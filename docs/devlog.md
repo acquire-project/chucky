@@ -2,6 +2,17 @@
 
 - [ ] interface for streaming from device, integrating with a cuda stream
 
+## 2026-02-26
+
+Cleaning up the compacted morton algorithm a little bit. Making sure we're not
+bit-limited on the morton code.
+
+I think this will make the most sense before the chunk scatter. This doesn't
+benefit from chunking, and it effectively needs it's own epoch size. That's
+epoch is only 2 "deep". After we compute the lod's we need to scatter out of
+the compacted morton order anyway, and that might as well be the chunk scatter.
+After that we're just dealing with chunks and need to do some lod bookkeeping.
+
 ## 2026-02-25
 
 Considering multiscale using morton to order 2x2x..x2 regions.

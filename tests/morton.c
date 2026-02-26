@@ -5,12 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_NDIM 8
+#define MAX_NDIM 64
 
-static uint32_t
-max_shape(int ndim, const uint32_t* shape)
+static uint64_t
+max_shape(int ndim, const uint64_t* shape)
 {
-  uint32_t m = 0;
+  uint64_t m = 0;
   for (int d = 0; d < ndim; ++d)
     if (shape[d] > m)
       m = shape[d];
@@ -19,88 +19,75 @@ max_shape(int ndim, const uint32_t* shape)
 
 // Smallest p such that 2^p >= v. Returns 0 for v <= 1.
 static int
-ceil_log2(uint32_t v)
+ceil_log2(uint64_t v)
 {
   int p = 0;
-  while ((1u << p) < v)
+  while ((1ull << p) < v)
     ++p;
   return p;
-}
-
-// Number of d-bit digits needed to represent k.
-static int
-morton_digits(int ndim, uint64_t k)
-{
-  int n = 0;
-  while (k > 0) {
-    k >>= ndim;
-    ++n;
-  }
-  return n;
-}
-
-// Extract the d-bit digit at the given level from a Morton code.
-// Level 0 is the most significant digit.
-static int
-morton_digit(int ndim, uint64_t k, int p, int level)
-{
-  return (int)((k >> (ndim * (p - 1 - level))) & ((1u << ndim) - 1));
 }
 
 // Clamped extent: how many valid coordinates in [lo, lo+scale) for a
 // dimension of size `shape_d`.
 static uint64_t
-clamped_extent(uint32_t shape_d, uint32_t lo, uint32_t scale)
+clamped_extent(uint64_t shape_d, uint64_t lo, uint64_t scale)
 {
   if (lo >= shape_d)
     return 0;
-  uint32_t e = shape_d - lo;
+  uint64_t e = shape_d - lo;
   return (e < scale) ? e : scale;
-}
-
-// Decode a Morton code back into coordinates.
-static void
-morton_decode(int ndim, uint64_t code, uint32_t* coords)
-{
-  memset(coords, 0, (size_t)ndim * sizeof(*coords));
-  for (int bit = 0; bit < 32; ++bit) {
-    for (int d = 0; d < ndim; ++d) {
-      coords[d] |= (uint32_t)(code & 1) << bit;
-      code >>= 1;
-    }
-  }
 }
 
 // Count how many Morton codes in [0, k) decode to coordinates within the array
 // bounds shape[0..ndim-1].
 //
-// Walks the Morton code top-down (MSB to LSB), one d-bit digit per level.
-// At each level, sibling subtrees before k's digit contribute a known count.
-// Instead of enumerating all v < digit (2^d siblings), we decompose the digit
-// bit by bit across dimensions. For each dimension where the digit's bit is 1,
-// we split: that dimension takes 0 (all lower dimensions free) or takes 1
-// (continue matching). This is O(d) per level, or O(p*d) overall where p*d
-// is the number of bits used in the morton code.
+// coords: the per-dimension coordinates identifying the Morton code.
+// depth:  number of extra zero-digit levels appended below coords (handles
+//         the equivalent of shifting a Morton code left by depth*ndim bits).
+//
+// Walks the digit sequence top-down, one ndim-bit digit per level.
+// At each level, sibling subtrees before the target digit contribute a known
+// count. Instead of enumerating all v < digit (2^d siblings), we decompose the
+// digit bit by bit across dimensions. For each dimension where the digit's bit
+// is 1, we split: that dimension takes 0 (all lower dimensions free) or takes 1
+// (continue matching). This is O(d) per level, or O(p*d) overall.
 static uint64_t
-morton_rank(int ndim, const uint32_t* shape, uint64_t k)
+morton_rank(int ndim,
+            const uint64_t* shape,
+            const uint64_t* coords,
+            int depth)
 {
   int p = ceil_log2(max_shape(ndim, shape));
-  int pk = morton_digits(ndim, k);
-  if (pk > p)
-    p = pk;
+
+  // Ensure p covers all coordinate bits
+  for (int d = 0; d < ndim; ++d) {
+    int pc = coords[d] > 0 ? ceil_log2(coords[d] + 1) : 0;
+    if (pc > p)
+      p = pc;
+  }
+
+  // Total digit levels = coordinate bits + extra zero levels
+  int total_levels = p + depth;
 
   uint64_t count = 0;
-  uint32_t prefix[MAX_NDIM] = { 0 };
+  uint64_t prefix[MAX_NDIM] = { 0 };
 
-  for (int level = 0; level < p; ++level) {
-    uint32_t scale = 1u << (p - 1 - level);
-    int digit = morton_digit(ndim, k, p, level);
+  for (int level = 0; level < total_levels; ++level) {
+    uint64_t scale = 1ull << (total_levels - 1 - level);
+
+    // Extract digit: from coords for levels 0..p-1, zero for deeper levels
+    int digit = 0;
+    if (level < p) {
+      int bit_idx = p - 1 - level;
+      for (int d = 0; d < ndim; ++d)
+        digit |= (int)((coords[d] >> bit_idx) & 1) << d;
+    }
 
     // For each dimension, precompute clamped extents for bit=0 and bit=1.
     uint64_t ext[MAX_NDIM][2];
     for (int d = 0; d < ndim; ++d) {
       for (int b = 0; b < 2; ++b) {
-        uint32_t lo = (prefix[d] * 2 + (uint32_t)b) * scale;
+        uint64_t lo = (prefix[d] * 2 + (uint64_t)b) * scale;
         ext[d][b] = clamped_extent(shape[d], lo, scale);
       }
     }
@@ -130,21 +117,8 @@ morton_rank(int ndim, const uint32_t* shape, uint64_t k)
   return count;
 }
 
-static uint64_t
-morton_encode(int ndim, const uint32_t* coords)
-{
-  uint64_t code = 0;
-  for (int bit = 31; bit >= 0; --bit) {
-    for (int d = ndim - 1; d >= 0; --d) {
-      code <<= 1;
-      code |= (coords[d] >> bit) & 1;
-    }
-  }
-  return code;
-}
-
 static int
-is_all_ones(int n, const uint32_t* v)
+is_all_ones(int n, const uint64_t* v)
 {
   for (int d = 0; d < n; ++d)
     if (v[d] > 1)
@@ -155,12 +129,12 @@ is_all_ones(int n, const uint32_t* v)
 // Row-major linear index to coordinates.
 static void
 linear_to_coords(int ndim,
-                 const uint32_t* shape,
+                 const uint64_t* shape,
                  uint64_t idx,
-                 uint32_t* coords)
+                 uint64_t* coords)
 {
   for (int d = 0; d < ndim; ++d) {
-    coords[d] = (uint32_t)(idx % shape[d]);
+    coords[d] = idx % shape[d];
     idx /= shape[d];
   }
 }
@@ -197,7 +171,7 @@ struct lod_plan
 {
   int ndim;
   int nlev;
-  uint32_t shapes[MAX_LOD][MAX_NDIM];
+  uint64_t shapes[MAX_LOD][MAX_NDIM];
   struct spans levels; // exclusive end of level k in values buf
   uint64_t* ends;      // contiguous child-group segment ends (absolute offsets)
 };
@@ -216,6 +190,27 @@ lod_segment(const struct lod_plan* p, int level)
 static void
 lod_plan_free(struct lod_plan* p);
 
+// Increment coordinates to the next position in Morton order.
+// This is equivalent to adding 1 to the Morton code: carry-propagating
+// addition on the mixed-radix digit array (each digit base 2).
+// On overflow, sets coords[0] = 2^p (one past the valid range) so that
+// morton_rank with these coords correctly counts all valid elements.
+static void
+coords_morton_next(int ndim, int p, uint64_t* coords)
+{
+  for (int bit = 0; bit < p; ++bit) {
+    for (int d = 0; d < ndim; ++d) {
+      uint64_t mask = 1ull << bit;
+      coords[d] ^= mask;
+      if (coords[d] & mask)
+        return; // no carry
+    }
+  }
+  // overflow
+  memset(coords, 0, (size_t)ndim * sizeof(uint64_t));
+  coords[0] = 1ull << p;
+}
+
 // Fill one level's segment-end array. Each iteration
 // is independent (one iteration could be one GPU thread).
 //
@@ -223,18 +218,25 @@ lod_plan_free(struct lod_plan* p);
 // contiguous values buffer (absolute offset).
 static void
 lod_fill_ends(int ndim,
-              const uint32_t* child_shape,
-              const uint32_t* parent_shape,
+              const uint64_t* child_shape,
+              const uint64_t* parent_shape,
               uint64_t n_parents,
               uint64_t val_base,
               uint64_t* ends)
 {
-  uint32_t coords[MAX_NDIM];
+  int p = ceil_log2(max_shape(ndim, parent_shape));
+
+  uint64_t coords[MAX_NDIM];
+  uint64_t next[MAX_NDIM];
   for (uint64_t j = 0; j < n_parents; ++j) {
     linear_to_coords(ndim, parent_shape, j, coords);
-    uint64_t m = morton_encode(ndim, coords);
-    uint64_t pos = morton_rank(ndim, parent_shape, m);
-    uint64_t val = morton_rank(ndim, child_shape, (m + 1) << ndim);
+    uint64_t pos = morton_rank(ndim, parent_shape, coords, 0);
+
+    // (m+1) << ndim: next parent's coords at child level with depth=1
+    memcpy(next, coords, (size_t)ndim * sizeof(uint64_t));
+    coords_morton_next(ndim, p, next);
+    uint64_t val = morton_rank(ndim, child_shape, next, 1);
+
     ends[pos] = val_base + val;
   }
 }
@@ -244,13 +246,13 @@ lod_fill_ends(int ndim,
 static int
 lod_plan_init(struct lod_plan* p,
               int ndim,
-              const uint32_t* shape,
+              const uint64_t* shape,
               int max_levels)
 {
   memset(p, 0, sizeof(*p));
   p->ndim = ndim;
 
-  memcpy(p->shapes[0], shape, (size_t)ndim * sizeof(uint32_t));
+  memcpy(p->shapes[0], shape, (size_t)ndim * sizeof(uint64_t));
   p->nlev = 1;
   while (p->nlev < max_levels && !is_all_ones(ndim, p->shapes[p->nlev - 1])) {
     for (int d = 0; d < ndim; ++d)
@@ -318,14 +320,13 @@ static void
 lod_scatter(const struct lod_plan* p, const float* src, float* dst)
 {
   int ndim = p->ndim;
-  const uint32_t* shape = p->shapes[0];
+  const uint64_t* shape = p->shapes[0];
   uint64_t n = slice_len(spans_at(&p->levels, 0));
 
-  uint32_t coords[MAX_NDIM];
+  uint64_t coords[MAX_NDIM];
   for (uint64_t i = 0; i < n; ++i) {
     linear_to_coords(ndim, shape, i, coords);
-    uint64_t m = morton_encode(ndim, coords);
-    uint64_t pos = morton_rank(ndim, shape, m);
+    uint64_t pos = morton_rank(ndim, shape, coords, 0);
     dst[pos] = src[i];
   }
 }
@@ -385,8 +386,8 @@ Error:
 // copies of boundary elements, so the weighted and unweighted means coincide.)
 static void
 downsample_ref(int ndim,
-               const uint32_t* cur_shape,
-               const uint32_t* next_shape,
+               const uint64_t* cur_shape,
+               const uint64_t* next_shape,
                const float* src,
                float* dst)
 {
@@ -394,7 +395,7 @@ downsample_ref(int ndim,
   for (int d = 0; d < ndim; ++d)
     n_next *= next_shape[d];
 
-  uint32_t coords[MAX_NDIM];
+  uint64_t coords[MAX_NDIM];
   for (uint64_t j = 0; j < n_next; ++j) {
     linear_to_coords(ndim, next_shape, j, coords);
 
@@ -406,7 +407,7 @@ downsample_ref(int ndim,
       uint64_t stride = 1;
       int valid = 1;
       for (int d = 0; d < ndim; ++d) {
-        uint32_t child_coord = coords[d] * 2 + ((c >> d) & 1);
+        uint64_t child_coord = coords[d] * 2 + ((c >> d) & 1);
         if (child_coord >= cur_shape[d]) {
           valid = 0;
           break;
@@ -426,7 +427,7 @@ downsample_ref(int ndim,
 // Unshuffle: convert from compacted Morton order back to row-major.
 static void
 morton_unshuffle(int ndim,
-                 const uint32_t* shape,
+                 const uint64_t* shape,
                  const float* morton_buf,
                  float* rowmajor)
 {
@@ -434,21 +435,36 @@ morton_unshuffle(int ndim,
   for (int d = 0; d < ndim; ++d)
     n *= shape[d];
 
-  uint32_t coords[MAX_NDIM];
+  uint64_t coords[MAX_NDIM];
   for (uint64_t i = 0; i < n; ++i) {
     linear_to_coords(ndim, shape, i, coords);
-    uint64_t m = morton_encode(ndim, coords);
-    uint64_t pos = morton_rank(ndim, shape, m);
+    uint64_t pos = morton_rank(ndim, shape, coords, 0);
     rowmajor[i] = morton_buf[pos];
   }
 }
 
-// brute-force
+// --- Reference implementations for testing (use old uint64_t Morton codes) ---
+
+// Decode a Morton code back into coordinates (reference, limited to small
+// shapes).
+static void
+morton_decode(int ndim, uint64_t code, uint64_t* coords)
+{
+  memset(coords, 0, (size_t)ndim * sizeof(*coords));
+  for (int bit = 0; bit < 64 / ndim; ++bit) {
+    for (int d = 0; d < ndim; ++d) {
+      coords[d] |= (code & 1) << bit;
+      code >>= 1;
+    }
+  }
+}
+
+// brute-force rank using Morton codes (reference)
 static uint64_t
-morton_rank_ref(int ndim, const uint32_t* shape, uint64_t k)
+morton_rank_ref(int ndim, const uint64_t* shape, uint64_t k)
 {
   uint64_t count = 0;
-  uint32_t coords[MAX_NDIM];
+  uint64_t coords[MAX_NDIM];
   for (uint64_t m = 0; m < k; ++m) {
     morton_decode(ndim, m, coords);
     int valid = 1;
@@ -469,12 +485,19 @@ test_3d(void)
   printf("--- test_3d ---\n");
   int ok = 0;
   const int ndim = 3;
-  const uint32_t shape[] = { 3, 2, 5 };
+  const uint64_t shape[] = { 3, 2, 5 };
 
   int p = ceil_log2(max_shape(ndim, shape));
   uint64_t box = 1ull << (ndim * p);
   for (uint64_t k = 0; k <= box; ++k) {
-    uint64_t r = morton_rank(ndim, shape, k);
+    // Decode k to coords, then use new morton_rank
+    uint64_t coords[MAX_NDIM];
+    morton_decode(ndim, k, coords);
+    uint64_t r = morton_rank(ndim, shape, coords, 0);
+
+    // But we need to compare against the reference which counts codes in [0,k).
+    // morton_rank(shape, coords, 0) counts codes < encode(coords), not codes < k.
+    // So compare against brute-force directly.
     uint64_t r_ref = morton_rank_ref(ndim, shape, k);
     if (r != r_ref) {
       printf("  FAIL at k=%llu: got %llu, expected %llu\n",
@@ -484,7 +507,7 @@ test_3d(void)
       goto Fail;
     }
   }
-  uint64_t total = morton_rank(ndim, shape, box);
+  uint64_t total = morton_rank_ref(ndim, shape, 1ull << (ndim * p));
   printf("  total valid in 3x2x5 = %llu\n", (unsigned long long)total);
   CHECK(Fail, total == 30);
   printf("  PASS\n");
@@ -499,11 +522,13 @@ test_1d(void)
   printf("--- test_1d ---\n");
   int ok = 0;
   const int ndim = 1;
-  const uint32_t shape[] = { 7 };
+  const uint64_t shape[] = { 7 };
   for (uint64_t k = 0; k <= 8; ++k) {
-    uint64_t r = morton_rank(ndim, shape, k);
-    uint64_t expected = k < 7 ? k : 7;
-    CHECK(Fail, r == expected);
+    uint64_t coords[MAX_NDIM];
+    morton_decode(ndim, k, coords);
+    uint64_t r = morton_rank(ndim, shape, coords, 0);
+    uint64_t r_ref = morton_rank_ref(ndim, shape, k);
+    CHECK(Fail, r == r_ref);
   }
   printf("  PASS\n");
   ok = 1;
@@ -512,7 +537,7 @@ Fail:
 }
 
 static int
-test_lod(const char* label, int ndim, const uint32_t* shape)
+test_lod(const char* label, int ndim, const uint64_t* shape)
 {
   printf("--- %s ---\n", label);
   int ok = 0;
@@ -554,8 +579,8 @@ test_lod(const char* label, int ndim, const uint32_t* shape)
 
   // Verify each subsequent level against brute-force downsample
   for (int l = 1; l < plan.nlev; ++l) {
-    const uint32_t* prev_shape = plan.shapes[l - 1];
-    const uint32_t* cur_shape = plan.shapes[l];
+    const uint64_t* prev_shape = plan.shapes[l - 1];
+    const uint64_t* cur_shape = plan.shapes[l];
     struct slice lev = spans_at(&plan.levels, l);
     uint64_t cur_n = slice_len(lev);
 
@@ -569,11 +594,11 @@ test_lod(const char* label, int ndim, const uint32_t* shape)
 
     for (uint64_t i = 0; i < cur_n; ++i) {
       if (fabsf(cur_rm[i] - ref[i]) > 1e-5f) {
-        uint32_t coords[MAX_NDIM];
+        uint64_t coords[MAX_NDIM];
         linear_to_coords(ndim, cur_shape, i, coords);
         printf("  FAIL level %d at (", l);
         for (int d = 0; d < ndim; ++d)
-          printf("%s%u", d ? "," : "", coords[d]);
+          printf("%s%llu", d ? "," : "", (unsigned long long)coords[d]);
         printf("): got %f, expected %f\n", cur_rm[i], ref[i]);
         goto Fail;
       }
@@ -605,8 +630,8 @@ main(void)
   int nfail = 0;
   nfail += !test_3d();
   nfail += !test_1d();
-  nfail += !test_lod("test_lod_2d", 2, (uint32_t[]){ 3, 5 });
-  nfail += !test_lod("test_lod_3d", 3, (uint32_t[]){ 3, 2, 5 });
+  nfail += !test_lod("test_lod_2d", 2, (uint64_t[]){ 3, 5 });
+  nfail += !test_lod("test_lod_3d", 3, (uint64_t[]){ 3, 2, 5 });
   printf("\n%s (%d failures)\n", nfail ? "FAIL" : "ALL PASSED", nfail);
   return nfail ? 1 : 0;
 }
