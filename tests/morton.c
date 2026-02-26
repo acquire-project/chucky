@@ -169,21 +169,34 @@ spans_at(const struct spans* s, uint64_t i)
 
 struct lod_plan
 {
-  int ndim;
+  int ndim; // full dimensionality
   int nlev;
-  uint64_t shapes[MAX_LOD][MAX_NDIM];
-  struct spans levels; // exclusive end of level k in values buf
-  uint64_t* ends;      // contiguous child-group segment ends (absolute offsets)
+  uint64_t shapes[MAX_LOD][MAX_NDIM]; // full shapes per level
+
+  // ds/batch decomposition
+  uint8_t ds_mask; // which dims are downsampled (bit d set => dim d halved)
+  int ds_ndim;
+  int ds_map[MAX_NDIM];    // ds_map[k] = full dim index for ds dim k
+  int batch_ndim;
+  int batch_map[MAX_NDIM]; // batch_map[k] = full dim index for batch dim k
+  uint64_t batch_shape[MAX_NDIM];
+  uint64_t batch_count;
+
+  uint64_t ds_shapes[MAX_LOD][MAX_NDIM]; // ds-only shapes per level
+  uint64_t ds_counts[MAX_LOD];           // product of ds_shapes per level
+
+  struct spans levels;    // full level ends in values buf (batch_count * ds cumulative)
+  struct spans ds_levels; // ds-only level ends (one batch slice)
+  uint64_t* ends;         // child-group segment ends, relative within batch slice
 };
 
 // Segment slice for level l's child-group ends in the ends buffer.
-// Derived from levels: segment l has counts[l+1] entries, and the segment
-// layout is the level layout shifted down by one level.
+// Uses ds_levels since ends are relative within one batch slice.
 static struct slice
 lod_segment(const struct lod_plan* p, int level)
 {
-  struct slice next = spans_at(&p->levels, level + 1);
-  uint64_t base = p->levels.ends[0]; // = counts[0]
+  struct slice next = spans_at(&p->ds_levels, level + 1);
+  uint64_t base = p->ds_levels.ends[0]; // = ds_counts[0]
   return (struct slice){ .beg = next.beg - base, .end = next.end - base };
 }
 
@@ -215,13 +228,12 @@ coords_morton_next(int ndim, int p, uint64_t* coords)
 // is independent (one iteration could be one GPU thread).
 //
 // ends[pos] receives the exclusive end of parent pos's children in the
-// contiguous values buffer (absolute offset).
+// contiguous values buffer (relative within one batch slice).
 static void
 lod_fill_ends(int ndim,
               const uint64_t* child_shape,
               const uint64_t* parent_shape,
               uint64_t n_parents,
-              uint64_t val_base,
               uint64_t* ends)
 {
   int p = ceil_log2(max_shape(ndim, parent_shape));
@@ -237,63 +249,122 @@ lod_fill_ends(int ndim,
     coords_morton_next(ndim, p, next);
     uint64_t val = morton_rank(ndim, child_shape, next, 1);
 
-    ends[pos] = val_base + val;
+    ends[pos] = val;
   }
 }
 
+// Compute batch linear index from full coordinates.
+static uint64_t
+plan_batch_index(const struct lod_plan* p, const uint64_t* full_coords)
+{
+  uint64_t idx = 0, stride = 1;
+  for (int k = 0; k < p->batch_ndim; ++k) {
+    idx += full_coords[p->batch_map[k]] * stride;
+    stride *= p->batch_shape[k];
+  }
+  return idx;
+}
+
+// Extract ds coordinates from full coordinates.
+static void
+plan_extract_ds(const struct lod_plan* p,
+                const uint64_t* full_coords,
+                uint64_t* ds_coords)
+{
+  for (int k = 0; k < p->ds_ndim; ++k)
+    ds_coords[k] = full_coords[p->ds_map[k]];
+}
+
 // Compute the shape pyramid, buffer layout, and child-group segment ends.
+// ds_mask: bit d set means dimension d is downsampled (halved each level).
+// If ds_mask has all bits set for dims 0..ndim-1, all dims are downsampled.
+// If ds_mask is 0, no downsampling: nlev=1.
 // Returns 0 on failure.
 static int
 lod_plan_init(struct lod_plan* p,
               int ndim,
               const uint64_t* shape,
+              uint8_t ds_mask,
               int max_levels)
 {
   memset(p, 0, sizeof(*p));
   p->ndim = ndim;
+  p->ds_mask = ds_mask;
 
+  // Build ds/batch dimension maps
+  for (int d = 0; d < ndim; ++d) {
+    if (ds_mask & (1 << d)) {
+      p->ds_map[p->ds_ndim++] = d;
+    } else {
+      p->batch_map[p->batch_ndim] = d;
+      p->batch_shape[p->batch_ndim] = shape[d];
+      p->batch_ndim++;
+    }
+  }
+  p->batch_count = 1;
+  for (int k = 0; k < p->batch_ndim; ++k)
+    p->batch_count *= p->batch_shape[k];
+
+  // Initialize full and ds shapes at level 0
   memcpy(p->shapes[0], shape, (size_t)ndim * sizeof(uint64_t));
+  for (int k = 0; k < p->ds_ndim; ++k)
+    p->ds_shapes[0][k] = shape[p->ds_map[k]];
+
+  // Build shape pyramid: only halve ds dims
   p->nlev = 1;
-  while (p->nlev < max_levels && !is_all_ones(ndim, p->shapes[p->nlev - 1])) {
-    for (int d = 0; d < ndim; ++d)
-      p->shapes[p->nlev][d] = (p->shapes[p->nlev - 1][d] + 1) / 2;
+  while (p->nlev < max_levels &&
+         !is_all_ones(p->ds_ndim, p->ds_shapes[p->nlev - 1])) {
+    // ds dims: halve
+    for (int k = 0; k < p->ds_ndim; ++k)
+      p->ds_shapes[p->nlev][k] = (p->ds_shapes[p->nlev - 1][k] + 1) / 2;
+    // full shapes: copy all, then overwrite ds dims
+    memcpy(p->shapes[p->nlev], p->shapes[p->nlev - 1],
+           (size_t)ndim * sizeof(uint64_t));
+    for (int k = 0; k < p->ds_ndim; ++k)
+      p->shapes[p->nlev][p->ds_map[k]] = p->ds_shapes[p->nlev][k];
     ++p->nlev;
   }
 
-  // Element counts per level
-  uint64_t counts[MAX_LOD];
+  // ds element counts per level
   for (int k = 0; k < p->nlev; ++k) {
-    uint64_t c = 1;
-    for (int d = 0; d < ndim; ++d)
-      c *= p->shapes[k][d];
-    counts[k] = c;
+    p->ds_counts[k] = 1;
+    for (int d = 0; d < p->ds_ndim; ++d)
+      p->ds_counts[k] *= p->ds_shapes[k][d];
   }
 
-  // levels: partitions the values buffer by LOD level
+  // ds_levels: per-batch-slice level ends
+  p->ds_levels.n = (uint64_t)p->nlev;
+  p->ds_levels.ends = (uint64_t*)malloc(p->nlev * sizeof(uint64_t));
+  if (!p->ds_levels.ends)
+    goto Fail;
+  p->ds_levels.ends[0] = p->ds_counts[0];
+  for (int k = 1; k < p->nlev; ++k)
+    p->ds_levels.ends[k] = p->ds_levels.ends[k - 1] + p->ds_counts[k];
+
+  // levels: full (batch-multiplied) level ends
   p->levels.n = (uint64_t)p->nlev;
   p->levels.ends = (uint64_t*)malloc(p->nlev * sizeof(uint64_t));
   if (!p->levels.ends)
     goto Fail;
-  p->levels.ends[0] = counts[0];
-  for (int k = 1; k < p->nlev; ++k)
-    p->levels.ends[k] = p->levels.ends[k - 1] + counts[k];
+  for (int k = 0; k < p->nlev; ++k)
+    p->levels.ends[k] = p->batch_count * p->ds_levels.ends[k];
 
-  // Compute child-group segment ends for all levels.
-  // Total ends = sum(counts[1..nlev-1]) = total_vals - counts[0].
+  // Compute child-group segment ends for all ds-level transitions.
+  // Total ends = sum(ds_counts[1..nlev-1]).
+  // Ends are relative within one batch slice.
   {
-    uint64_t total_ends = p->levels.ends[p->nlev - 1] - p->levels.ends[0];
+    uint64_t total_ends =
+      p->ds_levels.ends[p->nlev - 1] - p->ds_levels.ends[0];
     if (total_ends > 0) {
       p->ends = (uint64_t*)malloc(total_ends * sizeof(uint64_t));
       if (!p->ends)
         goto Fail;
       for (int l = 0; l < p->nlev - 1; ++l) {
         struct slice seg = lod_segment(p, l);
-        struct slice lev = spans_at(&p->levels, l);
-        lod_fill_ends(ndim,
-                      p->shapes[l],
-                      p->shapes[l + 1],
+        lod_fill_ends(p->ds_ndim,
+                      p->ds_shapes[l],
+                      p->ds_shapes[l + 1],
                       slice_len(seg),
-                      lev.beg,
                       p->ends + seg.beg);
       }
     }
@@ -311,50 +382,66 @@ lod_plan_free(struct lod_plan* p)
   if (!p)
     return;
   free(p->levels.ends);
+  free(p->ds_levels.ends);
   free(p->ends);
   memset(p, 0, sizeof(*p));
 }
 
 // Scatter array (row-major) into compacted Morton order for level 0.
+// Batch dimensions provide a flat outer index; Morton ordering applies
+// only to ds dimensions.
 static void
 lod_scatter(const struct lod_plan* p, const float* src, float* dst)
 {
-  int ndim = p->ndim;
-  const uint64_t* shape = p->shapes[0];
+  const uint64_t* full_shape = p->shapes[0];
   uint64_t n = slice_len(spans_at(&p->levels, 0));
 
-  uint64_t coords[MAX_NDIM];
+  uint64_t full_coords[MAX_NDIM];
+  uint64_t ds_coords[MAX_NDIM];
   for (uint64_t i = 0; i < n; ++i) {
-    linear_to_coords(ndim, shape, i, coords);
-    uint64_t pos = morton_rank(ndim, shape, coords, 0);
-    dst[pos] = src[i];
+    linear_to_coords(p->ndim, full_shape, i, full_coords);
+    uint64_t b = plan_batch_index(p, full_coords);
+    plan_extract_ds(p, full_coords, ds_coords);
+    uint64_t pos = morton_rank(p->ds_ndim, p->ds_shapes[0], ds_coords, 0);
+    dst[b * p->ds_counts[0] + pos] = src[i];
   }
 }
 
-// Segmented mean reduction over all LOD levels in one pass.
-// The ends array's absolute offsets align at level boundaries, so a flat
-// left-to-right scan naturally respects inter-level dependencies.
+// Segmented mean reduction over all LOD levels.
+// Processes each level transition and each batch slice independently.
+// The ends array is relative within one batch slice.
 static void
 lod_reduce(const struct lod_plan* p, float* values)
 {
-  uint64_t total_ends = p->levels.ends[p->nlev - 1] - p->levels.ends[0];
-  uint64_t dst_base = p->levels.ends[0];
+  for (int l = 0; l < p->nlev - 1; ++l) {
+    struct slice seg = lod_segment(p, l);
+    uint64_t src_ds = p->ds_counts[l];
+    uint64_t dst_ds = p->ds_counts[l + 1];
+    struct slice src_level = spans_at(&p->levels, l);
+    struct slice dst_level = spans_at(&p->levels, l + 1);
 
-  for (uint64_t i = 0; i < total_ends; ++i) {
-    uint64_t start = i > 0 ? p->ends[i - 1] : 0;
-    uint64_t end = p->ends[i];
-    uint64_t len = end - start;
-    float sum = 0;
-    for (uint64_t j = start; j < end; ++j)
-      sum += values[j];
-    values[dst_base + i] = sum / (float)len;
+    for (uint64_t b = 0; b < p->batch_count; ++b) {
+      uint64_t src_base = src_level.beg + b * src_ds;
+      uint64_t dst_base = dst_level.beg + b * dst_ds;
+
+      for (uint64_t i = 0; i < dst_ds; ++i) {
+        uint64_t start = (i > 0) ? p->ends[seg.beg + i - 1] : 0;
+        uint64_t end = p->ends[seg.beg + i];
+        uint64_t len = end - start;
+        float sum = 0;
+        for (uint64_t j = start; j < end; ++j)
+          sum += values[src_base + j];
+        values[dst_base + i] = sum / (float)len;
+      }
+    }
   }
 }
 
 // Compute all LOD levels into a contiguous values buffer.
-// Plan must be initialized via lod_plan_init before calling.
-// *out_values: contiguous buffer [level0][level1]...[levelN-1] in compacted
-//              Morton order.
+// *out_values: contiguous buffer laid out as:
+//   [level 0: batch_count * ds_counts[0]] [level 1: ...] ...
+// Within each level, batch slices are contiguous, each in compacted Morton
+// order over the ds dimensions.
 // Returns 0 on failure. Caller must free out_values.
 static int
 lod_compute(const struct lod_plan* p, const float* src, float** out_values)
@@ -379,13 +466,12 @@ Error:
   return ok;
 }
 
-// Reference: brute-force downsample by averaging only valid children in each
-// 2^d block. This matches lod_reduce's semantics: boundary parents have fewer
-// than 2^d valid children and the mean is taken over the valid ones only.
-// (This is equivalent to replicate-BC averaging because replicated values are
-// copies of boundary elements, so the weighted and unweighted means coincide.)
+// Reference: brute-force downsample by averaging only valid children.
+// ds_mask controls which dimensions are halved; non-masked dimensions
+// keep the same coordinate (no 2x expansion).
 static void
 downsample_ref(int ndim,
+               uint8_t ds_mask,
                const uint64_t* cur_shape,
                const uint64_t* next_shape,
                const float* src,
@@ -395,19 +481,32 @@ downsample_ref(int ndim,
   for (int d = 0; d < ndim; ++d)
     n_next *= next_shape[d];
 
+  int n_ds = 0;
+  for (int d = 0; d < ndim; ++d)
+    if (ds_mask & (1 << d))
+      n_ds++;
+  int n_children = 1 << n_ds;
+
   uint64_t coords[MAX_NDIM];
   for (uint64_t j = 0; j < n_next; ++j) {
     linear_to_coords(ndim, next_shape, j, coords);
 
     float sum = 0;
     int count = 0;
-    int n_children = 1 << ndim;
     for (int c = 0; c < n_children; ++c) {
       uint64_t lin = 0;
       uint64_t stride = 1;
       int valid = 1;
+      int ds_bit = 0;
+
       for (int d = 0; d < ndim; ++d) {
-        uint64_t child_coord = coords[d] * 2 + ((c >> d) & 1);
+        uint64_t child_coord;
+        if (ds_mask & (1 << d)) {
+          child_coord = coords[d] * 2 + ((c >> ds_bit) & 1);
+          ds_bit++;
+        } else {
+          child_coord = coords[d];
+        }
         if (child_coord >= cur_shape[d]) {
           valid = 0;
           break;
@@ -424,22 +523,28 @@ downsample_ref(int ndim,
   }
 }
 
-// Unshuffle: convert from compacted Morton order back to row-major.
+// Unshuffle: convert from compacted Morton order (with batch dims) back to
+// row-major at the given level.
 static void
-morton_unshuffle(int ndim,
-                 const uint64_t* shape,
+morton_unshuffle(const struct lod_plan* p,
+                 int level,
                  const float* morton_buf,
                  float* rowmajor)
 {
+  const uint64_t* full_shape = p->shapes[level];
   uint64_t n = 1;
-  for (int d = 0; d < ndim; ++d)
-    n *= shape[d];
+  for (int d = 0; d < p->ndim; ++d)
+    n *= full_shape[d];
 
-  uint64_t coords[MAX_NDIM];
+  uint64_t full_coords[MAX_NDIM];
+  uint64_t ds_coords[MAX_NDIM];
   for (uint64_t i = 0; i < n; ++i) {
-    linear_to_coords(ndim, shape, i, coords);
-    uint64_t pos = morton_rank(ndim, shape, coords, 0);
-    rowmajor[i] = morton_buf[pos];
+    linear_to_coords(p->ndim, full_shape, i, full_coords);
+    uint64_t b = plan_batch_index(p, full_coords);
+    plan_extract_ds(p, full_coords, ds_coords);
+    uint64_t pos =
+      morton_rank(p->ds_ndim, p->ds_shapes[level], ds_coords, 0);
+    rowmajor[i] = morton_buf[b * p->ds_counts[level] + pos];
   }
 }
 
@@ -537,7 +642,10 @@ Fail:
 }
 
 static int
-test_lod(const char* label, int ndim, const uint64_t* shape)
+test_lod(const char* label,
+         int ndim,
+         const uint64_t* shape,
+         uint8_t ds_mask)
 {
   printf("--- %s ---\n", label);
   int ok = 0;
@@ -557,21 +665,42 @@ test_lod(const char* label, int ndim, const uint64_t* shape)
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, MAX_LOD));
+  CHECK(Fail, lod_plan_init(&plan, ndim, shape, ds_mask, MAX_LOD));
+  printf("  ds_mask=0x%x  ds_ndim=%d  batch_ndim=%d  batch_count=%llu\n",
+         ds_mask, plan.ds_ndim, plan.batch_ndim,
+         (unsigned long long)plan.batch_count);
+
   CHECK(Fail, lod_compute(&plan, src, &values));
   printf("  levels: %d\n", plan.nlev);
+
+  if (plan.nlev < 2) {
+    // No downsampling levels — just verify scatter roundtrip
+    prev_rm = (float*)malloc(n * sizeof(float));
+    CHECK(Fail, prev_rm);
+    morton_unshuffle(&plan, 0, values, prev_rm);
+    for (uint64_t i = 0; i < n; ++i) {
+      if (fabsf(prev_rm[i] - src[i]) > 1e-6f) {
+        printf("  FAIL level 0 unshuffle at i=%llu: got %f, expected %f\n",
+               (unsigned long long)i, prev_rm[i], src[i]);
+        goto Fail;
+      }
+    }
+    printf("  level 0 scatter: ok (no downsample levels)\n");
+    printf("  PASS\n");
+    ok = 1;
+    goto Fail; // cleanup
+  }
+
   CHECK(Fail, plan.nlev >= 2);
 
   // Verify level 0 scatter roundtrips
   prev_rm = (float*)malloc(n * sizeof(float));
   CHECK(Fail, prev_rm);
-  morton_unshuffle(ndim, shape, values, prev_rm);
+  morton_unshuffle(&plan, 0, values, prev_rm);
   for (uint64_t i = 0; i < n; ++i) {
     if (fabsf(prev_rm[i] - src[i]) > 1e-6f) {
       printf("  FAIL level 0 unshuffle at i=%llu: got %f, expected %f\n",
-             (unsigned long long)i,
-             prev_rm[i],
-             src[i]);
+             (unsigned long long)i, prev_rm[i], src[i]);
       goto Fail;
     }
   }
@@ -586,11 +715,11 @@ test_lod(const char* label, int ndim, const uint64_t* shape)
 
     ref = (float*)malloc(cur_n * sizeof(float));
     CHECK(Fail, ref);
-    downsample_ref(ndim, prev_shape, cur_shape, prev_rm, ref);
+    downsample_ref(ndim, ds_mask, prev_shape, cur_shape, prev_rm, ref);
 
     cur_rm = (float*)malloc(cur_n * sizeof(float));
     CHECK(Fail, cur_rm);
-    morton_unshuffle(ndim, cur_shape, values + lev.beg, cur_rm);
+    morton_unshuffle(&plan, l, values + lev.beg, cur_rm);
 
     for (uint64_t i = 0; i < cur_n; ++i) {
       if (fabsf(cur_rm[i] - ref[i]) > 1e-5f) {
@@ -630,8 +759,38 @@ main(void)
   int nfail = 0;
   nfail += !test_3d();
   nfail += !test_1d();
-  nfail += !test_lod("test_lod_2d", 2, (uint64_t[]){ 3, 5 });
-  nfail += !test_lod("test_lod_3d", 3, (uint64_t[]){ 3, 2, 5 });
+
+  // All dims downsampled (same as original tests)
+  nfail +=
+    !test_lod("test_lod_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3);
+  nfail +=
+    !test_lod("test_lod_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7);
+
+  // Mixed: only some dims downsampled
+  // 3D, only dims 0 and 2 downsampled (dim 1 is batch)
+  nfail +=
+    !test_lod("test_lod_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5);
+  // 3D, only dim 1 downsampled (dims 0 and 2 are batch)
+  nfail +=
+    !test_lod("test_lod_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2);
+  // 2D, only dim 0 downsampled (dim 1 is batch)
+  nfail +=
+    !test_lod("test_lod_2d_d0", 2, (uint64_t[]){ 5, 3 }, 0x1);
+  // 2D, only dim 1 downsampled (dim 0 is batch)
+  nfail +=
+    !test_lod("test_lod_2d_d1", 2, (uint64_t[]){ 3, 7 }, 0x2);
+
+  // No dims downsampled (trivial: nlev=1)
+  nfail +=
+    !test_lod("test_lod_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0);
+  // 1D downsampled
+  nfail +=
+    !test_lod("test_lod_1d", 1, (uint64_t[]){ 9 }, 0x1);
+
+  // Larger mixed case
+  nfail +=
+    !test_lod("test_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA);
+
   printf("\n%s (%d failures)\n", nfail ? "FAIL" : "ALL PASSED", nfail);
   return nfail ? 1 : 0;
 }

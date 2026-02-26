@@ -1,6 +1,7 @@
 # dev log
 
 - [ ] interface for streaming from device, integrating with a cuda stream
+- [ ] "append dimension" semantics for dim0
 
 ## 2026-02-26
 
@@ -12,6 +13,10 @@ benefit from chunking, and it effectively needs it's own epoch size. That's
 epoch is only 2 "deep". After we compute the lod's we need to scatter out of
 the compacted morton order anyway, and that might as well be the chunk scatter.
 After that we're just dealing with chunks and need to do some lod bookkeeping.
+
+Need to think about generalizing the morton algorithm where there are dimensions
+that are not downsampled... Also need to think about what happens when dim 0
+(the append dimension) is downsampled.
 
 ## 2026-02-25
 
