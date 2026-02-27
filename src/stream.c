@@ -99,7 +99,6 @@ current_pool(struct transpose_stream* s)
   return s->pool_current ? s->pool_B.data : s->pool_A.data;
 }
 
-
 // Dispatch staged data: H2D transfer + scatter kernel
 // Returns 0 on success, 1 on error.
 static int
@@ -322,11 +321,13 @@ deliver_to_shards(struct transpose_stream* s,
 
     if (!sh->writer) {
       uint64_t flat = ss->shard_epoch * ss->shard_inner_count + si;
-      sh->writer = s->config.shard_sink->open(s->config.shard_sink, level, flat);
+      sh->writer =
+        s->config.shard_sink->open(s->config.shard_sink, level, flat);
       CHECK(Error, sh->writer);
     }
 
-    size_t shard_bytes = agg_slot->h_offsets[j_end] - agg_slot->h_offsets[j_start];
+    size_t shard_bytes =
+      agg_slot->h_offsets[j_end] - agg_slot->h_offsets[j_start];
     if (shard_bytes > 0) {
       const void* src =
         (const char*)agg_slot->h_aggregated + agg_slot->h_offsets[j_start];
@@ -342,8 +343,8 @@ deliver_to_shards(struct transpose_stream* s,
       if (tile_size > 0) {
         uint64_t within_inner = j - j_start;
         uint64_t slot = epoch_in_shard * tps_inner + within_inner;
-        size_t tile_off =
-          sh->data_cursor + (agg_slot->h_offsets[j] - agg_slot->h_offsets[j_start]);
+        size_t tile_off = sh->data_cursor + (agg_slot->h_offsets[j] -
+                                             agg_slot->h_offsets[j_start]);
         sh->index[2 * slot] = tile_off;
         sh->index[2 * slot + 1] = tile_size;
       }
@@ -371,9 +372,11 @@ wait_and_deliver(struct transpose_stream* s, int fc)
   if (s->config.compress && s->config.shard_sink) {
     CU(Error, cuEventSynchronize(fs->ready));
 
-    accumulate_metric_cu(&s->metrics.compress, fs->t_compress_start,
+    accumulate_metric_cu(&s->metrics.compress,
+                         fs->t_compress_start,
                          s->flush[fc].d_compressed.ready);
     accumulate_metric_cu(&s->metrics.d2h, fs->t_d2h_start, fs->ready);
+    s->metrics.d2h.total_bytes += s->comp_pool_bytes;
 
     struct aggregate_slot* agg = &s->agg[fc];
     if (deliver_to_shards(s, 0, &s->shard, agg))
@@ -382,8 +385,9 @@ wait_and_deliver(struct transpose_stream* s, int fc)
     // Uncompressed path: wait for host pool ready
     if (fc == 0) {
       CU(Error, cuEventSynchronize(s->pool_A_host.ready));
-      accumulate_metric_cu(&s->metrics.d2h, fs->t_d2h_start,
-                           s->pool_A_host.ready);
+      accumulate_metric_cu(
+        &s->metrics.d2h, fs->t_d2h_start, s->pool_A_host.ready);
+      s->metrics.d2h.total_bytes += s->layout.tile_pool_bytes;
       if (s->config.sink) {
         struct slice tiles = {
           .beg = s->pool_A_host.data,
@@ -393,8 +397,9 @@ wait_and_deliver(struct transpose_stream* s, int fc)
       }
     } else {
       CU(Error, cuEventSynchronize(s->pool_B_host.ready));
-      accumulate_metric_cu(&s->metrics.d2h, fs->t_d2h_start,
-                           s->pool_B_host.ready);
+      accumulate_metric_cu(
+        &s->metrics.d2h, fs->t_d2h_start, s->pool_B_host.ready);
+      s->metrics.d2h.total_bytes += s->layout.tile_pool_bytes;
       if (s->config.sink) {
         struct slice tiles = {
           .beg = s->pool_B_host.data,
@@ -441,21 +446,18 @@ kick_epoch(struct transpose_stream* s, int fc)
     }
 
     CU(Error, cuEventRecord(fs->t_compress_start, s->compress));
-    CHECK(Error,
-          compress_batch_async(
-            (const void* const*)fs->d_uncomp_ptrs,
-            s->d_uncomp_sizes,
-            s->layout.tile_stride * s->config.bytes_per_element,
-            M0,
-            s->d_comp_temp,
-            s->comp_temp_bytes,
-            (void**)fs->d_comp_ptrs,
-            s->d_comp_sizes,
-            s->compress) == 0);
+    CHECK(
+      Error,
+      compress_batch_async((const void* const*)fs->d_uncomp_ptrs,
+                           s->d_uncomp_sizes,
+                           s->layout.tile_stride * s->config.bytes_per_element,
+                           M0,
+                           s->d_comp_temp,
+                           s->comp_temp_bytes,
+                           (void**)fs->d_comp_ptrs,
+                           s->d_comp_sizes,
+                           s->compress) == 0);
 
-    // nvcomp may use internal CUDA operations not captured by stream events.
-    // Synchronize before reading compressed output.
-    CU(Error, cuStreamSynchronize(s->compress));
     CU(Error, cuEventRecord(fs->d_compressed.ready, s->compress));
 
     // Aggregate + D2H
@@ -464,8 +466,10 @@ kick_epoch(struct transpose_stream* s, int fc)
 
     struct aggregate_slot* agg = &s->agg[fc];
     CHECK(Error,
-          aggregate_by_shard_async(&s->agg_layout, fs->d_compressed.data,
-                                   s->d_comp_sizes, agg,
+          aggregate_by_shard_async(&s->agg_layout,
+                                   fs->d_compressed.data,
+                                   s->d_comp_sizes,
+                                   agg,
                                    s->compress) == 0);
     CU(Error, cuEventRecord(agg->ready, s->compress));
 
@@ -530,8 +534,8 @@ flush_epoch(struct transpose_stream* s)
   s->pool_current ^= 1;
   void* next = current_pool(s);
   CU(Error,
-     cuMemsetD8Async((CUdeviceptr)next, 0, s->layout.tile_pool_bytes,
-                     s->compute));
+     cuMemsetD8Async(
+       (CUdeviceptr)next, 0, s->layout.tile_pool_bytes, s->compute));
 
   s->flush_pending = 1;
   s->flush_current = fc;
@@ -636,7 +640,8 @@ init_cuda_streams_and_events(struct transpose_stream* s)
 
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuEventCreate(&s->stage.slot[i].t_h2d_start, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&s->stage.slot[i].t_scatter_start, CU_EVENT_DEFAULT));
+    CU(Fail,
+       cuEventCreate(&s->stage.slot[i].t_scatter_start, CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&s->stage.slot[i].t_scatter_end, CU_EVENT_DEFAULT));
   }
 
@@ -670,8 +675,7 @@ init_l0_layout(struct transpose_stream* s)
   }
 
   {
-    size_t alignment =
-      s->config.compress ? compress_get_input_alignment() : 1;
+    size_t alignment = s->config.compress ? compress_get_input_alignment() : 1;
     size_t tile_bytes = s->layout.tile_elements * bpe;
     size_t padded_bytes = align_up(tile_bytes, alignment);
     s->layout.tile_stride = padded_bytes / bpe;
@@ -690,10 +694,8 @@ init_l0_layout(struct transpose_stream* s)
     }
   }
 
-  s->layout.slot_count =
-    s->layout.lifted_strides[0] / s->layout.tile_stride;
-  s->layout.epoch_elements =
-    s->layout.slot_count * s->layout.tile_elements;
+  s->layout.slot_count = s->layout.lifted_strides[0] / s->layout.tile_stride;
+  s->layout.epoch_elements = s->layout.slot_count * s->layout.tile_elements;
   s->layout.lifted_strides[0] = 0; // collapse epoch dim
   s->layout.tile_pool_bytes =
     s->layout.slot_count * s->layout.tile_stride * bpe;
@@ -704,10 +706,14 @@ init_l0_layout(struct transpose_stream* s)
     CU(Fail, cuMemAlloc((CUdeviceptr*)&s->layout.d_lifted_shape, shape_bytes));
     CU(Fail,
        cuMemAlloc((CUdeviceptr*)&s->layout.d_lifted_strides, strides_bytes));
-    CU(Fail, cuMemcpyHtoD((CUdeviceptr)s->layout.d_lifted_shape,
-                           s->layout.lifted_shape, shape_bytes));
-    CU(Fail, cuMemcpyHtoD((CUdeviceptr)s->layout.d_lifted_strides,
-                           s->layout.lifted_strides, strides_bytes));
+    CU(Fail,
+       cuMemcpyHtoD((CUdeviceptr)s->layout.d_lifted_shape,
+                    s->layout.lifted_shape,
+                    shape_bytes));
+    CU(Fail,
+       cuMemcpyHtoD((CUdeviceptr)s->layout.d_lifted_strides,
+                    s->layout.lifted_strides,
+                    strides_bytes));
   }
 
   return 0;
@@ -734,8 +740,6 @@ Fail:
   return 1;
 }
 
-
-
 static int
 init_tile_pools(struct transpose_stream* s)
 {
@@ -750,11 +754,9 @@ init_tile_pools(struct transpose_stream* s)
      cuMemsetD8Async((CUdeviceptr)s->pool_B.data, 0, B_bytes, s->compute));
 
   CHECK(Fail,
-        (s->pool_A_host = buffer_new(s->layout.tile_pool_bytes, host, 0))
-          .data);
+        (s->pool_A_host = buffer_new(s->layout.tile_pool_bytes, host, 0)).data);
   CHECK(Fail,
-        (s->pool_B_host = buffer_new(s->layout.tile_pool_bytes, host, 0))
-          .data);
+        (s->pool_B_host = buffer_new(s->layout.tile_pool_bytes, host, 0)).data);
 
   return 0;
 Fail:
@@ -771,28 +773,25 @@ init_compression(struct transpose_stream* s)
   const uint64_t M0 = s->layout.slot_count;
   const size_t tile_bytes = s->layout.tile_stride * bpe;
 
-  s->max_comp_chunk_bytes = align_up(
-    compress_get_max_output_size(tile_bytes), compress_get_input_alignment());
+  s->max_comp_chunk_bytes = align_up(compress_get_max_output_size(tile_bytes),
+                                     compress_get_input_alignment());
   CHECK(Fail, s->max_comp_chunk_bytes > 0);
   s->comp_pool_bytes = M0 * s->max_comp_chunk_bytes;
 
   s->comp_temp_bytes = compress_get_temp_size(M0, tile_bytes);
   if (s->comp_temp_bytes > 0)
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&s->d_comp_temp, s->comp_temp_bytes));
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&s->d_comp_temp, s->comp_temp_bytes));
 
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&s->d_comp_sizes,
-                       M0 * sizeof(size_t)));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&s->d_comp_sizes, M0 * sizeof(size_t)));
 
   {
     size_t* h_sizes = (size_t*)malloc(M0 * sizeof(size_t));
     CHECK(Fail, h_sizes);
     for (uint64_t k = 0; k < M0; ++k)
       h_sizes[k] = tile_bytes;
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&s->d_uncomp_sizes,
-                         M0 * sizeof(size_t)));
-    CUresult rc = cuMemcpyHtoD((CUdeviceptr)s->d_uncomp_sizes, h_sizes,
-                                M0 * sizeof(size_t));
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&s->d_uncomp_sizes, M0 * sizeof(size_t)));
+    CUresult rc = cuMemcpyHtoD(
+      (CUdeviceptr)s->d_uncomp_sizes, h_sizes, M0 * sizeof(size_t));
     free(h_sizes);
     CU(Fail, rc);
   }
@@ -800,14 +799,12 @@ init_compression(struct transpose_stream* s)
   for (int fc = 0; fc < 2; ++fc) {
     struct flush_slot* fs = &s->flush[fc];
 
-    CHECK(Fail,
-          (fs->d_compressed =
-             buffer_new(M0 * s->max_comp_chunk_bytes, device, 0))
-            .data);
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&fs->d_uncomp_ptrs,
-                         M0 * sizeof(void*)));
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&fs->d_comp_ptrs,
-                         M0 * sizeof(void*)));
+    CHECK(
+      Fail,
+      (fs->d_compressed = buffer_new(M0 * s->max_comp_chunk_bytes, device, 0))
+        .data);
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&fs->d_uncomp_ptrs, M0 * sizeof(void*)));
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&fs->d_comp_ptrs, M0 * sizeof(void*)));
 
     void** h_ptrs = (void**)malloc(M0 * sizeof(void*));
     CHECK(Fail, h_ptrs);
@@ -815,14 +812,14 @@ init_compression(struct transpose_stream* s)
     void* pool = (fc == 0) ? s->pool_A.data : s->pool_B.data;
     for (uint64_t k = 0; k < M0; ++k)
       h_ptrs[k] = (char*)pool + k * tile_bytes;
-    CU(Fail, cuMemcpyHtoD((CUdeviceptr)fs->d_uncomp_ptrs, h_ptrs,
-                            M0 * sizeof(void*)));
+    CU(
+      Fail,
+      cuMemcpyHtoD((CUdeviceptr)fs->d_uncomp_ptrs, h_ptrs, M0 * sizeof(void*)));
 
     for (uint64_t k = 0; k < M0; ++k)
-      h_ptrs[k] =
-        (char*)fs->d_compressed.data + k * s->max_comp_chunk_bytes;
-    CU(Fail, cuMemcpyHtoD((CUdeviceptr)fs->d_comp_ptrs, h_ptrs,
-                            M0 * sizeof(void*)));
+      h_ptrs[k] = (char*)fs->d_compressed.data + k * s->max_comp_chunk_bytes;
+    CU(Fail,
+       cuMemcpyHtoD((CUdeviceptr)fs->d_comp_ptrs, h_ptrs, M0 * sizeof(void*)));
     free(h_ptrs);
   }
 
@@ -851,14 +848,17 @@ init_l0_aggregate_and_shards(struct transpose_stream* s)
   }
 
   CHECK(Fail,
-        aggregate_layout_init(&s->agg_layout, rank, tile_count,
-                              tiles_per_shard, s->layout.slot_count,
+        aggregate_layout_init(&s->agg_layout,
+                              rank,
+                              tile_count,
+                              tiles_per_shard,
+                              s->layout.slot_count,
                               s->max_comp_chunk_bytes) == 0);
 
   for (int i = 0; i < 2; ++i)
     CHECK(Fail,
-          aggregate_slot_init(&s->agg[i], &s->agg_layout,
-                              s->comp_pool_bytes) == 0);
+          aggregate_slot_init(&s->agg[i], &s->agg_layout, s->comp_pool_bytes) ==
+            0);
 
   s->shard.tiles_per_shard_0 = tiles_per_shard[0];
   s->shard.tiles_per_shard_inner = 1;
@@ -871,8 +871,8 @@ init_l0_aggregate_and_shards(struct transpose_stream* s)
   for (int d = 1; d < rank; ++d)
     s->shard.shard_inner_count *= ceildiv(tile_count[d], tiles_per_shard[d]);
 
-  s->shard.shards = (struct active_shard*)calloc(
-    s->shard.shard_inner_count, sizeof(struct active_shard));
+  s->shard.shards = (struct active_shard*)calloc(s->shard.shard_inner_count,
+                                                 sizeof(struct active_shard));
   CHECK(Fail, s->shard.shards);
 
   size_t index_bytes = 2 * s->shard.tiles_per_shard_total * sizeof(uint64_t);
@@ -949,12 +949,12 @@ transpose_stream_create(const struct transpose_stream_configuration* config,
   CU(Fail, cuStreamSynchronize(out->compute));
 
   out->metrics = (struct stream_metrics){
-    .memcpy   = { .name = "Memcpy",    .best_ms = 1e30f },
-    .h2d      = { .name = "H2D",       .best_ms = 1e30f },
-    .scatter  = { .name = "Scatter",   .best_ms = 1e30f },
-    .compress = { .name = "Compress",  .best_ms = 1e30f },
-    .aggregate= { .name = "Aggregate", .best_ms = 1e30f },
-    .d2h      = { .name = "D2H",       .best_ms = 1e30f },
+    .memcpy = { .name = "Memcpy", .best_ms = 1e30f },
+    .h2d = { .name = "H2D", .best_ms = 1e30f },
+    .scatter = { .name = "Scatter", .best_ms = 1e30f },
+    .compress = { .name = "Compress", .best_ms = 1e30f },
+    .aggregate = { .name = "Aggregate", .best_ms = 1e30f },
+    .d2h = { .name = "D2H", .best_ms = 1e30f },
   };
 
   return 0;
@@ -995,8 +995,10 @@ transpose_stream_append(struct writer* self, struct slice input)
           CU(Error, cuEventSynchronize(ss->h_in.ready));
 
           if (s->cursor > 0) {
-            accumulate_metric_cu(&s->metrics.h2d, ss->t_h2d_start, ss->h_in.ready);
-            accumulate_metric_cu(&s->metrics.scatter, ss->t_scatter_start, ss->t_scatter_end);
+            accumulate_metric_cu(
+              &s->metrics.h2d, ss->t_h2d_start, ss->h_in.ready);
+            accumulate_metric_cu(
+              &s->metrics.scatter, ss->t_scatter_start, ss->t_scatter_end);
           }
         }
 

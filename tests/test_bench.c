@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <zstd.h>
 
 // Deterministic source data — mix of compressibility levels.
@@ -31,7 +32,7 @@ splitmix64_uniform(uint64_t* state)
 }
 
 static void
-fill_chunk(uint16_t* buf, size_t count, size_t offset, size_t total)
+fill_thirds(uint16_t* buf, size_t count, size_t offset, size_t total)
 {
   const size_t third1 = total / 3;
   const size_t third2 = 2 * total / 3;
@@ -143,6 +144,70 @@ discard_shard_sink_init(struct discard_shard_sink* s)
   };
 }
 
+static void
+fill_zeros(uint16_t* buf, size_t count, size_t offset, size_t total)
+{
+  (void)offset;
+  (void)total;
+  memset(buf, 0, count * sizeof(uint16_t));
+}
+
+// XOR pattern: out[ravel(r)] = r_{d-1} ^ ... ^ r_0
+// Precomputed over `nframes` frames so fill_xor is just memcpy.
+static uint16_t* xor_pattern_buf = NULL;
+static size_t xor_pattern_len = 0; // elements in the precomputed buffer
+
+static void
+xor_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes)
+{
+  // frame = product of all dims except the outermost (slowest)
+  size_t frame = 1;
+  for (uint8_t i = 1; i < rank; ++i)
+    frame *= dims[i].size;
+  xor_pattern_len = nframes * frame;
+  free(xor_pattern_buf);
+  xor_pattern_buf = (uint16_t*)malloc(xor_pattern_len * sizeof(uint16_t));
+
+  // strides for unraveling (row-major, dims[0] outermost)
+  size_t strides[16];
+  strides[rank - 1] = 1;
+  for (int i = rank - 2; i >= 0; --i)
+    strides[i] = strides[i + 1] * dims[i + 1].size;
+
+  for (size_t gi = 0; gi < xor_pattern_len; ++gi) {
+    uint16_t v = 0;
+    size_t rem = gi;
+    for (uint8_t d = 0; d < rank; ++d) {
+      size_t coord = rem / strides[d];
+      rem %= strides[d];
+      v ^= (uint16_t)coord;
+    }
+    xor_pattern_buf[gi] = v;
+  }
+}
+
+static void
+xor_pattern_free(void)
+{
+  free(xor_pattern_buf);
+  xor_pattern_buf = NULL;
+  xor_pattern_len = 0;
+}
+
+static void
+fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total)
+{
+  (void)total;
+  for (size_t done = 0; done < count;) {
+    size_t src_off = (offset + done) % xor_pattern_len;
+    size_t chunk = xor_pattern_len - src_off;
+    if (chunk > count - done)
+      chunk = count - done;
+    memcpy(buf + done, xor_pattern_buf + src_off, chunk * sizeof(uint16_t));
+    done += chunk;
+  }
+}
+
 typedef void (*fill_fn)(uint16_t* buf,
                         size_t count,
                         size_t offset,
@@ -210,7 +275,7 @@ test_compressed_small(void)
     (total_elements + s.layout.epoch_elements - 1) / s.layout.epoch_elements;
   log_info("  total: %zu elements, %zu epochs", total_elements, num_epochs);
 
-  CHECK(Fail, pump_data(&s.writer, total_elements, fill_chunk) == 0);
+  CHECK(Fail, pump_data(&s.writer, total_elements, fill_zeros) == 0);
 
   CHECK(Fail, s.cursor == total_elements);
   log_info("  shards finalized: %zu, total bytes: %zu",
@@ -367,7 +432,7 @@ test_bench(void)
 
   const struct dimension dims[] = {
     {
-      .size = 10, // 1024,
+      .size = 100, // 1024,
       .tile_size = 2,
       .tiles_per_shard = 16,
       .name = "t",
@@ -416,9 +481,11 @@ test_bench(void)
   CHECK(Fail, transpose_stream_create(&config, &s) == 0);
   log_bench_header(&s, total_bytes, total_elements);
 
+  xor_pattern_init(dims, 5, 2);
+
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data(&s.writer, total_elements, fill_chunk) == 0);
+  CHECK(Fail, pump_data(&s.writer, total_elements, fill_xor) == 0);
   float wall_s = platform_toc(&clock);
 
   if (s.cursor != total_elements) {
@@ -436,11 +503,13 @@ test_bench(void)
   }
 
   transpose_stream_destroy(&s);
+  xor_pattern_free();
   log_info("  PASS");
   return 0;
 
 Fail:
   transpose_stream_destroy(&s);
+  xor_pattern_free();
   log_error("  FAIL");
   return 1;
 }
