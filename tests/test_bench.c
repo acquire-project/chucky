@@ -491,9 +491,8 @@ print_bench_report(const struct transpose_stream* s,
     m.scatter.count > 0 ? (double)total_bytes / m.scatter.count : 0;
   print_metric_row(&m.h2d, h2d_per_dispatch);
   print_metric_row(&m.scatter, scatter_per_dispatch);
-  double downsample_per =
-    m.downsample.count > 0 ? pool_bytes / m.downsample.count : pool_bytes;
-  print_metric_row(&m.downsample, downsample_per);
+  double lod_per = m.lod.count > 0 ? pool_bytes / m.lod.count : pool_bytes;
+  print_metric_row(&m.lod, lod_per);
   print_metric_row(&m.compress, pool_bytes);
   double agg_per = m.aggregate.count > 0
                      ? m.aggregate.total_bytes / m.aggregate.count
@@ -529,7 +528,7 @@ test_bench(void)
 
   const struct dimension dims[] = {
     {
-      .size = 1024,
+      .size = 10, // 1024,
       .tile_size = 2,
       .tiles_per_shard = 16,
       .name = "t",

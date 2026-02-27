@@ -18,6 +18,15 @@ Need to think about generalizing the morton algorithm where there are dimensions
 that are not downsampled... Also need to think about what happens when dim 0
 (the append dimension) is downsampled.
 
+When downsampling on dim0, then I think we need to aggregate 2^p elements along
+dim0 before kicking off the lod, where p is the depth of the lod tree. That way
+we can kick off the full lod reduction at once.
+
+Then we scatter that to tiles. The tiles will fill at different rates based
+on the lod. We'll need to track and spill epochs appropriately.
+
+Oh wait, that 2^p dim0 elements is 2^p epochs. That's way too much.
+
 ## 2026-02-25
 
 Considering multiscale using morton to order 2x2x..x2 regions.

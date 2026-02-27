@@ -115,6 +115,32 @@ target_compile_options(downsample
         $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_HOST_WARN_FLAGS}>
 )
 
+add_library(lod STATIC
+    lod.cu
+    lod.h
+)
+
+target_include_directories(lod
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(lod
+    PUBLIC
+        CUDA::cudart_static
+        CUDA::cuda_driver
+        chucky_log
+)
+
+set_target_properties(lod PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
+target_compile_options(lod
+    PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_HOST_WARN_FLAGS}>
+)
+
 add_library(aggregate STATIC
     aggregate.cu
     aggregate.h
@@ -164,7 +190,7 @@ target_link_libraries(stream
         transpose
         compress
         aggregate
-        downsample
+        lod
         chucky_log
         CUDA::cuda_driver
 )

@@ -838,14 +838,11 @@ test_stream_lod_roundtrip(void)
 
   for (int lv = 0; lv < 3; ++lv) {
     struct level_state* lod = &s.levels[lv];
-    log_info("  LOD%d: tile_elements=%lu  slot_count=%lu  "
-             "needs_two_epochs=%d  tps_total=%lu",
+    log_info("  LOD%d: tile_elements=%lu  slot_count=%lu  tps_total=%lu",
              lv + 1,
              (unsigned long)lod->layout.tile_elements,
              (unsigned long)lod->layout.slot_count,
-             lod->needs_two_epochs,
              (unsigned long)lod->shard.tiles_per_shard_total);
-    CHECK(Fail, lod->needs_two_epochs == 1);
   }
 
   // Fill source with sequential u16

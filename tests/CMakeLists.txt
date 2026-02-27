@@ -129,6 +129,9 @@ target_include_directories(test_zarr_sink PRIVATE ${ZSTD_INCLUDE_DIR})
 # Downsample kernel test
 add_my_test(test_downsample test_downsample.c downsample CUDA::cudart_static)
 
+# LOD Morton GPU kernel test
+add_my_test(test_lod test_lod.c lod CUDA::cudart_static)
+
 # Morton rank test (no CUDA)
 add_executable(test_morton morton.c)
 target_link_libraries(test_morton PRIVATE chucky_log)

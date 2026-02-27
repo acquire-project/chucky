@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aggregate.h"
+#include "lod.h"
 #include "metric.h"
 #include "transpose.h"
 #include <cuda.h>
@@ -48,7 +49,7 @@ struct stream_metrics
   struct stream_metric memcpy;
   struct stream_metric h2d;
   struct stream_metric scatter;
-  struct stream_metric downsample;
+  struct stream_metric lod;
   struct stream_metric compress;
   struct stream_metric aggregate;
   struct stream_metric d2h;
@@ -149,7 +150,10 @@ struct flush_slot
   void** d_comp_ptrs;        // device [M_total], pre-built at init
   CUevent t_compress_start;
   CUevent t_d2h_start;
+  CUevent t_lod_start;
+  CUevent t_lod_end;
   CUevent ready;             // signals all D2H for this slot is done
+  int lod_fired;              // 1 if LOD cascade ran this epoch
   int num_firing;             // number of levels that fired this epoch
   uint8_t firing_levels[MAX_LOD_LEVELS + 1]; // which levels fired (L0=0)
 };
@@ -162,14 +166,6 @@ struct level_state
   struct aggregate_slot agg[2]; // indexed by flush_current
   struct shard_state shard;
   struct dimension dimensions[MAX_RANK / 2];
-  uint64_t* d_dst_tile_size;
-  uint64_t* d_src_tile_size;
-  uint64_t* d_src_extent;
-  int64_t* d_src_pool_strides;
-  int64_t* d_dst_pool_strides;
-  uint8_t downsample_mask;
-  uint64_t epoch_count;
-  int needs_two_epochs;
 };
 
 struct transpose_stream
@@ -185,13 +181,11 @@ struct transpose_stream
   // Tile pools
   //   A:       M0 tiles (device)
   //   B:       M0 + M1 + ... + Mn tiles (device, contiguous)
-  //   scratch: M1 tiles (device, only if needs_two_epochs)
   //   A_host, B_host: M0 tiles each (host pinned, uncompressed path)
   struct buffer pool_A;      // device: M0 * tile_stride * bpe
   struct buffer pool_B;      // device: (M0+M1+...+Mn) * tile_stride * bpe
   struct buffer pool_A_host; // host pinned (uncompressed path)
   struct buffer pool_B_host; // host pinned (uncompressed path)
-  struct buffer scratch[2];  // device: two alternating scratch buffers for LOD cascade
   size_t level_offset[MAX_LOD_LEVELS + 1]; // byte offset per level in B
   uint64_t M_total;          // M0 + M1 + ... + Mn
   int pool_current;          // 0=A, 1=B — which pool scatter writes to
@@ -201,9 +195,12 @@ struct transpose_stream
   int flush_current;          // 0 or 1
   int flush_pending;
 
-  // Downsample timing
-  CUevent t_downsample_start;
-  CUevent t_downsample_end;
+  // Morton-code LOD
+  struct lod_plan lod_plan;      // spatial LOD plan (computed once at init)
+  struct buffer d_morton_values; // device: lod_dim0 * plan.batch_level_ends[nlev-1] * bpe
+  uint64_t lod_dim0;             // tile_size[0] << num_levels (if dim0 ds), else tile_size[0]
+  uint64_t lod_epoch_counter;    // counts L0 epochs since last LOD reduce
+  uint64_t lod_epoch_period;     // 1 << num_levels (L0 epochs per LOD epoch)
 
   // Compress (shared across flushes)
   size_t* d_comp_sizes;   // device [M_total]
