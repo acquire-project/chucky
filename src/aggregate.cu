@@ -86,8 +86,8 @@ aggregate_layout_init(struct aggregate_layout* layout,
                       uint8_t rank,
                       const uint64_t* tile_count,
                       const uint64_t* tiles_per_shard,
-                      uint64_t slot_count,
-                      size_t max_comp_chunk_bytes)
+                      uint64_t tiles_per_epoch,
+                      size_t max_chunk_bytes)
 {
   uint64_t shard_count[MAX_RANK];
   uint64_t eff_tps[MAX_RANK];
@@ -103,8 +103,8 @@ aggregate_layout_init(struct aggregate_layout* layout,
     CHECK(Error, tiles_per_shard[d] >= 1);
 
   memset(layout, 0, sizeof(*layout));
-  layout->slot_count = slot_count;
-  layout->max_comp_chunk_bytes = max_comp_chunk_bytes;
+  layout->tiles_per_epoch = tiles_per_epoch;
+  layout->max_chunk_bytes = max_chunk_bytes;
 
   D = rank;
   layout->lifted_rank = 2 * (D - 1);
@@ -192,7 +192,7 @@ aggregate_slot_init(struct aggregate_slot* slot,
   memset(slot, 0, sizeof(*slot));
 
   C = layout->covering_count;
-  M = layout->slot_count;
+  M = layout->tiles_per_epoch;
 
   CU(Error,
      cuMemAlloc((CUdeviceptr*)&slot->d_permuted_sizes,
@@ -249,7 +249,7 @@ aggregate_by_shard_async(const struct aggregate_layout* layout,
                          struct aggregate_slot* slot,
                          CUstream stream)
 {
-  const uint64_t M = layout->slot_count;
+  const uint64_t M = layout->tiles_per_epoch;
   const uint64_t C = layout->covering_count;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
@@ -297,7 +297,7 @@ aggregate_by_shard_async(const struct aggregate_layout* layout,
                                               d_comp_sizes,
                                               slot->d_offsets,
                                               slot->d_perm,
-                                              layout->max_comp_chunk_bytes);
+                                              layout->max_chunk_bytes);
   }
 
   return 0;

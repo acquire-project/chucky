@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aggregate.h"
+#include "lod.h"
 #include "lod_plan.h"
 #include "metric.h"
 #include "transpose.h"
@@ -69,6 +70,12 @@ struct buffer
   enum domain domain;
 };
 
+struct double_buffer
+{
+  struct buffer buf[2];
+  int current; // 0 or 1
+};
+
 struct dimension
 {
   uint64_t size;
@@ -77,15 +84,20 @@ struct dimension
   const char* name;         // optional label (e.g. "x"), may be NULL
 };
 
+enum compression_codec
+{
+  CODEC_NONE,
+  CODEC_ZSTD,
+};
+
 struct tile_stream_configuration
 {
   size_t buffer_capacity_bytes;
   size_t bytes_per_element;
   uint8_t rank;
   const struct dimension* dimensions;
-  struct writer* sink;           // downstream writer (uncompressed), not owned
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
-  int compress;                  // enable nvcomp zstd compression
+  enum compression_codec codec;  // compression codec for tiles
   int enable_multiscale;         // enable LOD pyramid generation
   uint32_t lod_mask;             // bitmask of dims to downsample (0 = dim0)
 };
@@ -102,8 +114,8 @@ struct staging_slot
 struct staging_state
 {
   struct staging_slot slot[2];
-  int current; // 0 or 1: which buffer the host is filling
-  size_t fill; // bytes written to current slot's h_in so far
+  int current;          // 0 or 1: which buffer the host is filling
+  size_t bytes_written; // bytes written to current slot's h_in so far
 };
 
 struct stream_layout
@@ -115,11 +127,11 @@ struct stream_layout
   uint64_t* d_lifted_shape;  // device copy (allocated once)
   int64_t* d_lifted_strides; // device copy (allocated once)
 
-  uint64_t tile_elements;  // elements per tile
-  uint64_t tile_stride;    // elements between tile starts (>= tile_elements)
-  uint64_t slot_count;     // M = prod of tile_count[i] for i > 0
-  uint64_t epoch_elements; // elements per epoch = M * tile_elements
-  size_t tile_pool_bytes;  // slot_count * tile_stride * bpe
+  uint64_t tile_elements;   // elements per tile
+  uint64_t tile_stride;     // elements between tile starts (>= tile_elements)
+  uint64_t tiles_per_epoch; // M = prod of tile_count[i] for i > 0
+  uint64_t epoch_elements;  // elements per epoch = M * tile_elements
+  size_t tile_pool_bytes;   // tiles_per_epoch * tile_stride * bpe
 };
 
 struct active_shard
@@ -157,6 +169,27 @@ struct tile_stream_gpu;
 // Dispatch function: H2D + scatter (+ optional d_linear copy).
 typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
 
+struct codec_state
+{
+  size_t* d_comp_sizes;   // device [M]
+  size_t* d_uncomp_sizes; // device [M], all same
+  void* d_comp_temp;
+  size_t comp_temp_bytes;
+  size_t max_chunk_bytes; // upper bound on compressed size of one tile
+  size_t pool_bytes;      // M * max_chunk_bytes
+};
+
+struct lod_level_state
+{
+  struct buffer d_compressed; // compressed tiles for this level
+  void** d_uncomp_ptrs;       // device [M_level]
+  void** d_comp_ptrs;         // device [M_level]
+  struct codec_state codec;
+  struct aggregate_layout agg_layout;
+  struct aggregate_slot agg_slot;
+  struct shard_state shard;
+};
+
 struct tile_stream_gpu
 {
   struct writer writer;
@@ -168,14 +201,8 @@ struct tile_stream_gpu
   struct stream_metrics metrics;
   uint64_t cursor;
 
-  // Tile pools (double-buffered)
-  //   A, B:     M0 tiles each (device)
-  //   A_host, B_host: M0 tiles each (host pinned, uncompressed path)
-  struct buffer pool_A;      // device: M0 * tile_stride * bpe
-  struct buffer pool_B;      // device: M0 * tile_stride * bpe
-  struct buffer pool_A_host; // host pinned (uncompressed path)
-  struct buffer pool_B_host; // host pinned (uncompressed path)
-  int pool_current;          // 0=A, 1=B — which pool scatter writes to
+  // Tile pools
+  struct double_buffer pools; // M0 * tile_stride * bpe each
 
   // Flush pipeline
   struct flush_slot_gpu flush[2]; // [0]=A epochs, [1]=B epochs
@@ -183,12 +210,7 @@ struct tile_stream_gpu
   int flush_pending;
 
   // Compress (shared across flushes)
-  size_t* d_comp_sizes;   // device [M0]
-  size_t* d_uncomp_sizes; // device [M0], all same
-  void* d_comp_temp;
-  size_t comp_temp_bytes;
-  size_t max_comp_chunk_bytes;
-  size_t comp_pool_bytes; // M0 * max_comp_chunk_bytes
+  struct codec_state codec; // L0 shared compress state
 
   // Aggregate + shard
   struct aggregate_layout agg_layout;
@@ -210,6 +232,10 @@ struct tile_stream_gpu
   CUevent t_lod_reduce_end;
   CUevent t_lod_end;
 
+  // Morton-to-tile layout structs (pre-computed at init)
+  struct m2t_layout m2t_l0;                     // L0 morton-to-tile layout
+  struct m2t_layout m2t_levels[LOD_MAX_LEVELS]; // [1..nlev-1]
+
   // Per-level tile layout for morton-to-tile scatter
   struct stream_layout
     lod_layouts[LOD_MAX_LEVELS]; // [1..nlev-1], index 0 unused
@@ -221,21 +247,7 @@ struct tile_stream_gpu
   uint64_t lod_tile_ends[LOD_MAX_LEVELS]; // exclusive end offsets in elements
 
   // Per-level compress + aggregate + shard delivery
-  struct
-  {
-    struct buffer d_compressed; // compressed tiles for this level
-    void** d_uncomp_ptrs;       // device [M_level]
-    void** d_comp_ptrs;         // device [M_level]
-    size_t* d_comp_sizes;       // device [M_level]
-    size_t* d_uncomp_sizes;     // device [M_level]
-    void* d_comp_temp;
-    size_t comp_temp_bytes;
-    size_t max_comp_chunk_bytes;
-    size_t comp_pool_bytes;
-    struct aggregate_layout agg_layout;
-    struct aggregate_slot agg_slot;
-    struct shard_state shard;
-  } lod_levels[LOD_MAX_LEVELS]; // [1..nlev-1]
+  struct lod_level_state lod_levels[LOD_MAX_LEVELS]; // [1..nlev-1]
 };
 
 // Initialize a tile_stream_gpu. Returns 0 on success, non-zero on error.

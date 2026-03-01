@@ -18,9 +18,9 @@ extern "C"
     int64_t lifted_strides[MAX_RANK];
     uint64_t* d_lifted_shape;           // device copy
     int64_t* d_lifted_strides;          // device copy
-    uint64_t slot_count;                // M: actual tile count
+    uint64_t tiles_per_epoch;            // M: actual tile count
     uint64_t covering_count;            // C >= M: product of padded dims
-    size_t max_comp_chunk_bytes;
+    size_t max_chunk_bytes;
   };
 
   struct aggregate_slot
@@ -42,22 +42,22 @@ extern "C"
   // tile_count[d]:       number of tiles along dim d (d = 0..rank-1).
   // tiles_per_shard[d]:  tiles per shard along dim d (d = 1..rank-1, each >= 1).
   //                      tiles_per_shard[0] is ignored.
-  // slot_count:          M = prod(tile_count[d] for d > 0), the number of tiles
+  // tiles_per_epoch:     M = prod(tile_count[d] for d > 0), the number of tiles
   //                      per epoch.
-  // max_comp_chunk_bytes: upper bound on compressed size of one tile.
+  // max_chunk_bytes:     upper bound on compressed size of one tile.
   //
   // Returns 0 on success. On failure, *layout is zeroed and safe to destroy.
   int aggregate_layout_init(struct aggregate_layout* layout,
                             uint8_t rank,
                             const uint64_t* tile_count,
                             const uint64_t* tiles_per_shard,
-                            uint64_t slot_count,
-                            size_t max_comp_chunk_bytes);
+                            uint64_t tiles_per_epoch,
+                            size_t max_chunk_bytes);
 
   void aggregate_layout_destroy(struct aggregate_layout* layout);
 
   // Initialize a slot (allocate device/host buffers).
-  // comp_pool_bytes = slot_count * max_comp_chunk_bytes.
+  // comp_pool_bytes = tiles_per_epoch * max_chunk_bytes.
   int aggregate_slot_init(struct aggregate_slot* slot,
                           const struct aggregate_layout* layout,
                           size_t comp_pool_bytes);

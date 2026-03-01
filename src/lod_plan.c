@@ -1,5 +1,7 @@
 #include "lod_plan.h"
 
+#include "index.ops.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -40,19 +42,7 @@ is_all_ones(int n, const uint64_t* v)
   return 1;
 }
 
-static void
-linear_to_coords(int ndim,
-                 const uint64_t* shape,
-                 uint64_t idx,
-                 uint64_t* coords)
-{
-  for (int d = 0; d < ndim; ++d) {
-    coords[d] = idx % shape[d];
-    idx /= shape[d];
-  }
-}
-
-static uint64_t
+uint64_t
 morton_rank(int ndim, const uint64_t* shape, const uint64_t* coords, int depth)
 {
   int p = ceil_log2(max_shape(ndim, shape));
@@ -148,7 +138,7 @@ lod_fill_ends(int ndim,
   uint64_t coords[LOD_MAX_NDIM];
   uint64_t next[LOD_MAX_NDIM];
   for (uint64_t j = 0; j < n_parents; ++j) {
-    linear_to_coords(ndim, parent_shape, j, coords);
+    unravel(ndim, parent_shape, j, coords);
     uint64_t pos = morton_rank(ndim, parent_shape, coords, 0);
 
     memcpy(next, coords, (size_t)ndim * sizeof(uint64_t));

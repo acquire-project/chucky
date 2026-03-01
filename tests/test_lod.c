@@ -97,9 +97,9 @@ lod_compute_gpu(const struct lod_plan* p,
 
   CU(Fail, cuEventRecord(ev_start, stream));
 
-  lod_scatter_f32(d_values, d_src, p->ndim, n_elements,
-                  d_full_shape, d_lod_shape, p->lod_ndim,
-                  p->lod_shapes[0], p->lod_mask, p->lod_counts[0], stream);
+  lod_scatter(d_values, d_src, lod_dtype_f32, p->ndim, n_elements,
+              d_full_shape, d_lod_shape, p->lod_ndim,
+              p->lod_shapes[0], p->lod_mask, p->lod_counts[0], stream);
 
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
@@ -131,10 +131,10 @@ lod_compute_gpu(const struct lod_plan* p,
     struct lod_span src_level = lod_spans_at(&p->levels, l);
     struct lod_span dst_level = lod_spans_at(&p->levels, l + 1);
 
-    lod_reduce_f32(d_values, d_ends,
-                   src_level.beg, dst_level.beg,
-                   p->lod_counts[l], p->lod_counts[l + 1],
-                   p->batch_count, stream);
+    lod_reduce(d_values, d_ends, lod_dtype_f32,
+               src_level.beg, dst_level.beg,
+               p->lod_counts[l], p->lod_counts[l + 1],
+               p->batch_count, stream);
   }
 
   CU(Fail, cuEventRecord(ev_done, stream));
@@ -234,7 +234,14 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
   uint64_t full_coords[MAX_NDIM];
   uint64_t lod_coords[MAX_NDIM];
   for (uint64_t i = 0; i < n; ++i) {
-    linear_to_coords(p->ndim, full_shape, i, full_coords);
+    // Decompose in C-order (dim ndim-1 fastest) to match GPU and data layout.
+    {
+      uint64_t rest = i;
+      for (int d = p->ndim - 1; d >= 0; --d) {
+        full_coords[d] = rest % full_shape[d];
+        rest /= full_shape[d];
+      }
+    }
     uint64_t b = plan_batch_index(p, full_coords);
     plan_extract_lod(p, full_coords, lod_coords);
     uint64_t pos =

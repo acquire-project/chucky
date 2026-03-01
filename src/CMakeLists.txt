@@ -141,6 +141,25 @@ target_compile_options(aggregate
         $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_HOST_WARN_FLAGS}>
 )
 
+add_library(index_ops STATIC
+    index.ops.c
+    index.ops.h
+)
+
+target_include_directories(index_ops
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_target_properties(index_ops PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
+target_compile_options(index_ops
+    PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:${C_WARN_FLAGS}>
+)
+
 add_library(lod_plan STATIC
     lod_plan.c
     lod_plan.h
@@ -153,6 +172,11 @@ target_include_directories(lod_plan
 
 set_target_properties(lod_plan PROPERTIES
     POSITION_INDEPENDENT_CODE ON
+)
+
+target_link_libraries(lod_plan
+    PUBLIC
+        index_ops
 )
 
 target_compile_options(lod_plan

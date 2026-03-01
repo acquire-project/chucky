@@ -43,6 +43,7 @@ find_package(OpenMP REQUIRED COMPONENTS C)
 add_library(index_ops_util STATIC index.ops.util.c)
 target_compile_options(index_ops_util PRIVATE ${C_WARN_FLAGS})
 target_include_directories(index_ops_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(index_ops_util PUBLIC index_ops)
 
 add_my_test(index.ops index.ops.c OpenMP::OpenMP_C)
 target_link_libraries(index.ops PRIVATE index_ops_util stream)
@@ -93,7 +94,6 @@ find_library(ZSTD_LIBRARY NAMES zstd libzstd_static zstd_static
 add_my_test(test_stream test_stream.c stream CUDA::cudart_static)
 target_link_libraries(test_stream PRIVATE index_ops_util ${ZSTD_LIBRARY})
 target_include_directories(test_stream PRIVATE ${ZSTD_INCLUDE_DIR})
-target_sources(test_stream PRIVATE writer.mem.c)
 
 add_my_test(test_compress test_compress.c stream CUDA::cudart_static)
 target_link_libraries(test_compress PRIVATE ${ZSTD_LIBRARY})
@@ -131,10 +131,10 @@ add_my_test(test_downsample test_downsample.c downsample CUDA::cudart_static)
 
 # Morton rank test (no CUDA)
 add_executable(test_morton morton.c)
-target_link_libraries(test_morton PRIVATE lod_plan chucky_log)
+target_link_libraries(test_morton PRIVATE lod_plan index_ops chucky_log)
 target_compile_options(test_morton PRIVATE ${C_WARN_FLAGS})
 add_test(NAME "test-test_morton" COMMAND test_morton)
 
 # LOD GPU test
-add_my_test(test_lod test_lod.c lod lod_plan CUDA::cudart_static)
+add_my_test(test_lod test_lod.c lod lod_plan index_ops CUDA::cudart_static)
 

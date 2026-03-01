@@ -14,6 +14,21 @@ extern "C"
     lod_dtype_f32,
   };
 
+  struct m2t_layout
+  {
+    enum lod_dtype dtype;
+    int ndim;
+    CUdeviceptr d_full_shape;
+    int lod_ndim;
+    uint32_t lod_mask;
+    CUdeviceptr d_lod_shape;
+    uint64_t lod_count;
+    uint64_t n_elements;
+    int lod_nlod;
+    CUdeviceptr d_lifted_shape;
+    CUdeviceptr d_lifted_strides;
+  };
+
   void lod_scatter(CUdeviceptr d_dst,
                    CUdeviceptr d_src,
                    enum lod_dtype dtype,
@@ -46,62 +61,15 @@ extern "C"
                   uint64_t batch_count,
                   CUstream stream);
 
+  // Pre-compute lod_nlod (= ceil_log2(max(lod_shape))) for m2t_layout.
+  int lod_m2t_lod_nlod(int lod_ndim, const uint64_t* lod_shape_host);
+
   // Morton-to-tile scatter: reads morton-ordered LOD data and writes into
-  // tile-pool layout using lifted strides.
-  //
-  // d_tiles:        output tile pool for this level
-  // d_morton:       input morton-ordered buffer (batch * lod_count elements)
-  // dtype:          element type
-  // ndim:           number of dimensions in the level's full shape
-  // full_shape:     host pointer to level's full shape [ndim]
-  // d_full_shape:   device pointer to level's full shape [ndim]
-  // lod_ndim:       number of downsampled dimensions
-  // lod_mask:       bitmask of downsampled dims
-  // d_lod_shape:    device pointer to LOD-only shape [lod_ndim]
-  // lod_shape_host: host pointer to LOD-only shape [lod_ndim]
-  // lod_count:      product of lod_shape (elements per batch in morton buf)
-  // batch_count:    product of non-downsampled dims
-  // lifted_rank:    2 * ndim (tile_count, tile_size interleaved)
-  // d_lifted_shape: device pointer [lifted_rank]
-  // d_lifted_strides: device pointer [lifted_rank]
+  // tile-pool layout using lifted strides. See struct m2t_layout.
   void lod_morton_to_tiles(CUdeviceptr d_tiles,
                            CUdeviceptr d_morton,
-                           enum lod_dtype dtype,
-                           int ndim,
-                           const uint64_t* full_shape,
-                           CUdeviceptr d_full_shape,
-                           int lod_ndim,
-                           uint32_t lod_mask,
-                           CUdeviceptr d_lod_shape,
-                           const uint64_t* lod_shape_host,
-                           uint64_t lod_count,
-                           uint64_t batch_count,
-                           int lifted_rank,
-                           CUdeviceptr d_lifted_shape,
-                           CUdeviceptr d_lifted_strides,
+                           const struct m2t_layout* layout,
                            CUstream stream);
-
-  // Legacy f32-only wrappers
-  void lod_scatter_f32(CUdeviceptr d_dst,
-                       CUdeviceptr d_src,
-                       int ndim,
-                       uint64_t n_elements,
-                       CUdeviceptr d_full_shape,
-                       CUdeviceptr d_lod_shape,
-                       int lod_ndim,
-                       const uint64_t* lod_shape_host,
-                       uint32_t lod_mask,
-                       uint64_t lod_count,
-                       CUstream stream);
-
-  void lod_reduce_f32(CUdeviceptr d_values,
-                      CUdeviceptr d_ends,
-                      uint64_t src_offset,
-                      uint64_t dst_offset,
-                      uint64_t src_lod_count,
-                      uint64_t dst_lod_count,
-                      uint64_t batch_count,
-                      CUstream stream);
 
 #ifdef __cplusplus
 }

@@ -21,7 +21,7 @@
 // Shards: 2*1*2 = 4 (flat index = s0 * (1*2) + s1 * 2 + s2)
 // Tiles per shard: 3*2*2 = 12
 // Voxels per tile: 2*4*3 = 24
-// Slot count (tiles/epoch) = tile_count[1]*tile_count[2] = 2*4 = 8
+// Tiles per epoch = tile_count[1]*tile_count[2] = 2*4 = 8
 // Epoch elements = 8 * 24 = 192
 // Epochs = tile_count[0] = 6
 // Shard epochs = shard_count[0] = 2, tiles_per_shard[0] = 3 epochs/shard-epoch
@@ -229,22 +229,22 @@ test_shard_contents(void)
     .bytes_per_element = sizeof(uint32_t),
     .rank = 3,
     .dimensions = dims,
-    .compress = 1,
+    .codec = CODEC_ZSTD,
     .shard_sink = &css.base,
   };
 
   struct tile_stream_gpu s;
   CHECK(Fail1, tile_stream_gpu_create(&config, &s) == 0);
 
-  log_info("  tile_elements=%lu  tile_stride=%lu  slot_count=%lu  "
+  log_info("  tile_elements=%lu  tile_stride=%lu  tiles_per_epoch=%lu  "
            "epoch_elements=%lu",
            (unsigned long)s.layout.tile_elements,
            (unsigned long)s.layout.tile_stride,
-           (unsigned long)s.layout.slot_count,
+           (unsigned long)s.layout.tiles_per_epoch,
            (unsigned long)s.layout.epoch_elements);
 
   CHECK(Fail2, s.layout.tile_elements == (uint64_t)voxels_per_tile);
-  CHECK(Fail2, s.layout.slot_count == 8);
+  CHECK(Fail2, s.layout.tiles_per_epoch == 8);
   CHECK(Fail2, s.layout.epoch_elements == 192);
 
   // Feed all data

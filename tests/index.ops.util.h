@@ -1,31 +1,10 @@
 #ifndef INDEX_OPS_UTIL_H
 #define INDEX_OPS_UTIL_H
 
+#include "index.ops.h"
+
 #include <stddef.h>
 #include <stdint.h>
-
-// Scalar index computation
-// For an array of dimension `rank` of size `shape`, a transpose is expressed
-// via `strides`. Consider an "input" array that has a row-major layout. The
-// "output" array also has a row-major layout but with dimensions in a different
-// order.
-//
-// This function computes the output index corresponding to a flat input index.
-// That is if r(i) is the coordinate of the i'th element of the input
-// array, and T(r) is the transpose, and r'(j) is the j'th element of the
-// output array, this function should return j such that r'(j)=T(r(idx)).
-uint64_t
-ravel(int rank,
-      const uint64_t* shape,
-      const int64_t* strides,
-      uint64_t idx);
-
-// Same as ravel but with int shape and int strides.
-uint64_t
-ravel_i32(int rank,
-          const int* restrict shape,
-          const int* restrict strides,
-          uint64_t idx);
 
 // Array printing utilities
 void
@@ -45,21 +24,6 @@ print_vi64(int n, const int64_t* v);
 
 void
 println_vi64(int n, const int64_t* v);
-
-// Array manipulation utilities
-void
-compute_strides(int rank, const int* shape, int* strides);
-
-void
-permute_i32(int n,
-            const int* restrict p,
-            const int* restrict in,
-            int* restrict out);
-
-void
-inverse_permutation_i32(int n,
-                        const int* restrict p,
-                        int* restrict inv);
 
 // Test utilities
 // Helper to create expected array using ravel_i32()

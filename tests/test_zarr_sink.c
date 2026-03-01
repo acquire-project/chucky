@@ -203,7 +203,7 @@ test_pipeline(const char* tmpdir)
     .bytes_per_element = sizeof(uint32_t),
     .rank = 3,
     .dimensions = dims,
-    .compress = 1,
+    .codec = CODEC_ZSTD,
     .shard_sink = zarr_sink_as_shard_sink(zs),
   };
 
