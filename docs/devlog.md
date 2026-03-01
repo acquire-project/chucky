@@ -3,6 +3,51 @@
 - [ ] interface for streaming from device, integrating with a cuda stream
 - [ ] "append dimension" semantics for dim0
 
+## 2026-03-01
+
+Continuing to refactor. Got the end-to-end working. Was seeing very
+slow compression times, but that was because the benchmark had too few
+chunks per epoch. Assembling the morton order and then scattering
+back out to tiles is still slow. My guess is the compute is too high,
+but I'm also not convinced the loads are right.
+
+Current benchmark on oreb (5090)
+
+```
+=== test_bench_multiscale ===
+  total:       9.38 GiB (5033164800 elements, 50 epochs)
+  tile:        8192 elements = 16 KiB  (stride=8192)
+  epoch:       12288 slots, 192 MiB pool
+  compress:    max_output=16395 comp_pool=219 MiB
+  LOD levels:  9
+
+  --- Benchmark Results ---
+  Input:        9.38 GiB (5033164800 elements)
+  Compressed:   1.33 GiB (ratio: 0.142)
+  Tiles:        614400 (12288/epoch x 50 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          23.10    26.45       2.71       2.36
+  H2D             39.52    53.82       1.58       1.16
+  Copy           381.37  2929.69       0.16       0.02
+  LOD Gather       9.30    17.74      20.15      10.57
+  LOD Reduce     234.29   260.46       0.91       0.82
+  LOD Scatter     15.68    16.00      13.68      13.40
+  Compress         9.71     9.95      22.08      21.55
+  Aggregate      389.50   506.64       0.55       0.42
+  D2H             53.15    53.23       4.04       4.03
+  Sink         10447.33     0.00       0.00       0.00
+
+  Wall time:     3.427 s
+  Throughput:    2.74 GiB/s
+```
+
+I confirmed I could write ngff zarr's compatible with neuroglancer.
+
+## 2026-02-28
+
+Cleaning up and moving things around.
+
 ## 2026-02-27
 
 Cleaned up lod kernels. Benchmarking from `test_lod` on `auk`:
@@ -21,6 +66,11 @@ Cleaned up lod kernels. Benchmarking from `test_lod` on `auk`:
   total      1.093 ms   15.35 GB/s
   PASS
 ```
+
+Completely deleted the lod code I had (sans kernels) and started over.
+Not supporting downsampling on the append dimension for the moment.
+
+Got back to an end-to-end implementation mostly.
 
 ## 2026-02-26
 

@@ -140,7 +140,7 @@ dispatch_scatter(struct tile_stream_gpu* s)
   transpose((CUdeviceptr)pool,
             (CUdeviceptr)ss->d_in.data,
             s->stage.bytes_written,
-            bpe,
+            (uint8_t)bpe,
             s->cursor,
             s->layout.lifted_rank,
             s->layout.d_lifted_shape,

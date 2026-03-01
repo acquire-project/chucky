@@ -11,7 +11,13 @@ ceil_log2_h(uint64_t v)
 {
   if (v <= 1)
     return 0;
-  return 64 - __builtin_clzll(v - 1);
+  v -= 1;
+  int n = 0;
+  while (v) {
+    v >>= 1;
+    ++n;
+  }
+  return n;
 }
 
 static uint64_t

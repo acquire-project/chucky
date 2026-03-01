@@ -176,7 +176,7 @@ test_multiscale_l0_correctness(void)
   int num_shards = 1;
   for (int d = 0; d < rank; ++d) {
     int tile_count = (int)(dims[d].size / dims[d].tile_size);
-    int shard_count = tile_count / dims[d].tiles_per_shard;
+    int shard_count = (int)(tile_count / dims[d].tiles_per_shard);
     num_shards *= shard_count;
   }
   const size_t shard_cap = total_bytes + 4096; // generous per-shard capacity

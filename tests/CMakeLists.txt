@@ -37,7 +37,12 @@ endfunction()
 
 add_my_test(test_ctx_null test_ctx_null.c)
 
-find_package(OpenMP REQUIRED COMPONENTS C)
+if(MSVC)
+    set(OPENMP_FLAGS /openmp:llvm)
+else()
+    find_package(OpenMP REQUIRED COMPONENTS C)
+    set(OPENMP_FLAGS ${OpenMP_C_FLAGS})
+endif()
 
 # Index operations utility library (shared between scalar and AVX2 tests)
 add_library(index_ops_util STATIC index.ops.util.c)
@@ -45,7 +50,8 @@ target_compile_options(index_ops_util PRIVATE ${C_WARN_FLAGS})
 target_include_directories(index_ops_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(index_ops_util PUBLIC index_ops)
 
-add_my_test(index.ops index.ops.c OpenMP::OpenMP_C)
+add_my_test(index.ops index.ops.c)
+target_compile_options(index.ops PRIVATE ${OPENMP_FLAGS})
 target_link_libraries(index.ops PRIVATE index_ops_util stream)
 
 # AVX2 helper library
@@ -54,8 +60,8 @@ target_compile_options(div_avx2 PRIVATE ${AVX2_FLAG} ${C_WARN_FLAGS})
 target_include_directories(div_avx2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # AVX2 test - always build, runtime check will skip if CPU doesn't support
-add_my_test(index.ops.avx2 index.ops.avx2.c OpenMP::OpenMP_C)
-target_compile_options(index.ops.avx2 PRIVATE ${AVX2_FLAG})
+add_my_test(index.ops.avx2 index.ops.avx2.c)
+target_compile_options(index.ops.avx2 PRIVATE ${OPENMP_FLAGS} ${AVX2_FLAG})
 target_link_libraries(index.ops.avx2 PRIVATE div_avx2 index_ops_util stream)
 
 # Magic division test
