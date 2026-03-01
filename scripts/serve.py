@@ -5,13 +5,13 @@
 """CORS + Range HTTP server for viewing zarr stores in neuroglancer.
 
 Usage:
-    uv run scripts/serve.py <zarr_path> [--port PORT] [--array NAME] [--no-open]
+    uv run scripts/serve.py <zarr_path> [--port PORT] [--no-open]
 
-Opens neuroglancer in your browser pointing at the zarr array.
+Opens neuroglancer in your browser pointing at the zarr store.
 
 Examples:
     uv run scripts/serve.py build/visual.zarr
-    uv run scripts/serve.py build/visual.zarr --array 0 --port 9000
+    uv run scripts/serve.py build/visual.zarr --port 9000
 """
 
 import argparse
@@ -40,13 +40,32 @@ class Handler(RangeRequestHandler):
         self.end_headers()
 
 
-def neuroglancer_url(port, zarr_rel_path):
+def read_axes(zarr_path):
+    """Read axis names and types from OME-NGFF metadata."""
+    meta_path = zarr_path / "zarr.json"
+    if not meta_path.exists():
+        return None
+    meta = json.loads(meta_path.read_text())
+    try:
+        return meta["attributes"]["ome"]["multiscales"][0]["axes"]
+    except (KeyError, IndexError):
+        return None
+
+
+def neuroglancer_url(port, zarr_rel_path, axes=None):
     source = f"zarr://http://localhost:{port}/{zarr_rel_path}"
-    state = json.dumps(
-        {"layers": [{"type": "image", "source": source, "name": "data"}]},
-        separators=(",", ":"),
-    )
-    return f"https://neuroglancer-demo.appspot.com/#!{quote(state)}"
+    state = {
+        "layers": [{"type": "image", "source": source, "name": "data"}],
+    }
+
+    if axes:
+        # Show spatial dims (z, y, x) in the cross-section panels
+        spatial = [a["name"] for a in axes if a.get("type") == "space"]
+        if spatial:
+            state["displayDimensions"] = spatial
+
+    state_json = json.dumps(state, separators=(",", ":"))
+    return f"https://neuroglancer-demo.appspot.com/#!{quote(state_json)}"
 
 
 def main():
@@ -54,20 +73,19 @@ def main():
     parser.add_argument("zarr_path", help="Path to zarr store")
     parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
     parser.add_argument(
-        "--array", default="0", help="Array name within the store (default: 0)"
-    )
-    parser.add_argument(
         "--no-open", action="store_true", help="Don't open browser automatically"
     )
     args = parser.parse_args()
 
     zarr_path = Path(args.zarr_path).resolve()
     serve_dir = zarr_path.parent
-    zarr_rel = f"{zarr_path.name}/{args.array}"
+    zarr_rel = zarr_path.name
+
+    axes = read_axes(zarr_path)
 
     os.chdir(serve_dir)
 
-    url = neuroglancer_url(args.port, zarr_rel)
+    url = neuroglancer_url(args.port, zarr_rel, axes)
     print(f"Serving {serve_dir} on http://localhost:{args.port}")
     print(f"Neuroglancer: {url}")
     print("Press Ctrl+C to stop.")

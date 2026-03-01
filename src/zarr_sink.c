@@ -572,12 +572,14 @@ write_multiscale_group_metadata(const char* store_path,
   jw_key(&jw, "attributes");
   jw_object_begin(&jw);
 
+  jw_key(&jw, "ome");
+  jw_object_begin(&jw);
+  jw_key(&jw, "version");
+  jw_string(&jw, "0.5");
+
   jw_key(&jw, "multiscales");
   jw_array_begin(&jw);
   jw_object_begin(&jw);
-
-  jw_key(&jw, "version");
-  jw_string(&jw, "0.4");
 
   jw_key(&jw, "axes");
   jw_array_begin(&jw);
@@ -592,7 +594,15 @@ write_multiscale_group_metadata(const char* store_path,
       jw_string(&jw, name);
     }
     jw_key(&jw, "type");
-    jw_string(&jw, "space");
+    {
+      const char* n = cfg->dimensions[d].name;
+      const char* type = "space";
+      if (n && (n[0] == 't' || n[0] == 'T') && n[1] == '\0')
+        type = "time";
+      else if (n && (n[0] == 'c' || n[0] == 'C') && n[1] == '\0')
+        type = "channel";
+      jw_string(&jw, type);
+    }
     jw_object_end(&jw);
   }
   jw_array_end(&jw);
@@ -608,15 +618,36 @@ write_multiscale_group_metadata(const char* store_path,
 
     jw_key(&jw, "coordinateTransformations");
     jw_array_begin(&jw);
+    // scale: voxel spacing at this level
     jw_object_begin(&jw);
     jw_key(&jw, "type");
     jw_string(&jw, "scale");
     jw_key(&jw, "scale");
     jw_array_begin(&jw);
     for (int d = 0; d < cfg->rank; ++d) {
-      double scale = (double)cfg->dimensions[d].size /
-                     (double)plan->shapes[lv][d];
+      double scale = 1.0;
+      if (cfg->dimensions[d].downsample && plan->shapes[lv][d] > 0)
+        scale = (double)cfg->dimensions[d].size /
+                (double)plan->shapes[lv][d];
       jw_float(&jw, scale);
+    }
+    jw_array_end(&jw);
+    jw_object_end(&jw);
+    // translation: half-voxel offset so downsampled voxel centers align
+    // t = 0.5 * (factor - 1) * base_scale
+    jw_object_begin(&jw);
+    jw_key(&jw, "type");
+    jw_string(&jw, "translation");
+    jw_key(&jw, "translation");
+    jw_array_begin(&jw);
+    for (int d = 0; d < cfg->rank; ++d) {
+      double t = 0.0;
+      if (cfg->dimensions[d].downsample && plan->shapes[lv][d] > 0) {
+        double factor = (double)cfg->dimensions[d].size /
+                        (double)plan->shapes[lv][d];
+        t = 0.5 * (factor - 1.0);
+      }
+      jw_float(&jw, t);
     }
     jw_array_end(&jw);
     jw_object_end(&jw);
@@ -629,6 +660,7 @@ write_multiscale_group_metadata(const char* store_path,
   jw_object_end(&jw); // multiscales[0]
   jw_array_end(&jw);  // multiscales
 
+  jw_object_end(&jw); // ome
   jw_object_end(&jw); // attributes
   jw_object_end(&jw); // root
 
@@ -651,9 +683,14 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   for (int d = 0; d < cfg->rank; ++d)
     shape[d] = cfg->dimensions[d].size;
 
+  uint32_t lod_mask = 0;
+  for (int d = 0; d < cfg->rank; ++d)
+    if (cfg->dimensions[d].downsample)
+      lod_mask |= (1u << d);
+
   int max_lev = cfg->nlev > 0 ? cfg->nlev : LOD_MAX_LEVELS;
   CHECK(Fail, lod_plan_init(&plan, cfg->rank, shape,
-                             (uint8_t)cfg->lod_mask, max_lev));
+                             (uint8_t)lod_mask, max_lev));
 
   struct zarr_multiscale_sink* ms =
     (struct zarr_multiscale_sink*)calloc(1, sizeof(*ms));

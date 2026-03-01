@@ -85,6 +85,12 @@ add_library(test_platform STATIC
 target_include_directories(test_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(test_platform PRIVATE $<$<COMPILE_LANGUAGE:C>:${C_WARN_FLAGS}>)
 
+# Shared test data generation library
+add_library(test_data STATIC test_data.c test_data.h)
+target_include_directories(test_data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_data PUBLIC stream)
+target_compile_options(test_data PRIVATE $<$<COMPILE_LANGUAGE:C>:${C_WARN_FLAGS}>)
+
 # Streaming tiled transpose test
 find_path(ZSTD_INCLUDE_DIR NAMES zstd.h
     PATH_SUFFIXES include REQUIRED)
@@ -100,7 +106,7 @@ target_link_libraries(test_compress PRIVATE ${ZSTD_LIBRARY})
 target_include_directories(test_compress PRIVATE ${ZSTD_INCLUDE_DIR})
 
 add_my_test(test_bench test_bench.c stream CUDA::cudart_static)
-target_link_libraries(test_bench PRIVATE index_ops_util zarr_sink test_platform ${ZSTD_LIBRARY})
+target_link_libraries(test_bench PRIVATE test_data ${ZSTD_LIBRARY})
 target_include_directories(test_bench PRIVATE ${ZSTD_INCLUDE_DIR})
 
 add_my_test(test_aggregate test_aggregate.c aggregate CUDA::cudart_static)
@@ -137,4 +143,9 @@ add_test(NAME "test-test_morton" COMMAND test_morton)
 
 # LOD GPU test
 add_my_test(test_lod test_lod.c lod lod_plan index_ops CUDA::cudart_static)
+
+# Multiscale integration test
+add_my_test(test_multiscale test_multiscale.c stream CUDA::cudart_static)
+target_link_libraries(test_multiscale PRIVATE test_data zarr_sink ${ZSTD_LIBRARY})
+target_include_directories(test_multiscale PRIVATE ${ZSTD_INCLUDE_DIR})
 

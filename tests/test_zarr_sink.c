@@ -208,7 +208,7 @@ test_pipeline(const char* tmpdir)
   };
 
   struct tile_stream_gpu s;
-  CHECK(Fail3, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail3, tile_stream_gpu_create(&config, &s));
 
   // Feed data
   {
@@ -364,9 +364,9 @@ test_multiscale_metadata(const char* tmpdir)
   log_info("=== test_multiscale_metadata ===");
 
   struct dimension dims[] = {
-    { .size = 64, .tile_size = 8, .tiles_per_shard = 4, .name = "z" },
+    { .size = 64, .tile_size = 8, .tiles_per_shard = 4, .name = "z", .downsample = 1 },
     { .size = 32, .tile_size = 8, .tiles_per_shard = 2, .name = "y" },
-    { .size = 64, .tile_size = 8, .tiles_per_shard = 4, .name = "x" },
+    { .size = 64, .tile_size = 8, .tiles_per_shard = 4, .name = "x", .downsample = 1 },
   };
 
   struct zarr_multiscale_config cfg = {
@@ -375,8 +375,7 @@ test_multiscale_metadata(const char* tmpdir)
     .fill_value = 0,
     .rank = 3,
     .dimensions = dims,
-    .lod_mask = 0x5, // dims 0 and 2 (z and x)
-    .nlev = 0,       // auto
+    .nlev = 0, // auto
   };
 
   struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);
@@ -395,8 +394,9 @@ test_multiscale_metadata(const char* tmpdir)
 
     CHECK(Fail2, strstr((char*)data, "\"zarr_format\":3"));
     CHECK(Fail2, strstr((char*)data, "\"node_type\":\"group\""));
+    CHECK(Fail2, strstr((char*)data, "\"ome\""));
     CHECK(Fail2, strstr((char*)data, "\"multiscales\""));
-    CHECK(Fail2, strstr((char*)data, "\"version\":\"0.4\""));
+    CHECK(Fail2, strstr((char*)data, "\"version\":\"0.5\""));
     CHECK(Fail2, strstr((char*)data, "\"path\":\"0\""));
     CHECK(Fail2, strstr((char*)data, "\"path\":\"1\""));
     CHECK(Fail2, strstr((char*)data, "\"coordinateTransformations\""));

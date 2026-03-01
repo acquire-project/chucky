@@ -140,7 +140,11 @@ void
 jw_float(struct json_writer* jw, double val)
 {
   jw_comma(jw);
-  jw_put(jw, "%g", val);
+  // Always include a decimal point so JSON parsers see a float, not an int.
+  if (val == (long long)val && val >= -1e15 && val <= 1e15)
+    jw_put(jw, "%.1f", val);
+  else
+    jw_put(jw, "%g", val);
   jw->needs_comma = 1;
 }
 

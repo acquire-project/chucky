@@ -134,7 +134,7 @@ test_stream_single_append(void)
   };
 
   struct tile_stream_gpu s;
-  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s));
 
   // Verify computed layout
   log_info("  tile_elements=%lu  tiles_per_epoch=%lu  epoch_elements=%lu",
@@ -263,7 +263,7 @@ test_stream_chunked_append(void)
   };
 
   struct tile_stream_gpu s;
-  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s));
 
   const int total = 96;
   uint16_t src[96];
@@ -389,7 +389,7 @@ test_stream_compressed_roundtrip(void)
   };
 
   struct tile_stream_gpu s;
-  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s));
 
   log_info("  tile_elements=%lu  tile_stride=%lu  tiles_per_epoch=%lu  "
            "epoch_elements=%lu",
@@ -397,8 +397,8 @@ test_stream_compressed_roundtrip(void)
            (unsigned long)s.layout.tile_stride,
            (unsigned long)s.layout.tiles_per_epoch,
            (unsigned long)s.layout.epoch_elements);
-  log_info("  max_comp_chunk_bytes=%zu  tile_pool_bytes=%zu",
-           s.codec.max_chunk_bytes,
+  log_info("  max_output_size=%zu  tile_pool_bytes=%zu",
+           s.codec.max_output_size,
            s.layout.tile_pool_bytes);
 
   CHECK(Fail, s.layout.tile_elements == 12);

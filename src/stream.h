@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aggregate.h"
+#include "compress.h"
 #include "lod.h"
 #include "lod_plan.h"
 #include "metric.h"
@@ -82,12 +83,7 @@ struct dimension
   uint64_t tile_size;
   uint64_t tiles_per_shard; // 0 means all tiles along this dimension
   const char* name;         // optional label (e.g. "x"), may be NULL
-};
-
-enum compression_codec
-{
-  CODEC_NONE,
-  CODEC_ZSTD,
+  int downsample;           // include in LOD pyramid (dim 0 not supported)
 };
 
 struct tile_stream_configuration
@@ -97,9 +93,7 @@ struct tile_stream_configuration
   uint8_t rank;
   const struct dimension* dimensions;
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
-  enum compression_codec codec;  // compression codec for tiles
-  int enable_multiscale;         // enable LOD pyramid generation
-  uint32_t lod_mask;             // bitmask of dims to downsample (0 = dim0)
+  enum compression_codec codec; // compression codec for tiles
 };
 
 struct staging_slot
@@ -109,6 +103,7 @@ struct staging_slot
   CUevent t_h2d_start;     // recorded before H2D memcpy
   CUevent t_scatter_start; // recorded before scatter kernel
   CUevent t_scatter_end;   // recorded after scatter kernel
+  size_t dispatched_bytes; // bytes transferred in last dispatch
 };
 
 struct staging_state
@@ -156,27 +151,11 @@ struct shard_state
 // flush[0] is used for A-pool epochs, flush[1] for B-pool epochs.
 struct flush_slot_gpu
 {
-  struct buffer d_compressed; // device: total_tiles * max_chunk_bytes
-  void** d_uncomp_ptrs;       // device [total_tiles], pre-built at init
-  void** d_comp_ptrs;         // device [total_tiles], pre-built at init
+  struct buffer d_compressed; // device: total_tiles * max_output_size
   CUevent t_compress_start;
+  CUevent t_aggregate_end;
   CUevent t_d2h_start;
   CUevent ready; // signals all D2H for this slot is done
-};
-
-struct tile_stream_gpu;
-
-// Dispatch function: H2D + scatter (+ optional d_linear copy).
-typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
-
-struct codec_state
-{
-  size_t* d_comp_sizes;   // device [M]
-  size_t* d_uncomp_sizes; // device [M], all same
-  void* d_comp_temp;
-  size_t comp_temp_bytes;
-  size_t max_chunk_bytes; // upper bound on compressed size of one tile
-  size_t pool_bytes;      // M * max_chunk_bytes
 };
 
 struct lod_level_state
@@ -190,12 +169,12 @@ struct lod_state
 {
   struct lod_plan plan;
 
-  struct buffer d_linear;  // linear epoch buffer (device)
-  struct buffer d_morton;  // morton-ordered LOD output (all levels packed)
+  struct buffer d_linear; // linear epoch buffer (device)
+  struct buffer d_morton; // morton-ordered LOD output (all levels packed)
 
-  CUdeviceptr d_full_shape;  // device copy of shapes[0]
-  CUdeviceptr d_lod_shape;   // device copy of lod_shapes[0]
-  CUdeviceptr d_ends;        // device copy of ends
+  CUdeviceptr d_full_shape; // device copy of shapes[0]
+  CUdeviceptr d_lod_shape;  // device copy of lod_shapes[0]
+  CUdeviceptr d_ends;       // device copy of ends
 
   CUdeviceptr d_child_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_parent_shapes[LOD_MAX_LEVELS];
@@ -214,6 +193,11 @@ struct lod_state
   CUevent t_reduce_end;
   CUevent t_end;
 };
+
+struct tile_stream_gpu;
+
+// Dispatch function: H2D + scatter (+ optional d_linear copy).
+typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
 
 struct tile_stream_gpu
 {
@@ -235,12 +219,14 @@ struct tile_stream_gpu
   int flush_pending;
 
   // Unified compression state (sized for total_tiles)
-  struct codec_state codec;
-  uint64_t total_tiles;                        // sum of all level tile counts
-  uint64_t level_tile_offset[LOD_MAX_LEVELS];  // first tile index per level
-  uint64_t level_tile_count[LOD_MAX_LEVELS];   // tiles_per_epoch per level
+  struct codec codec;
+  uint64_t total_tiles;                       // sum of all level tile counts
+  uint64_t level_tile_offset[LOD_MAX_LEVELS]; // first tile index per level
+  uint64_t level_tile_count[LOD_MAX_LEVELS];  // tiles_per_epoch per level
 
-  int nlev; // 1 when multiscale off, lod.nlev when on
+  int nlev;              // 1 when multiscale off, lod.nlev when on
+  int enable_multiscale; // computed from dimensions[].downsample
+  uint32_t lod_mask;     // computed from dimensions[].downsample
 
   // LOD (multiscale) state
   struct lod_state lod;

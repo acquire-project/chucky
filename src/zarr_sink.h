@@ -51,7 +51,6 @@ struct zarr_multiscale_config
   double fill_value;
   uint8_t rank;
   const struct dimension* dimensions; // L0 dimensions
-  uint32_t lod_mask;                  // bitmask of dims to downsample
   int nlev;                           // number of levels (0 = auto)
 };
 

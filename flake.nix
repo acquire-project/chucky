@@ -41,6 +41,9 @@
             perf
             pkg-config
             zstd
+            # for viewing w neuroglancer
+            python3
+            uv
           ];
         };
       }

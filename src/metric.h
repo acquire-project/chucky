@@ -11,9 +11,10 @@ struct stream_metric
 };
 
 static inline void
-accumulate_metric_ms(struct stream_metric* m, float ms)
+accumulate_metric_ms(struct stream_metric* m, float ms, size_t bytes)
 {
   m->ms += ms;
+  m->total_bytes += bytes;
   m->count++;
   if (ms < m->best_ms)
     m->best_ms = ms;

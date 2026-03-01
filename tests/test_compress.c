@@ -32,30 +32,26 @@ test_compress_roundtrip(void)
   const size_t num_tiles = 96;
   const size_t pool_bytes = num_tiles * tile_bytes;
 
-  const size_t max_comp = compress_get_max_output_size(tile_bytes);
-  const size_t comp_temp = compress_get_temp_size(num_tiles, tile_bytes);
-  const size_t comp_pool = num_tiles * max_comp;
-
-  log_info("  tile_bytes=%zu num_tiles=%zu max_comp=%zu comp_temp=%zu",
-           tile_bytes,
-           num_tiles,
-           max_comp,
-           comp_temp);
-
-  // Host data
-  uint16_t* h_data = (uint16_t*)malloc(pool_bytes);
+  struct codec c = { 0 };
+  uint16_t* h_data = NULL;
   uint8_t* h_compressed = NULL;
   size_t* h_comp_sizes = NULL;
   uint8_t* decomp_buf = NULL;
   void* d_data = NULL;
   void* d_compressed = NULL;
-  void* d_temp = NULL;
-  size_t* d_comp_sizes = NULL;
-  void** d_in_ptrs = NULL;
-  void** d_out_ptrs = NULL;
-  size_t* d_in_sizes = NULL;
   CUstream stream = 0;
   int ok = 0;
+
+  CHECK(Fail, codec_init(&c, CODEC_ZSTD, tile_bytes, num_tiles));
+
+  const size_t comp_pool = num_tiles * c.max_output_size;
+
+  log_info("  tile_bytes=%zu num_tiles=%zu max_comp=%zu",
+           tile_bytes,
+           num_tiles,
+           c.max_output_size);
+
+  h_data = (uint16_t*)malloc(pool_bytes);
 
   CHECK(Fail, h_data);
   h_compressed = (uint8_t*)malloc(comp_pool);
@@ -68,37 +64,6 @@ test_compress_roundtrip(void)
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuMemAlloc((CUdeviceptr*)&d_data, pool_bytes));
   CU(Fail, cuMemAlloc((CUdeviceptr*)&d_compressed, comp_pool));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_temp, comp_temp));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_comp_sizes, num_tiles * sizeof(size_t)));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_in_ptrs, num_tiles * sizeof(void*)));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_out_ptrs, num_tiles * sizeof(void*)));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_in_sizes, num_tiles * sizeof(size_t)));
-
-  // Set up pointer and size arrays
-  {
-    void** h_ptrs = (void**)malloc(num_tiles * sizeof(void*));
-    size_t* h_sizes = (size_t*)malloc(num_tiles * sizeof(size_t));
-    CHECK(Fail, h_ptrs && h_sizes);
-
-    for (size_t i = 0; i < num_tiles; ++i) {
-      h_ptrs[i] = (char*)d_data + i * tile_bytes;
-      h_sizes[i] = tile_bytes;
-    }
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)d_in_ptrs, h_ptrs, num_tiles * sizeof(void*)));
-    CU(Fail,
-       cuMemcpyHtoD(
-         (CUdeviceptr)d_in_sizes, h_sizes, num_tiles * sizeof(size_t)));
-
-    for (size_t i = 0; i < num_tiles; ++i)
-      h_ptrs[i] = (char*)d_compressed + i * max_comp;
-    CU(
-      Fail,
-      cuMemcpyHtoD((CUdeviceptr)d_out_ptrs, h_ptrs, num_tiles * sizeof(void*)));
-
-    free(h_ptrs);
-    free(h_sizes);
-  }
 
   // Run TWO rounds with different data
   for (int round = 0; round < 2; ++round) {
@@ -113,27 +78,19 @@ test_compress_roundtrip(void)
 
     // Compress
     CHECK(Fail,
-          compress_batch_async((const void* const*)d_in_ptrs,
-                               d_in_sizes,
-                               tile_bytes,
-                               num_tiles,
-                               d_temp,
-                               comp_temp,
-                               (void* const*)d_out_ptrs,
-                               d_comp_sizes,
-                               stream) == 0);
+          codec_compress(&c, d_data, tile_bytes, d_compressed, stream));
 
     // Wait for compress to finish, then D2H
     CU(Fail, cuStreamSynchronize(stream));
     CU(Fail, cuMemcpyDtoH(h_compressed, (CUdeviceptr)d_compressed, comp_pool));
     CU(Fail,
        cuMemcpyDtoH(
-         h_comp_sizes, (CUdeviceptr)d_comp_sizes, num_tiles * sizeof(size_t)));
+         h_comp_sizes, (CUdeviceptr)c.d_comp_sizes, num_tiles * sizeof(size_t)));
 
     // Verify: decompress each tile and compare
     int round_errors = 0;
     for (size_t t = 0; t < num_tiles; ++t) {
-      const uint8_t* comp_tile = h_compressed + t * max_comp;
+      const uint8_t* comp_tile = h_compressed + t * c.max_output_size;
       size_t result =
         ZSTD_decompress(decomp_buf, tile_bytes, comp_tile, h_comp_sizes[t]);
       if (ZSTD_isError(result)) {
@@ -191,12 +148,8 @@ Fail:
   free(decomp_buf);
   cuMemFree((CUdeviceptr)d_data);
   cuMemFree((CUdeviceptr)d_compressed);
-  cuMemFree((CUdeviceptr)d_temp);
-  cuMemFree((CUdeviceptr)d_comp_sizes);
-  cuMemFree((CUdeviceptr)d_in_ptrs);
-  cuMemFree((CUdeviceptr)d_out_ptrs);
-  cuMemFree((CUdeviceptr)d_in_sizes);
   cuStreamDestroy(stream);
+  codec_free(&c);
 
   if (ok) {
     log_info("  PASS");

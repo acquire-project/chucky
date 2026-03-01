@@ -141,9 +141,10 @@ lod_compute_gpu(const struct lod_plan* p,
   CU(Fail, cuStreamSynchronize(stream));
 
   if (metrics) {
-    accumulate_metric_cu(&metrics->scatter, ev_start, ev_scatter);
-    accumulate_metric_cu(&metrics->pyramid, ev_scatter, ev_done);
-    accumulate_metric_cu(&metrics->total, ev_start, ev_done);
+    size_t nbytes = total_vals * sizeof(float);
+    accumulate_metric_cu(&metrics->scatter, ev_start, ev_scatter, nbytes);
+    accumulate_metric_cu(&metrics->pyramid, ev_scatter, ev_done, nbytes);
+    accumulate_metric_cu(&metrics->total, ev_start, ev_done, nbytes);
   }
 
   result = (float*)malloc(total_vals * sizeof(float));
@@ -381,9 +382,10 @@ lod_compute_gpu_u16(const struct lod_plan* p,
   CU(Fail, cuStreamSynchronize(stream));
 
   if (metrics) {
-    accumulate_metric_cu(&metrics->scatter, ev_start, ev_scatter);
-    accumulate_metric_cu(&metrics->pyramid, ev_scatter, ev_done);
-    accumulate_metric_cu(&metrics->total, ev_start, ev_done);
+    size_t nbytes = total_vals * sizeof(uint16_t);
+    accumulate_metric_cu(&metrics->scatter, ev_start, ev_scatter, nbytes);
+    accumulate_metric_cu(&metrics->pyramid, ev_scatter, ev_done, nbytes);
+    accumulate_metric_cu(&metrics->total, ev_start, ev_done, nbytes);
   }
 
   result = (uint16_t*)malloc(total_vals * sizeof(uint16_t));
