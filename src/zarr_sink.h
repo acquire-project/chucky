@@ -46,12 +46,13 @@ struct shard_sink* zarr_sink_as_shard_sink(struct zarr_sink* s);
 
 struct zarr_multiscale_config
 {
-  const char* store_path; // root directory
+  const char* store_path;  // root directory
+  const char* array_name;  // group name (e.g. "multiscale"); NULL → write at store_path
   enum zarr_dtype data_type;
   double fill_value;
   uint8_t rank;
   const struct dimension* dimensions; // L0 dimensions
-  int nlev;                           // number of levels (0 = auto)
+  int nlod;                           // number of levels (0 = auto)
 };
 
 struct zarr_multiscale_sink;

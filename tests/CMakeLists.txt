@@ -112,7 +112,7 @@ target_link_libraries(test_compress PRIVATE ${ZSTD_LIBRARY})
 target_include_directories(test_compress PRIVATE ${ZSTD_INCLUDE_DIR})
 
 add_my_test(test_bench test_bench.c stream CUDA::cudart_static)
-target_link_libraries(test_bench PRIVATE test_data ${ZSTD_LIBRARY})
+target_link_libraries(test_bench PRIVATE test_data zarr_sink ${ZSTD_LIBRARY})
 target_include_directories(test_bench PRIVATE ${ZSTD_INCLUDE_DIR})
 
 add_my_test(test_aggregate test_aggregate.c aggregate CUDA::cudart_static)

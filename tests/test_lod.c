@@ -26,14 +26,14 @@ upload(CUdeviceptr* d_ptr, const void* h_ptr, size_t bytes)
 }
 
 static void
-report_metric(const struct stream_metric* m, uint64_t n_elements)
+report_metric(const struct stream_metric* m)
 {
   if (m->count == 0)
     return;
-  double bytes = (double)n_elements * 4.0;
   float avg_ms = m->ms / (float)m->count;
-  printf("  %-8s %7.3f ms  %6.2f GB/s\n",
-         m->name, avg_ms, bytes / ((double)avg_ms * 1e6));
+  double avg_bytes = m->total_bytes / (double)m->count;
+  printf("  %-8s %7.3f ms  %6.2f GB/s  (%d iters)\n",
+         m->name, avg_ms, avg_bytes / ((double)avg_ms * 1e6), m->count);
 }
 
 struct test_lod_metrics
@@ -54,11 +54,11 @@ test_lod_metrics_init(struct test_lod_metrics* m)
 }
 
 static void
-test_lod_metrics_report(const struct test_lod_metrics* m, uint64_t n_elements)
+test_lod_metrics_report(const struct test_lod_metrics* m)
 {
-  report_metric(&m->scatter, n_elements);
-  report_metric(&m->pyramid, n_elements);
-  report_metric(&m->total, n_elements);
+  report_metric(&m->scatter);
+  report_metric(&m->pyramid);
+  report_metric(&m->total);
 }
 
 // Run LOD computation on GPU: scatter + fill_ends + reduce.
@@ -78,7 +78,7 @@ lod_compute_gpu(const struct lod_plan* p,
   CUdeviceptr d_child_shape = 0, d_parent_shape = 0;
 
   uint64_t n_elements = lod_span_len(lod_spans_at(&p->levels, 0));
-  uint64_t total_vals = p->levels.ends[p->nlev - 1];
+  uint64_t total_vals = p->levels.ends[p->nlod - 1];
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
   CU(Fail, cuEventCreate(&ev_start, CU_EVENT_DEFAULT));
@@ -103,7 +103,7 @@ lod_compute_gpu(const struct lod_plan* p,
 
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
-  for (int l = 0; l < p->nlev - 1; ++l) {
+  for (int l = 0; l < p->nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
     uint64_t n_parents = lod_span_len(seg);
 
@@ -170,7 +170,8 @@ static int
 test_lod_gpu(const char* label,
              int ndim,
              const uint64_t* shape,
-             uint8_t lod_mask)
+             uint8_t lod_mask,
+             int niter)
 {
   printf("--- %s ---\n", label);
   int ok = 0;
@@ -188,21 +189,24 @@ test_lod_gpu(const char* label,
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, lod_mask, MAX_LOD));
-  printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlev=%d\n",
+  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD));
+  printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlod=%d\n",
          lod_mask, plan.lod_ndim, plan.batch_ndim,
-         (unsigned long long)plan.batch_count, plan.nlev);
+         (unsigned long long)plan.batch_count, plan.nlod);
 
   CHECK(Fail, lod_compute(&plan, src, &cpu_values));
 
   struct test_lod_metrics metrics;
   test_lod_metrics_init(&metrics);
-  gpu_values = lod_compute_gpu(&plan, src, &metrics);
-  CHECK(Fail, gpu_values);
-  test_lod_metrics_report(&metrics, n);
+  for (int iter = 0; iter < niter; ++iter) {
+    free(gpu_values);
+    gpu_values = lod_compute_gpu(&plan, src, &metrics);
+    CHECK(Fail, gpu_values);
+  }
+  test_lod_metrics_report(&metrics);
 
   {
-    uint64_t total = plan.levels.ends[plan.nlev - 1];
+    uint64_t total = plan.levels.ends[plan.nlod - 1];
     for (uint64_t i = 0; i < total; ++i) {
       if (fabsf(gpu_values[i] - cpu_values[i]) > 1e-5f) {
         printf("  FAIL at i=%llu: gpu=%f cpu=%f\n",
@@ -254,7 +258,7 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
 static void
 lod_reduce_cpu_u16(const struct lod_plan* p, uint16_t* values)
 {
-  for (int l = 0; l < p->nlev - 1; ++l) {
+  for (int l = 0; l < p->nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
     uint64_t src_lod = p->lod_counts[l];
     uint64_t dst_lod = p->lod_counts[l + 1];
@@ -286,7 +290,7 @@ lod_compute_u16(const struct lod_plan* p,
   int ok = 0;
   *out_values = NULL;
 
-  uint64_t total_vals = p->levels.ends[p->nlev - 1];
+  uint64_t total_vals = p->levels.ends[p->nlod - 1];
   uint16_t* values = (uint16_t*)malloc(total_vals * sizeof(uint16_t));
   CHECK(Error, values);
   *out_values = values;
@@ -319,7 +323,7 @@ lod_compute_gpu_u16(const struct lod_plan* p,
   CUdeviceptr d_child_shape = 0, d_parent_shape = 0;
 
   uint64_t n_elements = lod_span_len(lod_spans_at(&p->levels, 0));
-  uint64_t total_vals = p->levels.ends[p->nlev - 1];
+  uint64_t total_vals = p->levels.ends[p->nlod - 1];
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
   CU(Fail, cuEventCreate(&ev_start, CU_EVENT_DEFAULT));
@@ -344,7 +348,7 @@ lod_compute_gpu_u16(const struct lod_plan* p,
 
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
-  for (int l = 0; l < p->nlev - 1; ++l) {
+  for (int l = 0; l < p->nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
     uint64_t n_parents = lod_span_len(seg);
 
@@ -411,7 +415,8 @@ static int
 test_lod_gpu_u16(const char* label,
                  int ndim,
                  const uint64_t* shape,
-                 uint8_t lod_mask)
+                 uint8_t lod_mask,
+                 int niter)
 {
   printf("--- %s ---\n", label);
   int ok = 0;
@@ -429,21 +434,24 @@ test_lod_gpu_u16(const char* label,
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (uint16_t)((i + 1) & 0xFFFF);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, lod_mask, MAX_LOD));
-  printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlev=%d\n",
+  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD));
+  printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlod=%d\n",
          lod_mask, plan.lod_ndim, plan.batch_ndim,
-         (unsigned long long)plan.batch_count, plan.nlev);
+         (unsigned long long)plan.batch_count, plan.nlod);
 
   CHECK(Fail, lod_compute_u16(&plan, src, &cpu_values));
 
   struct test_lod_metrics metrics;
   test_lod_metrics_init(&metrics);
-  gpu_values = lod_compute_gpu_u16(&plan, src, &metrics);
-  CHECK(Fail, gpu_values);
-  test_lod_metrics_report(&metrics, n);
+  for (int iter = 0; iter < niter; ++iter) {
+    free(gpu_values);
+    gpu_values = lod_compute_gpu_u16(&plan, src, &metrics);
+    CHECK(Fail, gpu_values);
+  }
+  test_lod_metrics_report(&metrics);
 
   {
-    uint64_t total = plan.levels.ends[plan.nlev - 1];
+    uint64_t total = plan.levels.ends[plan.nlod - 1];
     for (uint64_t i = 0; i < total; ++i) {
       if (gpu_values[i] != cpu_values[i]) {
         printf("  FAIL at i=%llu: gpu=%u cpu=%u\n",
@@ -480,54 +488,54 @@ main(void)
 
   // All dims downsampled
   nfail +=
-    !test_lod_gpu("gpu_lod_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3);
+    !test_lod_gpu("gpu_lod_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3, 1);
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7);
+    !test_lod_gpu("gpu_lod_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7, 1);
 
   // Mixed: only some dims downsampled
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5);
+    !test_lod_gpu("gpu_lod_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5, 1);
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2);
+    !test_lod_gpu("gpu_lod_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2, 1);
   nfail +=
-    !test_lod_gpu("gpu_lod_2d_d0", 2, (uint64_t[]){ 5, 3 }, 0x1);
+    !test_lod_gpu("gpu_lod_2d_d0", 2, (uint64_t[]){ 5, 3 }, 0x1, 1);
   nfail +=
-    !test_lod_gpu("gpu_lod_2d_d1", 2, (uint64_t[]){ 3, 7 }, 0x2);
+    !test_lod_gpu("gpu_lod_2d_d1", 2, (uint64_t[]){ 3, 7 }, 0x2, 1);
 
-  // No dims downsampled (trivial: nlev=1)
+  // No dims downsampled (trivial: nlod=1)
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0);
+    !test_lod_gpu("gpu_lod_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0, 1);
   // 1D
   nfail +=
-    !test_lod_gpu("gpu_lod_1d", 1, (uint64_t[]){ 9 }, 0x1);
+    !test_lod_gpu("gpu_lod_1d", 1, (uint64_t[]){ 9 }, 0x1, 1);
 
   // Larger mixed
   nfail +=
-    !test_lod_gpu("gpu_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA);
+    !test_lod_gpu("gpu_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA, 1);
 
   // Larger cases for throughput estimation
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7);
+    !test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7, 10);
   nfail +=
     !test_lod_gpu("gpu_lod_3d_mixed_large", 3,
-                  (uint64_t[]){ 64, 256, 256 }, 0x6);
+                  (uint64_t[]){ 64, 256, 256 }, 0x6, 10);
 
   // u16 tests (exact integer match)
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3);
+    !test_lod_gpu_u16("gpu_lod_u16_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7);
+    !test_lod_gpu_u16("gpu_lod_u16_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5);
+    !test_lod_gpu_u16("gpu_lod_u16_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2);
+    !test_lod_gpu_u16("gpu_lod_u16_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0);
+    !test_lod_gpu_u16("gpu_lod_u16_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_1d", 1, (uint64_t[]){ 9 }, 0x1);
+    !test_lod_gpu_u16("gpu_lod_u16_1d", 1, (uint64_t[]){ 9 }, 0x1, 1);
   nfail +=
     !test_lod_gpu_u16("gpu_lod_u16_4d_d13", 4,
-                      (uint64_t[]){ 3, 8, 2, 6 }, 0xA);
+                      (uint64_t[]){ 3, 8, 2, 6 }, 0xA, 1);
 
   printf("\n%s (%d failures)\n", nfail ? "FAIL" : "ALL PASSED", nfail);
 

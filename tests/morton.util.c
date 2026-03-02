@@ -63,7 +63,7 @@ lod_scatter_cpu(const struct lod_plan* p, const float* src, float* dst)
 static void
 lod_reduce_cpu(const struct lod_plan* p, float* values)
 {
-  for (int l = 0; l < p->nlev - 1; ++l) {
+  for (int l = 0; l < p->nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
     uint64_t src_ds = p->lod_counts[l];
     uint64_t dst_ds = p->lod_counts[l + 1];
@@ -93,7 +93,7 @@ lod_compute(const struct lod_plan* p, const float* src, float** out_values)
   int ok = 0;
   *out_values = NULL;
 
-  uint64_t total_vals = p->levels.ends[p->nlev - 1];
+  uint64_t total_vals = p->levels.ends[p->nlod - 1];
   float* values = (float*)malloc(total_vals * sizeof(float));
   CHECK(Error, values);
   *out_values = values;

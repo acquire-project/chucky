@@ -215,7 +215,7 @@ test_lod(const char* label, int ndim, const uint64_t* shape, uint8_t lod_mask)
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, lod_mask, MAX_LOD));
+  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD));
   printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu\n",
          lod_mask,
          plan.lod_ndim,
@@ -223,9 +223,9 @@ test_lod(const char* label, int ndim, const uint64_t* shape, uint8_t lod_mask)
          (unsigned long long)plan.batch_count);
 
   CHECK(Fail, lod_compute(&plan, src, &values));
-  printf("  levels: %d\n", plan.nlev);
+  printf("  levels: %d\n", plan.nlod);
 
-  if (plan.nlev < 2) {
+  if (plan.nlod < 2) {
     prev_rm = (float*)malloc(n * sizeof(float));
     CHECK(Fail, prev_rm);
     morton_unshuffle(&plan, 0, values, prev_rm);
@@ -244,7 +244,7 @@ test_lod(const char* label, int ndim, const uint64_t* shape, uint8_t lod_mask)
     goto Fail;
   }
 
-  CHECK(Fail, plan.nlev >= 2);
+  CHECK(Fail, plan.nlod >= 2);
 
   prev_rm = (float*)malloc(n * sizeof(float));
   CHECK(Fail, prev_rm);
@@ -260,7 +260,7 @@ test_lod(const char* label, int ndim, const uint64_t* shape, uint8_t lod_mask)
   }
   printf("  level 0 scatter: ok\n");
 
-  for (int l = 1; l < plan.nlev; ++l) {
+  for (int l = 1; l < plan.nlod; ++l) {
     const uint64_t* prev_shape = plan.shapes[l - 1];
     const uint64_t* cur_shape = plan.shapes[l];
     struct lod_span lev = lod_spans_at(&plan.levels, l);

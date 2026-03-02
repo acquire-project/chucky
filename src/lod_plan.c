@@ -157,10 +157,25 @@ lod_segment(const struct lod_plan* p, int level)
   return (struct lod_span){ .beg = next.beg - base, .end = next.end - base };
 }
 
+// Would halving produce a level where any LOD dim < its tile size?
+static int
+next_level_below_tile(int lod_ndim,
+                      const uint64_t* lod_shape,
+                      const uint64_t* lod_tile)
+{
+  for (int d = 0; d < lod_ndim; ++d) {
+    uint64_t next = (lod_shape[d] + 1) / 2;
+    if (next < lod_tile[d])
+      return 1;
+  }
+  return 0;
+}
+
 int
 lod_plan_init(struct lod_plan* p,
               int ndim,
               const uint64_t* shape,
+              const uint64_t* tile_shape,
               uint8_t lod_mask,
               int max_levels)
 {
@@ -185,48 +200,55 @@ lod_plan_init(struct lod_plan* p,
   for (int k = 0; k < p->lod_ndim; ++k)
     p->lod_shapes[0][k] = shape[p->lod_map[k]];
 
-  p->nlev = 1;
-  while (p->nlev < max_levels &&
-         !is_all_ones(p->lod_ndim, p->lod_shapes[p->nlev - 1])) {
+  // Extract LOD tile sizes (default to 1 when tile_shape is NULL).
+  uint64_t lod_tile[LOD_MAX_NDIM];
+  for (int k = 0; k < p->lod_ndim; ++k)
+    lod_tile[k] = tile_shape ? tile_shape[p->lod_map[k]] : 1;
+
+  p->nlod = 1;
+  while (p->nlod < max_levels &&
+         !is_all_ones(p->lod_ndim, p->lod_shapes[p->nlod - 1]) &&
+         !next_level_below_tile(
+           p->lod_ndim, p->lod_shapes[p->nlod - 1], lod_tile)) {
     for (int k = 0; k < p->lod_ndim; ++k)
-      p->lod_shapes[p->nlev][k] = (p->lod_shapes[p->nlev - 1][k] + 1) / 2;
-    memcpy(p->shapes[p->nlev],
-           p->shapes[p->nlev - 1],
+      p->lod_shapes[p->nlod][k] = (p->lod_shapes[p->nlod - 1][k] + 1) / 2;
+    memcpy(p->shapes[p->nlod],
+           p->shapes[p->nlod - 1],
            (size_t)ndim * sizeof(uint64_t));
     for (int k = 0; k < p->lod_ndim; ++k)
-      p->shapes[p->nlev][p->lod_map[k]] = p->lod_shapes[p->nlev][k];
-    ++p->nlev;
+      p->shapes[p->nlod][p->lod_map[k]] = p->lod_shapes[p->nlod][k];
+    ++p->nlod;
   }
 
-  for (int k = 0; k < p->nlev; ++k) {
+  for (int k = 0; k < p->nlod; ++k) {
     p->lod_counts[k] = 1;
     for (int d = 0; d < p->lod_ndim; ++d)
       p->lod_counts[k] *= p->lod_shapes[k][d];
   }
 
-  p->lod_levels.n = (uint64_t)p->nlev;
-  p->lod_levels.ends = (uint64_t*)malloc(p->nlev * sizeof(uint64_t));
+  p->lod_levels.n = (uint64_t)p->nlod;
+  p->lod_levels.ends = (uint64_t*)malloc(p->nlod * sizeof(uint64_t));
   if (!p->lod_levels.ends)
     goto Fail;
   p->lod_levels.ends[0] = p->lod_counts[0];
-  for (int k = 1; k < p->nlev; ++k)
+  for (int k = 1; k < p->nlod; ++k)
     p->lod_levels.ends[k] = p->lod_levels.ends[k - 1] + p->lod_counts[k];
 
-  p->levels.n = (uint64_t)p->nlev;
-  p->levels.ends = (uint64_t*)malloc(p->nlev * sizeof(uint64_t));
+  p->levels.n = (uint64_t)p->nlod;
+  p->levels.ends = (uint64_t*)malloc(p->nlod * sizeof(uint64_t));
   if (!p->levels.ends)
     goto Fail;
-  for (int k = 0; k < p->nlev; ++k)
+  for (int k = 0; k < p->nlod; ++k)
     p->levels.ends[k] = p->batch_count * p->lod_levels.ends[k];
 
   {
     uint64_t total_ends =
-      p->lod_levels.ends[p->nlev - 1] - p->lod_levels.ends[0];
+      p->lod_levels.ends[p->nlod - 1] - p->lod_levels.ends[0];
     if (total_ends > 0) {
       p->ends = (uint64_t*)malloc(total_ends * sizeof(uint64_t));
       if (!p->ends)
         goto Fail;
-      for (int l = 0; l < p->nlev - 1; ++l) {
+      for (int l = 0; l < p->nlod - 1; ++l) {
         struct lod_span seg = lod_segment(p, l);
         lod_fill_ends(p->lod_ndim,
                       p->lod_shapes[l],

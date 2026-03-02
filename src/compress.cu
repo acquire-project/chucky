@@ -103,6 +103,68 @@ codec_alignment(enum compression_codec type)
   }
 }
 
+// --- codec_max_output_size ---
+
+extern "C" size_t
+codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
+{
+  size_t max_comp = 0;
+  switch (type) {
+    case CODEC_NONE:
+      return chunk_bytes;
+    case CODEC_LZ4:
+      NVCOMP(Fail,
+             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
+               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
+      return max_comp;
+    case CODEC_ZSTD:
+      NVCOMP(Fail,
+             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
+               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
+      return max_comp;
+    default:
+      break;
+  }
+Fail:
+  return 0;
+}
+
+// --- codec_temp_bytes ---
+
+extern "C" size_t
+codec_temp_bytes(enum compression_codec type,
+                 size_t chunk_bytes,
+                 size_t batch_size)
+{
+  size_t temp = 0;
+  switch (type) {
+    case CODEC_NONE:
+      return 0;
+    case CODEC_LZ4:
+      NVCOMP(Fail,
+             nvcompBatchedLZ4CompressGetTempSizeAsync(
+               batch_size,
+               chunk_bytes,
+               nvcompBatchedLZ4CompressDefaultOpts,
+               &temp,
+               batch_size * chunk_bytes));
+      return temp;
+    case CODEC_ZSTD:
+      NVCOMP(Fail,
+             nvcompBatchedZstdCompressGetTempSizeAsync(
+               batch_size,
+               chunk_bytes,
+               nvcompBatchedZstdCompressDefaultOpts,
+               &temp,
+               batch_size * chunk_bytes));
+      return temp;
+    default:
+      break;
+  }
+Fail:
+  return 0;
+}
+
 // --- codec_init ---
 
 extern "C" int

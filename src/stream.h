@@ -180,12 +180,12 @@ struct lod_state
   CUdeviceptr d_parent_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_level_ends[LOD_MAX_LEVELS];
 
-  // Per-level tile layouts [1..nlev-1], index 0 unused
+  // Per-level tile layouts [1..nlod-1], index 0 unused
   struct stream_layout layouts[LOD_MAX_LEVELS];
   CUdeviceptr d_lv_full_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_lv_lod_shapes[LOD_MAX_LEVELS];
 
-  // Morton-to-tile layout structs: [0] = L0, [1..nlev-1] = LOD levels
+  // Morton-to-tile layout structs: [0] = L0, [1..nlod-1] = LOD levels
   struct morton_tile_layout morton_tile[LOD_MAX_LEVELS];
 
   CUevent t_start;
@@ -195,6 +195,33 @@ struct lod_state
 };
 
 struct tile_stream_gpu;
+
+struct tile_stream_memory_info
+{
+  size_t device_bytes;          // total GPU memory
+  size_t host_pinned_bytes;     // total pinned host memory
+
+  // Breakdown (device)
+  size_t staging_bytes;         // 2 x buffer_capacity_bytes
+  size_t tile_pool_bytes;       // 2 x total_tiles x tile_stride x bpe
+  size_t compressed_pool_bytes; // 2 x total_tiles x max_output_size
+  size_t aggregate_bytes;       // sum over levels: device aggregate buffers
+  size_t lod_bytes;             // d_linear + d_morton + shape arrays
+  size_t codec_bytes;           // nvcomp workspace + pointer arrays
+
+  // Key parameters used in the estimate
+  uint64_t tiles_per_epoch;     // L0
+  uint64_t total_tiles;         // sum across all LOD levels
+  size_t   max_output_size;     // compressed tile bound
+  int      nlod;                // number of LOD levels
+};
+
+// Estimate GPU memory requirements without allocating.
+// Returns 0 on success, non-zero on invalid config.
+int
+tile_stream_gpu_memory_estimate(
+  const struct tile_stream_configuration* config,
+  struct tile_stream_memory_info* info);
 
 // Dispatch function: H2D + scatter (+ optional d_linear copy).
 typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
@@ -224,7 +251,7 @@ struct tile_stream_gpu
   uint64_t level_tile_offset[LOD_MAX_LEVELS]; // first tile index per level
   uint64_t level_tile_count[LOD_MAX_LEVELS];  // tiles_per_epoch per level
 
-  int nlev;              // 1 when multiscale off, lod.nlev when on
+  int nlod;              // 1 when multiscale off, lod.nlod when on
   int enable_multiscale; // computed from dimensions[].downsample
   uint32_t lod_mask;     // computed from dimensions[].downsample
 
@@ -232,7 +259,7 @@ struct tile_stream_gpu
   struct lod_state lod;
   // Per-level aggregate + shard delivery
   // lod_levels[0] = L0 state (agg_layout, agg[2], shard)
-  // lod_levels[1..nlev-1] = LOD levels
+  // lod_levels[1..nlod-1] = LOD levels
   struct lod_level_state lod_levels[LOD_MAX_LEVELS];
 };
 

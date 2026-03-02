@@ -375,7 +375,7 @@ test_multiscale_metadata(const char* tmpdir)
     .fill_value = 0,
     .rank = 3,
     .dimensions = dims,
-    .nlev = 0, // auto
+    .nlod = 0, // auto
   };
 
   struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);

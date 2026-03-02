@@ -9,7 +9,7 @@
 #include <string.h>
 #include <zstd.h>
 
-// --- L0 collecting sink (captures only level 0, discards others) ---
+// --- L0 collecting sink (captures only level 0, discards others; for testing) ---
 
 #define L0_MAX_SHARDS 16
 
@@ -355,7 +355,7 @@ test_multiscale_zarr_visual(const char* output_path)
     .fill_value = 0,
     .rank = rank,
     .dimensions = dims,
-    .nlev = 0, // auto
+    .nlod = 0, // auto
   };
 
   struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&zcfg);
@@ -372,7 +372,7 @@ test_multiscale_zarr_visual(const char* output_path)
   };
 
   CHECK(Fail2, tile_stream_gpu_create(&config, &s));
-  log_info("  total: %zu elements, LOD levels: %d", total_elements, s.lod.plan.nlev);
+  log_info("  total: %zu elements, LOD levels: %d", total_elements, s.lod.plan.nlod);
 
   xor_pattern_init(dims, rank, 2);
   CHECK(Fail3, pump_data(&s.writer, total_elements, fill_xor) == 0);

@@ -4,6 +4,7 @@
 #include "prelude.h"
 #include "stream.h"
 #include "test_data.h"
+#include "zarr_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,90 @@ discard_shard_sink_init(struct discard_shard_sink* s)
               .finalize = discard_shard_finalize },
     .parent = s,
   };
+}
+
+// --- Metering shard_sink wrapper ---
+//
+// Wraps any shard_sink, timing each write call and accumulating bytes.
+
+#define METER_MAX_WRITERS 32
+
+struct metering_writer
+{
+  struct shard_writer base;
+  struct shard_writer* inner;
+  struct metering_sink* parent;
+  int in_use;
+};
+
+struct metering_sink
+{
+  struct shard_sink base;
+  struct shard_sink* inner;
+  struct metering_writer writers[METER_MAX_WRITERS];
+  size_t total_bytes;
+  struct stream_metric metric;
+  struct platform_clock clock;
+};
+
+static int
+metering_write(struct shard_writer* self,
+               uint64_t offset,
+               const void* beg,
+               const void* end)
+{
+  struct metering_writer* w = (struct metering_writer*)self;
+  platform_toc(&w->parent->clock);
+  int rc = w->inner->write(w->inner, offset, beg, end);
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  w->parent->total_bytes += nbytes;
+  accumulate_metric_ms(&w->parent->metric,
+                       (float)(platform_toc(&w->parent->clock) * 1000.0),
+                       nbytes);
+  return rc;
+}
+
+static int
+metering_finalize(struct shard_writer* self)
+{
+  struct metering_writer* w = (struct metering_writer*)self;
+  int rc = w->inner->finalize(w->inner);
+  w->in_use = 0;
+  w->inner = NULL;
+  return rc;
+}
+
+static struct shard_writer*
+metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
+{
+  struct metering_sink* ms = (struct metering_sink*)self;
+  struct shard_writer* inner = ms->inner->open(ms->inner, level, shard_index);
+  if (!inner)
+    return NULL;
+  for (int i = 0; i < METER_MAX_WRITERS; ++i) {
+    if (!ms->writers[i].in_use) {
+      ms->writers[i].in_use = 1;
+      ms->writers[i].inner = inner;
+      return &ms->writers[i].base;
+    }
+  }
+  return NULL;
+}
+
+static void
+metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
+{
+  *ms = (struct metering_sink){
+    .base = { .open = metering_open },
+    .inner = inner,
+    .metric = { .name = "Sink", .best_ms = 1e30f },
+  };
+  for (int i = 0; i < METER_MAX_WRITERS; ++i) {
+    ms->writers[i] = (struct metering_writer){
+      .base = { .write = metering_write, .finalize = metering_finalize },
+      .parent = ms,
+    };
+  }
 }
 
 // --- Small compressed+shard smoke test ---
@@ -254,71 +339,111 @@ print_bench_report(const struct tile_stream_gpu* s,
   log_info("  Throughput:    %.2f GiB/s", throughput_gib);
 }
 
-// --- Benchmark ---
+// --- Reusable bench driver ---
 //
-// 5D: (T, Z, Y, X, C) with isotropic tiles (2, 64, 64, 64, 1)
+// Runs a single benchmark with the given dimensions and fill function.
+// When output_path is NULL, data is discarded. Otherwise:
+//   - single-scale: writes to <output_path>/<array_name>/
+//   - multiscale:   writes to <output_path>/multiscale/0/, .../1/, etc.
 
 static int
-test_bench(void)
+run_bench(const char* label,
+          const struct dimension* dims,
+          uint8_t rank,
+          fill_fn fill,
+          const char* output_path,
+          const char* array_name)
 {
-  log_info("=== test_bench ===");
+  log_info("=== %s ===", label);
 
-  const struct dimension dims[] = {
-    {
-      .size = 100, // 1024,
-      .tile_size = 2,
-      .tiles_per_shard = 16,
-      .name = "t",
-    },
-    {
-      .size = 256,
-      .tile_size = 64,
-      .tiles_per_shard = 2,
-      .name = "z",
-    },
-    {
-      .size = 256,
-      .tile_size = 64,
-      .tiles_per_shard = 2,
-      .name = "y",
-    },
-    {
-      .size = 256,
-      .tile_size = 64,
-      .tiles_per_shard = 2,
-      .name = "x",
-    },
-    {
-      .size = 3,
-      .tile_size = 1,
-      .tiles_per_shard = 3,
-      .name = "c",
-    },
-  };
-  const size_t total_elements = dim_total_elements(dims, 5);
+  int is_multiscale = 0;
+  for (uint8_t d = 0; d < rank; ++d)
+    if (dims[d].downsample)
+      is_multiscale = 1;
+
+  const size_t total_elements = dim_total_elements(dims, rank);
   const size_t total_bytes = total_elements * sizeof(uint16_t);
 
-  struct tile_stream_gpu s = { 0 };
   struct discard_shard_sink dss;
   discard_shard_sink_init(&dss);
 
+  struct zarr_sink* zsink = NULL;
+  struct zarr_multiscale_sink* zmsink = NULL;
+  struct metering_sink meter = { 0 };
+  struct shard_sink* sink = &dss.base;
+
+  if (output_path) {
+    struct shard_sink* zarr_sink_ptr = NULL;
+    if (is_multiscale) {
+      struct zarr_multiscale_config zcfg = {
+        .store_path = output_path,
+        .array_name = array_name,
+        .data_type = zarr_dtype_uint16,
+        .fill_value = 0,
+        .rank = rank,
+        .dimensions = dims,
+        .nlod = 0,
+      };
+      zmsink = zarr_multiscale_sink_create(&zcfg);
+      CHECK(Fail, zmsink);
+      zarr_sink_ptr = zarr_multiscale_sink_as_shard_sink(zmsink);
+    } else {
+      struct zarr_config zcfg = {
+        .store_path = output_path,
+        .array_name = array_name,
+        .data_type = zarr_dtype_uint16,
+        .fill_value = 0,
+        .rank = rank,
+        .dimensions = dims,
+      };
+      zsink = zarr_sink_create(&zcfg);
+      CHECK(Fail, zsink);
+      zarr_sink_ptr = zarr_sink_as_shard_sink(zsink);
+    }
+    metering_sink_init(&meter, zarr_sink_ptr);
+    sink = &meter.base;
+  }
+
+  struct tile_stream_gpu s = { 0 };
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 128 << 20,
     .bytes_per_element = sizeof(uint16_t),
-    .rank = 5,
+    .rank = rank,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = &dss.base,
+    .shard_sink = sink,
   };
+
+  {
+    struct tile_stream_memory_info mem;
+    if (tile_stream_gpu_memory_estimate(&config, &mem) == 0) {
+      log_info("  GPU memory:  %.2f GiB device, %.2f GiB pinned",
+               (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
+               (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
+      log_info("    staging:   %.2f MiB   tile_pool: %.2f GiB",
+               (double)mem.staging_bytes / (1024.0 * 1024.0),
+               (double)mem.tile_pool_bytes / (1024.0 * 1024.0 * 1024.0));
+      log_info("    comp_pool: %.2f GiB   aggregate: %.2f GiB",
+               (double)mem.compressed_pool_bytes / (1024.0 * 1024.0 * 1024.0),
+               (double)mem.aggregate_bytes / (1024.0 * 1024.0 * 1024.0));
+      log_info("    lod:       %.2f MiB   codec:     %.2f MiB",
+               (double)mem.lod_bytes / (1024.0 * 1024.0),
+               (double)mem.codec_bytes / (1024.0 * 1024.0));
+      log_info("    tiles:     %llu/epoch, %llu total (%d LOD levels)",
+               (unsigned long long)mem.tiles_per_epoch,
+               (unsigned long long)mem.total_tiles,
+               mem.nlod);
+    }
+  }
 
   CHECK(Fail, tile_stream_gpu_create(&config, &s));
   log_bench_header(&s, total_bytes, total_elements);
-
-  xor_pattern_init(dims, 5, 2);
+  if (is_multiscale)
+    log_info("  LOD levels:  %d", s.lod.plan.nlod);
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data(&s.writer, total_elements, fill_xor) == 0);
+  CHECK(Fail, pump_data(&s.writer, total_elements, fill) == 0);
   float wall_s = platform_toc(&clock);
 
   if (s.cursor != total_elements) {
@@ -330,116 +455,33 @@ test_bench(void)
   }
 
   {
-    struct sink_stats ss = { .total_bytes = dss.total_bytes,
-                             .sink = &dss.sink };
+    struct sink_stats ss =
+      output_path
+        ? (struct sink_stats){ .total_bytes = meter.total_bytes,
+                               .sink = &meter.metric }
+        : (struct sink_stats){ .total_bytes = dss.total_bytes,
+                               .sink = &dss.sink };
     print_bench_report(&s, &ss, total_bytes, total_elements, wall_s);
   }
 
   tile_stream_gpu_destroy(&s);
-  xor_pattern_free();
+  if (zsink) {
+    zarr_sink_flush(zsink);
+    zarr_sink_destroy(zsink);
+  }
+  if (zmsink) {
+    zarr_multiscale_sink_flush(zmsink);
+    zarr_multiscale_sink_destroy(zmsink);
+  }
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(&s);
-  xor_pattern_free();
-  log_error("  FAIL");
-  return 1;
-}
-
-// --- Multiscale benchmark ---
-//
-// 5D with downsample on z,y,x.
-// Smaller spatial dims to fit LOD buffers in GPU memory.
-
-static int
-test_bench_multiscale(void)
-{
-  log_info("=== test_bench_multiscale ===");
-
-  const struct dimension dims[] = {
-    {
-      .size = 100,
-      .tile_size = 2,
-      .tiles_per_shard = 32,
-      .name = "t",
-    },
-    {
-      .size = 256,
-      .tile_size = 16,
-      .tiles_per_shard = 4,
-      .name = "z",
-      .downsample = 1,
-    },
-    {
-      .size = 256,
-      .tile_size = 16,
-      .tiles_per_shard = 4,
-      .name = "y",
-      .downsample = 1,
-    },
-    {
-      .size = 256,
-      .tile_size = 16,
-      .tiles_per_shard = 4,
-      .name = "x",
-      .downsample = 1,
-    },
-    {
-      .size = 3,
-      .tile_size = 1,
-      .tiles_per_shard = 3,
-      .name = "c",
-    },
-  };
-  const size_t total_elements = dim_total_elements(dims, 5);
-  const size_t total_bytes = total_elements * sizeof(uint16_t);
-
-  struct tile_stream_gpu s = { 0 };
-  struct discard_shard_sink dss;
-  discard_shard_sink_init(&dss);
-
-  const struct tile_stream_configuration config = {
-    .buffer_capacity_bytes = 128 << 20,
-    .bytes_per_element = sizeof(uint16_t),
-    .rank = 5,
-    .dimensions = dims,
-    .codec = CODEC_ZSTD,
-    .shard_sink = &dss.base,
-  };
-
-  CHECK(Fail, tile_stream_gpu_create(&config, &s));
-  log_bench_header(&s, total_bytes, total_elements);
-  log_info("  LOD levels:  %d", s.lod.plan.nlev);
-
-  xor_pattern_init(dims, 5, 2);
-
-  struct platform_clock clock = { 0 };
-  platform_toc(&clock);
-  CHECK(Fail, pump_data(&s.writer, total_elements, fill_xor) == 0);
-  float wall_s = platform_toc(&clock);
-
-  if (s.cursor != total_elements) {
-    log_error("  cursor drift: expected %zu, got %zu",
-              total_elements,
-              (size_t)s.cursor);
-    goto Fail;
-  }
-
-  {
-    struct sink_stats ss = { .total_bytes = dss.total_bytes,
-                             .sink = &dss.sink };
-    print_bench_report(&s, &ss, total_bytes, total_elements, wall_s);
-  }
-
-  tile_stream_gpu_destroy(&s);
-  xor_pattern_free();
-  log_info("  PASS");
-  return 0;
-
-Fail:
-  tile_stream_gpu_destroy(&s);
-  xor_pattern_free();
+  if (zsink)
+    zarr_sink_destroy(zsink);
+  if (zmsink)
+    zarr_multiscale_sink_destroy(zmsink);
   log_error("  FAIL");
   return 1;
 }
@@ -447,8 +489,7 @@ Fail:
 int
 main(int ac, char* av[])
 {
-  (void)ac;
-  (void)av;
+  const char* output_path = (ac > 1) ? av[1] : NULL;
 
   int ecode = 0;
   CUcontext ctx = 0;
@@ -459,15 +500,48 @@ main(int ac, char* av[])
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
   ecode |= test_compressed_small();
-  if (!ecode)
-    ecode |= test_bench();
-  if (!ecode)
-    ecode |= test_bench_multiscale();
+  
+  #if 0
+      const int downsample[] = {1,2,3};
+      struct dimension dims[] = {
+        { .size = 1000, .tile_size = 2,  .tiles_per_shard = 32, .name = "t" },
+        { .size = 256,  .tile_size = 16, .tiles_per_shard = 8, .name = "z" },
+        { .size = 256,  .tile_size = 16, .tiles_per_shard = 8, .name = "y" },
+        { .size = 256,  .tile_size = 16, .tiles_per_shard = 8, .name = "x" },
+        { .size = 3,    .tile_size = 1,  .tiles_per_shard = 3, .name = "c" },
+      };
 
+      xor_pattern_init(dims, 5, 16);
+  #else
+      // Orca Quest 2, splitting the fov into two color channels along y
+      const int downsample[] = { 2, 3 };
+      struct dimension dims[] = {
+        { .size = 10000,  .tile_size = 16,   .tiles_per_shard = 128,.name = "t" },
+        { .size = 2,     .tile_size = 1,    .tiles_per_shard = 2, .name = "c" },
+        { .size = 2048,  .tile_size = 128,  .tiles_per_shard = 9, .name = "y" },
+        { .size = 2304,  .tile_size = 128,  .tiles_per_shard = 9, .name = "x" },
+      };
+
+      xor_pattern_init(dims, countof(dims), 16);
+  #endif
+  
+  if (!ecode)
+        ecode |=
+      run_bench("bench", dims, countof(dims), fill_xor, output_path, "single");
+
+  for (int i = 0; i < countof(downsample); ++i)
+    dims[downsample[i]].downsample = 1;
+
+  if (!ecode)
+    ecode |= run_bench(
+      "bench_multiscale", dims, countof(dims), fill_xor, output_path, "multiscale");
+
+  xor_pattern_free();
   cuCtxDestroy(ctx);
   return ecode;
 
 Fail:
+  printf("FAIL\n");
   cuCtxDestroy(ctx);
   return 1;
 }

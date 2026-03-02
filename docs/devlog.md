@@ -30,9 +30,9 @@ Current benchmark on oreb (5090)
   Memcpy          23.10    26.45       2.71       2.36
   H2D             39.52    53.82       1.58       1.16
   Copy           381.37  2929.69       0.16       0.02
-  LOD Gather       9.30    17.74      20.15      10.57
+  LOD Scatter      9.30    17.74      20.15      10.57
   LOD Reduce     234.29   260.46       0.91       0.82
-  LOD Scatter     15.68    16.00      13.68      13.40
+  LOD Gather      15.68    16.00      13.68      13.40
   Compress         9.71     9.95      22.08      21.55
   Aggregate      389.50   506.64       0.55       0.42
   D2H             53.15    53.23       4.04       4.03
@@ -43,6 +43,97 @@ Current benchmark on oreb (5090)
 ```
 
 I confirmed I could write ngff zarr's compatible with neuroglancer.
+
+Added Lz4 compression.
+
+I'm definitely not having trouble with IO.
+
+Playing with the dimension config - it really likes small tiles. It's
+hard to balance that with memory usage for larger fields. Trying to
+test conditions similar to typical microscope camera streams is tricky.
+
+I don't completely understand it yet, but it might be useful to buffer
+a bit more than an epoch so we have enough data for compression. Right
+now it feels like maybe I need a defree of freedom there.
+
+was making too many lod's...fixed. Didn't effect throughput too much.
+
+```c
+// Orca Quest 2, splitting the fov into two color channels along y
+const int downsample[] = { 2, 3 };
+struct dimension dims[] = {
+  { .size = 10000, .tile_size = 16,   .tiles_per_shard = 128,.name = "t" },
+  { .size = 2,     .tile_size = 1,    .tiles_per_shard = 2, .name = "c" },
+  { .size = 2048,  .tile_size = 128,  .tiles_per_shard = 9, .name = "y" },
+  { .size = 2304,  .tile_size = 128,  .tiles_per_shard = 9, .name = "x" },
+};
+```
+
+On oreb (5090):
+
+```
+=== bench ===
+  GPU memory:  2.97 GiB device, 0.81 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.56 GiB
+    comp_pool: 0.56 GiB   aggregate: 0.56 GiB
+    lod:       0.00 MiB   codec:     1053.35 MiB
+    tiles:     576/epoch, 576 total (1 LOD levels)
+  total:       175.78 GiB (94371840000 elements, 625 epochs)
+  tile:        262144 elements = 512 KiB  (stride=262144)
+  epoch:       576 slots, 288 MiB pool
+  compress:    max_output=524322 comp_pool=288 MiB
+
+  --- Benchmark Results ---
+  Input:        175.78 GiB (94371840000 elements)
+  Compressed:   22.03 GiB (ratio: 0.125)
+  Tiles:        360000 (576/epoch x 625 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          21.90    46.76       2.57       1.20
+  H2D             34.07    96.75       1.65       0.58
+  Scatter         97.47   218.70       0.60       0.27
+  Compress         4.82     4.87      58.34      57.71
+  Aggregate     1672.22  1733.66       0.17       0.16
+  D2H             53.34    53.45       5.27       5.26
+  Sink             6.71   162.51       1.30       0.05
+
+  Wall time:     52.821 s
+  Throughput:    3.33 GiB/s
+  PASS
+=== bench_multiscale ===
+  GPU memory:  4.44 GiB device, 1.02 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.77 GiB
+    comp_pool: 0.77 GiB   aggregate: 0.77 GiB
+    lod:       684.00 MiB   codec:     1229.00 MiB
+    tiles:     576/epoch, 792 total (13 LOD levels)
+  total:       175.78 GiB (94371840000 elements, 625 epochs)
+  tile:        262144 elements = 512 KiB  (stride=262144)
+  epoch:       576 slots, 288 MiB pool
+  compress:    max_output=524322 comp_pool=396 MiB
+  LOD levels:  13
+
+  --- Benchmark Results ---
+  Input:        175.78 GiB (94371840000 elements)
+  Compressed:   28.40 GiB (ratio: 0.162)
+  Tiles:        360000 (576/epoch x 625 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          21.86    45.43       2.57       1.24
+  H2D             35.61    96.75       1.58       0.58
+  Copy           434.98  1425.06       0.13       0.04
+  LOD Scatter     16.54    16.68      17.01      16.86
+  LOD Reduce     360.08   377.28       1.04       0.99
+  LOD Gather      15.78    15.93      24.50      24.27
+  Compress         5.83     5.89      66.32      65.63
+  Aggregate      454.46   529.06       0.85       0.73
+  D2H             53.15    53.27       7.28       7.26
+  Sink             4.35  1657.26       0.65       0.00
+
+  Wall time:     89.814 s
+  Throughput:    1.96 GiB/s
+  PASS  
+```
+
 
 ## 2026-02-28
 

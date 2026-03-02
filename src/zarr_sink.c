@@ -532,8 +532,8 @@ zarr_sink_as_shard_sink(struct zarr_sink* s)
 struct zarr_multiscale_sink
 {
   struct shard_sink base;
-  struct zarr_sink** levels; // array of nlev zarr_sink*
-  int nlev;
+  struct zarr_sink** levels; // array of nlod zarr_sink*
+  int nlod;
 };
 
 static struct shard_writer*
@@ -542,7 +542,7 @@ zarr_multiscale_open(struct shard_sink* self,
                      uint64_t shard_index)
 {
   struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
-  CHECK(Fail, level < ms->nlev);
+  CHECK(Fail, level < ms->nlod);
   return ms->levels[level]->base.open(&ms->levels[level]->base,
                                        level, shard_index);
 Fail:
@@ -609,7 +609,7 @@ write_multiscale_group_metadata(const char* store_path,
 
   jw_key(&jw, "datasets");
   jw_array_begin(&jw);
-  for (int lv = 0; lv < plan->nlev; ++lv) {
+  for (int lv = 0; lv < plan->nlod; ++lv) {
     jw_object_begin(&jw);
     jw_key(&jw, "path");
     char lvstr[8];
@@ -677,34 +677,50 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
 
+  // Build group path: store_path/array_name when array_name is set
+  char group_path[4096];
+  if (cfg->array_name)
+    snprintf(group_path, sizeof(group_path), "%s/%s",
+             cfg->store_path, cfg->array_name);
+  else
+    snprintf(group_path, sizeof(group_path), "%s", cfg->store_path);
+
   // Compute LOD plan for shapes
   struct lod_plan plan = { 0 };
   uint64_t shape[MAX_ZARR_RANK];
-  for (int d = 0; d < cfg->rank; ++d)
+  uint64_t tile_shape[MAX_ZARR_RANK];
+  for (int d = 0; d < cfg->rank; ++d) {
     shape[d] = cfg->dimensions[d].size;
+    tile_shape[d] = cfg->dimensions[d].tile_size;
+  }
 
   uint32_t lod_mask = 0;
   for (int d = 0; d < cfg->rank; ++d)
     if (cfg->dimensions[d].downsample)
       lod_mask |= (1u << d);
 
-  int max_lev = cfg->nlev > 0 ? cfg->nlev : LOD_MAX_LEVELS;
-  CHECK(Fail, lod_plan_init(&plan, cfg->rank, shape,
-                             (uint8_t)lod_mask, max_lev));
+  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
+  CHECK(Fail,
+        lod_plan_init(
+          &plan, cfg->rank, shape, tile_shape, (uint8_t)lod_mask, max_lev));
 
   struct zarr_multiscale_sink* ms =
     (struct zarr_multiscale_sink*)calloc(1, sizeof(*ms));
   CHECK(Fail_plan, ms);
 
   ms->base.open = zarr_multiscale_open;
-  ms->nlev = plan.nlev;
+  ms->nlod = plan.nlod;
 
   ms->levels =
-    (struct zarr_sink**)calloc((size_t)plan.nlev, sizeof(struct zarr_sink*));
+    (struct zarr_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_sink*));
   CHECK(Fail_ms, ms->levels);
 
+  // Write root group metadata when array_name creates a nested group
+  if (cfg->array_name)
+    CHECK(Fail_ms, write_root_metadata(cfg->store_path) == 0);
+
   // Create one zarr_sink per level
-  for (int lv = 0; lv < plan.nlev; ++lv) {
+  for (int lv = 0; lv < plan.nlod; ++lv) {
     // Build per-level dimensions with downsampled sizes
     struct dimension lv_dims[MAX_ZARR_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
@@ -716,7 +732,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     snprintf(name, sizeof(name), "%d", lv);
 
     struct zarr_config zcfg = {
-      .store_path = cfg->store_path,
+      .store_path = group_path,
       .array_name = name,
       .data_type = cfg->data_type,
       .fill_value = cfg->fill_value,
@@ -728,15 +744,15 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     CHECK(Fail_levels, ms->levels[lv]);
   }
 
-  // Write OME-NGFF multiscales group metadata (overwrites root zarr.json)
+  // Write OME-NGFF multiscales group metadata (overwrites group zarr.json)
   CHECK(Fail_levels,
-        write_multiscale_group_metadata(cfg->store_path, cfg, &plan) == 0);
+        write_multiscale_group_metadata(group_path, cfg, &plan) == 0);
 
   lod_plan_free(&plan);
   return ms;
 
 Fail_levels:
-  for (int i = 0; i < plan.nlev; ++i) {
+  for (int i = 0; i < plan.nlod; ++i) {
     if (ms->levels[i])
       zarr_sink_destroy(ms->levels[i]);
   }
@@ -754,7 +770,7 @@ zarr_multiscale_sink_flush(struct zarr_multiscale_sink* s)
 {
   if (!s)
     return;
-  for (int i = 0; i < s->nlev; ++i)
+  for (int i = 0; i < s->nlod; ++i)
     zarr_sink_flush(s->levels[i]);
 }
 
@@ -763,7 +779,7 @@ zarr_multiscale_sink_destroy(struct zarr_multiscale_sink* s)
 {
   if (!s)
     return;
-  for (int i = 0; i < s->nlev; ++i)
+  for (int i = 0; i < s->nlod; ++i)
     zarr_sink_destroy(s->levels[i]);
   free(s->levels);
   free(s);
