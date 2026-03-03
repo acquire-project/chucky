@@ -41,6 +41,7 @@
             perf
             pkg-config
             zstd
+            docker
             # for viewing w neuroglancer
             python3
             uv

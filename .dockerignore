@@ -1,0 +1,11 @@
+build/
+.git/
+.cache/
+.claude/
+.vscode/
+.direnv/
+*.o
+*.a
+*.so
+*.exe
+result

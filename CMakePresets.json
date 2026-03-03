@@ -7,6 +7,14 @@
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "docker",
+      "inherits": "default",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-I/usr/local/cuda/include",
+        "CMAKE_CXX_FLAGS": "-I/usr/local/cuda/include"
+      }
     }
   ]
 }
