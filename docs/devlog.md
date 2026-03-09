@@ -15,8 +15,95 @@
       dims need to be bigger than tile size
 - [x] add metrics, bench
 - [ ] optimize buffering for compression stage - may need more than one epoch
-- [ ] optimize lod scatter, lod gather kernels.
-- [ ] short-circuit copy before lod scatter
+- [x] optimize lod scatter, lod gather kernels.
+
+## 2026-03-08
+
+Using look up tables. xor pattern. 1000x256^3 2channel data. zstd w mean for
+lod.
+
+Current benchmark on oreb (5090)
+
+```
+=== bench ===
+  GPU memory:  2.01 GiB device, 0.63 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.38 GiB
+    comp_pool: 0.38 GiB   aggregate: 0.38 GiB
+    lod:       0.00 MiB   codec:     650.29 MiB
+    tiles:     12288/epoch, 12288 total (1 LOD levels)
+  total:       93.75 GiB (50331648000 elements, 500 epochs)
+  tile:        8192 elements = 16 KiB  (stride=8192)
+  epoch:       12288 slots, 192 MiB pool
+  compress:    max_output=16395 comp_pool=192 MiB
+
+  --- Benchmark Results ---
+  Input:        93.75 GiB (50331648000 elements)
+  Compressed:   11.60 GiB (ratio: 0.124)
+  Tiles:        6144000 (12288/epoch x 500 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          22.53    25.39       2.77       2.46
+  H2D             36.55    53.83       1.71       1.16
+  Scatter         64.95    95.68       0.96       0.65
+  Compress         9.71     9.82      19.31      19.10
+  Aggregate     1822.56  1880.47       0.10       0.10
+  D2H             53.37    53.41       3.52       3.51
+  Sink         98384.48     0.00       0.00       0.00
+
+  Wall time:     15.382 s
+  Throughput:    6.09 GiB/s
+  PASS
+=== bench_multiscale ===
+  GPU memory:  2.70 GiB device, 0.68 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.43 GiB
+    comp_pool: 0.43 GiB   aggregate: 0.43 GiB
+    lod:       493.70 MiB   codec:     695.05 MiB
+    tiles:     12288/epoch, 14043 total (5 LOD levels)
+  total:       93.75 GiB (50331648000 elements, 500 epochs)
+  tile:        8192 elements = 16 KiB  (stride=8192)
+  epoch:       12288 slots, 192 MiB pool
+  compress:    max_output=16395 comp_pool=219 MiB
+  LOD levels:  5
+
+  --- Benchmark Results ---
+  Input:        93.75 GiB (50331648000 elements)
+  Compressed:   13.29 GiB (ratio: 0.142)
+  Tiles:        6144000 (12288/epoch x 500 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          23.14    26.60       2.70       2.35
+  H2D             37.58    53.83       1.66       1.16
+  Copy           428.14   535.98       0.15       0.12
+  LOD Gather     104.97   107.45       1.79       1.75
+  LOD Reduce     212.96   216.13       1.01       0.99
+  LOD to tiles   204.81   207.49       1.05       1.03
+  Compress         9.88     9.98      21.70      21.47
+  Aggregate      762.34   969.01       0.28       0.22
+  D2H             53.26    53.30       4.03       4.02
+  Sink         69235.75     0.00       0.00       0.00
+
+  Wall time:     18.376 s
+  Throughput:    5.10 GiB/s
+  PASS
+```
+
+With writing to disk enabled
+
+```
+Without LOD  5.84 GB/s  
+With LOD     4.76 GB/s
+```
+
+For the Orca Quest 2 scenario:
+
+```
+Without LOD  3.31 GB/s  
+With LOD     2.82 GB/s
+```
+
+I think that's because of the fewer tiles/epoch: 576/epoch for this scenario
+compared to 12288/epoch for the previous one. Should try buffering tiles before
+compression.
 
 ## 2026-03-02
 

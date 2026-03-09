@@ -692,8 +692,8 @@ bench_scatter_lut(const char* label,
     }
 
     // Compute batch_offsets[batch_index] = C-order offset from batch dims
-    uint64_t* batch_offsets =
-      (uint64_t*)calloc(plan.batch_count, sizeof(uint64_t));
+    uint32_t* batch_offsets =
+      (uint32_t*)calloc(plan.batch_count, sizeof(uint32_t));
     CHECK(Fail, batch_offsets);
     {
       uint64_t full_strides[LOD_MAX_NDIM];
@@ -711,19 +711,19 @@ bench_scatter_lut(const char* label,
           remainder /= plan.batch_shape[k];
           offset += coord * full_strides[plan.batch_map[k]];
         }
-        batch_offsets[bi] = offset;
+        batch_offsets[bi] = (uint32_t)offset;
       }
     }
 
-    CU(Fail, cuMemAlloc(&d_src_lut, lod_count * sizeof(uint64_t)));
+    CU(Fail, cuMemAlloc(&d_src_lut, lod_count * sizeof(uint32_t)));
     CU(Fail,
        cuMemAlloc(&d_lod_strides, plan.lod_ndim * sizeof(uint64_t)));
     CU(Fail, cuMemcpyHtoD(d_lod_strides, lod_strides,
                            plan.lod_ndim * sizeof(uint64_t)));
     CU(Fail,
-       cuMemAlloc(&d_batch_offsets, plan.batch_count * sizeof(uint64_t)));
+       cuMemAlloc(&d_batch_offsets, plan.batch_count * sizeof(uint32_t)));
     CU(Fail, cuMemcpyHtoD(d_batch_offsets, batch_offsets,
-                           plan.batch_count * sizeof(uint64_t)));
+                           plan.batch_count * sizeof(uint32_t)));
     free(batch_offsets);
 
     CU(Fail, cuMemAlloc(&d_dst3, dst_bytes));

@@ -325,7 +325,7 @@ print_bench_report(const struct tile_stream_gpu* s,
   print_metric_row(&m.memcpy);
   print_metric_row(&m.h2d);
   print_metric_row(&m.scatter);
-  print_metric_row(&m.lod_scatter);
+  print_metric_row(&m.lod_gather);
   print_metric_row(&m.lod_reduce);
   print_metric_row(&m.lod_morton_tile);
   print_metric_row(&m.compress);

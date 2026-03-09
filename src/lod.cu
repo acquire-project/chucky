@@ -258,7 +258,7 @@ lod_scatter_lut_k(T* __restrict__ dst,
 
 template<int NdimMax>
 __global__ void
-lod_build_gather_lut_k(uint64_t* __restrict__ src_lut,
+lod_build_gather_lut_k(uint32_t* __restrict__ src_lut,
                        const uint32_t* __restrict__ fwd_lut,
                        int lod_ndim,
                        const uint64_t* __restrict__ lod_shape,
@@ -278,7 +278,7 @@ lod_build_gather_lut_k(uint64_t* __restrict__ src_lut,
     src_offset += coord * lod_strides[d];
   }
 
-  src_lut[fwd_lut[gid]] = src_offset;
+  src_lut[fwd_lut[gid]] = (uint32_t)src_offset;
 }
 
 // --- Gather kernel: shared-memory tiled, u32-aliased, coalesced stores ---
@@ -288,8 +288,8 @@ template<typename T>
 __global__ void __launch_bounds__(256, 4)
 lod_gather_lut_k(T* __restrict__ dst,
                  const T* __restrict__ src,
-                 const uint64_t* __restrict__ src_lut,
-                 const uint64_t* __restrict__ batch_offsets,
+                 const uint32_t* __restrict__ src_lut,
+                 const uint32_t* __restrict__ batch_offsets,
                  uint64_t lod_count,
                  uint64_t total)
 {
@@ -314,7 +314,7 @@ lod_gather_lut_k(T* __restrict__ dst,
 
       for (int k = 0; k < T_PER_U32; ++k) {
         if (gid + k < total) {
-          T val = src[batch_offsets[batch] + src_lut[morton_pos]];
+          T val = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
           if constexpr (sizeof(T) == 4)
             packed = __float_as_uint(val);
           else
@@ -350,6 +350,61 @@ lod_gather_lut_k(T* __restrict__ dst,
       }
     }
   }
+}
+
+// --- Build tile-scatter LUT kernel ---
+// Builds tile_lut: tile_lut[morton_pos] = tile_pool_offset from LOD dims.
+// Uses forward LUT to map lod_linear -> morton_pos, then decomposes
+// lod_linear into coords and computes lifted-stride offset.
+
+template<int NdimMax>
+__global__ void
+lod_build_tile_scatter_lut_k(uint32_t* __restrict__ tile_lut,
+                              const uint32_t* __restrict__ fwd_lut,
+                              int lod_ndim,
+                              const uint64_t* __restrict__ lod_shape,
+                              const uint64_t* __restrict__ lod_tile_sizes,
+                              const int64_t* __restrict__ lod_tile_strides,
+                              uint64_t lod_count)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gid >= lod_count)
+    return;
+
+  // Decompose gid (= lod_linear) into lod_coords, compute tile offset
+  uint64_t remainder = gid;
+  int64_t offset = 0;
+  for (int d = lod_ndim - 1; d >= 0; --d) {
+    uint64_t coord = remainder % lod_shape[d];
+    remainder /= lod_shape[d];
+    uint64_t tile_idx = coord / lod_tile_sizes[d];
+    uint64_t within = coord % lod_tile_sizes[d];
+    offset += (int64_t)tile_idx * lod_tile_strides[2 * d];
+    offset += (int64_t)within * lod_tile_strides[2 * d + 1];
+  }
+
+  tile_lut[fwd_lut[gid]] = (uint32_t)offset;
+}
+
+// --- Morton-to-tile scatter kernel using LUT ---
+// Sequential reads from morton buffer, LUT-directed writes to tile pool.
+
+template<typename T>
+__global__ void
+lod_morton_to_tiles_lut_k(T* __restrict__ dst,
+                           const T* __restrict__ src,
+                           const uint32_t* __restrict__ tile_lut,
+                           const uint32_t* __restrict__ batch_tile_offsets,
+                           uint64_t lod_count,
+                           uint64_t total)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gid >= total)
+    return;
+
+  uint64_t batch = gid / lod_count;
+  uint64_t morton_pos = gid % lod_count;
+  dst[(uint64_t)batch_tile_offsets[batch] + tile_lut[morton_pos]] = src[gid];
 }
 
 // --- Fill ends kernel (templated on NdimMax) ---
@@ -794,7 +849,7 @@ lod_build_gather_lut_launch(CUdeviceptr d_src_lut,
   const int grid_size = (int)((lod_count + LOD_BLOCK - 1) / LOD_BLOCK);
 
   lod_build_gather_lut_k<NdimMax>
-    <<<grid_size, LOD_BLOCK, 0, stream>>>((uint64_t*)d_src_lut,
+    <<<grid_size, LOD_BLOCK, 0, stream>>>((uint32_t*)d_src_lut,
                                           (const uint32_t*)d_fwd_lut,
                                           lod_ndim,
                                           (const uint64_t*)d_lod_shape,
@@ -828,6 +883,106 @@ lod_build_gather_lut(CUdeviceptr d_src_lut,
 #undef XXX
 }
 
+template<int NdimMax>
+static void
+lod_build_tile_scatter_lut_launch(CUdeviceptr d_tile_lut,
+                                   CUdeviceptr d_fwd_lut,
+                                   CUdeviceptr d_lod_shape,
+                                   CUdeviceptr d_lod_tile_sizes,
+                                   CUdeviceptr d_lod_tile_strides,
+                                   int lod_ndim,
+                                   uint64_t lod_count,
+                                   CUstream stream)
+{
+  const int grid_size = (int)((lod_count + LOD_BLOCK - 1) / LOD_BLOCK);
+
+  lod_build_tile_scatter_lut_k<NdimMax>
+    <<<grid_size, LOD_BLOCK, 0, stream>>>((uint32_t*)d_tile_lut,
+                                          (const uint32_t*)d_fwd_lut,
+                                          lod_ndim,
+                                          (const uint64_t*)d_lod_shape,
+                                          (const uint64_t*)d_lod_tile_sizes,
+                                          (const int64_t*)d_lod_tile_strides,
+                                          lod_count);
+}
+
+extern "C" void
+lod_build_tile_scatter_lut(CUdeviceptr d_tile_lut,
+                            CUdeviceptr d_fwd_lut,
+                            CUdeviceptr d_lod_shape,
+                            CUdeviceptr d_lod_tile_sizes,
+                            CUdeviceptr d_lod_tile_strides,
+                            int lod_ndim,
+                            uint64_t lod_count,
+                            CUstream stream)
+{
+#define XXX(maxdim)                                                            \
+  if (lod_ndim <= maxdim) {                                                    \
+    lod_build_tile_scatter_lut_launch<maxdim>(d_tile_lut,                      \
+                                              d_fwd_lut,                       \
+                                              d_lod_shape,                     \
+                                              d_lod_tile_sizes,                \
+                                              d_lod_tile_strides,              \
+                                              lod_ndim,                        \
+                                              lod_count,                       \
+                                              stream);                         \
+    return;                                                                    \
+  }
+
+  XXX(4);
+  XXX(8);
+#undef XXX
+}
+
+template<typename T>
+static void
+lod_morton_to_tiles_lut_launch(CUdeviceptr d_tiles,
+                                CUdeviceptr d_morton,
+                                CUdeviceptr d_tile_lut,
+                                CUdeviceptr d_batch_tile_offsets,
+                                uint64_t lod_count,
+                                uint64_t batch_count,
+                                CUstream stream)
+{
+  const uint64_t total = batch_count * lod_count;
+  const int grid_size = (int)((total + LOD_BLOCK - 1) / LOD_BLOCK);
+
+  lod_morton_to_tiles_lut_k<T>
+    <<<grid_size, LOD_BLOCK, 0, stream>>>((T*)d_tiles,
+                                          (const T*)d_morton,
+                                          (const uint32_t*)d_tile_lut,
+                                          (const uint32_t*)d_batch_tile_offsets,
+                                          lod_count,
+                                          total);
+}
+
+extern "C" void
+lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
+                         CUdeviceptr d_morton,
+                         CUdeviceptr d_tile_lut,
+                         CUdeviceptr d_batch_tile_offsets,
+                         enum lod_dtype dtype,
+                         uint64_t lod_count,
+                         uint64_t batch_count,
+                         CUstream stream)
+{
+#define XXX(target_dtype, T)                                                   \
+  if (dtype == target_dtype) {                                                 \
+    lod_morton_to_tiles_lut_launch<T>(d_tiles,                                 \
+                                      d_morton,                                \
+                                      d_tile_lut,                              \
+                                      d_batch_tile_offsets,                    \
+                                      lod_count,                               \
+                                      batch_count,                             \
+                                      stream);                                 \
+    return;                                                                    \
+  }
+
+  XXX(lod_dtype_u16, uint16_t);
+  XXX(lod_dtype_f32, float);
+#undef XXX
+}
+
 template<typename T>
 static void
 lod_gather_lut_launch(CUdeviceptr d_dst,
@@ -846,8 +1001,8 @@ lod_gather_lut_launch(CUdeviceptr d_dst,
   lod_gather_lut_k<T>
     <<<grid_size, LOD_BLOCK, 0, stream>>>((T*)d_dst,
                                           (const T*)d_src,
-                                          (const uint64_t*)d_src_lut,
-                                          (const uint64_t*)d_batch_offsets,
+                                          (const uint32_t*)d_src_lut,
+                                          (const uint32_t*)d_batch_offsets,
                                           lod_count,
                                           total);
 }

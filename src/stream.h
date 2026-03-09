@@ -49,7 +49,7 @@ struct stream_metrics
 {
   struct stream_metric memcpy;
   struct stream_metric h2d;
-  struct stream_metric lod_scatter;
+  struct stream_metric lod_gather;
   struct stream_metric lod_reduce;
   struct stream_metric lod_morton_tile;
   struct stream_metric scatter;
@@ -177,6 +177,9 @@ struct lod_state
   CUdeviceptr d_lod_shape;  // device copy of lod_shapes[0]
   CUdeviceptr d_ends;       // device copy of ends
 
+  CUdeviceptr d_gather_lut;    // u32, lod_counts[0] entries
+  CUdeviceptr d_batch_offsets; // u32, batch_count entries
+
   CUdeviceptr d_child_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_parent_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_level_ends[LOD_MAX_LEVELS];
@@ -188,6 +191,10 @@ struct lod_state
 
   // Morton-to-tile layout structs: [0] = L0, [1..nlod-1] = LOD levels
   struct morton_tile_layout morton_tile[LOD_MAX_LEVELS];
+
+  // Morton-to-tile scatter LUTs (precomputed)
+  CUdeviceptr d_morton_tile_lut[LOD_MAX_LEVELS];          // u32, lod_counts[lv]
+  CUdeviceptr d_morton_batch_tile_offsets[LOD_MAX_LEVELS]; // u32, batch_count
 
   CUevent t_start;
   CUevent t_scatter_end;
