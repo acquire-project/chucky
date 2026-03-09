@@ -226,6 +226,8 @@ Fail:
 
 // --- Report + pipeline helpers ---
 
+#define print_report(...) fprintf(stderr, __VA_ARGS__), fprintf(stderr, "\n")
+
 static void
 print_metric_row(const struct stream_metric* m)
 {
@@ -239,14 +241,14 @@ print_metric_row(const struct stream_metric* m)
 
   if (has_best) {
     double best_gbs = gb_per_s(bytes_per, (double)m->best_ms);
-    log_info("  %-12s %8.2f %8.2f %10.2f %10.2f",
-             m->name,
-             avg_gbs,
-             best_gbs,
-             avg_ms,
-             (double)m->best_ms);
+    print_report("  %-12s %8.2f %8.2f %10.2f %10.2f",
+                 m->name,
+                 avg_gbs,
+                 best_gbs,
+                 avg_ms,
+                 (double)m->best_ms);
   } else {
-    log_info(
+    print_report(
       "  %-12s %8.2f %8s %10.2f %10s", m->name, avg_gbs, "-", avg_ms, "-");
   }
 }
@@ -265,22 +267,22 @@ log_bench_header(const struct tile_stream_gpu* s,
   const size_t num_epochs =
     (total_elements + s->layout.epoch_elements - 1) / s->layout.epoch_elements;
 
-  log_info("  total:       %.2f GiB (%zu elements, %zu epochs)",
-           (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
-           total_elements,
-           num_epochs);
-  log_info(
+  print_report("  total:       %.2f GiB (%zu elements, %zu epochs)",
+               (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
+               total_elements,
+               num_epochs);
+  print_report(
     "  tile:        %lu elements = %lu KiB  (stride=%lu)",
     (unsigned long)s->layout.tile_elements,
     (unsigned long)(s->layout.tile_stride * s->config.bytes_per_element / 1024),
     (unsigned long)s->layout.tile_stride);
-  log_info("  epoch:       %lu slots, %lu MiB pool",
-           (unsigned long)s->layout.tiles_per_epoch,
-           (unsigned long)(s->layout.tile_pool_bytes / (1024 * 1024)));
+  print_report("  epoch:       %lu slots, %lu MiB pool",
+               (unsigned long)s->layout.tiles_per_epoch,
+               (unsigned long)(s->layout.tile_pool_bytes / (1024 * 1024)));
   if (s->config.codec != CODEC_NONE)
-    log_info("  compress:    max_output=%zu comp_pool=%zu MiB",
-             s->codec.max_output_size,
-             (s->codec.batch_size * s->codec.max_output_size) / (1024 * 1024));
+    print_report("  compress:    max_output=%zu comp_pool=%zu MiB",
+                 s->codec.max_output_size,
+                 (s->codec.batch_size * s->codec.max_output_size) / (1024 * 1024));
 }
 
 static void
@@ -301,26 +303,26 @@ print_bench_report(const struct tile_stream_gpu* s,
       ? (double)ss->total_bytes / (double)total_decompressed
       : 0.0;
 
-  log_info("");
-  log_info("  --- Benchmark Results ---");
-  log_info("  Input:        %.2f GiB (%zu elements)",
-           (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
-           total_elements);
-  log_info("  Compressed:   %.2f GiB (ratio: %.3f)",
-           (double)ss->total_bytes / (1024.0 * 1024.0 * 1024.0),
-           comp_ratio);
-  log_info("  Tiles:        %zu (%zu/epoch x %zu epochs)",
-           total_tiles,
-           (size_t)s->layout.tiles_per_epoch,
-           num_epochs);
+  print_report("");
+  print_report("  --- Benchmark Results ---");
+  print_report("  Input:        %.2f GiB (%zu elements)",
+               (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
+               total_elements);
+  print_report("  Compressed:   %.2f GiB (ratio: %.3f)",
+               (double)ss->total_bytes / (1024.0 * 1024.0 * 1024.0),
+               comp_ratio);
+  print_report("  Tiles:        %zu (%zu/epoch x %zu epochs)",
+               total_tiles,
+               (size_t)s->layout.tiles_per_epoch,
+               num_epochs);
 
-  log_info("");
-  log_info("  %-12s %8s %8s %10s %10s",
-           "Stage",
-           "avg GB/s",
-           "best GB/s",
-           "avg ms",
-           "best ms");
+  print_report("");
+  print_report("  %-12s %8s %8s %10s %10s",
+               "Stage",
+               "avg GB/s",
+               "best GB/s",
+               "avg ms",
+               "best ms");
 
   print_metric_row(&m.memcpy);
   print_metric_row(&m.h2d);
@@ -336,9 +338,9 @@ print_bench_report(const struct tile_stream_gpu* s,
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
                : 0.0;
-  log_info("");
-  log_info("  Wall time:     %.3f s", wall_s);
-  log_info("  Throughput:    %.2f GiB/s", throughput_gib);
+  print_report("");
+  print_report("  Wall time:     %.3f s", wall_s);
+  print_report("  Throughput:    %.2f GiB/s", throughput_gib);
 }
 
 // --- Reusable bench driver ---
@@ -356,7 +358,7 @@ run_bench(const char* label,
           const char* output_path,
           const char* array_name)
 {
-  log_info("=== %s ===", label);
+  print_report("=== %s ===", label);
 
   int is_multiscale = 0;
   for (uint8_t d = 0; d < rank; ++d)
@@ -420,29 +422,29 @@ run_bench(const char* label,
   {
     struct tile_stream_memory_info mem;
     if (tile_stream_gpu_memory_estimate(&config, &mem) == 0) {
-      log_info("  GPU memory:  %.2f GiB device, %.2f GiB pinned",
-               (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
-               (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
-      log_info("    staging:   %.2f MiB   tile_pool: %.2f GiB",
-               (double)mem.staging_bytes / (1024.0 * 1024.0),
-               (double)mem.tile_pool_bytes / (1024.0 * 1024.0 * 1024.0));
-      log_info("    comp_pool: %.2f GiB   aggregate: %.2f GiB",
-               (double)mem.compressed_pool_bytes / (1024.0 * 1024.0 * 1024.0),
-               (double)mem.aggregate_bytes / (1024.0 * 1024.0 * 1024.0));
-      log_info("    lod:       %.2f MiB   codec:     %.2f MiB",
-               (double)mem.lod_bytes / (1024.0 * 1024.0),
-               (double)mem.codec_bytes / (1024.0 * 1024.0));
-      log_info("    tiles:     %llu/epoch, %llu total (%d LOD levels)",
-               (unsigned long long)mem.tiles_per_epoch,
-               (unsigned long long)mem.total_tiles,
-               mem.nlod);
+      print_report("  GPU memory:  %.2f GiB device, %.2f GiB pinned",
+                   (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
+                   (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report("    staging:   %.2f MiB   tile_pool: %.2f GiB",
+                   (double)mem.staging_bytes / (1024.0 * 1024.0),
+                   (double)mem.tile_pool_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report("    comp_pool: %.2f GiB   aggregate: %.2f GiB",
+                   (double)mem.compressed_pool_bytes / (1024.0 * 1024.0 * 1024.0),
+                   (double)mem.aggregate_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report("    lod:       %.2f MiB   codec:     %.2f MiB",
+                   (double)mem.lod_bytes / (1024.0 * 1024.0),
+                   (double)mem.codec_bytes / (1024.0 * 1024.0));
+      print_report("    tiles:     %llu/epoch, %llu total (%d LOD levels)",
+                   (unsigned long long)mem.tiles_per_epoch,
+                   (unsigned long long)mem.total_tiles,
+                   mem.nlod);
     }
   }
 
   CHECK(Fail, tile_stream_gpu_create(&config, &s));
   log_bench_header(&s, total_bytes, total_elements);
   if (is_multiscale)
-    log_info("  LOD levels:  %d", s.lod.plan.nlod);
+    print_report("  LOD levels:  %d", s.lod.plan.nlod);
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
@@ -475,7 +477,7 @@ run_bench(const char* label,
     zarr_multiscale_sink_flush(zmsink);
     zarr_multiscale_sink_destroy(zmsink);
   }
-  log_info("  PASS");
+  print_report("  PASS");
   return 0;
 
 Fail:
@@ -484,7 +486,7 @@ Fail:
     zarr_sink_destroy(zsink);
   if (zmsink)
     zarr_multiscale_sink_destroy(zmsink);
-  log_error("  FAIL");
+  print_report("  FAIL");
   return 1;
 }
 

@@ -8,3 +8,4 @@ result
 .cache
 .vs
 CMakeUserPresets.json
+typos.toml

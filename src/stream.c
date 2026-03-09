@@ -412,8 +412,7 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
   {
     const size_t pool_bytes =
       s->total_tiles * s->layout.tile_stride * s->config.bytes_per_element;
-    const size_t comp_bytes =
-      s->codec.batch_size * s->codec.max_output_size;
+    const size_t comp_bytes = s->codec.batch_size * s->codec.max_output_size;
 
     accumulate_metric_cu(&s->metrics.compress,
                          fs->t_compress_start,
@@ -538,8 +537,6 @@ run_lod(struct tile_stream_gpu* s)
   struct lod_plan* p = &s->lod.plan;
   const size_t bpe = s->config.bytes_per_element;
   enum lod_dtype dtype = (bpe == 2) ? lod_dtype_u16 : lod_dtype_f32;
-
-  uint64_t n_elements = lod_span_len(lod_spans_at(&p->levels, 0));
 
   CU(Error, cuEventRecord(s->lod.t_start, s->compute));
 
@@ -1095,8 +1092,12 @@ init_lod_layouts(struct tile_stream_gpu* s)
     // Build temporary scatter (forward) LUT
     CUdeviceptr d_fwd_lut = 0;
     CU(Fail, cuMemAlloc(&d_fwd_lut, lod_count * sizeof(uint32_t)));
-    lod_build_scatter_lut(d_fwd_lut, s->lod.d_lod_shape, p->lod_ndim,
-                          p->lod_shapes[0], lod_count, 0);
+    lod_build_scatter_lut(d_fwd_lut,
+                          s->lod.d_lod_shape,
+                          p->lod_ndim,
+                          p->lod_shapes[0],
+                          lod_count,
+                          0);
 
     // Compute LOD strides on host and upload
     CUdeviceptr d_lod_strides = 0;
@@ -1116,15 +1117,20 @@ init_lod_layouts(struct tile_stream_gpu* s)
       }
 
       CU(Fail, cuMemAlloc(&d_lod_strides, p->lod_ndim * sizeof(uint64_t)));
-      CU(Fail, cuMemcpyHtoD(d_lod_strides, lod_strides,
-                             p->lod_ndim * sizeof(uint64_t)));
+      CU(Fail,
+         cuMemcpyHtoD(
+           d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
     }
 
     // Build gather (inverse) LUT
-    CU(Fail,
-       cuMemAlloc(&s->lod.d_gather_lut, lod_count * sizeof(uint32_t)));
-    lod_build_gather_lut(s->lod.d_gather_lut, d_fwd_lut, s->lod.d_lod_shape,
-                         d_lod_strides, p->lod_ndim, lod_count, 0);
+    CU(Fail, cuMemAlloc(&s->lod.d_gather_lut, lod_count * sizeof(uint32_t)));
+    lod_build_gather_lut(s->lod.d_gather_lut,
+                         d_fwd_lut,
+                         s->lod.d_lod_shape,
+                         d_lod_strides,
+                         p->lod_ndim,
+                         lod_count,
+                         0);
 
     cuMemFree(d_fwd_lut);
     cuMemFree(d_lod_strides);
@@ -1151,11 +1157,13 @@ init_lod_layouts(struct tile_stream_gpu* s)
         batch_offsets[bi] = (uint32_t)offset;
       }
 
+      CU(
+        Fail,
+        cuMemAlloc(&s->lod.d_batch_offsets, p->batch_count * sizeof(uint32_t)));
       CU(Fail,
-         cuMemAlloc(&s->lod.d_batch_offsets,
-                    p->batch_count * sizeof(uint32_t)));
-      CU(Fail, cuMemcpyHtoD(s->lod.d_batch_offsets, batch_offsets,
-                             p->batch_count * sizeof(uint32_t)));
+         cuMemcpyHtoD(s->lod.d_batch_offsets,
+                      batch_offsets,
+                      p->batch_count * sizeof(uint32_t)));
       free(batch_offsets);
     }
   }
@@ -1238,7 +1246,6 @@ init_lod_layouts(struct tile_stream_gpu* s)
            cuMemcpyHtoD(
              (CUdeviceptr)lay->d_lifted_strides, lay->lifted_strides, stb));
       }
-
     }
   }
 
@@ -1264,8 +1271,12 @@ init_lod_layouts(struct tile_stream_gpu* s)
       // Build temporary forward LUT for this level
       CUdeviceptr d_fwd_lut = 0;
       CU(Fail, cuMemAlloc(&d_fwd_lut, lod_count * sizeof(uint32_t)));
-      lod_build_scatter_lut(
-        d_fwd_lut, d_lod_shape_lv, p->lod_ndim, p->lod_shapes[lv], lod_count, 0);
+      lod_build_scatter_lut(d_fwd_lut,
+                            d_lod_shape_lv,
+                            p->lod_ndim,
+                            p->lod_shapes[lv],
+                            lod_count,
+                            0);
 
       // Compute lod_tile_sizes and lod_tile_strides on host
       {
@@ -1273,15 +1284,15 @@ init_lod_layouts(struct tile_stream_gpu* s)
         int64_t lod_tile_strides[2 * LOD_MAX_NDIM];
 
         for (int li = 0; li < p->lod_ndim; ++li) {
-          int d = p->lod_map[li]; // full dim index
+          int d = p->lod_map[li];                            // full dim index
           lod_tile_sizes[li] = lay->lifted_shape[2 * d + 1]; // tile_size
-          lod_tile_strides[2 * li] = lay->lifted_strides[2 * d];     // grid
-          lod_tile_strides[2 * li + 1] = lay->lifted_strides[2 * d + 1]; // within
+          lod_tile_strides[2 * li] = lay->lifted_strides[2 * d]; // grid
+          lod_tile_strides[2 * li + 1] =
+            lay->lifted_strides[2 * d + 1]; // within
         }
 
         CUdeviceptr d_tile_sizes = 0, d_tile_strides = 0;
-        CU(Fail2,
-           cuMemAlloc(&d_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
+        CU(Fail2, cuMemAlloc(&d_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
         CU(Fail2,
            cuMemAlloc(&d_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
         CU(Fail2,
@@ -1294,8 +1305,8 @@ init_lod_layouts(struct tile_stream_gpu* s)
 
         // Allocate and build tile LUT
         CU(Fail2,
-           cuMemAlloc(
-             &s->lod.d_morton_tile_lut[lv], lod_count * sizeof(uint32_t)));
+           cuMemAlloc(&s->lod.d_morton_tile_lut[lv],
+                      lod_count * sizeof(uint32_t)));
         lod_build_tile_scatter_lut(s->lod.d_morton_tile_lut[lv],
                                    d_fwd_lut,
                                    d_lod_shape_lv,
@@ -1327,9 +1338,6 @@ init_lod_layouts(struct tile_stream_gpu* s)
         uint32_t* batch_offsets =
           (uint32_t*)calloc(p->batch_count, sizeof(uint32_t));
         CHECK(Fail, batch_offsets);
-
-        const uint64_t* lv_shape =
-          (lv == 0) ? s->lod.plan.shapes[0] : s->lod.plan.shapes[lv];
 
         for (uint64_t bi = 0; bi < p->batch_count; ++bi) {
           uint64_t remainder = bi;
@@ -1452,8 +1460,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   *out = (struct tile_stream_gpu){
     .writer = { .append = tile_stream_gpu_append,
                 .flush = tile_stream_gpu_flush },
-    .dispatch = enable_multiscale ? dispatch_scatter_multiscale
-                                  : dispatch_scatter,
+    .dispatch =
+      enable_multiscale ? dispatch_scatter_multiscale : dispatch_scatter,
     .config = *config,
     .nlod = 1,
     .enable_multiscale = enable_multiscale,
@@ -1610,9 +1618,8 @@ tile_stream_gpu_flush(struct writer* self)
 // --- Memory estimate ---
 
 int
-tile_stream_gpu_memory_estimate(
-  const struct tile_stream_configuration* config,
-  struct tile_stream_memory_info* info)
+tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
+                                struct tile_stream_memory_info* info)
 {
   if (!config || !info)
     return 1;
@@ -1727,11 +1734,11 @@ tile_stream_gpu_memory_estimate(
   // --- Tally: codec device arrays ---
 
   size_t codec_bytes = 0;
-  codec_bytes += total_tiles * sizeof(size_t);  // d_comp_sizes
-  codec_bytes += total_tiles * sizeof(size_t);  // d_uncomp_sizes
+  codec_bytes += total_tiles * sizeof(size_t); // d_comp_sizes
+  codec_bytes += total_tiles * sizeof(size_t); // d_uncomp_sizes
   if (config->codec != CODEC_NONE)
     codec_bytes += 2 * total_tiles * sizeof(void*); // d_ptrs
-  codec_bytes += nvcomp_temp;                        // d_temp
+  codec_bytes += nvcomp_temp;                       // d_temp
 
   // --- Tally: aggregate (device + host pinned) ---
 
@@ -1745,15 +1752,15 @@ tile_stream_gpu_memory_estimate(
     if (lv == 0) {
       for (int d = 0; d < rank; ++d) {
         tc[d] = tile_count[d];
-        tps[d] = (dims[d].tiles_per_shard == 0) ? tc[d]
-                                                 : dims[d].tiles_per_shard;
+        tps[d] =
+          (dims[d].tiles_per_shard == 0) ? tc[d] : dims[d].tiles_per_shard;
       }
     } else {
       const uint64_t* lv_shape = plan.shapes[lv];
       for (int d = 0; d < rank; ++d) {
         tc[d] = ceildiv(lv_shape[d], dims[d].tile_size);
-        tps[d] = (dims[d].tiles_per_shard == 0) ? tc[d]
-                                                 : dims[d].tiles_per_shard;
+        tps[d] =
+          (dims[d].tiles_per_shard == 0) ? tc[d] : dims[d].tiles_per_shard;
       }
     }
 
@@ -1771,14 +1778,14 @@ tile_stream_gpu_memory_estimate(
       2 * (rank - 1) * sizeof(uint64_t) + 2 * (rank - 1) * sizeof(int64_t);
 
     // aggregate_slot x 2: device arrays
-    size_t slot_dev = (C_lv + 1) * sizeof(size_t)    // d_permuted_sizes
-                    + (C_lv + 1) * sizeof(size_t)     // d_offsets
-                    + M_lv * sizeof(uint32_t)          // d_perm
-                    + pool_bytes_lv;                   // d_aggregated
+    size_t slot_dev = (C_lv + 1) * sizeof(size_t)   // d_permuted_sizes
+                      + (C_lv + 1) * sizeof(size_t) // d_offsets
+                      + M_lv * sizeof(uint32_t)     // d_perm
+                      + pool_bytes_lv;              // d_aggregated
 
     // aggregate_slot x 2: host pinned
-    size_t slot_host = pool_bytes_lv                   // h_aggregated
-                     + (C_lv + 1) * sizeof(size_t);    // h_offsets
+    size_t slot_host = pool_bytes_lv                  // h_aggregated
+                       + (C_lv + 1) * sizeof(size_t); // h_offsets
 
     aggregate_device += agg_layout_dev + 2 * slot_dev;
     aggregate_host += 2 * slot_host;
@@ -1799,30 +1806,30 @@ tile_stream_gpu_memory_estimate(
     lod_device += total_lod_vals * bpe;
 
     // Global shape arrays
-    lod_device += rank * sizeof(uint64_t);             // d_full_shape
+    lod_device += rank * sizeof(uint64_t); // d_full_shape
     if (plan.lod_ndim > 0)
-      lod_device += plan.lod_ndim * sizeof(uint64_t);  // d_lod_shape
+      lod_device += plan.lod_ndim * sizeof(uint64_t); // d_lod_shape
 
     // Gather LUT + batch offsets
     if (plan.lod_ndim > 0) {
       lod_device += plan.lod_counts[0] * sizeof(uint32_t); // d_gather_lut
-      lod_device += plan.batch_count * sizeof(uint32_t);    // d_batch_offsets
+      lod_device += plan.batch_count * sizeof(uint32_t);   // d_batch_offsets
     }
 
     // Per reduce-level arrays (0..nlod-2)
     for (int l = 0; l < plan.nlod - 1; ++l) {
-      lod_device += plan.lod_ndim * sizeof(uint64_t);  // d_child_shapes
-      lod_device += plan.lod_ndim * sizeof(uint64_t);  // d_parent_shapes
+      lod_device += plan.lod_ndim * sizeof(uint64_t); // d_child_shapes
+      lod_device += plan.lod_ndim * sizeof(uint64_t); // d_parent_shapes
 
       struct lod_span seg = lod_segment(&plan, l);
       uint64_t n_parents = lod_span_len(seg);
-      lod_device += n_parents * sizeof(uint64_t);       // d_level_ends
+      lod_device += n_parents * sizeof(uint64_t); // d_level_ends
     }
 
     // Per LOD level (1..nlod-1): layout + shape arrays
     for (int lv = 1; lv < plan.nlod; ++lv) {
-      lod_device += 2 * rank * sizeof(uint64_t);        // d_lifted_shape
-      lod_device += 2 * rank * sizeof(int64_t);          // d_lifted_strides
+      lod_device += 2 * rank * sizeof(uint64_t); // d_lifted_shape
+      lod_device += 2 * rank * sizeof(int64_t);  // d_lifted_strides
     }
   }
 

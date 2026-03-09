@@ -9,13 +9,35 @@
 - [x] uniform handling of tiles for shard writer
 - [x] shard writer handles lods
 - [x] replicate boundary condition
-- [x] min, max, median, 2-max
+- [x] min, max, median, 2-e max
 - [x] verify the multiscale zarr is visualizable
 - [x] make sure we're using the right condition to stop downsampling. all
       dims need to be bigger than tile size
 - [x] add metrics, bench
 - [ ] optimize buffering for compression stage - may need more than one epoch
 - [x] optimize lod scatter, lod gather kernels.
+
+## 2026-03-09
+
+Could think about a lut for the scatter step on the non-lod path.
+Also on auk, the avg/best is pretty bad for th"Scatter" and "Copy" steps.
+
+Overall getting 2.19 GB/s and 1.83 GB/s for without and with LOD, respectively,
+on auk. After the compression, the next most significant times are  D2H and
+what looks like a delayed H2D. The "delayed H2D" looks like the H2D is actually
+showing up in the scatter/copy times.
+
+Time to look into LOD along the append dimension. This is tricky. First, I
+can't accumulate in memory all the data needed for all the lod's. For 5 levels,
+this would mean 2^5=32 epochs and I'm designing for ~1e9 element epochs.
+
+This means I'll need to use an accumulator and a different reduce method for
+dim0 than what we specify for the dims inside an epoch.
+
+It also means that different lods will emit data at different times. lod0 will
+emit every epoch, lod1 every other epoch, lod2 every 4th, and so on. I suspect
+this can be handled by adjusting how much data needs to be moved during the
+"LOD to tiles" step.
 
 ## 2026-03-08
 
