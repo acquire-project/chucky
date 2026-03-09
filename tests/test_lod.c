@@ -814,6 +814,338 @@ Fail:
   return ok;
 }
 
+// --- Dim0 accumulator tests ---
+
+static int
+test_accum_fold_u16(const char* label,
+                    enum lod_reduce_method method,
+                    int n_epochs)
+{
+  printf("--- %s ---\n", label);
+  int ok = 0;
+  const uint64_t n_elements = 128;
+
+  CUstream stream = NULL;
+  CUdeviceptr d_accum = 0, d_data = 0, d_out = 0;
+  uint16_t* h_data = NULL;
+  uint16_t* h_result = NULL;
+  uint16_t* h_expected = NULL;
+
+  size_t accum_bpe = (method == lod_reduce_mean) ? sizeof(uint32_t)
+                                                 : sizeof(uint16_t);
+
+  h_data = (uint16_t*)malloc(n_epochs * n_elements * sizeof(uint16_t));
+  h_result = (uint16_t*)malloc(n_elements * sizeof(uint16_t));
+  h_expected = (uint16_t*)malloc(n_elements * sizeof(uint16_t));
+  CHECK(Fail, h_data && h_result && h_expected);
+
+  for (int e = 0; e < n_epochs; ++e)
+    for (uint64_t i = 0; i < n_elements; ++i)
+      h_data[e * n_elements + i] = (uint16_t)((e * 100 + i) & 0xFFFF);
+
+  for (uint64_t i = 0; i < n_elements; ++i) {
+    if (method == lod_reduce_mean) {
+      uint32_t sum = 0;
+      for (int e = 0; e < n_epochs; ++e)
+        sum += h_data[e * n_elements + i];
+      h_expected[i] = (uint16_t)(sum / (uint32_t)n_epochs);
+    } else if (method == lod_reduce_min) {
+      uint16_t best = h_data[i];
+      for (int e = 1; e < n_epochs; ++e)
+        if (h_data[e * n_elements + i] < best)
+          best = h_data[e * n_elements + i];
+      h_expected[i] = best;
+    } else if (method == lod_reduce_max) {
+      uint16_t best = h_data[i];
+      for (int e = 1; e < n_epochs; ++e)
+        if (h_data[e * n_elements + i] > best)
+          best = h_data[e * n_elements + i];
+      h_expected[i] = best;
+    }
+  }
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
+  CU(Fail, cuMemAlloc(&d_accum, n_elements * accum_bpe));
+  CU(Fail, cuMemAlloc(&d_data, n_elements * sizeof(uint16_t)));
+  CU(Fail, cuMemAlloc(&d_out, n_elements * sizeof(uint16_t)));
+
+  for (int e = 0; e < n_epochs; ++e) {
+    CU(Fail, cuMemcpyHtoD(d_data, h_data + e * n_elements,
+                           n_elements * sizeof(uint16_t)));
+    lod_accum_fold(d_accum, d_data, lod_dtype_u16, method,
+                   n_elements, (uint32_t)e, stream);
+  }
+
+  lod_accum_emit(d_out, d_accum, lod_dtype_u16, method,
+                 n_elements, (uint32_t)n_epochs, stream);
+  CU(Fail, cuStreamSynchronize(stream));
+  CU(Fail, cuMemcpyDtoH(h_result, d_out, n_elements * sizeof(uint16_t)));
+
+  for (uint64_t i = 0; i < n_elements; ++i) {
+    if (h_result[i] != h_expected[i]) {
+      printf("  FAIL at i=%llu: gpu=%u expected=%u\n",
+             (unsigned long long)i, (unsigned)h_result[i],
+             (unsigned)h_expected[i]);
+      goto Fail;
+    }
+  }
+
+  printf("  PASS\n");
+  ok = 1;
+Fail:
+  free(h_data);
+  free(h_result);
+  free(h_expected);
+  cuMemFree(d_accum);
+  cuMemFree(d_data);
+  cuMemFree(d_out);
+  cuStreamDestroy(stream);
+  return ok;
+}
+
+static int
+test_accum_fold_f32(const char* label,
+                    enum lod_reduce_method method,
+                    int n_epochs)
+{
+  printf("--- %s ---\n", label);
+  int ok = 0;
+  const uint64_t n_elements = 128;
+
+  CUstream stream = NULL;
+  CUdeviceptr d_accum = 0, d_data = 0, d_result = 0;
+  float* h_data = NULL;
+  float* h_result = NULL;
+  float* h_expected = NULL;
+
+  h_data = (float*)malloc(n_epochs * n_elements * sizeof(float));
+  h_result = (float*)malloc(n_elements * sizeof(float));
+  h_expected = (float*)malloc(n_elements * sizeof(float));
+  CHECK(Fail, h_data && h_result && h_expected);
+
+  for (int e = 0; e < n_epochs; ++e)
+    for (uint64_t i = 0; i < n_elements; ++i)
+      h_data[e * n_elements + i] = (float)(e * 100 + i) + 0.5f;
+
+  for (uint64_t i = 0; i < n_elements; ++i) {
+    if (method == lod_reduce_mean) {
+      float sum = 0;
+      for (int e = 0; e < n_epochs; ++e)
+        sum += h_data[e * n_elements + i];
+      h_expected[i] = sum / (float)n_epochs;
+    } else if (method == lod_reduce_min) {
+      float best = h_data[i];
+      for (int e = 1; e < n_epochs; ++e)
+        if (h_data[e * n_elements + i] < best)
+          best = h_data[e * n_elements + i];
+      h_expected[i] = best;
+    } else if (method == lod_reduce_max) {
+      float best = h_data[i];
+      for (int e = 1; e < n_epochs; ++e)
+        if (h_data[e * n_elements + i] > best)
+          best = h_data[e * n_elements + i];
+      h_expected[i] = best;
+    }
+  }
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
+  CU(Fail, cuMemAlloc(&d_accum, n_elements * sizeof(float)));
+  CU(Fail, cuMemAlloc(&d_data, n_elements * sizeof(float)));
+
+  for (int e = 0; e < n_epochs; ++e) {
+    CU(Fail, cuMemcpyHtoD(d_data, h_data + e * n_elements,
+                           n_elements * sizeof(float)));
+    lod_accum_fold(d_accum, d_data, lod_dtype_f32, method,
+                   n_elements, (uint32_t)e, stream);
+  }
+
+  CU(Fail, cuMemAlloc(&d_result, n_elements * sizeof(float)));
+  lod_accum_emit(d_result, d_accum, lod_dtype_f32, method,
+                 n_elements, (uint32_t)n_epochs, stream);
+  CU(Fail, cuStreamSynchronize(stream));
+
+  CU(Fail, cuMemcpyDtoH(h_result, d_result, n_elements * sizeof(float)));
+
+  for (uint64_t i = 0; i < n_elements; ++i) {
+    if (fabsf(h_result[i] - h_expected[i]) > 1e-3f) {
+      printf("  FAIL at i=%llu: gpu=%f expected=%f\n",
+             (unsigned long long)i, h_result[i], h_expected[i]);
+      goto Fail;
+    }
+  }
+
+  printf("  PASS\n");
+  ok = 1;
+Fail:
+  free(h_data);
+  free(h_result);
+  free(h_expected);
+  cuMemFree(d_accum);
+  cuMemFree(d_data);
+  cuMemFree(d_result);
+  cuStreamDestroy(stream);
+  return ok;
+}
+
+// Test fused fold kernel: 2 levels packed together, 4 epochs.
+// Level 1 has period=2 (emits at epoch 2,4), level 2 has period=4 (emits at 4).
+// After 4 epochs, both levels should match CPU reference.
+static int
+test_accum_fold_fused_u16(const char* label, enum lod_reduce_method method)
+{
+  printf("--- %s ---\n", label);
+  int ok = 0;
+  const int n_epochs = 4;
+  const int nlod = 3; // levels 0,1,2; fused operates on 1,2
+  const uint64_t n_lv1 = 64, n_lv2 = 16;
+  const uint64_t total = n_lv1 + n_lv2;
+
+  CUstream stream = NULL;
+  CUdeviceptr d_accum = 0, d_data = 0, d_level_ids = 0, d_counts = 0;
+  uint16_t* h_data = NULL;
+  uint16_t* h_result = NULL;
+
+  size_t accum_bpe =
+    (method == lod_reduce_mean) ? sizeof(uint32_t) : sizeof(uint16_t);
+  uint8_t* h_level_ids = NULL;
+
+  h_data = (uint16_t*)malloc(n_epochs * total * sizeof(uint16_t));
+  h_result = (uint16_t*)malloc(total * sizeof(uint16_t));
+  h_level_ids = (uint8_t*)malloc(total);
+  CHECK(Fail, h_data && h_result && h_level_ids);
+
+  // Generate test data
+  for (int e = 0; e < n_epochs; ++e)
+    for (uint64_t i = 0; i < total; ++i)
+      h_data[e * total + i] = (uint16_t)((e * 100 + i * 7 + 3) & 0xFFFF);
+
+  // Build level-ID buffer: first n_lv1 are level 1, next n_lv2 are level 2
+  memset(h_level_ids, 1, n_lv1);
+  memset(h_level_ids + n_lv1, 2, n_lv2);
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
+  CU(Fail, cuMemAlloc(&d_accum, total * accum_bpe));
+  CU(Fail, cuMemAlloc(&d_data, total * sizeof(uint16_t)));
+  CU(Fail, cuMemAlloc(&d_level_ids, total));
+  CU(Fail, cuMemcpyHtoD(d_level_ids, h_level_ids, total));
+  CU(Fail, cuMemAlloc(&d_counts, nlod * sizeof(uint32_t)));
+
+  // Simulate 4 epochs with fused kernel
+  uint32_t counts[3] = { 0, 0, 0 }; // [0] unused, [1] for lv1, [2] for lv2
+
+  for (int e = 0; e < n_epochs; ++e) {
+    CU(Fail,
+       cuMemcpyHtoD(
+         d_data, h_data + e * total, total * sizeof(uint16_t)));
+    CU(Fail,
+       cuMemcpyHtoD(d_counts, counts, nlod * sizeof(uint32_t)));
+
+    lod_accum_fold_fused(d_accum,
+                         d_data,
+                         d_level_ids,
+                         d_counts,
+                         lod_dtype_u16,
+                         method,
+                         total,
+                         stream);
+
+    counts[1]++;
+    counts[2]++;
+  }
+
+  // After 4 epochs: counts[1]=4, counts[2]=4. Both ready.
+  // Emit level 1 (first n_lv1 elements of accum, count=4)
+  {
+    CUdeviceptr d_out = 0;
+    CU(Fail, cuMemAlloc(&d_out, n_lv1 * sizeof(uint16_t)));
+    lod_accum_emit(d_out, d_accum, lod_dtype_u16, method, n_lv1, counts[1],
+                   stream);
+    CU(Fail, cuStreamSynchronize(stream));
+    CU(Fail, cuMemcpyDtoH(h_result, d_out, n_lv1 * sizeof(uint16_t)));
+    cuMemFree(d_out);
+
+    // Verify level 1
+    for (uint64_t i = 0; i < n_lv1; ++i) {
+      uint16_t expected;
+      if (method == lod_reduce_mean) {
+        uint32_t sum = 0;
+        for (int e = 0; e < n_epochs; ++e)
+          sum += h_data[e * total + i];
+        expected = (uint16_t)(sum / (uint32_t)n_epochs);
+      } else if (method == lod_reduce_min) {
+        expected = h_data[i];
+        for (int e = 1; e < n_epochs; ++e)
+          if (h_data[e * total + i] < expected)
+            expected = h_data[e * total + i];
+      } else {
+        expected = h_data[i];
+        for (int e = 1; e < n_epochs; ++e)
+          if (h_data[e * total + i] > expected)
+            expected = h_data[e * total + i];
+      }
+      if (h_result[i] != expected) {
+        printf("  FAIL lv1 at i=%llu: gpu=%u expected=%u\n",
+               (unsigned long long)i, (unsigned)h_result[i],
+               (unsigned)expected);
+        goto Fail;
+      }
+    }
+  }
+
+  // Emit level 2 (next n_lv2 elements of accum, offset by n_lv1)
+  {
+    CUdeviceptr d_out = 0;
+    CUdeviceptr accum_lv2 = d_accum + n_lv1 * accum_bpe;
+    CU(Fail, cuMemAlloc(&d_out, n_lv2 * sizeof(uint16_t)));
+    lod_accum_emit(d_out, accum_lv2, lod_dtype_u16, method, n_lv2, counts[2],
+                   stream);
+    CU(Fail, cuStreamSynchronize(stream));
+    CU(Fail, cuMemcpyDtoH(h_result, d_out, n_lv2 * sizeof(uint16_t)));
+    cuMemFree(d_out);
+
+    // Verify level 2
+    for (uint64_t i = 0; i < n_lv2; ++i) {
+      uint64_t si = n_lv1 + i; // source index in packed data
+      uint16_t expected;
+      if (method == lod_reduce_mean) {
+        uint32_t sum = 0;
+        for (int e = 0; e < n_epochs; ++e)
+          sum += h_data[e * total + si];
+        expected = (uint16_t)(sum / (uint32_t)n_epochs);
+      } else if (method == lod_reduce_min) {
+        expected = h_data[si];
+        for (int e = 1; e < n_epochs; ++e)
+          if (h_data[e * total + si] < expected)
+            expected = h_data[e * total + si];
+      } else {
+        expected = h_data[si];
+        for (int e = 1; e < n_epochs; ++e)
+          if (h_data[e * total + si] > expected)
+            expected = h_data[e * total + si];
+      }
+      if (h_result[i] != expected) {
+        printf("  FAIL lv2 at i=%llu: gpu=%u expected=%u\n",
+               (unsigned long long)i, (unsigned)h_result[i],
+               (unsigned)expected);
+        goto Fail;
+      }
+    }
+  }
+
+  printf("  PASS\n");
+  ok = 1;
+Fail:
+  free(h_data);
+  free(h_result);
+  free(h_level_ids);
+  cuMemFree(d_accum);
+  cuMemFree(d_data);
+  cuMemFree(d_level_ids);
+  cuMemFree(d_counts);
+  cuStreamDestroy(stream);
+  return ok;
+}
+
 int
 main(void)
 {
@@ -924,6 +1256,24 @@ main(void)
     nfail += !test_lod_gpu_u16_method("reduce_max_u16_3d_d02", 3, shape, mask, 1,
                                       lod_reduce_max);
   }
+
+  // --- Dim0 accumulator tests ---
+  nfail += !test_accum_fold_u16("accum_mean_u16_4ep", lod_reduce_mean, 4);
+  nfail += !test_accum_fold_u16("accum_mean_u16_8ep", lod_reduce_mean, 8);
+  nfail += !test_accum_fold_u16("accum_min_u16_4ep", lod_reduce_min, 4);
+  nfail += !test_accum_fold_u16("accum_max_u16_4ep", lod_reduce_max, 4);
+  nfail += !test_accum_fold_u16("accum_mean_u16_1ep", lod_reduce_mean, 1);
+  nfail += !test_accum_fold_f32("accum_mean_f32_4ep", lod_reduce_mean, 4);
+  nfail += !test_accum_fold_f32("accum_min_f32_4ep", lod_reduce_min, 4);
+  nfail += !test_accum_fold_f32("accum_max_f32_4ep", lod_reduce_max, 4);
+
+  // --- Fused dim0 accumulator tests ---
+  nfail +=
+    !test_accum_fold_fused_u16("accum_fused_mean_u16", lod_reduce_mean);
+  nfail +=
+    !test_accum_fold_fused_u16("accum_fused_min_u16", lod_reduce_min);
+  nfail +=
+    !test_accum_fold_fused_u16("accum_fused_max_u16", lod_reduce_max);
 
   // --- Scatter LUT benchmarks ---
   nfail +=

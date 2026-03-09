@@ -329,6 +329,7 @@ print_bench_report(const struct tile_stream_gpu* s,
   print_metric_row(&m.scatter);
   print_metric_row(&m.lod_gather);
   print_metric_row(&m.lod_reduce);
+  print_metric_row(&m.lod_dim0_fold);
   print_metric_row(&m.lod_morton_tile);
   print_metric_row(&m.compress);
   print_metric_row(&m.aggregate);
@@ -416,7 +417,8 @@ run_bench(const char* label,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
     .shard_sink = sink,
-    .reduce_method = lod_reduce_mean
+    .reduce_method = lod_reduce_mean,
+    .dim0_reduce_method = lod_reduce_mean,
   };
 
   {
@@ -543,6 +545,17 @@ main(int ac, char* av[])
                        fill_xor,
                        output_path,
                        "multiscale");
+
+  // Add dim0 downsampling (temporal LOD)
+  dims[0].downsample = 1;
+
+  if (!ecode)
+    ecode |= run_bench("bench_multiscale_dim0",
+                       dims,
+                       countof(dims),
+                       fill_xor,
+                       output_path,
+                       "multiscale_dim0");
 
   xor_pattern_free();
   cuCtxDestroy(ctx);

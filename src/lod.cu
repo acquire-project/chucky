@@ -1002,6 +1002,197 @@ lod_fill_ends_gpu(CUdeviceptr d_ends,
 #undef XXX
 }
 
+// --- Accumulator fold kernel (dim0 LOD) ---
+// Folds one epoch's data into a running accumulator.
+// For mean: Acc is wider (u32 for u16), running sum.
+// For min/max: Acc == T, running min/max.
+
+template<typename T, typename Acc, enum lod_reduce_method Method>
+__global__ void
+lod_accum_fold_k(Acc* __restrict__ accum,
+                 const T* __restrict__ new_data,
+                 uint64_t n_elements,
+                 uint32_t count)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gid >= n_elements)
+    return;
+
+  T val = new_data[gid];
+
+  if (count == 0) {
+    accum[gid] = (Acc)val;
+  } else {
+    if constexpr (Method == lod_reduce_mean)
+      accum[gid] += (Acc)val;
+    else if constexpr (Method == lod_reduce_min)
+      accum[gid] = min(accum[gid], (Acc)val);
+    else if constexpr (Method == lod_reduce_max)
+      accum[gid] = max(accum[gid], (Acc)val);
+  }
+}
+
+// --- Accumulator emit kernel (dim0 LOD) ---
+// Finalizes accumulator to native type.
+// For mean: divide sum by count. For min/max: just copy.
+
+template<typename T, typename Acc, enum lod_reduce_method Method>
+__global__ void
+lod_accum_emit_k(T* __restrict__ dst,
+                 const Acc* __restrict__ accum,
+                 uint64_t n_elements,
+                 uint32_t count)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gid >= n_elements)
+    return;
+
+  if constexpr (Method == lod_reduce_mean)
+    dst[gid] = (T)(accum[gid] / (Acc)count);
+  else
+    dst[gid] = (T)accum[gid];
+}
+
+// --- Accumulator dispatch ---
+
+extern "C" void
+lod_accum_fold(CUdeviceptr d_accum,
+               CUdeviceptr d_new_data,
+               enum lod_dtype dtype,
+               enum lod_reduce_method method,
+               uint64_t n_elements,
+               uint32_t count,
+               CUstream stream)
+{
+  const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
+
+#define LAUNCH_FOLD(T, Acc, M)                                                 \
+  lod_accum_fold_k<T, Acc, M>                                                 \
+    <<<grid, LOD_BLOCK, 0, stream>>>((Acc*)d_accum,                            \
+                                     (const T*)d_new_data,                     \
+                                     n_elements,                               \
+                                     count)
+
+#define FOLD_METHOD(T, Acc)                                                    \
+  switch (method) {                                                            \
+    case lod_reduce_mean: LAUNCH_FOLD(T, Acc, lod_reduce_mean); return;        \
+    case lod_reduce_min:  LAUNCH_FOLD(T, T, lod_reduce_min);   return;        \
+    case lod_reduce_max:  LAUNCH_FOLD(T, T, lod_reduce_max);   return;        \
+    default: return;                                                           \
+  }
+
+  switch (dtype) {
+    case lod_dtype_u16: FOLD_METHOD(uint16_t, uint32_t); break;
+    case lod_dtype_f32: FOLD_METHOD(float, float);       break;
+  }
+
+#undef LAUNCH_FOLD
+#undef FOLD_METHOD
+}
+
+extern "C" void
+lod_accum_emit(CUdeviceptr d_dst,
+               CUdeviceptr d_accum,
+               enum lod_dtype dtype,
+               enum lod_reduce_method method,
+               uint64_t n_elements,
+               uint32_t count,
+               CUstream stream)
+{
+  const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
+
+#define LAUNCH_EMIT(T, Acc, M)                                                 \
+  lod_accum_emit_k<T, Acc, M>                                                 \
+    <<<grid, LOD_BLOCK, 0, stream>>>((T*)d_dst,                                \
+                                     (const Acc*)d_accum,                      \
+                                     n_elements,                               \
+                                     count)
+
+#define EMIT_METHOD(T, Acc)                                                    \
+  switch (method) {                                                            \
+    case lod_reduce_mean: LAUNCH_EMIT(T, Acc, lod_reduce_mean); return;        \
+    case lod_reduce_min:  LAUNCH_EMIT(T, T, lod_reduce_min);   return;        \
+    case lod_reduce_max:  LAUNCH_EMIT(T, T, lod_reduce_max);   return;        \
+    default: return;                                                           \
+  }
+
+  switch (dtype) {
+    case lod_dtype_u16: EMIT_METHOD(uint16_t, uint32_t); break;
+    case lod_dtype_f32: EMIT_METHOD(float, float);       break;
+  }
+
+#undef LAUNCH_EMIT
+#undef EMIT_METHOD
+}
+
+// --- Fused accumulator fold kernel (dim0 LOD) ---
+// Single launch over all LOD levels 1+. Each thread reads its level from
+// d_level_ids and the corresponding count from d_counts.
+
+template<typename T, typename Acc, enum lod_reduce_method Method>
+__global__ void
+lod_accum_fold_fused_k(Acc* __restrict__ accum,
+                       const T* __restrict__ new_data,
+                       const uint8_t* __restrict__ level_ids,
+                       const uint32_t* __restrict__ counts,
+                       uint64_t n_elements)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gid >= n_elements)
+    return;
+
+  uint32_t count = counts[level_ids[gid]];
+  T val = new_data[gid];
+
+  if (count == 0) {
+    accum[gid] = (Acc)val;
+  } else {
+    if constexpr (Method == lod_reduce_mean)
+      accum[gid] += (Acc)val;
+    else if constexpr (Method == lod_reduce_min)
+      accum[gid] = min(accum[gid], (Acc)val);
+    else if constexpr (Method == lod_reduce_max)
+      accum[gid] = max(accum[gid], (Acc)val);
+  }
+}
+
+extern "C" void
+lod_accum_fold_fused(CUdeviceptr d_accum,
+                     CUdeviceptr d_new_data,
+                     CUdeviceptr d_level_ids,
+                     CUdeviceptr d_counts,
+                     enum lod_dtype dtype,
+                     enum lod_reduce_method method,
+                     uint64_t n_elements,
+                     CUstream stream)
+{
+  const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
+
+#define LAUNCH_FUSED(T, Acc, M)                                                \
+  lod_accum_fold_fused_k<T, Acc, M>                                            \
+    <<<grid, LOD_BLOCK, 0, stream>>>((Acc*)d_accum,                            \
+                                     (const T*)d_new_data,                     \
+                                     (const uint8_t*)d_level_ids,              \
+                                     (const uint32_t*)d_counts,                \
+                                     n_elements)
+
+#define FUSED_METHOD(T, Acc)                                                   \
+  switch (method) {                                                            \
+    case lod_reduce_mean: LAUNCH_FUSED(T, Acc, lod_reduce_mean); return;       \
+    case lod_reduce_min:  LAUNCH_FUSED(T, T, lod_reduce_min);   return;       \
+    case lod_reduce_max:  LAUNCH_FUSED(T, T, lod_reduce_max);   return;       \
+    default: return;                                                           \
+  }
+
+  switch (dtype) {
+    case lod_dtype_u16: FUSED_METHOD(uint16_t, uint32_t); break;
+    case lod_dtype_f32: FUSED_METHOD(float, float);       break;
+  }
+
+#undef LAUNCH_FUSED
+#undef FUSED_METHOD
+}
+
 // Helper macro: dispatch over all methods for a given (Type, Acc) pair.
 #define DISPATCH_METHOD(Type, Acc)                                             \
   switch (method) {                                                            \

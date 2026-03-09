@@ -2,9 +2,13 @@
 
 ## TODO
 
+- [ ] lod for dim0
+- [ ] optimize buffering for compression stage - may need more than one epoch
+
+- [ ] move benchmark suite out of tests
+
 - [ ] interface for streaming from device, integrating with a cuda stream
 - [ ] "append dimension" semantics for dim0
-- [ ] lod for dim0 
 - [x] uniform handling of tiles across lods for compress and aggregate
 - [x] uniform handling of tiles for shard writer
 - [x] shard writer handles lods
@@ -14,8 +18,11 @@
 - [x] make sure we're using the right condition to stop downsampling. all
       dims need to be bigger than tile size
 - [x] add metrics, bench
-- [ ] optimize buffering for compression stage - may need more than one epoch
 - [x] optimize lod scatter, lod gather kernels.
+- [ ] u8, u32, i8, i16, i32
+- [ ] u64, i64, double?
+- [ ] ? f16
+- [ ] cpu impl
 
 ## 2026-03-09
 
@@ -38,6 +45,75 @@ It also means that different lods will emit data at different times. lod0 will
 emit every epoch, lod1 every other epoch, lod2 every 4th, and so on. I suspect
 this can be handled by adjusting how much data needs to be moved during the
 "LOD to tiles" step.
+
+On auk:
+
+```
+=== bench_multiscale ===
+  GPU memory:  2.51 GiB device, 0.68 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.43 GiB
+    comp_pool: 0.43 GiB   aggregate: 0.43 GiB
+    lod:       493.70 MiB   codec:     502.54 MiB
+    tiles:     12288/epoch, 14043 total (5 LOD levels)
+  total:       93.75 GiB (50331648000 elements, 500 epochs)
+  tile:        8192 elements = 16 KiB  (stride=8192)
+  epoch:       12288 slots, 192 MiB pool
+  compress:    max_output=16395 comp_pool=219 MiB
+  LOD levels:  5
+
+  --- Benchmark Results ---
+  Input:        93.75 GiB (50331648000 elements)
+  Compressed:   11.60 GiB (ratio: 0.124)
+  Tiles:        6144000 (12288/epoch x 500 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          19.37    21.27       3.23       2.94
+  H2D             13.30    13.46       4.70       4.64
+  Copy           140.12   165.42       0.45       0.38
+  LOD Gather      47.66    48.21       3.93       3.89
+  LOD Reduce      81.83    96.21       2.62       2.23
+  LOD to tiles    90.07    94.35       2.38       2.27
+  Compress         3.02     3.81      71.07      56.22
+  Aggregate      675.20   745.93       0.32       0.29
+  D2H             15.08    15.42      14.22      13.90
+  Sink         58510.70 70249.84       0.00       0.00
+
+  Wall time:     47.651 s
+  Throughput:    1.97 GiB/s
+  PASS
+=== bench_multiscale_dim0 ===
+  GPU memory:  2.58 GiB device, 0.68 GiB pinned
+    staging:   256.00 MiB   tile_pool: 0.43 GiB
+    comp_pool: 0.43 GiB   aggregate: 0.43 GiB
+    lod:       562.26 MiB   codec:     502.54 MiB
+    tiles:     12288/epoch, 14043 total (5 LOD levels)
+  total:       93.75 GiB (50331648000 elements, 500 epochs)
+  tile:        8192 elements = 16 KiB  (stride=8192)
+  epoch:       12288 slots, 192 MiB pool
+  compress:    max_output=16395 comp_pool=219 MiB
+  LOD levels:  5
+
+  --- Benchmark Results ---
+  Input:        93.75 GiB (50331648000 elements)
+  Compressed:   11.92 GiB (ratio: 0.127)
+  Tiles:        6144000 (12288/epoch x 500 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          19.43    21.25       3.22       2.94
+  H2D             13.26    13.46       4.71       4.64
+  Copy           123.04   165.00       0.51       0.38
+  LOD Gather      47.71    48.30       3.93       3.88
+  LOD Reduce      81.74    96.35       2.62       2.22
+  Dim0 Fold      102.94   181.21       0.52       0.30
+  LOD to tiles    79.06    93.38       2.71       2.29
+  Compress         2.90    15.34      73.82      13.97
+  Aggregate      601.49  4583.26       0.36       0.05
+  D2H             14.21  5080.15      15.09       0.04
+  Sink         55068.34 63923.94       0.00       0.00
+
+  Wall time:     49.942 s
+  Throughput:    1.88 GiB/s  
+```
 
 ## 2026-03-08
 

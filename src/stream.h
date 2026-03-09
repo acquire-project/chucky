@@ -51,6 +51,7 @@ struct stream_metrics
   struct stream_metric h2d;
   struct stream_metric lod_gather;
   struct stream_metric lod_reduce;
+  struct stream_metric lod_dim0_fold;
   struct stream_metric lod_morton_tile;
   struct stream_metric scatter;
   struct stream_metric compress;
@@ -83,7 +84,7 @@ struct dimension
   uint64_t tile_size;
   uint64_t tiles_per_shard; // 0 means all tiles along this dimension
   const char* name;         // optional label (e.g. "x"), may be NULL
-  int downsample;           // include in LOD pyramid (dim 0 not supported)
+  int downsample;           // include in LOD pyramid
 };
 
 struct tile_stream_configuration
@@ -94,7 +95,8 @@ struct tile_stream_configuration
   const struct dimension* dimensions;
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
   enum compression_codec codec;           // compression codec for tiles
-  enum lod_reduce_method reduce_method;   // LOD downsample reduction method
+  enum lod_reduce_method reduce_method;   // spatial LOD reduction method
+  enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
 };
 
 struct staging_slot
@@ -156,7 +158,8 @@ struct flush_slot_gpu
   CUevent t_compress_start;
   CUevent t_aggregate_end;
   CUevent t_d2h_start;
-  CUevent ready; // signals all D2H for this slot is done
+  CUevent ready;              // signals all D2H for this slot is done
+  uint32_t active_levels_mask; // bitmask: which LOD levels emitted this epoch
 };
 
 struct lod_level_state
@@ -164,6 +167,18 @@ struct lod_level_state
   struct aggregate_layout agg_layout;
   struct aggregate_slot agg[2]; // double-buffered, indexed by flush_current
   struct shard_state shard;
+};
+
+// Dim0 (temporal) LOD accumulation state.
+// Single buffer covering all LOD levels 1+, same packed layout as d_morton.
+struct dim0_state
+{
+  struct buffer d_accum;                  // GPU: all levels 1+ packed, accum_bpe
+  CUdeviceptr d_level_ids;                // GPU: u8 per element, maps to level
+  CUdeviceptr d_counts;                   // GPU: nlod uint32_t, per-level count
+  uint32_t counts[LOD_MAX_LEVELS];        // CPU mirror of d_counts
+  uint64_t total_elements;                // sum(batch_count * lod_counts[k]) k=1..
+  uint64_t morton_offset;                 // levels.ends[0] (start of level 1 in d_morton)
 };
 
 struct lod_state
@@ -194,6 +209,7 @@ struct lod_state
   CUevent t_start;
   CUevent t_scatter_end;
   CUevent t_reduce_end;
+  CUevent t_dim0_end;
   CUevent t_end;
 };
 
@@ -264,6 +280,11 @@ struct tile_stream_gpu
   // lod_levels[0] = L0 state (agg_layout, agg[2], shard)
   // lod_levels[1..nlod-1] = LOD levels
   struct lod_level_state lod_levels[LOD_MAX_LEVELS];
+
+  // Dim0 (temporal) LOD accumulation
+  int dim0_downsample;                       // 1 if dim 0 is downsampled
+  enum lod_reduce_method dim0_reduce_method; // temporal reduction method
+  struct dim0_state dim0;                    // single buffer for all levels 1+
 };
 
 // Initialize a tile_stream_gpu. Returns 0 on success, non-zero on error.

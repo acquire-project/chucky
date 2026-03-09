@@ -395,6 +395,186 @@ Fail:
   return 1;
 }
 
+// --- Dim0 LOD correctness: L0 must match spatial-only multiscale ---
+
+static int
+test_dim0_l0_correctness(void)
+{
+  log_info("=== test_dim0_l0_correctness ===");
+
+  // 5D: t, z, y, x, c. Spatial LOD on z, y, x.
+  // 8 epochs along t so dim0 levels 1+ accumulate and emit.
+  const struct dimension dims_spatial[] = {
+    { .size = 8, .tile_size = 2, .tiles_per_shard = 2, .name = "t" },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "z",
+      .downsample = 1 },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "y",
+      .downsample = 1 },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "x",
+      .downsample = 1 },
+    { .size = 1, .tile_size = 1, .tiles_per_shard = 1, .name = "c" },
+  };
+  const struct dimension dims_dim0[] = {
+    { .size = 8,
+      .tile_size = 2,
+      .tiles_per_shard = 2,
+      .name = "t",
+      .downsample = 1 },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "z",
+      .downsample = 1 },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "y",
+      .downsample = 1 },
+    { .size = 16,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "x",
+      .downsample = 1 },
+    { .size = 1, .tile_size = 1, .tiles_per_shard = 1, .name = "c" },
+  };
+  const uint8_t rank = 5;
+  const size_t total_elements = dim_total_elements(dims_spatial, rank);
+
+  // Compute number of L0 shards
+  int num_shards = 1;
+  for (int d = 0; d < rank; ++d) {
+    int tile_count = (int)(dims_spatial[d].size / dims_spatial[d].tile_size);
+    int shard_count = (int)(tile_count / dims_spatial[d].tiles_per_shard);
+    num_shards *= shard_count;
+  }
+  const size_t shard_cap = total_elements * sizeof(uint16_t) + 4096;
+  log_info("  total: %zu elements, %d L0 shards", total_elements, num_shards);
+
+  // --- Run 1: spatial-only multiscale (baseline) ---
+  struct l0_collecting_sink baseline_sink;
+  CHECK(Fail0, l0_sink_init(&baseline_sink, num_shards, shard_cap) == 0);
+
+  {
+    struct tile_stream_gpu s = { 0 };
+    const struct tile_stream_configuration config = {
+      .buffer_capacity_bytes = 4 << 20,
+      .bytes_per_element = sizeof(uint16_t),
+      .rank = rank,
+      .dimensions = dims_spatial,
+      .codec = CODEC_ZSTD,
+      .shard_sink = &baseline_sink.base,
+      .reduce_method = lod_reduce_mean,
+    };
+    CHECK(Fail1, tile_stream_gpu_create(&config, &s));
+    xor_pattern_init(dims_spatial, rank, 2);
+    CHECK(Fail1b, pump_data(&s.writer, total_elements, fill_xor) == 0);
+    CHECK(Fail1b, s.cursor == total_elements);
+    tile_stream_gpu_destroy(&s);
+    xor_pattern_free();
+    goto Run2d;
+  Fail1b:
+    tile_stream_gpu_destroy(&s);
+    xor_pattern_free();
+    goto Fail1;
+  }
+
+Run2d:
+  // --- Run 2: spatial + dim0 multiscale ---
+  ;
+  struct l0_collecting_sink dim0_sink;
+  CHECK(Fail1, l0_sink_init(&dim0_sink, num_shards, shard_cap) == 0);
+
+  {
+    struct tile_stream_gpu s = { 0 };
+    const struct tile_stream_configuration config = {
+      .buffer_capacity_bytes = 4 << 20,
+      .bytes_per_element = sizeof(uint16_t),
+      .rank = rank,
+      .dimensions = dims_dim0,
+      .codec = CODEC_ZSTD,
+      .shard_sink = &dim0_sink.base,
+      .reduce_method = lod_reduce_mean,
+      .dim0_reduce_method = lod_reduce_mean,
+    };
+    CHECK(Fail2b, tile_stream_gpu_create(&config, &s));
+    log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
+             s.nlod, s.dim0_downsample);
+    xor_pattern_init(dims_dim0, rank, 2);
+    CHECK(Fail2c, pump_data(&s.writer, total_elements, fill_xor) == 0);
+    CHECK(Fail2c, s.cursor == total_elements);
+    tile_stream_gpu_destroy(&s);
+    xor_pattern_free();
+    goto Compared;
+  Fail2c:
+    tile_stream_gpu_destroy(&s);
+    xor_pattern_free();
+    goto Fail2b;
+  }
+
+Compared:
+  // --- Compare L0 shard output (must be identical) ---
+  {
+    int errors = 0;
+    for (int i = 0; i < num_shards; ++i) {
+      struct l0_shard_writer* b = &baseline_sink.writers[i];
+      struct l0_shard_writer* m = &dim0_sink.writers[i];
+
+      if (!b->finalized || !m->finalized) {
+        log_error("  shard %d: not finalized (baseline=%d, dim0=%d)",
+                  i, b->finalized, m->finalized);
+        errors++;
+        continue;
+      }
+      if (b->size != m->size) {
+        log_error("  shard %d: size mismatch (baseline=%zu, dim0=%zu)",
+                  i, b->size, m->size);
+        errors++;
+        continue;
+      }
+      if (memcmp(b->buf, m->buf, b->size) != 0) {
+        size_t diff_off = 0;
+        for (size_t j = 0; j < b->size; ++j) {
+          if (b->buf[j] != m->buf[j]) {
+            diff_off = j;
+            break;
+          }
+        }
+        log_error("  shard %d: data mismatch at byte %zu (of %zu)",
+                  i, diff_off, b->size);
+        errors++;
+      }
+    }
+
+    if (errors > 0) {
+      log_error("  %d shard comparison errors", errors);
+      goto Fail2b;
+    }
+  }
+
+  log_info("  PASS");
+  l0_sink_free(&dim0_sink);
+  l0_sink_free(&baseline_sink);
+  return 0;
+
+Fail2b:
+  l0_sink_free(&dim0_sink);
+Fail1:
+  l0_sink_free(&baseline_sink);
+Fail0:
+  xor_pattern_free();
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -407,6 +587,7 @@ main(int ac, char* av[])
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
   ecode |= test_multiscale_l0_correctness();
+  ecode |= test_dim0_l0_correctness();
 
   if (!ecode && ac > 1) {
     ecode |= test_multiscale_zarr_visual(av[1]);

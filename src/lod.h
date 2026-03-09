@@ -140,6 +140,42 @@ extern "C"
                       uint64_t batch_count,
                       CUstream stream);
 
+  // Fold one epoch's spatial LOD data into a running accumulator.
+  // For mean: accumulator is wider type (u32 for u16), running sum.
+  // For min/max: accumulator is native type, running min/max.
+  // count: 0 = first epoch (initialize), >0 = fold.
+  void lod_accum_fold(CUdeviceptr d_accum,
+                      CUdeviceptr d_new_data,
+                      enum lod_dtype dtype,
+                      enum lod_reduce_method method,
+                      uint64_t n_elements,
+                      uint32_t count,
+                      CUstream stream);
+
+  // Finalize a mean accumulator: divide running sum by count, store in native
+  // type.  d_dst and d_accum may alias when method is min/max (same type).
+  // For mean: d_accum is wider (u32 for u16 input), d_dst is native type.
+  void lod_accum_emit(CUdeviceptr d_dst,
+                      CUdeviceptr d_accum,
+                      enum lod_dtype dtype,
+                      enum lod_reduce_method method,
+                      uint64_t n_elements,
+                      uint32_t count,
+                      CUstream stream);
+
+  // Fused fold over all LOD levels 1+ in a single kernel launch.
+  // Each thread looks up its level from d_level_ids (u8) and reads the
+  // corresponding count from d_counts to decide write vs fold.
+  // d_accum and d_new_data have the same packed layout (levels 1+ only).
+  void lod_accum_fold_fused(CUdeviceptr d_accum,
+                            CUdeviceptr d_new_data,
+                            CUdeviceptr d_level_ids,
+                            CUdeviceptr d_counts,
+                            enum lod_dtype dtype,
+                            enum lod_reduce_method method,
+                            uint64_t n_elements,
+                            CUstream stream);
+
 #ifdef __cplusplus
 }
 #endif
