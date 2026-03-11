@@ -29,6 +29,20 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
+## 2026-03-11
+
+Benchmarking on oreb (5090)
+
+```
+GB/s
+6.10  bench_stream_256cube_single
+5.50  bench_stream_256cube_multiscale 
+5.43  bench_stream_256cube_multiscale_dim0
+2.90  bench_stream_orca2_single
+2.81  bench_stream_orca2_multiscale
+Fail  bench_stream_orca2_multiscale_dim0
+```
+
 ## 2026-03-10
 
 The streaming pipeline prepares an epoch worth of tiles for compression. The
