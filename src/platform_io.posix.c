@@ -14,6 +14,26 @@ platform_mkdir(const char* path)
   return 0;
 }
 
+int
+platform_mkdirp(const char* path)
+{
+  char tmp[4096];
+  size_t len = strlen(path);
+  if (len == 0 || len >= sizeof(tmp))
+    return -1;
+  memcpy(tmp, path, len + 1);
+
+  for (size_t i = 1; i < len; ++i) {
+    if (tmp[i] == '/') {
+      tmp[i] = '\0';
+      if (platform_mkdir(tmp) != 0)
+        return -1;
+      tmp[i] = '/';
+    }
+  }
+  return platform_mkdir(tmp);
+}
+
 platform_fd
 platform_open_write(const char* path)
 {

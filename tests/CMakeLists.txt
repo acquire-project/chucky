@@ -59,7 +59,6 @@ target_link_libraries(test_data PUBLIC stream)
 # Tests with zstd
 add_test_exe(test_stream          test_stream.c          CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util)
 add_test_exe(test_compress        test_compress.c        CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
-add_test_exe(test_bench           test_bench.c           CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd bench_util)
 add_test_exe(test_aggregate       test_aggregate.c       CUDA::cuda_driver CUDA::cudart_static aggregate)
 add_test_exe(test_shard_contents  test_shard_contents.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 

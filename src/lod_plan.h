@@ -65,6 +65,16 @@ lod_plan_init(struct lod_plan* p,
               uint8_t lod_mask,
               int max_levels);
 
+// Compute only nlod and per-level shapes (no ends/counts/levels).
+// Use when you only need the level geometry (e.g. for metadata).
+int
+lod_plan_init_shapes(struct lod_plan* p,
+                     int ndim,
+                     const uint64_t* shape,
+                     const uint64_t* tile_shape,
+                     uint8_t lod_mask,
+                     int max_levels);
+
 void
 lod_plan_free(struct lod_plan* p);
 

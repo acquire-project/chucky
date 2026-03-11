@@ -10,28 +10,6 @@
 
 #define MAX_ZARR_RANK 8
 
-// --- Directory creation ---
-
-static int
-mkdirp(const char* path)
-{
-  char tmp[4096];
-  size_t len = strlen(path);
-  if (len >= sizeof(tmp))
-    return -1;
-  memcpy(tmp, path, len + 1);
-
-  for (size_t i = 1; i < len; ++i) {
-    if (tmp[i] == '/' || tmp[i] == '\\') {
-      char saved = tmp[i];
-      tmp[i] = '\0';
-      if (platform_mkdir(tmp) != 0)
-        return -1;
-      tmp[i] = saved;
-    }
-  }
-  return platform_mkdir(tmp);
-}
 
 // --- Writer for a single shard file ---
 
@@ -458,8 +436,8 @@ zarr_sink_create(const struct zarr_config* cfg)
       char* last_slash = strrchr(path, '/');
       if (last_slash) {
         *last_slash = '\0';
-        if (mkdirp(path) != 0) {
-          log_error("zarr_sink: mkdirp(%s) failed", path);
+        if (platform_mkdirp(path) != 0) {
+          log_error("zarr_sink: platform_mkdirp(%s) failed", path);
           goto Fail_alloc;
         }
       }
@@ -701,7 +679,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init(
+        lod_plan_init_shapes(
           &plan, cfg->rank, shape, tile_shape, (uint8_t)lod_mask, max_lev));
 
   struct zarr_multiscale_sink* ms =
@@ -715,9 +693,14 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     (struct zarr_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_sink*));
   CHECK(Fail_ms, ms->levels);
 
-  // Write root group metadata when array_name creates a nested group
-  if (cfg->array_name)
+  // Ensure directories exist before writing metadata
+  if (cfg->array_name) {
+    CHECK(Fail_ms, platform_mkdirp(cfg->store_path) == 0);
+    CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
     CHECK(Fail_ms, write_root_metadata(cfg->store_path) == 0);
+  } else {
+    CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
+  }
 
   // Create one zarr_sink per level
   for (int lv = 0; lv < plan.nlod; ++lv) {

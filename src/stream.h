@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MAX_BATCH_EPOCHS 64
+
 struct slice
 {
   const void* beg;
@@ -57,6 +59,7 @@ struct stream_metrics
   struct stream_metric compress;
   struct stream_metric aggregate;
   struct stream_metric d2h;
+  struct stream_metric sink;
 };
 
 enum domain
@@ -97,6 +100,8 @@ struct tile_stream_configuration
   enum compression_codec codec;           // compression codec for tiles
   enum lod_reduce_method reduce_method;   // spatial LOD reduction method
   enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
+  uint32_t epochs_per_batch;     // K: 0 = auto (target_min_tiles), must be pow2
+  uint32_t target_min_tiles;     // minimum tiles per compress batch (default 1024)
 };
 
 struct staging_slot
@@ -154,12 +159,14 @@ struct shard_state
 // flush[0] is used for A-pool epochs, flush[1] for B-pool epochs.
 struct flush_slot_gpu
 {
-  struct buffer d_compressed; // device: total_tiles * max_output_size
+  struct buffer d_compressed; // device: K * total_tiles * max_output_size
   CUevent t_compress_start;
   CUevent t_aggregate_end;
   CUevent t_d2h_start;
   CUevent ready;              // signals all D2H for this slot is done
-  uint32_t active_levels_mask; // bitmask: which LOD levels emitted this epoch
+  uint32_t active_levels_mask; // union of per-epoch active masks
+  uint32_t batch_active_masks[MAX_BATCH_EPOCHS]; // per-epoch active level masks
+  int batch_epoch_count;       // number of epochs accumulated in this batch
 };
 
 struct lod_level_state
@@ -167,6 +174,9 @@ struct lod_level_state
   struct aggregate_layout agg_layout;
   struct aggregate_slot agg[2]; // double-buffered, indexed by flush_current
   struct shard_state shard;
+  CUdeviceptr d_batch_gather;  // [K_l * M_l] uint32: batch-tile → compressed idx
+  CUdeviceptr d_batch_perm;    // [K_l * M_l] uint32: batch-tile → shard-ordered pos
+  uint32_t batch_active_count; // K_l = K / 2^l for this level
 };
 
 // Dim0 (temporal) LOD accumulation state.
@@ -233,6 +243,7 @@ struct tile_stream_memory_info
   uint64_t total_tiles;         // sum across all LOD levels
   size_t   max_output_size;     // compressed tile bound
   int      nlod;                // number of LOD levels
+  uint32_t epochs_per_batch;    // K
 };
 
 // Estimate GPU memory requirements without allocating.
@@ -263,6 +274,11 @@ struct tile_stream_gpu
   struct flush_slot_gpu flush[2]; // [0]=A epochs, [1]=B epochs
   int flush_current;              // 0 or 1
   int flush_pending;
+
+  // Batch accumulation
+  uint32_t epochs_per_batch;   // K: number of epochs per compress batch
+  uint32_t epochs_accumulated; // 0..K-1: epochs in current pool
+  CUevent batch_pool_events[MAX_BATCH_EPOCHS]; // per-epoch pool-ready signals
 
   // Unified compression state (sized for total_tiles)
   struct codec codec;

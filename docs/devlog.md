@@ -2,17 +2,17 @@
 
 ## TODO
 
-- [ ] move benchmark suite out of tests
-- [ ] optimize buffering for compression stage - may need more than one epoch
 
 - [x] lod for dim0
+- [x] move benchmark suite out of tests
+- [x] optimize buffering for compression stage - may need more than one epoch
 - [ ] interface for streaming from device, integrating with a cuda stream
 - [ ] "append dimension" semantics for dim0 - can be infinitely sized, updates over time 
 - [x] uniform handling of tiles across lods for compress and aggregate
 - [x] uniform handling of tiles for shard writer
 - [x] shard writer handles lods
 - [x] replicate boundary condition
-- [x] min, max, median, 2-e max
+- [x] min, max, median, suppressed max/min
 - [x] verify the multiscale zarr is visualizable
 - [x] make sure we're using the right condition to stop downsampling. all
       dims need to be bigger than tile size
@@ -23,6 +23,29 @@
 - [ ] ? f16
 - [ ] cpu impl
 - [ ] whitepaper
+
+- [ ] cleanup tests vs experiments
+- [ ] evaluate gather vs scatter for non-lod stream
+
+## 2026-03-10
+
+The streaming pipeline prepares an epoch worth of tiles for compression. The
+compression works best when there are many tiles to compress. However, depending
+on the stream config, sometimes there may not be many tiles. I could buffer
+multiple epochs worth of tiles if necessary so I could guarantee >1000 tiles
+are ready for compression. Typically I'm designing for 1MB/tile so this would
+represent ~1GB of buffer, which seems reasonable.
+
+I do some double-buffering before the compress stage - this might need to go
+to a ring buffer. Need to adjust the aggregate step too so it knows which
+epoch tiles came from. It'll use that info to map to shard and lod id.
+
+On auk, `bench_stream_256cube_multiscale_dim0` looks like it improved from
+(yesterdays) 1.88 GB/s to 1.99 GB/s. Need to play around with the chunking
+and see if robustness improved there.
+
+chunk sizes
+test_bench still in tests
 
 ## 2026-03-09
 
@@ -46,7 +69,7 @@ emit every epoch, lod1 every other epoch, lod2 every 4th, and so on. I suspect
 this can be handled by adjusting how much data needs to be moved during the
 "LOD to tiles" step.
 
-Reasonable throughput on auk:
+Reasonable throughput on auk (laptop, 5070):
 
 ```
 === bench_multiscale ===
@@ -117,6 +140,8 @@ Reasonable throughput on auk:
 
 Factoring benchmarks out of the tests - it takes too long to run the tests
 and I don't always want to see all three benchmarks, manage scenarios etc.
+
+
 
 ## 2026-03-08
 
@@ -551,7 +576,7 @@ Next is probably to start thinking about multiscale.
 I'm still a little annoyed by the performance. The compression is pretty heavily
 the bottleneck.
 
-Found another unneccessary sync in the compression pipeline. Removing that 
+Found another unnecessary sync in the compression pipeline. Removing that 
 and putting compress+downstream on another stream got it to 2.9 GB/s (without
 the write to disk).
 

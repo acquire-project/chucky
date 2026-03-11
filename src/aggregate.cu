@@ -305,3 +305,163 @@ aggregate_by_shard_async(const struct aggregate_layout* layout,
 Error:
   return 1;
 }
+
+// ---------------------------------------------------------------------------
+// Batch aggregate kernels (LUT-based)
+// ---------------------------------------------------------------------------
+
+// permute_sizes_batch_k:
+//   Thread i reads comp size from d_comp_sizes[gather[i]], writes to
+//   d_permuted_sizes[perm[i]].
+__global__ void
+permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
+                      size_t* __restrict__ d_permuted_sizes,
+                      const uint32_t* __restrict__ d_gather,
+                      const uint32_t* __restrict__ d_perm,
+                      uint64_t N)
+{
+  const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N)
+    return;
+  d_permuted_sizes[d_perm[i]] = d_comp_sizes[d_gather[i]];
+}
+
+// gather_batch_k:
+//   Block i copies compressed tile gather[i] to output position perm[i].
+__global__ void
+gather_batch_k(const void* __restrict__ d_compressed,
+               void* __restrict__ d_aggregated,
+               const size_t* __restrict__ d_comp_sizes,
+               const size_t* __restrict__ d_offsets,
+               const uint32_t* __restrict__ d_gather,
+               const uint32_t* __restrict__ d_perm,
+               size_t max_comp_chunk_bytes)
+{
+  const uint64_t i = blockIdx.x;
+  const uint32_t src_idx = d_gather[i];
+  const size_t nbytes = d_comp_sizes[src_idx];
+  if (nbytes == 0)
+    return;
+
+  const uint8_t* src =
+    (const uint8_t*)d_compressed + (uint64_t)src_idx * max_comp_chunk_bytes;
+  uint8_t* dst = (uint8_t*)d_aggregated + d_offsets[d_perm[i]];
+
+  for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
+    dst[off] = src[off];
+}
+
+// ---------------------------------------------------------------------------
+// aggregate_batch_slot_init
+// ---------------------------------------------------------------------------
+
+extern "C" int
+aggregate_batch_slot_init(struct aggregate_slot* slot,
+                          uint64_t batch_tile_count,
+                          uint64_t batch_covering_count,
+                          size_t comp_pool_bytes)
+{
+  uint64_t C = batch_covering_count;
+  uint64_t M = batch_tile_count;
+
+  CHECK(Error, slot);
+  memset(slot, 0, sizeof(*slot));
+
+  CU(Error,
+     cuMemAlloc((CUdeviceptr*)&slot->d_permuted_sizes,
+                (C + 1) * sizeof(size_t)));
+  CU(Error,
+     cuMemAlloc((CUdeviceptr*)&slot->d_offsets, (C + 1) * sizeof(size_t)));
+  CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_perm, M * sizeof(uint32_t)));
+  CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
+  CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
+  CU(Error,
+     cuMemHostAlloc((void**)&slot->h_offsets, (C + 1) * sizeof(size_t), 0));
+
+  slot->temp_bytes = 0;
+  cub::DeviceScan::ExclusiveSum(nullptr,
+                                slot->temp_bytes,
+                                slot->d_permuted_sizes,
+                                slot->d_offsets,
+                                (int)C,
+                                (cudaStream_t)0);
+
+  if (slot->temp_bytes > 0)
+    CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
+
+  CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
+
+  return 0;
+
+Error:
+  aggregate_slot_destroy(slot);
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
+// aggregate_batch_by_shard_async
+// ---------------------------------------------------------------------------
+
+extern "C" int
+aggregate_batch_by_shard_async(
+  void* d_compressed,
+  size_t* d_comp_sizes,
+  const uint32_t* d_batch_gather,
+  const uint32_t* d_batch_perm,
+  uint64_t batch_tile_count,
+  uint64_t batch_covering_count,
+  size_t max_chunk_bytes,
+  struct aggregate_slot* slot,
+  CUstream stream)
+{
+  const uint64_t N = batch_tile_count;
+  const uint64_t C = batch_covering_count;
+  cudaStream_t cuda_stream = (cudaStream_t)stream;
+
+  // Zero permuted_sizes (C+1 entries)
+  CU(Error,
+     cuMemsetD8Async((CUdeviceptr)slot->d_permuted_sizes,
+                     0,
+                     (C + 1) * sizeof(size_t),
+                     stream));
+
+  // Pass 1: permute sizes using LUTs
+  {
+    const int block = 256;
+    const int grid = (int)((N + block - 1) / block);
+    permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
+      d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
+  }
+
+  // Pass 2: exclusive prefix sum on C elements
+  {
+    size_t temp = slot->temp_bytes;
+    cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                  temp,
+                                  slot->d_permuted_sizes,
+                                  slot->d_offsets,
+                                  (int)C,
+                                  cuda_stream);
+
+    write_total_k<<<1, 1, 0, cuda_stream>>>(
+      slot->d_offsets, slot->d_permuted_sizes, C);
+  }
+
+  // Pass 3: gather compressed chunks using LUTs
+  {
+    const int block = 256;
+    const int grid = (int)N;
+    gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
+                                                     slot->d_aggregated,
+                                                     d_comp_sizes,
+                                                     slot->d_offsets,
+                                                     d_batch_gather,
+                                                     d_batch_perm,
+                                                     max_chunk_bytes);
+  }
+
+  return 0;
+
+Error:
+  return 1;
+}

@@ -71,6 +71,32 @@ extern "C"
                                struct aggregate_slot* slot,
                                CUstream stream);
 
+  // Initialize a slot sized for batch aggregation (K_l * M_l tiles).
+  // batch_tile_count: total tiles in the batch (K_l * M_l).
+  // batch_covering_count: covering count for the batch (K_l * C_l).
+  // comp_pool_bytes: batch_tile_count * max_chunk_bytes.
+  int aggregate_batch_slot_init(struct aggregate_slot* slot,
+                                uint64_t batch_tile_count,
+                                uint64_t batch_covering_count,
+                                size_t comp_pool_bytes);
+
+  // Batch aggregate using precomputed LUTs.
+  // d_batch_gather[i]: index into d_compressed (compressed buffer tile index)
+  // d_batch_perm[i]: index into shard-ordered output position
+  // batch_tile_count: total tiles in the batch (K_l * M_l)
+  // batch_covering_count: covering count for shard ordering (K_l * C_l)
+  // Returns 0 on success.
+  int aggregate_batch_by_shard_async(
+    void* d_compressed,
+    size_t* d_comp_sizes,
+    const uint32_t* d_batch_gather,
+    const uint32_t* d_batch_perm,
+    uint64_t batch_tile_count,
+    uint64_t batch_covering_count,
+    size_t max_chunk_bytes,
+    struct aggregate_slot* slot,
+    CUstream stream);
+
 #ifdef __cplusplus
 }
 #endif

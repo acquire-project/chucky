@@ -28,10 +28,8 @@ discard_shard_write(struct shard_writer* self,
 {
   (void)offset;
   struct discard_shard_writer* w = (struct discard_shard_writer*)self;
-  float elapsed_s = platform_toc(&w->parent->clock);
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
   w->parent->total_bytes += nbytes;
-  accumulate_metric_ms(&w->parent->sink, elapsed_s * 1000.0f, nbytes);
   return 0;
 }
 
@@ -57,7 +55,6 @@ discard_shard_sink_init(struct discard_shard_sink* s)
 {
   *s = (struct discard_shard_sink){
     .base = { .open = discard_shard_open },
-    .sink = { .name = "Sink", .best_ms = 1e30f },
   };
   s->writer = (struct discard_shard_writer){
     .base = { .write = discard_shard_write,
@@ -186,7 +183,8 @@ print_bench_report(const struct tile_stream_gpu* s,
                    const struct sink_stats* ss,
                    size_t total_bytes,
                    size_t total_elements,
-                   float wall_s)
+                   float wall_s,
+                   float init_s)
 {
   struct stream_metrics m = tile_stream_gpu_get_metrics(s);
   const size_t tile_bytes = s->layout.tile_stride * s->config.bytes_per_element;
@@ -230,12 +228,13 @@ print_bench_report(const struct tile_stream_gpu* s,
   print_metric_row(&m.compress);
   print_metric_row(&m.aggregate);
   print_metric_row(&m.d2h);
-  print_metric_row(ss->sink);
+  print_metric_row(&m.sink);
 
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
                : 0.0;
   print_report("");
+  print_report("  Init time:     %.3f s", (double)init_s);
   print_report("  Wall time:     %.3f s", wall_s);
   print_report("  Throughput:    %.2f GiB/s", throughput_gib);
 }
@@ -341,7 +340,11 @@ run_bench(const struct bench_config* cfg)
     }
   }
 
+  struct platform_clock init_clock = { 0 };
+  platform_toc(&init_clock);
   CHECK(Fail, tile_stream_gpu_create(&config, &s));
+  float init_s = platform_toc(&init_clock);
+
   log_bench_header(&s, total_bytes, total_elements);
   if (is_multiscale)
     print_report("  LOD levels:  %d", s.lod.plan.nlod);
@@ -361,11 +364,9 @@ run_bench(const struct bench_config* cfg)
 
   {
     struct sink_stats ss =
-      output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes,
-                                         .sink = &meter.metric }
-                  : (struct sink_stats){ .total_bytes = dss.total_bytes,
-                                         .sink = &dss.sink };
-    print_bench_report(&s, &ss, total_bytes, total_elements, wall_s);
+      output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes }
+                  : (struct sink_stats){ .total_bytes = dss.total_bytes };
+    print_bench_report(&s, &ss, total_bytes, total_elements, wall_s, init_s);
   }
 
   print_report("  PASS");
@@ -391,15 +392,24 @@ Cleanup:
 
 // --- CLI parsing helpers ---
 
+// Returns the index of the matching string, or n if no match.
+static int
+match_option(const char* s, const char* const* options, int n)
+{
+  for (int i = 0; i < n; ++i)
+    if (strcmp(s, options[i]) == 0)
+      return i;
+  return n;
+}
+
 static fill_fn
 parse_fill(const char* s)
 {
-  if (strcmp(s, "xor") == 0)
-    return fill_xor;
-  if (strcmp(s, "zeros") == 0)
-    return fill_zeros;
-  if (strcmp(s, "thirds") == 0)
-    return fill_thirds;
+  static const char* const names[] = { "xor", "zeros", "thirds" };
+  static const fill_fn fns[] = { fill_xor, fill_zeros, fill_thirds };
+  int i = match_option(s, names, 3);
+  if (i < 3)
+    return fns[i];
   fprintf(stderr, "Unknown fill: %s (expected xor, zeros, thirds)\n", s);
   return NULL;
 }
@@ -407,16 +417,12 @@ parse_fill(const char* s)
 static int
 parse_codec(const char* s, enum compression_codec* out)
 {
-  if (strcmp(s, "none") == 0) {
-    *out = CODEC_NONE;
-    return 1;
-  }
-  if (strcmp(s, "lz4") == 0) {
-    *out = CODEC_LZ4;
-    return 1;
-  }
-  if (strcmp(s, "zstd") == 0) {
-    *out = CODEC_ZSTD;
+  static const char* const names[] = { "none", "lz4", "zstd" };
+  static const enum compression_codec vals[] = { CODEC_NONE, CODEC_LZ4,
+                                                  CODEC_ZSTD };
+  int i = match_option(s, names, 3);
+  if (i < 3) {
+    *out = vals[i];
     return 1;
   }
   fprintf(stderr, "Unknown codec: %s (expected none, lz4, zstd)\n", s);
@@ -426,28 +432,15 @@ parse_codec(const char* s, enum compression_codec* out)
 static int
 parse_reduce(const char* s, enum lod_reduce_method* out)
 {
-  if (strcmp(s, "mean") == 0) {
-    *out = lod_reduce_mean;
-    return 1;
-  }
-  if (strcmp(s, "min") == 0) {
-    *out = lod_reduce_min;
-    return 1;
-  }
-  if (strcmp(s, "max") == 0) {
-    *out = lod_reduce_max;
-    return 1;
-  }
-  if (strcmp(s, "median") == 0) {
-    *out = lod_reduce_median;
-    return 1;
-  }
-  if (strcmp(s, "max_sup") == 0) {
-    *out = lod_reduce_max_suppressed;
-    return 1;
-  }
-  if (strcmp(s, "min_sup") == 0) {
-    *out = lod_reduce_min_suppressed;
+  static const char* const names[] = { "mean",    "min",     "max",
+                                        "median",  "max_sup", "min_sup" };
+  static const enum lod_reduce_method vals[] = {
+    lod_reduce_mean, lod_reduce_min,            lod_reduce_max,
+    lod_reduce_median, lod_reduce_max_suppressed, lod_reduce_min_suppressed,
+  };
+  int i = match_option(s, names, 6);
+  if (i < 6) {
+    *out = vals[i];
     return 1;
   }
   fprintf(stderr,
@@ -515,7 +508,8 @@ bench_stream_main(int ac,
     .array_name = label,
     .codec = codec,
     .reduce_method = reduce,
-    .dim0_reduce_method = reduce,
+    .dim0_reduce_method =
+      reduce == lod_reduce_median ? lod_reduce_max : reduce,
   };
   ecode = run_bench(&cfg);
 

@@ -301,24 +301,25 @@ codec_compress(struct codec* c,
                const void* d_input,
                size_t input_stride,
                void* d_output,
+               size_t actual_batch_size,
                CUstream stream)
 {
+  size_t n = actual_batch_size ? actual_batch_size : c->batch_size;
   const void* const* uncomp_ptrs = (const void* const*)c->d_ptrs;
-  void* const* comp_ptrs = (void* const*)(c->d_ptrs + c->batch_size);
+  void* const* comp_ptrs = (void* const*)(c->d_ptrs + n);
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
   if (c->type == CODEC_NONE) {
     CU(Fail,
        cuMemcpyDtoDAsync((CUdeviceptr)d_output,
                          (CUdeviceptr)d_input,
-                         c->batch_size * c->chunk_size,
+                         n * c->chunk_size,
                          stream));
     return 1;
   }
 
   // Fill pointer arrays
   {
-    size_t n = c->batch_size;
     unsigned blocks = (unsigned)((n + 255) / 256);
     fill_ptrs_kernel<<<blocks, 256, 0, cuda_stream>>>(
       c->d_ptrs,
@@ -335,7 +336,7 @@ codec_compress(struct codec* c,
              nvcompBatchedLZ4CompressAsync(uncomp_ptrs,
                                            c->d_uncomp_sizes,
                                            c->chunk_size,
-                                           c->batch_size,
+                                           n,
                                            c->d_temp,
                                            c->temp_bytes,
                                            comp_ptrs,
@@ -350,7 +351,7 @@ codec_compress(struct codec* c,
              nvcompBatchedZstdCompressAsync(uncomp_ptrs,
                                             c->d_uncomp_sizes,
                                             c->chunk_size,
-                                            c->batch_size,
+                                            n,
                                             c->d_temp,
                                             c->temp_bytes,
                                             comp_ptrs,

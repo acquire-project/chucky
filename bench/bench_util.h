@@ -30,8 +30,6 @@ struct discard_shard_sink
   struct discard_shard_writer writer;
   size_t total_bytes;
   size_t shards_finalized;
-  struct stream_metric sink;
-  struct platform_clock clock;
 };
 
 void discard_shard_sink_init(struct discard_shard_sink* s);
@@ -65,7 +63,6 @@ void metering_sink_init(struct metering_sink* ms, struct shard_sink* inner);
 struct sink_stats
 {
   size_t total_bytes;
-  const struct stream_metric* sink;
 };
 
 void print_metric_row(const struct stream_metric* m);
@@ -76,7 +73,8 @@ void print_bench_report(const struct tile_stream_gpu* s,
                         const struct sink_stats* ss,
                         size_t total_bytes,
                         size_t total_elements,
-                        float wall_s);
+                        float wall_s,
+                        float init_s);
 
 struct bench_config
 {

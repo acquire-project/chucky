@@ -13,8 +13,11 @@ typedef int platform_fd;
 #define PLATFORM_FD_INVALID (-1)
 #endif
 
-// Create a directory (and parents). Returns 0 on success, -1 on error.
+// Create a single directory. Returns 0 on success or if it already exists.
 int platform_mkdir(const char* path);
+
+// Create a directory and all parent directories. Returns 0 on success.
+int platform_mkdirp(const char* path);
 
 // Open a file for writing (create/truncate). Returns PLATFORM_FD_INVALID on error.
 platform_fd platform_open_write(const char* path);

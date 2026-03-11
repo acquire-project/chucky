@@ -57,11 +57,15 @@ extern "C"
   //   Output: d_output + i * max_output_size
   //   c->d_comp_sizes[i] filled with actual compressed size.
   // CODEC_NONE: single cuMemcpyDtoDAsync of batch_size * chunk_size bytes.
+  // actual_batch_size: number of chunks to compress (0 = use c->batch_size).
+  //   Must be <= c->batch_size. Allows partial batch compression without
+  //   re-initializing the codec.
   // Returns 1 on success.
   int codec_compress(struct codec* c,
                      const void* d_input,
                      size_t input_stride,
                      void* d_output,
+                     size_t actual_batch_size,
                      CUstream stream);
 
 #ifdef __cplusplus

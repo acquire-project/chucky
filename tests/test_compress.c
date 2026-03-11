@@ -78,7 +78,7 @@ test_compress_roundtrip(void)
 
     // Compress
     CHECK(Fail,
-          codec_compress(&c, d_data, tile_bytes, d_compressed, stream));
+          codec_compress(&c, d_data, tile_bytes, d_compressed, 0, stream));
 
     // Wait for compress to finish, then D2H
     CU(Fail, cuStreamSynchronize(stream));
