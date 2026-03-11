@@ -15,38 +15,15 @@ function(add_test_lib TARGET)
     target_link_libraries(${TARGET} PRIVATE warnings)
 endfunction()
 
-if(MSVC)
-    set(AVX2_FLAG /arch:AVX2)
-else()
-    set(AVX2_FLAG -mavx2)
-endif()
-
-add_test_exe(test_ctx_null test_ctx_null.c CUDA::cuda_driver)
-
-# Index operations utility library (shared between scalar and AVX2 tests)
+# Index operations utility library (shared between tests)
 add_test_lib(index_ops_util index.ops.util.c)
 target_link_libraries(index_ops_util PUBLIC index_ops)
 
-add_test_exe(index.ops index.ops.c CUDA::cuda_driver index_ops_util stream)
-enable_openmp(index.ops)
+# Index operations unit tests (pure CPU)
+add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
 
-# AVX2 helper library
-add_test_lib(div_avx2 div.avx2.c)
-target_compile_options(div_avx2 PRIVATE ${AVX2_FLAG})
-
-add_test_exe(index.ops.avx2 index.ops.avx2.c CUDA::cuda_driver div_avx2 index_ops_util stream)
-target_compile_options(index.ops.avx2 PRIVATE ${AVX2_FLAG})
-enable_openmp(index.ops.avx2)
-
-# Magic division test
-add_test_exe(test_magic_div test_magic_div.c div_avx2)
-
-# AVX2 division test
-add_test_exe(test_avx2_div test_avx2_div.c div_avx2)
-target_compile_options(test_avx2_div PRIVATE ${AVX2_FLAG})
-
-# Transpose indices CUDA test
-add_test_exe(index.ops.cuda index.ops.cuda.c CUDA::cuda_driver CUDA::cudart_static transpose index_ops_util chucky_log)
+# Standalone transpose kernel test
+add_test_exe(test_transpose test_transpose.c CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)
@@ -66,7 +43,8 @@ add_test_exe(test_json_writer test_json_writer.c json_writer chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 
 add_test_exe(test_zarr_sink   test_zarr_sink.c   CUDA::cuda_driver CUDA::cudart_static zarr_sink stream Zstd::Zstd test_platform)
-add_test_exe(test_morton      morton.c           lod_plan index_ops chucky_log)
 
 add_test_exe(test_lod         test_lod.c         CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops)
 add_test_exe(test_multiscale  test_multiscale.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data zarr_sink)
+
+add_subdirectory(experiments)

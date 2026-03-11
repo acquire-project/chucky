@@ -23,9 +23,11 @@
 - [ ] ? f16
 - [ ] cpu impl
 - [ ] whitepaper
+- [ ] coverage
+- [ ] characterize performance by chunk size
 
-- [ ] cleanup tests vs experiments
-- [ ] evaluate gather vs scatter for non-lod stream
+- [x] cleanup tests vs experiments
+- [x] evaluate gather vs scatter for non-lod stream
 
 ## 2026-03-10
 
@@ -44,7 +46,7 @@ On auk, `bench_stream_256cube_multiscale_dim0` looks like it improved from
 (yesterdays) 1.88 GB/s to 1.99 GB/s. Need to play around with the chunking
 and see if robustness improved there.
 
-chunk sizes
+Reorganized the tests.
 
 ## 2026-03-09
 

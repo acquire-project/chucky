@@ -440,6 +440,289 @@ Fail0:
   return 1;
 }
 
+// Software CRC32C (Castagnoli) — same algorithm as stream.c.
+static uint32_t crc32c_test_table[256];
+static int crc32c_test_table_ready;
+
+static void
+crc32c_test_init_table(void)
+{
+  if (crc32c_test_table_ready)
+    return;
+  for (int i = 0; i < 256; ++i) {
+    uint32_t crc = (uint32_t)i;
+    for (int j = 0; j < 8; ++j)
+      crc = (crc >> 1) ^ (0x82F63B78 & (0u - (crc & 1)));
+    crc32c_test_table[i] = crc;
+  }
+  crc32c_test_table_ready = 1;
+}
+
+static uint32_t
+crc32c_test(const void* data, size_t len)
+{
+  uint32_t crc = 0xFFFFFFFF;
+  const uint8_t* p = (const uint8_t*)data;
+  for (size_t i = 0; i < len; ++i)
+    crc = crc32c_test_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+  return crc ^ 0xFFFFFFFF;
+}
+
+// Verify shard index structure: monotonic offsets, size sum, CRC.
+// Tests with both even (all tiles present) and uneven (padded) cases.
+static int
+test_shard_index_structure(void)
+{
+  log_info("=== test_shard_index_structure ===");
+
+  crc32c_test_init_table();
+
+  // --- Case 1: Even tiling (all tiles fill shard evenly) ---
+  {
+    const int size[3] = { 12, 8, 12 };
+    const int tile_size[3] = { 2, 4, 3 };
+    const int tiles_per_shard[3] = { 3, 2, 2 };
+
+    const int tile_count[3] = {
+      size[0] / tile_size[0],
+      size[1] / tile_size[1],
+      size[2] / tile_size[2],
+    };
+    const int shard_count[3] = {
+      tile_count[0] / tiles_per_shard[0],
+      tile_count[1] / tiles_per_shard[1],
+      tile_count[2] / tiles_per_shard[2],
+    };
+
+    const int total_elements = size[0] * size[1] * size[2];
+    const int num_shards =
+      shard_count[0] * shard_count[1] * shard_count[2];
+    const int tiles_per_shard_total =
+      tiles_per_shard[0] * tiles_per_shard[1] * tiles_per_shard[2];
+
+    uint32_t* src = (uint32_t*)malloc(total_elements * sizeof(uint32_t));
+    CHECK(Fail0, src);
+
+    // Fill with coordinate-encoded data (same as test_shard_contents)
+    for (int x0 = 0; x0 < size[0]; ++x0)
+      for (int x1 = 0; x1 < size[1]; ++x1)
+        for (int x2 = 0; x2 < size[2]; ++x2) {
+          int gi = x0 * size[1] * size[2] + x1 * size[2] + x2;
+          src[gi] = encode_voxel(
+            x0 / (tile_size[0] * tiles_per_shard[0]),
+            x1 / (tile_size[1] * tiles_per_shard[1]),
+            x2 / (tile_size[2] * tiles_per_shard[2]),
+            (x0 / tile_size[0]) % tiles_per_shard[0],
+            (x1 / tile_size[1]) % tiles_per_shard[1],
+            (x2 / tile_size[2]) % tiles_per_shard[2],
+            x0 % tile_size[0],
+            x1 % tile_size[1],
+            x2 % tile_size[2]);
+        }
+
+    struct collecting_shard_sink css;
+    CHECK(Fail1, collecting_sink_init(&css, num_shards, 256 * 1024) == 0);
+
+    const struct dimension dims[] = {
+      { .size = 12, .tile_size = 2, .tiles_per_shard = 3 },
+      { .size = 8, .tile_size = 4, .tiles_per_shard = 2 },
+      { .size = 12, .tile_size = 3, .tiles_per_shard = 2 },
+    };
+
+    const struct tile_stream_configuration config = {
+      .buffer_capacity_bytes = total_elements * sizeof(uint32_t),
+      .bytes_per_element = sizeof(uint32_t),
+      .rank = 3,
+      .dimensions = dims,
+      .codec = CODEC_ZSTD,
+      .shard_sink = &css.base,
+    };
+
+    struct tile_stream_gpu s;
+    CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+
+    {
+      struct slice input = { .beg = src, .end = src + total_elements };
+      struct writer_result r = writer_append(&s.writer, input);
+      CHECK(Fail3, r.error == 0);
+    }
+    {
+      struct writer_result r = writer_flush(&s.writer);
+      CHECK(Fail3, r.error == 0);
+    }
+
+    // Verify index structure for each shard
+    const size_t index_data_bytes =
+      (size_t)tiles_per_shard_total * 2 * sizeof(uint64_t);
+    const size_t index_total_bytes = index_data_bytes + 4;
+    int errors = 0;
+
+    for (int si = 0; si < num_shards; ++si) {
+      struct collecting_shard_writer* w = &css.writers[si];
+      CHECK(Fail3, w->finalized);
+      CHECK(Fail3, w->size > index_total_bytes);
+
+      const uint8_t* index_ptr = w->buf + w->size - index_total_bytes;
+
+      uint64_t tile_offsets[12], tile_nbytes[12];
+      for (int i = 0; i < tiles_per_shard_total; ++i) {
+        memcpy(&tile_offsets[i], index_ptr + i * 16, sizeof(uint64_t));
+        memcpy(&tile_nbytes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
+      }
+
+      // 1. Offsets must be monotonically non-decreasing
+      for (int i = 1; i < tiles_per_shard_total; ++i) {
+        if (tile_offsets[i] < tile_offsets[i - 1]) {
+          log_error("  shard %d: offset[%d]=%lu < offset[%d]=%lu",
+                    si,
+                    i,
+                    (unsigned long)tile_offsets[i],
+                    i - 1,
+                    (unsigned long)tile_offsets[i - 1]);
+          errors++;
+        }
+      }
+
+      // 2. Sum of tile sizes + index block + CRC = shard size
+      size_t tile_data_sum = 0;
+      for (int i = 0; i < tiles_per_shard_total; ++i)
+        tile_data_sum += tile_nbytes[i];
+
+      if (tile_data_sum + index_total_bytes != w->size) {
+        log_error(
+          "  shard %d: tile_data_sum=%zu + index=%zu != shard_size=%zu",
+          si,
+          tile_data_sum,
+          index_total_bytes,
+          w->size);
+        errors++;
+      }
+
+      // 3. Verify CRC32C at end of shard matches computed CRC of index data
+      uint32_t stored_crc;
+      memcpy(&stored_crc, index_ptr + index_data_bytes, 4);
+      uint32_t computed_crc = crc32c_test(index_ptr, index_data_bytes);
+      if (stored_crc != computed_crc) {
+        log_error("  shard %d: CRC mismatch (stored=0x%08x computed=0x%08x)",
+                  si,
+                  stored_crc,
+                  computed_crc);
+        errors++;
+      }
+    }
+
+    if (errors > 0) {
+      log_error("  %d index structure errors", errors);
+      goto Fail3;
+    }
+
+    log_info("  even tiling: %d shards verified", num_shards);
+    tile_stream_gpu_destroy(&s);
+    collecting_sink_free(&css);
+    free(src);
+    goto Case2;
+
+  Fail3:
+    tile_stream_gpu_destroy(&s);
+  Fail2:
+    collecting_sink_free(&css);
+  Fail1:
+    free(src);
+  Fail0:
+    log_error("  FAIL");
+    return 1;
+  }
+
+Case2:
+  // --- Case 2: Single shard (u16 data, smaller shape) ---
+  {
+    const struct dimension dims2[] = {
+      { .size = 4, .tile_size = 2 },
+      { .size = 4, .tile_size = 2 },
+      { .size = 6, .tile_size = 3 },
+    };
+    const size_t tiles_per_shard_total2 = 8; // 2*2*2
+    const int total2 = 96;
+
+    struct collecting_shard_sink css2;
+    CHECK(FailB0, collecting_sink_init(&css2, 1, 256 * 1024) == 0);
+
+    const struct tile_stream_configuration config2 = {
+      .buffer_capacity_bytes = total2 * sizeof(uint16_t),
+      .bytes_per_element = sizeof(uint16_t),
+      .rank = 3,
+      .dimensions = dims2,
+      .codec = CODEC_ZSTD,
+      .shard_sink = &css2.base,
+    };
+
+    struct tile_stream_gpu s2;
+    CHECK(FailB1, tile_stream_gpu_create(&config2, &s2) == 0);
+
+    uint16_t src2[96];
+    for (int i = 0; i < 96; ++i)
+      src2[i] = (uint16_t)i;
+
+    {
+      struct slice input = { .beg = src2, .end = src2 + total2 };
+      struct writer_result r = writer_append(&s2.writer, input);
+      CHECK(FailB2, r.error == 0);
+    }
+    {
+      struct writer_result r = writer_flush(&s2.writer);
+      CHECK(FailB2, r.error == 0);
+    }
+
+    struct collecting_shard_writer* w = &css2.writers[0];
+    CHECK(FailB2, w->finalized);
+
+    const size_t index_data_bytes2 =
+      tiles_per_shard_total2 * 2 * sizeof(uint64_t);
+    const size_t index_total_bytes2 = index_data_bytes2 + 4;
+    CHECK(FailB2, w->size > index_total_bytes2);
+
+    const uint8_t* index_ptr2 = w->buf + w->size - index_total_bytes2;
+    uint64_t offs[8], sizes[8];
+    for (size_t i = 0; i < tiles_per_shard_total2; ++i) {
+      memcpy(&offs[i], index_ptr2 + i * 16, sizeof(uint64_t));
+      memcpy(&sizes[i], index_ptr2 + i * 16 + 8, sizeof(uint64_t));
+    }
+
+    // Monotonic offsets
+    for (size_t i = 1; i < tiles_per_shard_total2; ++i)
+      CHECK(FailB2, offs[i] >= offs[i - 1]);
+
+    // Size sum
+    size_t sum = 0;
+    for (size_t i = 0; i < tiles_per_shard_total2; ++i)
+      sum += sizes[i];
+    CHECK(FailB2, sum + index_total_bytes2 == w->size);
+
+    // CRC
+    uint32_t stored, computed;
+    memcpy(&stored, index_ptr2 + index_data_bytes2, 4);
+    computed = crc32c_test(index_ptr2, index_data_bytes2);
+    CHECK(FailB2, stored == computed);
+
+    log_info("  single shard (u16): verified");
+    tile_stream_gpu_destroy(&s2);
+    collecting_sink_free(&css2);
+    goto Done;
+
+  FailB2:
+    tile_stream_gpu_destroy(&s2);
+  FailB1:
+    collecting_sink_free(&css2);
+  FailB0:
+    log_error("  FAIL");
+    return 1;
+  }
+
+Done:
+  log_info("  PASS");
+  return 0;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -455,6 +738,7 @@ main(int ac, char* av[])
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
   ecode |= test_shard_contents();
+  ecode |= test_shard_index_structure();
 
   cuCtxDestroy(ctx);
   return ecode;

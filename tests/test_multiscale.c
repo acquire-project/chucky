@@ -575,6 +575,279 @@ Fail0:
   return 1;
 }
 
+// --- All-level collecting sink (captures every level) ---
+
+#define ALL_MAX_SHARDS 64
+#define ALL_MAX_LEVELS 8
+
+struct all_shard_writer
+{
+  struct shard_writer base;
+  uint8_t* buf;
+  size_t capacity;
+  size_t size;
+  int finalized;
+  uint8_t level;
+  uint64_t shard_index;
+};
+
+struct all_level_collecting_sink
+{
+  struct shard_sink base;
+  struct all_shard_writer writers[ALL_MAX_LEVELS][ALL_MAX_SHARDS];
+  int num_shards_per_level[ALL_MAX_LEVELS];
+  int num_levels;
+  size_t per_shard_capacity;
+};
+
+static int
+all_write(struct shard_writer* self,
+          uint64_t offset,
+          const void* beg,
+          const void* end)
+{
+  struct all_shard_writer* w = (struct all_shard_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  if (offset + nbytes > w->capacity) {
+    log_error("all_write: overflow level=%d shard=%lu",
+              w->level,
+              (unsigned long)w->shard_index);
+    return 1;
+  }
+  memcpy(w->buf + offset, beg, nbytes);
+  if (offset + nbytes > w->size)
+    w->size = offset + nbytes;
+  return 0;
+}
+
+static int
+all_finalize(struct shard_writer* self)
+{
+  struct all_shard_writer* w = (struct all_shard_writer*)self;
+  w->finalized = 1;
+  return 0;
+}
+
+static struct shard_writer*
+all_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
+{
+  struct all_level_collecting_sink* s = (struct all_level_collecting_sink*)self;
+  if (level >= s->num_levels) {
+    log_error("all_open: level %d >= num_levels %d", level, s->num_levels);
+    return NULL;
+  }
+  if ((int)shard_index >= s->num_shards_per_level[level]) {
+    log_error("all_open: level %d shard %lu >= %d",
+              level,
+              (unsigned long)shard_index,
+              s->num_shards_per_level[level]);
+    return NULL;
+  }
+  struct all_shard_writer* w = &s->writers[level][shard_index];
+  w->level = level;
+  w->shard_index = shard_index;
+  w->finalized = 0;
+  w->size = 0;
+  return &w->base;
+}
+
+static void
+all_sink_free(struct all_level_collecting_sink* s)
+{
+  for (int lv = 0; lv < s->num_levels; ++lv)
+    for (int i = 0; i < s->num_shards_per_level[lv]; ++i)
+      free(s->writers[lv][i].buf);
+  *s = (struct all_level_collecting_sink){ 0 };
+}
+
+static int
+all_sink_init(struct all_level_collecting_sink* s,
+              int num_levels,
+              const int* num_shards_per_level,
+              size_t per_shard_capacity)
+{
+  *s = (struct all_level_collecting_sink){
+    .base = { .open = all_open },
+    .num_levels = num_levels,
+    .per_shard_capacity = per_shard_capacity,
+  };
+  for (int lv = 0; lv < num_levels; ++lv) {
+    s->num_shards_per_level[lv] = num_shards_per_level[lv];
+    for (int i = 0; i < num_shards_per_level[lv]; ++i) {
+      s->writers[lv][i] = (struct all_shard_writer){
+        .base = { .write = all_write, .finalize = all_finalize },
+        .buf = (uint8_t*)calloc(1, per_shard_capacity),
+        .capacity = per_shard_capacity,
+      };
+      if (!s->writers[lv][i].buf) {
+        all_sink_free(s);
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+// --- Dim0 multi-epoch: verify higher LOD levels are populated ---
+
+static int
+test_dim0_multi_epoch_levels(void)
+{
+  log_info("=== test_dim0_multi_epoch_levels ===");
+
+  // 5D: t, z, y, x, c. Dim0 + spatial downsample.
+  // 16 epochs along t to trigger multiple dim0 emissions.
+  // Spatial dims 32 with tile 8 → 4 tiles → level 1 has 16 (≥ tile 8) → nlod≥2
+  const struct dimension dims[] = {
+    { .size = 32,
+      .tile_size = 2,
+      .tiles_per_shard = 4,
+      .name = "t",
+      .downsample = 1 },
+    { .size = 32,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "z",
+      .downsample = 1 },
+    { .size = 32,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "y",
+      .downsample = 1 },
+    { .size = 32,
+      .tile_size = 8,
+      .tiles_per_shard = 2,
+      .name = "x",
+      .downsample = 1 },
+    { .size = 1, .tile_size = 1, .tiles_per_shard = 1, .name = "c" },
+  };
+  const uint8_t rank = 5;
+  const size_t total_elements = dim_total_elements(dims, rank);
+
+  // We need nlod — compute from lod_plan_init_shapes
+  struct lod_plan plan = { 0 };
+  {
+    uint64_t shape[5], tile_shape[5];
+    uint8_t lod_mask = 0;
+    for (int i = 0; i < rank; ++i) {
+      shape[i] = dims[i].size;
+      tile_shape[i] = dims[i].tile_size;
+      if (dims[i].downsample)
+        lod_mask |= (1u << i);
+    }
+    CHECK(Fail, lod_plan_init_shapes(&plan, rank, shape, tile_shape,
+                                      lod_mask, LOD_MAX_LEVELS) == 0);
+  }
+
+  int nlod = plan.nlod;
+  log_info("  nlod=%d total_elements=%zu", nlod, total_elements);
+  CHECK(Fail, nlod >= 2); // need at least 2 levels for this test
+
+  // Use generous shard allocation — higher levels may have different shard
+  // layouts than what we can compute from just shapes. L0 gets a careful count,
+  // higher levels get ALL_MAX_SHARDS.
+  int num_shards_per_level[ALL_MAX_LEVELS];
+  for (int lv = 0; lv < nlod; ++lv) {
+    if (lv == 0) {
+      int ns = 1;
+      for (int d = 0; d < rank; ++d) {
+        uint64_t tc = ceildiv(dims[d].size, dims[d].tile_size);
+        uint64_t tps = dims[d].tiles_per_shard;
+        if (tps == 0) tps = tc;
+        uint64_t sc = ceildiv(tc, tps);
+        ns *= (int)sc;
+      }
+      num_shards_per_level[lv] = ns < ALL_MAX_SHARDS ? ns : ALL_MAX_SHARDS;
+    } else {
+      num_shards_per_level[lv] = ALL_MAX_SHARDS;
+    }
+    log_info("  level %d: shape=(%lu,%lu,%lu,%lu,%lu) shards=%d",
+             lv,
+             (unsigned long)plan.shapes[lv][0],
+             (unsigned long)plan.shapes[lv][1],
+             (unsigned long)plan.shapes[lv][2],
+             (unsigned long)plan.shapes[lv][3],
+             (unsigned long)plan.shapes[lv][4],
+             num_shards_per_level[lv]);
+  }
+
+  lod_plan_free(&plan);
+
+  struct all_level_collecting_sink sink;
+  CHECK(Fail,
+        all_sink_init(&sink, nlod, num_shards_per_level, 256 * 1024) == 0);
+
+  {
+    struct tile_stream_gpu s = { 0 };
+    const struct tile_stream_configuration config = {
+      .buffer_capacity_bytes = 4 << 20,
+      .bytes_per_element = sizeof(uint16_t),
+      .rank = rank,
+      .dimensions = dims,
+      .codec = CODEC_ZSTD,
+      .shard_sink = &sink.base,
+      .reduce_method = lod_reduce_mean,
+      .dim0_reduce_method = lod_reduce_mean,
+    };
+
+    CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+    log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",
+             s.nlod,
+             s.dim0_downsample,
+             s.epochs_per_batch);
+
+    xor_pattern_init(dims, rank, 2);
+    int pump_ok = (pump_data(&s.writer, total_elements, fill_xor) == 0);
+    int cursor_ok = pump_ok && (s.cursor == total_elements);
+    tile_stream_gpu_destroy(&s);
+    xor_pattern_free();
+    CHECK(Fail2, pump_ok);
+    CHECK(Fail2, cursor_ok);
+  }
+
+  // Verify: L0 shards should be finalized and non-empty
+  {
+    int l0_finalized = 0;
+    for (int i = 0; i < num_shards_per_level[0]; ++i) {
+      if (sink.writers[0][i].finalized && sink.writers[0][i].size > 0)
+        l0_finalized++;
+    }
+    log_info("  L0: %d/%d shards finalized",
+             l0_finalized,
+             num_shards_per_level[0]);
+    CHECK(Fail2, l0_finalized > 0);
+  }
+
+  // Verify: level 1+ shards should have at least some finalized non-empty
+  for (int lv = 1; lv < nlod; ++lv) {
+    int finalized = 0;
+    size_t total_bytes = 0;
+    for (int i = 0; i < num_shards_per_level[lv]; ++i) {
+      if (sink.writers[lv][i].finalized) {
+        finalized++;
+        total_bytes += sink.writers[lv][i].size;
+      }
+    }
+    log_info("  L%d: %d/%d shards finalized, %zu total bytes",
+             lv,
+             finalized,
+             num_shards_per_level[lv],
+             total_bytes);
+    CHECK(Fail2, finalized > 0);
+    CHECK(Fail2, total_bytes > 0);
+  }
+
+  all_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  all_sink_free(&sink);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -588,6 +861,7 @@ main(int ac, char* av[])
 
   ecode |= test_multiscale_l0_correctness();
   ecode |= test_dim0_l0_correctness();
+  ecode |= test_dim0_multi_epoch_levels();
 
   if (!ecode && ac > 1) {
     ecode |= test_multiscale_zarr_visual(av[1]);

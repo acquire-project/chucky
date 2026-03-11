@@ -1,6 +1,7 @@
 #include "compress.h"
 #include "prelude.h"
 #include "prelude.cuda.h"
+#include <nvcomp/lz4.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,6 +160,216 @@ Fail:
   return 1;
 }
 
+// LZ4 roundtrip: compress with codec_compress(CODEC_LZ4), decompress with
+// nvcomp LZ4 decompress on GPU, compare with original.
+static int
+test_compress_lz4_roundtrip(void)
+{
+  log_info("=== test_compress_lz4_roundtrip ===");
+
+  const size_t tile_bytes = 1048576; // 1 MiB
+  const size_t num_tiles = 96;
+  const size_t pool_bytes = num_tiles * tile_bytes;
+
+  struct codec c = { 0 };
+  uint16_t* h_data = NULL;
+  uint8_t* h_result = NULL;
+  size_t* h_comp_sizes = NULL;
+  void* d_data = NULL;
+  void* d_compressed = NULL;
+  void* d_decomp = NULL;
+  void* d_temp = NULL;
+  CUstream stream = 0;
+  int ok = 0;
+
+  CHECK(Fail, codec_init(&c, CODEC_LZ4, tile_bytes, num_tiles) == 0);
+
+  const size_t comp_pool = num_tiles * c.max_output_size;
+
+  log_info("  tile_bytes=%zu num_tiles=%zu max_comp=%zu",
+           tile_bytes,
+           num_tiles,
+           c.max_output_size);
+
+  h_data = (uint16_t*)malloc(pool_bytes);
+  CHECK(Fail, h_data);
+  h_result = (uint8_t*)malloc(pool_bytes);
+  CHECK(Fail, h_result);
+  h_comp_sizes = (size_t*)malloc(num_tiles * sizeof(size_t));
+  CHECK(Fail, h_comp_sizes);
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_data, pool_bytes));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_compressed, comp_pool));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&d_decomp, pool_bytes));
+
+  // Fill host data
+  {
+    const size_t elems = pool_bytes / sizeof(uint16_t);
+    for (size_t i = 0; i < elems; ++i)
+      h_data[i] = source_value_at(i, elems);
+  }
+
+  // H2D
+  CU(Fail, cuMemcpyHtoD((CUdeviceptr)d_data, h_data, pool_bytes));
+
+  // Compress
+  CHECK(Fail,
+        codec_compress(&c, d_data, tile_bytes, d_compressed, 0, stream) == 0);
+  CU(Fail, cuStreamSynchronize(stream));
+
+  // Read compressed sizes
+  CU(Fail,
+     cuMemcpyDtoH(
+       h_comp_sizes, (CUdeviceptr)c.d_comp_sizes, num_tiles * sizeof(size_t)));
+
+  // Set up nvcomp LZ4 batch decompress on GPU
+  // Build pointer arrays for decompress: compressed input ptrs, decompressed
+  // output ptrs, compressed sizes, decompressed sizes.
+  {
+    void** h_comp_ptrs = (void**)malloc(num_tiles * sizeof(void*));
+    void** h_decomp_ptrs = (void**)malloc(num_tiles * sizeof(void*));
+    size_t* h_uncomp_sizes = (size_t*)malloc(num_tiles * sizeof(size_t));
+    size_t* h_actual_uncomp_sizes = (size_t*)malloc(num_tiles * sizeof(size_t));
+    int* h_statuses = (int*)calloc(num_tiles, sizeof(int));
+    CHECK(Fail, h_comp_ptrs && h_decomp_ptrs && h_uncomp_sizes &&
+                  h_actual_uncomp_sizes && h_statuses);
+
+    for (size_t t = 0; t < num_tiles; ++t) {
+      h_comp_ptrs[t] = (uint8_t*)d_compressed + t * c.max_output_size;
+      h_decomp_ptrs[t] = (uint8_t*)d_decomp + t * tile_bytes;
+      h_uncomp_sizes[t] = tile_bytes;
+    }
+
+    // Allocate device arrays for nvcomp decompress
+    void** d_comp_ptrs = NULL;
+    void** d_decomp_ptrs = NULL;
+    size_t* d_comp_sizes_arr = NULL;
+    size_t* d_uncomp_sizes = NULL;
+    size_t* d_actual_uncomp_sizes = NULL;
+    int* d_statuses = NULL;
+
+    CU(Fail2,
+       cuMemAlloc((CUdeviceptr*)&d_comp_ptrs, num_tiles * sizeof(void*)));
+    CU(Fail2,
+       cuMemAlloc((CUdeviceptr*)&d_decomp_ptrs, num_tiles * sizeof(void*)));
+    CU(Fail2,
+       cuMemAlloc((CUdeviceptr*)&d_comp_sizes_arr,
+                  num_tiles * sizeof(size_t)));
+    CU(Fail2,
+       cuMemAlloc((CUdeviceptr*)&d_uncomp_sizes, num_tiles * sizeof(size_t)));
+    CU(Fail2,
+       cuMemAlloc((CUdeviceptr*)&d_actual_uncomp_sizes,
+                  num_tiles * sizeof(size_t)));
+    CU(Fail2, cuMemAlloc((CUdeviceptr*)&d_statuses, num_tiles * sizeof(int)));
+
+    CU(Fail2,
+       cuMemcpyHtoD(
+         (CUdeviceptr)d_comp_ptrs, h_comp_ptrs, num_tiles * sizeof(void*)));
+    CU(Fail2,
+       cuMemcpyHtoD((CUdeviceptr)d_decomp_ptrs,
+                    h_decomp_ptrs,
+                    num_tiles * sizeof(void*)));
+    CU(Fail2,
+       cuMemcpyHtoD((CUdeviceptr)d_comp_sizes_arr,
+                    h_comp_sizes,
+                    num_tiles * sizeof(size_t)));
+    CU(Fail2,
+       cuMemcpyHtoD((CUdeviceptr)d_uncomp_sizes,
+                    h_uncomp_sizes,
+                    num_tiles * sizeof(size_t)));
+
+    // Get temp buffer size for LZ4 decompress
+    size_t temp_bytes = 0;
+    nvcompBatchedLZ4DecompressOpts_t decomp_opts =
+      nvcompBatchedLZ4DecompressDefaultOpts;
+    {
+      nvcompStatus_t status = nvcompBatchedLZ4DecompressGetTempSizeAsync(
+        num_tiles, tile_bytes, decomp_opts, &temp_bytes,
+        num_tiles * tile_bytes);
+      CHECK(Fail2, status == nvcompSuccess);
+    }
+
+    if (temp_bytes == 0)
+      temp_bytes = 1; // cuMemAlloc requires size > 0
+    CU(Fail2, cuMemAlloc((CUdeviceptr*)&d_temp, temp_bytes));
+
+    // Run LZ4 decompress
+    {
+      nvcompStatus_t status = nvcompBatchedLZ4DecompressAsync(
+        (const void* const*)d_comp_ptrs,
+        d_comp_sizes_arr,
+        d_uncomp_sizes,
+        d_actual_uncomp_sizes,
+        num_tiles,
+        d_temp,
+        temp_bytes,
+        (void* const*)d_decomp_ptrs,
+        decomp_opts,
+        (nvcompStatus_t*)d_statuses,
+        (cudaStream_t)stream);
+      CHECK(Fail2, status == nvcompSuccess);
+    }
+
+    CU(Fail2, cuStreamSynchronize(stream));
+
+    // D2H decompressed data
+    CU(Fail2, cuMemcpyDtoH(h_result, (CUdeviceptr)d_decomp, pool_bytes));
+
+    // Verify
+    int errors = 0;
+    const uint16_t* original = h_data;
+    const uint16_t* result = (const uint16_t*)h_result;
+    const size_t total_elems = pool_bytes / sizeof(uint16_t);
+    for (size_t i = 0; i < total_elems; ++i) {
+      if (original[i] != result[i]) {
+        if (errors < 5)
+          log_error("  elem %zu: expected %u got %u", i, original[i],
+                    result[i]);
+        errors++;
+      }
+    }
+
+    if (errors > 0) {
+      log_error("  %d mismatches", errors);
+      goto Fail2;
+    }
+
+    ok = 1;
+
+  Fail2:
+    cuMemFree((CUdeviceptr)d_comp_ptrs);
+    cuMemFree((CUdeviceptr)d_decomp_ptrs);
+    cuMemFree((CUdeviceptr)d_comp_sizes_arr);
+    cuMemFree((CUdeviceptr)d_uncomp_sizes);
+    cuMemFree((CUdeviceptr)d_actual_uncomp_sizes);
+    cuMemFree((CUdeviceptr)d_statuses);
+    free(h_comp_ptrs);
+    free(h_decomp_ptrs);
+    free(h_uncomp_sizes);
+    free(h_actual_uncomp_sizes);
+    free(h_statuses);
+  }
+
+Fail:
+  free(h_data);
+  free(h_result);
+  free(h_comp_sizes);
+  cuMemFree((CUdeviceptr)d_data);
+  cuMemFree((CUdeviceptr)d_compressed);
+  cuMemFree((CUdeviceptr)d_decomp);
+  cuMemFree((CUdeviceptr)d_temp);
+  cuStreamDestroy(stream);
+  codec_free(&c);
+
+  if (ok) {
+    log_info("  PASS");
+    return 0;
+  }
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -174,6 +385,7 @@ main(int ac, char* av[])
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
   ecode |= test_compress_roundtrip();
+  ecode |= test_compress_lz4_roundtrip();
 
   cuCtxDestroy(ctx);
   return ecode;

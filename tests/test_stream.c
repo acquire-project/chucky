@@ -512,6 +512,297 @@ Fail0:
   return 1;
 }
 
+// Test: LZ4 compressed stream — verify shard structural integrity.
+// No CPU LZ4 decompression, so we check structural properties only:
+// shard size > 0, all tile sizes > 0 and ≤ max_output_size, valid offsets.
+static int
+test_stream_lz4_roundtrip(void)
+{
+  log_info("=== test_stream_lz4_roundtrip ===");
+
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2 },
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  const size_t tiles_per_shard_total = 8;
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 96 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_LZ4,
+    .shard_sink = &mss.base,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Fill source with sequential u16 values
+  uint16_t src[96];
+  for (size_t i = 0; i < countof(src); ++i)
+    src[i] = (uint16_t)i;
+
+  struct slice input = { .beg = src, .end = src + countof(src) };
+  struct writer_result r = writer_append(&s.writer, input);
+  CHECK(Fail, r.error == 0);
+
+  r = writer_flush(&s.writer);
+  CHECK(Fail, r.error == 0);
+
+  const size_t shard_size = mss.writer.size;
+  CHECK(Fail, shard_size > 0);
+  log_info("  shard_size=%zu", shard_size);
+
+  // Parse shard index
+  const size_t index_data_bytes = tiles_per_shard_total * 2 * sizeof(uint64_t);
+  CHECK(Fail, shard_size > index_data_bytes + 4);
+  const uint8_t* index_ptr = mss.writer.buf + shard_size - index_data_bytes - 4;
+
+  uint64_t tile_offsets[8], tile_sizes[8];
+  for (size_t i = 0; i < tiles_per_shard_total; ++i) {
+    memcpy(&tile_offsets[i], index_ptr + i * 16, sizeof(uint64_t));
+    memcpy(&tile_sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
+  }
+
+  // Verify structural properties
+  size_t tile_data_total = 0;
+  for (size_t i = 0; i < tiles_per_shard_total; ++i) {
+    CHECK(Fail, tile_sizes[i] > 0);
+    CHECK(Fail, tile_sizes[i] <= s.codec.max_output_size);
+    CHECK(Fail, tile_offsets[i] + tile_sizes[i] <= shard_size);
+    tile_data_total += tile_sizes[i];
+    log_info("  tile %zu: offset=%lu size=%lu",
+             i,
+             (unsigned long)tile_offsets[i],
+             (unsigned long)tile_sizes[i]);
+  }
+
+  // Total tile data + index block + CRC should equal shard size
+  CHECK(Fail, tile_data_total + index_data_bytes + 4 == shard_size);
+  log_info("  tile_data_total=%zu  expected_shard_size=%zu",
+           tile_data_total,
+           tile_data_total + index_data_bytes + 4);
+
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Error path tests ---
+
+static int
+test_stream_zero_length_append(void)
+{
+  log_info("=== test_stream_zero_length_append ===");
+
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2 },
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 96 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Append empty slice
+  uint16_t dummy;
+  struct slice empty = { .beg = &dummy, .end = &dummy };
+  struct writer_result r = writer_append(&s.writer, empty);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, s.cursor == 0);
+
+  // Now append real data and verify it still works
+  uint16_t src[96];
+  for (size_t i = 0; i < countof(src); ++i)
+    src[i] = (uint16_t)i;
+
+  struct slice input = { .beg = src, .end = src + countof(src) };
+  r = writer_append(&s.writer, input);
+  CHECK(Fail, r.error == 0);
+
+  r = writer_flush(&s.writer);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, mss.writer.size > 0);
+
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_stream_null_config_fields(void)
+{
+  log_info("=== test_stream_null_config_fields ===");
+
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  // NULL shard_sink should cause create to fail
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 24 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 2,
+    .dimensions = dims,
+    .shard_sink = NULL,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  int result = tile_stream_gpu_create(&config, &s);
+  if (result != 0) {
+    log_info("  create correctly returned error for NULL shard_sink");
+    log_info("  PASS");
+    return 0;
+  }
+
+  // If it didn't fail, clean up and report
+  log_error("  create succeeded with NULL shard_sink — expected failure");
+  tile_stream_gpu_destroy(&s);
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_stream_rank_1_dim(void)
+{
+  log_info("=== test_stream_rank_1_dim ===");
+
+  const struct dimension dims[] = {
+    { .size = 12, .tile_size = 4 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 12 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 1,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  int result = tile_stream_gpu_create(&config, &s);
+  if (result != 0) {
+    // Rank 1 may not be supported — that's fine, just report
+    log_info("  rank=1 not supported (create returned %d) — OK", result);
+    mem_shard_sink_free(&mss);
+    log_info("  PASS");
+    return 0;
+  }
+
+  // If it succeeds, verify we can push data through
+  uint16_t src[12];
+  for (int i = 0; i < 12; ++i)
+    src[i] = (uint16_t)i;
+
+  struct slice input = { .beg = src, .end = src + 12 };
+  struct writer_result r = writer_append(&s.writer, input);
+  CHECK(Fail, r.error == 0);
+
+  r = writer_flush(&s.writer);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, mss.writer.size > 0);
+  log_info("  rank=1 pipeline produced %zu bytes", mss.writer.size);
+
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_stream_flush_empty(void)
+{
+  log_info("=== test_stream_flush_empty ===");
+
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 24 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 2,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Flush with no data appended — should be a no-op
+  struct writer_result r = writer_flush(&s.writer);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, s.cursor == 0);
+
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -531,6 +822,16 @@ main(int ac, char* av[])
   ecode |= test_stream_chunked_append();
   log_info("");
   ecode |= test_stream_compressed_roundtrip();
+  log_info("");
+  ecode |= test_stream_lz4_roundtrip();
+  log_info("");
+  ecode |= test_stream_zero_length_append();
+  log_info("");
+  ecode |= test_stream_null_config_fields();
+  log_info("");
+  ecode |= test_stream_rank_1_dim();
+  log_info("");
+  ecode |= test_stream_flush_empty();
 
   cuCtxDestroy(ctx);
   return ecode;
