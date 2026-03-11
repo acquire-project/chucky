@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MAX_BATCH_EPOCHS 64
+#define MAX_BATCH_EPOCHS 256
 
 struct slice
 {
@@ -97,11 +97,11 @@ struct tile_stream_configuration
   uint8_t rank;
   const struct dimension* dimensions;
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
-  enum compression_codec codec;           // compression codec for tiles
-  enum lod_reduce_method reduce_method;   // spatial LOD reduction method
+  enum compression_codec codec;  // compression codec for tiles
+  enum lod_reduce_method reduce_method;      // spatial LOD reduction method
   enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
-  uint32_t epochs_per_batch;     // K: 0 = auto (target_min_tiles), must be pow2
-  uint32_t target_min_tiles;     // minimum tiles per compress batch (default 1024)
+  uint32_t epochs_per_batch; // K: 0 = auto (target_min_tiles), must be pow2
+  uint32_t target_min_tiles; // minimum tiles per compress batch (default 1024)
 };
 
 struct staging_slot
@@ -163,10 +163,10 @@ struct flush_slot_gpu
   CUevent t_compress_start;
   CUevent t_aggregate_end;
   CUevent t_d2h_start;
-  CUevent ready;              // signals all D2H for this slot is done
+  CUevent ready;               // signals all D2H for this slot is done
   uint32_t active_levels_mask; // union of per-epoch active masks
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS]; // per-epoch active level masks
-  int batch_epoch_count;       // number of epochs accumulated in this batch
+  int batch_epoch_count; // number of epochs accumulated in this batch
 };
 
 struct lod_level_state
@@ -174,8 +174,9 @@ struct lod_level_state
   struct aggregate_layout agg_layout;
   struct aggregate_slot agg[2]; // double-buffered, indexed by flush_current
   struct shard_state shard;
-  CUdeviceptr d_batch_gather;  // [K_l * M_l] uint32: batch-tile → compressed idx
-  CUdeviceptr d_batch_perm;    // [K_l * M_l] uint32: batch-tile → shard-ordered pos
+  CUdeviceptr d_batch_gather; // [K_l * M_l] uint32: batch-tile → compressed idx
+  CUdeviceptr
+    d_batch_perm; // [K_l * M_l] uint32: batch-tile → shard-ordered pos
   uint32_t batch_active_count; // K_l = K / 2^l for this level
 };
 
@@ -183,12 +184,12 @@ struct lod_level_state
 // Single buffer covering all LOD levels 1+, same packed layout as d_morton.
 struct dim0_state
 {
-  struct buffer d_accum;                  // GPU: all levels 1+ packed, accum_bpe
-  CUdeviceptr d_level_ids;                // GPU: u8 per element, maps to level
-  CUdeviceptr d_counts;                   // GPU: nlod uint32_t, per-level count
-  uint32_t counts[LOD_MAX_LEVELS];        // CPU mirror of d_counts
-  uint64_t total_elements;                // sum(batch_count * lod_counts[k]) k=1..
-  uint64_t morton_offset;                 // levels.ends[0] (start of level 1 in d_morton)
+  struct buffer d_accum;           // GPU: all levels 1+ packed, accum_bpe
+  CUdeviceptr d_level_ids;         // GPU: u8 per element, maps to level
+  CUdeviceptr d_counts;            // GPU: nlod uint32_t, per-level count
+  uint32_t counts[LOD_MAX_LEVELS]; // CPU mirror of d_counts
+  uint64_t total_elements;         // sum(batch_count * lod_counts[k]) k=1..
+  uint64_t morton_offset; // levels.ends[0] (start of level 1 in d_morton)
 };
 
 struct lod_state
@@ -213,7 +214,7 @@ struct lod_state
   struct stream_layout layouts[LOD_MAX_LEVELS];
 
   // Morton-to-tile scatter LUTs (precomputed)
-  CUdeviceptr d_morton_tile_lut[LOD_MAX_LEVELS];          // u32, lod_counts[lv]
+  CUdeviceptr d_morton_tile_lut[LOD_MAX_LEVELS]; // u32, lod_counts[lv]
   CUdeviceptr d_morton_batch_tile_offsets[LOD_MAX_LEVELS]; // u32, batch_count
 
   CUevent t_start;
@@ -227,8 +228,8 @@ struct tile_stream_gpu;
 
 struct tile_stream_memory_info
 {
-  size_t device_bytes;          // total GPU memory
-  size_t host_pinned_bytes;     // total pinned host memory
+  size_t device_bytes;      // total GPU memory
+  size_t host_pinned_bytes; // total pinned host memory
 
   // Breakdown (device)
   size_t staging_bytes;         // 2 x buffer_capacity_bytes
@@ -239,19 +240,18 @@ struct tile_stream_memory_info
   size_t codec_bytes;           // nvcomp workspace + pointer arrays
 
   // Key parameters used in the estimate
-  uint64_t tiles_per_epoch;     // L0
-  uint64_t total_tiles;         // sum across all LOD levels
-  size_t   max_output_size;     // compressed tile bound
-  int      nlod;                // number of LOD levels
-  uint32_t epochs_per_batch;    // K
+  uint64_t tiles_per_epoch;  // L0
+  uint64_t total_tiles;      // sum across all LOD levels
+  size_t max_output_size;    // compressed tile bound
+  int nlod;                  // number of LOD levels
+  uint32_t epochs_per_batch; // K
 };
 
 // Estimate GPU memory requirements without allocating.
 // Returns 0 on success, non-zero on invalid config.
 int
-tile_stream_gpu_memory_estimate(
-  const struct tile_stream_configuration* config,
-  struct tile_stream_memory_info* info);
+tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
+                                struct tile_stream_memory_info* info);
 
 // Dispatch function: H2D + scatter (+ optional d_linear copy).
 typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
@@ -276,8 +276,8 @@ struct tile_stream_gpu
   int flush_pending;
 
   // Batch accumulation
-  uint32_t epochs_per_batch;   // K: number of epochs per compress batch
-  uint32_t epochs_accumulated; // 0..K-1: epochs in current pool
+  uint32_t epochs_per_batch;   // number of epochs per compress batch
+  uint32_t epochs_accumulated; // counter of epochs in current pool
   CUevent batch_pool_events[MAX_BATCH_EPOCHS]; // per-epoch pool-ready signals
 
   // Unified compression state (sized for total_tiles)

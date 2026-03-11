@@ -2,7 +2,7 @@
 
 ## TODO
 
-
+- [ ] boundary conditions for dim0 downsampling
 - [x] lod for dim0
 - [x] move benchmark suite out of tests
 - [x] optimize buffering for compression stage - may need more than one epoch
@@ -26,6 +26,7 @@
 - [ ] coverage
 - [ ] characterize performance by chunk size
 
+
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
@@ -42,6 +43,16 @@ GB/s
 2.81  bench_stream_orca2_multiscale
 Fail  bench_stream_orca2_multiscale_dim0
 ```
+ - Need to debug that failure
+ - Review - separate static (config) state from mutable state
+ - target_min_tiles config parameter - rename to make clear this is per batch
+ - need a max lod parameter
+
+Exploring tile size vs performance with `bench_stream_orca2_multiscale`.
+`auk` doesn't have much memory and I keep running into memory blowing up,
+especially for smaller tile sizes. LOD scales particularly badly - the number
+of lod's goes up.
+
 
 ## 2026-03-10
 

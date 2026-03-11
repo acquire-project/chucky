@@ -28,8 +28,9 @@
 
           buildInputs = with pkgs; [
             cmake
-            cudaPackages.nvcomp
             cudaPackages.cudatoolkit
+            cudaPackages.nvcomp
+            docker
             gdb
             gh
             llvmPackages.openmp
@@ -40,8 +41,8 @@
             nixd
             perf
             pkg-config
+            tokei
             zstd
-            docker
             # for viewing w neuroglancer
             python3
             uv

@@ -175,7 +175,8 @@ log_bench_header(const struct tile_stream_gpu* s,
   if (s->config.codec != CODEC_NONE)
     print_report("  compress:    max_output=%zu comp_pool=%zu MiB",
                  s->codec.max_output_size,
-                 (s->codec.batch_size * s->codec.max_output_size) / (1024 * 1024));
+                 (s->codec.batch_size * s->codec.max_output_size) /
+                   (1024 * 1024));
 }
 
 void
@@ -316,6 +317,7 @@ run_bench(const struct bench_config* cfg)
     .shard_sink = sink,
     .reduce_method = cfg->reduce_method,
     .dim0_reduce_method = cfg->dim0_reduce_method,
+    .target_min_tiles = 2048,
   };
 
   {
@@ -328,15 +330,17 @@ run_bench(const struct bench_config* cfg)
                    (double)mem.staging_bytes / (1024.0 * 1024.0),
                    (double)mem.tile_pool_bytes / (1024.0 * 1024.0 * 1024.0));
       print_report("    comp_pool: %.2f GiB   aggregate: %.2f GiB",
-                   (double)mem.compressed_pool_bytes / (1024.0 * 1024.0 * 1024.0),
+                   (double)mem.compressed_pool_bytes /
+                     (1024.0 * 1024.0 * 1024.0),
                    (double)mem.aggregate_bytes / (1024.0 * 1024.0 * 1024.0));
       print_report("    lod:       %.2f MiB   codec:     %.2f MiB",
                    (double)mem.lod_bytes / (1024.0 * 1024.0),
                    (double)mem.codec_bytes / (1024.0 * 1024.0));
-      print_report("    tiles:     %llu/epoch, %llu total (%d LOD levels)",
+      print_report("    tiles:     %llu/epoch, %llu total (%d LOD levels, K=%u)",
                    (unsigned long long)mem.tiles_per_epoch,
                    (unsigned long long)mem.total_tiles,
-                   mem.nlod);
+                   mem.nlod,
+                   mem.epochs_per_batch);
     }
   }
 
@@ -418,8 +422,9 @@ static int
 parse_codec(const char* s, enum compression_codec* out)
 {
   static const char* const names[] = { "none", "lz4", "zstd" };
-  static const enum compression_codec vals[] = { CODEC_NONE, CODEC_LZ4,
-                                                  CODEC_ZSTD };
+  static const enum compression_codec vals[] = { CODEC_NONE,
+                                                 CODEC_LZ4,
+                                                 CODEC_ZSTD };
   int i = match_option(s, names, 3);
   if (i < 3) {
     *out = vals[i];
@@ -432,11 +437,15 @@ parse_codec(const char* s, enum compression_codec* out)
 static int
 parse_reduce(const char* s, enum lod_reduce_method* out)
 {
-  static const char* const names[] = { "mean",    "min",     "max",
-                                        "median",  "max_sup", "min_sup" };
+  static const char* const names[] = { "mean",   "min",     "max",
+                                       "median", "max_sup", "min_sup" };
   static const enum lod_reduce_method vals[] = {
-    lod_reduce_mean, lod_reduce_min,            lod_reduce_max,
-    lod_reduce_median, lod_reduce_max_suppressed, lod_reduce_min_suppressed,
+    lod_reduce_mean,
+    lod_reduce_min,
+    lod_reduce_max,
+    lod_reduce_median,
+    lod_reduce_max_suppressed,
+    lod_reduce_min_suppressed,
   };
   int i = match_option(s, names, 6);
   if (i < 6) {
@@ -508,8 +517,7 @@ bench_stream_main(int ac,
     .array_name = label,
     .codec = codec,
     .reduce_method = reduce,
-    .dim0_reduce_method =
-      reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
   };
   ecode = run_bench(&cfg);
 
