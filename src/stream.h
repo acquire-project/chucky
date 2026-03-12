@@ -36,6 +36,12 @@ struct shard_writer
                uint64_t offset, // byte offset within the shard
                const void* beg,
                const void* end);
+  // Zero-copy write: caller guarantees buffer lifetime until io_event.
+  // NULL = fall back to write (copy-based).
+  int (*write_direct)(struct shard_writer* self,
+                      uint64_t offset,
+                      const void* beg,
+                      const void* end);
   int (*finalize)(struct shard_writer* self); // shard complete, close/flush
 };
 
@@ -45,6 +51,9 @@ struct shard_sink
   struct shard_writer* (*open)(struct shard_sink* self,
                                uint8_t level,
                                uint64_t shard_index);
+  // IO fence for backpressure. NULL = no async IO.
+  struct io_event (*record_fence)(struct shard_sink* self, uint8_t level);
+  void (*wait_fence)(struct shard_sink* self, uint8_t level, struct io_event ev);
 };
 
 struct stream_metrics
@@ -102,6 +111,7 @@ struct tile_stream_configuration
   enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
   uint32_t epochs_per_batch; // K: 0 = auto (target_min_tiles), must be pow2
   uint32_t target_min_tiles; // minimum tiles per compress batch (default 1024)
+  size_t shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
 };
 
 struct staging_slot

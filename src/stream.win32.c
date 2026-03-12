@@ -3,6 +3,28 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <malloc.h>
+
+size_t
+platform_page_size(void)
+{
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return (size_t)si.dwPageSize;
+}
+
+void*
+platform_aligned_alloc(size_t alignment, size_t size)
+{
+  return _aligned_malloc(size, alignment);
+}
+
+void
+platform_aligned_free(void* ptr)
+{
+  _aligned_free(ptr);
+}
+
 void
 platform_sleep_ns(int64_t ns)
 {

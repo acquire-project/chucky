@@ -309,7 +309,7 @@ crc32c(const void* data, size_t len)
 
 // Emit completed shards (write index block + finalize).
 static int
-emit_shards(struct shard_state* ss)
+emit_shards(struct shard_state* ss, size_t shard_alignment)
 {
   for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
     struct active_shard* sh = &ss->shards[si];
@@ -318,17 +318,38 @@ emit_shards(struct shard_state* ss)
 
     size_t index_data_bytes = ss->tiles_per_shard_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
-    uint8_t* index_buf = (uint8_t*)malloc(index_total_bytes);
-    CHECK(Error, index_buf);
 
-    memcpy(index_buf, sh->index, index_data_bytes);
+    uint8_t* index_buf;
+    size_t write_bytes;
+    size_t index_offset; // offset of index data within write buffer
 
-    uint32_t crc_val = crc32c(index_buf, index_data_bytes);
-    memcpy(index_buf + index_data_bytes, &crc_val, 4);
+    if (shard_alignment > 0) {
+      // Unbuffered IO: pad BEFORE the index so the file ends sector-aligned
+      // with the index at the very end. No truncation needed.
+      write_bytes = align_up(index_total_bytes, shard_alignment);
+      index_buf = (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
+      CHECK(Error, index_buf);
+      index_offset = write_bytes - index_total_bytes;
+      memset(index_buf, 0, index_offset); // zero the padding before index
+    } else {
+      write_bytes = index_total_bytes;
+      index_buf = (uint8_t*)malloc(write_bytes);
+      CHECK(Error, index_buf);
+      index_offset = 0;
+    }
+
+    memcpy(index_buf + index_offset, sh->index, index_data_bytes);
+
+    uint32_t crc_val = crc32c(index_buf + index_offset, index_data_bytes);
+    memcpy(index_buf + index_offset + index_data_bytes, &crc_val, 4);
 
     int wrc = sh->writer->write(
-      sh->writer, sh->data_cursor, index_buf, index_buf + index_total_bytes);
-    free(index_buf);
+      sh->writer, sh->data_cursor, index_buf, index_buf + write_bytes);
+
+    if (shard_alignment > 0)
+      platform_aligned_free(index_buf);
+    else
+      free(index_buf);
     CHECK(Error, wrc == 0);
 
     CHECK(Error, sh->writer->finalize(sh->writer) == 0);
@@ -381,11 +402,24 @@ deliver_to_shards_batch(struct tile_stream_gpu* s,
       if (shard_bytes > 0) {
         const void* src =
           (const char*)agg_slot->h_aggregated + agg_slot->h_offsets[j_start];
-        CHECK(Error,
-              sh->writer->write(sh->writer,
-                                sh->data_cursor,
-                                src,
-                                (const char*)src + shard_bytes) == 0);
+        size_t sa = s->config.shard_alignment;
+        // Unbuffered IO: round write size up to alignment. The padding
+        // region in h_aggregated is safe to read (buffer is oversized).
+        size_t write_bytes = sa > 0 ? align_up(shard_bytes, sa) : shard_bytes;
+        const void* src_end = (const char*)src + write_bytes;
+        if (sh->writer->write_direct) {
+          CHECK(Error,
+                sh->writer->write_direct(sh->writer,
+                                         sh->data_cursor,
+                                         src,
+                                         src_end) == 0);
+        } else {
+          CHECK(Error,
+                sh->writer->write(sh->writer,
+                                  sh->data_cursor,
+                                  src,
+                                  src_end) == 0);
+        }
       }
 
       for (uint64_t j = j_start; j < j_end; ++j) {
@@ -399,13 +433,16 @@ deliver_to_shards_batch(struct tile_stream_gpu* s,
           sh->index[2 * slot_idx + 1] = tile_size;
         }
       }
-      sh->data_cursor += shard_bytes;
+      {
+        size_t sa = s->config.shard_alignment;
+        sh->data_cursor += sa > 0 ? align_up(shard_bytes, sa) : shard_bytes;
+      }
     }
 
     ss->epoch_in_shard++;
 
     if (ss->epoch_in_shard >= ss->tiles_per_shard_0) {
-      if (emit_shards(ss))
+      if (emit_shards(ss, s->config.shard_alignment))
         goto Error;
     }
   }
@@ -511,6 +548,16 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
 {
   struct flush_slot_gpu* fs = &s->flush[fc];
 
+  // Wait for previous IO from this flush slot's agg_slots before reuse
+  if (s->config.shard_sink->wait_fence) {
+    for (int lv = 0; lv < s->nlod; ++lv) {
+      struct aggregate_slot* agg = &s->lod_levels[lv].agg[fc];
+      if (agg->io_done.seq > 0)
+        s->config.shard_sink->wait_fence(
+          s->config.shard_sink, (uint8_t)lv, agg->io_done);
+    }
+  }
+
   CU(Error, cuEventSynchronize(fs->ready));
   record_flush_metrics(s, fc);
 
@@ -536,6 +583,11 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
       if (deliver_to_shards_batch(
             s, (uint8_t)lv, &lvl->shard, &lvl->agg[fc], active_count))
         goto Error;
+
+      // Record fence for THIS level right away
+      if (s->config.shard_sink->record_fence)
+        lvl->agg[fc].io_done =
+          s->config.shard_sink->record_fence(s->config.shard_sink, (uint8_t)lv);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
@@ -1023,6 +1075,19 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
 
   CU(Error, cuEventRecord(fs->t_aggregate_end, s->compress));
 
+  // Wait for any pending IO from a previous call before overwriting
+  // h_aggregated/h_offsets with the D2H below.
+  if (s->config.shard_sink->wait_fence) {
+    for (int lv = 0; lv < s->nlod; ++lv) {
+      if (!(active_mask & (1u << lv)))
+        continue;
+      struct aggregate_slot* agg = &s->lod_levels[lv].agg[fc];
+      if (agg->io_done.seq > 0)
+        s->config.shard_sink->wait_fence(
+          s->config.shard_sink, (uint8_t)lv, agg->io_done);
+    }
+  }
+
   CU(Error, cuStreamWaitEvent(s->d2h, fs->t_aggregate_end, 0));
   CU(Error, cuEventRecord(fs->t_d2h_start, s->d2h));
 
@@ -1065,6 +1130,12 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                                   &s->lod_levels[lv].agg[fc],
                                   1))
         goto Error;
+
+      // Record fence for this level right away
+      if (s->config.shard_sink->record_fence)
+        s->lod_levels[lv].agg[fc].io_done =
+          s->config.shard_sink->record_fence(
+            s->config.shard_sink, (uint8_t)lv);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
@@ -1566,7 +1637,8 @@ init_aggregate_and_shards(struct tile_stream_gpu* s)
                                 tile_count,
                                 tiles_per_shard,
                                 tiles_lv,
-                                s->codec.max_output_size) == 0);
+                                s->codec.max_output_size,
+                                s->config.shard_alignment) == 0);
 
     // Aggregate slots sized for batch (at least 1 for infrequent dim0 levels).
     uint32_t slot_count = batch_count > 0 ? batch_count : 1;
@@ -1574,6 +1646,19 @@ init_aggregate_and_shards(struct tile_stream_gpu* s)
     uint64_t batch_covering =
       (uint64_t)slot_count * s->lod_levels[lv].agg_layout.covering_count;
     size_t batch_agg_bytes = batch_tiles * s->codec.max_output_size;
+
+    // Add page-alignment padding slack: each shard boundary may add up to
+    // page_size bytes of padding. num_shards = batch_covering / (slot_count * tps_inner).
+    {
+      size_t ps = s->lod_levels[lv].agg_layout.page_size;
+      if (ps > 0) {
+        uint64_t tpsi = s->lod_levels[lv].agg_layout.tps_inner;
+        uint64_t num_shards = (tpsi > 0) ? batch_covering / (slot_count * tpsi) : 0;
+        batch_agg_bytes += num_shards * ps;
+        // Extra tail padding for rounding up the last write.
+        batch_agg_bytes += ps;
+      }
+    }
 
     for (int i = 0; i < 2; ++i) {
       CHECK(Fail,
@@ -2421,7 +2506,7 @@ tile_stream_gpu_flush(struct writer* self)
   // Emit partial shards for all levels
   for (int lv = 0; lv < s->nlod; ++lv) {
     if (s->lod_levels[lv].shard.epoch_in_shard > 0) {
-      if (emit_shards(&s->lod_levels[lv].shard))
+      if (emit_shards(&s->lod_levels[lv].shard, s->config.shard_alignment))
         return writer_error();
     }
   }
@@ -2610,9 +2695,22 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       batch_count = (K >= period) ? K / period : 1;
     }
 
+    uint64_t tps_inner_lv = 1;
+    for (int d = 1; d < rank; ++d)
+      tps_inner_lv *= tps[d];
+
     uint64_t batch_tiles = (uint64_t)batch_count * level_tile_count[lv];
     uint64_t batch_covering = (uint64_t)batch_count * covering_count;
     size_t batch_agg_bytes = batch_tiles * max_output_size;
+
+    // Page-alignment padding slack
+    {
+      size_t ps = config->shard_alignment; // 0 when not using unbuffered IO
+      uint64_t num_shards = (tps_inner_lv > 0)
+        ? batch_covering / (batch_count * tps_inner_lv) : 0;
+      batch_agg_bytes += num_shards * ps;
+      batch_agg_bytes += ps; // tail padding
+    }
 
     // aggregate_layout: device lifted shape + strides
     size_t agg_layout_dev =

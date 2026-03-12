@@ -2,6 +2,7 @@
 #include "io_queue.h"
 #include "json_writer.h"
 #include "lod_plan.h"
+#include "platform.h"
 #include "platform_io.h"
 #include "prelude.h"
 
@@ -18,6 +19,7 @@ struct zarr_shard_writer
   struct shard_writer base;
   platform_fd fd;
   struct io_queue* queue;
+  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
 };
 
 struct pwrite_job
@@ -25,14 +27,16 @@ struct pwrite_job
   platform_fd fd;
   uint64_t offset;
   size_t nbytes;
-  uint8_t data[];
+  size_t data_off; // byte offset from start of struct to data
+  uint8_t data[];  // used when data_off == sizeof(struct pwrite_job)
 };
 
 static void
 pwrite_fn(void* arg)
 {
   struct pwrite_job* j = (struct pwrite_job*)arg;
-  if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0)
+  const void* data = (const char*)j + j->data_off;
+  if (platform_pwrite(j->fd, data, j->nbytes, j->offset) != 0)
     log_error("zarr pwrite failed");
 }
 
@@ -46,14 +50,71 @@ zarr_shard_write(struct shard_writer* self,
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
 
   if (w->queue) {
-    struct pwrite_job* j =
-      (struct pwrite_job*)malloc(sizeof(struct pwrite_job) + nbytes);
+    struct pwrite_job* j;
+    void (*job_free)(void*) = free;
+    if (w->alignment > 0) {
+      // Unbuffered IO: buffer must be page-aligned.
+      size_t hdr = align_up(sizeof(struct pwrite_job), w->alignment);
+      j = (struct pwrite_job*)platform_aligned_alloc(w->alignment, hdr + nbytes);
+      CHECK(Error, j);
+      j->data_off = hdr; // data lives at aligned offset
+      job_free = platform_aligned_free;
+    } else {
+      j = (struct pwrite_job*)malloc(sizeof(struct pwrite_job) + nbytes);
+      CHECK(Error, j);
+      j->data_off = sizeof(struct pwrite_job);
+    }
+    j->fd = w->fd;
+    j->offset = offset;
+    j->nbytes = nbytes;
+    memcpy((char*)j + j->data_off, beg, nbytes);
+    io_queue_post(w->queue, pwrite_fn, j, job_free);
+  } else {
+    CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
+  }
+  return 0;
+
+Error:
+  return 1;
+}
+
+// Zero-copy pwrite: data points into pinned memory, NOT owned.
+struct pwrite_ref_job
+{
+  platform_fd fd;
+  uint64_t offset;
+  size_t nbytes;
+  const void* data; // NOT owned — points into pinned memory
+};
+
+static void
+pwrite_ref_fn(void* arg)
+{
+  struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
+  if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0)
+    log_error("zarr pwrite_ref failed");
+}
+
+static int
+zarr_shard_write_direct(struct shard_writer* self,
+                        uint64_t offset,
+                        const void* beg,
+                        const void* end)
+{
+  struct zarr_shard_writer* w = (struct zarr_shard_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  if (nbytes == 0)
+    return 0;
+
+  if (w->queue) {
+    struct pwrite_ref_job* j =
+      (struct pwrite_ref_job*)malloc(sizeof(struct pwrite_ref_job));
     CHECK(Error, j);
     j->fd = w->fd;
     j->offset = offset;
     j->nbytes = nbytes;
-    memcpy(j->data, beg, nbytes);
-    io_queue_post(w->queue, pwrite_fn, j, free);
+    j->data = beg;
+    io_queue_post(w->queue, pwrite_ref_fn, j, free);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -104,6 +165,7 @@ struct zarr_sink
 {
   struct shard_sink base;
   struct io_queue* queue;
+  int unbuffered;
 
   // Geometry
   uint8_t rank;
@@ -152,6 +214,24 @@ shard_path(char* buf,
   return 0;
 }
 
+// --- shard_sink fence ---
+
+static struct io_event
+zarr_sink_record_fence(struct shard_sink* self, uint8_t level)
+{
+  (void)level;
+  struct zarr_sink* zs = (struct zarr_sink*)self;
+  return io_queue_record(zs->queue);
+}
+
+static void
+zarr_sink_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+{
+  (void)level;
+  struct zarr_sink* zs = (struct zarr_sink*)self;
+  io_event_wait(zs->queue, ev);
+}
+
 // --- shard_sink open ---
 
 static struct shard_writer*
@@ -175,7 +255,10 @@ zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     return NULL;
   }
 
-  w->fd = platform_open_write(path);
+  {
+    int flags = zs->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
+    w->fd = platform_open_write_ex(path, flags);
+  }
   if (w->fd == PLATFORM_FD_INVALID) {
     log_error("zarr_sink_open: open(%s) failed", path);
     return NULL;
@@ -400,8 +483,11 @@ zarr_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, zs);
 
   zs->base.open = zarr_sink_open;
+  zs->base.record_fence = zarr_sink_record_fence;
+  zs->base.wait_fence = zarr_sink_wait_fence;
   zs->queue = io_queue_create();
   CHECK(Fail_alloc, zs->queue);
+  zs->unbuffered = cfg->unbuffered;
   zs->rank = cfg->rank;
 
   // Compute geometry
@@ -457,9 +543,11 @@ zarr_sink_create(const struct zarr_config* cfg)
 
   for (uint64_t i = 0; i < zs->num_writers; ++i) {
     zs->writers[i].base.write = zarr_shard_write;
+    zs->writers[i].base.write_direct = zarr_shard_write_direct;
     zs->writers[i].base.finalize = zarr_shard_finalize;
     zs->writers[i].fd = PLATFORM_FD_INVALID;
     zs->writers[i].queue = zs->queue;
+    zs->writers[i].alignment = zs->unbuffered ? platform_page_size() : 0;
   }
 
   return zs;
@@ -513,6 +601,25 @@ struct zarr_multiscale_sink
   struct zarr_sink** levels; // array of nlod zarr_sink*
   int nlod;
 };
+
+static struct io_event
+zarr_multiscale_record_fence(struct shard_sink* self, uint8_t level)
+{
+  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  if (level >= ms->nlod)
+    return (struct io_event){ 0 };
+  return io_queue_record(ms->levels[level]->queue);
+}
+
+static void
+zarr_multiscale_wait_fence(struct shard_sink* self,
+                           uint8_t level,
+                           struct io_event ev)
+{
+  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  if (level < ms->nlod)
+    io_event_wait(ms->levels[level]->queue, ev);
+}
 
 static struct shard_writer*
 zarr_multiscale_open(struct shard_sink* self,
@@ -688,6 +795,8 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail_plan, ms);
 
   ms->base.open = zarr_multiscale_open;
+  ms->base.record_fence = zarr_multiscale_record_fence;
+  ms->base.wait_fence = zarr_multiscale_wait_fence;
   ms->nlod = plan.nlod;
 
   ms->levels =
@@ -722,6 +831,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
       .fill_value = cfg->fill_value,
       .rank = cfg->rank,
       .dimensions = lv_dims,
+      .unbuffered = cfg->unbuffered,
     };
 
     ms->levels[lv] = zarr_sink_create(&zcfg);

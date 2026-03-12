@@ -25,6 +25,7 @@
 - [ ] whitepaper
 - [ ] coverage
 - [ ] characterize performance by chunk size
+- [ ] metadata
 
 
 - [x] cleanup tests vs experiments
@@ -108,6 +109,9 @@ Using 64x1x64x64 zcyx tiles on bench_stream_orca2_multiscale_dim0
   PASS  
 ```
 
+Looking into unbuffered io - at the very least to get more accurate io numbers.
+There's some performance to eke out there too. That comes with some alignment
+constraints. I probably need to aggregate shards to page-aligned boundaries.
 
 ## 2026-03-10
 

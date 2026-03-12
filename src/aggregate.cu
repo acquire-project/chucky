@@ -2,7 +2,9 @@
 #include "prelude.h"
 #include "prelude.cuda.h"
 
+#pragma nv_diag_suppress 221
 #include <cub/cub.cuh>
+#pragma nv_diag_default 221
 #include <stdlib.h>
 #include <string.h>
 
@@ -87,7 +89,8 @@ aggregate_layout_init(struct aggregate_layout* layout,
                       const uint64_t* tile_count,
                       const uint64_t* tiles_per_shard,
                       uint64_t tiles_per_epoch,
-                      size_t max_chunk_bytes)
+                      size_t max_chunk_bytes,
+                      size_t page_size)
 {
   uint64_t shard_count[MAX_RANK];
   uint64_t eff_tps[MAX_RANK];
@@ -125,6 +128,9 @@ aggregate_layout_init(struct aggregate_layout* layout,
   // tps_inner = prod(eff_tps[d] for d=1..D-1)
   for (int d = 1; d < D; ++d)
     tps_inner *= eff_tps[d];
+
+  layout->tps_inner = tps_inner;
+  layout->page_size = page_size;
 
   // Shard strides: stride(sc[d]) = prod(sc[j] for j>d) * tps_inner
   {

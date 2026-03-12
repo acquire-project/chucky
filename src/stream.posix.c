@@ -1,5 +1,26 @@
 #include "platform.h"
+
+#include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
+
+size_t
+platform_page_size(void)
+{
+  return (size_t)sysconf(_SC_PAGESIZE);
+}
+
+void*
+platform_aligned_alloc(size_t alignment, size_t size)
+{
+  return aligned_alloc(alignment, size);
+}
+
+void
+platform_aligned_free(void* ptr)
+{
+  free(ptr);
+}
 
 void
 platform_sleep_ns(int64_t ns)

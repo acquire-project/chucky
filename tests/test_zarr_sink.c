@@ -3,6 +3,7 @@
 #include "stream.h"
 #include "test_platform.h"
 #include "zarr_sink.h"
+#include "platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -445,6 +446,392 @@ Fail:
   return 1;
 }
 
+// Test unbuffered IO: write with FILE_FLAG_NO_BUFFERING, verify file contents.
+// Uses epochs_per_batch=1 to avoid the per-epoch fallback aggregate bug.
+static int
+test_unbuffered_pipeline(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_pipeline ===");
+
+  // Simple 3D: 2 epochs, 1 shard
+  // dim0=4 (epoch dim), dim1=4, dim2=4, tile=2x2x2, tps=2x2x2 → 1 shard
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2, .tiles_per_shard = 2, .name = "z" },
+    { .size = 4, .tile_size = 2, .tiles_per_shard = 2, .name = "y" },
+    { .size = 4, .tile_size = 2, .tiles_per_shard = 2, .name = "x" },
+  };
+
+  const int total_elements = 4 * 4 * 4;
+  const int voxels_per_tile = 2 * 2 * 2; // 8
+  const int tiles_per_shard_total = 2 * 2 * 2; // 8
+
+  uint32_t src[64];
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint32_t)i;
+
+  struct zarr_config zcfg = {
+    .store_path = tmpdir,
+    .array_name = "0",
+    .data_type = zarr_dtype_uint32,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .unbuffered = 1,
+  };
+
+  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  CHECK(Fail, zs);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
+    .bytes_per_element = sizeof(uint32_t),
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .epochs_per_batch = 1,
+    .shard_alignment = platform_page_size(),
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Feed data
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(&s.writer, input);
+    CHECK(Fail3, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(&s.writer);
+    CHECK(Fail3, r.error == 0);
+  }
+
+  zarr_sink_flush(zs);
+
+  // Verify shard file exists
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/0/c/0/0/0", tmpdir);
+  CHECK(Fail3, test_file_exists(path));
+
+  // Read and verify contents
+  {
+    uint8_t* shard_data;
+    size_t shard_len;
+    CHECK(Fail3, read_file_all(path, &shard_data, &shard_len) == 0);
+
+    size_t index_data_bytes =
+      (size_t)tiles_per_shard_total * 2 * sizeof(uint64_t);
+    size_t index_total_bytes = index_data_bytes + 4;
+    CHECK(Fail4, shard_len > index_total_bytes);
+
+    const uint8_t* index_ptr = shard_data + shard_len - index_total_bytes;
+
+    uint64_t tile_offsets[8], tile_nbytes[8];
+    for (int i = 0; i < tiles_per_shard_total; ++i) {
+      memcpy(&tile_offsets[i], index_ptr + (size_t)i * 16, sizeof(uint64_t));
+      memcpy(
+        &tile_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
+    }
+
+    size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+    int errors = 0;
+
+    for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
+      if (tile_nbytes[i_tile] == 0 ||
+          tile_nbytes[i_tile] > ZSTD_compressBound(tile_stride_bytes)) {
+        log_error("tile %d: bad nbytes=%llu",
+                  i_tile,
+                  (unsigned long long)tile_nbytes[i_tile]);
+        errors++;
+        continue;
+      }
+
+      uint8_t* decomp = (uint8_t*)calloc(1, tile_stride_bytes);
+      CHECK(Fail4, decomp);
+
+      size_t result = ZSTD_decompress(decomp,
+                                      tile_stride_bytes,
+                                      shard_data + tile_offsets[i_tile],
+                                      (size_t)tile_nbytes[i_tile]);
+      if (ZSTD_isError(result)) {
+        log_error("tile %d: ZSTD error: %s",
+                  i_tile,
+                  ZSTD_getErrorName(result));
+        free(decomp);
+        errors++;
+        continue;
+      }
+
+      // Verify decompressed data is non-zero (basic sanity)
+      const uint32_t* voxels = (const uint32_t*)decomp;
+      int nonzero = 0;
+      for (int e = 0; e < voxels_per_tile; ++e)
+        if (voxels[e] != 0)
+          nonzero++;
+
+      // At least some tiles should have non-zero data (only tile 0 could be
+      // all-zero since src starts at 0, but even then voxels from offset > 0
+      // won't be zero).
+      if (i_tile > 0 && nonzero == 0) {
+        log_error("tile %d: all zeros after decompression", i_tile);
+        errors++;
+      }
+
+      free(decomp);
+    }
+
+    if (errors > 0) {
+      log_error("  %d errors in unbuffered pipeline", errors);
+      free(shard_data);
+      goto Fail3;
+    }
+
+    free(shard_data);
+  }
+
+  tile_stream_gpu_destroy(&s);
+  zarr_sink_destroy(zs);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+Fail3:
+  tile_stream_gpu_destroy(&s);
+Fail2:
+  zarr_sink_destroy(zs);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: unbuffered pipeline with multiple shards ---
+// Uses the same geometry as test_pipeline (12x8x12, tile 2x4x3, tps 3x2x2
+// → 4 shards) but with unbuffered IO and shard alignment.
+
+static int
+test_unbuffered_pipeline_multishard(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_pipeline_multishard ===");
+
+  const int size[3] = { 12, 8, 12 };
+  const int tile_size[3] = { 2, 4, 3 };
+  const int tiles_per_shard[3] = { 3, 2, 2 };
+
+  const int tile_count[3] = {
+    size[0] / tile_size[0],
+    size[1] / tile_size[1],
+    size[2] / tile_size[2],
+  };
+  const int shard_count[3] = {
+    tile_count[0] / tiles_per_shard[0],
+    tile_count[1] / tiles_per_shard[1],
+    tile_count[2] / tiles_per_shard[2],
+  };
+
+  const int total_elements = size[0] * size[1] * size[2];
+  const int num_shards = shard_count[0] * shard_count[1] * shard_count[2];
+  const int tiles_per_shard_total =
+    tiles_per_shard[0] * tiles_per_shard[1] * tiles_per_shard[2];
+  const int voxels_per_tile = tile_size[0] * tile_size[1] * tile_size[2];
+
+  uint32_t* src = NULL;
+
+  // Generate source data (same encoding as test_pipeline)
+  src = (uint32_t*)malloc((size_t)total_elements * sizeof(uint32_t));
+  CHECK(Fail, src);
+
+  for (int x0 = 0; x0 < size[0]; ++x0)
+    for (int x1 = 0; x1 < size[1]; ++x1)
+      for (int x2 = 0; x2 < size[2]; ++x2) {
+        int gi = x0 * size[1] * size[2] + x1 * size[2] + x2;
+        int s0 = x0 / (tile_size[0] * tiles_per_shard[0]);
+        int s1 = x1 / (tile_size[1] * tiles_per_shard[1]);
+        int s2 = x2 / (tile_size[2] * tiles_per_shard[2]);
+        int t0 = (x0 / tile_size[0]) % tiles_per_shard[0];
+        int t1 = (x1 / tile_size[1]) % tiles_per_shard[1];
+        int t2 = (x2 / tile_size[2]) % tiles_per_shard[2];
+        int v0 = x0 % tile_size[0];
+        int v1 = x1 % tile_size[1];
+        int v2 = x2 % tile_size[2];
+        src[gi] = encode_voxel(s0, s1, s2, t0, t1, t2, v0, v1, v2);
+      }
+
+  // Create zarr sink with unbuffered IO
+  const struct dimension dims[] = {
+    { .size = 12, .tile_size = 2, .tiles_per_shard = 3, .name = "z" },
+    { .size = 8, .tile_size = 4, .tiles_per_shard = 2, .name = "y" },
+    { .size = 12, .tile_size = 3, .tiles_per_shard = 2, .name = "x" },
+  };
+
+  struct zarr_config zcfg = {
+    .store_path = tmpdir,
+    .array_name = "0",
+    .data_type = zarr_dtype_uint32,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .unbuffered = 1,
+  };
+
+  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  CHECK(Fail2, zs);
+
+  // Configure tile stream with shard alignment for unbuffered IO
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
+    .bytes_per_element = sizeof(uint32_t),
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_alignment = platform_page_size(),
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail3, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Feed data
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(&s.writer, input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(&s.writer);
+    CHECK(Fail4, r.error == 0);
+  }
+
+  zarr_sink_flush(zs);
+
+  // Verify shard files: same loop as test_pipeline
+  {
+    const int tps_inner = tiles_per_shard[1] * tiles_per_shard[2];
+    int errors = 0;
+
+    for (int i_shard = 0; i_shard < num_shards; ++i_shard) {
+      int sc[3];
+      {
+        int rem = i_shard;
+        for (int d = 2; d >= 0; --d) {
+          sc[d] = rem % shard_count[d];
+          rem /= shard_count[d];
+        }
+      }
+
+      char path[4096];
+      snprintf(
+        path, sizeof(path), "%s/0/c/%d/%d/%d", tmpdir, sc[0], sc[1], sc[2]);
+      CHECK(Fail4, test_file_exists(path));
+
+      uint8_t* shard_data;
+      size_t shard_len;
+      CHECK(Fail4, read_file_all(path, &shard_data, &shard_len) == 0);
+
+      size_t index_data_bytes =
+        (size_t)tiles_per_shard_total * 2 * sizeof(uint64_t);
+      size_t index_total_bytes = index_data_bytes + 4;
+      CHECK(Fail4, shard_len > index_total_bytes);
+
+      const uint8_t* index_ptr = shard_data + shard_len - index_total_bytes;
+
+      uint64_t tile_offsets[12], tile_nbytes[12];
+      for (int i = 0; i < tiles_per_shard_total; ++i) {
+        memcpy(&tile_offsets[i], index_ptr + (size_t)i * 16, sizeof(uint64_t));
+        memcpy(
+          &tile_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
+      }
+
+      size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+
+      for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
+        if (tile_nbytes[i_tile] == 0 ||
+            tile_nbytes[i_tile] > ZSTD_compressBound(tile_stride_bytes)) {
+          log_error("shard %d tile %d: bad nbytes=%llu",
+                    i_shard,
+                    i_tile,
+                    (unsigned long long)tile_nbytes[i_tile]);
+          errors++;
+          continue;
+        }
+
+        uint8_t* decomp = (uint8_t*)calloc(1, tile_stride_bytes);
+        CHECK(Fail4, decomp);
+
+        size_t result = ZSTD_decompress(decomp,
+                                        tile_stride_bytes,
+                                        shard_data + tile_offsets[i_tile],
+                                        (size_t)tile_nbytes[i_tile]);
+        if (ZSTD_isError(result)) {
+          log_error("shard %d tile %d: ZSTD error: %s",
+                    i_shard,
+                    i_tile,
+                    ZSTD_getErrorName(result));
+          free(decomp);
+          errors++;
+          continue;
+        }
+
+        int exp_t0 = i_tile / tps_inner;
+        int exp_t1 = (i_tile % tps_inner) / tiles_per_shard[2];
+        int exp_t2 = (i_tile % tps_inner) % tiles_per_shard[2];
+
+        const uint32_t* voxels = (const uint32_t*)decomp;
+        for (int e = 0; e < voxels_per_tile; ++e) {
+          int exp_v0 = e / (tile_size[1] * tile_size[2]);
+          int exp_v1 = (e / tile_size[2]) % tile_size[1];
+          int exp_v2 = e % tile_size[2];
+
+          uint32_t expected = encode_voxel(sc[0],
+                                           sc[1],
+                                           sc[2],
+                                           exp_t0,
+                                           exp_t1,
+                                           exp_t2,
+                                           exp_v0,
+                                           exp_v1,
+                                           exp_v2);
+
+          if (voxels[e] != expected) {
+            if (errors < 10) {
+              log_error("shard %d tile %d elem %d: got 0x%08x expected 0x%08x",
+                        i_shard,
+                        i_tile,
+                        e,
+                        voxels[e],
+                        expected);
+            }
+            errors++;
+          }
+        }
+        free(decomp);
+      }
+      free(shard_data);
+    }
+
+    if (errors > 0) {
+      log_error("  %d total errors", errors);
+      goto Fail4;
+    }
+  }
+
+  tile_stream_gpu_destroy(&s);
+  zarr_sink_destroy(zs);
+  free(src);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  tile_stream_gpu_destroy(&s);
+Fail3:
+  zarr_sink_destroy(zs);
+Fail2:
+  free(src);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -488,6 +875,20 @@ main(int ac, char* av[])
       snprintf(sub, sizeof(sub), "%s/pipe", tmpdir);
       test_mkdir(sub);
       ecode |= test_pipeline(sub);
+    }
+
+    {
+      char sub[4200];
+      snprintf(sub, sizeof(sub), "%s/unbuf", tmpdir);
+      test_mkdir(sub);
+      ecode |= test_unbuffered_pipeline(sub);
+    }
+
+    {
+      char sub[4200];
+      snprintf(sub, sizeof(sub), "%s/unbuf_ms", tmpdir);
+      test_mkdir(sub);
+      ecode |= test_unbuffered_pipeline_multishard(sub);
     }
 
     cuCtxDestroy(ctx);

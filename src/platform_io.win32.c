@@ -41,12 +41,21 @@ platform_mkdirp(const char* path)
 platform_fd
 platform_open_write(const char* path)
 {
+  return platform_open_write_ex(path, 0);
+}
+
+platform_fd
+platform_open_write_ex(const char* path, int flags)
+{
+  DWORD attrs = FILE_ATTRIBUTE_NORMAL;
+  if (flags & PLATFORM_OPEN_UNBUFFERED)
+    attrs = FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
   return CreateFileA(path,
                      GENERIC_WRITE,
                      0,    // no sharing
                      NULL, // default security
                      CREATE_ALWAYS,
-                     FILE_ATTRIBUTE_NORMAL,
+                     attrs,
                      NULL);
 }
 
@@ -84,6 +93,18 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
     p += written;
     remaining -= written;
   }
+  return 0;
+}
+
+int
+platform_truncate(platform_fd fd, uint64_t size)
+{
+  LARGE_INTEGER li;
+  li.QuadPart = (LONGLONG)size;
+  if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
+    return -1;
+  if (!SetEndOfFile(fd))
+    return -1;
   return 0;
 }
 

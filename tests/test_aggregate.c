@@ -52,7 +52,7 @@ test_aggregate_even(void)
   uint8_t* h_agg = NULL;
 
   CHECK(Fail, aggregate_layout_init(&layout, rank, tile_count, tiles_per_shard,
-                                     M, max_comp) == 0);
+                                     M, max_comp, 0) == 0);
 
   const uint64_t C = layout.covering_count;
   printf("  M=%llu C=%llu lifted_rank=%u\n",
@@ -184,7 +184,7 @@ test_aggregate_uneven(void)
   uint8_t* h_agg = NULL;
 
   CHECK(Fail, aggregate_layout_init(&layout, rank, tile_count, tiles_per_shard,
-                                     M, max_comp) == 0);
+                                     M, max_comp, 0) == 0);
 
   const uint64_t C = layout.covering_count;
   printf("  M=%llu C=%llu lifted_rank=%u\n",

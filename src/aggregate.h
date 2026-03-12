@@ -1,5 +1,6 @@
 #pragma once
 
+#include "io_queue.h"
 #include "transpose.h"
 
 #include <cuda.h>
@@ -21,6 +22,8 @@ extern "C"
     uint64_t tiles_per_epoch;            // M: actual tile count
     uint64_t covering_count;            // C >= M: product of padded dims
     size_t max_chunk_bytes;
+    uint64_t tps_inner;                 // product of tiles_per_shard for inner dims
+    size_t page_size;                   // 0 = no padding
   };
 
   struct aggregate_slot
@@ -34,6 +37,7 @@ extern "C"
     void* d_temp;               // CUB scratch
     size_t temp_bytes;
     CUevent ready;              // D2H completion
+    struct io_event io_done;    // tracks IO completion from this slot's data
   };
 
   // Build the shard-permutation layout for reordering compressed tiles.
@@ -52,7 +56,8 @@ extern "C"
                             const uint64_t* tile_count,
                             const uint64_t* tiles_per_shard,
                             uint64_t tiles_per_epoch,
-                            size_t max_chunk_bytes);
+                            size_t max_chunk_bytes,
+                            size_t page_size);
 
   void aggregate_layout_destroy(struct aggregate_layout* layout);
 

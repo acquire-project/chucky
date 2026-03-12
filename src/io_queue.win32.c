@@ -18,7 +18,7 @@ struct io_job
 struct io_queue
 {
   HANDLE thread;
-  CRITICAL_SECTION cs;
+  SRWLOCK srw;
   CONDITION_VARIABLE cond_not_empty;
   CONDITION_VARIABLE cond_retired;
 
@@ -42,27 +42,27 @@ worker_thread(LPVOID arg)
   for (;;) {
     struct io_job job;
 
-    EnterCriticalSection(&q->cs);
+    AcquireSRWLockExclusive(&q->srw);
     while (q->head == q->tail && !q->shutdown)
-      SleepConditionVariableCS(&q->cond_not_empty, &q->cs, INFINITE);
+      SleepConditionVariableSRW(&q->cond_not_empty, &q->srw, INFINITE, 0);
 
     if (q->head == q->tail && q->shutdown) {
-      LeaveCriticalSection(&q->cs);
+      ReleaseSRWLockExclusive(&q->srw);
       break;
     }
 
     job = q->ring[q->tail & (q->ring_cap - 1)];
     q->tail++;
-    LeaveCriticalSection(&q->cs);
+    ReleaseSRWLockExclusive(&q->srw);
 
     job.fn(job.ctx);
     if (job.ctx_free)
       job.ctx_free(job.ctx);
 
-    EnterCriticalSection(&q->cs);
+    AcquireSRWLockExclusive(&q->srw);
     q->retired_seq = job.seq;
     WakeAllConditionVariable(&q->cond_retired);
-    LeaveCriticalSection(&q->cs);
+    ReleaseSRWLockExclusive(&q->srw);
   }
 
   return 0;
@@ -82,14 +82,13 @@ io_queue_create(void)
     return NULL;
   }
 
-  InitializeCriticalSection(&q->cs);
+  q->srw = (SRWLOCK)SRWLOCK_INIT;
   InitializeConditionVariable(&q->cond_not_empty);
   InitializeConditionVariable(&q->cond_retired);
 
   q->thread = CreateThread(NULL, 0, worker_thread, q, 0, NULL);
   if (!q->thread) {
     free(q->ring);
-    DeleteCriticalSection(&q->cs);
     free(q);
     return NULL;
   }
@@ -104,10 +103,10 @@ io_queue_destroy(struct io_queue* q)
   if (!q)
     return;
 
-  EnterCriticalSection(&q->cs);
+  AcquireSRWLockExclusive(&q->srw);
   q->shutdown = 1;
   WakeConditionVariable(&q->cond_not_empty);
-  LeaveCriticalSection(&q->cs);
+  ReleaseSRWLockExclusive(&q->srw);
 
   if (q->started)
     WaitForSingleObject(q->thread, INFINITE);
@@ -116,7 +115,6 @@ io_queue_destroy(struct io_queue* q)
     CloseHandle(q->thread);
 
   free(q->ring);
-  DeleteCriticalSection(&q->cs);
   free(q);
 }
 
@@ -149,7 +147,7 @@ io_queue_post(struct io_queue* q,
               void* ctx,
               void (*ctx_free)(void*))
 {
-  EnterCriticalSection(&q->cs);
+  AcquireSRWLockExclusive(&q->srw);
 
   q->next_seq++;
   uint64_t seq = q->next_seq;
@@ -166,7 +164,7 @@ io_queue_post(struct io_queue* q,
   q->head++;
 
   WakeConditionVariable(&q->cond_not_empty);
-  LeaveCriticalSection(&q->cs);
+  ReleaseSRWLockExclusive(&q->srw);
 
   return seq;
 }
@@ -174,9 +172,9 @@ io_queue_post(struct io_queue* q,
 struct io_event
 io_queue_record(struct io_queue* q)
 {
-  EnterCriticalSection(&q->cs);
+  AcquireSRWLockExclusive(&q->srw);
   struct io_event ev = { .seq = q->next_seq };
-  LeaveCriticalSection(&q->cs);
+  ReleaseSRWLockExclusive(&q->srw);
   return ev;
 }
 
@@ -185,8 +183,8 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
 {
   struct io_queue* mq = (struct io_queue*)q;
 
-  EnterCriticalSection(&mq->cs);
+  AcquireSRWLockExclusive(&mq->srw);
   while (mq->retired_seq < ev.seq && !mq->shutdown)
-    SleepConditionVariableCS(&mq->cond_retired, &mq->cs, INFINITE);
-  LeaveCriticalSection(&mq->cs);
+    SleepConditionVariableSRW(&mq->cond_retired, &mq->srw, INFINITE, 0);
+  ReleaseSRWLockExclusive(&mq->srw);
 }

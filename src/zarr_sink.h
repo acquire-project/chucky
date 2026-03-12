@@ -26,6 +26,7 @@ struct zarr_config
   double fill_value;
   uint8_t rank;
   const struct dimension* dimensions;
+  int unbuffered; // use FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH
 };
 
 struct zarr_sink;
@@ -54,6 +55,7 @@ struct zarr_multiscale_config
   const struct dimension* dimensions; // L0 dimensions
   int nlod;                           // number of levels (0 = auto)
   int exclude_dim0;                   // exclude dim 0 from LOD (temporal)
+  int unbuffered;                     // use unbuffered IO for shard data
 };
 
 struct zarr_multiscale_sink;
