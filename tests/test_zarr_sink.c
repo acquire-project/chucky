@@ -682,7 +682,7 @@ test_midstream_metadata_update(const char* tmpdir)
     .dimensions = dims,
     .codec = CODEC_ZSTD,
     .shard_sink = zarr_sink_as_shard_sink(zs),
-    .metadata_update_interval_s = 1e-9, // effectively always fire
+    .metadata_update_interval_s = 0.0f, // always fire
     .epochs_per_batch = 1,
   };
 

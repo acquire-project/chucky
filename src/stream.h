@@ -130,8 +130,7 @@ struct tile_stream_configuration
   enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
   uint32_t epochs_per_batch; // K: 0 = auto (target_min_tiles), must be pow2
   uint32_t target_min_tiles; // minimum tiles per compress batch (default 1024)
-  float metadata_update_interval_s; // seconds between metadata updates (0 =
-                                    // disable)
+  float metadata_update_interval_s; // seconds between metadata updates
   size_t
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
 };

@@ -37,6 +37,44 @@
 
 Finishing unbuffered io on posix.
 
+Benching on livescreen again (fixed Sink timing):
+```
+=== multiscale_dim0 ===
+  GPU memory:  16.59 GiB device, 3.26 GiB pinned
+    staging:   256.00 MiB   tile_pool: 3.01 GiB
+    comp_pool: 3.01 GiB   aggregate: 3.01 GiB
+    lod:       3676.68 MiB   codec:     3813.82 MiB
+    tiles:     2304/epoch, 3080 total (6 LOD levels, batch=1)
+  total:       1757.81 GiB (943718400000 elements, 1563 epochs)
+  tile:        262144 elements = 512 KiB  (stride=262144)
+  epoch:       2304 slots, 1152 MiB pool
+  compress:    max_output=524322 comp_pool=1540 MiB
+  LOD levels:  6
+
+  --- Benchmark Results ---
+  Input:        1757.81 GiB (943718400000 elements)
+  Compressed:   232.89 GiB (ratio: 0.132)
+  Tiles:        3601152 (2304/epoch x 1563 epochs)
+
+  Stage        avg GB/s best GB/s     avg ms    best ms
+  Memcpy          25.76    26.98       2.43       2.32
+  H2D             53.74    53.81       1.16       1.16
+  Copy           930.24  1417.36       0.07       0.04
+  LOD Gather     662.46   671.97       1.70       1.67
+  LOD Reduce     999.41   999.76       1.50       1.50
+  Dim0 Fold      539.54   702.38       1.39       1.07
+  LOD to tiles    37.92   853.87      39.66       1.76
+  Compress        14.10    19.87     106.65      75.70
+  Aggregate     3682.52  4815.59       0.41       0.31
+  D2H             62.41    71.38      24.10      21.07
+  Sink             5.50 744264.83      27.07       0.00
+
+  Init time:     1.273 s
+  Wall time:     370.876 s
+  Throughput:    4.74 GiB/s
+  PASS  
+```
+
 I think I'm about done with all the major features besides maybe the in-epoch
 transpose. I need to look at that pr in acquire-zarr some more ... ok, it's
 compatible. It restricts dim0 and adds some other restrictions that are

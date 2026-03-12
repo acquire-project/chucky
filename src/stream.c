@@ -607,8 +607,7 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
 
   // Time-based metadata updates.
   // Peek at elapsed time without resetting; only reset when we fire.
-  if (s->config.metadata_update_interval_s > 0 &&
-      s->config.shard_sink->update_dim0) {
+  if (s->config.shard_sink->update_dim0) {
     struct platform_clock peek = s->metadata_update_clock;
     float elapsed = platform_toc(&peek);
     if (elapsed >= s->config.metadata_update_interval_s) {
