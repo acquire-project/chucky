@@ -40,6 +40,9 @@ void zarr_sink_destroy(struct zarr_sink* s);
 // Block until all queued I/O has completed.
 void zarr_sink_flush(struct zarr_sink* s);
 
+// Return number of bytes queued but not yet written to disk.
+size_t zarr_sink_pending_bytes(struct zarr_sink* s);
+
 // Get the shard_sink interface for use with tile_stream_gpu.
 struct shard_sink* zarr_sink_as_shard_sink(struct zarr_sink* s);
 
@@ -69,6 +72,9 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg);
 void zarr_multiscale_sink_destroy(struct zarr_multiscale_sink* s);
 
 void zarr_multiscale_sink_flush(struct zarr_multiscale_sink* s);
+
+// Return number of bytes queued but not yet written across all levels.
+size_t zarr_multiscale_sink_pending_bytes(struct zarr_multiscale_sink* s);
 
 // Get the shard_sink interface (dispatches open to correct level).
 struct shard_sink*

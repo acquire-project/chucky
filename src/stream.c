@@ -2317,7 +2317,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   if (config->dimensions[0].size == 0 &&
       config->dimensions[0].tiles_per_shard == 0) {
     log_error("dims[0].size=0 (unbounded) requires tiles_per_shard > 0");
-    goto Fail;
+    goto EarlyFail;
   }
 
   // Compute lod_mask from dimensions (uniform: includes dim 0 if marked).
@@ -2335,7 +2335,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         if (m != lod_reduce_mean && m != lod_reduce_min &&
             m != lod_reduce_max) {
           log_error("dim0 reduce method must be mean, min, or max");
-          goto Fail;
+          goto EarlyFail;
         }
       }
     }
@@ -2343,7 +2343,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   // dim0 downsampling requires at least one spatial dim also downsampled
   if (dim0_downsample && (lod_mask & ~1u) == 0) {
     log_error("dim0 downsample requires at least one spatial dim downsampled");
-    goto Fail;
+    goto EarlyFail;
   }
   // enable_multiscale requires at least one spatial (non-dim0) LOD dim
   int enable_multiscale = (lod_mask & ~1u) != 0;

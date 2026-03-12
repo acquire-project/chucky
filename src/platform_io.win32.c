@@ -43,7 +43,7 @@ platform_open_write(const char* path, int flags)
 {
   DWORD attrs = FILE_ATTRIBUTE_NORMAL;
   if (flags & PLATFORM_OPEN_UNBUFFERED)
-    attrs = FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
+    attrs = FILE_FLAG_NO_BUFFERING;
   return CreateFileA(path,
                      GENERIC_WRITE,
                      0,    // no sharing

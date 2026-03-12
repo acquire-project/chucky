@@ -74,7 +74,9 @@ void print_bench_report(const struct tile_stream_gpu* s,
                         size_t total_bytes,
                         size_t total_elements,
                         float wall_s,
-                        float init_s);
+                        float init_s,
+                        float flush_s,
+                        size_t flush_pending_bytes);
 
 struct bench_config
 {

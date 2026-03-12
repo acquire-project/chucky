@@ -83,6 +83,23 @@ metering_write(struct shard_writer* self,
 }
 
 static int
+metering_write_direct(struct shard_writer* self,
+                      uint64_t offset,
+                      const void* beg,
+                      const void* end)
+{
+  struct metering_writer* w = (struct metering_writer*)self;
+  platform_toc(&w->parent->clock);
+  int rc = w->inner->write_direct(w->inner, offset, beg, end);
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  w->parent->total_bytes += nbytes;
+  accumulate_metric_ms(&w->parent->metric,
+                       (float)(platform_toc(&w->parent->clock) * 1000.0),
+                       nbytes);
+  return rc;
+}
+
+static int
 metering_finalize(struct shard_writer* self)
 {
   struct metering_writer* w = (struct metering_writer*)self;
@@ -103,6 +120,8 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     if (!ms->writers[i].in_use) {
       ms->writers[i].in_use = 1;
       ms->writers[i].inner = inner;
+      ms->writers[i].base.write_direct =
+        inner->write_direct ? metering_write_direct : NULL;
       return &ms->writers[i].base;
     }
   }
@@ -185,7 +204,9 @@ print_bench_report(const struct tile_stream_gpu* s,
                    size_t total_bytes,
                    size_t total_elements,
                    float wall_s,
-                   float init_s)
+                   float init_s,
+                   float flush_s,
+                   size_t flush_pending_bytes)
 {
   struct stream_metrics m = tile_stream_gpu_get_metrics(s);
   const size_t tile_bytes = s->layout.tile_stride * s->config.bytes_per_element;
@@ -236,6 +257,15 @@ print_bench_report(const struct tile_stream_gpu* s,
                : 0.0;
   print_report("");
   print_report("  Init time:     %.3f s", (double)init_s);
+  if (flush_pending_bytes > 0 && flush_s > 0) {
+    double flush_gib =
+      ((double)flush_pending_bytes / (1024.0 * 1024.0 * 1024.0)) /
+      (double)flush_s;
+    print_report("  Flush time:    %.3f s (%.2f GiB/s)", (double)flush_s,
+                 flush_gib);
+  } else {
+    print_report("  Flush time:    %.3f s", (double)flush_s);
+  }
   print_report("  Wall time:     %.3f s", wall_s);
   print_report("  Throughput:    %.2f GiB/s", throughput_gib);
 }
@@ -292,6 +322,7 @@ run_bench(const struct bench_config* cfg)
         .dimensions = dims,
         .nlod = 0,
         .exclude_dim0 = dim0_downsample,
+        .unbuffered = 1,
       };
       zmsink = zarr_multiscale_sink_create(&zcfg);
       CHECK(Fail, zmsink);
@@ -304,6 +335,7 @@ run_bench(const struct bench_config* cfg)
         .fill_value = 0,
         .rank = rank,
         .dimensions = dims,
+        .unbuffered = 1,
       };
       zsink = zarr_sink_create(&zcfg);
       CHECK(Fail, zsink);
@@ -324,6 +356,7 @@ run_bench(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .dim0_reduce_method = cfg->dim0_reduce_method,
     .target_min_tiles = 2048,
+    .shard_alignment = output_path ? platform_page_size() : 0,
   };
 
   {
@@ -362,6 +395,20 @@ run_bench(const struct bench_config* cfg)
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
   CHECK(Fail, pump_data(&s.writer, total_elements, fill) == 0);
+
+  size_t pending_bytes = 0;
+  if (zsink)
+    pending_bytes = zarr_sink_pending_bytes(zsink);
+  if (zmsink)
+    pending_bytes = zarr_multiscale_sink_pending_bytes(zmsink);
+
+  struct platform_clock flush_clock = { 0 };
+  platform_toc(&flush_clock);
+  if (zsink)
+    zarr_sink_flush(zsink);
+  if (zmsink)
+    zarr_multiscale_sink_flush(zmsink);
+  float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
   if (s.cursor != total_elements) {
@@ -376,7 +423,9 @@ run_bench(const struct bench_config* cfg)
     struct sink_stats ss =
       output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes }
                   : (struct sink_stats){ .total_bytes = dss.total_bytes };
-    print_bench_report(&s, &ss, total_bytes, total_elements, wall_s, init_s);
+    print_bench_report(
+      &s, &ss, total_bytes, total_elements, wall_s, init_s, flush_s,
+      pending_bytes);
   }
 
   print_report("  PASS");
@@ -388,15 +437,15 @@ Fail:
   rc = 1;
 
 Cleanup:
-  tile_stream_gpu_destroy(&s);
-  if (zsink) {
+  // Flush before destroying the stream — pending write_direct jobs
+  // reference pinned host buffers owned by the stream.
+  if (zsink)
     zarr_sink_flush(zsink);
-    zarr_sink_destroy(zsink);
-  }
-  if (zmsink) {
+  if (zmsink)
     zarr_multiscale_sink_flush(zmsink);
-    zarr_multiscale_sink_destroy(zmsink);
-  }
+  tile_stream_gpu_destroy(&s);
+  zarr_sink_destroy(zsink);
+  zarr_multiscale_sink_destroy(zmsink);
   return rc;
 }
 

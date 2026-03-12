@@ -20,6 +20,8 @@ struct zarr_shard_writer
   platform_fd fd;
   struct io_queue* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
+  uint64_t* retired_bytes; // points to zarr_sink.retired_bytes
+  uint64_t* queued_bytes;  // points to zarr_sink.queued_bytes
 };
 
 struct pwrite_job
@@ -28,6 +30,7 @@ struct pwrite_job
   uint64_t offset;
   size_t nbytes;
   size_t data_off; // byte offset from start of struct to data
+  uint64_t* retired_bytes; // written by io worker after pwrite
   uint8_t data[];  // used when data_off == sizeof(struct pwrite_job)
 };
 
@@ -38,6 +41,7 @@ pwrite_fn(void* arg)
   const void* data = (const char*)j + j->data_off;
   if (platform_pwrite(j->fd, data, j->nbytes, j->offset) != 0)
     log_error("zarr pwrite failed");
+  *j->retired_bytes += j->nbytes;
 }
 
 static int
@@ -67,8 +71,10 @@ zarr_shard_write(struct shard_writer* self,
     j->fd = w->fd;
     j->offset = offset;
     j->nbytes = nbytes;
+    j->retired_bytes = w->retired_bytes;
     memcpy((char*)j + j->data_off, beg, nbytes);
     io_queue_post(w->queue, pwrite_fn, j, job_free);
+    *w->queued_bytes += nbytes;
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -85,6 +91,7 @@ struct pwrite_ref_job
   uint64_t offset;
   size_t nbytes;
   const void* data; // NOT owned — points into pinned memory
+  uint64_t* retired_bytes; // written by io worker after pwrite
 };
 
 static void
@@ -93,6 +100,7 @@ pwrite_ref_fn(void* arg)
   struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
   if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0)
     log_error("zarr pwrite_ref failed");
+  *j->retired_bytes += j->nbytes;
 }
 
 static int
@@ -114,7 +122,9 @@ zarr_shard_write_direct(struct shard_writer* self,
     j->offset = offset;
     j->nbytes = nbytes;
     j->data = beg;
+    j->retired_bytes = w->retired_bytes;
     io_queue_post(w->queue, pwrite_ref_fn, j, free);
+    *w->queued_bytes += nbytes;
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -166,6 +176,8 @@ struct zarr_sink
   struct shard_sink base;
   struct io_queue* queue;
   int unbuffered;
+  uint64_t queued_bytes;  // written by main thread only
+  uint64_t retired_bytes; // written by io worker only
 
   // Geometry
   uint8_t rank;
@@ -603,6 +615,8 @@ zarr_sink_create(const struct zarr_config* cfg)
     zs->writers[i].fd = PLATFORM_FD_INVALID;
     zs->writers[i].queue = zs->queue;
     zs->writers[i].alignment = zs->unbuffered ? platform_page_size() : 0;
+    zs->writers[i].retired_bytes = &zs->retired_bytes;
+    zs->writers[i].queued_bytes = &zs->queued_bytes;
   }
 
   return zs;
@@ -613,6 +627,17 @@ Fail_alloc:
   free(zs);
 Fail:
   return NULL;
+}
+
+size_t
+zarr_sink_pending_bytes(struct zarr_sink* s)
+{
+  if (!s || !s->queue)
+    return 0;
+  // io_queue_record takes the lock, synchronizing with the worker's last
+  // retired_bytes update so the read below is consistent.
+  io_queue_record(s->queue);
+  return (size_t)(s->queued_bytes - s->retired_bytes);
 }
 
 void
@@ -959,6 +984,17 @@ Fail_plan:
   lod_plan_free(&plan);
 Fail:
   return NULL;
+}
+
+size_t
+zarr_multiscale_sink_pending_bytes(struct zarr_multiscale_sink* s)
+{
+  if (!s)
+    return 0;
+  size_t total = 0;
+  for (int i = 0; i < s->nlod; ++i)
+    total += zarr_sink_pending_bytes(s->levels[i]);
+  return total;
 }
 
 void
