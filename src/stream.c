@@ -41,7 +41,14 @@ writer_error(void)
 static struct writer_result
 writer_error_at(const void* beg, const void* end)
 {
-  return (struct writer_result){ .error = 1, .rest = { beg, end } };
+  return (struct writer_result){ .error = writer_error_fail, .rest = { beg, end } };
+}
+
+static struct writer_result
+writer_finished_at(const void* beg, const void* end)
+{
+  return (struct writer_result){ .error = writer_error_finished,
+                                 .rest = { beg, end } };
 }
 
 static void
@@ -540,6 +547,26 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&s->metrics.sink, sink_ms, sink_bytes);
+  }
+
+  // Time-based metadata updates.
+  // Peek at elapsed time without resetting; only reset when we fire.
+  if (s->config.metadata_update_interval_s > 0 &&
+      s->config.shard_sink->update_dim0) {
+    struct platform_clock peek = s->metadata_update_clock;
+    double elapsed = platform_toc(&peek);
+    if (elapsed >= s->config.metadata_update_interval_s) {
+      s->metadata_update_clock = peek; // commit the reset
+      const struct dimension* dims = s->config.dimensions;
+      for (int lv = 0; lv < s->nlod; ++lv) {
+        struct shard_state* ss = &s->lod_levels[lv].shard;
+        uint64_t dim0_tiles =
+          ss->shard_epoch * ss->tiles_per_shard_0 + ss->epoch_in_shard;
+        uint64_t dim0_extent = dim0_tiles * dims[0].tile_size;
+        s->config.shard_sink->update_dim0(
+          s->config.shard_sink, (uint8_t)lv, dim0_extent);
+      }
+    }
   }
 
   return writer_ok();
@@ -1386,7 +1413,7 @@ init_l0_layout(struct tile_stream_gpu* s)
 
   uint64_t tile_count[MAX_RANK];
   for (int i = 0; i < rank; ++i) {
-    tile_count[i] = ceildiv(dims[i].size, dims[i].tile_size);
+    tile_count[i] = (dims[i].size == 0) ? 1 : ceildiv(dims[i].size, dims[i].tile_size);
     s->layout.lifted_shape[2 * i] = tile_count[i];
     s->layout.lifted_shape[2 * i + 1] = dims[i].tile_size;
     s->layout.tile_elements *= dims[i].tile_size;
@@ -1532,7 +1559,8 @@ init_aggregate_and_shards(struct tile_stream_gpu* s)
 
     if (lv == 0) {
       for (int d = 0; d < rank; ++d) {
-        tile_count[d] = ceildiv(dims[d].size, dims[d].tile_size);
+        tile_count[d] = (dims[d].size == 0) ? 1
+                       : ceildiv(dims[d].size, dims[d].tile_size);
         uint64_t tps = dims[d].tiles_per_shard;
         tiles_per_shard[d] = (tps == 0) ? tile_count[d] : tps;
       }
@@ -2195,6 +2223,13 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(EarlyFail, config->dimensions);
   CHECK(EarlyFail, config->shard_sink);
 
+  // Validate unbounded dim0: tiles_per_shard must be specified
+  if (config->dimensions[0].size == 0 &&
+      config->dimensions[0].tiles_per_shard == 0) {
+    log_error("dims[0].size=0 (unbounded) requires tiles_per_shard > 0");
+    goto Fail;
+  }
+
   // Compute lod_mask from dimensions (uniform: includes dim 0 if marked).
   // Dim 0 downsample is handled separately (temporal accumulation) via
   // exclude_dim0 in the LOD plan, but lod_mask itself is computed uniformly.
@@ -2295,6 +2330,10 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     .sink = { .name = "Sink", .best_ms = 1e30f },
   };
 
+  // Initialize metadata update timer
+  out->metadata_update_clock = (struct platform_clock){ 0 };
+  platform_toc(&out->metadata_update_clock);
+
   return 0;
 
 Fail:
@@ -2313,12 +2352,34 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
+  const uint64_t dim0_size = s->config.dimensions[0].size;
+  const uint64_t max_cursor = (dim0_size > 0)
+    ? ceildiv(dim0_size, s->config.dimensions[0].tile_size)
+      * s->layout.epoch_elements
+    : 0; // 0 = unbounded (never checked)
+
   while (src < end) {
+    // Bounded dim0: check capacity
+    if (dim0_size > 0 && s->cursor >= max_cursor) {
+      struct writer_result fr = tile_stream_gpu_flush(&s->writer);
+      if (fr.error)
+        return writer_error_at(src, end);
+      return writer_finished_at(src, end);
+    }
+
     const uint64_t epoch_remaining =
       s->layout.epoch_elements - (s->cursor % s->layout.epoch_elements);
     const uint64_t input_remaining = (uint64_t)(end - src) / bpe;
-    const uint64_t elements_this_pass =
+    uint64_t elements_this_pass =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
+
+    // Bounded dim0: clamp to remaining capacity
+    if (dim0_size > 0) {
+      const uint64_t remaining_capacity = max_cursor - s->cursor;
+      if (elements_this_pass > remaining_capacity)
+        elements_this_pass = remaining_capacity;
+    }
+
     const uint64_t bytes_this_pass = elements_this_pass * bpe;
 
     {
@@ -2418,11 +2479,29 @@ tile_stream_gpu_flush(struct writer* self)
   if (r.error)
     return r;
 
+  // Capture actual dim0 tile counts before partial shard emission,
+  // since emit_shards resets epoch_in_shard and increments shard_epoch.
+  uint64_t dim0_tiles[LOD_MAX_LEVELS];
+  for (int lv = 0; lv < s->nlod; ++lv) {
+    struct shard_state* ss = &s->lod_levels[lv].shard;
+    dim0_tiles[lv] = ss->shard_epoch * ss->tiles_per_shard_0 + ss->epoch_in_shard;
+  }
+
   // Emit partial shards for all levels
   for (int lv = 0; lv < s->nlod; ++lv) {
     if (s->lod_levels[lv].shard.epoch_in_shard > 0) {
       if (emit_shards(&s->lod_levels[lv].shard))
         return writer_error();
+    }
+  }
+
+  // Final metadata update using pre-emit tile counts.
+  if (s->config.shard_sink->update_dim0) {
+    const struct dimension* dims = s->config.dimensions;
+    for (int lv = 0; lv < s->nlod; ++lv) {
+      uint64_t dim0_extent = dim0_tiles[lv] * dims[0].tile_size;
+      s->config.shard_sink->update_dim0(
+        s->config.shard_sink, (uint8_t)lv, dim0_extent);
     }
   }
 
@@ -2462,7 +2541,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   uint64_t tile_elements = 1;
   uint64_t tile_count[MAX_RANK / 2];
   for (int i = 0; i < rank; ++i) {
-    tile_count[i] = ceildiv(dims[i].size, dims[i].tile_size);
+    tile_count[i] = (dims[i].size == 0) ? 1
+                   : ceildiv(dims[i].size, dims[i].tile_size);
     tile_elements *= dims[i].tile_size;
   }
 

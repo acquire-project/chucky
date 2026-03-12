@@ -803,6 +803,185 @@ Fail0:
   return 1;
 }
 
+// Test: unbounded dim0 (size=0) — stream multiple epochs without crashing.
+static int
+test_stream_unbounded_dim0(void)
+{
+  log_info("=== test_stream_unbounded_dim0 ===");
+
+  // dim0.size=0 (unbounded), tiles_per_shard=2 (required when unbounded)
+  const struct dimension dims[] = {
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 2 },
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 1024 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 96 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+
+  // tiles_per_epoch should be prod(tile_count[d] for d>0) = 2*2 = 4
+  CHECK(Fail, s.layout.tiles_per_epoch == 4);
+  CHECK(Fail, s.layout.epoch_elements == 48);
+  log_info("  tiles_per_epoch=%lu  epoch_elements=%lu",
+           (unsigned long)s.layout.tiles_per_epoch,
+           (unsigned long)s.layout.epoch_elements);
+
+  // Stream 4 epochs worth of data (192 elements)
+  const int total = 4 * 48;
+  uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total; ++i)
+    src[i] = (uint16_t)(i % 65536);
+
+  struct slice input = { .beg = src, .end = src + total };
+  struct writer_result r = writer_append(&s.writer, input);
+  CHECK(Fail2, r.error == 0);
+
+  r = writer_flush(&s.writer);
+  CHECK(Fail2, r.error == 0);
+  CHECK(Fail2, mss.writer.size > 0);
+  log_info("  streamed %d elements, shard bytes=%zu", total, mss.writer.size);
+
+  free(src);
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  free(src);
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
+// Test: unbounded dim0 requires tiles_per_shard > 0.
+static int
+test_stream_unbounded_requires_tps(void)
+{
+  log_info("=== test_stream_unbounded_requires_tps ===");
+
+  // size=0, tiles_per_shard=0 → should fail validation
+  const struct dimension dims[] = {
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 0 },
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 96 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  int result = tile_stream_gpu_create(&config, &s);
+  if (result != 0) {
+    log_info("  create correctly rejected unbounded dim0 with tps=0");
+    mem_shard_sink_free(&mss);
+    log_info("  PASS");
+    return 0;
+  }
+
+  log_error("  create should have failed for unbounded dim0 with tps=0");
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
+// Test: bounded dim0 — append more data than capacity, expect auto-flush.
+static int
+test_stream_bounded_dim0(void)
+{
+  log_info("=== test_stream_bounded_dim0 ===");
+
+  // dim0.size=4, tile_size=2 → 2 epochs max → 96 elements capacity
+  const struct dimension dims[] = {
+    { .size = 4, .tile_size = 2 },
+    { .size = 4, .tile_size = 2 },
+    { .size = 6, .tile_size = 3 },
+  };
+
+  struct mem_shard_sink mss;
+  mem_shard_sink_init(&mss, 256 * 1024);
+  CHECK(Fail0, mss.writer.buf);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 96 * sizeof(uint16_t),
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .shard_sink = &mss.base,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail0, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Try to feed 150 elements (more than 96 capacity)
+  const int total = 150;
+  uint16_t src[150];
+  for (int i = 0; i < total; ++i)
+    src[i] = (uint16_t)i;
+
+  struct slice input = { .beg = src, .end = src + total };
+  struct writer_result r = writer_append(&s.writer, input);
+
+  // Should get writer_error_finished (auto-flushed at capacity)
+  CHECK(Fail, r.error == writer_error_finished);
+  log_info("  got writer_error_finished as expected");
+
+  // rest should point to unconsumed data
+  size_t consumed = (size_t)((const uint16_t*)r.rest.beg - src);
+  size_t unconsumed = (size_t)((const uint16_t*)r.rest.end -
+                               (const uint16_t*)r.rest.beg);
+  log_info("  consumed=%zu elements, unconsumed=%zu elements",
+           consumed, unconsumed);
+  CHECK(Fail, consumed == 96);
+  CHECK(Fail, unconsumed == 54);
+
+  // Shard data should have been written
+  CHECK(Fail, mss.writer.size > 0);
+  log_info("  shard bytes=%zu", mss.writer.size);
+
+  tile_stream_gpu_destroy(&s);
+  mem_shard_sink_free(&mss);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  tile_stream_gpu_destroy(&s);
+Fail0:
+  mem_shard_sink_free(&mss);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -832,6 +1011,12 @@ main(int ac, char* av[])
   ecode |= test_stream_rank_1_dim();
   log_info("");
   ecode |= test_stream_flush_empty();
+  log_info("");
+  ecode |= test_stream_unbounded_dim0();
+  log_info("");
+  ecode |= test_stream_unbounded_requires_tps();
+  log_info("");
+  ecode |= test_stream_bounded_dim0();
 
   cuCtxDestroy(ctx);
   return ecode;

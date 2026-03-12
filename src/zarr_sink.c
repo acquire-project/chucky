@@ -118,6 +118,11 @@ struct zarr_sink
   // Writer pool: one per inner shard, reused across shard epochs
   struct zarr_shard_writer* writers;
   uint64_t num_writers;
+
+  // For metadata updates (stored copy of config)
+  struct dimension dimensions[MAX_ZARR_RANK];
+  enum zarr_dtype data_type;
+  double fill_value;
 };
 
 // --- Path computation ---
@@ -134,12 +139,18 @@ shard_path(char* buf,
   if (pos < 0 || (size_t)pos >= cap)
     return -1;
 
-  // Unravel flat index into coordinates (row-major)
+  // Unravel flat index into coordinates (row-major).
+  // Dim 0 coordinate is just the remainder after extracting inner dims,
+  // which works for both bounded and unbounded (shard_count[0] unknown).
   uint64_t coords[MAX_ZARR_RANK];
   uint64_t rem = flat;
   for (int d = rank - 1; d >= 0; --d) {
-    coords[d] = rem % shard_count[d];
-    rem /= shard_count[d];
+    if (d == 0) {
+      coords[d] = rem;
+    } else {
+      coords[d] = rem % shard_count[d];
+      rem /= shard_count[d];
+    }
   }
 
   for (int d = 0; d < rank; ++d) {
@@ -177,8 +188,19 @@ zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 
   w->fd = platform_open_write(path);
   if (w->fd == PLATFORM_FD_INVALID) {
-    log_error("zarr_sink_open: open(%s) failed", path);
-    return NULL;
+    // Directory may not exist yet (unbounded dim0) — create and retry
+    char dir[4096];
+    memcpy(dir, path, sizeof(dir));
+    char* last_slash = strrchr(dir, '/');
+    if (last_slash) {
+      *last_slash = '\0';
+      if (platform_mkdirp(dir) == 0)
+        w->fd = platform_open_write(path);
+    }
+    if (w->fd == PLATFORM_FD_INVALID) {
+      log_error("zarr_sink_open: open(%s) failed", path);
+      return NULL;
+    }
   }
 
   return &w->base;
@@ -238,8 +260,12 @@ zarr_dtype_string(enum zarr_dtype dt)
 }
 
 static int
-write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
-                     const uint64_t* tiles_per_shard)
+write_array_metadata(const char* array_dir,
+                        uint8_t rank,
+                        const struct dimension* dimensions,
+                        enum zarr_dtype data_type,
+                        double fill_value,
+                        const uint64_t* tiles_per_shard)
 {
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", array_dir);
@@ -258,12 +284,12 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
 
   jw_key(&jw, "shape");
   jw_array_begin(&jw);
-  for (int d = 0; d < cfg->rank; ++d)
-    jw_uint(&jw, cfg->dimensions[d].size);
+  for (int d = 0; d < rank; ++d)
+    jw_uint(&jw, dimensions[d].size);
   jw_array_end(&jw);
 
   jw_key(&jw, "data_type");
-  jw_string(&jw, zarr_dtype_string(cfg->data_type));
+  jw_string(&jw, zarr_dtype_string(data_type));
 
   // chunk_grid: shard shape = tile_size * tiles_per_shard
   jw_key(&jw, "chunk_grid");
@@ -274,8 +300,8 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
   jw_object_begin(&jw);
   jw_key(&jw, "chunk_shape");
   jw_array_begin(&jw);
-  for (int d = 0; d < cfg->rank; ++d)
-    jw_uint(&jw, cfg->dimensions[d].tile_size * tiles_per_shard[d]);
+  for (int d = 0; d < rank; ++d)
+    jw_uint(&jw, dimensions[d].tile_size * tiles_per_shard[d]);
   jw_array_end(&jw);
   jw_object_end(&jw);
   jw_object_end(&jw);
@@ -302,8 +328,8 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
 
   jw_key(&jw, "chunk_shape");
   jw_array_begin(&jw);
-  for (int d = 0; d < cfg->rank; ++d)
-    jw_uint(&jw, cfg->dimensions[d].tile_size);
+  for (int d = 0; d < rank; ++d)
+    jw_uint(&jw, dimensions[d].tile_size);
   jw_array_end(&jw);
 
   jw_key(&jw, "codecs");
@@ -354,13 +380,13 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
   jw_array_end(&jw);  // codecs
 
   jw_key(&jw, "fill_value");
-  jw_float(&jw, cfg->fill_value);
+  jw_float(&jw, fill_value);
 
   // dimension_names (optional)
   {
     int has_names = 0;
-    for (int d = 0; d < cfg->rank; ++d) {
-      if (cfg->dimensions[d].name) {
+    for (int d = 0; d < rank; ++d) {
+      if (dimensions[d].name) {
         has_names = 1;
         break;
       }
@@ -368,9 +394,9 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
     if (has_names) {
       jw_key(&jw, "dimension_names");
       jw_array_begin(&jw);
-      for (int d = 0; d < cfg->rank; ++d) {
-        if (cfg->dimensions[d].name)
-          jw_string(&jw, cfg->dimensions[d].name);
+      for (int d = 0; d < rank; ++d) {
+        if (dimensions[d].name)
+          jw_string(&jw, dimensions[d].name);
         else
           jw_null(&jw);
       }
@@ -383,6 +409,25 @@ write_array_metadata(const char* array_dir, const struct zarr_config* cfg,
   if (jw_error(&jw))
     return -1;
   return write_file(path, buf, jw_length(&jw));
+}
+
+// --- Metadata update ---
+
+static void
+zarr_sink_update_dim0(struct shard_sink* self,
+                      uint8_t level,
+                      uint64_t dim0_size)
+{
+  (void)level;
+  struct zarr_sink* zs = (struct zarr_sink*)self;
+  if (zs->dimensions[0].size == dim0_size)
+    return;
+  zs->dimensions[0].size = dim0_size;
+  if (write_array_metadata(zs->array_dir, zs->rank, zs->dimensions,
+                               zs->data_type, zs->fill_value,
+                               zs->tiles_per_shard))
+    log_error("zarr_sink_update_dim0: failed to rewrite zarr.json for %s",
+              zs->array_dir);
 }
 
 // --- Create / Destroy ---
@@ -400,15 +445,23 @@ zarr_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, zs);
 
   zs->base.open = zarr_sink_open;
+  zs->base.update_dim0 = zarr_sink_update_dim0;
   zs->queue = io_queue_create();
   CHECK(Fail_alloc, zs->queue);
   zs->rank = cfg->rank;
+  zs->data_type = cfg->data_type;
+  zs->fill_value = cfg->fill_value;
+
+  // Store dimension config for metadata updates
+  for (int d = 0; d < cfg->rank; ++d)
+    zs->dimensions[d] = cfg->dimensions[d];
 
   // Compute geometry
   zs->shard_inner_count = 1;
   for (int d = 0; d < cfg->rank; ++d) {
-    zs->tile_count[d] = ceildiv(cfg->dimensions[d].size,
-                                cfg->dimensions[d].tile_size);
+    zs->tile_count[d] = (cfg->dimensions[d].size == 0) ? 1
+                        : ceildiv(cfg->dimensions[d].size,
+                                  cfg->dimensions[d].tile_size);
     uint64_t tps = cfg->dimensions[d].tiles_per_shard;
     zs->tiles_per_shard[d] = (tps == 0) ? zs->tile_count[d] : tps;
     zs->shard_count[d] = ceildiv(zs->tile_count[d], zs->tiles_per_shard[d]);
@@ -420,11 +473,13 @@ zarr_sink_create(const struct zarr_config* cfg)
   snprintf(zs->array_dir, sizeof(zs->array_dir), "%s/%s",
            cfg->store_path, cfg->array_name);
 
-  // Create directory tree: ensure all shard directories exist
+  // Create directory tree: ensure shard directories exist.
+  // When dim0 is unbounded (size=0), only pre-create spatial dirs for
+  // shard_epoch=0; further dirs are created on-demand in zarr_sink_open.
   {
-    uint64_t total_shards = 1;
-    for (int d = 0; d < cfg->rank; ++d)
-      total_shards *= zs->shard_count[d];
+    uint64_t total_shards = zs->shard_inner_count; // just spatial for epoch 0
+    if (cfg->dimensions[0].size > 0)
+      total_shards *= zs->shard_count[0]; // bounded: create all
 
     for (uint64_t flat = 0; flat < total_shards; ++flat) {
       char path[4096];
@@ -447,7 +502,9 @@ zarr_sink_create(const struct zarr_config* cfg)
   // Write metadata
   CHECK(Fail_alloc, write_root_metadata(cfg->store_path) == 0);
   CHECK(Fail_alloc,
-        write_array_metadata(zs->array_dir, cfg, zs->tiles_per_shard) == 0);
+        write_array_metadata(zs->array_dir, zs->rank, zs->dimensions,
+                                zs->data_type, zs->fill_value,
+                                zs->tiles_per_shard) == 0);
 
   // Allocate writer pool
   zs->num_writers = zs->shard_inner_count;
@@ -466,6 +523,7 @@ zarr_sink_create(const struct zarr_config* cfg)
 
 Fail_alloc:
   free(zs->writers);
+  io_queue_destroy(zs->queue);
   free(zs);
 Fail:
   return NULL;
@@ -512,6 +570,11 @@ struct zarr_multiscale_sink
   struct shard_sink base;
   struct zarr_sink** levels; // array of nlod zarr_sink*
   int nlod;
+
+  // For group metadata regeneration
+  char group_path[4096];
+  uint8_t rank;
+  struct dimension dimensions[MAX_ZARR_RANK]; // L0 dims (names, downsample flags)
 };
 
 static struct shard_writer*
@@ -527,13 +590,12 @@ Fail:
   return NULL;
 }
 
+// Regenerate OME-NGFF group metadata from live per-level shapes.
 static int
-write_multiscale_group_metadata(const char* store_path,
-                                const struct zarr_multiscale_config* cfg,
-                                const struct lod_plan* plan)
+write_multiscale_group_metadata(const struct zarr_multiscale_sink* ms)
 {
   char path[4096];
-  snprintf(path, sizeof(path), "%s/zarr.json", store_path);
+  snprintf(path, sizeof(path), "%s/zarr.json", ms->group_path);
 
   char buf[8192];
   struct json_writer jw;
@@ -561,11 +623,11 @@ write_multiscale_group_metadata(const char* store_path,
 
   jw_key(&jw, "axes");
   jw_array_begin(&jw);
-  for (int d = 0; d < cfg->rank; ++d) {
+  for (int d = 0; d < ms->rank; ++d) {
     jw_object_begin(&jw);
     jw_key(&jw, "name");
-    if (cfg->dimensions[d].name)
-      jw_string(&jw, cfg->dimensions[d].name);
+    if (ms->dimensions[d].name)
+      jw_string(&jw, ms->dimensions[d].name);
     else {
       char name[8];
       snprintf(name, sizeof(name), "d%d", d);
@@ -573,7 +635,7 @@ write_multiscale_group_metadata(const char* store_path,
     }
     jw_key(&jw, "type");
     {
-      const char* n = cfg->dimensions[d].name;
+      const char* n = ms->dimensions[d].name;
       const char* type = "space";
       if (n && (n[0] == 't' || n[0] == 'T') && n[1] == '\0')
         type = "time";
@@ -587,7 +649,7 @@ write_multiscale_group_metadata(const char* store_path,
 
   jw_key(&jw, "datasets");
   jw_array_begin(&jw);
-  for (int lv = 0; lv < plan->nlod; ++lv) {
+  for (int lv = 0; lv < ms->nlod; ++lv) {
     jw_object_begin(&jw);
     jw_key(&jw, "path");
     char lvstr[8];
@@ -596,33 +658,42 @@ write_multiscale_group_metadata(const char* store_path,
 
     jw_key(&jw, "coordinateTransformations");
     jw_array_begin(&jw);
-    // scale: voxel spacing at this level
+    // scale
     jw_object_begin(&jw);
     jw_key(&jw, "type");
     jw_string(&jw, "scale");
     jw_key(&jw, "scale");
     jw_array_begin(&jw);
-    for (int d = 0; d < cfg->rank; ++d) {
+    for (int d = 0; d < ms->rank; ++d) {
       double scale = 1.0;
-      if (cfg->dimensions[d].downsample && plan->shapes[lv][d] > 0)
-        scale = (double)cfg->dimensions[d].size /
-                (double)plan->shapes[lv][d];
+      if (ms->dimensions[d].downsample &&
+          ms->levels[lv]->dimensions[d].size > 0) {
+        if (ms->dimensions[d].size == 0)
+          scale = (double)(1u << lv);
+        else
+          scale = (double)ms->dimensions[d].size /
+                  (double)ms->levels[lv]->dimensions[d].size;
+      }
       jw_float(&jw, scale);
     }
     jw_array_end(&jw);
     jw_object_end(&jw);
-    // translation: half-voxel offset so downsampled voxel centers align
-    // t = 0.5 * (factor - 1) * base_scale
+    // translation
     jw_object_begin(&jw);
     jw_key(&jw, "type");
     jw_string(&jw, "translation");
     jw_key(&jw, "translation");
     jw_array_begin(&jw);
-    for (int d = 0; d < cfg->rank; ++d) {
+    for (int d = 0; d < ms->rank; ++d) {
       double t = 0.0;
-      if (cfg->dimensions[d].downsample && plan->shapes[lv][d] > 0) {
-        double factor = (double)cfg->dimensions[d].size /
-                        (double)plan->shapes[lv][d];
+      if (ms->dimensions[d].downsample &&
+          ms->levels[lv]->dimensions[d].size > 0) {
+        double factor;
+        if (ms->dimensions[d].size == 0)
+          factor = (double)(1u << lv);
+        else
+          factor = (double)ms->dimensions[d].size /
+                   (double)ms->levels[lv]->dimensions[d].size;
         t = 0.5 * (factor - 1.0);
       }
       jw_float(&jw, t);
@@ -647,6 +718,28 @@ write_multiscale_group_metadata(const char* store_path,
   return write_file(path, buf, jw_length(&jw));
 }
 
+static void
+zarr_multiscale_update_dim0(struct shard_sink* self,
+                            uint8_t level,
+                            uint64_t dim0_size)
+{
+  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  if (level >= ms->nlod)
+    return;
+
+  // Skip if unchanged
+  uint64_t old = ms->levels[level]->dimensions[0].size;
+  zarr_sink_update_dim0(&ms->levels[level]->base, level, dim0_size);
+  if (old == dim0_size)
+    return;
+
+  // Regenerate group metadata
+  if (write_multiscale_group_metadata(ms))
+    log_error(
+      "zarr_multiscale_update_dim0: failed to rewrite group zarr.json for %s",
+      ms->group_path);
+}
+
 struct zarr_multiscale_sink*
 zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 {
@@ -663,12 +756,15 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   else
     snprintf(group_path, sizeof(group_path), "%s", cfg->store_path);
 
-  // Compute LOD plan for shapes
+  // Compute LOD plan for shapes.
+  // When dim0 is unbounded (size=0), use tile_size as a placeholder
+  // to get valid spatial shapes. Dim0 shape will be updated dynamically.
   struct lod_plan plan = { 0 };
   uint64_t shape[MAX_ZARR_RANK];
   uint64_t tile_shape[MAX_ZARR_RANK];
   for (int d = 0; d < cfg->rank; ++d) {
-    shape[d] = cfg->dimensions[d].size;
+    shape[d] = (cfg->dimensions[d].size == 0) ? cfg->dimensions[d].tile_size
+                                               : cfg->dimensions[d].size;
     tile_shape[d] = cfg->dimensions[d].tile_size;
   }
 
@@ -688,7 +784,12 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail_plan, ms);
 
   ms->base.open = zarr_multiscale_open;
+  ms->base.update_dim0 = zarr_multiscale_update_dim0;
   ms->nlod = plan.nlod;
+  ms->rank = cfg->rank;
+  snprintf(ms->group_path, sizeof(ms->group_path), "%s", group_path);
+  for (int d = 0; d < cfg->rank; ++d)
+    ms->dimensions[d] = cfg->dimensions[d];
 
   ms->levels =
     (struct zarr_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_sink*));
@@ -705,11 +806,15 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 
   // Create one zarr_sink per level
   for (int lv = 0; lv < plan.nlod; ++lv) {
-    // Build per-level dimensions with downsampled sizes
+    // Build per-level dimensions with downsampled sizes.
+    // When dim0 is unbounded (size=0), set level shape[0]=0 (will grow).
     struct dimension lv_dims[MAX_ZARR_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
       lv_dims[d] = cfg->dimensions[d];
-      lv_dims[d].size = plan.shapes[lv][d];
+      if (d == 0 && cfg->dimensions[0].size == 0)
+        lv_dims[d].size = 0;
+      else
+        lv_dims[d].size = plan.shapes[lv][d];
     }
 
     char name[8];
@@ -729,8 +834,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   }
 
   // Write OME-NGFF multiscales group metadata (overwrites group zarr.json)
-  CHECK(Fail_levels,
-        write_multiscale_group_metadata(group_path, cfg, &plan) == 0);
+  CHECK(Fail_levels, write_multiscale_group_metadata(ms) == 0);
 
   lod_plan_free(&plan);
   return ms;

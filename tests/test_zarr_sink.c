@@ -445,6 +445,332 @@ Fail:
   return 1;
 }
 
+// --- Test: unbounded dim0 metadata update ---
+
+static int
+test_unbounded_metadata_update(const char* tmpdir)
+{
+  log_info("=== test_unbounded_metadata_update ===");
+
+  // dim0 unbounded (size=0), tiles_per_shard must be > 0
+  struct dimension dims[] = {
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 3, .name = "z" },
+    { .size = 8, .tile_size = 4, .tiles_per_shard = 2, .name = "y" },
+    { .size = 12, .tile_size = 3, .tiles_per_shard = 2, .name = "x" },
+  };
+
+  struct zarr_config cfg = {
+    .store_path = tmpdir,
+    .array_name = "0",
+    .data_type = zarr_dtype_uint16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+  };
+
+  struct zarr_sink* zs = zarr_sink_create(&cfg);
+  CHECK(Fail, zs);
+
+  // Initial zarr.json should have shape[0] = 0
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    int has_shape = strstr((char*)data, "\"shape\":[0,8,12]") != NULL;
+    free(data);
+    CHECK(Fail2, has_shape);
+    log_info("  initial shape: [0,8,12] OK");
+  }
+
+  // Stream some data through the pipeline
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+    .shard_sink = zarr_sink_as_shard_sink(zs),
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+
+  // epoch_elements = tiles_per_epoch * tile_elements
+  // tiles_per_epoch = tile_count[1] * tile_count[2] = 2 * 4 = 8
+  // tile_elements = 2 * 4 * 3 = 24
+  // epoch_elements = 8 * 24 = 192
+  log_info("  epoch_elements=%lu", (unsigned long)s.layout.epoch_elements);
+
+  // Feed 4 epochs of data
+  const size_t total = 4 * s.layout.epoch_elements;
+  uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
+  CHECK(Fail3, src);
+  for (size_t i = 0; i < total; ++i)
+    src[i] = (uint16_t)(i % 65536);
+
+  struct slice input = { .beg = src, .end = src + total };
+  struct writer_result r = writer_append(&s.writer, input);
+  CHECK(Fail4, r.error == 0);
+
+  r = writer_flush(&s.writer);
+  CHECK(Fail4, r.error == 0);
+
+  zarr_sink_flush(zs);
+
+  // After flush, zarr.json shape[0] should reflect data written.
+  // 4 epochs of tile_size=2 → shape[0] = 8.
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail4, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    log_info("  final metadata: %s", (char*)data);
+
+    int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
+    int has_shape = strstr((char*)data, "\"shape\":[8,8,12]") != NULL;
+    free(data);
+
+    CHECK(Fail4, is_array);
+    CHECK(Fail4, has_shape);  // 4 epochs * tile_size 2 = 8
+  }
+
+  free(src);
+  tile_stream_gpu_destroy(&s);
+  zarr_sink_destroy(zs);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  free(src);
+Fail3:
+  tile_stream_gpu_destroy(&s);
+Fail2:
+  zarr_sink_destroy(zs);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: multiscale unbounded dim0 creation ---
+
+static int
+test_multiscale_unbounded(const char* tmpdir)
+{
+  log_info("=== test_multiscale_unbounded ===");
+
+  struct dimension dims[] = {
+    { .size = 0, .tile_size = 8, .tiles_per_shard = 4, .name = "z", .downsample = 1 },
+    { .size = 32, .tile_size = 8, .tiles_per_shard = 2, .name = "y" },
+    { .size = 64, .tile_size = 8, .tiles_per_shard = 4, .name = "x", .downsample = 1 },
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .data_type = zarr_dtype_uint16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .nlod = 0, // auto
+    .exclude_dim0 = 1,
+  };
+
+  struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  // Check root zarr.json exists with multiscales
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 8191 ? len : 8191] = '\0';
+    int has_ms = strstr((char*)data, "\"multiscales\"") != NULL;
+    int has_p0 = strstr((char*)data, "\"path\":\"0\"") != NULL;
+    free(data);
+    CHECK(Fail2, has_ms);
+    CHECK(Fail2, has_p0);
+  }
+
+  // Check L0 array zarr.json has shape[0] = 0
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    int has_shape = strstr((char*)data, "\"shape\":[0,32,64]") != NULL;
+    free(data);
+    CHECK(Fail2, has_shape);
+    log_info("  L0 shape: [0,32,64] OK");
+  }
+
+  // Check L1 array zarr.json has shape[0] = 0 (unbounded propagates)
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/1/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    // dim0 unbounded (0), dim1 unchanged (32), dim2 halved (32)
+    int has_shape = strstr((char*)data, "\"shape\":[0,32,32]") != NULL;
+    free(data);
+    CHECK(Fail2, has_shape);
+    log_info("  L1 shape: [0,32,32] OK");
+  }
+
+  zarr_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: midstream metadata update via timer ---
+
+static int
+test_midstream_metadata_update(const char* tmpdir)
+{
+  log_info("=== test_midstream_metadata_update ===");
+
+  // dim0 unbounded (size=0)
+  struct dimension dims[] = {
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 3, .name = "z" },
+    { .size = 8, .tile_size = 4, .tiles_per_shard = 2, .name = "y" },
+    { .size = 12, .tile_size = 3, .tiles_per_shard = 2, .name = "x" },
+  };
+
+  struct zarr_config cfg = {
+    .store_path = tmpdir,
+    .array_name = "0",
+    .data_type = zarr_dtype_uint16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+  };
+
+  struct zarr_sink* zs = zarr_sink_create(&cfg);
+  CHECK(Fail, zs);
+
+  // Enable periodic metadata updates with a tiny interval.
+  // Force epochs_per_batch=1 so each epoch triggers a flush (and timer check).
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .bytes_per_element = sizeof(uint16_t),
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .metadata_update_interval_s = 1e-9, // effectively always fire
+    .epochs_per_batch = 1,
+  };
+
+  struct tile_stream_gpu s;
+  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+
+  // Feed several epochs of data (enough to trigger timer-based update)
+  const size_t total = 6 * s.layout.epoch_elements;
+  uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
+  CHECK(Fail3, src);
+  for (size_t i = 0; i < total; ++i)
+    src[i] = (uint16_t)(i % 65536);
+
+  // Feed in two batches; the 1e-9 interval fires the timer on every wait_and_deliver
+  size_t half = 3 * s.layout.epoch_elements;
+  {
+    struct slice input = { .beg = src, .end = src + half };
+    struct writer_result r = writer_append(&s.writer, input);
+    CHECK(Fail4, r.error == 0);
+  }
+
+  {
+    struct slice input = { .beg = src + half, .end = src + total };
+    struct writer_result r = writer_append(&s.writer, input);
+    CHECK(Fail4, r.error == 0);
+  }
+
+  // The timer-based update_dim0 fired during the second append batch,
+  // writing zarr.json synchronously. Verify shape[0] > 0 before writer_flush.
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail4, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    log_info("  midstream metadata: %s", (char*)data);
+
+    int not_zero = strstr((char*)data, "\"shape\":[0,") == NULL;
+    // 5 epochs delivered (epoch 5 still pending), dim0_extent = 5 * 2 = 10
+    int has_shape = strstr((char*)data, "\"shape\":[10,8,12]") != NULL;
+    int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
+    free(data);
+
+    CHECK(Fail4, not_zero);
+    CHECK(Fail4, has_shape);
+    CHECK(Fail4, is_array);
+  }
+
+  // Now flush and verify final state
+  {
+    struct writer_result r = writer_flush(&s.writer);
+    CHECK(Fail4, r.error == 0);
+  }
+  zarr_sink_flush(zs);
+
+  // Verify final shape after flush: 6 epochs * tile_size 2 = 12
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail4, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+    int has_shape = strstr((char*)data, "\"shape\":[12,8,12]") != NULL;
+    free(data);
+    CHECK(Fail4, has_shape);
+    log_info("  final metadata shape: [12,8,12] OK");
+  }
+
+  free(src);
+  tile_stream_gpu_destroy(&s);
+  zarr_sink_destroy(zs);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  free(src);
+Fail3:
+  tile_stream_gpu_destroy(&s);
+Fail2:
+  zarr_sink_destroy(zs);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -474,6 +800,14 @@ main(int ac, char* av[])
     ecode |= test_multiscale_metadata(sub);
   }
 
+  // Multiscale unbounded metadata test (no CUDA needed)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/msunbounded", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_multiscale_unbounded(sub);
+  }
+
   // Pipeline tests (need CUDA)
   {
     CUcontext ctx = 0;
@@ -488,6 +822,20 @@ main(int ac, char* av[])
       snprintf(sub, sizeof(sub), "%s/pipe", tmpdir);
       test_mkdir(sub);
       ecode |= test_pipeline(sub);
+    }
+
+    {
+      char sub[4200];
+      snprintf(sub, sizeof(sub), "%s/unbounded", tmpdir);
+      test_mkdir(sub);
+      ecode |= test_unbounded_metadata_update(sub);
+    }
+
+    {
+      char sub[4200];
+      snprintf(sub, sizeof(sub), "%s/midstream", tmpdir);
+      test_mkdir(sub);
+      ecode |= test_midstream_metadata_update(sub);
     }
 
     cuCtxDestroy(ctx);

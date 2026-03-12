@@ -2,7 +2,7 @@
 
 ## TODO
 
-- [ ] boundary conditions for dim0 downsampling
+- [x] boundary conditions for dim0 downsampling - it's a ceil like it should be
 - [x] lod for dim0
 - [x] move benchmark suite out of tests
 - [x] optimize buffering for compression stage - may need more than one epoch
@@ -25,6 +25,8 @@
 - [ ] whitepaper
 - [ ] coverage
 - [ ] characterize performance by chunk size
+- [ ] within epoch transpose
+- [ ] unbuffered io
 
 
 - [x] cleanup tests vs experiments
@@ -69,7 +71,9 @@ Benchmarking on livescreen-1 (A6000)
 +-----------------------------------------+------------------------+----------------------+  
 ```
 
-Using 64x1x64x64 zcyx tiles on bench_stream_orca2_multiscale_dim0
+Using 64x1x64x64 zcyx tiles on bench_stream_orca2_multiscale_dim0. There's
+300+ GB of RAM on that machine, so IO times are really just RAM bandwidth
+here.
 
 ```
 === multiscale_dim0 ===
@@ -108,6 +112,11 @@ Using 64x1x64x64 zcyx tiles on bench_stream_orca2_multiscale_dim0
   PASS  
 ```
 
+Looking into unbuffered writes, which comes with some alignment restrictions.
+
+Also working on making sure I'm treating dim0 right. `dim[0].size=0` should
+enable infinite streaming. For a finite size, the stream should terminate. And
+the zarr shape should update in an eventually consistent way.
 
 ## 2026-03-10
 

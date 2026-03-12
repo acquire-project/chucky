@@ -5,6 +5,7 @@
 #include "lod.h"
 #include "lod_plan.h"
 #include "metric.h"
+#include "platform.h"
 #include "transpose.h"
 #include <cuda.h>
 #include <stddef.h>
@@ -18,9 +19,16 @@ struct slice
   const void* end;
 };
 
+enum writer_error_code
+{
+  writer_error_ok = 0,
+  writer_error_fail = 1,
+  writer_error_finished = 2, // bounded dim0 capacity reached, data flushed
+};
+
 struct writer_result
 {
-  int error;
+  int error; // writer_error_code; 0 = ok, 1 = fail, 2 = finished
   struct slice rest; // unconsumed input (empty on success for append)
 };
 
@@ -45,6 +53,13 @@ struct shard_sink
   struct shard_writer* (*open)(struct shard_sink* self,
                                uint8_t level,
                                uint64_t shard_index);
+
+  // Optional: update dim0 extent in metadata (e.g. zarr.json shape[0]).
+  // Called periodically during streaming and at final flush.
+  // NULL means no-op (non-zarr sinks can ignore).
+  void (*update_dim0)(struct shard_sink* self,
+                      uint8_t level,
+                      uint64_t dim0_size);
 };
 
 struct stream_metrics
@@ -83,9 +98,10 @@ struct double_buffer
 
 struct dimension
 {
-  uint64_t size;
+  uint64_t size;            // 0 means unbounded (dim 0 only: stream indefinitely)
   uint64_t tile_size;
   uint64_t tiles_per_shard; // 0 means all tiles along this dimension
+                            // (must be > 0 when size == 0)
   const char* name;         // optional label (e.g. "x"), may be NULL
   int downsample;           // include in LOD pyramid
 };
@@ -102,6 +118,7 @@ struct tile_stream_configuration
   enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
   uint32_t epochs_per_batch; // K: 0 = auto (target_min_tiles), must be pow2
   uint32_t target_min_tiles; // minimum tiles per compress batch (default 1024)
+  double metadata_update_interval_s; // seconds between metadata updates (0 = disable)
 };
 
 struct staging_slot
@@ -301,6 +318,9 @@ struct tile_stream_gpu
   int dim0_downsample;                       // 1 if dim 0 is downsampled
   enum lod_reduce_method dim0_reduce_method; // temporal reduction method
   struct dim0_state dim0;                    // single buffer for all levels 1+
+
+  // Metadata update timer
+  struct platform_clock metadata_update_clock;
 };
 
 // Initialize a tile_stream_gpu. Returns 0 on success, non-zero on error.
