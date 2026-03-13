@@ -22,7 +22,7 @@ struct lod_plan
   int nlod;
   uint64_t shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
 
-  uint8_t lod_mask;
+  uint32_t lod_mask;
   int lod_ndim;
   int lod_map[LOD_MAX_NDIM];
   int batch_ndim;
@@ -64,7 +64,7 @@ lod_plan_init(struct lod_plan* p,
               int ndim,
               const uint64_t* shape,
               const uint64_t* tile_shape,
-              uint8_t lod_mask,
+              uint32_t lod_mask,
               int max_levels,
               int exclude_dim0);
 
@@ -75,7 +75,7 @@ lod_plan_init_shapes(struct lod_plan* p,
                      int ndim,
                      const uint64_t* shape,
                      const uint64_t* tile_shape,
-                     uint8_t lod_mask,
+                     uint32_t lod_mask,
                      int max_levels,
                      int exclude_dim0);
 

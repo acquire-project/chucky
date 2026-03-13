@@ -118,7 +118,7 @@ io_queue_destroy(struct io_queue* q)
   free(q);
 }
 
-static void
+static int
 ring_grow(struct io_queue* q)
 {
   uint64_t new_cap = q->ring_cap * 2;
@@ -126,7 +126,7 @@ ring_grow(struct io_queue* q)
     (struct io_job*)calloc(new_cap, sizeof(struct io_job));
   if (!new_ring) {
     log_error("io_queue: failed to grow ring buffer");
-    return;
+    return 1;
   }
 
   // Copy existing jobs preserving order
@@ -139,9 +139,10 @@ ring_grow(struct io_queue* q)
   q->ring_cap = new_cap;
   q->head = count;
   q->tail = 0;
+  return 0;
 }
 
-uint64_t
+int
 io_queue_post(struct io_queue* q,
               void (*fn)(void*),
               void* ctx,
@@ -149,24 +150,25 @@ io_queue_post(struct io_queue* q,
 {
   AcquireSRWLockExclusive(&q->srw);
 
+  if (q->head - q->tail == q->ring_cap) {
+    if (ring_grow(q)) {
+      ReleaseSRWLockExclusive(&q->srw);
+      return 1;
+    }
+  }
+
   q->next_seq++;
-  uint64_t seq = q->next_seq;
-
-  if (q->head - q->tail == q->ring_cap)
-    ring_grow(q);
-
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
     .fn = fn,
     .ctx = ctx,
     .ctx_free = ctx_free,
-    .seq = seq,
+    .seq = q->next_seq,
   };
   q->head++;
 
   WakeConditionVariable(&q->cond_not_empty);
   ReleaseSRWLockExclusive(&q->srw);
-
-  return seq;
+  return 0;
 }
 
 struct io_event

@@ -34,6 +34,10 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
+## 2026-03-13
+
+Confirmed using a non-trivial storage order doesn't effect performance.
+
 ## 2026-03-12
 
 Finishing unbuffered io on posix.
@@ -88,7 +92,6 @@ Worst offenders are `stream.c` and `lod.cu`. `aggregate.cu` has gotten a bit
 beefy too.
 
  - Review - separate static (config) state from mutable state
- - target_min_tiles config parameter - rename to make clear this is per batch
 
 Hmm, I think I might not have been timing things right... had a bug with how
 I was setting up the unbuffered io on windows. Fixed that added some timing

@@ -51,7 +51,7 @@ morton_unshuffle(const struct lod_plan* p,
 
 static void
 downsample_ref(int ndim,
-               uint8_t ds_mask,
+               uint32_t ds_mask,
                const uint64_t* cur_shape,
                const uint64_t* next_shape,
                const float* src,
@@ -195,7 +195,7 @@ Fail:
 }
 
 static int
-test_lod(const char* label, int ndim, const uint64_t* shape, uint8_t lod_mask)
+test_lod(const char* label, int ndim, const uint64_t* shape, uint32_t lod_mask)
 {
   printf("--- %s ---\n", label);
   int ok = 0;

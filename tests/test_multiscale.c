@@ -522,7 +522,7 @@ Run2d:
     };
     CHECK(Fail2b, tile_stream_gpu_create(&config, &s) == 0);
     log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
-             s.nlod, s.dim0_downsample);
+             s.levels.nlod, s.levels.dim0_downsample);
     xor_pattern_init(dims_dim0, rank, 2);
     CHECK(Fail2c, pump_data(&s.writer, total_elements, fill_xor) == 0);
     CHECK(Fail2c, s.cursor == total_elements);
@@ -747,7 +747,7 @@ test_dim0_multi_epoch_levels(void)
   struct lod_plan plan = { 0 };
   {
     uint64_t shape[5], tile_shape[5];
-    uint8_t lod_mask = 0;
+    uint32_t lod_mask = 0;
     for (int i = 0; i < rank; ++i) {
       shape[i] = dims[i].size;
       tile_shape[i] = dims[i].tile_size;
@@ -811,9 +811,9 @@ test_dim0_multi_epoch_levels(void)
 
     CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
     log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",
-             s.nlod,
-             s.dim0_downsample,
-             s.epochs_per_batch);
+             s.levels.nlod,
+             s.levels.dim0_downsample,
+             s.batch.epochs_per_batch);
 
     xor_pattern_init(dims, rank, 2);
     int pump_ok = (pump_data(&s.writer, total_elements, fill_xor) == 0);

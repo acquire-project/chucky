@@ -246,7 +246,7 @@ static int
 test_lod_gpu_method(const char* label,
                     int ndim,
                     const uint64_t* shape,
-                    uint8_t lod_mask,
+                    uint32_t lod_mask,
                     int niter,
                     enum lod_reduce_method method)
 {
@@ -307,7 +307,7 @@ static int
 test_lod_gpu(const char* label,
              int ndim,
              const uint64_t* shape,
-             uint8_t lod_mask,
+             uint32_t lod_mask,
              int niter)
 {
   return test_lod_gpu_method(label, ndim, shape, lod_mask, niter,
@@ -579,7 +579,7 @@ static int
 test_lod_gpu_u16_method(const char* label,
                         int ndim,
                         const uint64_t* shape,
-                        uint8_t lod_mask,
+                        uint32_t lod_mask,
                         int niter,
                         enum lod_reduce_method method)
 {
@@ -641,7 +641,7 @@ static int
 test_lod_gpu_u16(const char* label,
                  int ndim,
                  const uint64_t* shape,
-                 uint8_t lod_mask,
+                 uint32_t lod_mask,
                  int niter)
 {
   return test_lod_gpu_u16_method(label, ndim, shape, lod_mask, niter,
@@ -1080,7 +1080,7 @@ main(void)
   // --- Reduce method tests (f32) ---
   {
     const uint64_t shape[] = { 3, 5 };
-    const uint8_t mask = 0x3;
+    const uint32_t mask = 0x3;
     nfail += !test_lod_gpu_method("reduce_min_f32", 2, shape, mask, 1,
                                   lod_reduce_min);
     nfail += !test_lod_gpu_method("reduce_max_f32", 2, shape, mask, 1,
@@ -1096,7 +1096,7 @@ main(void)
   // --- Reduce method tests (u16) ---
   {
     const uint64_t shape[] = { 3, 5 };
-    const uint8_t mask = 0x3;
+    const uint32_t mask = 0x3;
     nfail += !test_lod_gpu_u16_method("reduce_min_u16", 2, shape, mask, 1,
                                       lod_reduce_min);
     nfail += !test_lod_gpu_u16_method("reduce_max_u16", 2, shape, mask, 1,
@@ -1112,7 +1112,7 @@ main(void)
   // --- Reduce method tests with mixed dims (3D, partial mask) ---
   {
     const uint64_t shape[] = { 6, 3, 5 };
-    const uint8_t mask = 0x5;
+    const uint32_t mask = 0x5;
     nfail += !test_lod_gpu_method("reduce_min_3d_d02", 3, shape, mask, 1,
                                   lod_reduce_min);
     nfail += !test_lod_gpu_method("reduce_max_3d_d02", 3, shape, mask, 1,

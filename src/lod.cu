@@ -373,9 +373,9 @@ lod_reduce_k(T* __restrict__ values,
 
   uint64_t start = (element > 0) ? ends[element - 1] : 0;
   uint64_t end = ends[element];
-#pragma nv_diag_suppress 177,550  // len unused in min/max constexpr branches
+#pragma nv_diag_suppress 177, 550 // len unused in min/max constexpr branches
   uint64_t len = end - start;
-#pragma nv_diag_default 177,550
+#pragma nv_diag_default 177, 550
 
   T result;
 
@@ -869,29 +869,6 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
 #undef LAUNCH_FUSED
 #undef FUSED_METHOD
 }
-
-// Helper macro: dispatch over all methods for a given (Type, Acc) pair.
-#define DISPATCH_METHOD(Type, Acc)                                             \
-  switch (method) {                                                            \
-    case lod_reduce_mean:                                                      \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_mean);                               \
-      break;                                                                   \
-    case lod_reduce_min:                                                       \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_min);                                \
-      break;                                                                   \
-    case lod_reduce_max:                                                       \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_max);                                \
-      break;                                                                   \
-    case lod_reduce_median:                                                    \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_median);                             \
-      break;                                                                   \
-    case lod_reduce_max_suppressed:                                            \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_max_suppressed);                     \
-      break;                                                                   \
-    case lod_reduce_min_suppressed:                                            \
-      LAUNCH_REDUCE(Type, Acc, lod_reduce_min_suppressed);                     \
-      break;                                                                   \
-  }
 
 extern "C" int
 lod_reduce(CUdeviceptr d_values,

@@ -1,3 +1,4 @@
+#include "crc32c.h"
 #include "prelude.cuda.h"
 #include "prelude.h"
 #include "stream.h"
@@ -440,33 +441,6 @@ Fail0:
   return 1;
 }
 
-// Software CRC32C (Castagnoli) — same algorithm as stream.c.
-static uint32_t crc32c_test_table[256];
-static int crc32c_test_table_ready;
-
-static void
-crc32c_test_init_table(void)
-{
-  if (crc32c_test_table_ready)
-    return;
-  for (int i = 0; i < 256; ++i) {
-    uint32_t crc = (uint32_t)i;
-    for (int j = 0; j < 8; ++j)
-      crc = (crc >> 1) ^ (0x82F63B78 & (0u - (crc & 1)));
-    crc32c_test_table[i] = crc;
-  }
-  crc32c_test_table_ready = 1;
-}
-
-static uint32_t
-crc32c_test(const void* data, size_t len)
-{
-  uint32_t crc = 0xFFFFFFFF;
-  const uint8_t* p = (const uint8_t*)data;
-  for (size_t i = 0; i < len; ++i)
-    crc = crc32c_test_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
-  return crc ^ 0xFFFFFFFF;
-}
 
 // Verify shard index structure: monotonic offsets, size sum, CRC.
 // Tests with both even (all tiles present) and uneven (padded) cases.
@@ -475,7 +449,7 @@ test_shard_index_structure(void)
 {
   log_info("=== test_shard_index_structure ===");
 
-  crc32c_test_init_table();
+  crc32c_init();
 
   // --- Case 1: Even tiling (all tiles fill shard evenly) ---
   {
@@ -601,7 +575,7 @@ test_shard_index_structure(void)
       // 3. Verify CRC32C at end of shard matches computed CRC of index data
       uint32_t stored_crc;
       memcpy(&stored_crc, index_ptr + index_data_bytes, 4);
-      uint32_t computed_crc = crc32c_test(index_ptr, index_data_bytes);
+      uint32_t computed_crc = crc32c(index_ptr, index_data_bytes);
       if (stored_crc != computed_crc) {
         log_error("  shard %d: CRC mismatch (stored=0x%08x computed=0x%08x)",
                   si,
@@ -701,7 +675,7 @@ Case2:
     // CRC
     uint32_t stored, computed;
     memcpy(&stored, index_ptr2 + index_data_bytes2, 4);
-    computed = crc32c_test(index_ptr2, index_data_bytes2);
+    computed = crc32c(index_ptr2, index_data_bytes2);
     CHECK(FailB2, stored == computed);
 
     log_info("  single shard (u16): verified");

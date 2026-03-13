@@ -6,73 +6,14 @@
 #include "lod_plan.h"
 #include "metric.h"
 #include "platform.h"
+#include "shard_delivery.h"
 #include "transpose.h"
+#include "writer.h"
 #include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #define MAX_BATCH_EPOCHS 256
-
-struct slice
-{
-  const void* beg;
-  const void* end;
-};
-
-enum writer_error_code
-{
-  writer_error_ok = 0,
-  writer_error_fail = 1,
-  writer_error_finished = 2, // bounded dim0 capacity reached, data flushed
-};
-
-struct writer_result
-{
-  int error;         // writer_error_code; 0 = ok, 1 = fail, 2 = finished
-  struct slice rest; // unconsumed input (empty on success for append)
-};
-
-struct writer
-{
-  struct writer_result (*append)(struct writer* self, struct slice data);
-  struct writer_result (*flush)(struct writer* self);
-};
-
-struct shard_writer
-{
-  int (*write)(struct shard_writer* self,
-               uint64_t offset, // byte offset within the shard
-               const void* beg,
-               const void* end);
-  // Zero-copy write: caller guarantees buffer lifetime until io_event.
-  // NULL = fall back to write (copy-based).
-  int (*write_direct)(struct shard_writer* self,
-                      uint64_t offset,
-                      const void* beg,
-                      const void* end);
-  int (*finalize)(struct shard_writer* self); // shard complete, close/flush
-};
-
-struct shard_sink
-{
-  // Open/get a writer for the given flat shard index.
-  struct shard_writer* (*open)(struct shard_sink* self,
-                               uint8_t level,
-                               uint64_t shard_index);
-
-  // Optional: update dim0 extent in metadata (e.g. zarr.json shape[0]).
-  // Called periodically during streaming and at final flush.
-  // NULL means no-op (non-zarr sinks can ignore).
-  void (*update_dim0)(struct shard_sink* self,
-                      uint8_t level,
-                      uint64_t dim0_size);
-
-  // IO fence for backpressure. NULL = no async IO.
-  struct io_event (*record_fence)(struct shard_sink* self, uint8_t level);
-  void (*wait_fence)(struct shard_sink* self,
-                     uint8_t level,
-                     struct io_event ev);
-};
 
 struct stream_metrics
 {
@@ -172,24 +113,6 @@ struct stream_layout
   uint64_t tiles_per_epoch; // M = prod of tile_count[i] for i > 0
   uint64_t epoch_elements;  // elements per epoch = M * tile_elements
   size_t tile_pool_bytes;   // tiles_per_epoch * tile_stride * bpe
-};
-
-struct active_shard
-{
-  size_t data_cursor;
-  uint64_t* index;             // 2 * tiles_per_shard_total entries
-  struct shard_writer* writer; // from sink->open, NULL until first use
-};
-
-struct shard_state
-{
-  uint64_t epoch_in_shard;        // 0..tiles_per_shard[0]-1
-  uint64_t shard_epoch;           // s_0 coordinate (0, 1, 2, ...)
-  uint64_t shard_inner_count;     // S_inner = prod(shard_count[d] for d>0)
-  uint64_t tiles_per_shard_inner; // prod(tps[d] for d>0)
-  uint64_t tiles_per_shard_total; // prod(tps[d] for all d)
-  uint64_t tiles_per_shard_0;     // tps[0]
-  struct active_shard* shards;    // array[shard_inner_count]
 };
 
 // Per flush-slot: holds compressed output + pre-built pointer arrays.
@@ -293,53 +216,58 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 // Dispatch function: H2D + scatter (+ optional d_linear copy).
 typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
 
+// CUDA stream handles (all immutable after create)
+struct gpu_streams
+{
+  CUstream h2d, compute, compress, d2h;
+};
+
+// Per-level tile geometry (all immutable after create)
+struct level_geometry
+{
+  int nlod;                             // number of LOD levels
+  int enable_multiscale;                // has spatial LOD
+  int dim0_downsample;                  // has temporal LOD
+  uint64_t total_tiles;                 // sum across all levels per epoch
+  uint64_t tile_offset[LOD_MAX_LEVELS]; // first tile index per level
+  uint64_t tile_count[LOD_MAX_LEVELS];  // tiles_per_epoch per level
+};
+
+// Batch accumulation: config + mutable counter + per-epoch events
+struct batch_state
+{
+  uint32_t epochs_per_batch;             // K (immutable after create)
+  uint32_t accumulated;                  // mutable: 0..K-1
+  CUevent pool_events[MAX_BATCH_EPOCHS]; // per-epoch pool-ready signals
+};
+
+// Flush pipeline: double-buffered compress->D2H->deliver
+struct flush_pipeline
+{
+  struct flush_slot_gpu slot[2]; // [0]=A pool, [1]=B pool
+  int current;                   // mutable: which slot is active
+  int pending;                   // mutable: has unkicked work
+};
+
 struct tile_stream_gpu
 {
   struct writer writer;
-  dispatch_scatter_fn dispatch;
-  CUstream h2d, compute, compress, d2h;
-  struct staging_state stage;
-  struct stream_layout layout; // L0 layout
   struct tile_stream_configuration config;
-  struct stream_metrics metrics;
-  uint64_t cursor;
+  dispatch_scatter_fn dispatch;
+  struct stream_layout layout;  // L0 tile layout
+  struct level_geometry levels; // per-level accounting
+  struct gpu_streams streams;   // CUDA stream handles
+  struct batch_state batch;     // epoch accumulation
+  struct flush_pipeline flush;  // compress->deliver pipeline
+  struct codec codec;           // compression state
+  struct lod_state lod;         // LOD buffers + plan
+  struct lod_level_state lod_levels[LOD_MAX_LEVELS]; // per-level agg+shard
 
-  // Tile pools — unified across all levels
-  struct double_buffer pools; // total_tiles * tile_stride * bpe each
-
-  // Flush pipeline
-  struct flush_slot_gpu flush[2]; // [0]=A epochs, [1]=B epochs
-  int flush_current;              // 0 or 1
-  int flush_pending;
-
-  // Batch accumulation
-  uint32_t epochs_per_batch;   // number of epochs per compress batch
-  uint32_t epochs_accumulated; // counter of epochs in current pool
-  CUevent batch_pool_events[MAX_BATCH_EPOCHS]; // per-epoch pool-ready signals
-
-  // Unified compression state (sized for total_tiles)
-  struct codec codec;
-  uint64_t total_tiles;                       // sum of all level tile counts
-  uint64_t level_tile_offset[LOD_MAX_LEVELS]; // first tile index per level
-  uint64_t level_tile_count[LOD_MAX_LEVELS];  // tiles_per_epoch per level
-
-  int nlod;              // 1 when multiscale off, lod.nlod when on
-  int enable_multiscale; // computed from dimensions[].downsample
-  uint32_t lod_mask;     // computed from dimensions[].downsample
-
-  // LOD (multiscale) state
-  struct lod_state lod;
-  // Per-level aggregate + shard delivery
-  // lod_levels[0] = L0 state (agg_layout, agg[2], shard)
-  // lod_levels[1..nlod-1] = LOD levels
-  struct lod_level_state lod_levels[LOD_MAX_LEVELS];
-
-  // Dim0 (temporal) LOD accumulation
-  int dim0_downsample;                       // 1 if dim 0 is downsampled
-  enum lod_reduce_method dim0_reduce_method; // temporal reduction method
-  struct dim0_state dim0;                    // single buffer for all levels 1+
-
-  // Metadata update timer
+  struct double_buffer pools;    // tile pools
+  struct staging_state stage;    // H2D staging buffers
+  struct dim0_state dim0;        // temporal accumulation
+  uint64_t cursor;               // current element position
+  struct stream_metrics metrics; // telemetry
   struct platform_clock metadata_update_clock;
 };
 
@@ -351,18 +279,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* stream);
-
-// Dispatch to the writer's append method.
-struct writer_result
-writer_append(struct writer* w, struct slice data);
-
-// Dispatch to the writer's flush method.
-struct writer_result
-writer_flush(struct writer* w);
-
-// Append data to a writer, retrying with exponential back-off on stall.
-struct writer_result
-writer_append_wait(struct writer* w, struct slice data);
 
 // Return accumulated timing metrics.
 struct stream_metrics
