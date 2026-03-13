@@ -84,8 +84,8 @@ dims_budget_tile_size(struct dimension* dims,
   if (sum_ratios == 0)
     return;
 
-  int bits_per_part = total_bits / (int)sum_ratios;
-  int remainder = total_bits % (int)sum_ratios;
+  int bits_per_part = (total_bits + (int)sum_ratios - 1) / (int)sum_ratios;
+  int remainder = total_bits - bits_per_part * (int)sum_ratios;
 
   int first_nonzero = -1;
   for (uint8_t i = 0; i < rank; ++i) {

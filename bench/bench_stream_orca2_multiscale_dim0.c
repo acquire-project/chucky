@@ -1,41 +1,20 @@
 #include "bench_util.h"
-#include "prelude.h"
+#include "dimension.h"
 
 int
 main(int ac, char* av[])
 {
-  struct dimension dims[] = {
-    {
-      .size = 10000,
-      .tile_size = 64,
-      .tiles_per_shard = 20,
-      .name = "t",
-      .downsample = 1,
-      .storage_position = 0,
-    },
-    {
-      .size = 2,
-      .tile_size = 1,
-      .tiles_per_shard = 2,
-      .name = "c",
-      .storage_position = 1,
-    },
-    {
-      .size = 2048,
-      .tile_size = 64,
-      .tiles_per_shard = 10,
-      .name = "y",
-      .downsample = 1,
-      .storage_position = 2,
-    },
-    {
-      .size = 2304,
-      .tile_size = 64,
-      .tiles_per_shard = 10,
-      .name = "x",
-      .downsample = 1,
-      .storage_position = 3,
-    },
-  };
-  return bench_stream_main(ac, av, "multiscale_dim0", dims, countof(dims));
+  struct dimension dims[4];
+  uint64_t sizes[] = { 10000, 2, 2048, 2304 };
+  uint8_t rank = dims_create(dims, "tcyx", sizes);
+
+  uint8_t ratios[] = { 6, 0, 6, 6 };
+  dims_budget_tile_size(dims, rank, 1ULL << 18, ratios);
+
+  uint64_t shard_counts[] = { 8, 1, 4, 4 };
+  dims_set_shard_counts(dims, rank, shard_counts);
+
+  dims_set_downsample_by_name(dims, rank, "tyx");
+
+  return bench_stream_main(ac, av, "multiscale_dim0", dims, rank);
 }

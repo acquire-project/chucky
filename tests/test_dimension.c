@@ -67,18 +67,18 @@ test_dims_budget_tile_size(void)
   dims_create(dims, "tcyx", sizes);
 
   // nelem=1<<19, ratios=[1,0,2,2], sum=5
-  // bits_per_part = floor(19/5) = 3, remainder = 4
-  // dim 0 (ratio 1): 1<<(1*3+4) = 1<<7 = 128
+  // bits_per_part = ceil(19/5) = 4, remainder = 19 - 20 = -1
+  // dim 0 (ratio 1): 1<<(1*4-1) = 1<<3 = 8
   // dim 1 (ratio 0): 1
-  // dim 2 (ratio 2): 1<<(2*3)   = 1<<6 = 64
-  // dim 3 (ratio 2): 1<<(2*3)   = 1<<6 = 64
+  // dim 2 (ratio 2): 1<<(2*4)   = 1<<8 = 256
+  // dim 3 (ratio 2): 1<<(2*4)   = 1<<8 = 256
   uint8_t ratios[] = { 1, 0, 2, 2 };
   dims_budget_tile_size(dims, 4, 1ULL << 19, ratios);
 
-  CHECK(Error, dims[0].tile_size == 128);
+  CHECK(Error, dims[0].tile_size == 8);
   CHECK(Error, dims[1].tile_size == 1);
-  CHECK(Error, dims[2].tile_size == 64);
-  CHECK(Error, dims[3].tile_size == 64);
+  CHECK(Error, dims[2].tile_size == 256);
+  CHECK(Error, dims[3].tile_size == 256);
 
   // Verify total: 128 * 1 * 64 * 64 = 2^19
   uint64_t total = 1;
@@ -126,20 +126,20 @@ test_dims_set_shard_counts(void)
 
   uint8_t ratios[] = { 1, 0, 2, 2 };
   dims_budget_tile_size(dims, 4, 1ULL << 19, ratios);
-  // tile_sizes: 128, 1, 64, 64
-  // tile_counts: ceil(1000/128)=8, ceil(2/1)=2, ceil(2048/64)=32, ceil(2304/64)=36
+  // tile_sizes: 8, 1, 256, 256
+  // tile_counts: ceil(1000/8)=125, ceil(2/1)=2, ceil(2048/256)=8, ceil(2304/256)=9
 
   uint64_t shard_counts[] = { 1, 1, 4, 4 };
   dims_set_shard_counts(dims, 4, shard_counts);
 
-  // tps[0] = ceil(8/1) = 8
-  CHECK(Error, dims[0].tiles_per_shard == 8);
+  // tps[0] = ceil(125/1) = 125
+  CHECK(Error, dims[0].tiles_per_shard == 125);
   // tps[1] = ceil(2/1) = 2
   CHECK(Error, dims[1].tiles_per_shard == 2);
-  // tps[2] = ceil(32/4) = 8
-  CHECK(Error, dims[2].tiles_per_shard == 8);
-  // tps[3] = ceil(36/4) = 9
-  CHECK(Error, dims[3].tiles_per_shard == 9);
+  // tps[2] = ceil(8/4) = 2
+  CHECK(Error, dims[2].tiles_per_shard == 2);
+  // tps[3] = ceil(9/4) = 3
+  CHECK(Error, dims[3].tiles_per_shard == 3);
 
   ok = 1;
 Error:
