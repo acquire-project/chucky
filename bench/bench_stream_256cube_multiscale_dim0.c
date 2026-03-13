@@ -8,10 +8,12 @@ main(int ac, char* av[])
   uint64_t sizes[] = { 1000, 256, 256, 256, 3 };
   uint8_t rank = dims_create(dims, "tzyxc", sizes);
 
-  uint8_t ratios[] = { 0, 1, 1, 1, 0 };
-  dims_budget_tile_size(dims, rank, 1ULL << 17, ratios);
+  dims_set_storage_order(dims, rank, "tczyx");
 
-  uint64_t shard_counts[] = { 16, 1, 1, 1, 1 };
+  uint8_t ratios[] = { 0, 1, 1, 1, 0 };
+  dims_budget_tile_size(dims, rank, 1ULL << 18, ratios);
+
+  uint64_t shard_counts[] = { 16, 2, 2, 2, 1 };
   dims_set_shard_counts(dims, rank, shard_counts);
 
   dims_set_downsample_by_name(dims, rank, "tzyx");

@@ -58,13 +58,35 @@ dims_create(struct dimension* dims, const char* names, const uint64_t* sizes)
   return rank;
 }
 
-void
+int
 dims_set_storage_order(struct dimension* dims,
                        uint8_t rank,
-                       const uint8_t* order)
+                       const char* order)
 {
-  for (uint8_t i = 0; i < rank; ++i)
-    dims[i].storage_position = order ? order[i] : i;
+  if (!order) {
+    for (uint8_t i = 0; i < rank; ++i)
+      dims[i].storage_position = i;
+    return 0;
+  }
+  if (strlen(order) != rank)
+    return 1;
+  // The append dimension (index 0) must stay at storage position 0.
+  if (rank > 0 && order[0] != dims[0].name[0])
+    return 1;
+  for (uint8_t i = 0; i < rank; ++i) {
+    // Find which dim has name order[i].
+    int found = 0;
+    for (uint8_t j = 0; j < rank; ++j) {
+      if (dims[j].name[0] == order[i]) {
+        dims[j].storage_position = i;
+        found = 1;
+        break;
+      }
+    }
+    if (!found)
+      return 1;
+  }
+  return 0;
 }
 
 void

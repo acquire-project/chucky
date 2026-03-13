@@ -14,12 +14,16 @@ dims_create(struct dimension* dims,
             const char* names,
             const uint64_t* sizes);
 
-// Sets dims[i].storage_position = order[i].
+// Set storage order from a string of dimension names.
+// Each character in order names a dimension; its position is the storage
+// position assigned to that dimension. strlen(order) must equal rank.
+// The first character must name dims[0] (the append dimension is pinned).
 // Pass NULL for identity (0,1,2,...).
-void
+// Returns 0 on success, non-zero on error.
+int
 dims_set_storage_order(struct dimension* dims,
                        uint8_t rank,
-                       const uint8_t* order);
+                       const char* order);
 
 // Sets downsample=1 on dims whose name character appears in names.
 // Other dims set to downsample=0.

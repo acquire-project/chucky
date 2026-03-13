@@ -178,18 +178,26 @@ test_dims_set_storage_order(void)
   uint64_t sizes[] = { 10, 20, 30 };
   dims_create(dims, "xyz", sizes);
 
-  uint8_t order[] = { 0, 2, 1 };
-  dims_set_storage_order(dims, 3, order);
-
-  CHECK(Error, dims[0].storage_position == 0);
-  CHECK(Error, dims[1].storage_position == 2);
-  CHECK(Error, dims[2].storage_position == 1);
+  // "xzy" means storage order x=0, z=1, y=2
+  CHECK(Error, dims_set_storage_order(dims, 3, "xzy") == 0);
+  CHECK(Error, dims[0].storage_position == 0); // x -> 0
+  CHECK(Error, dims[1].storage_position == 2); // y -> 2
+  CHECK(Error, dims[2].storage_position == 1); // z -> 1
 
   // NULL resets to identity
-  dims_set_storage_order(dims, 3, NULL);
+  CHECK(Error, dims_set_storage_order(dims, 3, NULL) == 0);
   CHECK(Error, dims[0].storage_position == 0);
   CHECK(Error, dims[1].storage_position == 1);
   CHECK(Error, dims[2].storage_position == 2);
+
+  // Error: wrong length
+  CHECK(Error, dims_set_storage_order(dims, 3, "xy") != 0);
+
+  // Error: append dim not first
+  CHECK(Error, dims_set_storage_order(dims, 3, "yxz") != 0);
+
+  // Error: unknown dim name
+  CHECK(Error, dims_set_storage_order(dims, 3, "xqz") != 0);
 
   ok = 1;
 Error:
