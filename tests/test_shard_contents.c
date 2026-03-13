@@ -219,9 +219,9 @@ test_shard_contents(void)
 
   // Configure stream
   const struct dimension dims[] = {
-    { .size = 12, .tile_size = 2, .tiles_per_shard = 3 },
-    { .size = 8, .tile_size = 4, .tiles_per_shard = 2 },
-    { .size = 12, .tile_size = 3, .tiles_per_shard = 2 },
+    { .size = 12, .tile_size = 2, .tiles_per_shard = 3, .storage_position = 0 },
+    { .size = 8, .tile_size = 4, .tiles_per_shard = 2, .storage_position = 1 },
+    { .size = 12, .tile_size = 3, .tiles_per_shard = 2, .storage_position = 2 },
   };
 
   const struct tile_stream_configuration config = {
@@ -524,9 +524,9 @@ test_shard_index_structure(void)
     CHECK(Fail1, collecting_sink_init(&css, num_shards, 256 * 1024) == 0);
 
     const struct dimension dims[] = {
-      { .size = 12, .tile_size = 2, .tiles_per_shard = 3 },
-      { .size = 8, .tile_size = 4, .tiles_per_shard = 2 },
-      { .size = 12, .tile_size = 3, .tiles_per_shard = 2 },
+      { .size = 12, .tile_size = 2, .tiles_per_shard = 3, .storage_position = 0 },
+      { .size = 8, .tile_size = 4, .tiles_per_shard = 2, .storage_position = 1 },
+      { .size = 12, .tile_size = 3, .tiles_per_shard = 2, .storage_position = 2 },
     };
 
     const struct tile_stream_configuration config = {
@@ -637,9 +637,9 @@ Case2:
   // --- Case 2: Single shard (u16 data, smaller shape) ---
   {
     const struct dimension dims2[] = {
-      { .size = 4, .tile_size = 2 },
-      { .size = 4, .tile_size = 2 },
-      { .size = 6, .tile_size = 3 },
+      { .size = 4, .tile_size = 2, .storage_position = 0 },
+      { .size = 4, .tile_size = 2, .storage_position = 1 },
+      { .size = 6, .tile_size = 3, .storage_position = 2 },
     };
     const size_t tiles_per_shard_total2 = 8; // 2*2*2
     const int total2 = 96;

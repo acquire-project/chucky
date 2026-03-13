@@ -24,8 +24,9 @@
 - [ ] cpu impl
 - [ ] whitepaper
 - [ ] coverage
+- [ ] ci/cd
 - [ ] make a report to characterize performance/memory by chunk size
-- [ ] within epoch transpose
+- [x] within epoch transpose
 - [x] unbuffered io
 - [ ] metadata
 - [ ] fix "temporal" vs "spatial" naming.
@@ -78,7 +79,8 @@ Benching on livescreen again (fixed Sink timing):
 I think I'm about done with all the major features besides maybe the in-epoch
 transpose. I need to look at that pr in acquire-zarr some more ... ok, it's
 compatible. It restricts dim0 and adds some other restrictions that are
-artifacts of how aqz's frame-based streaming.
+artifacts of how aqz's frame-based streaming. API is just specifying the
+permutation as a vector of integers.
 
 I'm at about 20ksloc in the code right now. ~2ksloc cuda and ~15ksloc in c.
 A lot of that is in `tests`. In `src`, it's a total of 8ksloc (2k cuda, 5k c).
@@ -87,6 +89,16 @@ beefy too.
 
  - Review - separate static (config) state from mutable state
  - target_min_tiles config parameter - rename to make clear this is per batch
+
+Hmm, I think I might not have been timing things right... had a bug with how
+I was setting up the unbuffered io on windows. Fixed that added some timing
+around the flush step. Getting 5.7 GB/s on livescreen-1 for no compression
+no lod. Compression actually speeds up throughput: 7.6 GB/s lz4, 6.4 GB/s zstd.
+
+Spent a fair amount of the day debugging stray alignment issues and fixing
+up transpose (storage order) support. I decided to make it part of the
+dimension description which significantly simplifies reasoning about whether
+the `dims` array has been permuted to storage order or not.
 
 ## 2026-03-11
 

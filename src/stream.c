@@ -1,4 +1,5 @@
 #include "compress.h"
+#include "index.ops.h"
 #include "lod.h"
 #include "metric.cuda.h"
 #include "platform.h"
@@ -41,7 +42,8 @@ writer_error(void)
 static struct writer_result
 writer_error_at(const void* beg, const void* end)
 {
-  return (struct writer_result){ .error = writer_error_fail, .rest = { beg, end } };
+  return (struct writer_result){ .error = writer_error_fail,
+                                 .rest = { beg, end } };
 }
 
 static struct writer_result
@@ -334,7 +336,8 @@ emit_shards(struct shard_state* ss, size_t shard_alignment)
       // Unbuffered IO: pad BEFORE the index so the file ends sector-aligned
       // with the index at the very end. No truncation needed.
       write_bytes = align_up(index_total_bytes, shard_alignment);
-      index_buf = (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
+      index_buf =
+        (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
       CHECK(Error, index_buf);
       index_offset = write_bytes - index_total_bytes;
       memset(index_buf, 0, index_offset); // zero the padding before index
@@ -433,16 +436,12 @@ deliver_to_shards_batch(struct tile_stream_gpu* s,
         int aligned = sa == 0 || ((uintptr_t)src % sa == 0);
         if (aligned && sh->writer->write_direct) {
           CHECK(Error,
-                sh->writer->write_direct(sh->writer,
-                                         sh->data_cursor,
-                                         src,
-                                         src_end) == 0);
+                sh->writer->write_direct(
+                  sh->writer, sh->data_cursor, src, src_end) == 0);
         } else {
           CHECK(Error,
-                sh->writer->write(sh->writer,
-                                  sh->data_cursor,
-                                  src,
-                                  src_end) == 0);
+                sh->writer->write(sh->writer, sh->data_cursor, src, src_end) ==
+                  0);
         }
       }
 
@@ -622,8 +621,12 @@ wait_and_deliver(struct tile_stream_gpu* s, int fc)
       struct lod_level_state* lvl = &s->lod_levels[lv];
 
       size_t level_bytes = 0;
-      if (deliver_to_shards_batch(
-            s, (uint8_t)lv, &lvl->shard, &lvl->agg[fc], active_count, &level_bytes))
+      if (deliver_to_shards_batch(s,
+                                  (uint8_t)lv,
+                                  &lvl->shard,
+                                  &lvl->agg[fc],
+                                  active_count,
+                                  &level_bytes))
         goto Error;
       sink_bytes += level_bytes;
 
@@ -726,14 +729,12 @@ kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
           (char*)fs->d_compressed.data +
           ((uint64_t)e * s->total_tiles + s->level_tile_offset[lv]) *
             s->codec.max_output_size;
-        size_t* d_sizes = s->codec.d_comp_sizes +
-                          (uint64_t)e * s->total_tiles +
+        size_t* d_sizes = s->codec.d_comp_sizes + (uint64_t)e * s->total_tiles +
                           s->level_tile_offset[lv];
 
-        CHECK(
-          Error,
-          aggregate_by_shard_async(
-            &lvl->agg_layout, d_comp, d_sizes, agg, s->compress) == 0);
+        CHECK(Error,
+              aggregate_by_shard_async(
+                &lvl->agg_layout, d_comp, d_sizes, agg, s->compress) == 0);
       }
       if (active_count == 0)
         continue;
@@ -773,14 +774,12 @@ kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
                             pool_epoch * s->total_tiles +
                             s->level_tile_offset[lv];
 
-          CHECK(
-            Error,
-            aggregate_by_shard_async(
-              &lvl->agg_layout, d_comp, d_sizes, agg, s->compress) == 0);
+          CHECK(Error,
+                aggregate_by_shard_async(
+                  &lvl->agg_layout, d_comp, d_sizes, agg, s->compress) == 0);
         }
       }
     }
-
   }
 
   CU(Error, cuEventRecord(fs->t_aggregate_end, s->compress));
@@ -793,8 +792,7 @@ kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
     if (!(fs->active_levels_mask & (1u << lv)))
       continue;
 
-    uint32_t active_count =
-      level_actual_active_count(s, fs, lv, n_epochs);
+    uint32_t active_count = level_actual_active_count(s, fs, lv, n_epochs);
     if (active_count == 0)
       continue;
 
@@ -1205,8 +1203,7 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
       // Record fence for this level right away
       if (s->config.shard_sink->record_fence)
         s->lod_levels[lv].agg[fc].io_done =
-          s->config.shard_sink->record_fence(
-            s->config.shard_sink, (uint8_t)lv);
+          s->config.shard_sink->record_fence(s->config.shard_sink, (uint8_t)lv);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
@@ -1503,7 +1500,7 @@ Fail:
 }
 
 static int
-init_l0_layout(struct tile_stream_gpu* s)
+init_l0_layout(struct tile_stream_gpu* s, const uint8_t* storage_order)
 {
   const uint8_t rank = s->config.rank;
   const size_t bpe = s->config.bytes_per_element;
@@ -1526,9 +1523,10 @@ init_l0_layout(struct tile_stream_gpu* s)
   s->layout.lifted_rank = 2 * rank;
   s->layout.tile_elements = 1;
 
-  uint64_t tile_count[MAX_RANK];
+  uint64_t tile_count[HALF_MAX_RANK];
   for (int i = 0; i < rank; ++i) {
-    tile_count[i] = (dims[i].size == 0) ? 1 : ceildiv(dims[i].size, dims[i].tile_size);
+    tile_count[i] =
+      (dims[i].size == 0) ? 1 : ceildiv(dims[i].size, dims[i].tile_size);
     s->layout.lifted_shape[2 * i] = tile_count[i];
     s->layout.lifted_shape[2 * i + 1] = dims[i].tile_size;
     s->layout.tile_elements *= dims[i].tile_size;
@@ -1542,16 +1540,15 @@ init_l0_layout(struct tile_stream_gpu* s)
   }
 
   {
-    int64_t n_stride = 1;
-    int64_t t_stride = (int64_t)s->layout.tile_stride;
-
-    for (int i = rank - 1; i >= 0; --i) {
-      s->layout.lifted_strides[2 * i + 1] = n_stride;
-      n_stride *= (int64_t)dims[i].tile_size;
-
-      s->layout.lifted_strides[2 * i] = t_stride;
-      t_stride *= (int64_t)tile_count[i];
-    }
+    uint64_t ts[HALF_MAX_RANK];
+    for (int i = 0; i < rank; ++i)
+      ts[i] = dims[i].tile_size;
+    compute_lifted_strides(rank,
+                           ts,
+                           tile_count,
+                           storage_order,
+                           (int64_t)s->layout.tile_stride,
+                           s->layout.lifted_strides);
   }
 
   s->layout.tiles_per_epoch =
@@ -1660,7 +1657,8 @@ Fail:
 }
 
 static int
-init_aggregate_and_shards(struct tile_stream_gpu* s)
+init_aggregate_and_shards(struct tile_stream_gpu* s,
+                          const uint8_t* storage_order)
 {
   const uint8_t rank = s->config.rank;
   const struct dimension* dims = s->config.dimensions;
@@ -1669,13 +1667,13 @@ init_aggregate_and_shards(struct tile_stream_gpu* s)
   crc32c_init_table();
 
   for (int lv = 0; lv < s->nlod; ++lv) {
-    uint64_t tile_count[MAX_RANK / 2];
-    uint64_t tiles_per_shard[MAX_RANK / 2];
+    uint64_t tile_count[HALF_MAX_RANK];
+    uint64_t tiles_per_shard[HALF_MAX_RANK];
 
     if (lv == 0) {
       for (int d = 0; d < rank; ++d) {
-        tile_count[d] = (dims[d].size == 0) ? 1
-                       : ceildiv(dims[d].size, dims[d].tile_size);
+        tile_count[d] =
+          (dims[d].size == 0) ? 1 : ceildiv(dims[d].size, dims[d].tile_size);
         uint64_t tps = dims[d].tiles_per_shard;
         tiles_per_shard[d] = (tps == 0) ? tile_count[d] : tps;
       }
@@ -1701,13 +1699,22 @@ init_aggregate_and_shards(struct tile_stream_gpu* s)
     }
     s->lod_levels[lv].batch_active_count = batch_count;
 
+    // Permute tile_count and tiles_per_shard into storage order for aggregate.
+    // Aggregate decomposes tile indices assuming tile-pool dimension ordering,
+    // which is now storage order.
+    uint64_t so_tile_count[HALF_MAX_RANK], so_tiles_per_shard[HALF_MAX_RANK];
+    for (int j = 0; j < rank; ++j) {
+      so_tile_count[j] = tile_count[storage_order[j]];
+      so_tiles_per_shard[j] = tiles_per_shard[storage_order[j]];
+    }
+
     // Aggregate layout: per-epoch tile geometry (used by the single-epoch
     // aggregate path for K=1 or partial batch fallback).
     CHECK(Fail,
           aggregate_layout_init(&s->lod_levels[lv].agg_layout,
                                 rank,
-                                tile_count,
-                                tiles_per_shard,
+                                so_tile_count,
+                                so_tiles_per_shard,
                                 tiles_lv,
                                 s->codec.max_output_size,
                                 s->config.shard_alignment) == 0);
@@ -1873,7 +1880,7 @@ Fail:
 // morton_tile structs. Must be called BEFORE init_tile_pools so total_tiles can
 // be computed.
 static int
-init_lod_layouts(struct tile_stream_gpu* s)
+init_lod_layouts(struct tile_stream_gpu* s, const uint8_t* storage_order)
 {
   if (!s->enable_multiscale)
     return 0;
@@ -1883,8 +1890,8 @@ init_lod_layouts(struct tile_stream_gpu* s)
   const size_t bpe = s->config.bytes_per_element;
 
   // Use epoch shape, not full volume shape.
-  uint64_t shape[MAX_RANK / 2];
-  uint64_t tile_shape[MAX_RANK / 2];
+  uint64_t shape[HALF_MAX_RANK];
+  uint64_t tile_shape[HALF_MAX_RANK];
   shape[0] = dims[0].tile_size;
   for (int d = 1; d < rank; ++d)
     shape[d] = dims[d].size;
@@ -2046,7 +2053,7 @@ init_lod_layouts(struct tile_stream_gpu* s)
       lay->lifted_rank = 2 * rank;
       lay->tile_elements = 1;
 
-      uint64_t tc[MAX_RANK / 2];
+      uint64_t tc[HALF_MAX_RANK];
       for (int d = 0; d < rank; ++d) {
         tc[d] = ceildiv(lv_shape[d], dims[d].tile_size);
         lay->lifted_shape[2 * d] = tc[d];
@@ -2061,14 +2068,15 @@ init_lod_layouts(struct tile_stream_gpu* s)
       }
 
       {
-        int64_t n_stride = 1;
-        int64_t t_stride = (int64_t)lay->tile_stride;
-        for (int i = rank - 1; i >= 0; --i) {
-          lay->lifted_strides[2 * i + 1] = n_stride;
-          n_stride *= (int64_t)dims[i].tile_size;
-          lay->lifted_strides[2 * i] = t_stride;
-          t_stride *= (int64_t)tc[i];
-        }
+        uint64_t ts[HALF_MAX_RANK];
+        for (int d = 0; d < rank; ++d)
+          ts[d] = dims[d].tile_size;
+        compute_lifted_strides(rank,
+                               ts,
+                               tc,
+                               storage_order,
+                               (int64_t)lay->tile_stride,
+                               lay->lifted_strides);
       }
 
       lay->tiles_per_epoch = lay->lifted_strides[0] / lay->tile_stride;
@@ -2330,6 +2338,40 @@ Fail:
   return 1;
 }
 
+// Extract forward permutation from dims[d].storage_position.
+// forward[j] = acquisition dim d such that dims[d].storage_position == j.
+// Returns 0 on success.
+static int
+resolve_storage_order(uint8_t rank,
+                      const struct dimension* dims,
+                      uint8_t* forward)
+{
+  // dims[0].storage_position must be 0
+  if (dims[0].storage_position != 0)
+    return 1;
+
+  // Invert: forward[storage_position] = acq_dim
+  uint32_t seen = 0;
+  uint8_t tmp[HALF_MAX_RANK];
+  for (int d = 0; d < rank; ++d) {
+    uint8_t j = dims[d].storage_position;
+    if (j >= rank)
+      return 1;
+    if (seen & (1u << j))
+      return 1;
+    seen |= (1u << j);
+    tmp[j] = (uint8_t)d;
+  }
+
+  // forward[0] must be 0 (dim 0 stays outermost)
+  if (tmp[0] != 0)
+    return 1;
+
+  if (forward)
+    memcpy(forward, tmp, rank);
+  return 0;
+}
+
 int
 tile_stream_gpu_create(const struct tile_stream_configuration* config,
                        struct tile_stream_gpu* out)
@@ -2339,7 +2381,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(EarlyFail, config->bytes_per_element > 0);
   CHECK(EarlyFail, config->buffer_capacity_bytes > 0);
   CHECK(EarlyFail, config->rank > 0);
-  CHECK(EarlyFail, config->rank <= MAX_RANK / 2);
+  CHECK(EarlyFail, config->rank <= HALF_MAX_RANK);
   CHECK(EarlyFail, config->dimensions);
   CHECK(EarlyFail, config->shard_sink);
 
@@ -2348,6 +2390,13 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
       config->dimensions[0].tiles_per_shard == 0) {
     log_error("dims[0].size=0 (unbounded) requires tiles_per_shard > 0");
     goto EarlyFail;
+  }
+
+  uint8_t resolved_storage_order[HALF_MAX_RANK];
+  if (resolve_storage_order(
+        config->rank, config->dimensions, resolved_storage_order)) {
+    log_error("invalid storage_order permutation");
+    goto Fail;
   }
 
   // Compute lod_mask from dimensions (uniform: includes dim 0 if marked).
@@ -2395,9 +2444,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
 
   CHECK(Fail, init_cuda_streams_and_events(out) == 0);
-  CHECK(Fail, init_l0_layout(out) == 0);
+  CHECK(Fail, init_l0_layout(out, resolved_storage_order) == 0);
   CHECK(Fail, init_staging_buffers(out) == 0);
-  CHECK(Fail, init_lod_layouts(out) == 0);
+  CHECK(Fail, init_lod_layouts(out, resolved_storage_order) == 0);
 
   // Compute epochs_per_batch (K) after lod_layouts sets total_tiles/nlod.
   // nlod is set by init_lod_layouts; total_tiles is set by init_tile_pools.
@@ -2426,7 +2475,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CHECK(Fail, init_tile_pools(out) == 0);
   CHECK(Fail, init_compression(out) == 0);
-  CHECK(Fail, init_aggregate_and_shards(out) == 0);
+  CHECK(Fail, init_aggregate_and_shards(out, resolved_storage_order) == 0);
   CHECK(Fail, init_batch_luts(out) == 0);
   CHECK(Fail, init_batch_events(out) == 0);
   CHECK(Fail, init_lod_buffers(out) == 0);
@@ -2473,10 +2522,10 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   const uint8_t* end = (const uint8_t*)input.end;
 
   const uint64_t dim0_size = s->config.dimensions[0].size;
-  const uint64_t max_cursor = (dim0_size > 0)
-    ? ceildiv(dim0_size, s->config.dimensions[0].tile_size)
-      * s->layout.epoch_elements
-    : 0; // 0 = unbounded (never checked)
+  const uint64_t max_cursor =
+    (dim0_size > 0) ? ceildiv(dim0_size, s->config.dimensions[0].tile_size) *
+                        s->layout.epoch_elements
+                    : 0; // 0 = unbounded (never checked)
 
   while (src < end) {
     // Bounded dim0: check capacity
@@ -2604,7 +2653,8 @@ tile_stream_gpu_flush(struct writer* self)
   uint64_t dim0_tiles[LOD_MAX_LEVELS];
   for (int lv = 0; lv < s->nlod; ++lv) {
     struct shard_state* ss = &s->lod_levels[lv].shard;
-    dim0_tiles[lv] = ss->shard_epoch * ss->tiles_per_shard_0 + ss->epoch_in_shard;
+    dim0_tiles[lv] =
+      ss->shard_epoch * ss->tiles_per_shard_0 + ss->epoch_in_shard;
   }
 
   // Emit partial shards for all levels
@@ -2643,9 +2693,12 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     return 1;
   if (config->buffer_capacity_bytes == 0)
     return 1;
-  if (config->rank == 0 || config->rank > MAX_RANK / 2)
+  if (config->rank == 0 || config->rank > HALF_MAX_RANK)
     return 1;
   if (!config->dimensions)
+    return 1;
+
+  if (resolve_storage_order(config->rank, config->dimensions, NULL))
     return 1;
 
   memset(info, 0, sizeof(*info));
@@ -2659,10 +2712,10 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   // --- L0 layout math (mirrors init_l0_layout) ---
 
   uint64_t tile_elements = 1;
-  uint64_t tile_count[MAX_RANK / 2];
+  uint64_t tile_count[HALF_MAX_RANK];
   for (int i = 0; i < rank; ++i) {
-    tile_count[i] = (dims[i].size == 0) ? 1
-                   : ceildiv(dims[i].size, dims[i].tile_size);
+    tile_count[i] =
+      (dims[i].size == 0) ? 1 : ceildiv(dims[i].size, dims[i].tile_size);
     tile_elements *= dims[i].tile_size;
   }
 
@@ -2694,16 +2747,21 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   int nlod = 1;
 
   if (enable_multiscale) {
-    uint64_t shape[MAX_RANK / 2];
-    uint64_t tile_shape[MAX_RANK / 2];
+    uint64_t shape[HALF_MAX_RANK];
+    uint64_t tile_shape[HALF_MAX_RANK];
     shape[0] = dims[0].tile_size;
     for (int d = 1; d < rank; ++d)
       shape[d] = dims[d].size;
     for (int d = 0; d < rank; ++d)
       tile_shape[d] = dims[d].tile_size;
 
-    if (lod_plan_init(&plan, rank, shape, tile_shape, (uint8_t)lod_mask,
-                      LOD_MAX_LEVELS, dim0_ds))
+    if (lod_plan_init(&plan,
+                      rank,
+                      shape,
+                      tile_shape,
+                      (uint8_t)lod_mask,
+                      LOD_MAX_LEVELS,
+                      dim0_ds))
       return 1;
 
     nlod = plan.nlod;
@@ -2781,8 +2839,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   size_t aggregate_host = 0;
 
   for (int lv = 0; lv < nlod; ++lv) {
-    uint64_t tc[MAX_RANK / 2];
-    uint64_t tps[MAX_RANK / 2];
+    uint64_t tc[HALF_MAX_RANK];
+    uint64_t tps[HALF_MAX_RANK];
 
     if (lv == 0) {
       for (int d = 0; d < rank; ++d) {

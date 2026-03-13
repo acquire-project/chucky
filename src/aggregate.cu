@@ -119,14 +119,14 @@ aggregate_layout_init(struct aggregate_layout* layout,
                       size_t max_chunk_bytes,
                       size_t page_size)
 {
-  uint64_t shard_count[MAX_RANK];
-  uint64_t eff_tps[MAX_RANK];
+  uint64_t shard_count[HALF_MAX_RANK];
+  uint64_t eff_tps[HALF_MAX_RANK];
   uint64_t tps_inner = 1;
   uint8_t D;
 
   CHECK(Error, layout);
   CHECK(Error, rank >= 2);
-  CHECK(Error, rank <= MAX_RANK / 2);
+  CHECK(Error, rank <= HALF_MAX_RANK);
   CHECK(Error, tile_count);
   CHECK(Error, tiles_per_shard);
   for (int d = 1; d < rank; ++d)

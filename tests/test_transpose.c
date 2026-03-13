@@ -12,6 +12,7 @@ static void
 build_lifted_layout(int rank,
                     const uint64_t* dim_sizes,
                     const uint64_t* tile_sizes,
+                    const uint8_t* storage_order, // NULL = identity
                     uint8_t bpe,
                     uint8_t* out_lifted_rank,
                     uint64_t* lifted_shape,
@@ -36,14 +37,9 @@ build_lifted_layout(int rank,
   uint64_t tile_stride = tile_bytes / bpe;
   (void)tile_bytes;
 
-  int64_t n_stride = 1;
-  int64_t t_stride = (int64_t)tile_stride;
-  for (int i = rank - 1; i >= 0; --i) {
-    lifted_strides[2 * i + 1] = n_stride;
-    n_stride *= (int64_t)tile_sizes[i];
-    lifted_strides[2 * i] = t_stride;
-    t_stride *= (int64_t)tile_count[i];
-  }
+  compute_lifted_strides(
+    rank, tile_sizes, tile_count, storage_order, (int64_t)tile_stride,
+    lifted_strides);
 
   *out_tiles_per_epoch = (uint64_t)lifted_strides[0] / tile_stride;
   lifted_strides[0] = 0; // collapse epoch dim
@@ -61,6 +57,7 @@ run_transpose_test(const char* name,
                    int rank,
                    const uint64_t* dim_sizes,
                    const uint64_t* tile_sizes,
+                   const uint8_t* storage_order,
                    uint8_t bpe)
 {
   log_info("=== %s ===", name);
@@ -73,6 +70,7 @@ run_transpose_test(const char* name,
   build_lifted_layout(rank,
                       dim_sizes,
                       tile_sizes,
+                      storage_order,
                       bpe,
                       &lifted_rank,
                       lifted_shape,
@@ -120,19 +118,23 @@ run_transpose_test(const char* name,
   CU(Fail, cuMemAlloc(&d_src, src_bytes));
   CU(Fail, cuMemAlloc(&d_dst, dst_bytes));
   CU(Fail, cuMemsetD8(d_dst, 0, dst_bytes));
-  CU(Fail,
-     cuMemAlloc(&d_shape, lifted_rank * sizeof(uint64_t)));
-  CU(Fail,
-     cuMemAlloc(&d_strides, lifted_rank * sizeof(int64_t)));
+  CU(Fail, cuMemAlloc(&d_shape, lifted_rank * sizeof(uint64_t)));
+  CU(Fail, cuMemAlloc(&d_strides, lifted_rank * sizeof(int64_t)));
 
   CU(Fail, cuMemcpyHtoD(d_src, h_src, src_bytes));
-  CU(Fail,
-     cuMemcpyHtoD(d_shape, lifted_shape, lifted_rank * sizeof(uint64_t)));
+  CU(Fail, cuMemcpyHtoD(d_shape, lifted_shape, lifted_rank * sizeof(uint64_t)));
   CU(Fail,
      cuMemcpyHtoD(d_strides, lifted_strides, lifted_rank * sizeof(int64_t)));
 
-  transpose(d_dst, d_src, src_bytes, bpe, 0, lifted_rank,
-            (const uint64_t*)d_shape, (const int64_t*)d_strides, stream);
+  transpose(d_dst,
+            d_src,
+            src_bytes,
+            bpe,
+            0,
+            lifted_rank,
+            (const uint64_t*)d_shape,
+            (const int64_t*)d_strides,
+            stream);
   CU(Fail, cuStreamSynchronize(stream));
 
   CU(Fail, cuMemcpyDtoH(h_dst, d_dst, dst_bytes));
@@ -140,8 +142,7 @@ run_transpose_test(const char* name,
   // Verify against CPU ravel reference
   int errors = 0;
   for (uint64_t i = 0; i < epoch_elements; ++i) {
-    uint64_t expected_off =
-      ravel(lifted_rank, lifted_shape, lifted_strides, i);
+    uint64_t expected_off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
 
     if (bpe == 2) {
       uint16_t src_val = ((uint16_t*)h_src)[i];
@@ -182,16 +183,11 @@ run_transpose_test(const char* name,
 Fail:
   free(h_src);
   free(h_dst);
-  if (d_src)
-    cuMemFree(d_src);
-  if (d_dst)
-    cuMemFree(d_dst);
-  if (d_shape)
-    cuMemFree(d_shape);
-  if (d_strides)
-    cuMemFree(d_strides);
-  if (stream)
-    cuStreamDestroy(stream);
+  cuMemFree(d_src);
+  cuMemFree(d_dst);
+  cuMemFree(d_shape);
+  cuMemFree(d_strides);
+  cuStreamDestroy(stream);
 
   if (ok) {
     log_info("  PASS");
@@ -207,7 +203,8 @@ test_transpose_2d(void)
   // 2D: 4×6 with tile 2×3
   uint64_t dim_sizes[] = { 4, 6 };
   uint64_t tile_sizes[] = { 2, 3 };
-  return run_transpose_test("test_transpose_2d", 2, dim_sizes, tile_sizes, 2);
+  return run_transpose_test(
+    "test_transpose_2d", 2, dim_sizes, tile_sizes, NULL, 2);
 }
 
 static int
@@ -216,7 +213,8 @@ test_transpose_3d(void)
   // 3D: matching test_stream's shape (4, 4, 6) tile (2, 2, 3)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t tile_sizes[] = { 2, 2, 3 };
-  return run_transpose_test("test_transpose_3d", 3, dim_sizes, tile_sizes, 2);
+  return run_transpose_test(
+    "test_transpose_3d", 3, dim_sizes, tile_sizes, NULL, 2);
 }
 
 static int
@@ -226,7 +224,7 @@ test_transpose_identity(void)
   uint64_t dim_sizes[] = { 6, 4 };
   uint64_t tile_sizes[] = { 6, 4 };
   return run_transpose_test(
-    "test_transpose_identity", 2, dim_sizes, tile_sizes, 2);
+    "test_transpose_identity", 2, dim_sizes, tile_sizes, NULL, 2);
 }
 
 static int
@@ -235,7 +233,40 @@ test_transpose_bpe4(void)
   // 3D with 4-byte elements (u32)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t tile_sizes[] = { 2, 2, 3 };
-  return run_transpose_test("test_transpose_bpe4", 3, dim_sizes, tile_sizes, 4);
+  return run_transpose_test(
+    "test_transpose_bpe4", 3, dim_sizes, tile_sizes, NULL, 4);
+}
+
+static int
+test_transpose_3d_storage_order(void)
+{
+  // 3D with storage_order={0,2,1}: storage dims are [z,x,y]
+  // Acquisition: z=4, y=4, x=6, tiles 2,2,3
+  uint64_t dim_sizes[] = { 4, 4, 6 };
+  uint64_t tile_sizes[] = { 2, 2, 3 };
+  uint8_t storage_order[] = { 0, 2, 1 };
+  return run_transpose_test("test_transpose_3d_storage_order",
+                            3,
+                            dim_sizes,
+                            tile_sizes,
+                            storage_order,
+                            2);
+}
+
+static int
+test_transpose_4d_storage_order(void)
+{
+  // 4D with storage_order={0,3,1,2}: stress test
+  // Acquisition: t=2, z=4, y=4, x=6, tiles 2,2,2,3
+  uint64_t dim_sizes[] = { 2, 4, 4, 6 };
+  uint64_t tile_sizes[] = { 2, 2, 2, 3 };
+  uint8_t storage_order[] = { 0, 3, 1, 2 };
+  return run_transpose_test("test_transpose_4d_storage_order",
+                            4,
+                            dim_sizes,
+                            tile_sizes,
+                            storage_order,
+                            2);
 }
 
 int
@@ -256,6 +287,8 @@ main(int ac, char* av[])
   ecode |= test_transpose_3d();
   ecode |= test_transpose_identity();
   ecode |= test_transpose_bpe4();
+  ecode |= test_transpose_3d_storage_order();
+  ecode |= test_transpose_4d_storage_order();
 
   cuCtxDestroy(ctx);
   return ecode;

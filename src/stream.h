@@ -116,19 +116,25 @@ struct dimension
                             // (must be > 0 when size == 0)
   const char* name;         // optional label (e.g. "x"), may be NULL
   int downsample;           // include in LOD pyramid
+  uint8_t storage_position; // position in storage layout (0=outermost).
+                            // dims[0].storage_position must be 0.
+                            // Must be a valid permutation of 0..rank-1.
 };
 
 struct tile_stream_configuration
 {
+  // FIXME: which buffer is this refering to?
   size_t buffer_capacity_bytes;
   size_t bytes_per_element;
   uint8_t rank;
   const struct dimension* dimensions;
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
   enum compression_codec codec;  // compression codec for tiles
-  enum lod_reduce_method reduce_method;      // spatial LOD reduction method
-  enum lod_reduce_method dim0_reduce_method; // dim0 (temporal) LOD reduction
+  enum lod_reduce_method reduce_method;      // epoch LOD reduction method
+  enum lod_reduce_method dim0_reduce_method; // dim0 LOD reduction
+  // FIXME: this doesn't need 4-bytes - could be a u8
   uint32_t epochs_per_batch; // K: 0 = auto (target_min_tiles), must be pow2
+  // FIXME: rename target_min_tiles to make it clear it's per batch
   uint32_t target_min_tiles; // minimum tiles per compress batch (default 1024)
   float metadata_update_interval_s; // seconds between metadata updates
   size_t

@@ -111,9 +111,9 @@ test_stream_single_append(void)
   log_info("=== test_stream_single_append ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 }, // slowest (dim 0)
-    { .size = 4, .tile_size = 2 }, // dim 1
-    { .size = 6, .tile_size = 3 }, // fastest (dim 2)
+    { .size = 4, .tile_size = 2, .storage_position = 0 }, // slowest (dim 0)
+    { .size = 4, .tile_size = 2, .storage_position = 1 }, // dim 1
+    { .size = 6, .tile_size = 3, .storage_position = 2 }, // fastest (dim 2)
   };
 
   // tiles_per_shard defaults to tile_count → single shard containing all tiles.
@@ -241,9 +241,9 @@ test_stream_chunked_append(void)
   log_info("=== test_stream_chunked_append ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   const size_t tiles_per_shard_total = 8;
@@ -365,9 +365,9 @@ test_stream_compressed_roundtrip(void)
   log_info("=== test_stream_compressed_roundtrip ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   // tiles_per_shard defaults to tile_count → single shard containing all tiles.
@@ -521,9 +521,9 @@ test_stream_lz4_roundtrip(void)
   log_info("=== test_stream_lz4_roundtrip ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   const size_t tiles_per_shard_total = 8;
@@ -611,9 +611,9 @@ test_stream_zero_length_append(void)
   log_info("=== test_stream_zero_length_append ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   struct mem_shard_sink mss;
@@ -671,8 +671,8 @@ test_stream_null_config_fields(void)
   log_info("=== test_stream_null_config_fields ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 6, .tile_size = 3, .storage_position = 1 },
   };
 
   // NULL shard_sink should cause create to fail
@@ -765,8 +765,8 @@ test_stream_flush_empty(void)
   log_info("=== test_stream_flush_empty ===");
 
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 6, .tile_size = 3, .storage_position = 1 },
   };
 
   struct mem_shard_sink mss;
@@ -811,9 +811,9 @@ test_stream_unbounded_dim0(void)
 
   // dim0.size=0 (unbounded), tiles_per_shard=2 (required when unbounded)
   const struct dimension dims[] = {
-    { .size = 0, .tile_size = 2, .tiles_per_shard = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   struct mem_shard_sink mss;
@@ -879,9 +879,9 @@ test_stream_unbounded_requires_tps(void)
 
   // size=0, tiles_per_shard=0 → should fail validation
   const struct dimension dims[] = {
-    { .size = 0, .tile_size = 2, .tiles_per_shard = 0 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 0, .tile_size = 2, .tiles_per_shard = 0, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   struct mem_shard_sink mss;
@@ -922,9 +922,9 @@ test_stream_bounded_dim0(void)
 
   // dim0.size=4, tile_size=2 → 2 epochs max → 96 elements capacity
   const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2 },
-    { .size = 4, .tile_size = 2 },
-    { .size = 6, .tile_size = 3 },
+    { .size = 4, .tile_size = 2, .storage_position = 0 },
+    { .size = 4, .tile_size = 2, .storage_position = 1 },
+    { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
   struct mem_shard_sink mss;

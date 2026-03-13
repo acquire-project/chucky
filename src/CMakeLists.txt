@@ -21,8 +21,8 @@ add_src_lib(index_ops   SOURCES index.ops.c index.ops.h)
 add_src_lib(lod_plan    SOURCES lod_plan.c lod_plan.h       LINKS index_ops)
 add_src_lib(lod         SOURCES lod.cu lod.h                LINKS CUDA::cudart_static CUDA::cuda_driver chucky_log)
 
-add_src_lib(stream SOURCES stream.c stream.h platform.h
-    LINKS transpose compress aggregate lod lod_plan chucky_log CUDA::cuda_driver)
+add_src_lib(stream SOURCES stream.c stream.h dimension.c dimension.h platform.h
+    LINKS transpose compress aggregate lod lod_plan index_ops chucky_log CUDA::cuda_driver)
 add_platform_sources(stream)
 
 add_src_lib(json_writer SOURCES json_writer.c json_writer.h)

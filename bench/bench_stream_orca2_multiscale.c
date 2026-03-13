@@ -1,50 +1,22 @@
 #include "bench_util.h"
-#include "log/log.h"
-#include "prelude.h"
+#include "dimension.h"
 
 int
 main(int ac, char* av[])
 {
-  const uint64_t t_nelem = 1 << 16;
-  const uint64_t t_xy = 64;
-  const uint64_t s_xy = 2;
-  const uint64_t s_z = 2;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 1000, 2, 2048, 2304 };
+  uint8_t rank = dims_create(dims, "tcyx", sizes);
 
-  const uint64_t tps_xy = (2304 + t_xy * s_xy - 1) / (t_xy * s_xy);
-  const uint64_t t_z = t_nelem / t_xy / t_xy;
-  const uint64_t tps_z = (1000 + t_z * s_z - 1) / (t_z * s_z);
+  uint8_t ratios[] = { 1, 0, 2, 2 };
+  dims_budget_tile_size(dims, rank, 1ULL << 16, ratios);
 
-  log_info("t_xy: %d\tt_z: %d", (int)t_xy, (int)t_z);
+  uint64_t shard_counts[] = { 2, 1, 2, 2 };
+  dims_set_shard_counts(dims, rank, shard_counts);
 
-  struct dimension dims[] = {
-    {
-      .size = 1000,
-      .tile_size = t_z,
-      .tiles_per_shard = tps_z,
-      .name = "t",
-    },
-    {
-      .size = 2,
-      .tile_size = 1,
-      .tiles_per_shard = 2,
-      .name = "c",
-    },
-    {
-      .size = 2048,
-      .tile_size = t_xy,
-      .tiles_per_shard = tps_xy,
-      .name = "y",
-      .downsample = 1,
-    },
-    {
-      .size = 2304,
-      .tile_size = t_xy,
-      .tiles_per_shard = tps_xy,
-      .name = "x",
-      .downsample = 1,
-    },
-  };
-  return bench_stream_main(ac, av, "multiscale", dims, countof(dims));
+  dims_set_downsample_by_name(dims, rank, "yx");
+
+  return bench_stream_main(ac, av, "multiscale", dims, rank);
 }
 
 /* NOTES

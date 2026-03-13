@@ -44,6 +44,7 @@ add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 
 add_test_exe(test_zarr_sink   test_zarr_sink.c   CUDA::cuda_driver CUDA::cudart_static zarr_sink stream Zstd::Zstd test_platform)
 
+add_test_exe(test_dimension   test_dimension.c   stream chucky_log)
 add_test_exe(test_lod         test_lod.c         CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops)
 add_test_exe(test_multiscale  test_multiscale.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data zarr_sink)
 

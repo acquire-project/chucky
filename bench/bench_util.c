@@ -1,5 +1,6 @@
 #include "bench_util.h"
 #include "compress.h"
+#include "dimension.h"
 #include "lod.h"
 #include "prelude.cuda.h"
 #include "prelude.h"
@@ -574,6 +575,7 @@ bench_stream_main(int ac,
     .reduce_method = reduce,
     .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
   };
+  dims_print(dims, rank);
   ecode = run_bench(&cfg);
 
   if (need_xor)

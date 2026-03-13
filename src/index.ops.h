@@ -41,3 +41,15 @@ void
 inverse_permutation_i32(int n,
                         const int* restrict p,
                         int* restrict inv);
+
+// Compute lifted strides for tile decomposition with storage-order permutation.
+// Produces 2*rank strides: lifted_strides[2*i] = tile stride for dim i,
+// lifted_strides[2*i+1] = element stride for dim i.
+// storage_order may be NULL (identity).
+void
+compute_lifted_strides(int rank,
+                       const uint64_t* tile_sizes,
+                       const uint64_t* tile_count,
+                       const uint8_t* storage_order,
+                       int64_t tile_stride,
+                       int64_t* lifted_strides);

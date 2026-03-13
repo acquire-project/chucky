@@ -10,6 +10,7 @@ extern "C"
 #endif
 
 #define MAX_RANK (64)
+#define HALF_MAX_RANK (MAX_RANK / 2)
 
   void transpose(CUdeviceptr d_dst_beg,
                  CUdeviceptr d_src_beg,

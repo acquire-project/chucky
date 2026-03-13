@@ -71,3 +71,22 @@ inverse_permutation_i32(int n, const int* restrict p, int* restrict inv)
     inv[p[i]] = i;
   }
 }
+
+void
+compute_lifted_strides(int rank,
+                       const uint64_t* tile_sizes,
+                       const uint64_t* tile_count,
+                       const uint8_t* storage_order,
+                       int64_t tile_stride,
+                       int64_t* lifted_strides)
+{
+  int64_t n_stride = 1;
+  int64_t t_stride = tile_stride;
+  for (int j = rank - 1; j >= 0; --j) {
+    int i = storage_order ? storage_order[j] : j;
+    lifted_strides[2 * i + 1] = n_stride;
+    n_stride *= (int64_t)tile_sizes[i];
+    lifted_strides[2 * i] = t_stride;
+    t_stride *= (int64_t)tile_count[i];
+  }
+}
