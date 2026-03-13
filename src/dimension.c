@@ -6,6 +6,17 @@
 
 #include <string.h>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+static inline int clzll(unsigned long long x) {
+  unsigned long index;
+  _BitScanReverse64(&index, x);
+  return 63 - (int)index;
+}
+#else
+#define clzll(x) __builtin_clzll(x)
+#endif
+
 // Static name storage: single-char strings indexed by character value.
 // dims[i].name points into this table, avoiding lifetime issues.
 static const char name_table[128][2] = {
@@ -75,7 +86,7 @@ dims_budget_tile_size(struct dimension* dims,
     return;
 
   // total_bits = floor(log2(nelem))
-  int total_bits = 63 - __builtin_clzll(nelem);
+  int total_bits = 63 - clzll(nelem);
 
   uint32_t sum_ratios = 0;
   for (uint8_t i = 0; i < rank; ++i)
