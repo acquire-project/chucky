@@ -100,6 +100,10 @@ up transpose (storage order) support. I decided to make it part of the
 dimension description which significantly simplifies reasoning about whether
 the `dims` array has been permuted to storage order or not.
 
+Noticed I was transferring the uncompressed data size for the D2H. Using
+the compressed size means transmitting the size back to the host and a sync
+but it's on the `d2h` stream and should be quick.
+
 ## 2026-03-11
 
 Benchmarking on oreb (5090)

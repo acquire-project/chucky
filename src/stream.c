@@ -784,10 +784,12 @@ kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
 
   CU(Error, cuEventRecord(fs->t_aggregate_end, s->compress));
 
-  // Per-level D2H on d2h stream
+  // Two-phase D2H: transfer offsets first (small), then only actual compressed
+  // bytes instead of the full worst-case aggregated pool.
   CU(Error, cuStreamWaitEvent(s->d2h, fs->t_aggregate_end, 0));
   CU(Error, cuEventRecord(fs->t_d2h_start, s->d2h));
 
+  // Phase 1: D2H offsets only
   for (int lv = 0; lv < s->nlod; ++lv) {
     if (!(fs->active_levels_mask & (1u << lv)))
       continue;
@@ -798,22 +800,46 @@ kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
 
     struct lod_level_state* lvl = &s->lod_levels[lv];
     struct aggregate_slot* agg = &lvl->agg[fc];
-    uint64_t tiles_lv = s->level_tile_count[lv];
-    size_t agg_bytes = agg_pool_bytes(
-      (uint64_t)active_count * tiles_lv, s->codec.max_output_size,
-      lvl->agg_layout.covering_count, lvl->agg_layout.tps_inner,
-      lvl->agg_layout.page_size);
     uint64_t batch_covering =
       (uint64_t)active_count * lvl->agg_layout.covering_count;
 
-    CU(Error,
-       cuMemcpyDtoHAsync(
-         agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, agg_bytes, s->d2h));
     CU(Error,
        cuMemcpyDtoHAsync(agg->h_offsets,
                          (CUdeviceptr)agg->d_offsets,
                          (batch_covering + 1) * sizeof(size_t),
                          s->d2h));
+  }
+  CU(Error, cuEventRecord(fs->ready, s->d2h));
+  CU(Error, cuEventSynchronize(fs->ready));
+
+  // Phase 2: D2H only actual compressed bytes per level
+  for (int lv = 0; lv < s->nlod; ++lv) {
+    if (!(fs->active_levels_mask & (1u << lv)))
+      continue;
+
+    uint32_t active_count = level_actual_active_count(s, fs, lv, n_epochs);
+    if (active_count == 0)
+      continue;
+
+    struct lod_level_state* lvl = &s->lod_levels[lv];
+    struct aggregate_slot* agg = &lvl->agg[fc];
+    uint64_t batch_covering =
+      (uint64_t)active_count * lvl->agg_layout.covering_count;
+
+    size_t actual = agg->h_offsets[batch_covering];
+    if (s->config.shard_alignment > 0)
+      actual += s->config.shard_alignment;
+    size_t cap = agg_pool_bytes(
+      (uint64_t)active_count * s->level_tile_count[lv],
+      s->codec.max_output_size,
+      lvl->agg_layout.covering_count, lvl->agg_layout.tps_inner,
+      lvl->agg_layout.page_size);
+    if (actual > cap)
+      actual = cap;
+
+    CU(Error,
+       cuMemcpyDtoHAsync(
+         agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, actual, s->d2h));
     CU(Error, cuEventRecord(agg->ready, s->d2h));
   }
 
@@ -1151,25 +1177,17 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
     }
   }
 
+  // Two-phase D2H: transfer offsets first (small), then only actual compressed
+  // bytes instead of the full worst-case aggregated pool.
   CU(Error, cuStreamWaitEvent(s->d2h, fs->t_aggregate_end, 0));
   CU(Error, cuEventRecord(fs->t_d2h_start, s->d2h));
 
+  // Phase 1: D2H offsets only
   for (int lv = 0; lv < s->nlod; ++lv) {
     if (!(active_mask & (1u << lv)))
       continue;
 
     struct aggregate_slot* agg = &s->lod_levels[lv].agg[fc];
-    size_t pool_bytes_lv = agg_pool_bytes(
-      s->level_tile_count[lv], s->codec.max_output_size,
-      s->lod_levels[lv].agg_layout.covering_count,
-      s->lod_levels[lv].agg_layout.tps_inner,
-      s->lod_levels[lv].agg_layout.page_size);
-
-    CU(Error,
-       cuMemcpyDtoHAsync(agg->h_aggregated,
-                         (CUdeviceptr)agg->d_aggregated,
-                         pool_bytes_lv,
-                         s->d2h));
     CU(Error,
        cuMemcpyDtoHAsync(agg->h_offsets,
                          (CUdeviceptr)agg->d_offsets,
@@ -1177,7 +1195,34 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                            sizeof(size_t),
                          s->d2h));
   }
+  CU(Error, cuEventRecord(fs->ready, s->d2h));
+  CU(Error, cuEventSynchronize(fs->ready));
 
+  // Phase 2: D2H only actual compressed bytes per level
+  for (int lv = 0; lv < s->nlod; ++lv) {
+    if (!(active_mask & (1u << lv)))
+      continue;
+
+    struct lod_level_state* lvl = &s->lod_levels[lv];
+    struct aggregate_slot* agg = &lvl->agg[fc];
+    uint64_t covering = lvl->agg_layout.covering_count;
+
+    size_t actual = agg->h_offsets[covering];
+    if (s->config.shard_alignment > 0)
+      actual += s->config.shard_alignment;
+    size_t cap = agg_pool_bytes(
+      s->level_tile_count[lv], s->codec.max_output_size,
+      covering, lvl->agg_layout.tps_inner,
+      lvl->agg_layout.page_size);
+    if (actual > cap)
+      actual = cap;
+
+    CU(Error,
+       cuMemcpyDtoHAsync(agg->h_aggregated,
+                         (CUdeviceptr)agg->d_aggregated,
+                         actual,
+                         s->d2h));
+  }
   CU(Error, cuEventRecord(fs->ready, s->d2h));
   CU(Error, cuEventSynchronize(fs->ready));
 
