@@ -34,12 +34,19 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
+## 2026-03-14
+
+
+
 ## 2026-03-13
 
 Confirmed using a non-trivial storage order doesn't effect performance.
 
 Realized I was hardcoding zstd in the zarr metadata. Fixing. Probably need to
 double check that part of the code again.
+
+I've been just adding stuff to the code as I go. I need to break up a bunch of
+files/functions. So doing some cleanup...
 
 ## 2026-03-12
 
