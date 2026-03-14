@@ -23,6 +23,12 @@ extern "C"
     }                                                                          \
   } while (0)
 
+#define CHECK_SILENT(lbl, e)                                                   \
+  do {                                                                         \
+    if (!(e))                                                                  \
+      goto lbl;                                                                \
+  } while (0)
+
   static inline uint64_t ceildiv(uint64_t a, uint64_t b)
   {
     return (a + b - 1) / b;

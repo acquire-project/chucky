@@ -1,6 +1,8 @@
 /// PRIVATE: never include in other headers.
 #pragma once
 
+#include <stddef.h>
+
 struct stream_metric
 {
   const char* name;

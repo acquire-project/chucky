@@ -37,14 +37,11 @@ init_plan_and_shapes(struct lod_state* lod,
     if (dims[d].downsample && d == 0)
       dim0_ds = 1;
 
-  CHECK(Fail,
-        lod_plan_init(&lod->plan,
-                      rank,
-                      shape,
-                      tile_shape,
-                      lod_mask,
-                      LOD_MAX_LEVELS,
-                      dim0_ds) == 0);
+  CHECK(
+    Fail,
+    lod_plan_init(
+      &lod->plan, rank, shape, tile_shape, lod_mask, LOD_MAX_LEVELS, dim0_ds) ==
+      0);
 
   for (int k = 0; k < lod->plan.nlod; ++k) {
     if (lod->plan.lod_counts[k] > UINT32_MAX) {
@@ -62,8 +59,7 @@ init_plan_and_shapes(struct lod_state* lod,
 
   if (lod->plan.lod_ndim > 0) {
     CU(Fail,
-       cuMemAlloc(&lod->d_lod_shape,
-                  lod->plan.lod_ndim * sizeof(uint64_t)));
+       cuMemAlloc(&lod->d_lod_shape, lod->plan.lod_ndim * sizeof(uint64_t)));
     CU(Fail,
        cuMemcpyHtoD(lod->d_lod_shape,
                     lod->plan.lod_shapes[0],
@@ -121,9 +117,9 @@ init_gather_lut(struct lod_state* lod,
     }
 
     CU(Fail, cuMemAlloc(&d_lod_strides, p->lod_ndim * sizeof(uint64_t)));
-    CU(Fail,
-       cuMemcpyHtoD(
-         d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
+    CU(
+      Fail,
+      cuMemcpyHtoD(d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
   }
 
   // Build gather (inverse) LUT
@@ -169,8 +165,7 @@ init_gather_lut(struct lod_state* lod,
     }
 
     CU(Fail,
-       cuMemAlloc(&lod->d_batch_offsets,
-                  p->batch_count * sizeof(uint32_t)));
+       cuMemAlloc(&lod->d_batch_offsets, p->batch_count * sizeof(uint32_t)));
     CU(Fail,
        cuMemcpyHtoD(lod->d_batch_offsets,
                     batch_offsets,
@@ -206,8 +201,7 @@ init_reduce_level_arrays(struct lod_state* lod)
                     lod->plan.lod_shapes[l + 1],
                     lod->plan.lod_ndim * sizeof(uint64_t)));
 
-    CU(Fail,
-       cuMemAlloc(&lod->d_level_ends[l], n_parents * sizeof(uint64_t)));
+    CU(Fail, cuMemAlloc(&lod->d_level_ends[l], n_parents * sizeof(uint64_t)));
   }
 
   return 0;
@@ -269,8 +263,7 @@ init_lod_level_layouts(struct lod_state* lod,
       CU(Fail, cuMemAlloc((CUdeviceptr*)&lay->d_lifted_shape, sb));
       CU(Fail, cuMemAlloc((CUdeviceptr*)&lay->d_lifted_strides, stb));
       CU(Fail,
-         cuMemcpyHtoD(
-           (CUdeviceptr)lay->d_lifted_shape, lay->lifted_shape, sb));
+         cuMemcpyHtoD((CUdeviceptr)lay->d_lifted_shape, lay->lifted_shape, sb));
       CU(Fail,
          cuMemcpyHtoD(
            (CUdeviceptr)lay->d_lifted_strides, lay->lifted_strides, stb));
@@ -327,13 +320,11 @@ build_morton_lut_for_level(struct lod_state* lod,
        cuMemcpyHtoD(
          d_tile_sizes, lod_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
     CU(FailTemp,
-       cuMemcpyHtoD(d_tile_strides,
-                    lod_tile_strides,
-                    2 * p->lod_ndim * sizeof(int64_t)));
+       cuMemcpyHtoD(
+         d_tile_strides, lod_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
 
     CU(FailTemp,
-       cuMemAlloc(&lod->d_morton_tile_lut[lv],
-                  lod_count * sizeof(uint32_t)));
+       cuMemAlloc(&lod->d_morton_tile_lut[lv], lod_count * sizeof(uint32_t)));
     CHECK(FailTemp,
           lod_build_tile_scatter_lut(lod->d_morton_tile_lut[lv],
                                      d_lod_shape_lv,
@@ -396,17 +387,14 @@ Fail:
 }
 
 static int
-init_morton_scatter_luts(struct lod_state* lod,
-                        const struct stream_layout* l0)
+init_morton_scatter_luts(struct lod_state* lod, const struct stream_layout* l0)
 {
   if (lod->plan.lod_ndim == 0)
     return 0;
 
   for (int lv = 0; lv < lod->plan.nlod; ++lv) {
-    const struct stream_layout* lay =
-      (lv == 0) ? l0 : &lod->layouts[lv];
-    if (build_morton_lut_for_level(lod, lay, lv))
-      goto Fail;
+    const struct stream_layout* lay = (lv == 0) ? l0 : &lod->layouts[lv];
+    CHECK_SILENT(Fail, build_morton_lut_for_level(lod, lay, lv) == 0);
   }
 
   return 0;
@@ -424,16 +412,11 @@ lod_state_init(struct lod_state* lod,
   if (!levels->enable_multiscale)
     return 0;
 
-  if (init_plan_and_shapes(lod, config))
-    goto Fail;
-  if (init_gather_lut(lod, config))
-    goto Fail;
-  if (init_reduce_level_arrays(lod))
-    goto Fail;
-  if (init_lod_level_layouts(lod, config, storage_order))
-    goto Fail;
-  if (init_morton_scatter_luts(lod, l0))
-    goto Fail;
+  CHECK_SILENT(Fail, init_plan_and_shapes(lod, config) == 0);
+  CHECK_SILENT(Fail, init_gather_lut(lod, config) == 0);
+  CHECK_SILENT(Fail, init_reduce_level_arrays(lod) == 0);
+  CHECK_SILENT(Fail, init_lod_level_layouts(lod, config, storage_order) == 0);
+  CHECK_SILENT(Fail, init_morton_scatter_luts(lod, l0) == 0);
 
   levels->nlod = lod->plan.nlod;
   return 0;
@@ -500,8 +483,7 @@ lod_state_init_accumulators(struct lod_state* lod,
       offset += n;
     }
 
-    CUresult r =
-      cuMemAlloc(&lod->dim0.d_level_ids, lod->dim0.total_elements);
+    CUresult r = cuMemAlloc(&lod->dim0.d_level_ids, lod->dim0.total_elements);
     if (r != CUDA_SUCCESS) {
       free(h_level_ids);
       goto Fail;
@@ -515,8 +497,7 @@ lod_state_init_accumulators(struct lod_state* lod,
 
   {
     CU(Fail,
-       cuMemAlloc(&lod->dim0.d_counts,
-                  (uint64_t)p->nlod * sizeof(uint32_t)));
+       cuMemAlloc(&lod->dim0.d_counts, (uint64_t)p->nlod * sizeof(uint32_t)));
     memset(lod->dim0.counts, 0, sizeof(lod->dim0.counts));
     CU(Fail,
        cuMemcpyHtoD(lod->dim0.d_counts,
@@ -687,9 +668,8 @@ scatter_morton_to_tiles(struct lod_state* lod,
     struct lod_span lev = lod_spans_at(&p->levels, lv);
     CUdeviceptr morton_lv = lod->d_morton + lev.beg * bpe;
 
-    CUdeviceptr dst =
-      (CUdeviceptr)pool_epoch +
-      levels->tile_offset[lv] * layout->tile_stride * bpe;
+    CUdeviceptr dst = (CUdeviceptr)pool_epoch +
+                      levels->tile_offset[lv] * layout->tile_stride * bpe;
 
     lod_morton_to_tiles_lut(dst,
                             morton_lv,
@@ -763,15 +743,19 @@ lod_run_epoch(struct lod_state* lod,
 
   uint32_t active_levels_mask = 1; // L0 always active
   if (levels->dim0_downsample && lod->dim0.total_elements > 0) {
-    if (run_dim0_fold_emit(lod, bpe, dtype, dim0_reduce_method, compute,
-                           &active_levels_mask))
-      goto Error;
+    CHECK_SILENT(Error,
+                 run_dim0_fold_emit(lod,
+                                    bpe,
+                                    dtype,
+                                    dim0_reduce_method,
+                                    compute,
+                                    &active_levels_mask) == 0);
   }
 
   CU(Error, cuEventRecord(lod->t_dim0_end, compute));
 
-  scatter_morton_to_tiles(lod, levels, layout, pool_epoch, bpe, dtype,
-                          active_levels_mask, compute);
+  scatter_morton_to_tiles(
+    lod, levels, layout, pool_epoch, bpe, dtype, active_levels_mask, compute);
 
   CU(Error, cuEventRecord(lod->t_end, compute));
 

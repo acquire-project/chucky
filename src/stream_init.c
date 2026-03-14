@@ -1,3 +1,4 @@
+#include "metric.h"
 #include "stream_internal.h"
 
 #include "aggregate.h"
@@ -348,11 +349,12 @@ init_tile_pools(struct pool_state* pools,
                 const struct stream_layout* layout,
                 const struct lod_state* lod,
                 size_t bpe,
-                uint32_t K,
+                uint32_t epochs_per_batch,
                 CUstream compute)
 {
   // Compute total_tiles and level tile offsets from L0 + LOD layouts
-  // These are per-epoch counts; the pool holds K epochs.
+  // These are per-epoch counts; the pool holds K epochs, where K is
+  // epochs_per_batch.
   levels->tile_count[0] = layout->tiles_per_epoch;
   levels->tile_offset[0] = 0;
   levels->total_tiles = layout->tiles_per_epoch;
@@ -364,8 +366,8 @@ init_tile_pools(struct pool_state* pools,
   }
 
   // Pool holds K epochs worth of tiles
-  const size_t pool_bytes =
-    (uint64_t)K * levels->total_tiles * layout->tile_stride * bpe;
+  const size_t pool_bytes = (uint64_t)epochs_per_batch * levels->total_tiles *
+                            layout->tile_stride * bpe;
 
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&pools->buf[i], pool_bytes));
@@ -739,6 +741,30 @@ Fail:
   return 1;
 }
 
+struct stream_metric
+mk_stream_metric(const char* name)
+{
+  return (struct stream_metric){ .name = name, .best_ms = 1e30 };
+}
+
+static struct stream_metrics
+init_metrics(int enable_multiscale)
+{
+  return (struct stream_metrics){
+    .memcpy = mk_stream_metric("Memcpy"),
+    .h2d = mk_stream_metric("H2D"),
+    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
+    .lod_gather = mk_stream_metric("LOD Gather"),
+    .lod_reduce = mk_stream_metric("LOD Reduce"),
+    .lod_dim0_fold = mk_stream_metric("Dim0 Fold"),
+    .lod_morton_tile = mk_stream_metric("LOD to tiles"),
+    .compress = mk_stream_metric("Compress"),
+    .aggregate = mk_stream_metric("Aggregate"),
+    .d2h = mk_stream_metric("D2H"),
+    .sink = mk_stream_metric("Sink"),
+  };
+}
+
 int
 tile_stream_gpu_create(const struct tile_stream_configuration* config,
                        struct tile_stream_gpu* out)
@@ -845,20 +871,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CU(Fail, cuStreamSynchronize(out->streams.compute));
 
-  out->metrics = (struct stream_metrics){
-    .memcpy = { .name = "Memcpy", .best_ms = 1e30f },
-    .h2d = { .name = "H2D", .best_ms = 1e30f },
-    .scatter = { .name = out->levels.enable_multiscale ? "Copy" : "Scatter",
-                 .best_ms = 1e30f },
-    .lod_gather = { .name = "LOD Gather", .best_ms = 1e30f },
-    .lod_reduce = { .name = "LOD Reduce", .best_ms = 1e30f },
-    .lod_dim0_fold = { .name = "Dim0 Fold", .best_ms = 1e30f },
-    .lod_morton_tile = { .name = "LOD to tiles", .best_ms = 1e30f },
-    .compress = { .name = "Compress", .best_ms = 1e30f },
-    .aggregate = { .name = "Aggregate", .best_ms = 1e30f },
-    .d2h = { .name = "D2H", .best_ms = 1e30f },
-    .sink = { .name = "Sink", .best_ms = 1e30f },
-  };
+  out->metrics = init_metrics(out->levels.enable_multiscale);
 
   // Initialize metadata update timer
   out->metadata_update_clock = (struct platform_clock){ 0 };

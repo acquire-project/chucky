@@ -154,8 +154,7 @@ deliver_to_shards_batch(uint8_t level,
     a += run_len;
 
     if (ss->epoch_in_shard >= ss->tiles_per_shard_0) {
-      if (emit_shards(ss, sa))
-        goto Error;
+      CHECK_SILENT(Error, emit_shards(ss, sa) == 0);
     }
   }
 
