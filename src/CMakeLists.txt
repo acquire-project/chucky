@@ -31,7 +31,7 @@ add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_queue chucky_log)
 add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
     LINKS crc32c writer aggregate platform chucky_log)
 
-add_src_lib(stream SOURCES stream.c stream.h dimension.c dimension.h
+add_src_lib(stream SOURCES stream.c stream_init.c stream_flush.c stream_ingest.c stream_lod.c stream.h stream_internal.h stream_flush.h stream_ingest.h stream_lod.h dimension.c dimension.h
     LINKS transpose compress aggregate lod lod_plan index_ops crc32c shard_delivery writer platform chucky_log CUDA::cuda_driver)
 
 add_src_lib(json_writer SOURCES json_writer.c json_writer.h)

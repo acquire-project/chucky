@@ -30,22 +30,10 @@ struct stream_metrics
   struct stream_metric sink;
 };
 
-enum domain
+struct pool_state
 {
-  host,
-  device
-};
-
-struct buffer
-{
-  void* data;
-  CUevent ready;
-  enum domain domain;
-};
-
-struct double_buffer
-{
-  struct buffer buf[2];
+  CUdeviceptr buf[2];
+  CUevent ready[2];
   int current; // 0 or 1
 };
 
@@ -82,8 +70,9 @@ struct tile_stream_configuration
 
 struct staging_slot
 {
-  struct buffer h_in;      // pinned host WC, size = buffer_capacity_bytes
-  struct buffer d_in;      // device, size = buffer_capacity_bytes
+  void* h_in;              // pinned host WC, size = buffer_capacity_bytes
+  CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
+  CUevent t_h2d_end;       // recorded after H2D memcpy completes
   CUevent t_h2d_start;     // recorded before H2D memcpy
   CUevent t_scatter_start; // recorded before scatter kernel
   CUevent t_scatter_end;   // recorded after scatter kernel
@@ -117,7 +106,8 @@ struct stream_layout
 // flush[0] is used for A-pool epochs, flush[1] for B-pool epochs.
 struct flush_slot_gpu
 {
-  struct buffer d_compressed; // device: K * total_tiles * max_output_size
+  CUdeviceptr d_compressed;    // device: K * total_tiles * max_output_size
+  CUevent t_compress_end;      // signals compress finished
   CUevent t_compress_start;
   CUevent t_aggregate_end;
   CUevent t_d2h_start;
@@ -127,7 +117,7 @@ struct flush_slot_gpu
   int batch_epoch_count; // number of epochs accumulated in this batch
 };
 
-struct lod_level_state
+struct level_flush_state
 {
   struct aggregate_layout agg_layout;
   struct aggregate_slot agg[2]; // double-buffered, indexed by flush_current
@@ -138,24 +128,12 @@ struct lod_level_state
   uint32_t batch_active_count; // K_l = K / 2^l for this level
 };
 
-// Dim0 (temporal) LOD accumulation state.
-// Single buffer covering all LOD levels 1+, same packed layout as d_morton.
-struct dim0_state
-{
-  struct buffer d_accum;           // GPU: all levels 1+ packed, accum_bpe
-  CUdeviceptr d_level_ids;         // GPU: u8 per element, maps to level
-  CUdeviceptr d_counts;            // GPU: nlod uint32_t, per-level count
-  uint32_t counts[LOD_MAX_LEVELS]; // CPU mirror of d_counts
-  uint64_t total_elements;         // sum(batch_count * lod_counts[k]) k=1..
-  uint64_t morton_offset; // levels.ends[0] (start of level 1 in d_morton)
-};
-
 struct lod_state
 {
   struct lod_plan plan;
 
-  struct buffer d_linear; // linear epoch buffer (device)
-  struct buffer d_morton; // morton-ordered LOD output (all levels packed)
+  CUdeviceptr d_linear; // linear epoch buffer (device)
+  CUdeviceptr d_morton; // morton-ordered LOD output (all levels packed)
 
   CUdeviceptr d_full_shape; // device copy of shapes[0]
   CUdeviceptr d_lod_shape;  // device copy of lod_shapes[0]
@@ -180,6 +158,18 @@ struct lod_state
   CUevent t_reduce_end;
   CUevent t_dim0_end;
   CUevent t_end;
+
+  // Dim0 (temporal) LOD accumulation state.
+  // Single buffer covering all LOD levels 1+, same packed layout as d_morton.
+  struct
+  {
+    CUdeviceptr d_accum;             // GPU: all levels 1+ packed, accum_bpe
+    CUdeviceptr d_level_ids;         // GPU: u8 per element, maps to level
+    CUdeviceptr d_counts;            // GPU: nlod uint32_t, per-level count
+    uint32_t counts[LOD_MAX_LEVELS]; // CPU mirror of d_counts
+    uint64_t total_elements;         // sum(batch_count * lod_counts[k]) k=1..
+    uint64_t morton_offset; // levels.ends[0] (start of level 1 in d_morton)
+  } dim0;
 };
 
 struct tile_stream_gpu;
@@ -211,9 +201,6 @@ int
 tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                 struct tile_stream_memory_info* info);
 
-// Dispatch function: H2D + scatter (+ optional d_linear copy).
-typedef int (*dispatch_scatter_fn)(struct tile_stream_gpu*);
-
 // CUDA stream handles (all immutable after create)
 struct gpu_streams
 {
@@ -243,6 +230,7 @@ struct batch_state
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2]; // [0]=A pool, [1]=B pool
+  struct level_flush_state levels[LOD_MAX_LEVELS]; // per-level agg+shard
   int current;                   // mutable: which slot is active
   int pending;                   // mutable: has unkicked work
 };
@@ -251,7 +239,6 @@ struct tile_stream_gpu
 {
   struct writer writer;
   struct tile_stream_configuration config;
-  dispatch_scatter_fn dispatch;
   struct stream_layout layout;  // L0 tile layout
   struct level_geometry levels; // per-level accounting
   struct gpu_streams streams;   // CUDA stream handles
@@ -259,11 +246,9 @@ struct tile_stream_gpu
   struct flush_pipeline flush;  // compress->deliver pipeline
   struct codec codec;           // compression state
   struct lod_state lod;         // LOD buffers + plan
-  struct lod_level_state lod_levels[LOD_MAX_LEVELS]; // per-level agg+shard
 
-  struct double_buffer pools;    // tile pools
+  struct pool_state pools;       // tile pools
   struct staging_state stage;    // H2D staging buffers
-  struct dim0_state dim0;        // temporal accumulation
   uint64_t cursor;               // current element position
   struct stream_metrics metrics; // telemetry
   struct platform_clock metadata_update_clock;

@@ -8,7 +8,9 @@
 
 #ifdef _MSC_VER
 #include <intrin.h>
-static inline int clzll(unsigned long long x) {
+static inline int
+clzll(unsigned long long x)
+{
   unsigned long index;
   _BitScanReverse64(&index, x);
   return 63 - (int)index;
@@ -59,9 +61,7 @@ dims_create(struct dimension* dims, const char* names, const uint64_t* sizes)
 }
 
 int
-dims_set_storage_order(struct dimension* dims,
-                       uint8_t rank,
-                       const char* order)
+dims_set_storage_order(struct dimension* dims, uint8_t rank, const char* order)
 {
   if (!order) {
     for (uint8_t i = 0; i < rank; ++i)
@@ -117,7 +117,7 @@ dims_budget_tile_size(struct dimension* dims,
   if (sum_ratios == 0)
     return;
 
-  int bits_per_part = total_bits / (int)sum_ratios;
+  int bits_per_part = (total_bits + sum_ratios - 1) / (int)sum_ratios;
   int remainder = total_bits - bits_per_part * (int)sum_ratios;
 
   int first_nonzero = -1;
