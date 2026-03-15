@@ -177,8 +177,10 @@ log_bench_header(const struct tile_stream_gpu* s,
                  size_t total_bytes,
                  size_t total_elements)
 {
+  const struct stream_layout* layout = tile_stream_gpu_layout(s);
+  const struct tile_stream_status st = tile_stream_gpu_status(s);
   const size_t num_epochs =
-    (total_elements + s->layout.epoch_elements - 1) / s->layout.epoch_elements;
+    (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
 
   print_report("  total:       %.2f GiB (%zu elements, %zu epochs)",
                (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
@@ -186,17 +188,17 @@ log_bench_header(const struct tile_stream_gpu* s,
                num_epochs);
   print_report(
     "  tile:        %lu elements = %lu KiB  (stride=%lu)",
-    (unsigned long)s->layout.tile_elements,
-    (unsigned long)(s->layout.tile_stride * s->config.bytes_per_element / 1024),
-    (unsigned long)s->layout.tile_stride);
+    (unsigned long)layout->tile_elements,
+    (unsigned long)(layout->tile_stride * st.bytes_per_element / 1024),
+    (unsigned long)layout->tile_stride);
   print_report("  epoch:       %lu slots, %lu MiB pool",
-               (unsigned long)s->layout.tiles_per_epoch,
-               (unsigned long)(s->layout.tile_pool_bytes / (1024 * 1024)));
-  if (s->config.codec != CODEC_NONE)
-    print_report("  compress:    max_output=%zu comp_pool=%zu MiB",
-                 s->codec.max_output_size,
-                 (s->codec.batch_size * s->codec.max_output_size) /
-                   (1024 * 1024));
+               (unsigned long)layout->tiles_per_epoch,
+               (unsigned long)(layout->tile_pool_bytes / (1024 * 1024)));
+  if (st.codec != CODEC_NONE)
+    print_report(
+      "  compress:    max_output=%zu comp_pool=%zu MiB",
+      st.max_compressed_size,
+      (st.codec_batch_size * st.max_compressed_size) / (1024 * 1024));
 }
 
 void
@@ -210,10 +212,12 @@ print_bench_report(const struct tile_stream_gpu* s,
                    size_t flush_pending_bytes)
 {
   struct stream_metrics m = tile_stream_gpu_get_metrics(s);
-  const size_t tile_bytes = s->layout.tile_stride * s->config.bytes_per_element;
+  const struct stream_layout* layout = tile_stream_gpu_layout(s);
+  const struct tile_stream_status st = tile_stream_gpu_status(s);
+  const size_t tile_bytes = layout->tile_stride * st.bytes_per_element;
   const size_t num_epochs =
-    (total_elements + s->layout.epoch_elements - 1) / s->layout.epoch_elements;
-  const size_t total_tiles = num_epochs * s->layout.tiles_per_epoch;
+    (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
+  const size_t total_tiles = num_epochs * layout->tiles_per_epoch;
   const size_t total_decompressed = total_tiles * tile_bytes;
   const double comp_ratio =
     total_decompressed > 0
@@ -230,7 +234,7 @@ print_bench_report(const struct tile_stream_gpu* s,
                comp_ratio);
   print_report("  Tiles:        %zu (%zu/epoch x %zu epochs)",
                total_tiles,
-               (size_t)s->layout.tiles_per_epoch,
+               (size_t)layout->tiles_per_epoch,
                num_epochs);
 
   print_report("");
@@ -310,6 +314,7 @@ run_bench(const struct bench_config* cfg)
   struct zarr_multiscale_sink* zmsink = NULL;
   struct metering_sink meter = { 0 };
   struct shard_sink* sink = &dss.base;
+  struct tile_stream_gpu* s = NULL;
 
   if (output_path) {
     struct shard_sink* zarr_sink_ptr = NULL;
@@ -346,7 +351,6 @@ run_bench(const struct bench_config* cfg)
     sink = &meter.base;
   }
 
-  struct tile_stream_gpu s = { 0 };
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 128 << 20,
     .bytes_per_element = sizeof(uint16_t),
@@ -387,16 +391,16 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
-  CHECK(Fail, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail, (s = tile_stream_gpu_create(&config)) != NULL);
   float init_s = platform_toc(&init_clock);
 
-  log_bench_header(&s, total_bytes, total_elements);
+  log_bench_header(s, total_bytes, total_elements);
   if (is_multiscale)
-    print_report("  LOD levels:  %d", s.lod.plan.nlod);
+    print_report("  LOD levels:  %d", tile_stream_gpu_status(s).nlod);
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data(&s.writer, total_elements, fill) == 0);
+  CHECK(Fail, pump_data(tile_stream_gpu_writer(s), total_elements, fill) == 0);
 
   size_t pending_bytes = 0;
   if (zsink)
@@ -413,11 +417,11 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
-  if (s.cursor != total_elements) {
+  if (tile_stream_gpu_cursor(s) != total_elements) {
     log_error("  cursor drift: expected %zu, got %zu (diff=%td)",
               total_elements,
-              (size_t)s.cursor,
-              (ptrdiff_t)((int64_t)s.cursor - (int64_t)total_elements));
+              (size_t)tile_stream_gpu_cursor(s),
+              (ptrdiff_t)((int64_t)tile_stream_gpu_cursor(s) - (int64_t)total_elements));
     goto Fail;
   }
 
@@ -425,7 +429,7 @@ run_bench(const struct bench_config* cfg)
     struct sink_stats ss =
       output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes }
                   : (struct sink_stats){ .total_bytes = dss.total_bytes };
-    print_bench_report(&s,
+    print_bench_report(s,
                        &ss,
                        total_bytes,
                        total_elements,
@@ -450,7 +454,7 @@ Cleanup:
     zarr_sink_flush(zsink);
   if (zmsink)
     zarr_multiscale_sink_flush(zmsink);
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zsink);
   zarr_multiscale_sink_destroy(zmsink);
   return rc;

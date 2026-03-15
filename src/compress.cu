@@ -1,5 +1,6 @@
 #include "compress.h"
 #include "log/log.h"
+#include "prelude.cuda.h"
 #include <nvcomp/lz4.h>
 #include <nvcomp/zstd.h>
 #include <string.h>
@@ -53,18 +54,6 @@ handle_nvcomp(int level,
     nvcompStatus_t st_ = (e);                                                  \
     if (st_ != nvcompSuccess &&                                                \
         handle_nvcomp(LOG_ERROR, st_, __FILE__, __LINE__, #e)) {               \
-      goto lbl;                                                                \
-    }                                                                          \
-  } while (0)
-
-#define CU(lbl, e)                                                             \
-  do {                                                                         \
-    CUresult r_ = (e);                                                         \
-    if (r_ != CUDA_SUCCESS) {                                                  \
-      const char* s_ = NULL;                                                   \
-      cuGetErrorString(r_, &s_);                                               \
-      log_error(                                                               \
-        "CUDA error: %s at %s:%d", s_ ? s_ : "unknown", __FILE__, __LINE__);   \
       goto lbl;                                                                \
     }                                                                          \
   } while (0)

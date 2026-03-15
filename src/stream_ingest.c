@@ -1,4 +1,4 @@
-#include "stream_ingest.h"
+#include "stream_internal.h"
 
 #include "prelude.cuda.h"
 #include "transpose.h"

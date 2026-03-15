@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.h"
+// Included via stream_internal.h — all internal types available above.
 
 // Upload pre-computed LOD plan/layouts to GPU and build scatter LUTs.
 // Plan and level layouts must already be populated in lod->plan and
@@ -31,7 +31,7 @@ lod_state_init_accumulators(struct lod_state* lod,
 void
 lod_state_destroy(struct lod_state* lod);
 
-// Run LOD pipeline for one epoch: gather → reduce → dim0 fold →
+// Run LOD pipeline for one epoch: gather -> reduce -> dim0 fold ->
 // morton-to-tiles. pool_epoch: pointer to this epoch's tile pool region (all
 // levels). *out_active_mask: set to bitmask of active LOD levels for this
 // epoch. Returns 0 on success, non-zero on error.

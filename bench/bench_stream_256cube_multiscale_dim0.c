@@ -11,7 +11,7 @@ main(int ac, char* av[])
   dims_set_storage_order(dims, rank, "tczyx");
 
   uint8_t ratios[] = { 0, 1, 1, 1, 0 };
-  dims_budget_tile_size(dims, rank, 1ULL << 17, ratios);
+  dims_budget_tile_size(dims, rank, 1ULL << 16, ratios);
 
   uint64_t shard_counts[] = { 16, 2, 2, 2, 1 };
   dims_set_shard_counts(dims, rank, shard_counts);

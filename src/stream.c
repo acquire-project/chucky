@@ -257,7 +257,7 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 
         if (s->stage.bytes_written == buffer_capacity ||
             written == bytes_this_pass) {
-          CHECK_SILENT(Error, dispatch_ingest(s) == 0);
+          CHECK(Error, dispatch_ingest(s) == 0);
           s->stage.bytes_written = 0;
         }
       }

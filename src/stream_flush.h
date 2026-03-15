@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.h"
+// Included via stream_internal.h — all internal types available above.
 
 // Context for flush pipeline operations.
 // Stack-allocated by the orchestrator; contains only pointers/copies.

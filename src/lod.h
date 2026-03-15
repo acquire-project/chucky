@@ -3,6 +3,8 @@
 #include <cuda.h>
 #include <stdint.h>
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -23,6 +25,12 @@ extern "C"
     lod_reduce_max_suppressed, // 2nd highest value
     lod_reduce_min_suppressed, // 2nd lowest value
   };
+
+  static inline size_t
+  lod_accum_bpe(size_t bpe, enum lod_reduce_method method)
+  {
+    return (method == lod_reduce_mean && bpe == 2) ? 4 : bpe;
+  }
 
   int lod_fill_ends_gpu(CUdeviceptr d_ends,
                         int ndim,
@@ -64,7 +72,7 @@ extern "C"
   // d_tile_lut: lod_count uint32_t entries (morton_pos ->
   // tile_pool_lod_offset). d_batch_tile_offsets: batch_count uint32_t entries
   // (batch -> tile_pool_batch_offset).
-  void lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
+  int lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
                                CUdeviceptr d_morton,
                                CUdeviceptr d_tile_lut,
                                CUdeviceptr d_batch_tile_offsets,
@@ -93,7 +101,7 @@ extern "C"
   // d_batch_offsets: batch_count uint32_t entries mapping batch_index to
   //                  the C-order source offset from batch dims.
   // Caller must ensure all offsets fit in uint32_t.
-  void lod_gather_lut(CUdeviceptr d_dst,
+  int lod_gather_lut(CUdeviceptr d_dst,
                       CUdeviceptr d_src,
                       CUdeviceptr d_src_lut,
                       CUdeviceptr d_batch_offsets,
@@ -105,7 +113,7 @@ extern "C"
   // Finalize a mean accumulator: divide running sum by count, store in native
   // type.  d_dst and d_accum may alias when method is min/max (same type).
   // For mean: d_accum is wider (u32 for u16 input), d_dst is native type.
-  void lod_accum_emit(CUdeviceptr d_dst,
+  int lod_accum_emit(CUdeviceptr d_dst,
                       CUdeviceptr d_accum,
                       enum lod_dtype dtype,
                       enum lod_reduce_method method,
@@ -117,7 +125,7 @@ extern "C"
   // Each thread looks up its level from d_level_ids (u8) and reads the
   // corresponding count from d_counts to decide write vs fold.
   // d_accum and d_new_data have the same packed layout (levels 1+ only).
-  void lod_accum_fold_fused(CUdeviceptr d_accum,
+  int lod_accum_fold_fused(CUdeviceptr d_accum,
                             CUdeviceptr d_new_data,
                             CUdeviceptr d_level_ids,
                             CUdeviceptr d_counts,

@@ -232,17 +232,17 @@ test_pipeline(const char* tmpdir)
     .shard_sink = zarr_sink_as_shard_sink(zs),
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail3, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // Feed data
   {
     struct slice input = { .beg = src, .end = src + total_elements };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
 
@@ -290,7 +290,7 @@ test_pipeline(const char* tmpdir)
 
       // Decompress and verify each tile
       // tile_stride may be padded; use actual tile_stride for decompression
-      size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+      size_t tile_stride_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint32_t);
 
       for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
         if (tile_nbytes[i_tile] == 0 ||
@@ -364,14 +364,14 @@ test_pipeline(const char* tmpdir)
     }
   }
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
 
 Fail4:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail3:
   zarr_sink_destroy(zs);
 Fail2:
@@ -548,27 +548,27 @@ test_unbounded_metadata_update(const char* tmpdir)
     .shard_sink = zarr_sink_as_shard_sink(zs),
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // epoch_elements = tiles_per_epoch * tile_elements
   // tiles_per_epoch = tile_count[1] * tile_count[2] = 2 * 4 = 8
   // tile_elements = 2 * 4 * 3 = 24
   // epoch_elements = 8 * 24 = 192
-  log_info("  epoch_elements=%lu", (unsigned long)s.layout.epoch_elements);
+  log_info("  epoch_elements=%lu", (unsigned long)tile_stream_gpu_layout(s)->epoch_elements);
 
   // Feed 4 epochs of data
-  const size_t total = 4 * s.layout.epoch_elements;
+  const size_t total = 4 * tile_stream_gpu_layout(s)->epoch_elements;
   uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
   CHECK(Fail3, src);
   for (size_t i = 0; i < total; ++i)
     src[i] = (uint16_t)(i % 65536);
 
   struct slice input = { .beg = src, .end = src + total };
-  struct writer_result r = writer_append(&s.writer, input);
+  struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail4, r.error == 0);
 
-  r = writer_flush(&s.writer);
+  r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail4, r.error == 0);
 
   zarr_sink_flush(zs);
@@ -594,7 +594,7 @@ test_unbounded_metadata_update(const char* tmpdir)
   }
 
   free(src);
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   log_info("  PASS");
   return 0;
@@ -602,7 +602,7 @@ test_unbounded_metadata_update(const char* tmpdir)
 Fail4:
   free(src);
 Fail3:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail2:
   zarr_sink_destroy(zs);
 Fail:
@@ -762,11 +762,11 @@ test_midstream_metadata_update(const char* tmpdir)
     .epochs_per_batch = 1,
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // Feed several epochs of data (enough to trigger timer-based update)
-  const size_t total = 6 * s.layout.epoch_elements;
+  const size_t total = 6 * tile_stream_gpu_layout(s)->epoch_elements;
   uint16_t* src = (uint16_t*)malloc(total * sizeof(uint16_t));
   CHECK(Fail3, src);
   for (size_t i = 0; i < total; ++i)
@@ -774,16 +774,16 @@ test_midstream_metadata_update(const char* tmpdir)
 
   // Feed in two batches; the 1e-9 interval fires the timer on every
   // wait_and_deliver
-  size_t half = 3 * s.layout.epoch_elements;
+  size_t half = 3 * tile_stream_gpu_layout(s)->epoch_elements;
   {
     struct slice input = { .beg = src, .end = src + half };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
 
   {
     struct slice input = { .beg = src + half, .end = src + total };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
 
@@ -812,7 +812,7 @@ test_midstream_metadata_update(const char* tmpdir)
 
   // Now flush and verify final state
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
   zarr_sink_flush(zs);
@@ -833,7 +833,7 @@ test_midstream_metadata_update(const char* tmpdir)
   }
 
   free(src);
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   log_info("  PASS");
   return 0;
@@ -841,7 +841,7 @@ test_midstream_metadata_update(const char* tmpdir)
 Fail4:
   free(src);
 Fail3:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail2:
   zarr_sink_destroy(zs);
 Fail:
@@ -908,17 +908,17 @@ test_unbuffered_pipeline(const char* tmpdir)
     .shard_alignment = platform_page_size(),
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // Feed data
   {
     struct slice input = { .beg = src, .end = src + total_elements };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail3, r.error == 0);
   }
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail3, r.error == 0);
   }
 
@@ -948,7 +948,7 @@ test_unbuffered_pipeline(const char* tmpdir)
       memcpy(&tile_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
     }
 
-    size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+    size_t tile_stride_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint32_t);
     int errors = 0;
 
     for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
@@ -1002,14 +1002,14 @@ test_unbuffered_pipeline(const char* tmpdir)
     free(shard_data);
   }
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   log_info("  PASS");
   return 0;
 
 Fail4:
 Fail3:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail2:
   zarr_sink_destroy(zs);
 Fail:
@@ -1112,17 +1112,17 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .shard_alignment = platform_page_size(),
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail3, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // Feed data
   {
     struct slice input = { .beg = src, .end = src + total_elements };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
 
@@ -1166,7 +1166,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
           &tile_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
       }
 
-      size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+      size_t tile_stride_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint32_t);
 
       for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
         if (tile_nbytes[i_tile] == 0 ||
@@ -1239,14 +1239,14 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     }
   }
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
 
 Fail4:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail3:
   zarr_sink_destroy(zs);
 Fail2:
@@ -1557,17 +1557,17 @@ test_pipeline_storage_order(const char* tmpdir)
     .shard_sink = zarr_sink_as_shard_sink(zs),
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail3, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
 
   // Feed data
   {
     struct slice input = { .beg = src, .end = src + total_elements };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail4, r.error == 0);
   }
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
 
@@ -1612,7 +1612,7 @@ test_pipeline_storage_order(const char* tmpdir)
           &tile_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
       }
 
-      size_t tile_stride_bytes = s.layout.tile_stride * sizeof(uint32_t);
+      size_t tile_stride_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint32_t);
 
       for (int i_tile = 0; i_tile < tiles_per_shard_total; ++i_tile) {
         if (tile_nbytes[i_tile] == 0 ||
@@ -1698,14 +1698,14 @@ test_pipeline_storage_order(const char* tmpdir)
     }
   }
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   zarr_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
 
 Fail4:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail3:
   zarr_sink_destroy(zs);
 Fail2:

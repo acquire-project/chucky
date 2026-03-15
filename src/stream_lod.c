@@ -1,4 +1,4 @@
-#include "stream_lod.h"
+#include "stream_internal.h"
 
 #include "lod.h"
 #include "lod_plan.h"
@@ -313,7 +313,7 @@ init_morton_scatter_luts(struct lod_state* lod, const struct stream_layout* l0)
 
   for (int lv = 0; lv < lod->plan.nlod; ++lv) {
     const struct stream_layout* lay = (lv == 0) ? l0 : &lod->layouts[lv];
-    CHECK_SILENT(Fail, build_morton_lut_for_level(lod, lay, lv) == 0);
+    CHECK(Fail, build_morton_lut_for_level(lod, lay, lv) == 0);
   }
 
   return 0;
@@ -342,11 +342,11 @@ lod_state_init(struct lod_state* lod,
     }
   }
 
-  CHECK_SILENT(Fail, upload_plan_shapes(lod, config->rank) == 0);
-  CHECK_SILENT(Fail, init_gather_lut(lod, config) == 0);
-  CHECK_SILENT(Fail, init_reduce_level_arrays(lod) == 0);
-  CHECK_SILENT(Fail, upload_lod_level_layouts(lod) == 0);
-  CHECK_SILENT(Fail, init_morton_scatter_luts(lod, l0) == 0);
+  CHECK(Fail, upload_plan_shapes(lod, config->rank) == 0);
+  CHECK(Fail, init_gather_lut(lod, config) == 0);
+  CHECK(Fail, init_reduce_level_arrays(lod) == 0);
+  CHECK(Fail, upload_lod_level_layouts(lod) == 0);
+  CHECK(Fail, init_morton_scatter_luts(lod, l0) == 0);
 
   levels->nlod = lod->plan.nlod;
   return 0;
@@ -397,8 +397,7 @@ lod_state_init_accumulators(struct lod_state* lod,
   if (lod->dim0.total_elements == 0)
     return 0;
 
-  size_t accum_bpe =
-    (config->dim0_reduce_method == lod_reduce_mean && bpe == 2) ? 4 : bpe;
+  size_t accum_bpe = lod_accum_bpe(bpe, config->dim0_reduce_method);
   size_t accum_bytes = lod->dim0.total_elements * accum_bpe;
   CU(Fail, cuMemAlloc(&lod->dim0.d_accum, accum_bytes));
 
@@ -460,7 +459,6 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_morton));
   CUWARN(cuMemFree(lod->d_full_shape));
   CUWARN(cuMemFree(lod->d_lod_shape));
-  CUWARN(cuMemFree(lod->d_ends));
   CUWARN(cuMemFree(lod->d_gather_lut));
   CUWARN(cuMemFree(lod->d_batch_offsets));
   for (int i = 0; i < lod->plan.nlod; ++i) {
@@ -517,14 +515,15 @@ run_dim0_fold_emit(struct lod_state* lod,
 
   // Single fused fold over all levels 1+
   CUdeviceptr morton_1plus = lod->d_morton + lod->dim0.morton_offset * bpe;
-  lod_accum_fold_fused(lod->dim0.d_accum,
-                       morton_1plus,
-                       lod->dim0.d_level_ids,
-                       lod->dim0.d_counts,
-                       dtype,
-                       dim0_reduce_method,
-                       lod->dim0.total_elements,
-                       compute);
+  CHECK(Error,
+        lod_accum_fold_fused(lod->dim0.d_accum,
+                             morton_1plus,
+                             lod->dim0.d_level_ids,
+                             lod->dim0.d_counts,
+                             dtype,
+                             dim0_reduce_method,
+                             lod->dim0.total_elements,
+                             compute) == 0);
 
   // Increment counts, emit ready levels back to morton
   for (int lv = 1; lv < p->nlod; ++lv) {
@@ -539,19 +538,19 @@ run_dim0_fold_emit(struct lod_state* lod,
       for (int k = 1; k < lv; ++k)
         accum_offset += p->batch_count * p->lod_counts[k];
 
-      size_t accum_bpe =
-        (dim0_reduce_method == lod_reduce_mean && bpe == 2) ? 4 : bpe;
+      size_t accum_bpe = lod_accum_bpe(bpe, dim0_reduce_method);
 
       CUdeviceptr morton_lv = lod->d_morton + lev.beg * bpe;
       CUdeviceptr accum_lv = lod->dim0.d_accum + accum_offset * accum_bpe;
 
-      lod_accum_emit(morton_lv,
-                     accum_lv,
-                     dtype,
-                     dim0_reduce_method,
-                     n_elements,
-                     lod->dim0.counts[lv],
-                     compute);
+      CHECK(Error,
+            lod_accum_emit(morton_lv,
+                           accum_lv,
+                           dtype,
+                           dim0_reduce_method,
+                           n_elements,
+                           lod->dim0.counts[lv],
+                           compute) == 0);
 
       lod->dim0.counts[lv] = 0;
       *out_mask |= (1u << lv);
@@ -565,7 +564,7 @@ Error:
 }
 
 // Scatter morton-ordered LOD data into the tile pool for all active levels.
-static void
+static int
 scatter_morton_to_tiles(struct lod_state* lod,
                         const struct level_geometry* levels,
                         const struct stream_layout* layout,
@@ -581,14 +580,15 @@ scatter_morton_to_tiles(struct lod_state* lod,
   {
     struct lod_span lev0 = lod_spans_at(&p->levels, 0);
 
-    lod_morton_to_tiles_lut((CUdeviceptr)pool_epoch,
-                            lod->d_morton + lev0.beg * bpe,
-                            lod->d_morton_tile_lut[0],
-                            lod->d_morton_batch_tile_offsets[0],
-                            dtype,
-                            p->lod_counts[0],
-                            p->batch_count,
-                            compute);
+    CHECK(Error,
+          lod_morton_to_tiles_lut((CUdeviceptr)pool_epoch,
+                                  lod->d_morton + lev0.beg * bpe,
+                                  lod->d_morton_tile_lut[0],
+                                  lod->d_morton_batch_tile_offsets[0],
+                                  dtype,
+                                  p->lod_counts[0],
+                                  p->batch_count,
+                                  compute) == 0);
   }
 
   for (int lv = 1; lv < p->nlod; ++lv) {
@@ -601,15 +601,21 @@ scatter_morton_to_tiles(struct lod_state* lod,
     CUdeviceptr dst = (CUdeviceptr)pool_epoch +
                       levels->tile_offset[lv] * layout->tile_stride * bpe;
 
-    lod_morton_to_tiles_lut(dst,
-                            morton_lv,
-                            lod->d_morton_tile_lut[lv],
-                            lod->d_morton_batch_tile_offsets[lv],
-                            dtype,
-                            p->lod_counts[lv],
-                            p->batch_count,
-                            compute);
+    CHECK(Error,
+          lod_morton_to_tiles_lut(dst,
+                                  morton_lv,
+                                  lod->d_morton_tile_lut[lv],
+                                  lod->d_morton_batch_tile_offsets[lv],
+                                  dtype,
+                                  p->lod_counts[lv],
+                                  p->batch_count,
+                                  compute) == 0);
   }
+
+  return 0;
+
+Error:
+  return 1;
 }
 
 int
@@ -628,14 +634,15 @@ lod_run_epoch(struct lod_state* lod,
 
   CU(Error, cuEventRecord(lod->t_start, compute));
 
-  lod_gather_lut(lod->d_morton,
-                 lod->d_linear,
-                 lod->d_gather_lut,
-                 lod->d_batch_offsets,
-                 dtype,
-                 p->lod_counts[0],
-                 p->batch_count,
-                 compute);
+  CHECK(Error,
+        lod_gather_lut(lod->d_morton,
+                       lod->d_linear,
+                       lod->d_gather_lut,
+                       lod->d_batch_offsets,
+                       dtype,
+                       p->lod_counts[0],
+                       p->batch_count,
+                       compute) == 0);
 
   CU(Error, cuEventRecord(lod->t_scatter_end, compute));
 
@@ -673,7 +680,7 @@ lod_run_epoch(struct lod_state* lod,
 
   uint32_t active_levels_mask = 1; // L0 always active
   if (levels->dim0_downsample && lod->dim0.total_elements > 0) {
-    CHECK_SILENT(
+    CHECK(
       Error,
       run_dim0_fold_emit(
         lod, bpe, dtype, dim0_reduce_method, compute, &active_levels_mask) ==
@@ -682,8 +689,15 @@ lod_run_epoch(struct lod_state* lod,
 
   CU(Error, cuEventRecord(lod->t_dim0_end, compute));
 
-  scatter_morton_to_tiles(
-    lod, levels, layout, pool_epoch, bpe, dtype, active_levels_mask, compute);
+  CHECK(Error,
+        scatter_morton_to_tiles(lod,
+                                levels,
+                                layout,
+                                pool_epoch,
+                                bpe,
+                                dtype,
+                                active_levels_mask,
+                                compute) == 0);
 
   CU(Error, cuEventRecord(lod->t_end, compute));
 

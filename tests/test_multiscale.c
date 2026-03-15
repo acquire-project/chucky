@@ -1,5 +1,6 @@
 #include "prelude.cuda.h"
 #include "prelude.h"
+#include "lod_plan.h"
 #include "stream.h"
 #include "test_data.h"
 #include "zarr_sink.h"
@@ -220,7 +221,7 @@ test_multiscale_l0_correctness(void)
   CHECK(Fail0, l0_sink_init(&baseline_sink, num_shards, shard_cap) == 0);
 
   {
-    struct tile_stream_gpu s = { 0 };
+    struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
       .bytes_per_element = sizeof(uint16_t),
@@ -229,15 +230,15 @@ test_multiscale_l0_correctness(void)
       .codec = CODEC_ZSTD,
       .shard_sink = &baseline_sink.base,
     };
-    CHECK(Fail1, tile_stream_gpu_create(&config, &s) == 0);
+    CHECK(Fail1, (s = tile_stream_gpu_create(&config)) != NULL);
     xor_pattern_init(dims, rank, 2);
-    CHECK(Fail1b, pump_data(&s.writer, total_elements, fill_xor) == 0);
-    CHECK(Fail1b, s.cursor == total_elements);
-    tile_stream_gpu_destroy(&s);
+    CHECK(Fail1b, pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    CHECK(Fail1b, tile_stream_gpu_cursor(s) == total_elements);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Run2;
   Fail1b:
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Fail1;
   }
@@ -249,7 +250,7 @@ Run2:
   CHECK(Fail1, l0_sink_init(&ms_sink, num_shards, shard_cap) == 0);
 
   {
-    struct tile_stream_gpu s = { 0 };
+    struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
       .bytes_per_element = sizeof(uint16_t),
@@ -258,15 +259,15 @@ Run2:
       .codec = CODEC_ZSTD,
       .shard_sink = &ms_sink.base,
     };
-    CHECK(Fail2b, tile_stream_gpu_create(&config, &s) == 0);
+    CHECK(Fail2b, (s = tile_stream_gpu_create(&config)) != NULL);
     xor_pattern_init(dims_ms, rank, 2);
-    CHECK(Fail2c, pump_data(&s.writer, total_elements, fill_xor) == 0);
-    CHECK(Fail2c, s.cursor == total_elements);
-    tile_stream_gpu_destroy(&s);
+    CHECK(Fail2c, pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    CHECK(Fail2c, tile_stream_gpu_cursor(s) == total_elements);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Compare;
   Fail2c:
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Fail2b;
   }
@@ -398,7 +399,7 @@ test_multiscale_zarr_visual(const char* output_path)
   struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&zcfg);
   CHECK(Fail, ms);
 
-  struct tile_stream_gpu s = { 0 };
+  struct tile_stream_gpu* s = NULL;
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 128 << 20,
     .bytes_per_element = sizeof(uint16_t),
@@ -408,15 +409,15 @@ test_multiscale_zarr_visual(const char* output_path)
     .shard_sink = zarr_multiscale_sink_as_shard_sink(ms),
   };
 
-  CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
   log_info(
-    "  total: %zu elements, LOD levels: %d", total_elements, s.lod.plan.nlod);
+    "  total: %zu elements, LOD levels: %d", total_elements, tile_stream_gpu_status(s).nlod);
 
   xor_pattern_init(dims, rank, 2);
-  CHECK(Fail3, pump_data(&s.writer, total_elements, fill_xor) == 0);
-  CHECK(Fail3, s.cursor == total_elements);
+  CHECK(Fail3, pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+  CHECK(Fail3, tile_stream_gpu_cursor(s) == total_elements);
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   xor_pattern_free();
   zarr_multiscale_sink_flush(ms);
   zarr_multiscale_sink_destroy(ms);
@@ -424,7 +425,7 @@ test_multiscale_zarr_visual(const char* output_path)
   return 0;
 
 Fail3:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   xor_pattern_free();
 Fail2:
   zarr_multiscale_sink_destroy(ms);
@@ -521,7 +522,7 @@ test_dim0_l0_correctness(void)
   CHECK(Fail0, l0_sink_init(&baseline_sink, num_shards, shard_cap) == 0);
 
   {
-    struct tile_stream_gpu s = { 0 };
+    struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
       .bytes_per_element = sizeof(uint16_t),
@@ -531,15 +532,15 @@ test_dim0_l0_correctness(void)
       .shard_sink = &baseline_sink.base,
       .reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail1, tile_stream_gpu_create(&config, &s) == 0);
+    CHECK(Fail1, (s = tile_stream_gpu_create(&config)) != NULL);
     xor_pattern_init(dims_spatial, rank, 2);
-    CHECK(Fail1b, pump_data(&s.writer, total_elements, fill_xor) == 0);
-    CHECK(Fail1b, s.cursor == total_elements);
-    tile_stream_gpu_destroy(&s);
+    CHECK(Fail1b, pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    CHECK(Fail1b, tile_stream_gpu_cursor(s) == total_elements);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Run2d;
   Fail1b:
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Fail1;
   }
@@ -551,7 +552,7 @@ Run2d:
   CHECK(Fail1, l0_sink_init(&dim0_sink, num_shards, shard_cap) == 0);
 
   {
-    struct tile_stream_gpu s = { 0 };
+    struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
       .bytes_per_element = sizeof(uint16_t),
@@ -562,18 +563,20 @@ Run2d:
       .reduce_method = lod_reduce_mean,
       .dim0_reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail2b, tile_stream_gpu_create(&config, &s) == 0);
-    log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
-             s.levels.nlod,
-             s.levels.dim0_downsample);
+    CHECK(Fail2b, (s = tile_stream_gpu_create(&config)) != NULL);
+    {
+      struct tile_stream_status st = tile_stream_gpu_status(s);
+      log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
+               st.nlod, st.dim0_downsample);
+    }
     xor_pattern_init(dims_dim0, rank, 2);
-    CHECK(Fail2c, pump_data(&s.writer, total_elements, fill_xor) == 0);
-    CHECK(Fail2c, s.cursor == total_elements);
-    tile_stream_gpu_destroy(&s);
+    CHECK(Fail2c, pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    CHECK(Fail2c, tile_stream_gpu_cursor(s) == total_elements);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Compared;
   Fail2c:
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     goto Fail2b;
   }
@@ -852,7 +855,7 @@ test_dim0_multi_epoch_levels(void)
         all_sink_init(&sink, nlod, num_shards_per_level, 256 * 1024) == 0);
 
   {
-    struct tile_stream_gpu s = { 0 };
+    struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
       .bytes_per_element = sizeof(uint16_t),
@@ -864,16 +867,17 @@ test_dim0_multi_epoch_levels(void)
       .dim0_reduce_method = lod_reduce_mean,
     };
 
-    CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
-    log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",
-             s.levels.nlod,
-             s.levels.dim0_downsample,
-             s.batch.epochs_per_batch);
+    CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+    {
+      struct tile_stream_status st = tile_stream_gpu_status(s);
+      log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",
+               st.nlod, st.dim0_downsample, st.epochs_per_batch);
+    }
 
     xor_pattern_init(dims, rank, 2);
-    int pump_ok = (pump_data(&s.writer, total_elements, fill_xor) == 0);
-    int cursor_ok = pump_ok && (s.cursor == total_elements);
-    tile_stream_gpu_destroy(&s);
+    int pump_ok = (pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    int cursor_ok = pump_ok && (tile_stream_gpu_cursor(s) == total_elements);
+    tile_stream_gpu_destroy(s);
     xor_pattern_free();
     CHECK(Fail2, pump_ok);
     CHECK(Fail2, cursor_ok);

@@ -577,7 +577,7 @@ lod_morton_to_tiles_lut_launch(CUdeviceptr d_tiles,
                                           total);
 }
 
-extern "C" void
+extern "C" int
 lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
                         CUdeviceptr d_morton,
                         CUdeviceptr d_tile_lut,
@@ -596,12 +596,13 @@ lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
                                       lod_count,                               \
                                       batch_count,                             \
                                       stream);                                 \
-    return;                                                                    \
+    return 0;                                                                  \
   }
 
   XXX(lod_dtype_u16, uint16_t);
   XXX(lod_dtype_f32, float);
 #undef XXX
+  return 1;
 }
 
 template<typename T>
@@ -628,7 +629,7 @@ lod_gather_lut_launch(CUdeviceptr d_dst,
                                           total);
 }
 
-extern "C" void
+extern "C" int
 lod_gather_lut(CUdeviceptr d_dst,
                CUdeviceptr d_src,
                CUdeviceptr d_src_lut,
@@ -647,12 +648,13 @@ lod_gather_lut(CUdeviceptr d_dst,
                              lod_count,                                        \
                              batch_count,                                      \
                              stream);                                          \
-    return;                                                                    \
+    return 0;                                                                  \
   }
 
   XXX(lod_dtype_u16, uint16_t);
   XXX(lod_dtype_f32, float);
 #undef XXX
+  return 1;
 }
 
 template<int NdimMax>
@@ -731,7 +733,7 @@ lod_accum_emit_k(T* __restrict__ dst,
     dst[gid] = (T)accum[gid];
 }
 
-extern "C" void
+extern "C" int
 lod_accum_emit(CUdeviceptr d_dst,
                CUdeviceptr d_accum,
                enum lod_dtype dtype,
@@ -750,15 +752,15 @@ lod_accum_emit(CUdeviceptr d_dst,
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
       LAUNCH_EMIT(T, Acc, lod_reduce_mean);                                    \
-      return;                                                                  \
+      return 0;                                                                \
     case lod_reduce_min:                                                       \
       LAUNCH_EMIT(T, T, lod_reduce_min);                                       \
-      return;                                                                  \
+      return 0;                                                                \
     case lod_reduce_max:                                                       \
       LAUNCH_EMIT(T, T, lod_reduce_max);                                       \
-      return;                                                                  \
+      return 0;                                                                \
     default:                                                                   \
-      return;                                                                  \
+      return 1;                                                                \
   }
 
   switch (dtype) {
@@ -772,6 +774,7 @@ lod_accum_emit(CUdeviceptr d_dst,
 
 #undef LAUNCH_EMIT
 #undef EMIT_METHOD
+  return 1;
 }
 
 // --- Fused accumulator fold kernel (dim0 LOD) ---
@@ -805,7 +808,7 @@ lod_accum_fold_fused_k(Acc* __restrict__ accum,
   }
 }
 
-extern "C" void
+extern "C" int
 lod_accum_fold_fused(CUdeviceptr d_accum,
                      CUdeviceptr d_new_data,
                      CUdeviceptr d_level_ids,
@@ -829,15 +832,15 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
       LAUNCH_FUSED(T, Acc, lod_reduce_mean);                                   \
-      return;                                                                  \
+      return 0;                                                                \
     case lod_reduce_min:                                                       \
       LAUNCH_FUSED(T, T, lod_reduce_min);                                      \
-      return;                                                                  \
+      return 0;                                                                \
     case lod_reduce_max:                                                       \
       LAUNCH_FUSED(T, T, lod_reduce_max);                                      \
-      return;                                                                  \
+      return 0;                                                                \
     default:                                                                   \
-      return;                                                                  \
+      return 1;                                                                \
   }
 
   switch (dtype) {
@@ -851,6 +854,7 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
 
 #undef LAUNCH_FUSED
 #undef FUSED_METHOD
+  return 1;
 }
 
 extern "C" int

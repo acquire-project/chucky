@@ -746,8 +746,7 @@ test_accum_fold_u16(const char* label,
   uint16_t* h_expected = NULL;
   uint8_t* h_level_ids = NULL;
 
-  size_t accum_bpe =
-    (method == lod_reduce_mean) ? sizeof(uint32_t) : sizeof(uint16_t);
+  size_t accum_bpe = lod_accum_bpe(sizeof(uint16_t), method);
 
   h_data = (uint16_t*)malloc(n_epochs * n_elements * sizeof(uint16_t));
   h_result = (uint16_t*)malloc(n_elements * sizeof(uint16_t));
@@ -976,8 +975,7 @@ test_accum_fold_fused_u16(const char* label, enum lod_reduce_method method)
   uint16_t* h_data = NULL;
   uint16_t* h_result = NULL;
 
-  size_t accum_bpe =
-    (method == lod_reduce_mean) ? sizeof(uint32_t) : sizeof(uint16_t);
+  size_t accum_bpe = lod_accum_bpe(sizeof(uint16_t), method);
   uint8_t* h_level_ids = NULL;
 
   h_data = (uint16_t*)malloc(n_epochs * total * sizeof(uint16_t));

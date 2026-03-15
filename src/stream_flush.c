@@ -1,4 +1,4 @@
-#include "stream_flush.h"
+#include "stream_internal.h"
 
 #include "aggregate.h"
 #include "compress.h"
@@ -68,9 +68,7 @@ record_flush_metrics(struct flush_context* ctx, int fc)
                          ctx->lod->t_reduce_end,
                          morton_bytes);
     if (ctx->levels->dim0_downsample) {
-      size_t accum_bpe =
-        (ctx->config->dim0_reduce_method == lod_reduce_mean && bpe == 2) ? 4
-                                                                         : bpe;
+      size_t accum_bpe = lod_accum_bpe(bpe, ctx->config->dim0_reduce_method);
       size_t dim0_bytes = ctx->lod->dim0.total_elements * accum_bpe;
       accumulate_metric_cu(&ctx->metrics->lod_dim0_fold,
                            ctx->lod->t_reduce_end,
@@ -586,22 +584,21 @@ flush_partial_dim0(struct flush_context* ctx)
     for (int k = 1; k < lv; ++k)
       accum_offset += p->batch_count * p->lod_counts[k];
 
-    size_t accum_bpe =
-      (ctx->config->dim0_reduce_method == lod_reduce_mean && bpe == 2) ? 4
-                                                                       : bpe;
+    size_t accum_bpe = lod_accum_bpe(bpe, ctx->config->dim0_reduce_method);
 
     struct lod_span lev = lod_spans_at(&p->levels, lv);
     CUdeviceptr morton_lv = ctx->lod->d_morton + lev.beg * bpe;
     CUdeviceptr accum_lv = ctx->lod->dim0.d_accum + accum_offset * accum_bpe;
 
     // Emit with actual count (not period) -- mean divides by actual count
-    lod_accum_emit(morton_lv,
-                   accum_lv,
-                   dtype,
-                   ctx->config->dim0_reduce_method,
-                   n_elements,
-                   ctx->lod->dim0.counts[lv],
-                   ctx->streams.compute);
+    CHECK(Error,
+          lod_accum_emit(morton_lv,
+                         accum_lv,
+                         dtype,
+                         ctx->config->dim0_reduce_method,
+                         n_elements,
+                         ctx->lod->dim0.counts[lv],
+                         ctx->streams.compute) == 0);
 
     ctx->lod->dim0.counts[lv] = 0;
 
@@ -613,14 +610,15 @@ flush_partial_dim0(struct flush_context* ctx)
       ctx->levels->tile_count[lv] * ctx->layout->tile_stride * bpe;
     CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, ctx->streams.compute));
 
-    lod_morton_to_tiles_lut(dst,
-                            morton_lv,
-                            ctx->lod->d_morton_tile_lut[lv],
-                            ctx->lod->d_morton_batch_tile_offsets[lv],
-                            dtype,
-                            p->lod_counts[lv],
-                            p->batch_count,
-                            ctx->streams.compute);
+    CHECK(Error,
+          lod_morton_to_tiles_lut(dst,
+                                  morton_lv,
+                                  ctx->lod->d_morton_tile_lut[lv],
+                                  ctx->lod->d_morton_batch_tile_offsets[lv],
+                                  dtype,
+                                  p->lod_counts[lv],
+                                  p->batch_count,
+                                  ctx->streams.compute) == 0);
   }
 
   CU(Error, cuEventRecord(ctx->pools->ready[fc], ctx->streams.compute));

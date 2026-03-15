@@ -177,7 +177,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   destroy_staging_buffers(&s->stage);
   destroy_l0_layout(&s->layout);
   destroy_cuda_streams_and_events(&s->streams, &s->stage, &s->pools, &s->flush);
-  *s = (struct tile_stream_gpu){ 0 };
+  free(s);
 }
 
 // --- Create ---
@@ -855,25 +855,24 @@ init_metrics(int enable_multiscale)
   };
 }
 
-int
-tile_stream_gpu_create(const struct tile_stream_configuration* config,
-                       struct tile_stream_gpu* out)
+struct tile_stream_gpu*
+tile_stream_gpu_create(const struct tile_stream_configuration* config)
 {
   struct computed_stream_layouts cl;
   memset(&cl, 0, sizeof(cl));
 
-  CHECK(FailPhase1, out);
   CHECK(FailPhase1, config && config->shard_sink);
   CHECK(FailPhase1, validate_config(config) == 0);
 
   // Phase 1: CPU-only layout computation.
   CHECK(FailPhase1, compute_stream_layouts(config, &cl) == 0);
 
-  // Phase 2: Initialize tile_stream_gpu from pre-computed layouts.
-  *out = (struct tile_stream_gpu){
-    .config = *config,
-    .levels = cl.levels,
-  };
+  // Phase 2: Allocate and initialize tile_stream_gpu.
+  struct tile_stream_gpu* out = (struct tile_stream_gpu*)calloc(1, sizeof(*out));
+  CHECK(FailPhase1b, out);
+
+  out->config = *config;
+  out->levels = cl.levels;
   tile_stream_gpu_init_writer(out);
 
   out->config.buffer_capacity_bytes =
@@ -950,13 +949,48 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   platform_toc(&out->metadata_update_clock);
 
   computed_stream_layouts_free(&cl);
-  return 0;
+  return out;
 
 FailPhase2:
   tile_stream_gpu_destroy(out);
+FailPhase1b:
   computed_stream_layouts_free(&cl);
 FailPhase1:
-  return 1;
+  return NULL;
+}
+
+// --- Accessors ---
+
+const struct stream_layout*
+tile_stream_gpu_layout(const struct tile_stream_gpu* s)
+{
+  return &s->layout;
+}
+
+struct writer*
+tile_stream_gpu_writer(struct tile_stream_gpu* s)
+{
+  return &s->writer;
+}
+
+uint64_t
+tile_stream_gpu_cursor(const struct tile_stream_gpu* s)
+{
+  return s->cursor;
+}
+
+struct tile_stream_status
+tile_stream_gpu_status(const struct tile_stream_gpu* s)
+{
+  return (struct tile_stream_status){
+    .nlod = s->levels.nlod,
+    .dim0_downsample = s->levels.dim0_downsample,
+    .epochs_per_batch = s->batch.epochs_per_batch,
+    .max_compressed_size = s->codec.max_output_size,
+    .bytes_per_element = s->config.bytes_per_element,
+    .codec = s->config.codec,
+    .codec_batch_size = s->codec.batch_size,
+  };
 }
 
 // --- Memory estimate ---
@@ -1109,8 +1143,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 
     // Dim0 accumulator: single buffer + level-ID LUT + counts
     if (cl.levels.dim0_downsample) {
-      size_t accum_bpe =
-        (config->dim0_reduce_method == lod_reduce_mean && bpe == 2) ? 4 : bpe;
+      size_t accum_bpe = lod_accum_bpe(bpe, config->dim0_reduce_method);
       uint64_t total_elems = 0;
       for (int lv = 1; lv < plan->nlod; ++lv)
         total_elems += plan->batch_count * plan->lod_counts[lv];

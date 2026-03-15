@@ -234,32 +234,32 @@ test_shard_contents(void)
     .shard_sink = &css.base,
   };
 
-  struct tile_stream_gpu s;
-  CHECK(Fail1, tile_stream_gpu_create(&config, &s) == 0);
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail1, (s = tile_stream_gpu_create(&config)) != NULL);
 
   log_info("  tile_elements=%lu  tile_stride=%lu  tiles_per_epoch=%lu  "
            "epoch_elements=%lu",
-           (unsigned long)s.layout.tile_elements,
-           (unsigned long)s.layout.tile_stride,
-           (unsigned long)s.layout.tiles_per_epoch,
-           (unsigned long)s.layout.epoch_elements);
+           (unsigned long)tile_stream_gpu_layout(s)->tile_elements,
+           (unsigned long)tile_stream_gpu_layout(s)->tile_stride,
+           (unsigned long)tile_stream_gpu_layout(s)->tiles_per_epoch,
+           (unsigned long)tile_stream_gpu_layout(s)->epoch_elements);
 
-  CHECK(Fail2, s.layout.tile_elements == (uint64_t)voxels_per_tile);
-  CHECK(Fail2, s.layout.tiles_per_epoch == 8);
-  CHECK(Fail2, s.layout.epoch_elements == 192);
+  CHECK(Fail2, tile_stream_gpu_layout(s)->tile_elements == (uint64_t)voxels_per_tile);
+  CHECK(Fail2, tile_stream_gpu_layout(s)->tiles_per_epoch == 8);
+  CHECK(Fail2, tile_stream_gpu_layout(s)->epoch_elements == 192);
 
   // Feed all data
   {
     struct slice input = { .beg = src, .end = src + total_elements };
-    struct writer_result r = writer_append(&s.writer, input);
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
     CHECK(Fail2, r.error == 0);
   }
   {
-    struct writer_result r = writer_flush(&s.writer);
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail2, r.error == 0);
   }
 
-  CHECK(Fail2, s.cursor == (uint64_t)total_elements);
+  CHECK(Fail2, tile_stream_gpu_cursor(s) == (uint64_t)total_elements);
 
   // Verify all shards were finalized
   for (int si = 0; si < num_shards; ++si) {
@@ -269,7 +269,7 @@ test_shard_contents(void)
 
   // Verify each shard
   {
-    const size_t tile_bytes = s.layout.tile_stride * sizeof(uint32_t);
+    const size_t tile_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint32_t);
     const size_t index_data_bytes =
       (size_t)tiles_per_shard_total * 2 * sizeof(uint64_t);
     const size_t index_total_bytes = index_data_bytes + 4;
@@ -425,14 +425,14 @@ test_shard_contents(void)
     }
   }
 
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
   collecting_sink_free(&css);
   free(src);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  tile_stream_gpu_destroy(&s);
+  tile_stream_gpu_destroy(s);
 Fail1:
   collecting_sink_free(&css);
 Fail0:
@@ -518,16 +518,16 @@ test_shard_index_structure(void)
       .shard_sink = &css.base,
     };
 
-    struct tile_stream_gpu s;
-    CHECK(Fail2, tile_stream_gpu_create(&config, &s) == 0);
+    struct tile_stream_gpu* s = NULL;
+    CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
 
     {
       struct slice input = { .beg = src, .end = src + total_elements };
-      struct writer_result r = writer_append(&s.writer, input);
+      struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
       CHECK(Fail3, r.error == 0);
     }
     {
-      struct writer_result r = writer_flush(&s.writer);
+      struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
       CHECK(Fail3, r.error == 0);
     }
 
@@ -596,13 +596,13 @@ test_shard_index_structure(void)
     }
 
     log_info("  even tiling: %d shards verified", num_shards);
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
     collecting_sink_free(&css);
     free(src);
     goto Case2;
 
   Fail3:
-    tile_stream_gpu_destroy(&s);
+    tile_stream_gpu_destroy(s);
   Fail2:
     collecting_sink_free(&css);
   Fail1:
@@ -635,8 +635,8 @@ Case2:
       .shard_sink = &css2.base,
     };
 
-    struct tile_stream_gpu s2;
-    CHECK(FailB1, tile_stream_gpu_create(&config2, &s2) == 0);
+    struct tile_stream_gpu* s2 = NULL;
+    CHECK(FailB1, (s2 = tile_stream_gpu_create(&config2)) != NULL);
 
     uint16_t src2[96];
     for (int i = 0; i < 96; ++i)
@@ -644,11 +644,11 @@ Case2:
 
     {
       struct slice input = { .beg = src2, .end = src2 + total2 };
-      struct writer_result r = writer_append(&s2.writer, input);
+      struct writer_result r = writer_append(tile_stream_gpu_writer(s2), input);
       CHECK(FailB2, r.error == 0);
     }
     {
-      struct writer_result r = writer_flush(&s2.writer);
+      struct writer_result r = writer_flush(tile_stream_gpu_writer(s2));
       CHECK(FailB2, r.error == 0);
     }
 
@@ -684,12 +684,12 @@ Case2:
     CHECK(FailB2, stored == computed);
 
     log_info("  single shard (u16): verified");
-    tile_stream_gpu_destroy(&s2);
+    tile_stream_gpu_destroy(s2);
     collecting_sink_free(&css2);
     goto Done;
 
   FailB2:
-    tile_stream_gpu_destroy(&s2);
+    tile_stream_gpu_destroy(s2);
   FailB1:
     collecting_sink_free(&css2);
   FailB0:

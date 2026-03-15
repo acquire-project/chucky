@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.h"
+// Included via stream_internal.h — all internal types available above.
 
 // H2D transfer + scatter into tile pool.
 // pool_epoch: pointer to the target epoch's tile region in the pool.
