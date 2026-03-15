@@ -6,8 +6,8 @@ large multidimensional arrays (tensors) using CUDA.
 ## Overview
 
 Chucky implements a GPU-accelerated streaming pipeline for writing compressed,
-sharded Zarr v3 stores from high-throughput data sources such as light-sheet
-microscopes (2–10 GB/s). The pipeline stages are:
+sharded Zarr v3 stores from high-throughput data sources (2–5 GB/s).
+The pipeline stages are:
 
 1. **Tiling** — partition the input tensor into fixed-size tiles
 2. **Transpose** — scatter data so each tile is contiguous in memory
@@ -23,14 +23,16 @@ coarser level before compressing and delivering it alongside L0.
 
 ### Prerequisites
 
-- NVIDIA GPU with 8+ GB VRAM (16 GB recommended for multiscale workloads)
-- CUDA Toolkit 12.8+
-- nvcomp 5.x
-- zstd
-- CMake 3.18+, Ninja
+An NVIDIA GPU with at least 8 GB VRAM is required at runtime.
 
-The default build targets SM 100 (Blackwell). For other GPUs, set
-`CMAKE_CUDA_ARCHITECTURES` at configure time.
+- **CUDA Toolkit** (12.8+) — CUDA runtime and nvcc compiler
+- **nvcomp** (5.x) — NVIDIA compression library for GPU
+- **zstd** — Zstandard compression (CPU-side, used by tests)
+- **CMake** (3.18+) + **Ninja** — build system
+- NVIDIA GPU with 8+ GB VRAM (16 GB recommended for multiscale workloads)
+
+The default build targets SM 100. For other GPUs, set `CMAKE_CUDA_ARCHITECTURES`
+at configure time.
 
 ### Build
 
@@ -81,8 +83,8 @@ docker build -t chucky .
 ## Benchmarks
 
 Several streaming benchmarks exercise the full pipeline on two representative
-workloads (256³ cube and 2048×2304×2 ORCA2 sensor) in single-scale, multiscale,
-and multiscale-with-dim0-downsampling modes.
+workloads (256³ cube and 4096×2304 Orca Quest 2 sensor) in single-scale,
+multiscale, and multiscale-with-dim0-downsampling modes.
 
 ```
 ./build/bench/bench_stream_256cube_single [options]
@@ -142,14 +144,6 @@ The main entry points live in [`src/stream.h`](src/stream.h):
 Configure the pipeline via `struct tile_stream_configuration` (codec, tile
 dimensions, shard layout, LOD reduction method, etc.).
 
-## Dependencies
-
-- **CUDA Toolkit** (12.8+) — CUDA runtime and nvcc compiler
-- **nvcomp** (5.x) — NVIDIA compression library for GPU
-- **zstd** — Zstandard compression (CPU-side, used by shard delivery)
-- **CMake** (3.18+) + **Ninja** — build system
-
-An NVIDIA GPU with at least 8 GB VRAM is required at runtime.
 
 ## Status
 
