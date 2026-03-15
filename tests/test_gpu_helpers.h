@@ -7,6 +7,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Canonical rank-3 bounded dims: "zyx" sizes {4,4,6}, tiles {2,2,3}, tps {2,2,2}.
+uint8_t
+make_test_dims_3d(struct dimension* dims);
+
+// Canonical rank-3 unbounded dims: "zyx" sizes {0,4,6}, tiles {2,2,3}, tps {2,2,2}.
+uint8_t
+make_test_dims_3d_unbounded(struct dimension* dims);
+
 // Build a rank-3 tile_stream_configuration for testing.
 // Shape: dims {4,4,6}, tiles {2,2,3}, tiles_per_shard {2,2,2}.
 int

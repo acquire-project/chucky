@@ -708,7 +708,6 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
   CUcontext ctx = 0;
   CUdevice dev;
 
@@ -716,11 +715,22 @@ main(int ac, char* av[])
   CU(Fail, cuDeviceGet(&dev, 0));
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  ecode |= test_shard_contents();
-  ecode |= test_shard_index_structure();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "shard_contents", test_shard_contents },
+    { "shard_index_structure", test_shard_index_structure },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
   cuCtxDestroy(ctx);
-  return ecode;
+  return rc;
 
 Fail:
   cuCtxDestroy(ctx);

@@ -59,7 +59,7 @@ extern "C"
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
   //
-  // rank:                full dimensionality (>= 2); dims 1..rank-1 are used.
+  // rank:                full dimensionality (>= 1); dims 1..rank-1 are used.
   // tile_count[d]:       number of tiles along dim d (d = 0..rank-1).
   // tiles_per_shard[d]:  tiles per shard along dim d (d = 1..rank-1, each >=
   // 1).

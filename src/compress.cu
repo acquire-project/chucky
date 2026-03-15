@@ -2,29 +2,27 @@
 #include "log/log.h"
 #include "prelude.cuda.h"
 #include <nvcomp/lz4.h>
+#include <nvcomp/shared_types.h>
 #include <nvcomp/zstd.h>
 #include <string.h>
 
 static const char*
 nvcomp_status_name(nvcompStatus_t st)
 {
+#define CASE(e)                                                                \
+  case e:                                                                      \
+    return #e
+
   switch (st) {
-    case nvcompSuccess:
-      return "nvcompSuccess";
-    case nvcompErrorInvalidValue:
-      return "nvcompErrorInvalidValue";
-    case nvcompErrorNotSupported:
-      return "nvcompErrorNotSupported";
-    case nvcompErrorCannotDecompress:
-      return "nvcompErrorCannotDecompress";
-    case nvcompErrorBadChecksum:
-      return "nvcompErrorBadChecksum";
-    case nvcompErrorCannotVerifyChecksums:
-      return "nvcompErrorCannotVerifyChecksums";
-    case nvcompErrorCudaError:
-      return "nvcompErrorCudaError";
-    case nvcompErrorInternal:
-      return "nvcompErrorInternal";
+    CASE(nvcompSuccess);
+    CASE(nvcompErrorInvalidValue);
+    CASE(nvcompErrorNotSupported);
+    CASE(nvcompErrorCannotDecompress);
+    CASE(nvcompErrorBadChecksum);
+    CASE(nvcompErrorCannotVerifyChecksums);
+    CASE(nvcompErrorCudaError);
+    CASE(nvcompErrorInternal);
+#undef CASE
     default:
       return "nvcompUnknown";
   }
@@ -265,22 +263,14 @@ Fail:
 extern "C" void
 codec_free(struct codec* c)
 {
-  if (c->d_comp_sizes) {
-    cuMemFree((CUdeviceptr)c->d_comp_sizes);
-    c->d_comp_sizes = NULL;
-  }
-  if (c->d_uncomp_sizes) {
-    cuMemFree((CUdeviceptr)c->d_uncomp_sizes);
-    c->d_uncomp_sizes = NULL;
-  }
-  if (c->d_ptrs) {
-    cuMemFree((CUdeviceptr)c->d_ptrs);
-    c->d_ptrs = NULL;
-  }
-  if (c->d_temp) {
-    cuMemFree((CUdeviceptr)c->d_temp);
-    c->d_temp = NULL;
-  }
+  cu_mem_free((CUdeviceptr)c->d_comp_sizes);
+  cu_mem_free((CUdeviceptr)c->d_uncomp_sizes);
+  cu_mem_free((CUdeviceptr)c->d_ptrs);
+  cu_mem_free((CUdeviceptr)c->d_temp);
+  c->d_comp_sizes = NULL;
+  c->d_uncomp_sizes = NULL;
+  c->d_ptrs = NULL;
+  c->d_temp = NULL;
 }
 
 // --- codec_compress ---

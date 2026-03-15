@@ -2,6 +2,7 @@
 #include "prelude.cuda.h"
 #include "prelude.h"
 #include "stream.h"
+#include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,14 +148,10 @@ test_stream_single_append(void)
 {
   log_info("=== test_stream_single_append ===");
 
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 }, // slowest (dim 0)
-    { .size = 4, .tile_size = 2, .storage_position = 1 }, // dim 1
-    { .size = 6, .tile_size = 3, .storage_position = 2 }, // fastest (dim 2)
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
-  // tiles_per_shard defaults to tile_count → single shard containing all tiles.
-  // tile_count = (2, 2, 2), tiles_per_shard_total = 8.
+  // tile_count = (2, 2, 2), tiles_per_shard = (2, 2, 2), total = 8.
   const size_t tiles_per_shard_total = 8;
 
   struct test_shard_sink mss;
@@ -231,11 +228,8 @@ test_stream_chunked_append(void)
 {
   log_info("=== test_stream_chunked_append ===");
 
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
   const size_t tiles_per_shard_total = 8;
 
@@ -309,17 +303,11 @@ test_stream_compressed_roundtrip(void)
 {
   log_info("=== test_stream_compressed_roundtrip ===");
 
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
-  // tiles_per_shard defaults to tile_count → single shard containing all tiles.
-  // tile_count = (2, 2, 2), tiles_per_shard_total = 8.
   const size_t tiles_per_shard_total = 8;
 
-  // Generous buffer for compressed shard data + index
   struct test_shard_sink mss;
   test_sink_init(&mss, 1, 256 * 1024);
 
@@ -391,11 +379,8 @@ test_stream_lz4_roundtrip(void)
 {
   log_info("=== test_stream_lz4_roundtrip ===");
 
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
   const size_t tiles_per_shard_total = 8;
 
@@ -480,11 +465,8 @@ test_stream_zero_length_append(void)
 {
   log_info("=== test_stream_zero_length_append ===");
 
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
   struct test_shard_sink mss;
   test_sink_init(&mss, 1, 256 * 1024);
@@ -668,15 +650,11 @@ test_stream_unbounded_dim0(void)
 {
   log_info("=== test_stream_unbounded_dim0 ===");
 
-  // dim0.size=0 (unbounded), tiles_per_shard=2 (required when unbounded)
-  const struct dimension dims[] = {
-    { .size = 0, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
 
   struct test_shard_sink mss;
-  test_sink_init(&mss, 1, 1024 * 1024);
+  test_sink_init(&mss, 2, 1024 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -776,11 +754,8 @@ test_stream_bounded_dim0(void)
   log_info("=== test_stream_bounded_dim0 ===");
 
   // dim0.size=4, tile_size=2 → 2 epochs max → 96 elements capacity
-  const struct dimension dims[] = {
-    { .size = 4, .tile_size = 2, .storage_position = 0 },
-    { .size = 4, .tile_size = 2, .storage_position = 1 },
-    { .size = 6, .tile_size = 3, .storage_position = 2 },
-  };
+  struct dimension dims[3];
+  make_test_dims_3d(dims);
 
   struct test_shard_sink mss;
   test_sink_init(&mss, 1, 256 * 1024);
@@ -842,7 +817,6 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
   CUcontext ctx = 0;
   CUdevice dev;
 
@@ -850,30 +824,31 @@ main(int ac, char* av[])
   CU(Fail, cuDeviceGet(&dev, 0));
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  ecode |= test_stream_single_append();
-  log_info("");
-  ecode |= test_stream_chunked_append();
-  log_info("");
-  ecode |= test_stream_compressed_roundtrip();
-  log_info("");
-  ecode |= test_stream_lz4_roundtrip();
-  log_info("");
-  ecode |= test_stream_zero_length_append();
-  log_info("");
-  ecode |= test_stream_null_config_fields();
-  log_info("");
-  ecode |= test_stream_rank_1_dim();
-  log_info("");
-  ecode |= test_stream_flush_empty();
-  log_info("");
-  ecode |= test_stream_unbounded_dim0();
-  log_info("");
-  ecode |= test_stream_unbounded_requires_tps();
-  log_info("");
-  ecode |= test_stream_bounded_dim0();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "single_append", test_stream_single_append },
+    { "chunked_append", test_stream_chunked_append },
+    { "compressed_roundtrip", test_stream_compressed_roundtrip },
+    { "lz4_roundtrip", test_stream_lz4_roundtrip },
+    { "zero_length_append", test_stream_zero_length_append },
+    { "null_config_fields", test_stream_null_config_fields },
+    { "rank_1_dim", test_stream_rank_1_dim },
+    { "flush_empty", test_stream_flush_empty },
+    { "unbounded_dim0", test_stream_unbounded_dim0 },
+    { "unbounded_requires_tps", test_stream_unbounded_requires_tps },
+    { "bounded_dim0", test_stream_bounded_dim0 },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
   cuCtxDestroy(ctx);
-  return ecode;
+  return rc;
 
 Fail:
   cuCtxDestroy(ctx);

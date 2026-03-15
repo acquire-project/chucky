@@ -688,7 +688,6 @@ Fail:
 int
 main(int ac, char* av[])
 {
-  int ecode = 0;
   CUcontext ctx = 0;
   CUdevice dev;
 
@@ -696,16 +695,32 @@ main(int ac, char* av[])
   CU(Fail, cuDeviceGet(&dev, 0));
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  ecode |= test_multiscale_l0_correctness();
-  ecode |= test_dim0_l0_correctness();
-  ecode |= test_dim0_multi_epoch_levels();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "multiscale_l0_correctness", test_multiscale_l0_correctness },
+    { "dim0_l0_correctness", test_dim0_l0_correctness },
+    { "dim0_multi_epoch_levels", test_dim0_multi_epoch_levels },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
-  if (!ecode && ac > 1) {
-    ecode |= test_multiscale_zarr_visual(av[1]);
+  if (!rc && ac > 1) {
+    if (test_multiscale_zarr_visual(av[1])) {
+      log_error("  FAIL: multiscale_zarr_visual");
+      rc = 1;
+    } else {
+      log_info("  PASS: multiscale_zarr_visual");
+    }
   }
 
   cuCtxDestroy(ctx);
-  return ecode;
+  return rc;
 
 Fail:
   cuCtxDestroy(ctx);

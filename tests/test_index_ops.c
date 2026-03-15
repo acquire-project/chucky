@@ -368,14 +368,24 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
-  ecode |= test_unravel_basic();
-  ecode |= test_unravel_ravel_roundtrip();
-  ecode |= test_ravel_transpose();
-  ecode |= test_compute_strides();
-  ecode |= test_permute_i32();
-  ecode |= test_inverse_permutation_i32();
-  ecode |= test_ravel_i32_matches_ravel();
-  ecode |= test_edge_cases();
-  return ecode;
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "unravel_basic", test_unravel_basic },
+    { "unravel_ravel_roundtrip", test_unravel_ravel_roundtrip },
+    { "ravel_transpose", test_ravel_transpose },
+    { "compute_strides", test_compute_strides },
+    { "permute_i32", test_permute_i32 },
+    { "inverse_permutation_i32", test_inverse_permutation_i32 },
+    { "ravel_i32_matches_ravel", test_ravel_i32_matches_ravel },
+    { "edge_cases", test_edge_cases },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
+  return rc;
 }

@@ -125,7 +125,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   uint8_t D;
 
   CHECK(Error, layout);
-  CHECK(Error, rank >= 2);
+  CHECK(Error, rank >= 1);
   CHECK(Error, rank <= HALF_MAX_RANK);
   CHECK(Error, tile_count);
   CHECK(Error, tiles_per_shard);
@@ -189,6 +189,9 @@ Error:
 extern "C" int
 aggregate_layout_upload(struct aggregate_layout* layout)
 {
+  if (layout->lifted_rank == 0)
+    return 0;
+
   const size_t shape_bytes = layout->lifted_rank * sizeof(uint64_t);
   const size_t strides_bytes = layout->lifted_rank * sizeof(int64_t);
   CU(Error, cuMemAlloc((CUdeviceptr*)&layout->d_lifted_shape, shape_bytes));

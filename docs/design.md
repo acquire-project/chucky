@@ -160,6 +160,20 @@ scatter writes from the current batch, the other drains through compression and
 transfer. This double-buffering ensures the scatter and compress stages overlap
 completely.
 
+Each tile is compressed in place into a fixed-size slot bounded by the codec's
+worst-case output. Since compressed sizes vary, gaps appear between tiles:
+
+```
+   tile 0           tile 1           tile 2           tile 3
+  ┌────────────────┬────────────────┬────────────────┬────────────────┐
+  │▓▓▓▓▓░░░░░░░░░░░│▓▓▓▓▓▓▓▓░░░░░░░░│▓▓░░░░░░░░░░░░░░│▓▓▓▓▓▓▓▓▓▓░░░░░░│
+  └────────────────┴────────────────┴────────────────┴────────────────┘
+   ▓ = compressed data   ░ = unused gap              |◄─ fixed size ─►|
+```
+
+These gaps waste both GPU memory and D2H transfer bandwidth, which motivates
+the aggregation step.
+
 ### Shard aggregation
 
 After compression, tiles sit in the pool in the order they were scattered
@@ -173,27 +187,98 @@ reorders compressed tiles into shard-major order using a three-pass algorithm:
    offsets.
 3. **Gather.** Copy each tile's compressed bytes to its destination offset.
 
-The result is a single contiguous buffer where all tiles belonging to the same
-shard are adjacent. This means each shard can be written to disk with one I/O
-call. When direct I/O is configured, padding is inserted between shards to
-align to page boundaries.
+The result is a single contiguous buffer where tiles are grouped by shard and
+packed without gaps:
+
+```
+  Before (compressed pool — tile-major order, fixed-size slots):
+
+   tile 0    tile 1    tile 2    tile 3    tile 4    tile 5
+  ┌─────────┬─────────┬─────────┬─────────┬─────────┬─────────┐
+  │▓▓▓░░░░░░│▓▓▓▓▓░░░░│▓▓░░░░░░░│▓▓▓▓▓▓░░░│▓▓▓▓░░░░░│▓▓▓▓▓▓▓░░│
+  └─────────┴─────────┴─────────┴─────────┴─────────┴─────────┘
+   shard A   shard B   shard A   shard B   shard A   shard B
+
+  After (aggregated — shard-major, compacted):
+
+  ┌───┬──┬────┬─────┬──────┬───────┐
+  │▓▓▓│▓▓│▓▓▓▓│▓▓▓▓▓│▓▓▓▓▓▓│▓▓▓▓▓▓▓│
+  └───┴──┴────┴─────┴──────┴───────┘
+  |◄─shard A─►|◄────shard B───────►|
+```
+
+Each shard's tiles are contiguous, so the shard can be written to disk with a
+single I/O call. A configurable amount of padding is inserted between
+shards to align to page boundaries to support efficient I/O downstream.
 
 The permutation is another instance of the unravel/ravel pattern. Each tile
 coordinate $t_d$ is unraveled into a shard index $s_d$ and within-shard
 position $w_d$ (using radix $p_d$), then the full coordinate vector is raveled
 with shard-major strides. See [sharding.md](sharding.md) for the derivation.
 
-### Multiscale via compacted morton order
+### Multiscale
 
-The multiscale pyramid requires reducing over $2 \times \ldots \times 2$ blocks
-at each level. Not all dimensions participate in downsampling — a channel
-dimension, for example, should not be reduced. Let $D'$ be the number of
-downsampled dimensions; the remaining dimensions are batch dimensions.
+Each level of the pyramid is produced by $2\times$ reduction along selected
+dimensions. We choose $2\times$ blocks for simplicity and because filters with
+integral support have desirable properties from a signal-processing
+perspective. We also want to support non-separable filters like median and
+min/max-suppression — these preserve foreground signal across scales while
+rejecting noise, or faithfully downsample segmentation labels. Supporting
+non-separable filters rules out factored 1D passes and requires reducing over
+the full $2 \times \ldots \times 2$ block at once.
 
-A naive approach would iterate over $2^{D'}$-element blocks explicitly, but
-this maps poorly to GPU execution. Instead, we reorder elements into
-**compacted morton order** — a bit-interleaved indexing that places each block
-in a contiguous run.
+Computing this pyramid during streaming raises several challenges:
+
+- **Selective downsampling.** Not all dimensions should be reduced — a channel
+  dimension, for example, must be preserved. The algorithm must distinguish
+  downsampled dimensions from batch dimensions.
+
+- **Non-power-of-two shapes.** Array extents are rarely powers of two, but
+  hierarchical $2\times$ reduction naturally assumes they are. The algorithm
+  must handle arbitrary shapes without introducing artifacts at boundaries.
+
+- **The append dimension spans epochs.** The spatial dimensions within an epoch
+  are fully available and can be reduced immediately. But the append dimension
+  extends across epochs: a $2\times$ reduction at level $l$ requires data from
+  $2^l$ consecutive epochs. Buffering all of these is infeasible — for a
+  256-extent dimension, the pyramid has 8 levels, requiring 256 epochs of
+  buffering.
+
+- **Separability.** Because of the epoch constraint, the reduction along the
+  append dimension must be computed independently from the spatial reduction.
+  This factoring is only exact for **separable** reduction methods — those
+  where the result is the same whether applied jointly or in independent
+  passes.
+
+The design addresses these with two mechanisms: compacted morton order for
+efficient spatial reduction on the GPU, and a separable fold for the append
+dimension.
+
+#### Compacted morton order
+
+Let $D'$ be the number of downsampled dimensions. The pyramid requires
+reducing over $2^{D'}$-element blocks at each level. In row-major order, the
+elements of a $2 \times \ldots \times 2$ block are not contiguous — they are
+scattered across memory, separated by strides. Reducing them requires gathering
+from strided locations, which is inefficient on a GPU.
+
+Instead, we reorder elements into **morton order** — a bit-interleaved indexing
+where the **morton index** of a coordinate is formed by interleaving the bits
+of the downsampled coordinates. Consider a 3×5 array ($D' = 2$):
+
+```
+  Row-major order:                Morton order:
+
+     x=0  x=1  x=2  x=3  x=4       x=0  x=1  x=2  x=3  x=4
+  y=0  0    1    2    3    4     y=0  0    1    4    5   16
+  y=1  5    6    7    8    9     y=1  2    3    6    7   18
+  y=2 10   11   12   13   14     y=2  8    9   12   13   24
+```
+
+In row-major order, the 2×2 block at top-left is {0, 1, 5, 6} — not
+contiguous. In morton order, the same block is {0, 1, 2, 3} — a contiguous
+run. Every group of $2^{D'}$ consecutive morton indices forms one reduction
+block.
 
 The **morton index** of a coordinate is formed by interleaving the bits of the
 downsampled coordinates: if $r_d(k)$ denotes the $k$-th bit of coordinate
@@ -201,51 +286,108 @@ $r_d$, then
 
 $$\text{morton}(r) = \ldots\, r_0(k)\, r_1(k) \cdots r_{D'-1}(k) \;\ldots\; r_0(0)\, r_1(0) \cdots r_{D'-1}(0)$$
 
-In this order, every consecutive run of $2^{D'}$ elements forms a
-$2 \times \ldots \times 2$ block along the downsampled dimensions. Reducing
-each run produces the next coarser level, and the process repeats. The result
-is a pyramid of levels computed by successive reduction of contiguous runs —
-ideal for GPU parallelism.
+Reducing each run of $2^{D'}$ elements produces the next coarser level, and
+the process repeats on the reduced output. The full pyramid is computed by
+successive reduction of contiguous runs — ideal for GPU parallelism.
 
-The complication is that the array shape is not a power of two. A
-$2^p$-sized bounding box would contain many out-of-bounds indices. The
-**compacted** morton order skips these, producing a dense sequence that covers
-only in-bounds elements. Boundary elements are handled by replicate padding:
-edge elements are averaged with copies of themselves rather than with zeros, so
-there is no darkening artifact at array boundaries.
+The complication is that the array shape is rarely a power of two. The morton
+indexing covers a $2^p$-sized bounding box, and many of those indices fall
+outside the array. In the 3×5 example, the bounding box is 4×8 (32 entries)
+but only 15 are in bounds. The **compacted** morton order assigns each
+in-bounds element a dense index: the number of in-bounds morton indices that
+precede it. This can be computed in $O(p \cdot D')$ time per element, where $p$
+is the number of bits needed to cover the largest extent.
 
-### Separable fold on the append dimension
+```
+  Compacted morton order for a 3×5 array:
 
-When the append dimension ($d = 0$) participates in downsampling, the
-multiscale reduction cannot be computed entirely within a single epoch. The
-spatial dimensions are fully available each epoch and can be reduced
-immediately via the morton-order scheme above. But $d = 0$ extends across
-epochs: a $2\times$ reduction at level $l$ requires data from $2^l$ consecutive
-epochs.
+  Boxes show 2×2 reduction blocks (clipped to array bounds):
 
-Buffering all $2^L$ epochs (where $L$ is the pyramid depth) is infeasible — for
-a 256-extent dimension, $L = 8$ and $2^L = 256$ epochs. Instead, the pipeline
-splits the reduction into two independent phases:
+     x=0  x=1   x=2  x=3   x=4
+     ┌─────────┬─────────┬────┐
+  y=0│  0   1  │  4   5  │ 12 │
+  y=1│  2   3  │  6   7  │ 13 │
+     ├─────────┼─────────┼────┤
+  y=2│  8   9  │ 10  11  │ 14 │
+     └─────────┴─────────┴────┘
+
+  Linear layout (boxes correspond to the blocks above):
+
+  ┌─────────┬─────────┬─────┬─────┬─────┬────┐
+  │ 0 1 2 3 │ 4 5 6 7 │ 8 9 │10 11│12 13│ 14 │
+  └─────────┴─────────┴─────┴─────┴─────┴────┘
+   full 2×2  full 2×2  ◄── partial blocks ──►
+    block     block     (replicate padded)
+```
+
+The first two runs of 4 are complete 2×2 blocks. At the boundaries — the
+bottom row and the right column — blocks are partial. Replicate padding fills
+the missing positions: edge elements are reduced with copies of themselves
+rather than with zeros, avoiding darkening artifacts.
+
+**Hierarchical reduction.** Once elements are in compacted morton order, the
+pyramid is built by successive reduction of the linear buffer. Each level
+reduces contiguous runs, producing a shorter buffer that is itself in compacted
+morton order for the coarser shape ($\lceil s_d / 2 \rceil$ per dimension).
+Continuing the 3×5 example:
+
+```
+  L0 (3×5, 15 elements):
+  ┌─────────┬─────────┬─────┬─────┬─────┬────┐
+  │ 0 1 2 3 │ 4 5 6 7 │ 8 9 │10 11│12 13│ 14 │
+  └────┬────┴────┬────┴──┬──┴──┬──┴──┬──┴─┬──┘
+       ▼         ▼       ▼     ▼     ▼    ▼
+  L1 (2×3, 6 elements):
+  ┌─────────┬─────┬────┐
+  │ 0 1 2 3 │ 4 5 │(p) │
+  └────┬────┴──┬──┴────┘
+       ▼       ▼
+  L2 (1×2, 2 elements):
+  ┌─────┐
+  │ 0 1 │
+  └──┬──┘
+     ▼
+  L3 (1×1, 1 element):
+  ┌───┐
+  │ 0 │
+  └───┘
+
+  (p) = partial block, replicate padded
+```
+
+Run lengths vary at each level due to boundary effects and are precomputed
+from the shape.
+
+**Morton-to-tiles scatter.** The reduced data at each level is still in
+compacted morton order, but the downstream compress and aggregate stages expect
+tiles. A final scatter step unravels each element's compacted morton index back
+to coordinates and ravels with tile-major strides — the same unravel/ravel
+pattern used for L0 scatter, but applied per level against the level's coarser
+shape and tile configuration. Each level's tiles are placed into the shared
+tile pool alongside L0.
+
+#### Separable fold on the append dimension
+
+The pipeline splits the multiscale reduction into two independent phases:
 
 1. **Spatial reduction** (within an epoch): the morton-order reduce handles all
-   downsampled dimensions except $d = 0$. This runs every epoch and produces
-   spatially reduced data at each level.
+   downsampled dimensions except the append dimension. This runs every epoch
+   and produces spatially reduced data at each level.
 
-2. **Temporal fold** (across epochs along $d = 0$): a per-level accumulator
-   collects the spatially reduced output. When $2^l$ epochs have been
-   accumulated for level $l$, the level emits its reduced tiles and resets.
+2. **Temporal fold** (across epochs along the append dimension): a per-level
+   accumulator collects the spatially reduced output. When $2^l$ epochs have
+   been accumulated for level $l$, the level emits its reduced tiles and
+   resets. This keeps the memory cost proportional to a single epoch regardless
+   of pyramid depth.
 
-This separation has an important consequence for the choice of reduction
-method. Because the spatial and temporal reductions are applied independently,
-the overall downsampling is only correct when the method is **separable** —
-meaning the result is the same whether the reduction is applied jointly across
-all dimensions or factored into independent passes. Mean, min, and max are
-separable. Median is not: the median of spatial medians is not in general the
-joint median. When median is configured, the pipeline computes it correctly
-within each phase, but the composition across phases is an approximation.
+This factoring constrains the choice of reduction method. Mean, min, and max
+are separable — the factored result equals the joint result. Median is not: the
+median of spatial medians is not in general the joint median. When median is
+configured, the pipeline computes it correctly within each phase, but the
+composition across phases is an approximation.
 
-The two phases can also use different reduction operators (e.g., mean spatially
-and max temporally), which is useful when the semantics of the append dimension
+The two phases can use different reduction operators (e.g., mean spatially and
+max temporally), which is useful when the semantics of the append dimension
 differ from the spatial dimensions.
 
 ## Pipeline

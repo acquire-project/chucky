@@ -599,7 +599,6 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
   CUcontext ctx = 0;
   CUdevice dev;
 
@@ -607,16 +606,24 @@ main(int ac, char* av[])
   CU(Fail, cuDeviceGet(&dev, 0));
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  ecode |= test_d2h_single_epoch_none();
-  log_info("");
-  ecode |= test_d2h_batch_none();
-  log_info("");
-  ecode |= test_d2h_zstd_single_epoch();
-  log_info("");
-  ecode |= test_d2h_double_buffer();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "d2h_single_epoch_none", test_d2h_single_epoch_none },
+    { "d2h_batch_none", test_d2h_batch_none },
+    { "d2h_zstd_single_epoch", test_d2h_zstd_single_epoch },
+    { "d2h_double_buffer", test_d2h_double_buffer },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
   cuCtxDestroy(ctx);
-  return ecode;
+  return rc;
 
 Fail:
   cuCtxDestroy(ctx);

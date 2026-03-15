@@ -1,4 +1,5 @@
 #include "test_gpu_helpers.h"
+#include "dimension.h"
 
 #include "prelude.cuda.h"
 #include "prelude.h"
@@ -6,21 +7,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+uint8_t
+make_test_dims_3d(struct dimension* dims)
+{
+  uint8_t rank = dims_create(dims, "zyx", (uint64_t[]){ 4, 4, 6 });
+  dims_set_tile_sizes(dims, rank, (uint64_t[]){ 2, 2, 3 });
+  dims_set_shard_counts(dims, rank, (uint64_t[]){ 1, 1, 1 });
+  return rank;
+}
+
+uint8_t
+make_test_dims_3d_unbounded(struct dimension* dims)
+{
+  uint8_t rank = dims_create(dims, "zyx", (uint64_t[]){ 0, 4, 6 });
+  dims_set_tile_sizes(dims, rank, (uint64_t[]){ 2, 2, 3 });
+  dims[0].tiles_per_shard = 2; // unbounded: must set directly
+  dims_set_shard_counts(dims, rank, (uint64_t[]){ 0, 1, 1 });
+  return rank;
+}
+
 int
 make_test_config(struct tile_stream_configuration* config,
                  struct dimension* dims,
                  enum compression_codec codec,
                  uint8_t epochs_per_batch)
 {
-  dims[0] = (struct dimension){
-    .size = 4, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 0
-  };
-  dims[1] = (struct dimension){
-    .size = 4, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 1
-  };
-  dims[2] = (struct dimension){
-    .size = 6, .tile_size = 3, .tiles_per_shard = 2, .storage_position = 2
-  };
+  make_test_dims_3d(dims);
 
   memset(config, 0, sizeof(*config));
   config->rank = 3;

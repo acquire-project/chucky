@@ -28,6 +28,13 @@ dims_set_downsample_by_name(struct dimension* dims,
                             uint8_t rank,
                             const char* names);
 
+// Set tile_size for each dimension directly.
+// tile_sizes has rank elements. Each must be > 0.
+void
+dims_set_tile_sizes(struct dimension* dims,
+                    uint8_t rank,
+                    const uint64_t* tile_sizes);
+
 // Distribute nelem across dims using power-of-2 ratios.
 //
 // ratio 0 -> tile_size = 1 (that dim doesn't contribute to tile volume).

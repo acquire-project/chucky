@@ -99,6 +99,15 @@ dims_set_downsample_by_name(struct dimension* dims,
 }
 
 void
+dims_set_tile_sizes(struct dimension* dims,
+                    uint8_t rank,
+                    const uint64_t* tile_sizes)
+{
+  for (uint8_t i = 0; i < rank; ++i)
+    dims[i].tile_size = tile_sizes[i];
+}
+
+void
 dims_budget_tile_size(struct dimension* dims,
                       uint8_t rank,
                       uint64_t nelem,

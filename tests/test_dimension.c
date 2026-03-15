@@ -262,15 +262,25 @@ test_dims_print(void)
 int
 main(void)
 {
-  int nerr = 0;
-  nerr += test_dims_create();
-  nerr += test_dims_create_errors();
-  nerr += test_dims_budget_tile_size();
-  nerr += test_dims_budget_tile_size_uniform();
-  nerr += test_dims_set_shard_counts();
-  nerr += test_dims_set_shard_counts_skip_zero();
-  nerr += test_dims_set_storage_order();
-  nerr += test_dims_set_downsample_by_name();
-  nerr += test_dims_print();
-  return nerr;
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "dims_create", test_dims_create },
+    { "dims_create_errors", test_dims_create_errors },
+    { "dims_budget_tile_size", test_dims_budget_tile_size },
+    { "dims_budget_tile_size_uniform", test_dims_budget_tile_size_uniform },
+    { "dims_set_shard_counts", test_dims_set_shard_counts },
+    { "dims_set_shard_counts_skip_zero", test_dims_set_shard_counts_skip_zero },
+    { "dims_set_storage_order", test_dims_set_storage_order },
+    { "dims_set_downsample_by_name", test_dims_set_downsample_by_name },
+    { "dims_print", test_dims_print },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
+  return rc;
 }

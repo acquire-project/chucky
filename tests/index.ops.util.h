@@ -62,4 +62,20 @@ cpu_perm(uint64_t i,
          const uint64_t* shape,
          const int64_t* strides);
 
+// Build lifted shape and strides for a tile decomposition (no codec alignment).
+// The epoch dimension (dim 0) stride is set to 0 so all epochs collapse.
+// storage_order may be NULL for identity order.
+void
+build_lifted_layout(int rank,
+                    const uint64_t* dim_sizes,
+                    const uint64_t* tile_sizes,
+                    const uint8_t* storage_order,
+                    uint8_t* out_lifted_rank,
+                    uint64_t* lifted_shape,
+                    int64_t* lifted_strides,
+                    uint64_t* out_tile_elements,
+                    uint64_t* out_tile_stride,
+                    uint64_t* out_tiles_per_epoch,
+                    uint64_t* out_epoch_elements);
+
 #endif // INDEX_OPS_UTIL_H

@@ -1,16 +1,12 @@
 #include "prelude.cuda.h"
 #include "prelude.h"
 #include "stream.h"
+#include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-// --- Config builder ---
-// Rank=3, dims {0, 4, 6}, tiles {2, 2, 3}, tiles_per_shard {2, 2, 2}.
-// Unbounded dim0 (size=0). Explicit epochs_per_batch=2.
-// Derived: tile_elements=12, tiles_per_epoch=4, epoch_elements=48.
 
 static struct tile_stream_configuration
 make_config(const struct dimension* dims, struct shard_sink* sink)
@@ -25,12 +21,6 @@ make_config(const struct dimension* dims, struct shard_sink* sink)
     .epochs_per_batch = 2,
   };
 }
-
-static const struct dimension test_dims[] = {
-  { .size = 0, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 0 },
-  { .size = 4, .tile_size = 2, .tiles_per_shard = 2, .storage_position = 1 },
-  { .size = 6, .tile_size = 3, .tiles_per_shard = 2, .storage_position = 2 },
-};
 
 // Fill source with sequential u16 values
 static uint16_t*
@@ -55,7 +45,9 @@ test_batch_counter_one_epoch(void)
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
-  struct tile_stream_configuration config = make_config(test_dims, &css.base);
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   CHECK(Fail0, s);
 
@@ -110,7 +102,9 @@ test_batch_full_triggers_swap(void)
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
-  struct tile_stream_configuration config = make_config(test_dims, &css.base);
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   CHECK(Fail0, s);
 
@@ -165,7 +159,9 @@ test_batch_multi_cycle(void)
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
 
-  struct tile_stream_configuration config = make_config(test_dims, &css.base);
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   CHECK(Fail0, s);
 
@@ -219,7 +215,9 @@ test_batch_partial_flush(void)
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
-  struct tile_stream_configuration config = make_config(test_dims, &css.base);
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   CHECK(Fail0, s);
 
@@ -265,7 +263,9 @@ test_batch_3epochs_flush(void)
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
 
-  struct tile_stream_configuration config = make_config(test_dims, &css.base);
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   CHECK(Fail0, s);
 
@@ -315,7 +315,6 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
   CUcontext ctx = 0;
   CUdevice dev;
 
@@ -323,18 +322,25 @@ main(int ac, char* av[])
   CU(Fail, cuDeviceGet(&dev, 0));
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  ecode |= test_batch_counter_one_epoch();
-  log_info("");
-  ecode |= test_batch_full_triggers_swap();
-  log_info("");
-  ecode |= test_batch_multi_cycle();
-  log_info("");
-  ecode |= test_batch_partial_flush();
-  log_info("");
-  ecode |= test_batch_3epochs_flush();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "batch_counter_one_epoch", test_batch_counter_one_epoch },
+    { "batch_full_triggers_swap", test_batch_full_triggers_swap },
+    { "batch_multi_cycle", test_batch_multi_cycle },
+    { "batch_partial_flush", test_batch_partial_flush },
+    { "batch_3epochs_flush", test_batch_3epochs_flush },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
   cuCtxDestroy(ctx);
-  return ecode;
+  return rc;
 
 Fail:
   cuCtxDestroy(ctx);

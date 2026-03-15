@@ -978,23 +978,23 @@ main(void)
 
   // Larger mixed
   nfail +=
-    !test_lod_gpu("gpu_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA, 1);
+    test_lod_gpu("gpu_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA, 1);
 
   // Larger cases for throughput estimation
   nfail +=
-    !test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7, 10);
+    test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7, 10);
   nfail += test_lod_gpu(
     "gpu_lod_3d_mixed_large", 3, (uint64_t[]){ 64, 256, 256 }, 0x6, 10);
 
   // u16 tests (exact integer match)
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3, 1);
+    test_lod_gpu_u16("gpu_lod_u16_2d_all", 2, (uint64_t[]){ 3, 5 }, 0x3, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7, 1);
+    test_lod_gpu_u16("gpu_lod_u16_3d_all", 3, (uint64_t[]){ 3, 2, 5 }, 0x7, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5, 1);
+    test_lod_gpu_u16("gpu_lod_u16_3d_d02", 3, (uint64_t[]){ 6, 3, 5 }, 0x5, 1);
   nfail +=
-    !test_lod_gpu_u16("gpu_lod_u16_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2, 1);
+    test_lod_gpu_u16("gpu_lod_u16_3d_d1", 3, (uint64_t[]){ 4, 6, 3 }, 0x2, 1);
   nfail += test_lod_gpu_u16(
     "gpu_lod_u16_3d_none", 3, (uint64_t[]){ 3, 2, 5 }, 0x0, 1);
   nfail += test_lod_gpu_u16("gpu_lod_u16_1d", 1, (uint64_t[]){ 9 }, 0x1, 1);
@@ -1006,9 +1006,9 @@ main(void)
     const uint64_t shape[] = { 3, 5 };
     const uint32_t mask = 0x3;
     nfail +=
-      !test_lod_gpu_method("reduce_min_f32", 2, shape, mask, 1, lod_reduce_min);
+      test_lod_gpu_method("reduce_min_f32", 2, shape, mask, 1, lod_reduce_min);
     nfail +=
-      !test_lod_gpu_method("reduce_max_f32", 2, shape, mask, 1, lod_reduce_max);
+      test_lod_gpu_method("reduce_max_f32", 2, shape, mask, 1, lod_reduce_max);
     nfail += test_lod_gpu_method(
       "reduce_median_f32", 2, shape, mask, 1, lod_reduce_median);
     nfail += test_lod_gpu_method(

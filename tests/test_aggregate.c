@@ -290,17 +290,28 @@ main(int argc, char* argv[])
   CUcontext ctx = NULL;
   CUdevice dev = -1;
 
-  CU(InitFail, cuInit(0));
-  CU(InitFail, cuDeviceGet(&dev, 0));
-  CU(InitFail, cuCtxCreate(&ctx, 0, dev));
+  CU(Fail, cuInit(0));
+  CU(Fail, cuDeviceGet(&dev, 0));
+  CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
-  int fail = 0;
-  fail |= test_aggregate_even();
-  fail |= test_aggregate_uneven();
+  int rc = 0;
+  struct {
+    const char* name;
+    int (*fn)(void);
+  } tests[] = {
+    { "aggregate_even", test_aggregate_even },
+    { "aggregate_uneven", test_aggregate_uneven },
+  };
+  for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+    int r = tests[i].fn();
+    if (r) { log_error("  FAIL: %s", tests[i].name); rc = 1; }
+    else   { log_info("  PASS: %s", tests[i].name); }
+  }
 
   cuCtxDestroy(ctx);
-  return fail ? 1 : 0;
+  return rc;
 
-InitFail:
+Fail:
+  cuCtxDestroy(ctx);
   return 1;
 }
