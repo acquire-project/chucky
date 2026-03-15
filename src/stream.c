@@ -16,13 +16,6 @@ tile_stream_gpu_flush(struct writer* self);
 
 // --- Helpers ---
 
-// Return pointer to the current pool buffer (entire K-epoch super-pool).
-static inline void*
-current_pool_base(struct tile_stream_gpu* s)
-{
-  return (void*)s->pools.buf[s->pools.current];
-}
-
 // Return pointer to the current epoch's tile region within the super-pool.
 // epoch_in_batch: 0..K-1
 static inline void*
@@ -113,60 +106,67 @@ Error:
 
 // --- Orchestrator ---
 
-// Accumulate one epoch into the current batch, or flush when batch is full.
-// Called at each epoch boundary.
+// Drain previous flush, kick async pipeline on completed pool,
+// swap to fresh pool, reset batch state.
 static struct writer_result
-accumulate_epoch_or_flush(struct tile_stream_gpu* s)
+drain_kick_and_swap(struct tile_stream_gpu* s)
 {
   const uint32_t K = s->batch.epochs_per_batch;
-
-  // Run LOD pipeline: populates current epoch's pool tiles + LOD level tiles
-  if (run_lod_for_epoch(s))
-    return writer_error();
-
-  // Record per-epoch pool-ready event
-  CU(Error,
-     cuEventRecord(s->batch.pool_events[s->batch.accumulated],
-                   s->streams.compute));
-
-  s->batch.accumulated++;
-
-  if (s->batch.accumulated < K)
-    return writer_ok();
-
-  // Batch is full — drain previous, kick, swap.
-  // old_pool is the pool index before swap; it becomes the flush slot index.
-  const int old_pool = s->pools.current;
-  struct flush_slot_gpu* fs = &s->flush.slot[old_pool];
-
+  const int completed_pool = s->pools.current;
+  struct flush_slot_gpu* fs = &s->flush.slot[completed_pool];
   struct flush_context fctx = make_flush_context(s);
+
+  // Wait for any previous flush to finish delivery
   struct writer_result r = flush_drain_pending(&fctx);
   if (r.error)
     return r;
 
+  // Launch async compress->aggregate->D2H on completed pool
   fs->batch_epoch_count = (int)s->batch.accumulated;
-  if (flush_kick_batch(&fctx, old_pool, s->batch.accumulated))
+  if (flush_kick_batch(&fctx, completed_pool, s->batch.accumulated))
     return writer_error();
 
-  // Swap pool and zero next super-pool (K epochs)
+  // Swap to fresh pool and zero it for next batch
   s->pools.current ^= 1;
-  void* next = current_pool_base(s);
-  size_t total_pool_bytes = (uint64_t)K * s->levels.total_tiles *
-                            s->layout.tile_stride * s->config.bytes_per_element;
+  size_t pool_bytes = (uint64_t)K * s->levels.total_tiles *
+                      s->layout.tile_stride * s->config.bytes_per_element;
   CU(Error,
      cuMemsetD8Async(
-       (CUdeviceptr)next, 0, total_pool_bytes, s->streams.compute));
+       s->pools.buf[s->pools.current], 0, pool_bytes, s->streams.compute));
 
-  // Reset for next batch
+  // Reset batch accumulation
   s->batch.accumulated = 0;
   s->flush.slot[s->pools.current].active_levels_mask = 0;
   memset(s->flush.slot[s->pools.current].batch_active_masks,
          0,
          sizeof(s->flush.slot[s->pools.current].batch_active_masks));
 
+  // Mark completed pool as pending delivery
   s->flush.pending = 1;
-  s->flush.current = old_pool;
+  s->flush.current = completed_pool;
   return writer_ok();
+
+Error:
+  return writer_error();
+}
+
+// Accumulate one epoch into the current batch, or flush when batch is full.
+// Called at each epoch boundary.
+static struct writer_result
+accumulate_epoch_or_flush(struct tile_stream_gpu* s)
+{
+  if (run_lod_for_epoch(s))
+    return writer_error();
+
+  CU(Error,
+     cuEventRecord(s->batch.pool_events[s->batch.accumulated],
+                   s->streams.compute));
+  s->batch.accumulated++;
+
+  if (s->batch.accumulated < s->batch.epochs_per_batch)
+    return writer_ok();
+
+  return drain_kick_and_swap(s);
 
 Error:
   return writer_error();

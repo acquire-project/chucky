@@ -447,6 +447,72 @@ Fail:
   return 1;
 }
 
+// Build gather and permutation LUTs for a single level.
+// Owns h_gather and h_perm — freed in both success and failure paths.
+static int
+build_level_batch_lut(struct level_flush_state* lvl,
+                       const struct level_geometry* levels,
+                       int lv)
+{
+  uint32_t batch_count = lvl->batch_active_count;
+  uint64_t tiles_lv = levels->tile_count[lv];
+  uint64_t lut_len = (uint64_t)batch_count * tiles_lv;
+
+  uint32_t* h_gather = NULL;
+  uint32_t* h_perm = NULL;
+
+  if (lut_len == 0)
+    return 0;
+
+  h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+  h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+  CHECK(Fail, h_gather && h_perm);
+
+  const struct aggregate_layout* al = &lvl->agg_layout;
+
+  for (uint32_t a = 0; a < batch_count; ++a) {
+    // Level lv fires at pool epochs period-1, 2*period-1, etc.
+    uint32_t period = 1;
+    if (levels->dim0_downsample && lv > 0)
+      period = 1u << lv;
+    uint32_t pool_epoch = (a + 1) * period - 1;
+
+    for (uint64_t j = 0; j < tiles_lv; ++j) {
+      uint64_t idx = (uint64_t)a * tiles_lv + j;
+
+      // gather: map batch-tile to compressed buffer position
+      h_gather[idx] = (uint32_t)(pool_epoch * levels->total_tiles +
+                                 levels->tile_offset[lv] + j);
+
+      // perm: shard-order position via lifted strides, interleaved by epoch
+      uint64_t perm_pos = 0;
+      uint64_t rest = j;
+      for (int d = al->lifted_rank - 1; d >= 0; --d) {
+        uint64_t coord = rest % al->lifted_shape[d];
+        rest /= al->lifted_shape[d];
+        perm_pos += coord * (uint64_t)al->lifted_strides[d];
+      }
+      h_perm[idx] = (uint32_t)(perm_pos * batch_count + a);
+    }
+  }
+
+  CU(Fail, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
+  CU(Fail,
+     cuMemcpyHtoD(lvl->d_batch_gather, h_gather, lut_len * sizeof(uint32_t)));
+
+  CU(Fail, cuMemAlloc(&lvl->d_batch_perm, lut_len * sizeof(uint32_t)));
+  CU(Fail,
+     cuMemcpyHtoD(lvl->d_batch_perm, h_perm, lut_len * sizeof(uint32_t)));
+
+  free(h_gather);
+  free(h_perm);
+  return 0;
+Fail:
+  free(h_gather);
+  free(h_perm);
+  return 1;
+}
+
 // Precompute per-level gather and permutation LUTs for batch aggregate.
 //
 // gather[a * tiles_lv + j] maps batch-tile (a, j) to its position in the
@@ -466,62 +532,7 @@ init_batch_luts(struct flush_pipeline* flush,
     return 0;
 
   for (int lv = 0; lv < levels->nlod; ++lv) {
-    struct level_flush_state* lvl = &flush->levels[lv];
-    uint32_t batch_count = lvl->batch_active_count;
-    uint64_t tiles_lv = levels->tile_count[lv];
-    uint64_t lut_len = (uint64_t)batch_count * tiles_lv;
-
-    if (lut_len == 0)
-      continue;
-
-    uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-    uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-    CHECK(Fail2, h_gather && h_perm);
-
-    const struct aggregate_layout* al = &lvl->agg_layout;
-
-    for (uint32_t a = 0; a < batch_count; ++a) {
-      // Level lv fires at pool epochs period-1, 2*period-1, etc.
-      uint32_t period = 1;
-      if (levels->dim0_downsample && lv > 0)
-        period = 1u << lv;
-      uint32_t pool_epoch = (a + 1) * period - 1;
-
-      for (uint64_t j = 0; j < tiles_lv; ++j) {
-        uint64_t idx = (uint64_t)a * tiles_lv + j;
-
-        // gather: map batch-tile to compressed buffer position
-        h_gather[idx] = (uint32_t)(pool_epoch * levels->total_tiles +
-                                   levels->tile_offset[lv] + j);
-
-        // perm: shard-order position via lifted strides, interleaved by epoch
-        uint64_t perm_pos = 0;
-        uint64_t rest = j;
-        for (int d = al->lifted_rank - 1; d >= 0; --d) {
-          uint64_t coord = rest % al->lifted_shape[d];
-          rest /= al->lifted_shape[d];
-          perm_pos += coord * (uint64_t)al->lifted_strides[d];
-        }
-        h_perm[idx] = (uint32_t)(perm_pos * batch_count + a);
-      }
-    }
-
-    CU(Fail2, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
-    CU(Fail2,
-       cuMemcpyHtoD(lvl->d_batch_gather, h_gather, lut_len * sizeof(uint32_t)));
-
-    CU(Fail2, cuMemAlloc(&lvl->d_batch_perm, lut_len * sizeof(uint32_t)));
-    CU(Fail2,
-       cuMemcpyHtoD(lvl->d_batch_perm, h_perm, lut_len * sizeof(uint32_t)));
-
-    free(h_gather);
-    free(h_perm);
-    continue;
-
-  Fail2:
-    free(h_gather);
-    free(h_perm);
-    goto Fail;
+    CHECK(Fail, build_level_batch_lut(&flush->levels[lv], levels, lv) == 0);
   }
 
   return 0;

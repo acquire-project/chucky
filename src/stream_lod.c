@@ -33,6 +33,52 @@ Fail:
   return 1;
 }
 
+// Compute LOD strides, upload to GPU, and build gather LUT.
+// Owns d_lod_strides — freed in both success and failure paths.
+static int
+build_gather_lut_with_strides(struct lod_state* lod,
+                               const struct lod_plan* p,
+                               const uint64_t* shape,
+                               uint8_t rank)
+{
+  CUdeviceptr d_lod_strides = 0;
+
+  uint64_t full_strides[LOD_MAX_NDIM];
+  full_strides[rank - 1] = 1;
+  for (int d = rank - 2; d >= 0; --d)
+    full_strides[d] = full_strides[d + 1] * shape[d + 1];
+
+  uint64_t lod_strides[LOD_MAX_NDIM];
+  int li = p->lod_ndim - 1;
+  for (int d = rank - 1; d >= 0; --d) {
+    if ((p->lod_mask >> d) & 1) {
+      lod_strides[li] = full_strides[d];
+      li--;
+    }
+  }
+
+  CU(Fail, cuMemAlloc(&d_lod_strides, p->lod_ndim * sizeof(uint64_t)));
+  CU(Fail,
+     cuMemcpyHtoD(d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
+
+  CU(Fail,
+     cuMemAlloc(&lod->d_gather_lut, p->lod_counts[0] * sizeof(uint32_t)));
+  CHECK(Fail,
+        lod_build_gather_lut(lod->d_gather_lut,
+                             lod->d_lod_shape,
+                             d_lod_strides,
+                             p->lod_ndim,
+                             p->lod_shapes[0],
+                             p->lod_counts[0],
+                             0) == 0);
+
+  cuMemFree(d_lod_strides);
+  return 0;
+Fail:
+  cuMemFree(d_lod_strides);
+  return 1;
+}
+
 static int
 init_gather_lut(struct lod_state* lod,
                 const struct tile_stream_configuration* config)
@@ -43,7 +89,6 @@ init_gather_lut(struct lod_state* lod,
   const uint8_t rank = config->rank;
   const struct dimension* dims = config->dimensions;
   struct lod_plan* p = &lod->plan;
-  uint64_t lod_count = p->lod_counts[0];
 
   uint64_t shape[HALF_MAX_RANK];
   shape[0] = dims[0].tile_size;
@@ -61,48 +106,7 @@ init_gather_lut(struct lod_state* lod,
     }
   }
 
-  // Compute LOD strides on host and upload
-  CUdeviceptr d_lod_strides = 0;
-  {
-    uint64_t full_strides[LOD_MAX_NDIM];
-    full_strides[rank - 1] = 1;
-    for (int d = rank - 2; d >= 0; --d)
-      full_strides[d] = full_strides[d + 1] * shape[d + 1];
-
-    uint64_t lod_strides[LOD_MAX_NDIM];
-    int li = p->lod_ndim - 1;
-    for (int d = rank - 1; d >= 0; --d) {
-      if ((p->lod_mask >> d) & 1) {
-        lod_strides[li] = full_strides[d];
-        li--;
-      }
-    }
-
-    CU(Fail, cuMemAlloc(&d_lod_strides, p->lod_ndim * sizeof(uint64_t)));
-    CU(
-      Fail,
-      cuMemcpyHtoD(d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
-  }
-
-  // Build gather (inverse) LUT
-  {
-    CUresult alloc_res =
-      cuMemAlloc(&lod->d_gather_lut, lod_count * sizeof(uint32_t));
-    if (alloc_res != CUDA_SUCCESS) {
-      cuMemFree(d_lod_strides);
-      goto Fail;
-    }
-  }
-  CHECK(Fail,
-        lod_build_gather_lut(lod->d_gather_lut,
-                             lod->d_lod_shape,
-                             d_lod_strides,
-                             p->lod_ndim,
-                             p->lod_shapes[0],
-                             lod_count,
-                             0) == 0);
-
-  cuMemFree(d_lod_strides);
+  CHECK(Fail, build_gather_lut_with_strides(lod, p, shape, rank) == 0);
 
   // Compute batch_offsets on host and upload
   {
@@ -194,6 +198,58 @@ Fail:
   return 1;
 }
 
+// Upload tile sizes/strides to GPU and build tile scatter LUT.
+// Owns d_tile_sizes and d_tile_strides — freed in both success and failure.
+static int
+build_tile_scatter_with_temps(struct lod_state* lod,
+                               const struct lod_plan* p,
+                               const struct stream_layout* lay,
+                               CUdeviceptr d_lod_shape_lv,
+                               int lv)
+{
+  CUdeviceptr d_tile_sizes = 0, d_tile_strides = 0;
+  uint64_t lod_count = p->lod_counts[lv];
+
+  uint64_t lod_tile_sizes[LOD_MAX_NDIM];
+  int64_t lod_tile_strides[2 * LOD_MAX_NDIM];
+
+  for (int li = 0; li < p->lod_ndim; ++li) {
+    int d = p->lod_map[li];
+    lod_tile_sizes[li] = lay->lifted_shape[2 * d + 1];
+    lod_tile_strides[2 * li] = lay->lifted_strides[2 * d];
+    lod_tile_strides[2 * li + 1] = lay->lifted_strides[2 * d + 1];
+  }
+
+  CU(Fail, cuMemAlloc(&d_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
+  CU(Fail, cuMemAlloc(&d_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
+  CU(Fail,
+     cuMemcpyHtoD(
+       d_tile_sizes, lod_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
+  CU(Fail,
+     cuMemcpyHtoD(
+       d_tile_strides, lod_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
+
+  CU(Fail,
+     cuMemAlloc(&lod->d_morton_tile_lut[lv], lod_count * sizeof(uint32_t)));
+  CHECK(Fail,
+        lod_build_tile_scatter_lut(lod->d_morton_tile_lut[lv],
+                                   d_lod_shape_lv,
+                                   d_tile_sizes,
+                                   d_tile_strides,
+                                   p->lod_ndim,
+                                   p->lod_shapes[lv],
+                                   lod_count,
+                                   0) == 0);
+
+  cuMemFree(d_tile_sizes);
+  cuMemFree(d_tile_strides);
+  return 0;
+Fail:
+  cuMemFree(d_tile_sizes);
+  cuMemFree(d_tile_strides);
+  return 1;
+}
+
 // Build morton-to-tile LUT for a single level. Returns 0 on success.
 static int
 build_morton_lut_for_level(struct lod_state* lod,
@@ -201,7 +257,6 @@ build_morton_lut_for_level(struct lod_state* lod,
                            int lv)
 {
   struct lod_plan* p = &lod->plan;
-  uint64_t lod_count = p->lod_counts[lv];
 
   // Upload LOD shape to device (temporary for LUT building)
   CUdeviceptr d_lod_shape_lv = 0;
@@ -212,59 +267,10 @@ build_morton_lut_for_level(struct lod_state* lod,
     const size_t lod_shape_bytes = p->lod_ndim * sizeof(uint64_t);
     CU(Fail, cuMemAlloc(&d_lod_shape_lv, lod_shape_bytes));
     free_shape = 1;
-    if (cuMemcpyHtoD(d_lod_shape_lv, p->lod_shapes[lv], lod_shape_bytes) !=
-        CUDA_SUCCESS) {
-      cuMemFree(d_lod_shape_lv);
-      goto Fail;
-    }
+    CU(FailShape, cuMemcpyHtoD(d_lod_shape_lv, p->lod_shapes[lv], lod_shape_bytes));
   }
 
-  // Compute lod_tile_sizes and lod_tile_strides on host
-  {
-    uint64_t lod_tile_sizes[LOD_MAX_NDIM];
-    int64_t lod_tile_strides[2 * LOD_MAX_NDIM];
-
-    for (int li = 0; li < p->lod_ndim; ++li) {
-      int d = p->lod_map[li];
-      lod_tile_sizes[li] = lay->lifted_shape[2 * d + 1];
-      lod_tile_strides[2 * li] = lay->lifted_strides[2 * d];
-      lod_tile_strides[2 * li + 1] = lay->lifted_strides[2 * d + 1];
-    }
-
-    CUdeviceptr d_tile_sizes = 0, d_tile_strides = 0;
-    CU(FailTemp, cuMemAlloc(&d_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
-    CU(FailTemp,
-       cuMemAlloc(&d_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
-    CU(FailTemp,
-       cuMemcpyHtoD(
-         d_tile_sizes, lod_tile_sizes, p->lod_ndim * sizeof(uint64_t)));
-    CU(FailTemp,
-       cuMemcpyHtoD(
-         d_tile_strides, lod_tile_strides, 2 * p->lod_ndim * sizeof(int64_t)));
-
-    CU(FailTemp,
-       cuMemAlloc(&lod->d_morton_tile_lut[lv], lod_count * sizeof(uint32_t)));
-    CHECK(FailTemp,
-          lod_build_tile_scatter_lut(lod->d_morton_tile_lut[lv],
-                                     d_lod_shape_lv,
-                                     d_tile_sizes,
-                                     d_tile_strides,
-                                     p->lod_ndim,
-                                     p->lod_shapes[lv],
-                                     lod_count,
-                                     0) == 0);
-
-    cuMemFree(d_tile_sizes);
-    cuMemFree(d_tile_strides);
-    goto TempDone;
-  FailTemp:
-    cuMemFree(d_tile_sizes);
-    cuMemFree(d_tile_strides);
-    if (free_shape)
-      cuMemFree(d_lod_shape_lv);
-    goto Fail;
-  TempDone:;
-  }
+  CHECK(FailShape, build_tile_scatter_with_temps(lod, p, lay, d_lod_shape_lv, lv) == 0);
 
   if (free_shape)
     cuMemFree(d_lod_shape_lv);
@@ -301,6 +307,9 @@ build_morton_lut_for_level(struct lod_state* lod,
   }
 
   return 0;
+FailShape:
+  if (free_shape)
+    cuMemFree(d_lod_shape_lv);
 Fail:
   return 1;
 }
