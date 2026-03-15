@@ -2,6 +2,7 @@
 #include "prelude.cuda.h"
 #include "prelude.h"
 #include "stream.h"
+#include "test_shard_sink.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,74 +33,110 @@ make_expected_tiles(uint64_t epoch_start,
   return expected;
 }
 
-// --- Collecting shard writer ---
-
-struct mem_shard_writer
-{
-  struct shard_writer base;
-  uint8_t* buf;
-  size_t capacity;
-  size_t size; // high water mark
-};
-
-struct mem_shard_sink
-{
-  struct shard_sink base;
-  struct mem_shard_writer writer;
-};
-
+// Parse shard index from end of shard buffer.
+// Returns 0 on success, 1 on failure.
 static int
-mem_shard_write(struct shard_writer* self,
-                uint64_t offset,
-                const void* beg,
-                const void* end)
+parse_shard_index(const uint8_t* buf,
+                  size_t shard_size,
+                  size_t tiles_per_shard,
+                  uint64_t* offsets,
+                  uint64_t* sizes)
 {
-  struct mem_shard_writer* w = (struct mem_shard_writer*)self;
-  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (offset + nbytes > w->capacity) {
-    log_error("mem_shard_write: overflow");
+  size_t index_data_bytes = tiles_per_shard * 2 * sizeof(uint64_t);
+  if (shard_size <= index_data_bytes + 4)
     return 1;
+  const uint8_t* index_ptr = buf + shard_size - index_data_bytes - 4;
+  for (size_t i = 0; i < tiles_per_shard; ++i) {
+    memcpy(&offsets[i], index_ptr + i * 16, sizeof(uint64_t));
+    memcpy(&sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
   }
-  memcpy(w->buf + offset, beg, nbytes);
-  if (offset + nbytes > w->size)
-    w->size = offset + nbytes;
   return 0;
 }
 
+// Verify tile data against expected tiles for all epochs.
+// If use_zstd, decompress each tile before comparing.
+// Returns 0 on success, 1 on failure.
 static int
-mem_shard_finalize(struct shard_writer* self)
+verify_tiles(const struct tile_stream_gpu* s,
+             const uint8_t* shard_buf,
+             const uint64_t* tile_offsets,
+             const uint64_t* tile_sizes,
+             int use_zstd)
 {
-  (void)self;
+  const struct stream_layout* lay = tile_stream_gpu_layout(s);
+  const size_t tile_bytes = lay->tile_stride * sizeof(uint16_t);
+  int n_epochs = 2;
+
+  for (int epoch = 0; epoch < n_epochs; ++epoch) {
+    uint16_t* expected =
+      make_expected_tiles((uint64_t)epoch * lay->epoch_elements,
+                          lay->epoch_elements,
+                          lay->tiles_per_epoch,
+                          lay->tile_elements,
+                          lay->lifted_rank,
+                          lay->lifted_shape,
+                          lay->lifted_strides);
+    if (!expected)
+      return 1;
+
+    int err = 0;
+    for (uint64_t t = 0; t < lay->tiles_per_epoch; ++t) {
+      size_t slot = (size_t)epoch * lay->tiles_per_epoch + t;
+      const uint16_t* tile_data = NULL;
+      uint8_t* decomp = NULL;
+
+      if (use_zstd) {
+        if (tile_sizes[slot] == 0) {
+          err = 1;
+          break;
+        }
+        decomp = (uint8_t*)calloc(1, tile_bytes);
+        if (!decomp) {
+          err = 1;
+          break;
+        }
+        size_t result = ZSTD_decompress(
+          decomp, tile_bytes, shard_buf + tile_offsets[slot], tile_sizes[slot]);
+        if (ZSTD_isError(result) || result != tile_bytes) {
+          log_error("  ZSTD_decompress failed for tile %lu epoch %d",
+                    (unsigned long)t,
+                    epoch);
+          free(decomp);
+          err = 1;
+          break;
+        }
+        tile_data = (const uint16_t*)decomp;
+      } else {
+        if (tile_sizes[slot] != tile_bytes) {
+          err = 1;
+          break;
+        }
+        tile_data = (const uint16_t*)(shard_buf + tile_offsets[slot]);
+      }
+
+      const uint16_t* expected_tile =
+        expected + t * lay->tile_elements;
+      for (uint64_t e = 0; e < lay->tile_elements; ++e) {
+        if (tile_data[e] != expected_tile[e]) {
+          log_error("  epoch %d tile %lu elem %lu: expected %u, got %u",
+                    epoch,
+                    (unsigned long)t,
+                    (unsigned long)e,
+                    expected_tile[e],
+                    tile_data[e]);
+          err = 1;
+        }
+      }
+      free(decomp);
+    }
+    free(expected);
+    if (err) {
+      log_error("  FAIL: epoch %d verification", epoch);
+      return 1;
+    }
+    log_info("  epoch %d: OK", epoch);
+  }
   return 0;
-}
-
-static struct shard_writer*
-mem_shard_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
-{
-  (void)level;
-  (void)shard_index;
-  struct mem_shard_sink* s = (struct mem_shard_sink*)self;
-  return &s->writer.base;
-}
-
-static void
-mem_shard_sink_init(struct mem_shard_sink* s, size_t capacity)
-{
-  *s = (struct mem_shard_sink){
-    .base = { .open = mem_shard_open },
-  };
-  s->writer = (struct mem_shard_writer){
-    .base = { .write = mem_shard_write, .finalize = mem_shard_finalize },
-    .buf = (uint8_t*)calloc(1, capacity),
-    .capacity = capacity,
-  };
-}
-
-static void
-mem_shard_sink_free(struct mem_shard_sink* s)
-{
-  free(s->writer.buf);
-  *s = (struct mem_shard_sink){ 0 };
 }
 
 // Test: feed all data in one append call.
@@ -120,9 +157,8 @@ test_stream_single_append(void)
   // tile_count = (2, 2, 2), tiles_per_shard_total = 8.
   const size_t tiles_per_shard_total = 8;
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -165,69 +201,24 @@ test_stream_single_append(void)
   // Flush to get all data
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, mss.writer.size > 0);
+  CHECK(Fail, mss.writers[0][0].size > 0);
 
-  // Parse shard index from the end of the buffer.
-  const size_t tile_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint16_t);
-  const size_t index_data_bytes = tiles_per_shard_total * 2 * sizeof(uint64_t);
-  const size_t shard_size = mss.writer.size;
-  CHECK(Fail, shard_size > index_data_bytes + 4);
-  const uint8_t* index_ptr = mss.writer.buf + shard_size - index_data_bytes - 4;
-
-  uint64_t tile_offsets[8], tile_sizes[8];
-  for (size_t i = 0; i < tiles_per_shard_total; ++i) {
-    memcpy(&tile_offsets[i], index_ptr + i * 16, sizeof(uint64_t));
-    memcpy(&tile_sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
-  }
-
-  for (int epoch = 0; epoch < 2; ++epoch) {
-    uint16_t* expected =
-      make_expected_tiles((uint64_t)epoch * tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->tiles_per_epoch,
-                          tile_stream_gpu_layout(s)->tile_elements,
-                          tile_stream_gpu_layout(s)->lifted_rank,
-                          tile_stream_gpu_layout(s)->lifted_shape,
-                          tile_stream_gpu_layout(s)->lifted_strides);
-    CHECK(Fail, expected);
-
-    int err = 0;
-    for (uint64_t t = 0; t < tile_stream_gpu_layout(s)->tiles_per_epoch; ++t) {
-      size_t slot = (size_t)epoch * tile_stream_gpu_layout(s)->tiles_per_epoch + t;
-      CHECK(Fail, tile_sizes[slot] == tile_bytes);
-
-      const uint16_t* tile_data =
-        (const uint16_t*)(mss.writer.buf + tile_offsets[slot]);
-      const uint16_t* expected_tile = expected + t * tile_stream_gpu_layout(s)->tile_elements;
-      for (uint64_t e = 0; e < tile_stream_gpu_layout(s)->tile_elements; ++e) {
-        if (tile_data[e] != expected_tile[e]) {
-          log_error("  epoch %d tile %lu elem %lu: expected %u, got %u",
-                    epoch,
-                    (unsigned long)t,
-                    (unsigned long)e,
-                    expected_tile[e],
-                    tile_data[e]);
-          err = 1;
-        }
-      }
-    }
-    free(expected);
-    if (err) {
-      log_error("  FAIL: epoch %d verification", epoch);
-      goto Fail;
-    }
-    log_info("  epoch %d: OK", epoch);
+  {
+    uint64_t tile_offsets[8], tile_sizes[8];
+    CHECK(Fail, parse_shard_index(mss.writers[0][0].buf, mss.writers[0][0].size,
+                                  tiles_per_shard_total, tile_offsets, tile_sizes) == 0);
+    CHECK(Fail, verify_tiles(s, mss.writers[0][0].buf, tile_offsets, tile_sizes, 0) == 0);
   }
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -248,9 +239,8 @@ test_stream_chunked_append(void)
 
   const size_t tiles_per_shard_total = 8;
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   // Small buffer: 10 elements worth (rounded up to 4KB internally)
   const struct tile_stream_configuration config = {
@@ -289,69 +279,24 @@ test_stream_chunked_append(void)
     CHECK(Fail, r.error == 0);
   }
 
-  CHECK(Fail, mss.writer.size > 0);
+  CHECK(Fail, mss.writers[0][0].size > 0);
 
-  // Parse shard index
-  const size_t tile_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint16_t);
-  const size_t index_data_bytes = tiles_per_shard_total * 2 * sizeof(uint64_t);
-  const size_t shard_size = mss.writer.size;
-  CHECK(Fail, shard_size > index_data_bytes + 4);
-  const uint8_t* index_ptr = mss.writer.buf + shard_size - index_data_bytes - 4;
-
-  uint64_t tile_offsets[8], tile_sizes[8];
-  for (size_t i = 0; i < tiles_per_shard_total; ++i) {
-    memcpy(&tile_offsets[i], index_ptr + i * 16, sizeof(uint64_t));
-    memcpy(&tile_sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
-  }
-
-  for (int epoch = 0; epoch < 2; ++epoch) {
-    uint16_t* expected =
-      make_expected_tiles((uint64_t)epoch * tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->tiles_per_epoch,
-                          tile_stream_gpu_layout(s)->tile_elements,
-                          tile_stream_gpu_layout(s)->lifted_rank,
-                          tile_stream_gpu_layout(s)->lifted_shape,
-                          tile_stream_gpu_layout(s)->lifted_strides);
-    CHECK(Fail, expected);
-
-    int err = 0;
-    for (uint64_t t = 0; t < tile_stream_gpu_layout(s)->tiles_per_epoch; ++t) {
-      size_t slot = (size_t)epoch * tile_stream_gpu_layout(s)->tiles_per_epoch + t;
-      CHECK(Fail, tile_sizes[slot] == tile_bytes);
-
-      const uint16_t* tile_data =
-        (const uint16_t*)(mss.writer.buf + tile_offsets[slot]);
-      const uint16_t* expected_tile = expected + t * tile_stream_gpu_layout(s)->tile_elements;
-      for (uint64_t e = 0; e < tile_stream_gpu_layout(s)->tile_elements; ++e) {
-        if (tile_data[e] != expected_tile[e]) {
-          log_error("  epoch %d tile %lu elem %lu: expected %u, got %u",
-                    epoch,
-                    (unsigned long)t,
-                    (unsigned long)e,
-                    expected_tile[e],
-                    tile_data[e]);
-          err = 1;
-        }
-      }
-    }
-    free(expected);
-    if (err) {
-      log_error("  FAIL: epoch %d verification", epoch);
-      goto Fail;
-    }
-    log_info("  epoch %d: OK", epoch);
+  {
+    uint64_t tile_offsets[8], tile_sizes[8];
+    CHECK(Fail, parse_shard_index(mss.writers[0][0].buf, mss.writers[0][0].size,
+                                  tiles_per_shard_total, tile_offsets, tile_sizes) == 0);
+    CHECK(Fail, verify_tiles(s, mss.writers[0][0].buf, tile_offsets, tile_sizes, 0) == 0);
   }
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -375,9 +320,8 @@ test_stream_compressed_roundtrip(void)
   const size_t tiles_per_shard_total = 8;
 
   // Generous buffer for compressed shard data + index
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -417,97 +361,24 @@ test_stream_compressed_roundtrip(void)
 
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, mss.writer.size > 0);
+  CHECK(Fail, mss.writers[0][0].size > 0);
 
-  // Parse shard index from the end of the buffer.
-  // Index layout: tiles_per_shard_total * 2 * uint64_t + 4-byte CRC32C
-  const size_t index_data_bytes = tiles_per_shard_total * 2 * sizeof(uint64_t);
-  const size_t tile_bytes = tile_stream_gpu_layout(s)->tile_stride * sizeof(uint16_t);
-
-  // The index is the last write. Read tile offsets/sizes from it.
-  // Shard data layout: [compressed tile data...] [index block + crc]
-  // The index block starts at (shard_size - index_data_bytes - 4).
-  const size_t shard_size = mss.writer.size;
-  CHECK(Fail, shard_size > index_data_bytes + 4);
-  const uint8_t* index_ptr = mss.writer.buf + shard_size - index_data_bytes - 4;
-
-  // Parse index: tiles_per_shard_total pairs of (offset, nbytes) as uint64
-  uint64_t tile_offsets[8], tile_sizes[8];
-  for (size_t i = 0; i < tiles_per_shard_total; ++i) {
-    memcpy(&tile_offsets[i], index_ptr + i * 16, sizeof(uint64_t));
-    memcpy(&tile_sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
-  }
-
-  // With single shard + identity permutation, shard index slots map:
-  //   slot = epoch * tiles_per_shard_inner + within_inner
-  // where tiles_per_shard_inner = 4, within_inner = tile pool index.
-  // So slot 0..3 = epoch 0 tiles 0..3, slot 4..7 = epoch 1 tiles 0..3.
-  for (int epoch = 0; epoch < 2; ++epoch) {
-    uint16_t* expected =
-      make_expected_tiles((uint64_t)epoch * tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->epoch_elements,
-                          tile_stream_gpu_layout(s)->tiles_per_epoch,
-                          tile_stream_gpu_layout(s)->tile_elements,
-                          tile_stream_gpu_layout(s)->lifted_rank,
-                          tile_stream_gpu_layout(s)->lifted_shape,
-                          tile_stream_gpu_layout(s)->lifted_strides);
-    CHECK(Fail, expected);
-
-    int err = 0;
-    for (uint64_t t = 0; t < tile_stream_gpu_layout(s)->tiles_per_epoch; ++t) {
-      size_t slot = (size_t)epoch * tile_stream_gpu_layout(s)->tiles_per_epoch + t;
-      CHECK(Fail, tile_sizes[slot] > 0);
-
-      const uint8_t* comp_data = mss.writer.buf + tile_offsets[slot];
-
-      uint8_t* decomp = (uint8_t*)calloc(1, tile_bytes);
-      CHECK(Fail, decomp);
-
-      size_t result =
-        ZSTD_decompress(decomp, tile_bytes, comp_data, tile_sizes[slot]);
-      if (ZSTD_isError(result)) {
-        log_error("  ZSTD_decompress failed for tile %lu epoch %d: %s",
-                  (unsigned long)t,
-                  epoch,
-                  ZSTD_getErrorName(result));
-        free(decomp);
-        free(expected);
-        goto Fail;
-      }
-      CHECK(Fail, result == tile_bytes);
-
-      const uint16_t* decomp_u16 = (const uint16_t*)decomp;
-      const uint16_t* expected_tile = expected + t * tile_stream_gpu_layout(s)->tile_elements;
-      for (uint64_t e = 0; e < tile_stream_gpu_layout(s)->tile_elements; ++e) {
-        if (decomp_u16[e] != expected_tile[e]) {
-          log_error("  epoch %d tile %lu elem %lu: expected %u, got %u",
-                    epoch,
-                    (unsigned long)t,
-                    (unsigned long)e,
-                    expected_tile[e],
-                    decomp_u16[e]);
-          err = 1;
-        }
-      }
-      free(decomp);
-    }
-    free(expected);
-    if (err) {
-      log_error("  FAIL: epoch %d verification", epoch);
-      goto Fail;
-    }
-    log_info("  epoch %d: OK", epoch);
+  {
+    uint64_t tile_offsets[8], tile_sizes[8];
+    CHECK(Fail, parse_shard_index(mss.writers[0][0].buf, mss.writers[0][0].size,
+                                  tiles_per_shard_total, tile_offsets, tile_sizes) == 0);
+    CHECK(Fail, verify_tiles(s, mss.writers[0][0].buf, tile_offsets, tile_sizes, 1) == 0);
   }
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -528,9 +399,8 @@ test_stream_lz4_roundtrip(void)
 
   const size_t tiles_per_shard_total = 8;
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -556,14 +426,14 @@ test_stream_lz4_roundtrip(void)
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail, r.error == 0);
 
-  const size_t shard_size = mss.writer.size;
+  const size_t shard_size = mss.writers[0][0].size;
   CHECK(Fail, shard_size > 0);
   log_info("  shard_size=%zu", shard_size);
 
   // Parse shard index
   const size_t index_data_bytes = tiles_per_shard_total * 2 * sizeof(uint64_t);
   CHECK(Fail, shard_size > index_data_bytes + 4);
-  const uint8_t* index_ptr = mss.writer.buf + shard_size - index_data_bytes - 4;
+  const uint8_t* index_ptr = mss.writers[0][0].buf + shard_size - index_data_bytes - 4;
 
   uint64_t tile_offsets[8], tile_sizes[8];
   for (size_t i = 0; i < tiles_per_shard_total; ++i) {
@@ -591,14 +461,14 @@ test_stream_lz4_roundtrip(void)
            tile_data_total + index_data_bytes + 4);
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -616,9 +486,8 @@ test_stream_zero_length_append(void)
     { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -650,17 +519,17 @@ test_stream_zero_length_append(void)
 
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, mss.writer.size > 0);
+  CHECK(Fail, mss.writers[0][0].size > 0);
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -708,9 +577,8 @@ test_stream_rank_1_dim(void)
     { .size = 12, .tile_size = 4 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 12 * sizeof(uint16_t),
@@ -721,16 +589,10 @@ test_stream_rank_1_dim(void)
     .codec = CODEC_NONE,
   };
 
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
-  if (!s) {
-    // Rank 1 may not be supported — that's fine, just report
-    log_info("  rank=1 not supported (create returned NULL) — OK");
-    mem_shard_sink_free(&mss);
-    log_info("  PASS");
-    return 0;
-  }
+  struct tile_stream_gpu* s = NULL;
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
 
-  // If it succeeds, verify we can push data through
+  // Verify we can push data through
   uint16_t src[12];
   for (int i = 0; i < 12; ++i)
     src[i] = (uint16_t)i;
@@ -741,18 +603,18 @@ test_stream_rank_1_dim(void)
 
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, mss.writer.size > 0);
-  log_info("  rank=1 pipeline produced %zu bytes", mss.writer.size);
+  CHECK(Fail, mss.writers[0][0].size > 0);
+  log_info("  rank=1 pipeline produced %zu bytes", mss.writers[0][0].size);
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -767,9 +629,8 @@ test_stream_flush_empty(void)
     { .size = 6, .tile_size = 3, .storage_position = 1 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 24 * sizeof(uint16_t),
@@ -789,14 +650,14 @@ test_stream_flush_empty(void)
   CHECK(Fail, tile_stream_gpu_cursor(s) == 0);
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -814,9 +675,8 @@ test_stream_unbounded_dim0(void)
     { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 1024 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 1024 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -850,12 +710,12 @@ test_stream_unbounded_dim0(void)
 
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
-  CHECK(Fail2, mss.writer.size > 0);
-  log_info("  streamed %d elements, shard bytes=%zu", total, mss.writer.size);
+  CHECK(Fail2, mss.writers[0][0].size > 0);
+  log_info("  streamed %d elements, shard bytes=%zu", total, mss.writers[0][0].size);
 
   free(src);
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
@@ -864,7 +724,7 @@ Fail2:
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -882,9 +742,8 @@ test_stream_unbounded_requires_tps(void)
     { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -898,15 +757,14 @@ test_stream_unbounded_requires_tps(void)
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
   if (!s) {
     log_info("  create correctly rejected unbounded dim0 with tps=0");
-    mem_shard_sink_free(&mss);
+    test_sink_free(&mss);
     log_info("  PASS");
     return 0;
   }
 
   log_error("  create should have failed for unbounded dim0 with tps=0");
   tile_stream_gpu_destroy(s);
-Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }
@@ -924,9 +782,8 @@ test_stream_bounded_dim0(void)
     { .size = 6, .tile_size = 3, .storage_position = 2 },
   };
 
-  struct mem_shard_sink mss;
-  mem_shard_sink_init(&mss, 256 * 1024);
-  CHECK(Fail0, mss.writer.buf);
+  struct test_shard_sink mss;
+  test_sink_init(&mss, 1, 256 * 1024);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
@@ -963,18 +820,18 @@ test_stream_bounded_dim0(void)
   CHECK(Fail, unconsumed == 54);
 
   // Shard data should have been written
-  CHECK(Fail, mss.writer.size > 0);
-  log_info("  shard bytes=%zu", mss.writer.size);
+  CHECK(Fail, mss.writers[0][0].size > 0);
+  log_info("  shard bytes=%zu", mss.writers[0][0].size);
 
   tile_stream_gpu_destroy(s);
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_info("  PASS");
   return 0;
 
 Fail:
   tile_stream_gpu_destroy(s);
 Fail0:
-  mem_shard_sink_free(&mss);
+  test_sink_free(&mss);
   log_error("  FAIL");
   return 1;
 }

@@ -30,7 +30,7 @@ test_simple_object(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -62,7 +62,7 @@ test_nested(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -82,7 +82,7 @@ test_string_escaping(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -121,7 +121,7 @@ test_array_commas(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -141,7 +141,7 @@ test_uint(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -200,7 +200,7 @@ test_zarr_metadata(void)
   return 0;
 
 Fail:
-  fprintf(stderr, "  got: %.*s\n", (int)jw_length(&jw), buf);
+  log_error("  got: %.*s", (int)jw_length(&jw), buf);
   return 1;
 }
 
@@ -221,10 +221,10 @@ main(void)
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();
     if (r) {
-      fprintf(stderr, "FAIL: %s\n", tests[i].name);
+      log_error("  FAIL: %s", tests[i].name);
       rc = 1;
     } else {
-      fprintf(stderr, "PASS: %s\n", tests[i].name);
+      log_info("  PASS: %s", tests[i].name);
     }
   }
   return rc;

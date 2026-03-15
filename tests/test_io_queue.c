@@ -187,10 +187,10 @@ main(void)
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();
     if (r) {
-      fprintf(stderr, "FAIL: %s\n", tests[i].name);
+      log_error("  FAIL: %s", tests[i].name);
       rc = 1;
     } else {
-      fprintf(stderr, "PASS: %s\n", tests[i].name);
+      log_info("  PASS: %s", tests[i].name);
     }
   }
   return rc;

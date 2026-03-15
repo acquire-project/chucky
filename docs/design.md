@@ -63,14 +63,13 @@ The pipeline performs several index-space transformations — tiling, storage
 reordering, shard aggregation — that look different but share a common
 mechanism. Mixed-radix arithmetic gives us a uniform language for all of them.
 
-The coordinates of an array with shape $(s_0, \ldots, s_{D-1})$ form a bounded
-integer lattice — the set of all $(r_0, \ldots, r_{D-1})$ with $0 \le r_d <
-s_d$. Interpreting coordinates as **mixed-radix** numbers — where the shape
-serves as the **radix vector** — gives each point in the lattice a natural
-ordering (the row-major order) and a flat index. In a mixed-radix system with
-radix vector $(b_0, \ldots, b_{D-1})$, every non-negative integer $i <
-\prod_d b_d$ has a unique coordinate vector $(r_0, \ldots, r_{D-1})$ where
-$0 \le r_d < b_d$. The two conversions are:
+The coordinates of this array form a bounded integer lattice — the set of all
+$(r_0, \ldots, r_{D-1})$ with $0 \le r_d < s_d$. Interpreting coordinates as
+**mixed-radix** numbers — where the shape serves as the **radix vector** —
+gives each point in the lattice a natural ordering (the row-major order) and a
+flat index. More generally, given any radix vector $(b_0, \ldots, b_{D-1})$,
+every non-negative integer $i < \prod_d b_d$ has a unique coordinate vector
+$(r_0, \ldots, r_{D-1})$ where $0 \le r_d < b_d$. The two conversions are:
 
 - **Unravel.** Recover coordinates from a flat index by repeated division
   against the radix vector: $r_{D-1} = i \bmod b_{D-1}$, then
@@ -86,81 +85,87 @@ from the array shape — $\sigma_d = \prod_{k=d+1}^{D-1} s_k$ — are the
 **natural strides**, and raveling with them recovers the original row-major
 index.
 
-The key property: raveling the same coordinates with a different stride vector
-produces a different flat index — placing the element at a different memory
-location. If that stride vector is itself the natural strides of some target
-radix vector, the mapping is an isomorphism: every input position maps to
-exactly one output position and vice versa. This is a transposition.
+Raveling the same coordinates with a different stride vector produces a
+different flat index — placing the element at a different memory location. If
+that stride vector is itself the natural strides of some target radix vector,
+the mapping is an isomorphism: every input position maps to exactly one output
+position and vice versa. This is a transposition.
 
-The pipeline's transformations all reduce to unraveling with one radix vector
-and raveling with the strides of another. The scatter kernel, shard
+The pipeline's transformations all reduce to unraveling against one shape and
+raveling with the strides of another. The scatter kernel, shard
 aggregation, and LOD-to-tiles scatter differ only in which radix and stride
 tables they use.
 
 ### Lifted coordinates and scatter
 
 The central operation is reorganizing a flat row-major stream into tiles. We do
-this by **lifting** — replacing the original radix vector with a finer one that
-separates tile identity from position within a tile.
+this by **lifting** — replacing the array shape with a finer one that separates
+tile identity from position within a tile.
 
 Given the array shape $(s_0, \ldots, s_{D-1})$ and tile shape $(n_0, \ldots,
 n_{D-1})$, define the tile count $t_d = \lceil s_d / n_d \rceil$ for each
-dimension. The original rank-$D$ radix vector is replaced by a rank-$2D$
-**lifted radix vector**:
+dimension. The original rank-$D$ shape is replaced by a rank-$2D$ **lifted
+shape**:
 
 $$(t_0, n_0, \; t_1, n_1, \; \ldots, \; t_{D-1}, n_{D-1})$$
 
-Unraveling a flat index against this radix vector produces coordinates where
-$t_d$ identifies the tile along dimension $d$ and $n_d$ is the position within
-that tile. To assemble tiles, we ravel these same coordinates with the strides
-of the **tile-major** radix vector:
+Unraveling a flat index against this shape produces coordinates where $t_d$
+identifies the tile along dimension $d$ and $n_d$ is the position within that
+tile. To assemble tiles, we ravel these same coordinates with the strides of
+the **tile-major** shape:
 
 $$(t_0, \ldots, t_{D-1}, \; n_0, \ldots, n_{D-1})$$
 
 The first $D$ coordinates identify the tile; the last $D$ identify the position
-within it. This is the unravel/ravel pattern from the previous section — the
-two radix vectors share the same elements, just in a different order, so the
-mapping is an isomorphism.
+within it. The two shapes share the same elements, just in a different order,
+so the mapping is an isomorphism.
 
 A GPU **scatter kernel** implements this: each thread unravels its input index
-against the lifted radix vector, then ravels the coordinates with the
-tile-major strides, writing the element directly to its tile slot.
+against the lifted shape, then ravels the coordinates with the tile-major
+strides, writing the element directly to its tile slot.
+
+**Epochs and bounded memory.** The coordinate $t_0$ — the tile index along the
+append dimension — partitions the stream into **epochs**. Within an epoch, all
+tiles share the same $t_0$ value; there are
+
+$$M = \prod_{d=1}^{D-1} t_d$$
+
+tiles (the product over all dimensions except the append dimension). When
+assembling tiles, we map $t_0 \to 0$ so that every epoch's tiles land in the
+same $M$ pool slots. The pipeline processes one epoch (or a small batch of $K$
+epochs), flushes the completed tiles, and reuses the pool — bounding the
+working set regardless of stream length.
 
 **Storage order.** The tile-major strides encode the desired dimension ordering
 in the on-disk layout. Changing the storage order (e.g., from `tzcyx` to
-`tczyx`) is a different permutation of the same radix vector, producing
-different strides. The scatter kernel itself is unchanged — only the stride
-table differs.
+`tczyx`) is a different permutation of the same shape, producing different
+strides. The scatter kernel itself is unchanged — only the stride table differs.
+However, there is a limitation: The append dimension must remain outermost in
+the storage order.
 
-### Parallel compression with nvcomp
+### Batching and compression
 
-Once tiles are assembled in GPU memory, they are compressed in a single
-batched call using NVIDIA's nvcomp library (`nvcompBatchedZstdCompressAsync`
-or the lz4 equivalent). nvcomp compresses all tiles in the batch simultaneously,
-one tile per GPU thread block. This is efficient when the batch contains many
-tiles (1000+), which motivates batching multiple epochs together.
-
-### Batching and the tile pool
-
-A single epoch may produce relatively few tiles (e.g., 576 for a typical
-camera configuration). Compressing a small batch underutilizes the GPU. To
-address this, the pipeline accumulates $K$ consecutive epochs into a **batch**
+Once tiles are assembled in GPU memory, they are compressed in a single batched
+call using NVIDIA's nvcomp library (zstd or lz4). nvcomp compresses all tiles
+simultaneously, but is most efficient when the batch contains many tiles
+(1000+). Depending on the configuration, a single epoch may produce relatively
+few tiles, so the pipeline accumulates $K$ consecutive epochs into a **batch**
 before triggering the compress → aggregate → transfer sequence. $K$ is chosen
-so the total tile count across all levels is large enough for good GPU
-occupancy.
+so the total tile count ($K \times M$ times the number of LOD levels) is large
+enough for good GPU occupancy.
 
-The **tile pool** is a contiguous GPU buffer with $K \times M$ slots (times the
-number of LOD levels). Two pools are allocated: while one receives scatter
-writes from the current batch, the other drains through compression and
+The **tile pool** is a contiguous GPU buffer holding all $K \times M$ tile
+slots (plus LOD level slots). Two pools are allocated: while one receives
+scatter writes from the current batch, the other drains through compression and
 transfer. This double-buffering ensures the scatter and compress stages overlap
 completely.
 
 ### Shard aggregation
 
-After compression, tiles sit in the tile pool in tile-major order — the order
-they were scattered into. But shards group tiles by spatial locality, which is a
-different order. A GPU **aggregation** kernel reorders compressed tiles into
-shard-major order using a three-pass algorithm:
+After compression, tiles sit in the pool in the order they were scattered
+into — epoch-major, then tile-major within each epoch. But shards group tiles
+by spatial locality, which is a different order. A GPU **aggregation** kernel
+reorders compressed tiles into shard-major order using a three-pass algorithm:
 
 1. **Permute sizes.** Compute the shard-major destination for each tile and
    write its compressed size to that position.
@@ -181,21 +186,26 @@ with shard-major strides. See [sharding.md](sharding.md) for the derivation.
 ### Multiscale via compacted morton order
 
 The multiscale pyramid requires reducing over $2 \times \ldots \times 2$ blocks
-at each level. A naive approach would iterate over blocks explicitly, but this
-maps poorly to GPU execution. Instead, we reorder elements into **compacted
-morton order** — a bit-interleaved indexing that places each $2^D$-element block
+at each level. Not all dimensions participate in downsampling — a channel
+dimension, for example, should not be reduced. Let $D'$ be the number of
+downsampled dimensions; the remaining dimensions are batch dimensions.
+
+A naive approach would iterate over $2^{D'}$-element blocks explicitly, but
+this maps poorly to GPU execution. Instead, we reorder elements into
+**compacted morton order** — a bit-interleaved indexing that places each block
 in a contiguous run.
 
-The **morton index** of a coordinate $(r_0, \ldots, r_{D-1})$ is formed by
-interleaving the bits of each coordinate: if $r_d(k)$ denotes the $k$-th bit of
+The **morton index** of a coordinate is formed by interleaving the bits of the
+downsampled coordinates: if $r_d(k)$ denotes the $k$-th bit of coordinate
 $r_d$, then
 
-$$\text{morton}(r) = \ldots\, r_0(k)\, r_1(k) \cdots r_{D-1}(k) \;\ldots\; r_0(0)\, r_1(0) \cdots r_{D-1}(0)$$
+$$\text{morton}(r) = \ldots\, r_0(k)\, r_1(k) \cdots r_{D'-1}(k) \;\ldots\; r_0(0)\, r_1(0) \cdots r_{D'-1}(0)$$
 
-In this order, every consecutive run of $2^D$ elements forms a
-$2 \times \ldots \times 2$ block. Reducing each run produces the next coarser
-level, and the process repeats. The result is a pyramid of levels computed by
-successive reduction of contiguous runs — ideal for GPU parallelism.
+In this order, every consecutive run of $2^{D'}$ elements forms a
+$2 \times \ldots \times 2$ block along the downsampled dimensions. Reducing
+each run produces the next coarser level, and the process repeats. The result
+is a pyramid of levels computed by successive reduction of contiguous runs —
+ideal for GPU parallelism.
 
 The complication is that the array shape is not a power of two. A
 $2^p$-sized bounding box would contain many out-of-bounds indices. The
@@ -204,28 +214,39 @@ only in-bounds elements. Boundary elements are handled by replicate padding:
 edge elements are averaged with copies of themselves rather than with zeros, so
 there is no darkening artifact at array boundaries.
 
-Not all dimensions participate in downsampling (e.g., a channel dimension
-should not be reduced). The morton interleaving is restricted to the
-downsampled dimensions; non-downsampled dimensions are treated as batch
-dimensions.
-
 ### Separable fold on the append dimension
 
-The append dimension ($d = 0$) requires special treatment. The spatial
-dimensions within an epoch are fully available and can be reduced immediately,
-but $d = 0$ extends over multiple epochs. Computing a $2\times$ reduction along
-$d = 0$ requires data from two consecutive epochs.
+When the append dimension ($d = 0$) participates in downsampling, the
+multiscale reduction cannot be computed entirely within a single epoch. The
+spatial dimensions are fully available each epoch and can be reduced
+immediately via the morton-order scheme above. But $d = 0$ extends across
+epochs: a $2\times$ reduction at level $l$ requires data from $2^l$ consecutive
+epochs.
 
-Rather than buffering $2^L$ epochs (where $L$ is the number of LOD levels —
-potentially 32+ epochs), the pipeline uses a **separable fold**: a temporal
-accumulator that maintains partial reductions across epochs. Each epoch
-contributes its data to the accumulator, and when $2^l$ epochs have been
-accumulated for level $l$, the level emits its reduced tiles and resets. This
-keeps the memory cost proportional to one epoch regardless of pyramid depth.
+Buffering all $2^L$ epochs (where $L$ is the pyramid depth) is infeasible — for
+a 256-extent dimension, $L = 8$ and $2^L = 256$ epochs. Instead, the pipeline
+splits the reduction into two independent phases:
 
-The fold is separable in the sense that the spatial reduction (within an epoch)
-and the temporal reduction (across epochs along $d = 0$) are independent and
-can use different reduction operators.
+1. **Spatial reduction** (within an epoch): the morton-order reduce handles all
+   downsampled dimensions except $d = 0$. This runs every epoch and produces
+   spatially reduced data at each level.
+
+2. **Temporal fold** (across epochs along $d = 0$): a per-level accumulator
+   collects the spatially reduced output. When $2^l$ epochs have been
+   accumulated for level $l$, the level emits its reduced tiles and resets.
+
+This separation has an important consequence for the choice of reduction
+method. Because the spatial and temporal reductions are applied independently,
+the overall downsampling is only correct when the method is **separable** —
+meaning the result is the same whether the reduction is applied jointly across
+all dimensions or factored into independent passes. Mean, min, and max are
+separable. Median is not: the median of spatial medians is not in general the
+joint median. When median is configured, the pipeline computes it correctly
+within each phase, but the composition across phases is an approximation.
+
+The two phases can also use different reduction operators (e.g., mean spatially
+and max temporally), which is useful when the semantics of the append dimension
+differ from the spatial dimensions.
 
 ## Pipeline
 
@@ -296,7 +317,7 @@ the GPU asynchronously. The H2D stream waits on the prior scatter to finish
 before overwriting the staging area on the device.
 
 **Scatter (compute stream).** Each thread unravels its input index against the
-lifted radix vector and ravels with tile-major strides, writing the element to
+lifted shape and ravels with tile-major strides, writing the element to
 its tile pool slot. When multiscale is enabled, the raw data is instead copied
 linearly for the LOD pipeline, and L0 scatter happens as part of the LOD stage.
 

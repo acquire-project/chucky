@@ -3,137 +3,13 @@
 #include "lod_plan.h"
 #include "stream.h"
 #include "test_data.h"
+#include "test_shard_sink.h"
 #include "zarr_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zstd.h>
-
-// --- L0 collecting sink (captures only level 0, discards others; for testing)
-// ---
-
-#define L0_MAX_SHARDS 16
-
-struct l0_shard_writer
-{
-  struct shard_writer base;
-  uint8_t* buf;
-  size_t capacity;
-  size_t size;
-  int finalized;
-};
-
-struct l0_discard_writer
-{
-  struct shard_writer base;
-};
-
-struct l0_collecting_sink
-{
-  struct shard_sink base;
-  struct l0_shard_writer writers[L0_MAX_SHARDS];
-  struct l0_discard_writer discard;
-  int num_shards;
-};
-
-static int
-l0_write(struct shard_writer* self,
-         uint64_t offset,
-         const void* beg,
-         const void* end)
-{
-  struct l0_shard_writer* w = (struct l0_shard_writer*)self;
-  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (offset + nbytes > w->capacity) {
-    log_error("l0_write: overflow shard (offset=%lu nbytes=%lu cap=%lu)",
-              (unsigned long)offset,
-              (unsigned long)nbytes,
-              (unsigned long)w->capacity);
-    return 1;
-  }
-  memcpy(w->buf + offset, beg, nbytes);
-  if (offset + nbytes > w->size)
-    w->size = offset + nbytes;
-  return 0;
-}
-
-static int
-l0_finalize(struct shard_writer* self)
-{
-  struct l0_shard_writer* w = (struct l0_shard_writer*)self;
-  w->finalized = 1;
-  return 0;
-}
-
-static int
-l0_discard_write(struct shard_writer* self,
-                 uint64_t offset,
-                 const void* beg,
-                 const void* end)
-{
-  (void)self;
-  (void)offset;
-  (void)beg;
-  (void)end;
-  return 0;
-}
-
-static int
-l0_discard_finalize(struct shard_writer* self)
-{
-  (void)self;
-  return 0;
-}
-
-static struct shard_writer*
-l0_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
-{
-  struct l0_collecting_sink* s = (struct l0_collecting_sink*)self;
-  if (level != 0)
-    return &s->discard.base;
-  if ((int)shard_index >= s->num_shards) {
-    log_error("l0_open: shard_index %lu >= num_shards %d",
-              (unsigned long)shard_index,
-              s->num_shards);
-    return NULL;
-  }
-  struct l0_shard_writer* w = &s->writers[shard_index];
-  w->finalized = 0;
-  w->size = 0;
-  return &w->base;
-}
-
-static int
-l0_sink_init(struct l0_collecting_sink* s,
-             int num_shards,
-             size_t per_shard_capacity)
-{
-  *s = (struct l0_collecting_sink){
-    .base = { .open = l0_open },
-    .discard = { .base = { .write = l0_discard_write,
-                           .finalize = l0_discard_finalize } },
-    .num_shards = num_shards,
-  };
-  for (int i = 0; i < num_shards; ++i) {
-    s->writers[i] = (struct l0_shard_writer){
-      .base = { .write = l0_write, .finalize = l0_finalize },
-      .buf = (uint8_t*)calloc(1, per_shard_capacity),
-      .capacity = per_shard_capacity,
-    };
-    if (!s->writers[i].buf)
-      return 1;
-  }
-  return 0;
-}
-
-static void
-l0_sink_free(struct l0_collecting_sink* s)
-{
-  for (int i = 0; i < s->num_shards; ++i)
-    free(s->writers[i].buf);
-  *s = (struct l0_collecting_sink){ 0 };
-}
 
 // --- L0 correctness: multiscale vs non-multiscale ---
 
@@ -217,8 +93,8 @@ test_multiscale_l0_correctness(void)
   log_info("  total: %zu elements, %d L0 shards", total_elements, num_shards);
 
   // --- Run 1: non-multiscale (baseline) ---
-  struct l0_collecting_sink baseline_sink;
-  CHECK(Fail0, l0_sink_init(&baseline_sink, num_shards, shard_cap) == 0);
+  struct test_shard_sink baseline_sink;
+  test_sink_init(&baseline_sink, num_shards, shard_cap);
 
   {
     struct tile_stream_gpu* s = NULL;
@@ -246,8 +122,8 @@ test_multiscale_l0_correctness(void)
 Run2:
   // --- Run 2: multiscale ---
   ;
-  struct l0_collecting_sink ms_sink;
-  CHECK(Fail1, l0_sink_init(&ms_sink, num_shards, shard_cap) == 0);
+  struct test_shard_sink ms_sink;
+  test_sink_init(&ms_sink, num_shards, shard_cap);
 
   {
     struct tile_stream_gpu* s = NULL;
@@ -277,8 +153,8 @@ Compare:
   {
     int errors = 0;
     for (int i = 0; i < num_shards; ++i) {
-      struct l0_shard_writer* b = &baseline_sink.writers[i];
-      struct l0_shard_writer* m = &ms_sink.writers[i];
+      struct test_shard_writer* b = &baseline_sink.writers[0][i];
+      struct test_shard_writer* m = &ms_sink.writers[0][i];
 
       if (!b->finalized) {
         log_error("  shard %d: baseline not finalized", i);
@@ -322,15 +198,14 @@ Compare:
   }
 
   log_info("  PASS");
-  l0_sink_free(&ms_sink);
-  l0_sink_free(&baseline_sink);
+  test_sink_free(&ms_sink);
+  test_sink_free(&baseline_sink);
   return 0;
 
 Fail2b:
-  l0_sink_free(&ms_sink);
+  test_sink_free(&ms_sink);
 Fail1:
-  l0_sink_free(&baseline_sink);
-Fail0:
+  test_sink_free(&baseline_sink);
   xor_pattern_free();
   log_error("  FAIL");
   return 1;
@@ -518,8 +393,8 @@ test_dim0_l0_correctness(void)
   log_info("  total: %zu elements, %d L0 shards", total_elements, num_shards);
 
   // --- Run 1: spatial-only multiscale (baseline) ---
-  struct l0_collecting_sink baseline_sink;
-  CHECK(Fail0, l0_sink_init(&baseline_sink, num_shards, shard_cap) == 0);
+  struct test_shard_sink baseline_sink;
+  test_sink_init(&baseline_sink, num_shards, shard_cap);
 
   {
     struct tile_stream_gpu* s = NULL;
@@ -548,8 +423,8 @@ test_dim0_l0_correctness(void)
 Run2d:
   // --- Run 2: spatial + dim0 multiscale ---
   ;
-  struct l0_collecting_sink dim0_sink;
-  CHECK(Fail1, l0_sink_init(&dim0_sink, num_shards, shard_cap) == 0);
+  struct test_shard_sink dim0_sink;
+  test_sink_init(&dim0_sink, num_shards, shard_cap);
 
   {
     struct tile_stream_gpu* s = NULL;
@@ -586,8 +461,8 @@ Compared:
   {
     int errors = 0;
     for (int i = 0; i < num_shards; ++i) {
-      struct l0_shard_writer* b = &baseline_sink.writers[i];
-      struct l0_shard_writer* m = &dim0_sink.writers[i];
+      struct test_shard_writer* b = &baseline_sink.writers[0][i];
+      struct test_shard_writer* m = &dim0_sink.writers[0][i];
 
       if (!b->finalized || !m->finalized) {
         log_error("  shard %d: not finalized (baseline=%d, dim0=%d)",
@@ -628,131 +503,17 @@ Compared:
   }
 
   log_info("  PASS");
-  l0_sink_free(&dim0_sink);
-  l0_sink_free(&baseline_sink);
+  test_sink_free(&dim0_sink);
+  test_sink_free(&baseline_sink);
   return 0;
 
 Fail2b:
-  l0_sink_free(&dim0_sink);
+  test_sink_free(&dim0_sink);
 Fail1:
-  l0_sink_free(&baseline_sink);
-Fail0:
+  test_sink_free(&baseline_sink);
   xor_pattern_free();
   log_error("  FAIL");
   return 1;
-}
-
-// --- All-level collecting sink (captures every level) ---
-
-#define ALL_MAX_SHARDS 64
-#define ALL_MAX_LEVELS 8
-
-struct all_shard_writer
-{
-  struct shard_writer base;
-  uint8_t* buf;
-  size_t capacity;
-  size_t size;
-  int finalized;
-  uint8_t level;
-  uint64_t shard_index;
-};
-
-struct all_level_collecting_sink
-{
-  struct shard_sink base;
-  struct all_shard_writer writers[ALL_MAX_LEVELS][ALL_MAX_SHARDS];
-  int num_shards_per_level[ALL_MAX_LEVELS];
-  int num_levels;
-  size_t per_shard_capacity;
-};
-
-static int
-all_write(struct shard_writer* self,
-          uint64_t offset,
-          const void* beg,
-          const void* end)
-{
-  struct all_shard_writer* w = (struct all_shard_writer*)self;
-  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (offset + nbytes > w->capacity) {
-    log_error("all_write: overflow level=%d shard=%lu",
-              w->level,
-              (unsigned long)w->shard_index);
-    return 1;
-  }
-  memcpy(w->buf + offset, beg, nbytes);
-  if (offset + nbytes > w->size)
-    w->size = offset + nbytes;
-  return 0;
-}
-
-static int
-all_finalize(struct shard_writer* self)
-{
-  struct all_shard_writer* w = (struct all_shard_writer*)self;
-  w->finalized = 1;
-  return 0;
-}
-
-static struct shard_writer*
-all_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
-{
-  struct all_level_collecting_sink* s = (struct all_level_collecting_sink*)self;
-  if (level >= s->num_levels) {
-    log_error("all_open: level %d >= num_levels %d", level, s->num_levels);
-    return NULL;
-  }
-  if ((int)shard_index >= s->num_shards_per_level[level]) {
-    log_error("all_open: level %d shard %lu >= %d",
-              level,
-              (unsigned long)shard_index,
-              s->num_shards_per_level[level]);
-    return NULL;
-  }
-  struct all_shard_writer* w = &s->writers[level][shard_index];
-  w->level = level;
-  w->shard_index = shard_index;
-  w->finalized = 0;
-  w->size = 0;
-  return &w->base;
-}
-
-static void
-all_sink_free(struct all_level_collecting_sink* s)
-{
-  for (int lv = 0; lv < s->num_levels; ++lv)
-    for (int i = 0; i < s->num_shards_per_level[lv]; ++i)
-      free(s->writers[lv][i].buf);
-  *s = (struct all_level_collecting_sink){ 0 };
-}
-
-static int
-all_sink_init(struct all_level_collecting_sink* s,
-              int num_levels,
-              const int* num_shards_per_level,
-              size_t per_shard_capacity)
-{
-  *s = (struct all_level_collecting_sink){
-    .base = { .open = all_open },
-    .num_levels = num_levels,
-    .per_shard_capacity = per_shard_capacity,
-  };
-  for (int lv = 0; lv < num_levels; ++lv) {
-    s->num_shards_per_level[lv] = num_shards_per_level[lv];
-    for (int i = 0; i < num_shards_per_level[lv]; ++i) {
-      s->writers[lv][i] = (struct all_shard_writer){
-        .base = { .write = all_write, .finalize = all_finalize },
-        .buf = (uint8_t*)calloc(1, per_shard_capacity),
-        .capacity = per_shard_capacity,
-      };
-      if (!s->writers[lv][i].buf) {
-        all_sink_free(s);
-        return 1;
-      }
-    }
-  }
-  return 0;
 }
 
 // --- Dim0 multi-epoch: verify higher LOD levels are populated ---
@@ -821,8 +582,8 @@ test_dim0_multi_epoch_levels(void)
 
   // Use generous shard allocation — higher levels may have different shard
   // layouts than what we can compute from just shapes. L0 gets a careful count,
-  // higher levels get ALL_MAX_SHARDS.
-  int num_shards_per_level[ALL_MAX_LEVELS];
+  // higher levels get TEST_SHARD_SINK_MAX_SHARDS.
+  int num_shards_per_level[TEST_SHARD_SINK_MAX_LEVELS];
   for (int lv = 0; lv < nlod; ++lv) {
     if (lv == 0) {
       int ns = 1;
@@ -834,9 +595,9 @@ test_dim0_multi_epoch_levels(void)
         uint64_t sc = ceildiv(tc, tps);
         ns *= (int)sc;
       }
-      num_shards_per_level[lv] = ns < ALL_MAX_SHARDS ? ns : ALL_MAX_SHARDS;
+      num_shards_per_level[lv] = ns < TEST_SHARD_SINK_MAX_SHARDS ? ns : TEST_SHARD_SINK_MAX_SHARDS;
     } else {
-      num_shards_per_level[lv] = ALL_MAX_SHARDS;
+      num_shards_per_level[lv] = TEST_SHARD_SINK_MAX_SHARDS;
     }
     log_info("  level %d: shape=(%lu,%lu,%lu,%lu,%lu) shards=%d",
              lv,
@@ -850,9 +611,8 @@ test_dim0_multi_epoch_levels(void)
 
   lod_plan_free(&plan);
 
-  struct all_level_collecting_sink sink;
-  CHECK(Fail,
-        all_sink_init(&sink, nlod, num_shards_per_level, 256 * 1024) == 0);
+  struct test_shard_sink sink;
+  test_sink_init_multi(&sink, nlod, num_shards_per_level, 256 * 1024);
 
   {
     struct tile_stream_gpu* s = NULL;
@@ -914,12 +674,12 @@ test_dim0_multi_epoch_levels(void)
     CHECK(Fail2, total_bytes > 0);
   }
 
-  all_sink_free(&sink);
+  test_sink_free(&sink);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  all_sink_free(&sink);
+  test_sink_free(&sink);
 Fail:
   log_error("  FAIL");
   return 1;

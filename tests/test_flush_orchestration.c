@@ -187,7 +187,7 @@ test_accumulate_one_epoch(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct orch_ctx c;
@@ -240,7 +240,7 @@ test_full_batch_auto_flush(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct orch_ctx c;
@@ -292,7 +292,7 @@ test_drain_delivers_data(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct orch_ctx c;
@@ -318,7 +318,7 @@ test_drain_delivers_data(void)
   // Data delivered: shard opened and finalized (tps_0=2, 2 epochs → complete)
   CHECK(Fail, sink.open_count >= 1);
   CHECK(Fail, sink.finalize_count == 1);
-  CHECK(Fail, sink.writers[0].size > 0);
+  CHECK(Fail, sink.writers[0][0].size > 0);
 
   // Sink metric always recorded (uses platform_toc, not CUDA events)
   CHECK(Fail, c.metrics.sink.count == 1);
@@ -345,7 +345,7 @@ test_accumulated_sync_partial(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct orch_ctx c;
@@ -369,7 +369,7 @@ test_accumulated_sync_partial(void)
 
   // Data delivered to sink (1 epoch, shard not finalized since tps_0=2)
   CHECK(Fail, sink.open_count >= 1);
-  CHECK(Fail, sink.writers[0].size > 0);
+  CHECK(Fail, sink.writers[0][0].size > 0);
 
   // Sink metric recorded (platform_toc, not CUDA events — always fires)
   CHECK(Fail, c.metrics.sink.count == 1);
@@ -396,7 +396,7 @@ test_two_batch_cycle(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 1024 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
   config.shard_sink = &sink.base;
 
   struct orch_ctx c;

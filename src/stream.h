@@ -131,6 +131,9 @@ struct tile_stream_status
   size_t bytes_per_element;
   enum compression_codec codec;
   size_t codec_batch_size;
+  uint32_t batch_accumulated;
+  int pool_current;
+  int flush_pending;
 };
 
 struct tile_stream_status

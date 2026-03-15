@@ -19,6 +19,10 @@ endfunction()
 add_test_lib(index_ops_util index.ops.util.c)
 target_link_libraries(index_ops_util PUBLIC index_ops)
 
+# Morton/LOD CPU reference library (shared between tests)
+add_test_lib(morton_util morton.util.c morton.util.h)
+target_link_libraries(morton_util PUBLIC lod_plan index_ops)
+
 # Shared test shard sink (multi-shard-safe)
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)
 target_link_libraries(test_shard_sink PUBLIC stream)
@@ -42,7 +46,7 @@ add_test_lib(test_data test_data.c test_data.h)
 target_link_libraries(test_data PUBLIC stream)
 
 # Tests with zstd
-add_test_exe(test_stream          test_stream.c          CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util)
+add_test_exe(test_stream          test_stream.c          CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink)
 add_test_exe(test_compress        test_compress.c        CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 add_test_exe(test_aggregate       test_aggregate.c       CUDA::cuda_driver CUDA::cudart_static aggregate index_ops_util)
 add_test_exe(test_shard_contents  test_shard_contents.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
@@ -58,7 +62,7 @@ add_test_exe(test_batch        test_batch.c        CUDA::cuda_driver CUDA::cudar
 add_test_exe(test_d2h_deliver  test_d2h_deliver.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink test_gpu_helpers index_ops_util)
 add_test_exe(test_flush_orch  test_flush_orchestration.c CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream chucky_log)
-add_test_exe(test_lod         test_lod.c         CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops)
-add_test_exe(test_multiscale  test_multiscale.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data zarr_sink)
+add_test_exe(test_lod         test_lod.c         CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
+add_test_exe(test_multiscale  test_multiscale.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data zarr_sink test_shard_sink)
 
 add_subdirectory(experiments)

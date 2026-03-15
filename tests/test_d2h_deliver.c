@@ -158,7 +158,7 @@ test_d2h_single_epoch_none(void)
   make_test_config(&config, dims, CODEC_NONE, 1);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct test_ctx c;
@@ -220,7 +220,7 @@ test_d2h_single_epoch_none(void)
 
       uint16_t expected_val = fill_epoch0(t);
       const uint16_t* got =
-        (const uint16_t*)(sink.writers[0].buf + tile_off);
+        (const uint16_t*)(sink.writers[0][0].buf + tile_off);
       for (uint64_t e = 0; e < tile_stride; ++e) {
         if (got[e] != expected_val) {
           if (errors < 5)
@@ -256,7 +256,7 @@ test_d2h_batch_none(void)
   make_test_config(&config, dims, CODEC_NONE, 2);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct test_ctx c;
@@ -301,11 +301,11 @@ test_d2h_batch_none(void)
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
 
-    CHECK(Fail, sink.writers[0].size >= index_total_bytes);
-    size_t index_start = sink.writers[0].size - index_total_bytes;
+    CHECK(Fail, sink.writers[0][0].size >= index_total_bytes);
+    size_t index_start = sink.writers[0][0].size - index_total_bytes;
 
     const uint64_t* idx =
-      (const uint64_t*)(sink.writers[0].buf + index_start);
+      (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
     // The batch LUT aggregate interleaves epochs: output position =
     // perm_pos * batch_count + epoch. deliver_to_shards_batch reads
@@ -347,7 +347,7 @@ test_d2h_batch_none(void)
 
       uint16_t expected_val = fill_fn(orig_tile);
       const uint16_t* got =
-        (const uint16_t*)(sink.writers[0].buf + tile_off);
+        (const uint16_t*)(sink.writers[0][0].buf + tile_off);
       for (uint64_t e = 0; e < tile_stride; ++e) {
         if (got[e] != expected_val) {
           if (errors < 5)
@@ -387,7 +387,7 @@ test_d2h_zstd_single_epoch(void)
   make_test_config(&config, dims, CODEC_ZSTD, 1);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct test_ctx c;
@@ -413,7 +413,7 @@ test_d2h_zstd_single_epoch(void)
         test_ctx_kick_and_drain(
           &c, &config, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
 
-  CHECK(Fail, sink.writers[0].size > 0);
+  CHECK(Fail, sink.writers[0][0].size > 0);
 
   // Decompress and verify tile data
   {
@@ -432,10 +432,10 @@ test_d2h_zstd_single_epoch(void)
       uint64_t tile_sz = sh->index[2 * pi + 1];
 
       CHECK(Fail, tile_sz > 0);
-      CHECK(Fail, tile_off + tile_sz <= sink.writers[0].size);
+      CHECK(Fail, tile_off + tile_sz <= sink.writers[0][0].size);
 
       size_t result = ZSTD_decompress(decomp_buf, tile_bytes,
-                                      sink.writers[0].buf + tile_off,
+                                      sink.writers[0][0].buf + tile_off,
                                       tile_sz);
       if (ZSTD_isError(result)) {
         log_error("  tile %lu: ZSTD_decompress failed: %s",
@@ -483,7 +483,7 @@ test_d2h_double_buffer(void)
   make_test_config(&config, dims, CODEC_NONE, 1);
 
   struct test_shard_sink sink;
-  test_sink_init(&sink, 512 * 1024);
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
   config.shard_sink = &sink.base;
 
   struct test_ctx c;
@@ -536,10 +536,10 @@ test_d2h_double_buffer(void)
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
 
-    CHECK(Fail, sink.writers[0].size >= index_total_bytes);
-    size_t index_start = sink.writers[0].size - index_total_bytes;
+    CHECK(Fail, sink.writers[0][0].size >= index_total_bytes);
+    size_t index_start = sink.writers[0][0].size - index_total_bytes;
     const uint64_t* idx =
-      (const uint64_t*)(sink.writers[0].buf + index_start);
+      (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
     const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
     uint64_t tps_inner = ss->tiles_per_shard_inner;
@@ -565,7 +565,7 @@ test_d2h_double_buffer(void)
 
         uint16_t expected_val = fill_fn(j);
         const uint16_t* got =
-          (const uint16_t*)(sink.writers[0].buf + tile_off);
+          (const uint16_t*)(sink.writers[0][0].buf + tile_off);
         for (uint64_t e = 0; e < tile_stride; ++e) {
           if (got[e] != expected_val) {
             if (errors < 5)

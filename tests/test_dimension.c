@@ -5,6 +5,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#define REPORT_TEST(ok)                                                        \
+  do {                                                                         \
+    if (ok)                                                                    \
+      log_info("  PASS: %s", __func__);                                        \
+    else                                                                       \
+      log_error("  FAIL: %s", __func__);                                       \
+  } while (0)
+
 static int
 test_dims_create(void)
 {
@@ -37,7 +45,7 @@ test_dims_create(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -54,7 +62,7 @@ test_dims_create_errors(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -88,7 +96,7 @@ test_dims_budget_tile_size(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -112,7 +120,7 @@ test_dims_budget_tile_size_uniform(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -144,7 +152,7 @@ test_dims_set_shard_counts(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -167,7 +175,7 @@ test_dims_set_shard_counts_skip_zero(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -202,7 +210,7 @@ test_dims_set_storage_order(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -223,7 +231,7 @@ test_dims_set_downsample_by_name(void)
 
   ok = 1;
 Error:
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 
@@ -247,7 +255,7 @@ test_dims_print(void)
   dims_print(dims, 4);
 
   ok = 1;
-  printf("%s: %s\n", ok ? "PASS" : "FAIL", __func__);
+  REPORT_TEST(ok);
   return !ok;
 }
 

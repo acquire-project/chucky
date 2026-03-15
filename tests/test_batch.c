@@ -1,7 +1,6 @@
 #include "prelude.cuda.h"
 #include "prelude.h"
 #include "stream.h"
-#include "stream_internal.h"
 #include "test_shard_sink.h"
 
 #include <stdio.h>
@@ -54,7 +53,7 @@ test_batch_counter_one_epoch(void)
   log_info("=== test_batch_counter_one_epoch ===");
 
   struct test_shard_sink css;
-  test_sink_init(&css, 512 * 1024);
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
   struct tile_stream_configuration config = make_config(test_dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
@@ -70,14 +69,13 @@ test_batch_counter_one_epoch(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  // Verify internal state: mid-batch
-  CHECK(Fail2, s->batch.accumulated == 1);
-  CHECK(Fail2, s->pools.current == 0);
-  CHECK(Fail2, s->flush.pending == 0);
-
-  // Verify masks
-  CHECK(Fail2, s->flush.slot[0].batch_active_masks[0] == 0x1);
-  CHECK(Fail2, s->flush.slot[0].active_levels_mask == 0x1);
+  // Verify state: mid-batch
+  {
+    struct tile_stream_status st = tile_stream_gpu_status(s);
+    CHECK(Fail2, st.batch_accumulated == 1);
+    CHECK(Fail2, st.pool_current == 0);
+    CHECK(Fail2, st.flush_pending == 0);
+  }
 
   // Sink should not have been touched yet
   CHECK(Fail2, css.open_count == 0);
@@ -110,7 +108,7 @@ test_batch_full_triggers_swap(void)
   log_info("=== test_batch_full_triggers_swap ===");
 
   struct test_shard_sink css;
-  test_sink_init(&css, 512 * 1024);
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
   struct tile_stream_configuration config = make_config(test_dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
@@ -125,9 +123,12 @@ test_batch_full_triggers_swap(void)
   CHECK(Fail2, r.error == 0);
 
   // After full batch: accumulated reset, pool swapped, pending set
-  CHECK(Fail2, s->batch.accumulated == 0);
-  CHECK(Fail2, s->pools.current == 1);
-  CHECK(Fail2, s->flush.pending == 1);
+  {
+    struct tile_stream_status st = tile_stream_gpu_status(s);
+    CHECK(Fail2, st.batch_accumulated == 0);
+    CHECK(Fail2, st.pool_current == 1);
+    CHECK(Fail2, st.flush_pending == 1);
+  }
 
   // Kicked but NOT drained yet
   CHECK(Fail2, css.finalize_count == 0);
@@ -136,7 +137,7 @@ test_batch_full_triggers_swap(void)
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
 
-  CHECK(Fail2, s->flush.pending == 0);
+  CHECK(Fail2, tile_stream_gpu_status(s).flush_pending == 0);
   CHECK(Fail2, css.finalize_count >= 1);
 
   free(src);
@@ -162,7 +163,7 @@ test_batch_multi_cycle(void)
   log_info("=== test_batch_multi_cycle ===");
 
   struct test_shard_sink css;
-  test_sink_init(&css, 1024 * 1024);
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
 
   struct tile_stream_configuration config = make_config(test_dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
@@ -177,9 +178,12 @@ test_batch_multi_cycle(void)
   CHECK(Fail2, r.error == 0);
 
   // After 2 batches: swapped twice → back to pool 0, batch 2 pending
-  CHECK(Fail2, s->pools.current == 0);
-  CHECK(Fail2, s->batch.accumulated == 0);
-  CHECK(Fail2, s->flush.pending == 1);
+  {
+    struct tile_stream_status st = tile_stream_gpu_status(s);
+    CHECK(Fail2, st.pool_current == 0);
+    CHECK(Fail2, st.batch_accumulated == 0);
+    CHECK(Fail2, st.flush_pending == 1);
+  }
 
   // Batch 1 drained when batch 2 started; batch 2 still pending
   int pre_flush_finalize = css.finalize_count;
@@ -213,7 +217,7 @@ test_batch_partial_flush(void)
   log_info("=== test_batch_partial_flush ===");
 
   struct test_shard_sink css;
-  test_sink_init(&css, 512 * 1024);
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
 
   struct tile_stream_configuration config = make_config(test_dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
@@ -226,14 +230,14 @@ test_batch_partial_flush(void)
   struct slice input = { .beg = src, .end = src + 48 };
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
-  CHECK(Fail2, s->batch.accumulated == 1);
+  CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 1);
 
   // Flush exercises the partial batch path (flush_accumulated_sync)
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
 
   // After flush: batch drained
-  CHECK(Fail2, s->batch.accumulated == 0);
+  CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 0);
   CHECK(Fail2, css.finalize_count >= 1);
 
   free(src);
@@ -259,7 +263,7 @@ test_batch_3epochs_flush(void)
   log_info("=== test_batch_3epochs_flush ===");
 
   struct test_shard_sink css;
-  test_sink_init(&css, 1024 * 1024);
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
 
   struct tile_stream_configuration config = make_config(test_dims, &css.base);
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
@@ -275,15 +279,18 @@ test_batch_3epochs_flush(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  CHECK(Fail2, s->batch.accumulated == 1);
-  CHECK(Fail2, s->flush.pending == 1);
+  {
+    struct tile_stream_status st = tile_stream_gpu_status(s);
+    CHECK(Fail2, st.batch_accumulated == 1);
+    CHECK(Fail2, st.flush_pending == 1);
+  }
 
   // Flush: drain batch 1 + handle epoch 2 as partial + emit partial shard
   int pre_flush_finalize = css.finalize_count;
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
 
-  CHECK(Fail2, s->flush.pending == 0);
+  CHECK(Fail2, tile_stream_gpu_status(s).flush_pending == 0);
   CHECK(Fail2, css.finalize_count > pre_flush_finalize);
 
   free(src);

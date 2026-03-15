@@ -676,6 +676,9 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
     .bytes_per_element = s->config.bytes_per_element,
     .codec = s->config.codec,
     .codec_batch_size = s->compress_agg.codec.batch_size,
+    .batch_accumulated = s->batch.accumulated,
+    .pool_current = s->pools.current,
+    .flush_pending = s->flush.pending,
   };
 }
 
