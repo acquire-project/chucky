@@ -579,7 +579,7 @@ test_accum_fold_u16(const char* label,
   uint16_t* h_expected = NULL;
   uint8_t* h_level_ids = NULL;
 
-  size_t accum_bpe = lod_accum_bpe(sizeof(uint16_t), method);
+  size_t accum_bpe = lod_accum_bpe(lod_dtype_u16, method);
 
   h_data = (uint16_t*)malloc(n_epochs * n_elements * sizeof(uint16_t));
   h_result = (uint16_t*)malloc(n_elements * sizeof(uint16_t));
@@ -593,10 +593,16 @@ test_accum_fold_u16(const char* label,
 
   for (uint64_t i = 0; i < n_elements; ++i) {
     if (method == lod_reduce_mean) {
-      uint32_t sum = 0;
-      for (int e = 0; e < n_epochs; ++e)
-        sum += h_data[e * n_elements + i];
-      h_expected[i] = (uint16_t)(sum / (uint32_t)n_epochs);
+      // GPU fold uses overflow-safe (a+b)>>s per step, s=level=1
+      uint16_t accum = h_data[i];
+      int s = 1; // level_ids are all 1
+      uint16_t mask = (uint16_t)((1u << s) - 1);
+      for (int e = 1; e < n_epochs; ++e) {
+        uint16_t b = h_data[e * n_elements + i];
+        accum = (uint16_t)((accum >> s) + (b >> s)
+                           + (((accum & mask) + (b & mask)) >> s));
+      }
+      h_expected[i] = accum;
     } else if (method == lod_reduce_min) {
       uint16_t best = h_data[i];
       for (int e = 1; e < n_epochs; ++e)
@@ -808,7 +814,7 @@ test_accum_fold_fused_u16(const char* label, enum lod_reduce_method method)
   uint16_t* h_data = NULL;
   uint16_t* h_result = NULL;
 
-  size_t accum_bpe = lod_accum_bpe(sizeof(uint16_t), method);
+  size_t accum_bpe = lod_accum_bpe(lod_dtype_u16, method);
   uint8_t* h_level_ids = NULL;
 
   h_data = (uint16_t*)malloc(n_epochs * total * sizeof(uint16_t));
@@ -868,10 +874,15 @@ test_accum_fold_fused_u16(const char* label, enum lod_reduce_method method)
     for (uint64_t i = 0; i < n_lv1; ++i) {
       uint16_t expected;
       if (method == lod_reduce_mean) {
-        uint32_t sum = 0;
-        for (int e = 0; e < n_epochs; ++e)
-          sum += h_data[e * total + i];
-        expected = (uint16_t)(sum / (uint32_t)n_epochs);
+        uint16_t accum = h_data[i];
+        int s = 1; // level 1
+        uint16_t mask = (uint16_t)((1u << s) - 1);
+        for (int e = 1; e < n_epochs; ++e) {
+          uint16_t b = h_data[e * total + i];
+          accum = (uint16_t)((accum >> s) + (b >> s)
+                             + (((accum & mask) + (b & mask)) >> s));
+        }
+        expected = accum;
       } else if (method == lod_reduce_min) {
         expected = h_data[i];
         for (int e = 1; e < n_epochs; ++e)
@@ -909,10 +920,15 @@ test_accum_fold_fused_u16(const char* label, enum lod_reduce_method method)
       uint64_t si = n_lv1 + i; // source index in packed data
       uint16_t expected;
       if (method == lod_reduce_mean) {
-        uint32_t sum = 0;
-        for (int e = 0; e < n_epochs; ++e)
-          sum += h_data[e * total + si];
-        expected = (uint16_t)(sum / (uint32_t)n_epochs);
+        uint16_t accum = h_data[si];
+        int s = 2; // level 2
+        uint16_t mask = (uint16_t)((1u << s) - 1);
+        for (int e = 1; e < n_epochs; ++e) {
+          uint16_t b = h_data[e * total + si];
+          accum = (uint16_t)((accum >> s) + (b >> s)
+                             + (((accum & mask) + (b & mask)) >> s));
+        }
+        expected = accum;
       } else if (method == lod_reduce_min) {
         expected = h_data[si];
         for (int e = 1; e < n_epochs; ++e)

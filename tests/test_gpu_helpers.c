@@ -37,7 +37,7 @@ make_test_config(struct tile_stream_configuration* config,
   memset(config, 0, sizeof(*config));
   config->rank = 3;
   config->dimensions = dims;
-  config->bytes_per_element = 2;
+  config->dtype = lod_dtype_u16;
   config->buffer_capacity_bytes = 4096;
   config->codec = codec;
   config->shard_alignment = 0;

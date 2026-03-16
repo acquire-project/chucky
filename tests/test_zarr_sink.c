@@ -188,7 +188,7 @@ test_pipeline(const char* tmpdir)
   // Configure tile stream
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
-    .bytes_per_element = sizeof(uint32_t),
+    .dtype = lod_dtype_u32,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -495,7 +495,7 @@ test_unbounded_metadata_update(const char* tmpdir)
   // Stream some data through the pipeline
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -707,7 +707,7 @@ test_midstream_metadata_update(const char* tmpdir)
   // Force epochs_per_batch=1 so each epoch triggers a flush (and timer check).
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -853,7 +853,7 @@ test_unbuffered_pipeline(const char* tmpdir)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
-    .bytes_per_element = sizeof(uint32_t),
+    .dtype = lod_dtype_u32,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -1058,7 +1058,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
   // Configure tile stream with shard alignment for unbuffered IO
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
-    .bytes_per_element = sizeof(uint32_t),
+    .dtype = lod_dtype_u32,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -1246,7 +1246,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = bad_dims,
     };
@@ -1276,7 +1276,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = bad_dims,
     };
@@ -1306,7 +1306,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = bad_dims,
     };
@@ -1319,7 +1319,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = dims,
     };
@@ -1349,7 +1349,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = id_dims,
     };
@@ -1379,7 +1379,7 @@ test_storage_order_validation(const char* tmpdir)
     struct tile_stream_memory_info info;
     struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4096,
-      .bytes_per_element = 2,
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = perm_dims,
     };
@@ -1504,7 +1504,7 @@ test_pipeline_storage_order(const char* tmpdir)
   // tile_stream uses acquisition-order dims (same array, with storage_position)
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint32_t),
-    .bytes_per_element = sizeof(uint32_t),
+    .dtype = lod_dtype_u32,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,

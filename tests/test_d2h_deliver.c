@@ -77,7 +77,7 @@ test_ctx_setup(struct test_ctx* c,
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_tiles *
-                      c->cl.l0.tile_stride * config->bytes_per_element;
+                      c->cl.l0.tile_stride * lod_dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
   c->batch = (struct batch_state){
@@ -170,7 +170,7 @@ test_d2h_single_epoch_none(void)
 
   const uint64_t total_tiles = c.cl.levels.total_tiles;
   const uint64_t tile_stride = c.cl.l0.tile_stride;
-  const size_t bpe = config.bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config.dtype);
   const size_t tile_bytes = tile_stride * bpe;
 
   log_info("  total_tiles=%lu tile_stride=%lu tile_bytes=%zu",
@@ -235,7 +235,7 @@ test_d2h_batch_none(void)
 
   const uint64_t total_tiles = c.cl.levels.total_tiles;
   const uint64_t tile_stride = c.cl.l0.tile_stride;
-  const size_t bpe = config.bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config.dtype);
   const size_t tile_bytes = tile_stride * bpe;
 
   // Fill pool: epoch 0 and epoch 1
@@ -365,7 +365,7 @@ test_d2h_zstd_single_epoch(void)
 
   const uint64_t total_tiles = c.cl.levels.total_tiles;
   const uint64_t tile_stride = c.cl.l0.tile_stride;
-  const size_t bpe = config.bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config.dtype);
   const size_t tile_bytes = tile_stride * bpe;
 
   CHECK(Fail, fill_pool_epoch(c.d_pool, total_tiles, tile_stride, bpe,
@@ -460,7 +460,7 @@ test_d2h_double_buffer(void)
 
   const uint64_t total_tiles = c.cl.levels.total_tiles;
   const uint64_t tile_stride = c.cl.l0.tile_stride;
-  const size_t bpe = config.bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config.dtype);
   const size_t tile_bytes = tile_stride * bpe;
   size_t epoch_pool_bytes = total_tiles * tile_stride * bpe;
 

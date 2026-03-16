@@ -15,7 +15,7 @@ make_config(const struct dimension* dims, struct shard_sink* sink)
 {
   return (struct tile_stream_configuration){
     .buffer_capacity_bytes = 48 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = sink,

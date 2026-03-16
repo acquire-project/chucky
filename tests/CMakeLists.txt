@@ -69,6 +69,7 @@ add_test_exe(test_d2h_deliver  test_d2h_deliver.c  CUDA::cuda_driver CUDA::cudar
 add_test_exe(test_flush_orch  test_flush_orchestration.c CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream chucky_log)
 add_test_exe(test_lod         test_lod.c         CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
+add_test_exe(test_lod_dtypes  test_lod_dtypes.cu CUDA::cuda_driver CUDA::cudart_static lod lod_plan)
 add_test_exe(test_multiscale  test_multiscale.c  CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data test_shard_sink)
 
 add_subdirectory(experiments)

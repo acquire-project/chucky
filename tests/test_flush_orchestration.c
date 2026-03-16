@@ -75,7 +75,7 @@ orch_ctx_setup(struct orch_ctx* c,
   const uint32_t K = c->cl.epochs_per_batch;
   const uint64_t total_tiles = c->cl.levels.total_tiles;
   const uint64_t tile_stride = c->cl.l0.tile_stride;
-  const size_t bpe = config->bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config->dtype);
   const size_t pool_bytes = (uint64_t)K * total_tiles * tile_stride * bpe;
 
   // GPU streams
@@ -166,7 +166,7 @@ orch_ctx_fill_epoch(struct orch_ctx* c,
 
   const uint64_t total_tiles = c->cl.levels.total_tiles;
   const uint64_t tile_stride = c->cl.l0.tile_stride;
-  const size_t bpe = config->bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config->dtype);
   CUdeviceptr epoch_ptr =
     c->pools.buf[c->pools.current] +
     (uint64_t)epoch_in_batch * total_tiles * tile_stride * bpe;

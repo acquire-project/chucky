@@ -368,6 +368,8 @@ zarr_dtype_string(enum zarr_dtype dt)
       return "int32";
     case zarr_dtype_int64:
       return "int64";
+    case zarr_dtype_float16:
+      return "float16";
     case zarr_dtype_float32:
       return "float32";
     case zarr_dtype_float64:

@@ -3,9 +3,9 @@
 ## TODO
 
 - [ ] interface for streaming from device, integrating with a cuda stream
-- [ ] u8, u32, i8, i16, i32
-- [ ] u64, i64, double?
-- [ ] ? f16
+- [x] u8, u32, i8, i16, i32
+- [x] u64, i64, double?
+- [x] fp16
 - [ ] cpu impl
 - [ ] whitepaper
 - [ ] coverage
@@ -34,11 +34,19 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
+## 2026-03-15
+
+Refactoring tests and isolating pipeline stages more.
+
+Spent a good amount of time rewriting the design doc which I think will
+basically turn into a whitepaper. Or at least I can use the design doc to get
+some useful text down.
+
+Added support for many different scalar types. Apparently zarr supports fp16.
+
 ## 2026-03-14
 
 Trying to refactor to isolate pipeline stages.
-
-
 
 ## 2026-03-13
 
@@ -49,10 +57,6 @@ double check that part of the code again.
 
 I've been just adding stuff to the code as I go. I need to break up a bunch of
 files/functions. So doing some cleanup...
-
-Spent a good amount of time rewriting the design doc which I think will
-basically turn into a whitepaper. Or at least I can use the design doc to get
-some useful text down.
 
 ## 2026-03-12
 

@@ -144,7 +144,7 @@ test_stream_single_append(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -224,7 +224,7 @@ test_stream_chunked_append(void)
   // Small buffer: 10 elements worth (rounded up to 4KB internally)
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 10 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -298,7 +298,7 @@ test_stream_compressed_roundtrip(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
@@ -374,7 +374,7 @@ test_stream_lz4_roundtrip(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_LZ4,
@@ -453,7 +453,7 @@ test_stream_zero_length_append(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -509,7 +509,7 @@ test_stream_null_config_fields(void)
   // NULL shard_sink should cause create to fail
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 24 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 2,
     .dimensions = dims,
     .shard_sink = NULL,
@@ -544,7 +544,7 @@ test_stream_rank_1_dim(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 12 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 1,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -596,7 +596,7 @@ test_stream_flush_empty(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 24 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 2,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -638,7 +638,7 @@ test_stream_unbounded_dim0(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -705,7 +705,7 @@ test_stream_unbounded_requires_tps(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -742,7 +742,7 @@ test_stream_bounded_dim0(void)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 96 * sizeof(uint16_t),
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = 3,
     .dimensions = dims,
     .shard_sink = &mss.base,
@@ -836,7 +836,7 @@ test_shard_index_structure(void)
 
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = total_elements * sizeof(uint32_t),
-      .bytes_per_element = sizeof(uint32_t),
+      .dtype = lod_dtype_u32,
       .rank = 3,
       .dimensions = dims,
       .codec = CODEC_ZSTD,
@@ -942,7 +942,7 @@ Case2:
 
     const struct tile_stream_configuration config2 = {
       .buffer_capacity_bytes = total2 * sizeof(uint16_t),
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = 3,
       .dimensions = dims2,
       .codec = CODEC_ZSTD,

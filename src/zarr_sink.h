@@ -15,6 +15,7 @@ enum zarr_dtype
   zarr_dtype_int16,
   zarr_dtype_int32,
   zarr_dtype_int64,
+  zarr_dtype_float16,
   zarr_dtype_float32,
   zarr_dtype_float64,
 };

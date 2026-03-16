@@ -3,7 +3,45 @@
 #include "prelude.h"
 
 #include <assert.h>
+#include <cuda_fp16.h>
 #include <stdint.h>
+#include <string.h>
+
+// min/max overloads for __half (not provided by CUDA math functions).
+__device__ inline __half
+min(__half a, __half b)
+{
+  return __hmin(a, b);
+}
+__device__ inline __half
+max(__half a, __half b)
+{
+  return __hmax(a, b);
+}
+
+#define FOR_EACH_DTYPE(X)       \
+  X(lod_dtype_u8,  uint8_t)    \
+  X(lod_dtype_u16, uint16_t)   \
+  X(lod_dtype_u32, uint32_t)   \
+  X(lod_dtype_u64, uint64_t)   \
+  X(lod_dtype_i8,  int8_t)     \
+  X(lod_dtype_i16, int16_t)    \
+  X(lod_dtype_i32, int32_t)    \
+  X(lod_dtype_i64, int64_t)    \
+  X(lod_dtype_f16, __half)     \
+  X(lod_dtype_f32, float)      \
+  X(lod_dtype_f64, double)
+
+// Widened accumulator for lod_reduce (register-only).
+template<typename T> struct reduce_acc { using type = T; };
+template<> struct reduce_acc<uint8_t>  { using type = uint32_t; };
+template<> struct reduce_acc<uint16_t> { using type = uint32_t; };
+template<> struct reduce_acc<uint32_t> { using type = uint64_t; };
+template<> struct reduce_acc<int8_t>   { using type = int32_t; };
+template<> struct reduce_acc<int16_t>  { using type = int32_t; };
+template<> struct reduce_acc<int32_t>  { using type = int64_t; };
+template<> struct reduce_acc<__half>   { using type = float; };
+// u64, i64, float, double: default (type = T)
 
 #define LOD_BLOCK 256
 
@@ -147,7 +185,8 @@ lod_build_gather_lut_k(uint32_t* __restrict__ src_lut,
 }
 
 // --- Gather kernel: shared-memory tiled, u32-aliased, coalesced stores ---
-// Caller must ensure dst is 4-byte aligned.
+// For types <= 4 bytes: pack into u32 via memcpy, coalesced stores via smem.
+// For 8-byte types: simple per-element path (no packing).
 
 template<typename T>
 __global__ void __launch_bounds__(256, 4)
@@ -158,66 +197,74 @@ __global__ void __launch_bounds__(256, 4)
                    uint64_t lod_count,
                    uint64_t total)
 {
-  constexpr int T_PER_U32 = sizeof(uint32_t) / sizeof(T);
-  constexpr int TILE_U32 = (1 << 12) / sizeof(uint32_t); // 1024 u32 slots = 4KB
-  constexpr int TILE_ELEMENTS = TILE_U32 * T_PER_U32;
+  if constexpr (sizeof(T) > sizeof(uint32_t)) {
+    // 8-byte types: simple per-element, no shared memory packing
+    const uint64_t gid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid >= total)
+      return;
+    uint64_t batch = gid / lod_count;
+    uint64_t morton_pos = gid % lod_count;
+    dst[gid] = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
+  } else {
+    constexpr int T_PER_U32 = sizeof(uint32_t) / sizeof(T);
+    constexpr int TILE_U32 =
+      (1 << 12) / sizeof(uint32_t); // 1024 u32 slots = 4KB
+    constexpr int TILE_ELEMENTS = TILE_U32 * T_PER_U32;
 
-  __shared__ uint32_t tile[TILE_U32];
+    __shared__ uint32_t tile[TILE_U32];
 
-  const int tid = threadIdx.x;
-  const uint64_t block_base = (uint64_t)blockIdx.x * TILE_ELEMENTS;
+    const int tid = threadIdx.x;
+    const uint64_t block_base = (uint64_t)blockIdx.x * TILE_ELEMENTS;
 
-  // Phase 1: Gather scattered reads, pack into u32, write to shared memory
-  {
-    uint64_t gid0 = block_base + (uint64_t)tid * T_PER_U32;
-    uint64_t batch = gid0 / lod_count;
-    uint64_t morton_pos = gid0 % lod_count;
+    // Phase 1: Gather scattered reads, pack into u32 via memcpy, write to smem
+    {
+      uint64_t gid0 = block_base + (uint64_t)tid * T_PER_U32;
+      uint64_t batch = gid0 / lod_count;
+      uint64_t morton_pos = gid0 % lod_count;
 
-    for (int i = tid; i < TILE_U32; i += blockDim.x) {
-      uint64_t gid = block_base + (uint64_t)i * T_PER_U32;
-      uint32_t packed = 0;
+      for (int i = tid; i < TILE_U32; i += blockDim.x) {
+        uint64_t gid = block_base + (uint64_t)i * T_PER_U32;
+        uint32_t packed = 0;
 
-      for (int k = 0; k < T_PER_U32; ++k) {
-        if (gid + k < total) {
-          T val = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
-          if constexpr (sizeof(T) == 4)
-            packed = __float_as_uint(val);
-          else
-            packed |= ((uint32_t)val) << (k * sizeof(T) * 8);
+        for (int k = 0; k < T_PER_U32; ++k) {
+          if (gid + k < total) {
+            T val = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
+            memcpy((char*)&packed + k * sizeof(T), &val, sizeof(T));
+          }
+          morton_pos++;
+          if (morton_pos >= lod_count) {
+            morton_pos = 0;
+            batch++;
+          }
         }
-        morton_pos++;
-        if (morton_pos >= lod_count) {
-          morton_pos = 0;
+        tile[i] = packed;
+
+        // Advance to next iteration: skip (blockDim.x - 1) * T_PER_U32 elements
+        morton_pos += (uint64_t)(blockDim.x - 1) * T_PER_U32;
+        while (morton_pos >= lod_count) {
+          morton_pos -= lod_count;
           batch++;
         }
       }
-      tile[i] = packed;
-
-      // Advance to next iteration: skip (blockDim.x - 1) * T_PER_U32 elements
-      morton_pos += (uint64_t)(blockDim.x - 1) * T_PER_U32;
-      while (morton_pos >= lod_count) {
-        morton_pos -= lod_count;
-        batch++;
-      }
     }
-  }
 
-  __syncthreads();
+    __syncthreads();
 
-  // Phase 2: Coalesced u32 stores
-  {
-    uint32_t* dst_u32 = (uint32_t*)dst;
-    uint64_t base_u32 = block_base / T_PER_U32;
+    // Phase 2: Coalesced u32 stores
+    {
+      uint32_t* dst_u32 = (uint32_t*)dst;
+      uint64_t base_u32 = block_base / T_PER_U32;
 
-    for (int i = tid; i < TILE_U32; i += blockDim.x) {
-      uint64_t elem_idx = block_base + (uint64_t)i * T_PER_U32;
-      if (elem_idx + T_PER_U32 <= total) {
-        dst_u32[base_u32 + i] = tile[i];
-      } else if (elem_idx < total) {
-        T* tile_T = (T*)tile;
-        for (int k = 0; k < T_PER_U32; ++k)
-          if (elem_idx + k < total)
-            dst[elem_idx + k] = tile_T[i * T_PER_U32 + k];
+      for (int i = tid; i < TILE_U32; i += blockDim.x) {
+        uint64_t elem_idx = block_base + (uint64_t)i * T_PER_U32;
+        if (elem_idx + T_PER_U32 <= total) {
+          dst_u32[base_u32 + i] = tile[i];
+        } else if (elem_idx < total) {
+          T* tile_T = (T*)tile;
+          for (int k = 0; k < T_PER_U32; ++k)
+            if (elem_idx + k < total)
+              dst[elem_idx + k] = tile_T[i * T_PER_U32 + k];
+        }
       }
     }
   }
@@ -587,8 +634,8 @@ lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
                         uint64_t batch_count,
                         CUstream stream)
 {
-#define XXX(target_dtype, T)                                                   \
-  if (dtype == target_dtype) {                                                 \
+#define DISPATCH(D, T)                                                         \
+  if (dtype == D) {                                                            \
     lod_morton_to_tiles_lut_launch<T>(d_tiles,                                 \
                                       d_morton,                                \
                                       d_tile_lut,                              \
@@ -598,10 +645,8 @@ lod_morton_to_tiles_lut(CUdeviceptr d_tiles,
                                       stream);                                 \
     return 0;                                                                  \
   }
-
-  XXX(lod_dtype_u16, uint16_t);
-  XXX(lod_dtype_f32, float);
-#undef XXX
+  FOR_EACH_DTYPE(DISPATCH)
+#undef DISPATCH
   return 1;
 }
 
@@ -616,9 +661,16 @@ lod_gather_lut_launch(CUdeviceptr d_dst,
                       CUstream stream)
 {
   const uint64_t total = batch_count * lod_count;
-  constexpr int T_PER_U32 = sizeof(uint32_t) / sizeof(T);
-  constexpr int TILE_ELEMENTS = ((1 << 12) / (int)sizeof(uint32_t)) * T_PER_U32;
-  const int grid_size = (int)((total + TILE_ELEMENTS - 1) / TILE_ELEMENTS);
+  int grid_size;
+
+  if constexpr (sizeof(T) > sizeof(uint32_t)) {
+    grid_size = (int)((total + LOD_BLOCK - 1) / LOD_BLOCK);
+  } else {
+    constexpr int T_PER_U32 = sizeof(uint32_t) / sizeof(T);
+    constexpr int TILE_ELEMENTS =
+      ((1 << 12) / (int)sizeof(uint32_t)) * T_PER_U32;
+    grid_size = (int)((total + TILE_ELEMENTS - 1) / TILE_ELEMENTS);
+  }
 
   lod_gather_lut_k<T>
     <<<grid_size, LOD_BLOCK, 0, stream>>>((T*)d_dst,
@@ -639,8 +691,8 @@ lod_gather_lut(CUdeviceptr d_dst,
                uint64_t batch_count,
                CUstream stream)
 {
-#define XXX(target_dtype, T)                                                   \
-  if (dtype == target_dtype) {                                                 \
+#define DISPATCH(D, T)                                                         \
+  if (dtype == D) {                                                            \
     lod_gather_lut_launch<T>(d_dst,                                            \
                              d_src,                                            \
                              d_src_lut,                                        \
@@ -650,10 +702,8 @@ lod_gather_lut(CUdeviceptr d_dst,
                              stream);                                          \
     return 0;                                                                  \
   }
-
-  XXX(lod_dtype_u16, uint16_t);
-  XXX(lod_dtype_f32, float);
-#undef XXX
+  FOR_EACH_DTYPE(DISPATCH)
+#undef DISPATCH
   return 1;
 }
 
@@ -712,14 +762,37 @@ lod_fill_ends_gpu(CUdeviceptr d_ends,
   return 1;
 }
 
+// Type trait: is this a floating-point type (including __half)?
+template<typename T>
+struct is_fp
+{
+  static constexpr bool value = false;
+};
+template<>
+struct is_fp<__half>
+{
+  static constexpr bool value = true;
+};
+template<>
+struct is_fp<float>
+{
+  static constexpr bool value = true;
+};
+template<>
+struct is_fp<double>
+{
+  static constexpr bool value = true;
+};
+
 // --- Accumulator emit kernel (dim0 LOD) ---
 // Finalizes accumulator to native type.
-// For mean: divide sum by count. For min/max: just copy.
+// For integer mean: accumulator already holds pre-divided result; just copy.
+// For float mean: accumulator holds raw sum; divide here.
 
-template<typename T, typename Acc, enum lod_reduce_method Method>
+template<typename T, enum lod_reduce_method Method>
 __global__ void
 lod_accum_emit_k(T* __restrict__ dst,
-                 const Acc* __restrict__ accum,
+                 const T* __restrict__ accum,
                  uint64_t n_elements,
                  uint32_t count)
 {
@@ -727,10 +800,13 @@ lod_accum_emit_k(T* __restrict__ dst,
   if (gid >= n_elements)
     return;
 
-  if constexpr (Method == lod_reduce_mean)
-    dst[gid] = (T)(accum[gid] / (Acc)count);
+  // For integer mean: accumulator already holds sum>>level (pre-divided
+  // via overflow_safe_add_shift in fold). Just copy.
+  // For float mean: accumulator holds raw sum; divide here.
+  if constexpr (Method == lod_reduce_mean && is_fp<T>::value)
+    dst[gid] = (T)(accum[gid] / (T)count);
   else
-    dst[gid] = (T)accum[gid];
+    dst[gid] = accum[gid];
 }
 
 extern "C" int
@@ -744,46 +820,61 @@ lod_accum_emit(CUdeviceptr d_dst,
 {
   const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
 
-#define LAUNCH_EMIT(T, Acc, M)                                                 \
-  lod_accum_emit_k<T, Acc, M><<<grid, LOD_BLOCK, 0, stream>>>(                 \
-    (T*)d_dst, (const Acc*)d_accum, n_elements, count)
+#define LAUNCH_EMIT(T, M)                                                      \
+  lod_accum_emit_k<T, M><<<grid, LOD_BLOCK, 0, stream>>>(                      \
+    (T*)d_dst, (const T*)d_accum, n_elements, count)
 
-#define EMIT_METHOD(T, Acc)                                                    \
+#define EMIT_METHOD(T)                                                         \
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
-      LAUNCH_EMIT(T, Acc, lod_reduce_mean);                                    \
+      LAUNCH_EMIT(T, lod_reduce_mean);                                         \
       return 0;                                                                \
     case lod_reduce_min:                                                       \
-      LAUNCH_EMIT(T, T, lod_reduce_min);                                       \
+      LAUNCH_EMIT(T, lod_reduce_min);                                          \
       return 0;                                                                \
     case lod_reduce_max:                                                       \
-      LAUNCH_EMIT(T, T, lod_reduce_max);                                       \
+      LAUNCH_EMIT(T, lod_reduce_max);                                          \
       return 0;                                                                \
     default:                                                                   \
       return 1;                                                                \
   }
 
-  switch (dtype) {
-    case lod_dtype_u16:
-      EMIT_METHOD(uint16_t, uint32_t);
-      break;
-    case lod_dtype_f32:
-      EMIT_METHOD(float, float);
-      break;
-  }
-
-#undef LAUNCH_EMIT
+#define DISPATCH(D, T) case D: EMIT_METHOD(T); break;
+  switch (dtype) { FOR_EACH_DTYPE(DISPATCH) }
+#undef DISPATCH
 #undef EMIT_METHOD
+#undef LAUNCH_EMIT
   return 1;
 }
 
 // --- Fused accumulator fold kernel (dim0 LOD) ---
 // Single launch over all LOD levels 1+. Each thread reads its level from
 // d_level_ids and the corresponding count from d_counts.
+//
+// Mean accumulation uses an overflow-safe running sum. The final count
+// is always 2^level, so the division is a right-shift by `level` bits.
+// To avoid overflow in native-width accumulators we pre-divide each
+// addend: (a + b) >> s  =  (a>>s + b>>s) + ((a&mask + b&mask) >> s).
+// The accumulator stores the partial mean (sum >> s) so emit just copies.
 
-template<typename T, typename Acc, enum lod_reduce_method Method>
+// Overflow-safe (a + b) >> s for integer types.
+// Float types: just add (emit divides later).
+// 64-bit integers: just add (overflow unlikely for LOD window sizes).
+template<typename T>
+__device__ static T
+overflow_safe_add_shift(T a, T b, int s)
+{
+  if constexpr (is_fp<T>::value || sizeof(T) >= 8) {
+    return a + b;
+  } else {
+    T mask = (T)((1u << s) - 1);
+    return (T)((a >> s) + (b >> s) + (((a & mask) + (b & mask)) >> s));
+  }
+}
+
+template<typename T, enum lod_reduce_method Method>
 __global__ void
-lod_accum_fold_fused_k(Acc* __restrict__ accum,
+lod_accum_fold_fused_k(T* __restrict__ accum,
                        const T* __restrict__ new_data,
                        const uint8_t* __restrict__ level_ids,
                        const uint32_t* __restrict__ counts,
@@ -797,14 +888,15 @@ lod_accum_fold_fused_k(Acc* __restrict__ accum,
   T val = new_data[gid];
 
   if (count == 0) {
-    accum[gid] = (Acc)val;
+    accum[gid] = val;
   } else {
-    if constexpr (Method == lod_reduce_mean)
-      accum[gid] += (Acc)val;
-    else if constexpr (Method == lod_reduce_min)
-      accum[gid] = min(accum[gid], (Acc)val);
+    if constexpr (Method == lod_reduce_mean) {
+      int s = (int)level_ids[gid]; // shift = level = log2(period)
+      accum[gid] = overflow_safe_add_shift<T>(accum[gid], val, s);
+    } else if constexpr (Method == lod_reduce_min)
+      accum[gid] = min(accum[gid], val);
     else if constexpr (Method == lod_reduce_max)
-      accum[gid] = max(accum[gid], (Acc)val);
+      accum[gid] = max(accum[gid], val);
   }
 }
 
@@ -820,40 +912,34 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
 {
   const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
 
-#define LAUNCH_FUSED(T, Acc, M)                                                \
-  lod_accum_fold_fused_k<T, Acc, M>                                            \
-    <<<grid, LOD_BLOCK, 0, stream>>>((Acc*)d_accum,                            \
+#define LAUNCH_FUSED(T, M)                                                     \
+  lod_accum_fold_fused_k<T, M>                                                 \
+    <<<grid, LOD_BLOCK, 0, stream>>>((T*)d_accum,                              \
                                      (const T*)d_new_data,                     \
                                      (const uint8_t*)d_level_ids,              \
                                      (const uint32_t*)d_counts,                \
                                      n_elements)
 
-#define FUSED_METHOD(T, Acc)                                                   \
+#define FUSED_METHOD(T)                                                        \
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
-      LAUNCH_FUSED(T, Acc, lod_reduce_mean);                                   \
+      LAUNCH_FUSED(T, lod_reduce_mean);                                        \
       return 0;                                                                \
     case lod_reduce_min:                                                       \
-      LAUNCH_FUSED(T, T, lod_reduce_min);                                      \
+      LAUNCH_FUSED(T, lod_reduce_min);                                         \
       return 0;                                                                \
     case lod_reduce_max:                                                       \
-      LAUNCH_FUSED(T, T, lod_reduce_max);                                      \
+      LAUNCH_FUSED(T, lod_reduce_max);                                         \
       return 0;                                                                \
     default:                                                                   \
       return 1;                                                                \
   }
 
-  switch (dtype) {
-    case lod_dtype_u16:
-      FUSED_METHOD(uint16_t, uint32_t);
-      break;
-    case lod_dtype_f32:
-      FUSED_METHOD(float, float);
-      break;
-  }
-
-#undef LAUNCH_FUSED
+#define DISPATCH(D, T) case D: FUSED_METHOD(T); break;
+  switch (dtype) { FOR_EACH_DTYPE(DISPATCH) }
+#undef DISPATCH
 #undef FUSED_METHOD
+#undef LAUNCH_FUSED
   return 1;
 }
 
@@ -873,7 +959,7 @@ lod_reduce(CUdeviceptr d_values,
   const int block_size = 256;
   const int grid_size = (int)((total + block_size - 1) / block_size);
 
-#define CASE(Type, Acc, Method)                                                \
+#define LAUNCH_REDUCE(Type, Acc, Method)                                       \
   case Method:                                                                 \
     lod_reduce_k<Type, Acc, Method>                                            \
       <<<grid_size, block_size, 0, stream>>>((Type*)d_values,                  \
@@ -885,28 +971,23 @@ lod_reduce(CUdeviceptr d_values,
                                              batch_count);                     \
     return 0;
 
-#define CASE2(Dtype, Type, Acc)                                                \
-  case Dtype:                                                                  \
-    XXX(Type, Acc);                                                            \
-    break;
-
-#define XXX(Type, Acc)                                                         \
+#define REDUCE_METHODS(Type, Acc)                                              \
   switch (method) {                                                            \
-    CASE(Type, Acc, lod_reduce_mean);                                          \
-    CASE(Type, Acc, lod_reduce_min);                                           \
-    CASE(Type, Acc, lod_reduce_max);                                           \
-    CASE(Type, Acc, lod_reduce_median);                                        \
-    CASE(Type, Acc, lod_reduce_max_suppressed);                                \
-    CASE(Type, Acc, lod_reduce_min_suppressed);                                \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_mean);                                 \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_min);                                  \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_max);                                  \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_median);                               \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_max_suppressed);                       \
+    LAUNCH_REDUCE(Type, Acc, lod_reduce_min_suppressed);                       \
   }
 
-  switch (dtype) {
-    CASE2(lod_dtype_u16, uint16_t, uint32_t);
-    CASE2(lod_dtype_f32, float, float);
-  }
-
-#undef CASE
-#undef CASE2
-#undef XXX
-  return 1; // error - invalid parameter
+#define DISPATCH(D, T)                                                         \
+  case D:                                                                      \
+    REDUCE_METHODS(T, reduce_acc<T>::type);                                    \
+    break;
+  switch (dtype) { FOR_EACH_DTYPE(DISPATCH) }
+#undef DISPATCH
+#undef REDUCE_METHODS
+#undef LAUNCH_REDUCE
+  return 1;
 }

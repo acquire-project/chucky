@@ -282,7 +282,7 @@ static int
 validate_config(const struct tile_stream_configuration* config)
 {
   CHECK(Fail, config);
-  CHECK(Fail, config->bytes_per_element > 0);
+  CHECK(Fail, lod_dtype_bpe(config->dtype) > 0);
   CHECK(Fail, config->buffer_capacity_bytes > 0);
   CHECK(Fail, config->rank > 0);
   CHECK(Fail, config->rank <= HALF_MAX_RANK);
@@ -358,7 +358,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        struct computed_stream_layouts* out)
 {
   const uint8_t rank = config->rank;
-  const size_t bpe = config->bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config->dtype);
   const struct dimension* dims = config->dimensions;
 
   uint8_t storage_order[HALF_MAX_RANK];
@@ -600,7 +600,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config)
         init_tile_pools(&out->pools,
                         &out->levels,
                         out->layout.tile_stride,
-                        config->bytes_per_element,
+                        lod_dtype_bpe(config->dtype),
                         out->batch.epochs_per_batch,
                         out->streams.compute) == 0);
 
@@ -618,7 +618,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config)
   if (out->levels.enable_multiscale) {
     CHECK(FailPhase2,
           lod_state_init_buffers(
-            &out->lod, &out->layout, out->config.bytes_per_element) == 0);
+            &out->lod, &out->layout, out->config.dtype) == 0);
     if (out->levels.dim0_downsample)
       CHECK(FailPhase2,
             lod_state_init_accumulators(&out->lod, &out->config) == 0);
@@ -673,7 +673,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
     .dim0_downsample = s->levels.dim0_downsample,
     .epochs_per_batch = s->batch.epochs_per_batch,
     .max_compressed_size = s->compress_agg.codec.max_output_size,
-    .bytes_per_element = s->config.bytes_per_element,
+    .dtype = s->config.dtype,
     .codec = s->config.codec,
     .codec_batch_size = s->compress_agg.codec.batch_size,
     .batch_accumulated = s->batch.accumulated,
@@ -700,7 +700,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     return 1;
 
   const uint8_t rank = config->rank;
-  const size_t bpe = config->bytes_per_element;
+  const size_t bpe = lod_dtype_bpe(config->dtype);
   const size_t buffer_capacity_bytes =
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
   const uint64_t tile_stride = cl.l0.tile_stride;
@@ -807,7 +807,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     }
 
     if (cl.levels.dim0_downsample) {
-      size_t accum_bpe = lod_accum_bpe(bpe, config->dim0_reduce_method);
+      size_t accum_bpe = lod_accum_bpe(config->dtype, config->dim0_reduce_method);
       uint64_t total_elems = 0;
       for (int lv = 1; lv < plan->nlod; ++lv)
         total_elems += plan->batch_count * plan->lod_counts[lv];

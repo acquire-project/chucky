@@ -189,7 +189,7 @@ log_bench_header(const struct tile_stream_gpu* s,
   print_report(
     "  tile:        %lu elements = %lu KiB  (stride=%lu)",
     (unsigned long)layout->tile_elements,
-    (unsigned long)(layout->tile_stride * st.bytes_per_element / 1024),
+    (unsigned long)(layout->tile_stride * lod_dtype_bpe(st.dtype) / 1024),
     (unsigned long)layout->tile_stride);
   print_report("  epoch:       %lu slots, %lu MiB pool",
                (unsigned long)layout->tiles_per_epoch,
@@ -214,7 +214,7 @@ print_bench_report(const struct tile_stream_gpu* s,
   struct stream_metrics m = tile_stream_gpu_get_metrics(s);
   const struct stream_layout* layout = tile_stream_gpu_layout(s);
   const struct tile_stream_status st = tile_stream_gpu_status(s);
-  const size_t tile_bytes = layout->tile_stride * st.bytes_per_element;
+  const size_t tile_bytes = layout->tile_stride * lod_dtype_bpe(st.dtype);
   const size_t num_epochs =
     (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
   const size_t total_tiles = num_epochs * layout->tiles_per_epoch;
@@ -353,7 +353,7 @@ run_bench(const struct bench_config* cfg)
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 128 << 20,
-    .bytes_per_element = sizeof(uint16_t),
+    .dtype = lod_dtype_u16,
     .rank = rank,
     .dimensions = dims,
     .codec = cfg->codec,

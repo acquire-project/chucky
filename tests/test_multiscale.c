@@ -100,7 +100,7 @@ test_multiscale_l0_correctness(void)
     struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = rank,
       .dimensions = dims,
       .codec = CODEC_ZSTD,
@@ -129,7 +129,7 @@ Run2:
     struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = rank,
       .dimensions = dims_ms,
       .codec = CODEC_ZSTD,
@@ -302,7 +302,7 @@ test_dim0_l0_correctness(void)
     struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = rank,
       .dimensions = dims_spatial,
       .codec = CODEC_ZSTD,
@@ -332,7 +332,7 @@ Run2d:
     struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = rank,
       .dimensions = dims_dim0,
       .codec = CODEC_ZSTD,
@@ -520,7 +520,7 @@ test_dim0_multi_epoch_levels(void)
     struct tile_stream_gpu* s = NULL;
     const struct tile_stream_configuration config = {
       .buffer_capacity_bytes = 4 << 20,
-      .bytes_per_element = sizeof(uint16_t),
+      .dtype = lod_dtype_u16,
       .rank = rank,
       .dimensions = dims,
       .codec = CODEC_ZSTD,

@@ -41,7 +41,7 @@ struct tile_stream_configuration
 {
   // Size of each H2D staging buffer (double-buffered: 4x total allocation)
   size_t buffer_capacity_bytes;
-  size_t bytes_per_element;
+  enum lod_dtype dtype;
   uint8_t rank;
   const struct dimension* dimensions;
   struct shard_sink* shard_sink; // downstream shard writer factory, not owned
@@ -128,7 +128,7 @@ struct tile_stream_status
   int dim0_downsample;
   uint32_t epochs_per_batch;
   size_t max_compressed_size;
-  size_t bytes_per_element;
+  enum lod_dtype dtype;
   enum compression_codec codec;
   size_t codec_batch_size;
   uint32_t batch_accumulated;

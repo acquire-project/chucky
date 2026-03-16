@@ -368,8 +368,9 @@ Fail:
 int
 lod_state_init_buffers(struct lod_state* lod,
                        const struct stream_layout* l0,
-                       size_t bpe)
+                       enum lod_dtype dtype)
 {
+  const size_t bpe = lod_dtype_bpe(dtype);
   size_t linear_bytes = l0->epoch_elements * bpe;
   CU(Fail, cuMemAlloc(&lod->d_linear, linear_bytes));
 
@@ -394,7 +395,6 @@ int
 lod_state_init_accumulators(struct lod_state* lod,
                             const struct tile_stream_configuration* config)
 {
-  const size_t bpe = config->bytes_per_element;
   struct lod_plan* p = &lod->plan;
 
   lod->dim0.morton_offset = p->levels.ends[0];
@@ -406,7 +406,7 @@ lod_state_init_accumulators(struct lod_state* lod,
   if (lod->dim0.total_elements == 0)
     return 0;
 
-  size_t accum_bpe = lod_accum_bpe(bpe, config->dim0_reduce_method);
+  size_t accum_bpe = lod_accum_bpe(config->dtype, config->dim0_reduce_method);
   size_t accum_bytes = lod->dim0.total_elements * accum_bpe;
   CU(Fail, cuMemAlloc(&lod->dim0.d_accum, accum_bytes));
 
@@ -507,13 +507,13 @@ lod_state_destroy(struct lod_state* lod)
 // *out_mask is OR'd with (1u << lv) for each level that emitted.
 static int
 run_dim0_fold_emit(struct lod_state* lod,
-                   size_t bpe,
                    enum lod_dtype dtype,
                    enum lod_reduce_method dim0_reduce_method,
                    CUstream compute,
                    uint32_t* out_mask)
 {
   struct lod_plan* p = &lod->plan;
+  const size_t bpe = lod_dtype_bpe(dtype);
 
   // Upload current counts to device before fused kernel
   CU(Error,
@@ -547,7 +547,7 @@ run_dim0_fold_emit(struct lod_state* lod,
       for (int k = 1; k < lv; ++k)
         accum_offset += p->batch_count * p->lod_counts[k];
 
-      size_t accum_bpe = lod_accum_bpe(bpe, dim0_reduce_method);
+      size_t accum_bpe = lod_accum_bpe(dtype, dim0_reduce_method);
 
       CUdeviceptr morton_lv = lod->d_morton + lev.beg * bpe;
       CUdeviceptr accum_lv = lod->dim0.d_accum + accum_offset * accum_bpe;
@@ -578,12 +578,12 @@ scatter_morton_to_tiles(struct lod_state* lod,
                         const struct level_geometry* levels,
                         const struct stream_layout* layout,
                         void* pool_epoch,
-                        size_t bpe,
                         enum lod_dtype dtype,
                         uint32_t active_levels_mask,
                         CUstream compute)
 {
   struct lod_plan* p = &lod->plan;
+  const size_t bpe = lod_dtype_bpe(dtype);
 
   // L0 always scattered
   {
@@ -632,14 +632,13 @@ lod_run_epoch(struct lod_state* lod,
               const struct level_geometry* levels,
               const struct stream_layout* layout,
               void* pool_epoch,
-              size_t bpe,
+              enum lod_dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method dim0_reduce_method,
               CUstream compute,
               uint32_t* out_active_mask)
 {
   struct lod_plan* p = &lod->plan;
-  enum lod_dtype dtype = (bpe == 2) ? lod_dtype_u16 : lod_dtype_f32;
 
   CU(Error, cuEventRecord(lod->t_start, compute));
 
@@ -692,8 +691,7 @@ lod_run_epoch(struct lod_state* lod,
     CHECK(
       Error,
       run_dim0_fold_emit(
-        lod, bpe, dtype, dim0_reduce_method, compute, &active_levels_mask) ==
-        0);
+        lod, dtype, dim0_reduce_method, compute, &active_levels_mask) == 0);
   }
 
   CU(Error, cuEventRecord(lod->t_dim0_end, compute));
@@ -703,7 +701,6 @@ lod_run_epoch(struct lod_state* lod,
                                 levels,
                                 layout,
                                 pool_epoch,
-                                bpe,
                                 dtype,
                                 active_levels_mask,
                                 compute) == 0);

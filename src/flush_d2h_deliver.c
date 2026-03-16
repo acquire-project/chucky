@@ -169,7 +169,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   const uint32_t n_epochs = handoff->n_epochs;
 
   if (levels->enable_multiscale && lod->t_start) {
-    const size_t bpe = config->bytes_per_element;
+    const size_t bpe = lod_dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bpe;
     const size_t morton_bytes =
       lod->plan.levels.ends[lod->plan.nlod - 1] * bpe;
@@ -183,7 +183,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                          lod->t_reduce_end,
                          morton_bytes);
     if (levels->dim0_downsample) {
-      size_t accum_bpe = lod_accum_bpe(bpe, config->dim0_reduce_method);
+      size_t accum_bpe = lod_accum_bpe(config->dtype, config->dim0_reduce_method);
       size_t dim0_bytes = lod->dim0.total_elements * accum_bpe;
       accumulate_metric_cu(&metrics->lod_dim0_fold,
                            lod->t_reduce_end,
@@ -198,7 +198,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
 
   {
     const size_t pool_bytes = (uint64_t)n_epochs * levels->total_tiles *
-                              layout->tile_stride * config->bytes_per_element;
+                              layout->tile_stride * lod_dtype_bpe(config->dtype);
 
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
