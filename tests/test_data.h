@@ -13,7 +13,7 @@ typedef void (*fill_fn)(uint16_t* buf,
 void
 fill_zeros(uint16_t* buf, size_t count, size_t offset, size_t total);
 void
-fill_thirds(uint16_t* buf, size_t count, size_t offset, size_t total);
+fill_rand(uint16_t* buf, size_t count, size_t offset, size_t total);
 void
 fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total);
 
@@ -21,6 +21,11 @@ void
 xor_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
 void
 xor_pattern_free(void);
+
+void
+rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
+void
+rand_pattern_free(void);
 
 size_t
 dim_total_elements(const struct dimension* dims, uint8_t rank);

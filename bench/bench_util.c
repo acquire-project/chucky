@@ -475,12 +475,12 @@ match_option(const char* s, const char* const* options, int n)
 static fill_fn
 parse_fill(const char* s)
 {
-  static const char* const names[] = { "xor", "zeros", "thirds" };
-  static const fill_fn fns[] = { fill_xor, fill_zeros, fill_thirds };
+  static const char* const names[] = { "xor", "zeros", "rand" };
+  static const fill_fn fns[] = { fill_xor, fill_zeros, fill_rand };
   int i = match_option(s, names, 3);
   if (i < 3)
     return fns[i];
-  fprintf(stderr, "Unknown fill: %s (expected xor, zeros, thirds)\n", s);
+  fprintf(stderr, "Unknown fill: %s (expected xor, zeros, rand)\n", s);
   return NULL;
 }
 
@@ -555,7 +555,7 @@ bench_stream_main(int ac,
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
-              "Usage: %s [--fill xor|zeros|thirds] [--codec none|lz4|zstd] "
+              "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
               "[--reduce mean|min|max|median|max_sup|min_sup] [-o path]\n",
               av[0]);
       return 1;
@@ -571,8 +571,11 @@ bench_stream_main(int ac,
   CU(Fail, cuCtxCreate(&ctx, 0, dev));
 
   int need_xor = (fill == fill_xor);
+  int need_rand = (fill == fill_rand);
   if (need_xor)
     xor_pattern_init(dims, rank, 16);
+  if (need_rand)
+    rand_pattern_init(dims, rank, 16);
 
   struct bench_config cfg = {
     .label = label,
@@ -590,6 +593,8 @@ bench_stream_main(int ac,
 
   if (need_xor)
     xor_pattern_free();
+  if (need_rand)
+    rand_pattern_free();
 
   cuCtxDestroy(ctx);
   return ecode;

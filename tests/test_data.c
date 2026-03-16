@@ -2,14 +2,9 @@
 
 #include "prelude.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 // --- PRNG ---
 
@@ -22,41 +17,48 @@ splitmix64(uint64_t* state)
   return z ^ (z >> 31);
 }
 
-static double
-splitmix64_uniform(uint64_t* state)
-{
-  return (double)(splitmix64(state) >> 11) * 0x1.0p-53;
-}
-
 // --- Fill functions ---
 
-void
-fill_thirds(uint16_t* buf, size_t count, size_t offset, size_t total)
-{
-  const size_t third1 = total / 3;
-  const size_t third2 = 2 * total / 3;
-  uint64_t rng = offset * 0x9e3779b97f4a7c15ULL + 1;
+// --- Rand pattern (pre-populated, uniform random 12-bit) ---
 
-  for (size_t i = 0; i < count; ++i) {
-    size_t gi = offset + i;
-    if (gi < third1) {
-      // Gaussian via Box-Muller, mu=2048 sigma=512, clamped to [0,4095]
-      double u1 = splitmix64_uniform(&rng);
-      double u2 = splitmix64_uniform(&rng);
-      if (u1 < 1e-15)
-        u1 = 1e-15;
-      double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-      int val = (int)(2048.0 + 512.0 * z);
-      if (val < 0)
-        val = 0;
-      if (val > 4095)
-        val = 4095;
-      buf[i] = (uint16_t)val;
-    } else if (gi < third2) {
-      buf[i] = 42;
-    } else {
-      buf[i] = (uint16_t)splitmix64(&rng);
-    }
+static uint16_t* rand_pattern_buf = NULL;
+static size_t rand_pattern_len = 0;
+
+void
+rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes)
+{
+  size_t frame = 1;
+  for (uint8_t i = 1; i < rank; ++i)
+    frame *= dims[i].size;
+  rand_pattern_len = nframes * frame;
+  free(rand_pattern_buf);
+  rand_pattern_buf =
+    (uint16_t*)malloc(rand_pattern_len * sizeof(uint16_t));
+
+  uint64_t rng = 0xdeadbeefcafebabeULL;
+  for (size_t i = 0; i < rand_pattern_len; ++i)
+    rand_pattern_buf[i] = (uint16_t)(splitmix64(&rng) & 0xFFF);
+}
+
+void
+rand_pattern_free(void)
+{
+  free(rand_pattern_buf);
+  rand_pattern_buf = NULL;
+  rand_pattern_len = 0;
+}
+
+void
+fill_rand(uint16_t* buf, size_t count, size_t offset, size_t total)
+{
+  (void)total;
+  for (size_t done = 0; done < count;) {
+    size_t src_off = (offset + done) % rand_pattern_len;
+    size_t chunk = rand_pattern_len - src_off;
+    if (chunk > count - done)
+      chunk = count - done;
+    memcpy(buf + done, rand_pattern_buf + src_off, chunk * sizeof(uint16_t));
+    done += chunk;
   }
 }
 
