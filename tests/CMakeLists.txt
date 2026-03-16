@@ -17,11 +17,11 @@ endfunction()
 
 # Index operations utility library (shared between tests)
 add_test_lib(index_ops_util index.ops.util.c)
-target_link_libraries(index_ops_util PUBLIC index_ops)
+target_link_libraries(index_ops_util PUBLIC index_ops transpose)
 
 # Morton/LOD CPU reference library (shared between tests)
 add_test_lib(morton_util morton.util.c morton.util.h)
-target_link_libraries(morton_util PUBLIC lod_plan index_ops)
+target_link_libraries(morton_util PUBLIC lod_plan index_ops CUDA::cuda_driver)
 
 # Shared test shard sink (multi-shard-safe)
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)

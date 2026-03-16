@@ -9,7 +9,7 @@ main(int ac, char* av[])
   uint8_t rank = dims_create(dims, "tzyxc", sizes);
 
   uint8_t ratios[] = { 1, 4, 4, 4, 0 };
-  dims_budget_tile_size(dims, rank, 1ULL << 13, ratios);
+  dims_budget_tile_size(dims, rank, 1ULL << 19, ratios);
 
   uint64_t shard_counts[] = { 16, 2, 2, 2, 1 };
   dims_set_shard_counts(dims, rank, shard_counts);

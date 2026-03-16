@@ -11,7 +11,7 @@ function(add_src_lib TARGET)
     endif()
 endfunction()
 
-add_src_lib(transpose SOURCES transpose.cu transpose.h)
+add_src_lib(transpose SOURCES transpose.cu transpose.h LINKS CUDA::cuda_driver)
 
 add_src_lib(chucky_log SOURCES log/log.c log/log.h)
 

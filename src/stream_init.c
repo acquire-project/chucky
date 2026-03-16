@@ -524,7 +524,7 @@ Fail:
 struct stream_metric
 mk_stream_metric(const char* name)
 {
-  return (struct stream_metric){ .name = name, .best_ms = 1e30 };
+  return (struct stream_metric){ .name = name, .best_ms = 1e30f };
 }
 
 static struct stream_metrics
