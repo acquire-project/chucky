@@ -45,7 +45,8 @@ ingest_destroy(struct staging_state* stage)
 
 int
 ingest_dispatch_scatter(struct staging_state* stage,
-                        const struct stream_layout* layout,
+                        const struct tile_stream_layout* layout,
+                        const struct tile_stream_layout_gpu* layout_gpu,
                         void* pool_epoch,
                         CUevent pool_ready,
                         uint64_t* cursor,
@@ -80,8 +81,8 @@ ingest_dispatch_scatter(struct staging_state* stage,
             (uint8_t)bpe,
             *cursor,
             layout->lifted_rank,
-            layout->d_lifted_shape,
-            layout->d_lifted_strides,
+            layout_gpu->d_lifted_shape,
+            layout_gpu->d_lifted_strides,
             compute);
   CU(Error, cuEventRecord(ss->t_scatter_end, compute));
 

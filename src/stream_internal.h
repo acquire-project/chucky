@@ -72,7 +72,8 @@ struct lod_state
   CUdeviceptr d_level_ends[LOD_MAX_LEVELS];
 
   // Per-level chunk layouts [1..nlod-1], index 0 unused
-  struct stream_layout layouts[LOD_MAX_LEVELS];
+  struct tile_stream_layout layouts[LOD_MAX_LEVELS];
+  struct tile_stream_layout_gpu layout_gpu[LOD_MAX_LEVELS];
 
   // Morton-to-chunk scatter LUTs (precomputed)
   CUdeviceptr d_morton_chunk_lut[LOD_MAX_LEVELS]; // u32, lod_counts[lv]
@@ -175,7 +176,8 @@ struct tile_stream_gpu
 {
   struct writer writer;
   struct tile_stream_configuration config;
-  struct stream_layout layout;  // L0 chunk layout
+  struct tile_stream_layout layout;      // L0 chunk layout
+  struct tile_stream_layout_gpu layout_gpu; // L0 device arrays
   struct level_geometry levels; // per-level accounting
   struct gpu_streams streams;   // CUDA stream handles
   struct batch_state batch;     // epoch accumulation
@@ -215,10 +217,10 @@ struct level_layout_info
 // and the memory estimate path.
 struct computed_stream_layouts
 {
-  struct stream_layout l0; // host fields; d_* = NULL
-  struct lod_plan plan;    // owned if enable_multiscale
-  struct stream_layout
-    lod_layouts[LOD_MAX_LEVELS]; // host; d_* = NULL; [0] unused
+  struct tile_stream_layout l0; // host fields only
+  struct lod_plan plan;         // owned if enable_multiscale
+  struct tile_stream_layout
+    lod_layouts[LOD_MAX_LEVELS]; // host only; [0] unused
   struct level_geometry levels;
   uint32_t epochs_per_batch;
   size_t max_output_size; // codec-derived compressed chunk bound
@@ -247,7 +249,7 @@ struct flush_context
   struct lod_state* lod;
   struct stream_metrics* metrics;
   const struct tile_stream_configuration* config;
-  const struct stream_layout* layout;
+  const struct tile_stream_layout* layout;
   struct gpu_streams streams;
   struct platform_clock* metadata_update_clock;
 };

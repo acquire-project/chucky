@@ -180,16 +180,18 @@ static int
 upload_lod_level_layouts(struct lod_state* lod)
 {
   for (int lv = 1; lv < lod->plan.nlod; ++lv) {
-    struct stream_layout* lay = &lod->layouts[lv];
-    const size_t sb = lay->lifted_rank * sizeof(uint64_t);
-    const size_t stb = lay->lifted_rank * sizeof(int64_t);
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&lay->d_lifted_shape, sb));
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&lay->d_lifted_strides, stb));
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)lay->d_lifted_shape, lay->lifted_shape, sb));
+    const struct tile_stream_layout* layout = &lod->layouts[lv];
+    struct tile_stream_layout_gpu* gpu = &lod->layout_gpu[lv];
+    const size_t sb = layout->lifted_rank * sizeof(uint64_t);
+    const size_t stb = layout->lifted_rank * sizeof(int64_t);
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, sb));
+    CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, stb));
     CU(Fail,
        cuMemcpyHtoD(
-         (CUdeviceptr)lay->d_lifted_strides, lay->lifted_strides, stb));
+         (CUdeviceptr)gpu->d_lifted_shape, layout->lifted_shape, sb));
+    CU(Fail,
+       cuMemcpyHtoD(
+         (CUdeviceptr)gpu->d_lifted_strides, layout->lifted_strides, stb));
   }
 
   return 0;
@@ -202,7 +204,7 @@ Fail:
 static int
 build_chunk_scatter_with_temps(struct lod_state* lod,
                                const struct lod_plan* p,
-                               const struct stream_layout* lay,
+                               const struct tile_stream_layout* lay,
                                CUdeviceptr d_lod_shape_lv,
                                int lv)
 {
@@ -252,7 +254,7 @@ Fail:
 // Build morton-to-chunk LUT for a single level. Returns 0 on success.
 static int
 build_morton_lut_for_level(struct lod_state* lod,
-                           const struct stream_layout* lay,
+                           const struct tile_stream_layout* lay,
                            int lv)
 {
   struct lod_plan* p = &lod->plan;
@@ -316,13 +318,15 @@ Fail:
 }
 
 static int
-init_morton_scatter_luts(struct lod_state* lod, const struct stream_layout* l0)
+init_morton_scatter_luts(struct lod_state* lod,
+                         const struct tile_stream_layout* l0)
 {
   if (lod->plan.lod_ndim == 0)
     return 0;
 
   for (int lv = 0; lv < lod->plan.nlod; ++lv) {
-    const struct stream_layout* lay = (lv == 0) ? l0 : &lod->layouts[lv];
+    const struct tile_stream_layout* lay =
+      (lv == 0) ? l0 : &lod->layouts[lv];
     CHECK(Fail, build_morton_lut_for_level(lod, lay, lv) == 0);
   }
 
@@ -334,7 +338,7 @@ Fail:
 int
 lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
-               const struct stream_layout* l0,
+               const struct tile_stream_layout* l0,
                const struct tile_stream_configuration* config)
 {
   if (!levels->enable_multiscale)
@@ -368,7 +372,7 @@ Fail:
 
 int
 lod_state_init_buffers(struct lod_state* lod,
-                       const struct stream_layout* l0,
+                       const struct tile_stream_layout* l0,
                        enum lod_dtype dtype)
 {
   const size_t bpe = lod_dtype_bpe(dtype);
@@ -481,8 +485,8 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_level_ends[i]));
   }
   for (int i = 1; i < lod->plan.nlod; ++i) {
-    CUWARN(cuMemFree((CUdeviceptr)lod->layouts[i].d_lifted_shape));
-    CUWARN(cuMemFree((CUdeviceptr)lod->layouts[i].d_lifted_strides));
+    CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
+    CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_strides));
   }
   if (lod->t_start) {
     CUWARN(cuEventDestroy(lod->t_start));
@@ -577,7 +581,7 @@ Error:
 static int
 scatter_morton_to_chunks(struct lod_state* lod,
                          const struct level_geometry* levels,
-                         const struct stream_layout* layout,
+                         const struct tile_stream_layout* layout,
                          void* pool_epoch,
                          enum lod_dtype dtype,
                          uint32_t active_levels_mask,
@@ -631,7 +635,7 @@ Error:
 int
 lod_run_epoch(struct lod_state* lod,
               const struct level_geometry* levels,
-              const struct stream_layout* layout,
+              const struct tile_stream_layout* layout,
               void* pool_epoch,
               enum lod_dtype dtype,
               enum lod_reduce_method reduce_method,

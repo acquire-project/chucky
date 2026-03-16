@@ -9,7 +9,7 @@
 int
 lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
-               const struct stream_layout* l0,
+               const struct tile_stream_layout* l0,
                const struct tile_stream_configuration* config);
 
 // Allocate d_linear, d_morton, LOD timing events.
@@ -17,7 +17,7 @@ lod_state_init(struct lod_state* lod,
 // Returns 0 on success.
 int
 lod_state_init_buffers(struct lod_state* lod,
-                       const struct stream_layout* l0,
+                       const struct tile_stream_layout* l0,
                        enum lod_dtype dtype);
 
 // Allocate dim0 accumulators, level-ID buffer, and counts.
@@ -38,7 +38,7 @@ lod_state_destroy(struct lod_state* lod);
 int
 lod_run_epoch(struct lod_state* lod,
               const struct level_geometry* levels,
-              const struct stream_layout* layout,
+              const struct tile_stream_layout* layout,
               void* pool_epoch,
               enum lod_dtype dtype,
               enum lod_reduce_method reduce_method,

@@ -63,6 +63,7 @@ dispatch_ingest(struct tile_stream_gpu* s)
   } else {
     return ingest_dispatch_scatter(&s->stage,
                                    &s->layout,
+                                   &s->layout_gpu,
                                    current_pool_epoch(s, s->batch.accumulated),
                                    s->pools.ready[s->pools.current],
                                    &s->cursor,

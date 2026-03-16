@@ -19,7 +19,8 @@ ingest_destroy(struct staging_state* stage);
 // Returns 0 on success, non-zero on error.
 int
 ingest_dispatch_scatter(struct staging_state* stage,
-                        const struct stream_layout* layout,
+                        const struct tile_stream_layout* layout,
+                        const struct tile_stream_layout_gpu* layout_gpu,
                         void* pool_epoch,
                         CUevent pool_ready,
                         uint64_t* cursor,

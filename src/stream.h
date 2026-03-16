@@ -56,20 +56,23 @@ struct tile_stream_configuration
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
 };
 
-struct stream_layout
+struct tile_stream_layout
 {
   uint8_t lifted_rank;
   uint64_t lifted_shape[MAX_RANK];
   int64_t lifted_strides[MAX_RANK];
-
-  uint64_t* d_lifted_shape;  // device copy (allocated once)
-  int64_t* d_lifted_strides; // device copy (allocated once)
 
   uint64_t chunk_elements; // elements per chunk
   uint64_t chunk_stride;   // elements between chunk starts (>= chunk_elements)
   uint64_t chunks_per_epoch; // M = prod of chunk_count[i] for i > 0
   uint64_t epoch_elements;   // elements per epoch = M * chunk_elements
   size_t chunk_pool_bytes;   // chunks_per_epoch * chunk_stride * bpe
+};
+
+struct tile_stream_layout_gpu
+{
+  uint64_t* d_lifted_shape;  // device copy (allocated once)
+  int64_t* d_lifted_strides; // device copy (allocated once)
 };
 
 struct tile_stream_memory_info
@@ -113,7 +116,7 @@ tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s);
 
 // --- Accessors ---
 
-const struct stream_layout*
+const struct tile_stream_layout*
 tile_stream_gpu_layout(const struct tile_stream_gpu* s);
 
 struct writer*

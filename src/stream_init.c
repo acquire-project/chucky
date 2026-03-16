@@ -60,10 +60,10 @@ destroy_cuda_streams_and_events(struct gpu_streams* streams,
 }
 
 static void
-destroy_l0_layout(struct stream_layout* layout)
+destroy_l0_layout_gpu(struct tile_stream_layout_gpu* gpu)
 {
-  cu_mem_free((CUdeviceptr)layout->d_lifted_shape);
-  cu_mem_free((CUdeviceptr)layout->d_lifted_strides);
+  cu_mem_free((CUdeviceptr)gpu->d_lifted_shape);
+  cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
 }
 
 static void
@@ -91,7 +91,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   destroy_chunk_pools(&s->pools);
   lod_state_destroy(&s->lod);
   ingest_destroy(&s->stage);
-  destroy_l0_layout(&s->layout);
+  destroy_l0_layout_gpu(&s->layout_gpu);
   destroy_cuda_streams_and_events(&s->streams, &s->pools);
   free(s);
 }
@@ -150,9 +150,9 @@ Fail:
   return 1;
 }
 
-// Compute host-side stream_layout fields for a single level (no GPU).
+// Compute host-side tile_stream_layout fields for a single level (no GPU).
 static void
-compute_level_layout(struct stream_layout* layout,
+compute_level_layout(struct tile_stream_layout* layout,
                      uint8_t rank,
                      size_t bpe,
                      const struct dimension* dims,
@@ -196,24 +196,22 @@ compute_level_layout(struct stream_layout* layout,
   layout->lifted_strides[0] = 0; // collapse epoch dim
   layout->chunk_pool_bytes =
     layout->chunks_per_epoch * layout->chunk_stride * bpe;
-
-  layout->d_lifted_shape = NULL;
-  layout->d_lifted_strides = NULL;
 }
 
-// Upload pre-computed stream_layout arrays to GPU. Returns 0 on success.
+// Upload layout arrays to GPU. Returns 0 on success.
 static int
-upload_stream_layout(struct stream_layout* layout)
+upload_stream_layout(struct tile_stream_layout_gpu* gpu,
+                     const struct tile_stream_layout* layout)
 {
   const size_t shape_bytes = layout->lifted_rank * sizeof(uint64_t);
   const size_t strides_bytes = layout->lifted_rank * sizeof(int64_t);
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&layout->d_lifted_shape, shape_bytes));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&layout->d_lifted_strides, strides_bytes));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, shape_bytes));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, strides_bytes));
   CU(Fail,
      cuMemcpyHtoD(
-       (CUdeviceptr)layout->d_lifted_shape, layout->lifted_shape, shape_bytes));
+       (CUdeviceptr)gpu->d_lifted_shape, layout->lifted_shape, shape_bytes));
   CU(Fail,
-     cuMemcpyHtoD((CUdeviceptr)layout->d_lifted_strides,
+     cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_strides,
                   layout->lifted_strides,
                   strides_bytes));
   return 0;
@@ -575,7 +573,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config)
   // GPU allocation and init.
   CHECK(FailPhase2,
         init_cuda_streams_and_events(&out->streams, &out->pools) == 0);
-  CHECK(FailPhase2, upload_stream_layout(&out->layout) == 0);
+  CHECK(FailPhase2, upload_stream_layout(&out->layout_gpu, &out->layout) == 0);
   CHECK(FailPhase2,
         ingest_init(&out->stage,
                     out->config.buffer_capacity_bytes,
@@ -634,7 +632,7 @@ FailPhase1:
 
 // --- Accessors ---
 
-const struct stream_layout*
+const struct tile_stream_layout*
 tile_stream_gpu_layout(const struct tile_stream_gpu* s)
 {
   return &s->layout;

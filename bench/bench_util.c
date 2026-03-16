@@ -177,7 +177,7 @@ log_bench_header(const struct tile_stream_gpu* s,
                  size_t total_bytes,
                  size_t total_elements)
 {
-  const struct stream_layout* layout = tile_stream_gpu_layout(s);
+  const struct tile_stream_layout* layout = tile_stream_gpu_layout(s);
   const struct tile_stream_status st = tile_stream_gpu_status(s);
   const size_t num_epochs =
     (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
@@ -212,7 +212,7 @@ print_bench_report(const struct tile_stream_gpu* s,
                    size_t flush_pending_bytes)
 {
   struct stream_metrics m = tile_stream_gpu_get_metrics(s);
-  const struct stream_layout* layout = tile_stream_gpu_layout(s);
+  const struct tile_stream_layout* layout = tile_stream_gpu_layout(s);
   const struct tile_stream_status st = tile_stream_gpu_status(s);
   const size_t chunk_bytes = layout->chunk_stride * lod_dtype_bpe(st.dtype);
   const size_t num_epochs =

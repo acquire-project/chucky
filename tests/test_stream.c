@@ -48,7 +48,7 @@ verify_tiles(const struct tile_stream_gpu* s,
              const uint64_t* chunk_sizes,
              int use_zstd)
 {
-  const struct stream_layout* lay = tile_stream_gpu_layout(s);
+  const struct tile_stream_layout* lay = tile_stream_gpu_layout(s);
   const size_t chunk_bytes = lay->chunk_stride * sizeof(uint16_t);
   int n_epochs = 2;
 

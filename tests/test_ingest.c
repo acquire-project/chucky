@@ -11,28 +11,28 @@
 // ingest_init / ingest_destroy from stream_ingest.h
 
 static int
-upload_layout(struct stream_layout* layout,
-              uint8_t lifted_rank,
-              const uint64_t* lifted_shape,
-              const int64_t* lifted_strides)
+upload_layout_gpu(struct tile_stream_layout_gpu* gpu,
+                  uint8_t lifted_rank,
+                  const uint64_t* lifted_shape,
+                  const int64_t* lifted_strides)
 {
   size_t sb = lifted_rank * sizeof(uint64_t);
   size_t stb = lifted_rank * sizeof(int64_t);
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&layout->d_lifted_shape, sb));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&layout->d_lifted_strides, stb));
-  CU(Fail, cuMemcpyHtoD((CUdeviceptr)layout->d_lifted_shape, lifted_shape, sb));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, sb));
+  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, stb));
+  CU(Fail, cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_shape, lifted_shape, sb));
   CU(Fail,
-     cuMemcpyHtoD((CUdeviceptr)layout->d_lifted_strides, lifted_strides, stb));
+     cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_strides, lifted_strides, stb));
   return 0;
 Fail:
   return 1;
 }
 
 static void
-destroy_layout(struct stream_layout* layout)
+destroy_layout_gpu(struct tile_stream_layout_gpu* gpu)
 {
-  cu_mem_free((CUdeviceptr)layout->d_lifted_shape);
-  cu_mem_free((CUdeviceptr)layout->d_lifted_strides);
+  cu_mem_free((CUdeviceptr)gpu->d_lifted_shape);
+  cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
 }
 
 // --- Tests ---
@@ -75,7 +75,8 @@ test_ingest_single_epoch(void)
            (unsigned long)pool_bytes);
 
   struct staging_state stage = { 0 };
-  struct stream_layout layout = { 0 };
+  struct tile_stream_layout layout = { 0 };
+  struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   CUevent pool_ready = 0;
@@ -100,7 +101,8 @@ test_ingest_single_epoch(void)
   layout.chunks_per_epoch = chunks_per_epoch;
   layout.epoch_elements = epoch_elements;
   CHECK(Fail,
-        upload_layout(&layout, lifted_rank, lifted_shape, lifted_strides) == 0);
+        upload_layout_gpu(
+          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -115,6 +117,7 @@ test_ingest_single_epoch(void)
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
+                                  &layout_gpu,
                                   (void*)d_pool,
                                   pool_ready,
                                   &cursor,
@@ -159,7 +162,7 @@ Fail:
   free(h_src);
   free(h_pool);
   ingest_destroy(&stage);
-  destroy_layout(&layout);
+  destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_event_destroy(pool_ready);
   cu_stream_destroy(h2d);
@@ -202,7 +205,8 @@ test_ingest_incremental(void)
   const size_t half = src_bytes / 2;
 
   struct staging_state stage = { 0 };
-  struct stream_layout layout = { 0 };
+  struct tile_stream_layout layout = { 0 };
+  struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   CUevent pool_ready = 0;
@@ -227,7 +231,8 @@ test_ingest_incremental(void)
   layout.chunks_per_epoch = chunks_per_epoch;
   layout.epoch_elements = epoch_elements;
   CHECK(Fail,
-        upload_layout(&layout, lifted_rank, lifted_shape, lifted_strides) == 0);
+        upload_layout_gpu(
+          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -242,6 +247,7 @@ test_ingest_incremental(void)
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
+                                  &layout_gpu,
                                   (void*)d_pool,
                                   pool_ready,
                                   &cursor,
@@ -256,6 +262,7 @@ test_ingest_incremental(void)
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
+                                  &layout_gpu,
                                   (void*)d_pool,
                                   pool_ready,
                                   &cursor,
@@ -300,7 +307,7 @@ Fail:
   free(h_src);
   free(h_pool);
   ingest_destroy(&stage);
-  destroy_layout(&layout);
+  destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_event_destroy(pool_ready);
   cu_stream_destroy(h2d);
