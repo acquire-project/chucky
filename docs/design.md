@@ -614,6 +614,46 @@ compressed pool, aggregate, LOD, codec workspace) and derived parameters
 (`tiles_per_epoch`, `total_tiles`, `epochs_per_batch`). This lets callers
 verify resource requirements before allocating.
 
+#### Example
+
+The following shows how these pieces fit together for an unbounded 3D
+stream compressed with zstd:
+
+```c
+// 1. Describe the dimensions (slowest to fastest).
+//    Dimension 0 has size 0, marking it as the append dimension.
+struct dimension dims[3] = {
+  { .name = "z", .size = 0,   .tile_size = 64,  .tiles_per_shard = 2 },
+  { .name = "y", .size = 512, .tile_size = 128, .tiles_per_shard = 2 },
+  { .name = "x", .size = 512, .tile_size = 128, .tiles_per_shard = 2 },
+};
+
+// 2. Configure the stream.
+struct tile_stream_configuration config = {
+  .rank               = 3,
+  .dimensions         = dims,
+  .dtype              = lod_dtype_u16,
+  .buffer_capacity_bytes = 4 * 1024 * 1024,
+  .codec              = CODEC_ZSTD,
+  .shard_sink         = &my_zarr_sink,  // see Zarr store below
+};
+
+// 3. Create the stream and obtain a writer.
+struct tile_stream_gpu *s = tile_stream_gpu_create(&config);
+struct writer *w = tile_stream_gpu_writer(s);
+
+// 4. Push data as it arrives — the library handles tiling,
+//    compression, and shard delivery internally.
+while (acquiring) {
+  struct slice frame = get_next_frame();
+  writer_append(w, frame);
+}
+
+// 5. Flush remaining data and tear down.
+writer_flush(w);
+tile_stream_gpu_destroy(s);
+```
+
 ### Zarr store
 
 The library ships a concrete `shard_sink` targeting Zarr v3 stores with the

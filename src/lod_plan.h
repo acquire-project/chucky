@@ -54,16 +54,13 @@ lod_segment(const struct lod_plan* p, int level);
 // Initialize a plan. Returns 0 on success, non-zero on failure.
 // tile_shape: per-dimension tile sizes (may be NULL). When provided,
 // levels stop before any LOD dimension would drop below its tile size.
-// exclude_dim0: when set, dim 0 is removed from lod_mask and treated as a
-// batch dimension (temporal accumulation handled separately).
 int
 lod_plan_init(struct lod_plan* p,
               int ndim,
               const uint64_t* shape,
               const uint64_t* tile_shape,
               uint32_t lod_mask,
-              int max_levels,
-              int exclude_dim0);
+              int max_levels);
 
 // Compute only nlod and per-level shapes (no ends/counts/levels).
 // Use when you only need the level geometry (e.g. for metadata).
@@ -73,8 +70,7 @@ lod_plan_init_shapes(struct lod_plan* p,
                      const uint64_t* shape,
                      const uint64_t* tile_shape,
                      uint32_t lod_mask,
-                     int max_levels,
-                     int exclude_dim0);
+                     int max_levels);
 
 void
 lod_plan_free(struct lod_plan* p);

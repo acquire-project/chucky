@@ -159,11 +159,10 @@ lod_plan_init(struct lod_plan* p,
               const uint64_t* shape,
               const uint64_t* tile_shape,
               uint32_t lod_mask,
-              int max_levels,
-              int exclude_dim0)
+              int max_levels)
 {
   if (lod_plan_init_shapes(
-        p, ndim, shape, tile_shape, lod_mask, max_levels, exclude_dim0))
+        p, ndim, shape, tile_shape, lod_mask, max_levels))
     return 1;
 
   for (int k = 0; k < p->nlod; ++k) {
@@ -217,13 +216,10 @@ lod_plan_init_shapes(struct lod_plan* p,
                      const uint64_t* shape,
                      const uint64_t* tile_shape,
                      uint32_t lod_mask,
-                     int max_levels,
-                     int exclude_dim0)
+                     int max_levels)
 {
   memset(p, 0, sizeof(*p));
   p->ndim = ndim;
-  if (exclude_dim0)
-    lod_mask &= ~1u;
   p->lod_mask = lod_mask;
 
   for (int d = 0; d < ndim; ++d) {

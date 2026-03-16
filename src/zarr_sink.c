@@ -949,6 +949,8 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   for (int d = 0; d < cfg->rank; ++d)
     if (cfg->dimensions[d].downsample)
       lod_mask |= (1u << d);
+  if (cfg->rank > 0 && cfg->dimensions[0].size == 0)
+    lod_mask &= ~1u;
 
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
@@ -957,8 +959,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
                              shape,
                              tile_shape,
                              lod_mask,
-                             max_lev,
-                             cfg->exclude_dim0) == 0);
+                             max_lev) == 0);
 
   struct zarr_multiscale_sink* ms =
     (struct zarr_multiscale_sink*)calloc(1, sizeof(*ms));

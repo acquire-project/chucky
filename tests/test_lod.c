@@ -300,7 +300,7 @@ test_lod_gpu_method(const char* label,
     src[i] = (float)(i + 1);
 
   CHECK(Fail,
-        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD, 0) == 0);
+        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD) == 0);
   log_info(
     "  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlod=%d",
     lod_mask,
@@ -505,7 +505,7 @@ test_lod_gpu_u16_method(const char* label,
     src[i] = (uint16_t)((i + 1) & 0xFFFF);
 
   CHECK(Fail,
-        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD, 0) == 0);
+        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD) == 0);
   log_info(
     "  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu  nlod=%d",
     lod_mask,

@@ -20,7 +20,7 @@ lod_state_init_buffers(struct lod_state* lod,
                        const struct stream_layout* l0,
                        enum lod_dtype dtype);
 
-// Allocate dim0 temporal accumulators, level-ID buffer, and counts.
+// Allocate dim0 accumulators, level-ID buffer, and counts.
 // Must be called AFTER lod_state_init.
 // Returns 0 on success.
 int

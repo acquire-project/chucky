@@ -215,7 +215,7 @@ test_lod(const char* label, int ndim, const uint64_t* shape, uint32_t lod_mask)
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD, 0) == 0);
+  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD) == 0);
   printf("  lod_mask=0x%x  lod_ndim=%d  batch_ndim=%d  batch_count=%llu\n",
          lod_mask,
          plan.lod_ndim,

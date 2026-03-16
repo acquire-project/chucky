@@ -475,7 +475,7 @@ test_dim0_multi_epoch_levels(void)
     }
     CHECK(Fail,
           lod_plan_init_shapes(
-            &plan, rank, shape, tile_shape, lod_mask, LOD_MAX_LEVELS, 0) == 0);
+            &plan, rank, shape, tile_shape, lod_mask, LOD_MAX_LEVELS) == 0);
   }
 
   int nlod = plan.nlod;

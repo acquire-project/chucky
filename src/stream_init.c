@@ -365,15 +365,11 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   CHECK(Fail, resolve_storage_order(rank, dims, storage_order) == 0);
 
   uint32_t lod_mask = 0;
-  int dim0_downsample = 0;
-  for (int d = 0; d < rank; ++d) {
-    if (dims[d].downsample) {
+  int dim0_downsample = dims[0].downsample;
+  for (int d = 1; d < rank; ++d)
+    if (dims[d].downsample)
       lod_mask |= (1u << d);
-      if (d == 0)
-        dim0_downsample = 1;
-    }
-  }
-  int enable_multiscale = (lod_mask & ~1u) != 0;
+  int enable_multiscale = lod_mask != 0;
 
   memset(out, 0, sizeof(*out));
   out->levels.enable_multiscale = enable_multiscale;
@@ -391,11 +387,6 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 
   // --- LOD plan ---
   if (enable_multiscale) {
-    uint32_t lod_mask = 0;
-    for (int d = 0; d < rank; ++d)
-      if (dims[d].downsample)
-        lod_mask |= (1u << d);
-
     uint64_t shape[HALF_MAX_RANK];
     uint64_t tile_shape[HALF_MAX_RANK];
     shape[0] = dims[0].tile_size;
@@ -410,8 +401,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                         shape,
                         tile_shape,
                         lod_mask,
-                        LOD_MAX_LEVELS,
-                        dim0_downsample) == 0);
+                        LOD_MAX_LEVELS) == 0);
 
     out->levels.nlod = out->plan.nlod;
 

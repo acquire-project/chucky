@@ -598,7 +598,6 @@ test_multiscale_unbounded(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .nlod = 0, // auto
-    .exclude_dim0 = 1,
   };
 
   struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);

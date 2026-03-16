@@ -295,13 +295,9 @@ run_bench(const struct bench_config* cfg)
   print_report("=== %s ===", label);
 
   int is_multiscale = 0;
-  int dim0_downsample = 0;
   for (uint8_t d = 0; d < rank; ++d) {
-    if (dims[d].downsample) {
+    if (dims[d].downsample)
       is_multiscale = 1;
-      if (d == 0)
-        dim0_downsample = 1;
-    }
   }
 
   const size_t total_elements = dim_total_elements(dims, rank);
@@ -327,7 +323,6 @@ run_bench(const struct bench_config* cfg)
         .rank = rank,
         .dimensions = dims,
         .nlod = 0,
-        .exclude_dim0 = dim0_downsample,
         .unbuffered = 1,
       };
       zmsink = zarr_multiscale_sink_create(&zcfg);

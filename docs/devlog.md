@@ -34,6 +34,9 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 
+## 2026-03-16
+
+
 ## 2026-03-15
 
 Refactoring tests and isolating pipeline stages more.
