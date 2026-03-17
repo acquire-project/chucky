@@ -12,3 +12,8 @@ add_src_lib(aggregate_cpu SOURCES aggregate.c aggregate.h
     LINKS index_ops chucky_log)
 target_include_directories(aggregate_cpu PUBLIC ${CMAKE_SOURCE_DIR}/src)
 enable_openmp(aggregate_cpu)
+
+add_src_lib(lod_cpu SOURCES lod.cpp lod.h
+    LINKS lod_plan index_ops stream_config chucky_log)
+target_include_directories(lod_cpu PUBLIC ${CMAKE_SOURCE_DIR}/src)
+enable_openmp(lod_cpu)

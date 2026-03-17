@@ -53,6 +53,9 @@ add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu Lz4::Lz4 Zstd::Z
 # CPU aggregate test (no CUDA)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)
 
+# CPU LOD test (no CUDA)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
+
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)
 add_platform_sources(test_platform)
