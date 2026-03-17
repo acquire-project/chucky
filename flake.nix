@@ -34,6 +34,7 @@
             gdb
             gh
             llvmPackages.openmp
+            lz4
             man-pages
             man-pages-posix
             neocmakelsp

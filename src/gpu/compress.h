@@ -1,5 +1,6 @@
 #pragma once
 
+#include "types.codec.h"
 #include <cuda.h>
 #include <stddef.h>
 
@@ -7,13 +8,6 @@
 extern "C"
 {
 #endif
-
-  enum compression_codec
-  {
-    CODEC_NONE,
-    CODEC_LZ4,
-    CODEC_ZSTD,
-  };
 
   struct codec
   {

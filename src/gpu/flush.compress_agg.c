@@ -1,5 +1,5 @@
-#include "flush_compress_agg.h"
-#include "flush_helpers.h"
+#include "flush.compress_agg.h"
+#include "flush.helpers.h"
 
 #include "aggregate.h"
 #include "compress.h"

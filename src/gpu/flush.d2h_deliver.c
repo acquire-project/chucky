@@ -1,5 +1,5 @@
-#include "flush_d2h_deliver.h"
-#include "flush_helpers.h"
+#include "flush.d2h_deliver.h"
+#include "flush.helpers.h"
 
 #include "lod.h"
 #include "metric.cuda.h"

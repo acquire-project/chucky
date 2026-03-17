@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream_internal.h"
+#include "stream.internal.h"
 
 // Upload pre-computed LOD plan/layouts to GPU and build scatter LUTs.
 // Plan and level layouts must already be populated in lod->plan and

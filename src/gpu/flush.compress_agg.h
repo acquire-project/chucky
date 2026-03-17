@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream_internal.h"
+#include "stream.internal.h"
 
 struct computed_stream_layouts;
 

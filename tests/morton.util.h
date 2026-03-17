@@ -1,8 +1,8 @@
 #ifndef MORTON_UTIL_H
 #define MORTON_UTIL_H
 
-#include "lod.h"
 #include "lod_plan.h"
+#include "types.lod.h"
 
 #include <stdint.h>
 

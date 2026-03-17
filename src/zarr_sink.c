@@ -1,6 +1,7 @@
 #include "zarr_sink.h"
 #include "io_queue.h"
 #include "json_writer.h"
+#include "defs.limits.h"
 #include "lod_plan.h"
 #include "platform.h"
 #include "platform_io.h"
@@ -9,8 +10,6 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define MAX_ZARR_RANK 8
 
 // --- Writer for a single shard file ---
 

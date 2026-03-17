@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream_internal.h"
+#include "stream.internal.h"
 
 // Allocate double-buffered staging buffers and events. Returns 0 on success.
 int

@@ -1,7 +1,7 @@
-#include "flush_compress_agg.h"
-#include "flush_d2h_deliver.h"
-#include "stream_ingest.h"
-#include "stream_lod.h"
+#include "flush.compress_agg.h"
+#include "flush.d2h_deliver.h"
+#include "stream.ingest.h"
+#include "stream.lod.h"
 
 #include "index.ops.h"
 #include "lod.h"

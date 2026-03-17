@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream_internal.h"
+#include "stream.internal.h"
 
 // Drain pending flush from the previous batch.
 struct writer_result

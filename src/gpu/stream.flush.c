@@ -1,8 +1,8 @@
-#include "stream_flush.h"
+#include "stream.flush.h"
 
-#include "flush_compress_agg.h"
-#include "flush_d2h_deliver.h"
-#include "stream_lod.h"
+#include "flush.compress_agg.h"
+#include "flush.d2h_deliver.h"
+#include "stream.lod.h"
 
 #include "lod.h"
 #include "prelude.cuda.h"

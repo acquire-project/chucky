@@ -1,4 +1,4 @@
-#include "flush_compress_agg.h"
+#include "flush.compress_agg.h"
 
 #include "index.ops.util.h"
 #include "test_gpu_helpers.h"

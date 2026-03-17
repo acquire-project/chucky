@@ -1,7 +1,8 @@
 #pragma once
 
-#include "compress.h"
-#include "stream.h"
+#include "dimension.h"
+#include "types.codec.h"
+#include "writer.h"
 
 #include <stdint.h>
 

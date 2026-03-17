@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream_internal.h"
+#include "stream.internal.h"
 
 // How many epochs fire for level `lv` within a batch of `n_epochs` epochs.
 // L0 fires every epoch; dim0-downsampled level lv fires every 2^lv epochs.

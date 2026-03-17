@@ -1,5 +1,6 @@
 #pragma once
 
+#include "defs.limits.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -8,9 +9,6 @@
 extern "C"
 {
 #endif
-
-#define MAX_RANK (64)
-#define HALF_MAX_RANK (MAX_RANK / 2)
 
   void transpose(CUdeviceptr d_dst_beg,
                  CUdeviceptr d_src_beg,

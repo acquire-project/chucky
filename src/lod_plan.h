@@ -1,9 +1,7 @@
 #pragma once
 
+#include "defs.limits.h"
 #include <stdint.h>
-
-#define LOD_MAX_NDIM 64
-#define LOD_MAX_LEVELS 32
 
 struct lod_span
 {

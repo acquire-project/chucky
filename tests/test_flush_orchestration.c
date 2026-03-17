@@ -1,6 +1,6 @@
-#include "flush_compress_agg.h"
-#include "flush_d2h_deliver.h"
-#include "stream_flush.h"
+#include "flush.compress_agg.h"
+#include "flush.d2h_deliver.h"
+#include "stream.flush.h"
 
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"

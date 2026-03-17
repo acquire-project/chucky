@@ -1,6 +1,8 @@
 #pragma once
 
 #include "compress.h"
+#include "dimension.h"
+#include "defs.limits.h"
 #include "lod.h"
 #include "metric.h"
 #include "transpose.h"
@@ -22,19 +24,6 @@ struct stream_metrics
   struct stream_metric aggregate;
   struct stream_metric d2h;
   struct stream_metric sink;
-};
-
-struct dimension
-{
-  uint64_t size; // 0 means unbounded (dim 0 only: stream indefinitely)
-  uint64_t chunk_size;
-  uint64_t chunks_per_shard; // 0 means all chunks along this dimension
-                             // (must be > 0 when size == 0)
-  const char* name;          // optional label (e.g. "x"), may be NULL
-  int downsample;            // include in LOD pyramid
-  uint8_t storage_position;  // position in storage layout (0=outermost).
-                             // dims[0].storage_position must be 0.
-                             // Must be a valid permutation of 0..rank-1.
 };
 
 struct tile_stream_configuration

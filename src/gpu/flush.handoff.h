@@ -1,12 +1,11 @@
 #pragma once
 
 #include "aggregate.h"
+#include "defs.limits.h"
 #include "lod_plan.h"
 
 #include <cuda.h>
 #include <stdint.h>
-
-#define MAX_BATCH_EPOCHS 128
 
 // Handoff from compress+aggregate to D2H+deliver.
 struct flush_handoff
