@@ -55,7 +55,11 @@ ca_ctx_setup(struct ca_test_ctx* c,
              int n_pool_epochs)
 {
   make_test_config(&c->config, c->dims, codec, epochs_per_batch);
-  CHECK(Fail, compute_stream_layouts(&c->config, &c->cl) == 0);
+  CHECK(Fail,
+        compute_stream_layouts(&c->config,
+                               codec_alignment(c->config.codec),
+                               codec_max_output_size,
+                               &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CHECK(Fail,

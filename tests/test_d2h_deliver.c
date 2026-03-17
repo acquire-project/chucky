@@ -63,7 +63,11 @@ test_ctx_setup(struct test_ctx* c,
                struct tile_stream_configuration* config,
                int n_pool_epochs)
 {
-  CHECK(Fail, compute_stream_layouts(config, &c->cl) == 0);
+  CHECK(Fail,
+        compute_stream_layouts(config,
+                               codec_alignment(config->codec),
+                               codec_max_output_size,
+                               &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->d2h_stream, CU_STREAM_NON_BLOCKING));

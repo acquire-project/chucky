@@ -78,7 +78,7 @@ compute_level_layout(struct tile_stream_layout* layout,
                      size_t bpe,
                      const struct dimension* dims,
                      const uint64_t* level_shape,
-                     enum compression_codec codec,
+                     size_t alignment,
                      const uint8_t* storage_order)
 {
   layout->lifted_rank = 2 * rank;
@@ -94,7 +94,6 @@ compute_level_layout(struct tile_stream_layout* layout,
   }
 
   {
-    size_t alignment = codec_alignment(codec);
     size_t chunk_bytes = layout->chunk_elements * bpe;
     size_t padded_bytes = align_up(chunk_bytes, alignment);
     layout->chunk_stride = padded_bytes / bpe;
@@ -195,8 +194,11 @@ computed_stream_layouts_free(struct computed_stream_layouts* cl)
 }
 
 int
-compute_stream_layouts(const struct tile_stream_configuration* config,
-                       struct computed_stream_layouts* out)
+compute_stream_layouts(
+  const struct tile_stream_configuration* config,
+  size_t codec_alignment,
+  size_t (*max_output_size_fn)(enum compression_codec, size_t chunk_bytes),
+  struct computed_stream_layouts* out)
 {
   const uint8_t rank = config->rank;
   const size_t bpe = lod_dtype_bpe(config->dtype);
@@ -225,7 +227,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     for (int d = 0; d < rank; ++d)
       l0_shape[d] = dims[d].size;
     compute_level_layout(
-      &out->l0, rank, bpe, dims, l0_shape, config->codec, storage_order);
+      &out->l0, rank, bpe, dims, l0_shape, codec_alignment, storage_order);
   }
 
   // --- LOD plan ---
@@ -251,7 +253,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                            bpe,
                            dims,
                            out->plan.shapes[lv],
-                           config->codec,
+                           codec_alignment,
                            storage_order);
   }
 
@@ -273,7 +275,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   // --- Codec-derived max_output_size ---
   {
     const size_t chunk_bytes = out->l0.chunk_stride * bpe;
-    out->max_output_size = codec_max_output_size(config->codec, chunk_bytes);
+    out->max_output_size = max_output_size_fn(config->codec, chunk_bytes);
     if (config->codec != CODEC_NONE && out->max_output_size == 0)
       goto Fail;
   }

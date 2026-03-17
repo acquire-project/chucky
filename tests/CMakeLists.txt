@@ -47,6 +47,9 @@ add_test_exe(test_transpose test_transpose.c CUDA::cuda_driver CUDA::cudart_stat
 # CPU transpose test (no CUDA)
 add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
 
+# CPU compress test (no CUDA)
+add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu Lz4::Lz4 Zstd::Zstd chucky_log)
+
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)
 add_platform_sources(test_platform)

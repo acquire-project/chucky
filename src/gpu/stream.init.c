@@ -186,7 +186,11 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config)
   CHECK(FailPhase1, config && config->shard_sink);
 
   // Phase 1: CPU-only layout computation.
-  CHECK(FailPhase1, compute_stream_layouts(config, &cl) == 0);
+  CHECK(FailPhase1,
+        compute_stream_layouts(config,
+                               codec_alignment(config->codec),
+                               codec_max_output_size,
+                               &cl) == 0);
 
   // Phase 2: Allocate and initialize tile_stream_gpu.
   struct tile_stream_gpu* out =
@@ -325,7 +329,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  if (compute_stream_layouts(config, &cl))
+  if (compute_stream_layouts(
+        config, codec_alignment(config->codec), codec_max_output_size, &cl))
     return 1;
 
   const uint8_t rank = config->rank;

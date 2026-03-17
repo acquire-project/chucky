@@ -19,6 +19,7 @@ include(OpenMP)
 find_package(CUDAToolkit 12.8 REQUIRED)
 find_package(Nvcomp REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Lz4 REQUIRED)
 find_package(Zstd REQUIRED)
 
 add_subdirectory(src)

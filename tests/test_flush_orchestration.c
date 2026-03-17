@@ -69,7 +69,11 @@ orch_ctx_destroy(struct orch_ctx* c)
 static int
 orch_ctx_setup(struct orch_ctx* c, struct tile_stream_configuration* config)
 {
-  CHECK(Fail, compute_stream_layouts(config, &c->cl) == 0);
+  CHECK(Fail,
+        compute_stream_layouts(config,
+                               codec_alignment(config->codec),
+                               codec_max_output_size,
+                               &c->cl) == 0);
 
   const uint32_t K = c->cl.epochs_per_batch;
   const uint64_t total_chunks = c->cl.levels.total_chunks;
