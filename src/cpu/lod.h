@@ -44,6 +44,28 @@ extern "C"
                                const uint64_t* batch_chunk_offsets,
                                enum lod_dtype dtype);
 
+  // Dim0 fold: accumulate inner-reduced data (levels 1+) from the morton
+  // buffer into the accumulator. On first call (counts[lv]==0) copies;
+  // subsequent calls reduce (mean/min/max).
+  // accum: buffer sized to sum(batch_count * lod_counts[lv]) for lv=1..nlod-1.
+  // counts[nlod]: per-level fold count (caller increments after this call).
+  int lod_cpu_dim0_fold(const struct lod_plan* p,
+                        const void* morton_values,
+                        void* accum,
+                        const uint32_t* counts,
+                        enum lod_dtype dtype,
+                        enum lod_reduce_method method);
+
+  // Dim0 emit: finalize accumulator for level lv back to morton buffer.
+  // For float mean: divides by count. For int mean/min/max: copies.
+  int lod_cpu_dim0_emit(const struct lod_plan* p,
+                        void* morton_values,
+                        const void* accum,
+                        int lv,
+                        uint32_t count,
+                        enum lod_dtype dtype,
+                        enum lod_reduce_method method);
+
 #ifdef __cplusplus
 }
 #endif

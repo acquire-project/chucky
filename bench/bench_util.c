@@ -1,5 +1,6 @@
 #include "bench_util.h"
 #include "compress.h"
+#include "cpu/stream.h"
 #include "dimension.h"
 #include "lod.h"
 #include "prelude.cuda.h"
@@ -145,6 +146,61 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
   }
 }
 
+// --- Backend dispatch helpers ---
+
+struct bench_handle
+{
+  enum bench_backend backend;
+  union
+  {
+    struct tile_stream_gpu* gpu;
+    struct tile_stream_cpu* cpu;
+  };
+};
+
+static int
+bench_is_null(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? h->cpu == NULL : h->gpu == NULL;
+}
+
+static const struct tile_stream_layout*
+bench_layout(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_layout(h->cpu)
+                                 : tile_stream_gpu_layout(h->gpu);
+}
+
+static struct stream_metrics
+bench_get_metrics(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_get_metrics(h->cpu)
+                                 : tile_stream_gpu_get_metrics(h->gpu);
+}
+
+static struct writer*
+bench_writer(struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_writer(h->cpu)
+                                 : tile_stream_gpu_writer(h->gpu);
+}
+
+static uint64_t
+bench_cursor(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_cursor(h->cpu)
+                                 : tile_stream_gpu_cursor(h->gpu);
+}
+
+static void
+bench_destroy(struct bench_handle* h)
+{
+  if (h->backend == BENCH_CPU)
+    tile_stream_cpu_destroy(h->cpu);
+  else
+    tile_stream_gpu_destroy(h->gpu);
+}
+
 // --- Report + pipeline helpers ---
 
 void
@@ -173,12 +229,14 @@ print_metric_row(const struct stream_metric* m)
 }
 
 void
-log_bench_header(const struct tile_stream_gpu* s,
+log_bench_header(const struct tile_stream_layout* layout,
+                 enum lod_dtype dtype,
+                 enum compression_codec codec,
+                 size_t max_compressed_size,
+                 size_t codec_batch_size,
                  size_t total_bytes,
                  size_t total_elements)
 {
-  const struct tile_stream_layout* layout = tile_stream_gpu_layout(s);
-  const struct tile_stream_status st = tile_stream_gpu_status(s);
   const size_t num_epochs =
     (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
 
@@ -189,20 +247,21 @@ log_bench_header(const struct tile_stream_gpu* s,
   print_report(
     "  chunk:       %lu elements = %lu KiB  (stride=%lu)",
     (unsigned long)layout->chunk_elements,
-    (unsigned long)(layout->chunk_stride * lod_dtype_bpe(st.dtype) / 1024),
+    (unsigned long)(layout->chunk_stride * lod_dtype_bpe(dtype) / 1024),
     (unsigned long)layout->chunk_stride);
   print_report("  epoch:       %lu slots, %lu MiB pool",
                (unsigned long)layout->chunks_per_epoch,
                (unsigned long)(layout->chunk_pool_bytes / (1024 * 1024)));
-  if (st.codec != CODEC_NONE)
+  if (codec != CODEC_NONE && max_compressed_size > 0)
     print_report("  compress:    max_output=%zu comp_pool=%zu MiB",
-                 st.max_compressed_size,
-                 (st.codec_batch_size * st.max_compressed_size) /
-                   (1024 * 1024));
+                 max_compressed_size,
+                 (codec_batch_size * max_compressed_size) / (1024 * 1024));
 }
 
 void
-print_bench_report(const struct tile_stream_gpu* s,
+print_bench_report(const struct stream_metrics* metrics,
+                   const struct tile_stream_layout* layout,
+                   enum lod_dtype dtype,
                    const struct sink_stats* ss,
                    size_t total_bytes,
                    size_t total_elements,
@@ -211,10 +270,7 @@ print_bench_report(const struct tile_stream_gpu* s,
                    float flush_s,
                    size_t flush_pending_bytes)
 {
-  struct stream_metrics m = tile_stream_gpu_get_metrics(s);
-  const struct tile_stream_layout* layout = tile_stream_gpu_layout(s);
-  const struct tile_stream_status st = tile_stream_gpu_status(s);
-  const size_t chunk_bytes = layout->chunk_stride * lod_dtype_bpe(st.dtype);
+  const size_t chunk_bytes = layout->chunk_stride * lod_dtype_bpe(dtype);
   const size_t num_epochs =
     (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
   const size_t total_chunks = num_epochs * layout->chunks_per_epoch;
@@ -245,17 +301,17 @@ print_bench_report(const struct tile_stream_gpu* s,
                "avg ms",
                "best ms");
 
-  print_metric_row(&m.memcpy);
-  print_metric_row(&m.h2d);
-  print_metric_row(&m.scatter);
-  print_metric_row(&m.lod_gather);
-  print_metric_row(&m.lod_reduce);
-  print_metric_row(&m.lod_dim0_fold);
-  print_metric_row(&m.lod_morton_chunk);
-  print_metric_row(&m.compress);
-  print_metric_row(&m.aggregate);
-  print_metric_row(&m.d2h);
-  print_metric_row(&m.sink);
+  print_metric_row(&metrics->memcpy);
+  print_metric_row(&metrics->h2d);
+  print_metric_row(&metrics->scatter);
+  print_metric_row(&metrics->lod_gather);
+  print_metric_row(&metrics->lod_reduce);
+  print_metric_row(&metrics->lod_dim0_fold);
+  print_metric_row(&metrics->lod_morton_chunk);
+  print_metric_row(&metrics->compress);
+  print_metric_row(&metrics->aggregate);
+  print_metric_row(&metrics->d2h);
+  print_metric_row(&metrics->sink);
 
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
@@ -292,7 +348,7 @@ run_bench(const struct bench_config* cfg)
   const char* output_path = cfg->output_path;
   const char* array_name = cfg->array_name;
 
-  print_report("=== %s ===", label);
+  print_report("=== %s [%s] ===", label, cfg->backend == BENCH_CPU ? "cpu" : "gpu");
 
   int is_multiscale = 0;
   for (uint8_t d = 0; d < rank; ++d) {
@@ -310,7 +366,7 @@ run_bench(const struct bench_config* cfg)
   struct zarr_multiscale_sink* zmsink = NULL;
   struct metering_sink meter = { 0 };
   struct shard_sink* sink = &dss.base;
-  struct tile_stream_gpu* s = NULL;
+  struct bench_handle h = { .backend = cfg->backend };
 
   if (output_path) {
     struct shard_sink* zarr_sink_ptr = NULL;
@@ -359,7 +415,7 @@ run_bench(const struct bench_config* cfg)
     .shard_alignment = output_path ? platform_page_size() : 0,
   };
 
-  {
+  if (cfg->backend == BENCH_GPU) {
     struct tile_stream_memory_info mem;
     if (tile_stream_gpu_memory_estimate(&config, &mem) == 0) {
       print_report("  GPU memory:  %.2f GiB device, %.2f GiB pinned",
@@ -386,16 +442,34 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
-  CHECK(Fail, (s = tile_stream_gpu_create(&config)) != NULL);
+
+  if (cfg->backend == BENCH_CPU)
+    h.cpu = tile_stream_cpu_create(&config);
+  else
+    h.gpu = tile_stream_gpu_create(&config);
+  CHECK(Fail, !bench_is_null(&h));
   float init_s = platform_toc(&init_clock);
 
-  log_bench_header(s, total_bytes, total_elements);
-  if (is_multiscale)
-    print_report("  LOD levels:  %d", tile_stream_gpu_status(s).nlod);
+  const struct tile_stream_layout* layout = bench_layout(&h);
+  size_t max_compressed_size = 0;
+  size_t codec_batch_size = 0;
+  int nlod = 0;
+  if (cfg->backend == BENCH_GPU) {
+    struct tile_stream_status st = tile_stream_gpu_status(h.gpu);
+    max_compressed_size = st.max_compressed_size;
+    codec_batch_size = st.codec_batch_size;
+    nlod = st.nlod;
+  }
+
+  log_bench_header(layout, config.dtype, config.codec,
+                   max_compressed_size, codec_batch_size,
+                   total_bytes, total_elements);
+  if (is_multiscale && nlod > 0)
+    print_report("  LOD levels:  %d", nlod);
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data(tile_stream_gpu_writer(s), total_elements, fill) == 0);
+  CHECK(Fail, pump_data(bench_writer(&h), total_elements, fill) == 0);
 
   size_t pending_bytes = 0;
   if (zsink)
@@ -412,20 +486,23 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
-  if (tile_stream_gpu_cursor(s) != total_elements) {
+  if (bench_cursor(&h) != total_elements) {
     log_error("  cursor drift: expected %zu, got %zu (diff=%td)",
               total_elements,
-              (size_t)tile_stream_gpu_cursor(s),
-              (ptrdiff_t)((int64_t)tile_stream_gpu_cursor(s) -
+              (size_t)bench_cursor(&h),
+              (ptrdiff_t)((int64_t)bench_cursor(&h) -
                           (int64_t)total_elements));
     goto Fail;
   }
 
   {
+    struct stream_metrics m = bench_get_metrics(&h);
     struct sink_stats ss =
       output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes }
                   : (struct sink_stats){ .total_bytes = dss.total_bytes };
-    print_bench_report(s,
+    print_bench_report(&m,
+                       layout,
+                       config.dtype,
                        &ss,
                        total_bytes,
                        total_elements,
@@ -450,7 +527,7 @@ Cleanup:
     zarr_sink_flush(zsink);
   if (zmsink)
     zarr_multiscale_sink_flush(zmsink);
-  tile_stream_gpu_destroy(s);
+  bench_destroy(&h);
   zarr_sink_destroy(zsink);
   zarr_multiscale_sink_destroy(zmsink);
   return rc;
@@ -521,6 +598,22 @@ parse_reduce(const char* s, enum lod_reduce_method* out)
   return 0;
 }
 
+// --- CLI parsing: backend ---
+
+static int
+parse_backend(const char* s, enum bench_backend* out)
+{
+  static const char* const names[] = { "gpu", "cpu" };
+  static const enum bench_backend vals[] = { BENCH_GPU, BENCH_CPU };
+  int i = match_option(s, names, 2);
+  if (i < 2) {
+    *out = vals[i];
+    return 1;
+  }
+  fprintf(stderr, "Unknown backend: %s (expected gpu, cpu)\n", s);
+  return 0;
+}
+
 // --- CLI driver ---
 
 int
@@ -534,6 +627,7 @@ bench_stream_main(int ac,
   enum compression_codec codec = CODEC_ZSTD;
   enum lod_reduce_method reduce = lod_reduce_mean;
   const char* output_path = NULL;
+  enum bench_backend backend = BENCH_GPU;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -546,13 +640,17 @@ bench_stream_main(int ac,
     } else if (strcmp(av[i], "--reduce") == 0 && i + 1 < ac) {
       if (!parse_reduce(av[++i], &reduce))
         return 1;
+    } else if (strcmp(av[i], "--backend") == 0 && i + 1 < ac) {
+      if (!parse_backend(av[++i], &backend))
+        return 1;
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
       output_path = av[++i];
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
               "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
-              "[--reduce mean|min|max|median|max_sup|min_sup] [-o path]\n",
+              "[--reduce mean|min|max|median|max_sup|min_sup] "
+              "[--backend gpu|cpu] [-o path]\n",
               av[0]);
       return 1;
     }
@@ -560,11 +658,13 @@ bench_stream_main(int ac,
 
   int ecode = 0;
   CUcontext ctx = 0;
-  CUdevice dev;
 
-  CU(Fail, cuInit(0));
-  CU(Fail, cuDeviceGet(&dev, 0));
-  CU(Fail, cuCtxCreate(&ctx, 0, dev));
+  if (backend == BENCH_GPU) {
+    CUdevice dev;
+    CU(Fail, cuInit(0));
+    CU(Fail, cuDeviceGet(&dev, 0));
+    CU(Fail, cuCtxCreate(&ctx, 0, dev));
+  }
 
   int need_xor = (fill == fill_xor);
   int need_rand = (fill == fill_rand);
@@ -583,6 +683,7 @@ bench_stream_main(int ac,
     .codec = codec,
     .reduce_method = reduce,
     .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .backend = backend,
   };
   dims_print(dims, rank);
   ecode = run_bench(&cfg);
@@ -592,11 +693,13 @@ bench_stream_main(int ac,
   if (need_rand)
     rand_pattern_free();
 
-  cuCtxDestroy(ctx);
+  if (backend == BENCH_GPU)
+    cuCtxDestroy(ctx);
   return ecode;
 
 Fail:
   printf("FAIL\n");
-  cuCtxDestroy(ctx);
+  if (backend == BENCH_GPU)
+    cuCtxDestroy(ctx);
   return 1;
 }

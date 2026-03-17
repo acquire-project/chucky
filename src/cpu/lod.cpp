@@ -8,6 +8,7 @@ extern "C"
 
 #include <stdlib.h>
 #include <string.h>
+#include <type_traits>
 
 // ---- Accumulator type traits ----
 
@@ -245,6 +246,77 @@ build_chunk_lut(const lod_plan* p,
   }
 }
 
+// ---- Dim0 fold/emit ----
+
+// Overflow-safe (a + b) >> s for integer types.
+// Float/64-bit: just add (emit handles final division).
+template<typename T>
+static T
+overflow_safe_add_shift(T a, T b, int s)
+{
+  if constexpr (std::is_floating_point<T>::value || sizeof(T) >= 8)
+    return a + b;
+  else {
+    T mask = (T)((1u << s) - 1);
+    return (T)((a >> s) + (b >> s) + (((a & mask) + (b & mask)) >> s));
+  }
+}
+
+template<typename T>
+static void
+dim0_fold_typed(T* accum,
+                const T* new_data,
+                uint64_t n,
+                uint32_t count,
+                int level,
+                lod_reduce_method method)
+{
+  if (count == 0) {
+    for (uint64_t i = 0; i < n; ++i)
+      accum[i] = new_data[i];
+    return;
+  }
+  switch (method) {
+    case lod_reduce_mean:
+      for (uint64_t i = 0; i < n; ++i)
+        accum[i] = overflow_safe_add_shift(accum[i], new_data[i], level);
+      break;
+    case lod_reduce_min:
+      for (uint64_t i = 0; i < n; ++i)
+        if (new_data[i] < accum[i])
+          accum[i] = new_data[i];
+      break;
+    case lod_reduce_max:
+      for (uint64_t i = 0; i < n; ++i)
+        if (new_data[i] > accum[i])
+          accum[i] = new_data[i];
+      break;
+    default:
+      break;
+  }
+}
+
+template<typename T>
+static void
+dim0_emit_typed(T* dst,
+                const T* accum,
+                uint64_t n,
+                uint32_t count,
+                lod_reduce_method method)
+{
+  if constexpr (std::is_floating_point<T>::value) {
+    if (method == lod_reduce_mean) {
+      T divisor = (T)count;
+      for (uint64_t i = 0; i < n; ++i)
+        dst[i] = accum[i] / divisor;
+      return;
+    }
+  }
+  // int mean (pre-divided), min, max: just copy
+  for (uint64_t i = 0; i < n; ++i)
+    dst[i] = accum[i];
+}
+
 // ---- Dispatch macro (only used in the public API) ----
 
 #define DISPATCH(dtype, call)                                                  \
@@ -370,5 +442,61 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
 #undef DO
 
   free(chunk_lut);
+  return 0;
+}
+
+extern "C" int
+lod_cpu_dim0_fold(const lod_plan* p,
+                  const void* morton_values,
+                  void* accum,
+                  const uint32_t* counts,
+                  lod_dtype dtype,
+                  lod_reduce_method method)
+{
+  const size_t bpe = lod_dtype_bpe(dtype);
+  uint64_t accum_offset = 0;
+
+  for (int lv = 1; lv < p->nlod; ++lv) {
+    lod_span lev = lod_spans_at(&p->levels, (uint64_t)lv);
+    uint64_t n = p->batch_count * p->lod_counts[lv];
+    const char* src = (const char*)morton_values + lev.beg * bpe;
+    char* dst = (char*)accum + accum_offset * bpe;
+
+#define DO(T)                                                                  \
+  dim0_fold_typed((T*)dst, (const T*)src, n, counts[lv], lv, method)
+    DISPATCH(dtype, DO);
+#undef DO
+
+    accum_offset += n;
+  }
+
+  return 0;
+}
+
+extern "C" int
+lod_cpu_dim0_emit(const lod_plan* p,
+                  void* morton_values,
+                  const void* accum,
+                  int lv,
+                  uint32_t count,
+                  lod_dtype dtype,
+                  lod_reduce_method method)
+{
+  const size_t bpe = lod_dtype_bpe(dtype);
+  lod_span lev = lod_spans_at(&p->levels, (uint64_t)lv);
+  uint64_t n = p->batch_count * p->lod_counts[lv];
+
+  // Compute accum offset for this level
+  uint64_t accum_offset = 0;
+  for (int k = 1; k < lv; ++k)
+    accum_offset += p->batch_count * p->lod_counts[k];
+
+  char* dst = (char*)morton_values + lev.beg * bpe;
+  const char* src = (const char*)accum + accum_offset * bpe;
+
+#define DO(T) dim0_emit_typed((T*)dst, (const T*)src, n, count, method)
+  DISPATCH(dtype, DO);
+#undef DO
+
   return 0;
 }

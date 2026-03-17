@@ -27,7 +27,12 @@ struct tile_stream_cpu
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
   // LOD (multiscale only)
+  void* linear;     // linear epoch buffer (input accumulated here before scatter)
   void* lod_values; // morton-ordered LOD buffer (all levels packed)
+
+  // Dim0 downsample accumulation state
+  void* dim0_accum;                    // accumulator for levels 1+
+  uint32_t dim0_counts[LOD_MAX_LEVELS]; // per-level fold count
 
   uint64_t cursor;
   struct stream_metrics metrics;

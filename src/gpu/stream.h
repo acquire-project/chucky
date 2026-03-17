@@ -1,6 +1,5 @@
 #pragma once
 
-#include "stream.config.h"
 #include "types.stream.h"
 #include <cuda.h>
 

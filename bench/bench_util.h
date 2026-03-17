@@ -71,11 +71,17 @@ struct sink_stats
 void
 print_metric_row(const struct stream_metric* m);
 void
-log_bench_header(const struct tile_stream_gpu* s,
+log_bench_header(const struct tile_stream_layout* layout,
+                 enum lod_dtype dtype,
+                 enum compression_codec codec,
+                 size_t max_compressed_size,
+                 size_t codec_batch_size,
                  size_t total_bytes,
                  size_t total_elements);
 void
-print_bench_report(const struct tile_stream_gpu* s,
+print_bench_report(const struct stream_metrics* metrics,
+                   const struct tile_stream_layout* layout,
+                   enum lod_dtype dtype,
                    const struct sink_stats* ss,
                    size_t total_bytes,
                    size_t total_elements,
@@ -83,6 +89,12 @@ print_bench_report(const struct tile_stream_gpu* s,
                    float init_s,
                    float flush_s,
                    size_t flush_pending_bytes);
+
+enum bench_backend
+{
+  BENCH_GPU,
+  BENCH_CPU,
+};
 
 struct bench_config
 {
@@ -95,6 +107,7 @@ struct bench_config
   enum compression_codec codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method dim0_reduce_method;
+  enum bench_backend backend;
 };
 
 int

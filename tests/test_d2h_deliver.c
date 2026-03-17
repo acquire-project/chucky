@@ -1,5 +1,6 @@
 #include "flush.compress_agg.h"
 #include "flush.d2h_deliver.h"
+#include "stream.config.h"
 
 #include "index.ops.util.h"
 #include "test_gpu_helpers.h"

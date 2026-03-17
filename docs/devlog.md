@@ -34,7 +34,14 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 - [ ] bench 2 streams, 1 gpu
+Cleanup
 - [ ] make sure everything has extern c guards
+- [ ] comments at the top of each test
+
+## 2026-03-17
+
+Still need to do the dim0 fold for cpu. Need to do some review passes. Then I
+want to see how well it works on betchmarks.
 
 ## 2026-03-16
 
@@ -51,6 +58,9 @@ crash the driver at one point.
 
 Started doing the cpu implementation. I moved a bunch of the source files around
 ...I should have done the same for tests - will have to clean that up.
+
+Got tests to pass. Adding a test to validate the results are the same between
+the cpu and gpu pipeline. Adding the cpu backend to the benchmarks.
 
 - [ ] look into j8 failures
 

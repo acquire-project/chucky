@@ -84,12 +84,28 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config)
     }
   }
 
-  // LOD buffer (multiscale only).
+  // LOD buffers (multiscale only).
   if (s->levels.enable_multiscale) {
+    // Linear epoch buffer: input is accumulated here before LOD scatter.
+    s->linear = calloc(s->layout.epoch_elements, bpe);
+    CHECK(Fail, s->linear);
+
     uint64_t total_lod_elements =
       s->cl.plan.levels.ends[s->cl.plan.nlod - 1];
     s->lod_values = calloc(total_lod_elements, bpe);
     CHECK(Fail, s->lod_values);
+
+    // Dim0 accumulator: total elements in levels 1+ (packed).
+    if (s->levels.dim0_downsample) {
+      uint64_t dim0_total = 0;
+      for (int lv = 1; lv < s->cl.plan.nlod; ++lv)
+        dim0_total += s->cl.plan.batch_count * s->cl.plan.lod_counts[lv];
+      if (dim0_total > 0) {
+        s->dim0_accum = calloc(dim0_total, bpe);
+        CHECK(Fail, s->dim0_accum);
+      }
+      memset(s->dim0_counts, 0, sizeof(s->dim0_counts));
+    }
   }
 
   // Metrics.
@@ -134,7 +150,9 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s->chunk_pool);
   free(s->compressed);
   free(s->comp_sizes);
+  free(s->linear);
   free(s->lod_values);
+  free(s->dim0_accum);
   computed_stream_layouts_free(&s->cl);
   free(s);
 }
@@ -167,14 +185,17 @@ tile_stream_cpu_cursor(const struct tile_stream_cpu* s)
 
 // ---- Epoch processing ----
 
-// Process one complete epoch: compress + aggregate + deliver for each level.
+// Process one complete epoch: compress + aggregate + deliver for active levels.
+// active_levels_mask: bit lv set means level lv has data to process.
 static int
-flush_epoch(struct tile_stream_cpu* s)
+flush_epoch(struct tile_stream_cpu* s, uint32_t active_levels_mask)
 {
   const size_t bpe = lod_dtype_bpe(s->config.dtype);
   const size_t max_out = s->cl.max_output_size;
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
+    if (!(active_levels_mask & (1u << lv)))
+      continue;
     uint64_t chunk_count = s->levels.chunk_count[lv];
     uint64_t chunk_offset = s->levels.chunk_offset[lv];
     const struct tile_stream_layout* layout =
@@ -251,31 +272,32 @@ Error:
   return 1;
 }
 
-// Scatter one epoch into chunk pool.
+// Scatter one epoch into chunk pool. Returns active_levels_mask via out_mask.
 static int
-scatter_epoch(struct tile_stream_cpu* s)
+scatter_epoch(struct tile_stream_cpu* s, uint32_t* out_mask)
 {
   const size_t bpe = lod_dtype_bpe(s->config.dtype);
 
   if (!s->levels.enable_multiscale) {
-    // Simple path: transpose input directly to L0 chunk pool.
-    // The input for this epoch starts at the beginning of chunk_pool
-    // (we reuse the same buffer each epoch). But the source data was
-    // accumulated via append — the transpose_cpu calls during append
-    // already scattered into chunk_pool.
+    // Simple path: transpose was already done during append.
+    *out_mask = 1;
     return 0;
   }
 
-  // Multiscale path: scatter to morton, reduce, scatter each level to chunks.
+  // Multiscale path: scatter linear buffer to morton, reduce, then
+  // scatter each level to chunk pool.
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
 
-  // L0 scatter to morton (already done during lod_cpu_compute if we
-  // had all the data at once, but here we process incrementally via
-  // the lod_values buffer filled during append).
-  // Actually: for the multiscale path, the input epoch is in lod_values
-  // after lod_cpu_scatter, then we reduce, then morton_to_chunks for
-  // each level.
+  CHECK(Error,
+        lod_cpu_scatter(
+          &s->cl.plan, s->linear, s->lod_values, s->config.dtype) == 0);
+
+  float scatter_ms = (float)(platform_toc(&clk) * 1000.0);
+  accumulate_metric_ms(&s->metrics.lod_gather, scatter_ms,
+                        s->layout.epoch_elements * bpe);
+
+  platform_toc(&clk);
   CHECK(Error, lod_cpu_reduce(&s->cl.plan, s->lod_values, s->config.dtype,
                                s->config.reduce_method) == 0);
 
@@ -283,28 +305,84 @@ scatter_epoch(struct tile_stream_cpu* s)
   accumulate_metric_ms(&s->metrics.lod_reduce, ms,
                         s->cl.plan.levels.ends[s->cl.plan.nlod - 1] * bpe);
 
-  // Morton-to-chunks for each level.
+  // Dim0 fold/emit: accumulate levels 1+ across epochs.
+  // Without dim0_downsample, only L0 is scattered to the chunk pool.
+  uint32_t active_levels_mask = 1; // L0 always active
+  if (s->levels.dim0_downsample && s->dim0_accum) {
+    CHECK(Error,
+          lod_cpu_dim0_fold(&s->cl.plan,
+                            s->lod_values,
+                            s->dim0_accum,
+                            s->dim0_counts,
+                            s->config.dtype,
+                            s->config.dim0_reduce_method) == 0);
+
+    for (int lv = 1; lv < s->cl.plan.nlod; ++lv) {
+      s->dim0_counts[lv]++;
+      uint32_t period = 1u << lv;
+      if (s->dim0_counts[lv] >= period) {
+        CHECK(Error,
+              lod_cpu_dim0_emit(&s->cl.plan,
+                                s->lod_values,
+                                s->dim0_accum,
+                                lv,
+                                s->dim0_counts[lv],
+                                s->config.dtype,
+                                s->config.dim0_reduce_method) == 0);
+        s->dim0_counts[lv] = 0;
+        active_levels_mask |= (1u << lv);
+      }
+    }
+  }
+
   platform_toc(&clk);
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
+    if (!(active_levels_mask & (1u << lv)))
+      continue;
     const struct tile_stream_layout* layout =
       (lv == 0) ? &s->layout : &s->cl.lod_layouts[lv];
 
-    // batch_chunk_offsets: for K=1, one batch, offset = chunk_offset * chunk_stride
-    uint64_t batch_offset = s->levels.chunk_offset[lv] * layout->chunk_stride;
+    // Build per-batch chunk pool offsets (batch dims map to layout strides).
+    const struct lod_plan* plan = &s->cl.plan;
+    uint64_t* batch_offsets =
+      (uint64_t*)calloc(plan->batch_count, sizeof(uint64_t));
+    CHECK(Error, batch_offsets);
+
+    for (uint64_t bi = 0; bi < plan->batch_count; ++bi) {
+      uint64_t remainder = bi;
+      int64_t offset = 0;
+      for (int k = plan->batch_ndim - 1; k >= 0; --k) {
+        uint64_t coord = remainder % plan->batch_shape[k];
+        remainder /= plan->batch_shape[k];
+        int d = plan->batch_map[k];
+        uint64_t cs = layout->lifted_shape[2 * d + 1];
+        uint64_t ci = coord / cs;
+        uint64_t wi = coord % cs;
+        offset += (int64_t)ci * layout->lifted_strides[2 * d];
+        offset += (int64_t)wi * layout->lifted_strides[2 * d + 1];
+      }
+      // Add the level's chunk pool offset.
+      batch_offsets[bi] =
+        (uint64_t)offset +
+        s->levels.chunk_offset[lv] * layout->chunk_stride;
+    }
+
     CHECK(Error,
-          lod_cpu_morton_to_chunks(&s->cl.plan,
+          lod_cpu_morton_to_chunks(plan,
                                    s->lod_values,
                                    s->chunk_pool,
                                    lv,
                                    layout,
-                                   &batch_offset,
+                                   batch_offsets,
                                    s->config.dtype) == 0);
+    free(batch_offsets);
   }
 
   ms = (float)(platform_toc(&clk) * 1000.0);
   accumulate_metric_ms(&s->metrics.lod_morton_chunk, ms,
                         s->levels.total_chunks * s->layout.chunk_stride * bpe);
 
+  *out_mask = active_levels_mask;
   return 0;
 
 Error:
@@ -356,9 +434,10 @@ cpu_append(struct writer* self, struct slice input)
       platform_toc(&clk);
 
       if (s->levels.enable_multiscale) {
-        CHECK(Error,
-              lod_cpu_scatter(&s->cl.plan, src, s->lod_values,
-                              s->config.dtype) == 0);
+        // Accumulate into linear epoch buffer; LOD scatter happens at
+        // epoch boundary in scatter_epoch().
+        uint64_t epoch_offset = s->cursor % s->layout.epoch_elements;
+        memcpy((char*)s->linear + epoch_offset * bpe, src, bytes);
       } else {
         CHECK(Error,
               transpose_cpu(s->chunk_pool,
@@ -380,15 +459,18 @@ cpu_append(struct writer* self, struct slice input)
 
     // Epoch boundary: process the completed epoch.
     if (s->cursor % s->layout.epoch_elements == 0 && s->cursor > 0) {
+      uint32_t active_mask = 1; // L0 always active
       if (s->levels.enable_multiscale) {
-        CHECK(Error, scatter_epoch(s) == 0);
+        CHECK(Error, scatter_epoch(s, &active_mask) == 0);
       }
-      CHECK(Error, flush_epoch(s) == 0);
+      CHECK(Error, flush_epoch(s, active_mask) == 0);
 
-      // Clear chunk pool for next epoch.
+      // Clear buffers for next epoch.
       memset(s->chunk_pool,
              0,
              s->levels.total_chunks * s->layout.chunk_stride * bpe);
+      if (s->linear)
+        memset(s->linear, 0, s->layout.epoch_elements * bpe);
       if (s->lod_values) {
         size_t lod_bytes =
           s->cl.plan.levels.ends[s->cl.plan.nlod - 1] * bpe;
@@ -428,12 +510,32 @@ cpu_flush(struct writer* self)
 
   // Flush partial epoch.
   if (s->cursor % s->layout.epoch_elements != 0) {
+    uint32_t active_mask = 1;
     if (s->levels.enable_multiscale) {
-      if (scatter_epoch(s))
+      if (scatter_epoch(s, &active_mask))
         return writer_error();
     }
-    if (flush_epoch(s))
+    if (flush_epoch(s, active_mask))
       return writer_error();
+  }
+
+  // Drain any partial dim0 accumulators (levels that haven't emitted yet).
+  if (s->levels.dim0_downsample && s->dim0_accum) {
+    for (int lv = 1; lv < s->cl.plan.nlod; ++lv) {
+      if (s->dim0_counts[lv] > 0) {
+        if (lod_cpu_dim0_emit(&s->cl.plan,
+                              s->lod_values,
+                              s->dim0_accum,
+                              lv,
+                              s->dim0_counts[lv],
+                              s->config.dtype,
+                              s->config.dim0_reduce_method))
+          return writer_error();
+        // Scatter this level to chunk pool and flush it
+        // (simplified: reuse scatter_epoch logic for just this level)
+        s->dim0_counts[lv] = 0;
+      }
+    }
   }
 
   // Emit partial shards.
