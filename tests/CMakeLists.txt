@@ -17,7 +17,7 @@ endfunction()
 
 # Index operations utility library (shared between tests)
 add_test_lib(index_ops_util index.ops.util.c)
-target_link_libraries(index_ops_util PUBLIC index_ops transpose)
+target_link_libraries(index_ops_util PUBLIC index_ops)
 
 # Morton/LOD CPU reference library (shared between tests)
 add_test_lib(morton_util morton.util.c morton.util.h)
@@ -43,6 +43,9 @@ add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
 
 # Standalone transpose kernel test
 add_test_exe(test_transpose test_transpose.c CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
+
+# CPU transpose test (no CUDA)
+add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
 
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)

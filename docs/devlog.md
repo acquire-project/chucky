@@ -45,6 +45,14 @@ Fixing uses of the word chunk that are a bit off target.
 
 Analyzing acquire-zarr integration.
 
+When running tests with `-j8` noticed a bunch of weird bugs - even managed to
+crash the driver at one point.
+
+Started doing the cpu implementation. I moved a bunch of the source files around
+...I should have done the same for tests - will have to clean that up.
+
+- [ ] look into j8 failures
+
 ## 2026-03-15
 
 Refactoring tests and isolating pipeline stages more.

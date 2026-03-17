@@ -38,6 +38,7 @@ add_src_lib(stream_config SOURCES stream.config.c stream.config.h
 # --- Backend subdirectories ---
 
 add_subdirectory(gpu)
+add_subdirectory(cpu)
 
 add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
     LINKS crc32c writer platform chucky_log)
