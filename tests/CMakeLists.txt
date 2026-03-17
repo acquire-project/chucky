@@ -56,6 +56,9 @@ add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
 
+# CPU stream end-to-end test (no CUDA)
+add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer chucky_log)
+
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)
 add_platform_sources(test_platform)
