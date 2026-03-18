@@ -8,7 +8,9 @@
 #include "zarr_sink.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // --- Throughput helpers ---
 
@@ -273,7 +275,9 @@ print_bench_report(const struct stream_metrics* metrics,
   const size_t chunk_bytes = layout->chunk_stride * lod_dtype_bpe(dtype);
   const size_t num_epochs =
     (total_elements + layout->epoch_elements - 1) / layout->epoch_elements;
-  const size_t total_chunks = num_epochs * layout->chunks_per_epoch;
+  const uint64_t chunks_per_epoch =
+    ss->total_chunks ? ss->total_chunks : layout->chunks_per_epoch;
+  const size_t total_chunks = num_epochs * chunks_per_epoch;
   const size_t total_decompressed = total_chunks * chunk_bytes;
   const double comp_ratio =
     total_decompressed > 0
@@ -288,9 +292,9 @@ print_bench_report(const struct stream_metrics* metrics,
   print_report("  Compressed:   %.2f GiB (ratio: %.3f)",
                (double)ss->total_bytes / (1024.0 * 1024.0 * 1024.0),
                comp_ratio);
-  print_report("  Chunks:       %zu (%zu/epoch x %zu epochs)",
+  print_report("  Chunks:       %zu (%llu/epoch x %zu epochs)",
                total_chunks,
-               (size_t)layout->chunks_per_epoch,
+               (unsigned long long)chunks_per_epoch,
                num_epochs);
 
   print_report("");
@@ -331,6 +335,52 @@ print_bench_report(const struct stream_metrics* metrics,
   print_report("  Throughput:    %.2f GiB/s", throughput_gib);
 }
 
+// --- Byte-size parser: "256K", "1M", "8G" etc. ---
+
+static size_t
+parse_bytes(const char* s)
+{
+  char* end = NULL;
+  size_t val = (size_t)strtoull(s, &end, 10);
+  if (end && *end) {
+    switch (*end) {
+      case 'k':
+      case 'K': val <<= 10; break;
+      case 'm':
+      case 'M': val <<= 20; break;
+      case 'g':
+      case 'G': val <<= 30; break;
+    }
+  }
+  return val;
+}
+
+// --- Auto-fit adapter ---
+
+struct autofit_ctx
+{
+  const struct tile_stream_configuration* config;
+  enum bench_backend backend;
+};
+
+static int
+autofit_estimate(void* ctx, size_t* out)
+{
+  struct autofit_ctx* a = (struct autofit_ctx*)ctx;
+  if (a->backend == BENCH_GPU) {
+    struct tile_stream_memory_info mem;
+    if (tile_stream_gpu_memory_estimate(a->config, &mem))
+      return 1;
+    *out = mem.device_bytes;
+  } else {
+    struct tile_stream_cpu_memory_info mem;
+    if (tile_stream_cpu_memory_estimate(a->config, &mem))
+      return 1;
+    *out = mem.heap_bytes;
+  }
+  return 0;
+}
+
 // --- Reusable bench driver ---
 //
 // Runs a single benchmark with the given dimensions and fill function.
@@ -342,7 +392,7 @@ int
 run_bench(const struct bench_config* cfg)
 {
   const char* label = cfg->label;
-  const struct dimension* dims = cfg->dims;
+  struct dimension* dims = cfg->dims;
   uint8_t rank = cfg->rank;
   fill_fn fill = cfg->fill;
   const char* output_path = cfg->output_path;
@@ -354,6 +404,77 @@ run_bench(const struct bench_config* cfg)
   for (uint8_t d = 0; d < rank; ++d) {
     if (dims[d].downsample)
       is_multiscale = 1;
+  }
+
+  // --- Chunk sizing ---
+  if (cfg->chunk_ratios) {
+    size_t bpe = lod_dtype_bpe(lod_dtype_u16);
+    size_t target = cfg->target_chunk_bytes ? cfg->target_chunk_bytes : (1 << 20);
+    size_t budget = cfg->memory_budget;
+
+    // Auto-detect memory budget
+    if (budget == 0) {
+      if (cfg->backend == BENCH_GPU) {
+        size_t free_mem = 0, total_mem = 0;
+        if (cuMemGetInfo(&free_mem, &total_mem) == CUDA_SUCCESS && free_mem > 0) {
+          budget = (size_t)((double)free_mem * 0.8);
+          print_report("  auto-detect: %.2f GiB free GPU memory (using 80%%)",
+                       (double)free_mem / (1024.0 * 1024.0 * 1024.0));
+        }
+      } else {
+        long pages = sysconf(_SC_AVPHYS_PAGES);
+        long page_sz = sysconf(_SC_PAGESIZE);
+        if (pages > 0 && page_sz > 0) {
+          budget = (size_t)((double)pages * (double)page_sz * 0.8);
+          print_report("  auto-detect: %.2f GiB available RAM (using 80%%)",
+                       (double)((size_t)pages * (size_t)page_sz) /
+                         (1024.0 * 1024.0 * 1024.0));
+        }
+      }
+    }
+
+    // Auto-fit: try shrinking chunks to fit budget
+    int fitted = 0;
+    if (budget > 0) {
+      struct discard_shard_sink fit_dss;
+      discard_shard_sink_init(&fit_dss);
+      struct tile_stream_configuration fit_config = {
+        .buffer_capacity_bytes = 128 << 20,
+        .dtype = lod_dtype_u16,
+        .rank = rank,
+        .dimensions = dims,
+        .codec = cfg->codec,
+        .shard_sink = &fit_dss.base,
+        .reduce_method = cfg->reduce_method,
+        .dim0_reduce_method = cfg->dim0_reduce_method,
+        .target_batch_chunks = 2048,
+        .shard_alignment = output_path ? platform_page_size() : 0,
+      };
+      struct autofit_ctx actx = {
+        .config = &fit_config,
+        .backend = cfg->backend,
+      };
+      if (dims_advise(dims, rank, target, bpe, cfg->chunk_ratios, budget,
+                      autofit_estimate, &actx) == 0) {
+        fitted = 1;
+        uint64_t vol = 1;
+        for (uint8_t d = 0; d < rank; ++d)
+          vol *= dims[d].chunk_size;
+        print_report("  auto-fit: %zu bytes/chunk (budget %.2f GiB)",
+                     (size_t)(vol * bpe),
+                     (double)budget / (1024.0 * 1024.0 * 1024.0));
+      } else {
+        print_report("  auto-fit: WARNING — no chunk size fits in budget");
+      }
+    }
+
+    // Fallback: just budget chunk sizes without memory constraint
+    if (!fitted)
+      dims_budget_chunk_bytes(dims, rank, target, bpe, cfg->chunk_ratios);
+
+    // Set shard counts after chunk sizing
+    if (cfg->shard_counts)
+      dims_set_shard_counts(dims, rank, cfg->shard_counts);
   }
 
   const size_t total_elements = dim_total_elements(dims, rank);
@@ -415,9 +536,12 @@ run_bench(const struct bench_config* cfg)
     .shard_alignment = output_path ? platform_page_size() : 0,
   };
 
+  uint64_t est_total_chunks = 0;
+
   if (cfg->backend == BENCH_GPU) {
     struct tile_stream_memory_info mem;
     if (tile_stream_gpu_memory_estimate(&config, &mem) == 0) {
+      est_total_chunks = mem.total_chunks;
       print_report("  GPU memory:  %.2f GiB device, %.2f GiB pinned",
                    (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
                    (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
@@ -437,6 +561,30 @@ run_bench(const struct bench_config* cfg)
         (unsigned long long)mem.total_chunks,
         mem.nlod,
         mem.epochs_per_batch);
+    }
+  }
+
+  if (cfg->backend == BENCH_CPU) {
+    struct tile_stream_cpu_memory_info mem;
+    if (tile_stream_cpu_memory_estimate(&config, &mem) == 0) {
+      est_total_chunks = mem.total_chunks;
+      print_report("  CPU memory:  %.2f GiB heap",
+                   (double)mem.heap_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report("    chunk_pool: %.2f GiB   comp_pool: %.2f GiB",
+                   (double)mem.chunk_pool_bytes / (1024.0 * 1024.0 * 1024.0),
+                   (double)mem.compressed_pool_bytes /
+                     (1024.0 * 1024.0 * 1024.0));
+      print_report("    comp_sizes: %.2f MiB   aggregate: %.2f MiB",
+                   (double)mem.comp_sizes_bytes / (1024.0 * 1024.0),
+                   (double)mem.aggregate_bytes / (1024.0 * 1024.0));
+      print_report("    lod:       %.2f MiB   shards:    %.2f MiB",
+                   (double)mem.lod_bytes / (1024.0 * 1024.0),
+                   (double)mem.shard_bytes / (1024.0 * 1024.0));
+      print_report(
+        "    chunks:    %llu/epoch, %llu total (%d LOD levels)",
+        (unsigned long long)mem.chunks_per_epoch,
+        (unsigned long long)mem.total_chunks,
+        mem.nlod);
     }
   }
 
@@ -498,8 +646,11 @@ run_bench(const struct bench_config* cfg)
   {
     struct stream_metrics m = bench_get_metrics(&h);
     struct sink_stats ss =
-      output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes }
-                  : (struct sink_stats){ .total_bytes = dss.total_bytes };
+      output_path
+        ? (struct sink_stats){ .total_bytes = meter.total_bytes,
+                               .total_chunks = est_total_chunks }
+        : (struct sink_stats){ .total_bytes = dss.total_bytes,
+                               .total_chunks = est_total_chunks };
     print_bench_report(&m,
                        layout,
                        config.dtype,
@@ -621,13 +772,18 @@ bench_stream_main(int ac,
                   char* av[],
                   const char* label,
                   struct dimension* dims,
-                  uint8_t rank)
+                  uint8_t rank,
+                  const uint8_t* chunk_ratios,
+                  size_t default_chunk_bytes,
+                  const uint64_t* shard_counts)
 {
   fill_fn fill = fill_xor;
   enum compression_codec codec = CODEC_ZSTD;
   enum lod_reduce_method reduce = lod_reduce_mean;
   const char* output_path = NULL;
   enum bench_backend backend = BENCH_GPU;
+  size_t target_chunk_bytes = 0;
+  size_t memory_budget = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -643,6 +799,10 @@ bench_stream_main(int ac,
     } else if (strcmp(av[i], "--backend") == 0 && i + 1 < ac) {
       if (!parse_backend(av[++i], &backend))
         return 1;
+    } else if (strcmp(av[i], "--chunk-bytes") == 0 && i + 1 < ac) {
+      target_chunk_bytes = parse_bytes(av[++i]);
+    } else if (strcmp(av[i], "--memory-budget") == 0 && i + 1 < ac) {
+      memory_budget = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
       output_path = av[++i];
     } else {
@@ -650,7 +810,8 @@ bench_stream_main(int ac,
       fprintf(stderr,
               "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
-              "[--backend gpu|cpu] [-o path]\n",
+              "[--backend gpu|cpu] [--chunk-bytes N] "
+              "[--memory-budget N] [-o path]\n",
               av[0]);
       return 1;
     }
@@ -684,6 +845,11 @@ bench_stream_main(int ac,
     .reduce_method = reduce,
     .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = backend,
+    .chunk_ratios = chunk_ratios,
+    .target_chunk_bytes = target_chunk_bytes ? target_chunk_bytes
+                                             : default_chunk_bytes,
+    .memory_budget = memory_budget,
+    .shard_counts = shard_counts,
   };
   dims_print(dims, rank);
   ecode = run_bench(&cfg);

@@ -18,3 +18,28 @@ int aggregate_cpu(const void* compressed,
                   struct aggregate_result* result);
 
 void aggregate_cpu_result_free(struct aggregate_result* result);
+
+// Pre-allocated workspace for zero-allocation aggregation.
+struct aggregate_cpu_workspace
+{
+  uint32_t* perm;         // [M] ravel permutation (set per-call for shared use)
+  size_t* permuted_sizes; // [C] scratch, zeroed each call
+  size_t* offsets;        // [C+1] reused each call
+  size_t* chunk_sizes;    // [C] reused each call
+  void* data;             // output buffer (worst-case capacity)
+  size_t data_capacity;
+};
+
+// Init workspace for a single layout: allocates all buffers, precomputes perm.
+int aggregate_cpu_workspace_init(struct aggregate_cpu_workspace* ws,
+                                 const struct aggregate_layout* layout);
+
+void aggregate_cpu_workspace_free(struct aggregate_cpu_workspace* ws);
+
+// Same as aggregate_cpu but uses pre-allocated workspace. Zero mallocs.
+// result->data/offsets/chunk_sizes point into ws — caller must NOT free them.
+int aggregate_cpu_into(const void* compressed,
+                       const size_t* comp_sizes,
+                       const struct aggregate_layout* layout,
+                       struct aggregate_cpu_workspace* ws,
+                       struct aggregate_result* result);

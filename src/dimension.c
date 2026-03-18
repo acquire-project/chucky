@@ -126,25 +126,61 @@ dims_budget_chunk_size(struct dimension* dims,
   if (sum_ratios == 0)
     return;
 
-  int bits_per_part = (total_bits + sum_ratios - 1) / (int)sum_ratios;
-  int remainder = total_bits - bits_per_part * (int)sum_ratios;
-
-  int first_nonzero = -1;
-  for (uint8_t i = 0; i < rank; ++i) {
-    if (ratios[i] > 0 && first_nonzero < 0)
-      first_nonzero = i;
-  }
-
-  for (uint8_t i = 0; i < rank; ++i) {
-    if (ratios[i] == 0) {
-      dims[i].chunk_size = 1;
-    } else {
-      int bits = ratios[i] * bits_per_part;
-      if (i == first_nonzero)
-        bits += remainder;
-      dims[i].chunk_size = (uint64_t)1 << bits;
+  // Greedy bit allocation: each bit goes to the most underserved
+  // dimension (lowest bits[i]/ratio[i]). Ties favor higher indices.
+  int bits[HALF_MAX_RANK] = {0};
+  for (int b = 0; b < total_bits; ++b) {
+    int best = -1;
+    for (uint8_t i = 0; i < rank; ++i) {
+      if (ratios[i] == 0)
+        continue;
+      if (best < 0 ||
+          bits[i] * ratios[best] <= bits[best] * ratios[i])
+        best = i;
     }
+    bits[best]++;
   }
+
+  for (uint8_t i = 0; i < rank; ++i)
+    dims[i].chunk_size = (uint64_t)1 << bits[i];
+}
+
+void
+dims_budget_chunk_bytes(struct dimension* dims,
+                        uint8_t rank,
+                        size_t target_chunk_bytes,
+                        size_t bytes_per_element,
+                        const uint8_t* ratios)
+{
+  if (bytes_per_element == 0 || target_chunk_bytes < bytes_per_element)
+    return;
+  dims_budget_chunk_size(dims, rank, target_chunk_bytes / bytes_per_element,
+                         ratios);
+}
+
+int
+dims_advise(struct dimension* dims,
+            uint8_t rank,
+            size_t target_chunk_bytes,
+            size_t bytes_per_element,
+            const uint8_t* ratios,
+            size_t budget_bytes,
+            dims_estimate_fn estimate,
+            void* estimate_ctx)
+{
+  if (bytes_per_element == 0 || budget_bytes == 0)
+    return 1;
+
+  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
+       target >>= 1) {
+    dims_budget_chunk_bytes(dims, rank, target, bytes_per_element, ratios);
+    size_t estimated = 0;
+    if (estimate(estimate_ctx, &estimated))
+      return 1;
+    if (estimated <= budget_bytes)
+      return 0;
+  }
+  return 1; // nothing fits
 }
 
 void

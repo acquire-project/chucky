@@ -156,9 +156,10 @@ scatter_typed(const lod_plan* p, const T* src, T* dst)
   const uint64_t* full_shape = p->shapes[0];
   uint64_t n = lod_span_len(lod_spans_at(&p->levels, 0));
 
-  uint64_t full_coords[LOD_MAX_NDIM];
-  uint64_t lod_coords[LOD_MAX_NDIM];
+#pragma omp parallel for schedule(static)
   for (uint64_t i = 0; i < n; ++i) {
+    uint64_t full_coords[LOD_MAX_NDIM];
+    uint64_t lod_coords[LOD_MAX_NDIM];
     uint64_t rest = i;
     for (int d = p->ndim - 1; d >= 0; --d) {
       full_coords[d] = rest % full_shape[d];
@@ -168,6 +169,90 @@ scatter_typed(const lod_plan* p, const T* src, T* dst)
     plan_extract_lod(p, full_coords, lod_coords);
     uint64_t pos = morton_rank(p->lod_ndim, p->lod_shapes[0], lod_coords, 0);
     dst[b * p->lod_counts[0] + pos] = src[i];
+  }
+}
+
+// ---- Scatter LUT + Gather ----
+
+static void
+build_scatter_lut(const lod_plan* p, uint32_t* lut)
+{
+  const int ndim = p->ndim;
+  const int lod_ndim = p->lod_ndim;
+  const uint64_t* lod_shape = p->lod_shapes[0];
+  const uint64_t lod_count = p->lod_counts[0];
+
+  // Compute full-shape row-major strides.
+  uint64_t full_strides[LOD_MAX_NDIM];
+  full_strides[ndim - 1] = 1;
+  for (int d = ndim - 2; d >= 0; --d)
+    full_strides[d] = full_strides[d + 1] * p->shapes[0][d + 1];
+
+  // Precompute LOD strides in the source linear layout.
+  uint64_t lod_src_strides[LOD_MAX_NDIM];
+  for (int k = 0; k < lod_ndim; ++k)
+    lod_src_strides[k] = full_strides[p->lod_map[k]];
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t gid = 0; gid < lod_count; ++gid) {
+    uint64_t coords[LOD_MAX_NDIM];
+    uint64_t rest = gid;
+    uint64_t src_offset = 0;
+    for (int k = lod_ndim - 1; k >= 0; --k) {
+      coords[k] = rest % lod_shape[k];
+      rest /= lod_shape[k];
+      src_offset += coords[k] * lod_src_strides[k];
+    }
+    uint64_t morton_pos = morton_rank(lod_ndim, lod_shape, coords, 0);
+    lut[morton_pos] = (uint32_t)src_offset;
+  }
+}
+
+static void
+build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets)
+{
+  const int ndim = p->ndim;
+
+  uint64_t full_strides[LOD_MAX_NDIM];
+  full_strides[ndim - 1] = 1;
+  for (int d = ndim - 2; d >= 0; --d)
+    full_strides[d] = full_strides[d + 1] * p->shapes[0][d + 1];
+
+  for (uint64_t b = 0; b < p->batch_count; ++b) {
+    uint64_t rest = b;
+    uint64_t offset = 0;
+    for (int k = p->batch_ndim - 1; k >= 0; --k) {
+      uint64_t coord = rest % p->batch_shape[k];
+      rest /= p->batch_shape[k];
+      offset += coord * full_strides[p->batch_map[k]];
+    }
+    offsets[b] = offset;
+  }
+}
+
+template<typename T>
+static void
+gather_typed(const lod_plan* p,
+             const T* src,
+             T* dst,
+             const uint32_t* scatter_lut,
+             const uint64_t* batch_offsets)
+{
+  const uint64_t lod_count = p->lod_counts[0];
+  const uint64_t batch_count = p->batch_count;
+
+  // Batch-outer: sequential writes per batch, random reads via LUT.
+  // The nowait allows threads to start the next batch immediately.
+#pragma omp parallel
+  {
+    for (uint64_t b = 0; b < batch_count; ++b) {
+      const T* batch_src = src + batch_offsets[b];
+      T* batch_dst = dst + b * lod_count;
+
+#pragma omp for schedule(static) nowait
+      for (uint64_t m = 0; m < lod_count; ++m)
+        batch_dst[m] = batch_src[scatter_lut[m]];
+    }
   }
 }
 
@@ -182,15 +267,18 @@ reduce_typed(const lod_plan* p, T* values, lod_reduce_method method)
     lod_span src_lv = lod_spans_at(&p->levels, l);
     lod_span dst_lv = lod_spans_at(&p->levels, l + 1);
 
-    for (uint64_t b = 0; b < p->batch_count; ++b) {
+    // Batches and destination elements within a level are independent.
+    uint64_t total_work = p->batch_count * dst_ds;
+#pragma omp parallel for schedule(static)
+    for (uint64_t wi = 0; wi < total_work; ++wi) {
+      uint64_t b = wi / dst_ds;
+      uint64_t i = wi % dst_ds;
       uint64_t src_base = src_lv.beg + b * src_ds;
       uint64_t dst_base = dst_lv.beg + b * dst_ds;
-      for (uint64_t i = 0; i < dst_ds; ++i) {
-        uint64_t start = (i > 0) ? p->ends[seg.beg + i - 1] : 0;
-        uint64_t end = p->ends[seg.beg + i];
-        values[dst_base + i] =
-          reduce_window(values + src_base, start, end, method);
-      }
+      uint64_t start = (i > 0) ? p->ends[seg.beg + i - 1] : 0;
+      uint64_t end = p->ends[seg.beg + i];
+      values[dst_base + i] =
+        reduce_window(values + src_base, start, end, method);
     }
   }
 }
@@ -204,10 +292,17 @@ morton_to_chunks_typed(const T* values,
                        uint64_t lod_count,
                        uint64_t batch_count)
 {
-  for (uint64_t b = 0; b < batch_count; ++b) {
-    const T* src = values + b * lod_count;
-    for (uint64_t i = 0; i < lod_count; ++i)
-      chunks[batch_offsets[b] + chunk_lut[i]] = src[i];
+#pragma omp parallel
+  {
+    for (uint64_t b = 0; b < batch_count; ++b) {
+      const T* batch_values = values + b * lod_count;
+      uint64_t batch_base = batch_offsets[b];
+
+#pragma omp for schedule(static) nowait
+      for (uint64_t i = 0; i < lod_count; ++i) {
+        chunks[batch_base + chunk_lut[i]] = batch_values[i];
+      }
+    }
   }
 }
 
@@ -223,6 +318,7 @@ build_chunk_lut(const lod_plan* p,
   const uint64_t lod_count = p->lod_counts[lv];
   const int lod_ndim = p->lod_ndim;
 
+#pragma omp parallel for schedule(static)
   for (uint64_t gid = 0; gid < lod_count; ++gid) {
     uint64_t coords[LOD_MAX_NDIM];
     int64_t offset = 0;
@@ -272,21 +368,25 @@ dim0_fold_typed(T* accum,
                 lod_reduce_method method)
 {
   if (count == 0) {
+#pragma omp parallel for schedule(static)
     for (uint64_t i = 0; i < n; ++i)
       accum[i] = new_data[i];
     return;
   }
   switch (method) {
     case lod_reduce_mean:
+#pragma omp parallel for schedule(static)
       for (uint64_t i = 0; i < n; ++i)
         accum[i] = overflow_safe_add_shift(accum[i], new_data[i], level);
       break;
     case lod_reduce_min:
+#pragma omp parallel for schedule(static)
       for (uint64_t i = 0; i < n; ++i)
         if (new_data[i] < accum[i])
           accum[i] = new_data[i];
       break;
     case lod_reduce_max:
+#pragma omp parallel for schedule(static)
       for (uint64_t i = 0; i < n; ++i)
         if (new_data[i] > accum[i])
           accum[i] = new_data[i];
@@ -307,12 +407,14 @@ dim0_emit_typed(T* dst,
   if constexpr (std::is_floating_point<T>::value) {
     if (method == lod_reduce_mean) {
       T divisor = (T)count;
+#pragma omp parallel for schedule(static)
       for (uint64_t i = 0; i < n; ++i)
         dst[i] = accum[i] / divisor;
       return;
     }
   }
   // int mean (pre-divided), min, max: just copy
+#pragma omp parallel for schedule(static)
   for (uint64_t i = 0; i < n; ++i)
     dst[i] = accum[i];
 }
@@ -415,12 +517,22 @@ Error:
   return 1;
 }
 
+extern "C" void
+lod_cpu_build_chunk_lut(const lod_plan* p,
+                        int lv,
+                        const tile_stream_layout* layout,
+                        uint32_t* chunk_lut)
+{
+  build_chunk_lut(p, lv, layout, chunk_lut);
+}
+
 extern "C" int
 lod_cpu_morton_to_chunks(const lod_plan* p,
                          const void* values,
                          void* chunk_pool,
                          int lv,
                          const tile_stream_layout* layout,
+                         const uint32_t* chunk_lut_in,
                          const uint64_t* batch_chunk_offsets,
                          lod_dtype dtype)
 {
@@ -429,11 +541,16 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
   const size_t bpe = lod_dtype_bpe(dtype);
   const char* lv_values = (const char*)values + lv_span.beg * bpe;
 
-  uint32_t* chunk_lut = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
-  if (!chunk_lut)
-    return 1;
-
-  build_chunk_lut(p, lv, layout, chunk_lut);
+  // Use provided LUT or build one (legacy/standalone path).
+  uint32_t* chunk_lut_alloc = NULL;
+  const uint32_t* chunk_lut = chunk_lut_in;
+  if (!chunk_lut) {
+    chunk_lut_alloc = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
+    if (!chunk_lut_alloc)
+      return 1;
+    build_chunk_lut(p, lv, layout, chunk_lut_alloc);
+    chunk_lut = chunk_lut_alloc;
+  }
 
 #define DO(T)                                                                  \
   morton_to_chunks_typed((const T*)lv_values, (T*)chunk_pool, chunk_lut,       \
@@ -441,7 +558,7 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
   DISPATCH(dtype, DO);
 #undef DO
 
-  free(chunk_lut);
+  free(chunk_lut_alloc);
   return 0;
 }
 
@@ -498,5 +615,32 @@ lod_cpu_dim0_emit(const lod_plan* p,
   DISPATCH(dtype, DO);
 #undef DO
 
+  return 0;
+}
+
+extern "C" void
+lod_cpu_build_scatter_lut(const lod_plan* p, uint32_t* lut)
+{
+  build_scatter_lut(p, lut);
+}
+
+extern "C" void
+lod_cpu_build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets)
+{
+  build_scatter_batch_offsets(p, offsets);
+}
+
+extern "C" int
+lod_cpu_gather(const lod_plan* p,
+               const void* src,
+               void* dst,
+               const uint32_t* scatter_lut,
+               const uint64_t* batch_offsets,
+               lod_dtype dtype)
+{
+#define DO(T)                                                                  \
+  gather_typed(p, (const T*)src, (T*)dst, scatter_lut, batch_offsets)
+  DISPATCH(dtype, DO);
+#undef DO
   return 0;
 }

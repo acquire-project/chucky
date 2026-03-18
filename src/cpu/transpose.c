@@ -1,96 +1,33 @@
 #include "transpose.h"
 
+#include "defs.limits.h"
 #include "index.ops.h"
 
-#include <stdlib.h>
+#include <omp.h>
 #include <string.h>
 
-// Compute output element offsets for input indices [beg, beg+n) using the
-// vadd algorithm: fill with innermost-stride delta, apply carry corrections
-// at dimension boundaries, then prefix-sum into absolute offsets.
-static void
-scatter_offsets(uint8_t rank,
-          const uint64_t* restrict shape,
-          const int64_t* restrict strides,
-          uint64_t beg,
-          uint64_t n,
-          int64_t* restrict out)
-{
-  // Absolute offset for the first element.
-  int64_t o = (int64_t)ravel(rank, shape, strides, beg);
+// Fused odometer transpose: zero allocations.
+// Each element is scattered using an incremental odometer that tracks
+// coordinates and a running output offset on the stack.
 
-  // Fill with innermost stride (constant delta between consecutive elements
-  // within the same innermost-dimension run).
-  {
-    int64_t delta = strides[rank - 1];
-    for (uint64_t i = 0; i < n; ++i)
-      out[i] = delta;
-  }
-
-  // Carry corrections: at each dimension boundary the delta changes by
-  //   correction = strides[d-1] - shape[d] * strides[d]
-  // The correction is applied at the element where dimension d wraps.
-  {
-    uint64_t rest = beg;
-    uint64_t input_stride = 1;
-    uint64_t first_carry = shape[rank - 1] - (beg % shape[rank - 1]);
-
-    for (int d = rank - 1; d > 0; --d) {
-      uint64_t e = shape[d];
-      rest /= e;
-      uint64_t next_input_stride = input_stride * e;
-      int64_t correction = strides[d - 1] - (int64_t)e * strides[d];
-
-      for (uint64_t i = first_carry; i < n; i += next_input_stride)
-        out[i] += correction;
-
-      if (d > 1) {
-        uint64_t r_next = rest % shape[d - 1];
-        first_carry += next_input_stride * (shape[d - 1] - r_next - 1);
-      }
-
-      input_stride = next_input_stride;
-    }
-  }
-
-  // Prefix sum: convert deltas to absolute offsets.
-  out[0] = o;
-  for (uint64_t i = 1; i < n; ++i)
-    out[i] += out[i - 1];
-}
-
-// Scatter elements from src to dst at computed offsets.
-// Dispatch on bpe so the compiler emits native loads/stores.
-static void
-scatter(void* restrict dst,
-        const void* restrict src,
-        const int64_t* restrict offsets,
-        uint64_t n,
-        uint8_t bpe)
-{
-#define CASE(T)                                                                \
+#define ODOMETER_LOOP(T)                                                       \
   {                                                                            \
-    const T* s = (const T*)src;                                                \
+    const T* s = (const T*)my_src;                                             \
     T* d = (T*)dst;                                                            \
-    for (uint64_t i = 0; i < n; ++i)                                           \
-      d[offsets[i]] = s[i];                                                    \
-  }                                                                            \
-  break
-
-  switch (bpe) {
-    case 1: CASE(uint8_t);
-    case 2: CASE(uint16_t);
-    case 4: CASE(uint32_t);
-    case 8: CASE(uint64_t);
-    default: {
-      const char* s = (const char*)src;
-      char* d = (char*)dst;
-      for (uint64_t i = 0; i < n; ++i)
-        memcpy(d + offsets[i] * bpe, s + i * bpe, bpe);
-    } break;
+    for (uint64_t i = 0; i < my_n; ++i) {                                     \
+      d[o] = s[i];                                                             \
+      o += inner_stride;                                                       \
+      if (++coords[rank - 1] >= shape[rank - 1]) {                            \
+        coords[rank - 1] = 0;                                                 \
+        for (int dd = rank - 2; dd >= 0; --dd) {                              \
+          o += correction[dd];                                                 \
+          if (++coords[dd] < shape[dd])                                        \
+            break;                                                             \
+          coords[dd] = 0;                                                      \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
   }
-#undef CASE
-}
 
 int
 transpose_cpu(void* dst,
@@ -108,13 +45,68 @@ transpose_cpu(void* dst,
   if (n == 0)
     return 0;
 
-  int64_t* offsets = (int64_t*)malloc(n * sizeof(int64_t));
-  if (!offsets)
-    return 1;
+  const int rank = lifted_rank;
+  const uint64_t* shape = lifted_shape;
+  const int64_t* strides = lifted_strides;
 
-  scatter_offsets(lifted_rank, lifted_shape, lifted_strides, i_offset, n, offsets);
-  scatter(dst, src, offsets, n, bpe);
+  // Precompute carry corrections (shared, read-only across threads).
+  // When dimension d+1 wraps, the running offset changes by correction[d].
+  int64_t correction[MAX_RANK];
+  for (int d = 0; d < rank - 1; ++d)
+    correction[d] = strides[d] - (int64_t)shape[d + 1] * strides[d + 1];
 
-  free(offsets);
+  const int64_t inner_stride = strides[rank - 1];
+
+#pragma omp parallel
+  {
+    int tid = omp_get_thread_num();
+    int nthreads = omp_get_num_threads();
+    uint64_t per = n / (uint64_t)nthreads;
+    uint64_t rem = n % (uint64_t)nthreads;
+    uint64_t my_begin = tid * per + ((uint64_t)tid < rem ? tid : rem);
+    uint64_t my_end = my_begin + per + ((uint64_t)tid < rem ? 1 : 0);
+    uint64_t my_n = my_end - my_begin;
+
+    if (my_n > 0) {
+      // Init odometer: decompose starting index into coordinates (rank-1 is
+      // fastest, matching ravel's convention).
+      uint64_t base = i_offset + my_begin;
+      uint64_t coords[MAX_RANK];
+      {
+        uint64_t rest = base;
+        for (int d = rank - 1; d >= 0; --d) {
+          coords[d] = rest % shape[d];
+          rest /= shape[d];
+        }
+      }
+      int64_t o = (int64_t)ravel(rank, shape, strides, base);
+      const void* my_src = (const char*)src + my_begin * bpe;
+
+      switch (bpe) {
+        case 1: ODOMETER_LOOP(uint8_t); break;
+        case 2: ODOMETER_LOOP(uint16_t); break;
+        case 4: ODOMETER_LOOP(uint32_t); break;
+        case 8: ODOMETER_LOOP(uint64_t); break;
+        default: {
+          const char* s = (const char*)my_src;
+          char* d = (char*)dst;
+          for (uint64_t i = 0; i < my_n; ++i) {
+            memcpy(d + o * bpe, s + i * bpe, bpe);
+            o += inner_stride;
+            if (++coords[rank - 1] >= shape[rank - 1]) {
+              coords[rank - 1] = 0;
+              for (int dd = rank - 2; dd >= 0; --dd) {
+                o += correction[dd];
+                if (++coords[dd] < shape[dd])
+                  break;
+                coords[dd] = 0;
+              }
+            }
+          }
+        } break;
+      }
+    }
+  }
+
   return 0;
 }

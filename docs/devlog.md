@@ -6,7 +6,8 @@
 - [x] u8, u32, i8, i16, i32
 - [x] u64, i64, double?
 - [x] fp16
-- [ ] cpu impl
+- [x] cpu impl
+- [ ] s3 writer
 - [ ] whitepaper
 - [ ] coverage
 - [ ] ci/cd
@@ -42,6 +43,17 @@ Cleanup
 
 Still need to do the dim0 fold for cpu. Need to do some review passes. Then I
 want to see how well it works on betchmarks.
+
+Initial benchmarks show 0.37 GB/s on cpu for 256cube w no compression. So
+pretty slow. Cpu activity is pretty bursty. Initial implementation was single
+stream, so that probably needs fixing.
+
+Also, I turned off batching for the cpu compression, but that might be necessary
+when epochs are roughly a single tile in size. This would be important for
+when people are doing particularly high frame rate imaging with small fields.
+
+Ok, the scatter was slowing it down. Now that I fixed that getting pretty
+decent speeds on auk (2-3 GB/s for non-lod).
 
 ## 2026-03-16
 

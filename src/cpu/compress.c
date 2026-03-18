@@ -68,7 +68,7 @@ compress_cpu(enum compression_codec codec,
           continue;
         const void* in = (const char*)src + i * input_stride;
         void* out = (char*)dst + i * max_output_size;
-        size_t rc = ZSTD_compress(out, max_output_size, in, chunk_bytes, 1);
+        size_t rc = ZSTD_compress(out, max_output_size, in, chunk_bytes, 3);
         if (ZSTD_isError(rc))
           err = 1;
         else

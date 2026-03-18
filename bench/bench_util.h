@@ -66,6 +66,7 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner);
 struct sink_stats
 {
   size_t total_bytes;
+  uint64_t total_chunks; // all LOD levels, per epoch
 };
 
 void
@@ -99,7 +100,7 @@ enum bench_backend
 struct bench_config
 {
   const char* label;
-  const struct dimension* dims;
+  struct dimension* dims;
   uint8_t rank;
   fill_fn fill;
   const char* output_path;
@@ -108,6 +109,10 @@ struct bench_config
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method dim0_reduce_method;
   enum bench_backend backend;
+  const uint8_t* chunk_ratios;       // power-of-2 distribution ratios
+  size_t target_chunk_bytes;         // 0 = use 1MB default
+  size_t memory_budget;              // 0 = auto-detect
+  const uint64_t* shard_counts;     // per-dim target shard counts (NULL = skip)
 };
 
 int
@@ -120,4 +125,7 @@ bench_stream_main(int ac,
                   char* av[],
                   const char* label,
                   struct dimension* dims,
-                  uint8_t rank);
+                  uint8_t rank,
+                  const uint8_t* chunk_ratios,
+                  size_t default_chunk_bytes,
+                  const uint64_t* shard_counts);

@@ -8,13 +8,11 @@ main(int ac, char* av[])
   uint64_t sizes[] = { 10000, 2, 2048, 2304 };
   uint8_t rank = dims_create(dims, "tcyx", sizes);
 
-  uint8_t ratios[] = { 6, 0, 6, 6 };
-  dims_budget_chunk_size(dims, rank, 1ULL << 18, ratios);
-
-  uint64_t shard_counts[] = { 8, 1, 4, 4 };
-  dims_set_shard_counts(dims, rank, shard_counts);
-
   dims_set_downsample_by_name(dims, rank, "tyx");
 
-  return bench_stream_main(ac, av, "multiscale_dim0", dims, rank);
+  uint8_t ratios[] = { 6, 0, 6, 6 };
+  uint64_t shard_counts[] = { 8, 1, 4, 4 };
+
+  return bench_stream_main(ac, av, "multiscale_dim0", dims, rank, ratios,
+                           1 << 19, shard_counts);
 }

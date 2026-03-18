@@ -23,3 +23,23 @@ tile_stream_cpu_writer(struct tile_stream_cpu* s);
 
 uint64_t
 tile_stream_cpu_cursor(const struct tile_stream_cpu* s);
+
+struct tile_stream_cpu_memory_info
+{
+  size_t heap_bytes;             // total
+  size_t chunk_pool_bytes;       // total_chunks * chunk_stride * bpe
+  size_t compressed_pool_bytes;  // total_chunks * max_output_size
+  size_t comp_sizes_bytes;       // total_chunks * sizeof(size_t)
+  size_t aggregate_bytes;        // shared ws + per-level perm
+  size_t lod_bytes;              // linear + lod_values + morton_lut + batch_offsets + dim0
+  size_t shard_bytes;            // active_shard arrays + index buffers
+
+  uint64_t chunks_per_epoch;
+  uint64_t total_chunks;
+  size_t max_output_size;
+  int nlod;
+};
+
+int tile_stream_cpu_memory_estimate(
+  const struct tile_stream_configuration* config,
+  struct tile_stream_cpu_memory_info* info);
