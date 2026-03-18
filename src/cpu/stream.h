@@ -45,3 +45,13 @@ struct tile_stream_cpu_memory_info
 int tile_stream_cpu_memory_estimate(
   const struct tile_stream_configuration* config,
   struct tile_stream_cpu_memory_info* info);
+
+// Find the largest power-of-2 chunk size (starting from target_chunk_bytes)
+// that fits within budget_bytes of CPU heap memory.
+// Modifies config->dimensions in place. Returns 0 on success.
+int
+tile_stream_cpu_advise_chunk_sizes(
+    struct tile_stream_configuration* config,
+    size_t target_chunk_bytes,
+    const uint8_t* ratios,
+    size_t budget_bytes);

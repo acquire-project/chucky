@@ -51,10 +51,6 @@ zarr_sink_flush(struct zarr_sink* s);
 size_t
 zarr_sink_pending_bytes(struct zarr_sink* s);
 
-// Return non-zero if any IO write error has occurred.
-int
-zarr_sink_has_error(struct zarr_sink* s);
-
 // Get the shard_sink interface for use with the chunk stream.
 struct shard_sink*
 zarr_sink_as_shard_sink(struct zarr_sink* s);

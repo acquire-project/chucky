@@ -20,5 +20,5 @@ enable_openmp(lod_cpu)
 
 add_src_lib(stream_cpu SOURCES stream.c stream.h stream.internal.h
     LINKS transpose_cpu compress_cpu aggregate_cpu lod_cpu
-          stream_config shard_delivery platform chucky_log)
+          stream_config dimension shard_delivery platform chucky_log)
 target_include_directories(stream_cpu PUBLIC ${CMAKE_SOURCE_DIR}/src)

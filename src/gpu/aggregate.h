@@ -31,15 +31,6 @@ extern "C"
   // aggregate_layout_compute. Returns 0 on success.
   int aggregate_layout_upload(struct aggregate_layout* layout);
 
-  // Compute + upload (convenience wrapper). Returns 0 on success.
-  int aggregate_layout_init(struct aggregate_layout* layout,
-                            uint8_t rank,
-                            const uint64_t* chunk_count,
-                            const uint64_t* chunks_per_shard,
-                            uint64_t chunks_per_epoch,
-                            size_t max_comp_chunk_bytes,
-                            size_t page_size);
-
   void aggregate_layout_destroy(struct aggregate_layout* layout);
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);

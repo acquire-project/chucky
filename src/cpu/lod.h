@@ -12,26 +12,12 @@ extern "C"
 {
 #endif
 
-  // Scatter linear input into morton-ordered LOD L0 buffer.
-  // dst must have room for batch_count * lod_counts[0] elements.
-  int lod_cpu_scatter(const struct lod_plan* p,
-                      const void* src,
-                      void* dst,
-                      enum lod_dtype dtype);
-
   // Reduce across LOD levels in-place.
   // values buffer holds all levels: total = levels.ends[nlod-1] elements.
   int lod_cpu_reduce(const struct lod_plan* p,
                      void* values,
                      enum lod_dtype dtype,
                      enum lod_reduce_method method);
-
-  // Scatter + reduce (allocates output). Returns 0 on success.
-  int lod_cpu_compute(const struct lod_plan* p,
-                      const void* src,
-                      void** out_values,
-                      enum lod_dtype dtype,
-                      enum lod_reduce_method method);
 
   // Build morton-to-chunk-pool LUT for level lv.
   // chunk_lut must have room for lod_counts[lv] entries.

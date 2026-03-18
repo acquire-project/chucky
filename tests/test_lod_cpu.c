@@ -19,6 +19,8 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
 
   float* src = NULL;
   void* values = NULL;
+  uint32_t* scatter_lut = NULL;
+  uint64_t* batch_offsets = NULL;
 
   struct lod_plan plan;
   CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8) == 0);
@@ -32,8 +34,19 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   CHECK(Fail, src);
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
+
+  scatter_lut = (uint32_t*)malloc(plan.lod_counts[0] * sizeof(uint32_t));
+  batch_offsets = (uint64_t*)malloc(plan.batch_count * sizeof(uint64_t));
+  CHECK(Fail, scatter_lut && batch_offsets);
+  lod_cpu_build_scatter_lut(&plan, scatter_lut);
+  lod_cpu_build_scatter_batch_offsets(&plan, batch_offsets);
+  size_t total = plan.levels.ends[plan.nlod - 1];
+  values = calloc(total, lod_dtype_bpe(lod_dtype_f32));
+  CHECK(Fail, values);
   CHECK(Fail,
-        lod_cpu_compute(&plan, src, &values, lod_dtype_f32, method) == 0);
+        lod_cpu_gather(&plan, src, values, scatter_lut, batch_offsets,
+                       lod_dtype_f32) == 0);
+  CHECK(Fail, lod_cpu_reduce(&plan, values, lod_dtype_f32, method) == 0);
 
   // Verify L0: all source values should be present in the morton buffer.
   struct lod_span l0 = lod_spans_at(&plan.levels, 0);
@@ -54,6 +67,8 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
     CHECK(Fail, lod_span_len(lvs) < l0_count);
   }
 
+  free(scatter_lut);
+  free(batch_offsets);
   free(src);
   free(values);
   lod_plan_free(&plan);
@@ -61,6 +76,8 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   return 0;
 
 Fail:
+  free(scatter_lut);
+  free(batch_offsets);
   free(src);
   free(values);
   lod_plan_free(&plan);
@@ -80,6 +97,8 @@ test_scatter_reduce_u16(void)
 
   uint16_t* src = NULL;
   void* values = NULL;
+  uint32_t* scatter_lut = NULL;
+  uint64_t* batch_offsets = NULL;
 
   struct lod_plan plan;
   CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8) == 0);
@@ -91,9 +110,19 @@ test_scatter_reduce_u16(void)
   CHECK(Fail, src);
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (uint16_t)((i + 1) & 0xFFFF);
+
+  scatter_lut = (uint32_t*)malloc(plan.lod_counts[0] * sizeof(uint32_t));
+  batch_offsets = (uint64_t*)malloc(plan.batch_count * sizeof(uint64_t));
+  CHECK(Fail, scatter_lut && batch_offsets);
+  lod_cpu_build_scatter_lut(&plan, scatter_lut);
+  lod_cpu_build_scatter_batch_offsets(&plan, batch_offsets);
+  size_t total = plan.levels.ends[plan.nlod - 1];
+  values = calloc(total, lod_dtype_bpe(lod_dtype_u16));
+  CHECK(Fail, values);
   CHECK(Fail,
-        lod_cpu_compute(&plan, src, &values, lod_dtype_u16, lod_reduce_min) ==
-          0);
+        lod_cpu_gather(&plan, src, values, scatter_lut, batch_offsets,
+                       lod_dtype_u16) == 0);
+  CHECK(Fail, lod_cpu_reduce(&plan, values, lod_dtype_u16, lod_reduce_min) == 0);
 
   // Basic sanity: L1 min values should be <= any L0 value.
   uint16_t* uv = (uint16_t*)values;
@@ -110,6 +139,8 @@ test_scatter_reduce_u16(void)
       l1_min = uv[i];
   CHECK(Fail, l1_min >= l0_min);
 
+  free(scatter_lut);
+  free(batch_offsets);
   free(src);
   free(values);
   lod_plan_free(&plan);
@@ -117,6 +148,8 @@ test_scatter_reduce_u16(void)
   return 0;
 
 Fail:
+  free(scatter_lut);
+  free(batch_offsets);
   free(src);
   free(values);
   lod_plan_free(&plan);
@@ -132,19 +165,33 @@ test_f16_rejected(void)
 
   uint64_t shape[] = { 4, 4 };
   uint64_t chunk_shape[] = { 2, 2 };
+  uint32_t* scatter_lut = NULL;
+  uint64_t* batch_offsets = NULL;
+  void* values = NULL;
   struct lod_plan plan;
   CHECK(Fail, lod_plan_init(&plan, 2, shape, chunk_shape, 0x2, 4) == 0);
-
-  void* values = NULL;
-  int rc =
-    lod_cpu_compute(&plan, NULL, &values, lod_dtype_f16, lod_reduce_mean);
+  scatter_lut = (uint32_t*)malloc(plan.lod_counts[0] * sizeof(uint32_t));
+  batch_offsets = (uint64_t*)malloc(plan.batch_count * sizeof(uint64_t));
+  CHECK(Fail, scatter_lut && batch_offsets);
+  lod_cpu_build_scatter_lut(&plan, scatter_lut);
+  lod_cpu_build_scatter_batch_offsets(&plan, batch_offsets);
+  size_t total = plan.levels.ends[plan.nlod - 1];
+  values = calloc(total, 2); // f16 = 2 bytes
+  CHECK(Fail, values);
+  int rc = lod_cpu_gather(&plan, values, values, scatter_lut, batch_offsets,
+                           lod_dtype_f16);
   CHECK(Fail, rc != 0); // should fail
-
+  free(scatter_lut);
+  free(batch_offsets);
+  free(values);
   lod_plan_free(&plan);
   log_info("  PASS");
   return 0;
 
 Fail:
+  free(scatter_lut);
+  free(batch_offsets);
+  free(values);
   lod_plan_free(&plan);
   log_error("  FAIL");
   return 1;

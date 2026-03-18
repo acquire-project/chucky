@@ -721,12 +721,6 @@ zarr_sink_destroy(struct zarr_sink* s)
   free(s);
 }
 
-int
-zarr_sink_has_error(struct zarr_sink* s)
-{
-  return s ? atomic_load(&s->io_error) : 0;
-}
-
 struct shard_sink*
 zarr_sink_as_shard_sink(struct zarr_sink* s)
 {

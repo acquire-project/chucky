@@ -133,30 +133,6 @@ Error:
   return 1;
 }
 
-extern "C" int
-aggregate_layout_init(struct aggregate_layout* layout,
-                      uint8_t rank,
-                      const uint64_t* chunk_count,
-                      const uint64_t* chunks_per_shard,
-                      uint64_t chunks_per_epoch,
-                      size_t max_comp_chunk_bytes,
-                      size_t page_size)
-{
-  if (aggregate_layout_compute(layout,
-                               rank,
-                               chunk_count,
-                               chunks_per_shard,
-                               chunks_per_epoch,
-                               max_comp_chunk_bytes,
-                               page_size))
-    return 1;
-  if (aggregate_layout_upload(layout)) {
-    aggregate_layout_destroy(layout);
-    return 1;
-  }
-  return 0;
-}
-
 extern "C" void
 aggregate_layout_destroy(struct aggregate_layout* layout)
 {

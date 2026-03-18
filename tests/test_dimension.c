@@ -202,65 +202,6 @@ Error:
   return !ok;
 }
 
-struct advise_test_ctx
-{
-  struct dimension* dims;
-  uint8_t rank;
-  size_t bpe;
-};
-
-static int
-advise_estimate(void* ctx, size_t* out)
-{
-  struct advise_test_ctx* c = (struct advise_test_ctx*)ctx;
-  size_t total = 1;
-  for (uint8_t i = 0; i < c->rank; ++i)
-    total *= c->dims[i].chunk_size;
-  // Simulate: memory = 10 * chunk_volume * bpe
-  *out = 10 * total * c->bpe;
-  return 0;
-}
-
-static int
-test_dims_advise(void)
-{
-  int ok = 0;
-  struct dimension dims[4];
-  uint64_t sizes[] = { 1000, 2, 2048, 2304 };
-  dims_create(dims, "tcyx", sizes);
-
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  size_t bpe = 2;
-  struct advise_test_ctx actx = { .dims = dims, .rank = 4, .bpe = bpe };
-
-  // Budget: 10 * 2^19 * 2 = 10 MiB. Starting from 1MB chunks (2^19 elems).
-  // estimate(1MB) = 10 * 2^19 * 2 = 10 MiB <= 10 MiB => fits on first try
-  size_t budget = 10 * (1ULL << 19) * bpe;
-  CHECK(Error, dims_advise(dims, 4, 1 << 20, bpe, ratios, budget,
-                           advise_estimate, &actx) == 0);
-  // Should have used the full 1MB target
-  uint64_t vol = 1;
-  for (int i = 0; i < 4; ++i)
-    vol *= dims[i].chunk_size;
-  CHECK(Error, vol == (1ULL << 19));
-
-  // Now use a budget that's too small for 1MB but fits 512KB
-  // estimate(1MB) = 10 * 2^19 * 2 = 10 MiB > 5 MiB
-  // estimate(512KB) = 10 * 2^18 * 2 = 5 MiB <= 5 MiB => fits
-  size_t smaller_budget = 10 * (1ULL << 18) * bpe;
-  CHECK(Error, dims_advise(dims, 4, 1 << 20, bpe, ratios, smaller_budget,
-                           advise_estimate, &actx) == 0);
-  vol = 1;
-  for (int i = 0; i < 4; ++i)
-    vol *= dims[i].chunk_size;
-  CHECK(Error, vol == (1ULL << 18));
-
-  ok = 1;
-Error:
-  REPORT_TEST(ok);
-  return !ok;
-}
-
 static int
 test_dims_set_storage_order(void)
 {
@@ -355,7 +296,7 @@ main(void)
     { "dims_budget_chunk_size", test_dims_budget_chunk_size },
     { "dims_budget_chunk_size_uniform", test_dims_budget_chunk_size_uniform },
     { "dims_budget_chunk_bytes", test_dims_budget_chunk_bytes },
-    { "dims_advise", test_dims_advise },
+
     { "dims_set_shard_counts", test_dims_set_shard_counts },
     { "dims_set_shard_counts_skip_zero", test_dims_set_shard_counts_skip_zero },
     { "dims_set_storage_order", test_dims_set_storage_order },

@@ -360,31 +360,7 @@ parse_bytes(const char* s)
   return val;
 }
 
-// --- Auto-fit adapter ---
-
-struct autofit_ctx
-{
-  const struct tile_stream_configuration* config;
-  enum bench_backend backend;
-};
-
-static int
-autofit_estimate(void* ctx, size_t* out)
-{
-  struct autofit_ctx* a = (struct autofit_ctx*)ctx;
-  if (a->backend == BENCH_GPU) {
-    struct tile_stream_memory_info mem;
-    if (tile_stream_gpu_memory_estimate(a->config, &mem))
-      return 1;
-    *out = mem.device_bytes;
-  } else {
-    struct tile_stream_cpu_memory_info mem;
-    if (tile_stream_cpu_memory_estimate(a->config, &mem))
-      return 1;
-    *out = mem.heap_bytes;
-  }
-  return 0;
-}
+// (autofit adapter removed — now using tile_stream_{gpu,cpu}_advise_chunk_sizes)
 
 // --- Reusable bench driver ---
 //
@@ -458,18 +434,15 @@ run_bench(const struct bench_config* cfg)
         .target_batch_chunks = 2048,
         .shard_alignment = output_path ? platform_page_size() : 0,
       };
-      struct autofit_ctx actx = {
-        .config = &fit_config,
-        .backend = cfg->backend,
-      };
-      if (dims_advise(dims,
-                      rank,
-                      target,
-                      bpe,
-                      cfg->chunk_ratios,
-                      budget,
-                      autofit_estimate,
-                      &actx) == 0) {
+      int advise_ok;
+      if (cfg->backend == BENCH_GPU) {
+        advise_ok = tile_stream_gpu_advise_chunk_sizes(
+          &fit_config, target, cfg->chunk_ratios, budget);
+      } else {
+        advise_ok = tile_stream_cpu_advise_chunk_sizes(
+          &fit_config, target, cfg->chunk_ratios, budget);
+      }
+      if (advise_ok == 0) {
         fitted = 1;
         uint64_t vol = 1;
         for (uint8_t d = 0; d < rank; ++d)

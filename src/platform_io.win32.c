@@ -90,18 +90,6 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
-int
-platform_truncate(platform_fd fd, uint64_t size)
-{
-  LARGE_INTEGER li;
-  li.QuadPart = (LONGLONG)size;
-  if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
-    return -1;
-  if (!SetEndOfFile(fd))
-    return -1;
-  return 0;
-}
-
 void
 platform_close(platform_fd fd)
 {

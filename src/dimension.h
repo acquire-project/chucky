@@ -86,29 +86,6 @@ dims_budget_chunk_bytes(struct dimension* dims,
                         size_t bytes_per_element,
                         const uint8_t* ratios);
 
-// Callback: estimate total bytes required for the current dim configuration.
-// Returns 0 on success, non-zero on error.
-typedef int (*dims_estimate_fn)(void* ctx, size_t* estimated_bytes_out);
-
-// Find the largest power-of-2 chunk size (starting from target_chunk_bytes)
-// that fits within budget_bytes according to the estimate callback.
-//
-// Algorithm: repeatedly calls dims_budget_chunk_bytes to set chunk sizes,
-// then estimate(ctx, &est) to check total usage. Halves target_chunk_bytes
-// until est <= budget_bytes.
-//
-// Modifies dims in place. On success, dims hold the chosen chunk sizes.
-// Returns 0 on success, non-zero if no chunk size fits (even 1 element/chunk).
-int
-dims_advise(struct dimension* dims,
-            uint8_t rank,
-            size_t target_chunk_bytes,
-            size_t bytes_per_element,
-            const uint8_t* ratios,
-            size_t budget_bytes,
-            dims_estimate_fn estimate,
-            void* estimate_ctx);
-
 // Print a summary table of the dimension configuration.
 void
 dims_print(const struct dimension* dims, uint8_t rank);

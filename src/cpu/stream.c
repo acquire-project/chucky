@@ -461,6 +461,29 @@ tile_stream_cpu_memory_estimate(
   return 0;
 }
 
+int
+tile_stream_cpu_advise_chunk_sizes(
+    struct tile_stream_configuration* config,
+    size_t target_chunk_bytes,
+    const uint8_t* ratios,
+    size_t budget_bytes)
+{
+  const size_t bpe = lod_dtype_bpe(config->dtype);
+  if (bpe == 0 || budget_bytes == 0)
+    return 1;
+
+  for (size_t target = target_chunk_bytes; target >= bpe; target >>= 1) {
+    dims_budget_chunk_bytes(
+      config->dimensions, config->rank, target, bpe, ratios);
+    struct tile_stream_cpu_memory_info mem;
+    if (tile_stream_cpu_memory_estimate(config, &mem))
+      return 1;
+    if (mem.heap_bytes <= budget_bytes)
+      return 0;
+  }
+  return 1;
+}
+
 // ---- Epoch processing ----
 
 // Compress all K epochs, then aggregate + deliver per-level.

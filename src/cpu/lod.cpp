@@ -460,18 +460,6 @@ dim0_emit_typed(T* dst,
 // ---- Public API (extern "C") ----
 
 extern "C" int
-lod_cpu_scatter(const lod_plan* p,
-                const void* src,
-                void* dst,
-                lod_dtype dtype)
-{
-#define DO(T) scatter_typed(p, (const T*)src, (T*)dst)
-  DISPATCH(dtype, DO);
-#undef DO
-  return 0;
-}
-
-extern "C" int
 lod_cpu_reduce(const lod_plan* p,
                void* values,
                lod_dtype dtype,
@@ -481,37 +469,6 @@ lod_cpu_reduce(const lod_plan* p,
   DISPATCH(dtype, DO);
 #undef DO
   return 0;
-}
-
-extern "C" int
-lod_cpu_compute(const lod_plan* p,
-                const void* src,
-                void** out_values,
-                lod_dtype dtype,
-                lod_reduce_method method)
-{
-  *out_values = nullptr;
-  void* values = nullptr;
-
-  size_t bpe = lod_dtype_bpe(dtype);
-  if (bpe == 0)
-    return 1;
-
-  {
-    uint64_t total = p->levels.ends[p->nlod - 1];
-    values = calloc(total, bpe);
-  }
-  CHECK(Error, values);
-
-  CHECK(Error, lod_cpu_scatter(p, src, values, dtype) == 0);
-  CHECK(Error, lod_cpu_reduce(p, values, dtype, method) == 0);
-
-  *out_values = values;
-  return 0;
-
-Error:
-  free(values);
-  return 1;
 }
 
 extern "C" void

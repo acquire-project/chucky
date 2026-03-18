@@ -41,8 +41,11 @@ test_simple(void)
     memset(compressed + i * max_comp, (int)(i + 1), comp_sizes[i]);
   }
 
+  struct aggregate_cpu_workspace ws;
+  memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
-  CHECK(Fail, aggregate_cpu(compressed, comp_sizes, &layout, &result) == 0);
+  CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
+  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify: each chunk i should appear at its permuted position P[i].
   // The offsets should be a valid prefix sum.
@@ -62,12 +65,13 @@ test_simple(void)
       CHECK(Fail, (uint8_t)p[j] == (uint8_t)(i + 1));
   }
 
-  aggregate_cpu_result_free(&result);
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_info("  PASS");
   return 0;
 
 Fail:
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_error("  FAIL");
   return 1;
@@ -107,8 +111,11 @@ test_multishard(void)
     memset(compressed + i * max_comp, (int)(i + 1), comp_sizes[i]);
   }
 
+  struct aggregate_cpu_workspace ws;
+  memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
-  CHECK(Fail, aggregate_cpu(compressed, comp_sizes, &layout, &result) == 0);
+  CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
+  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify round-trip: each chunk's data at its permuted offset
   for (uint64_t i = 0; i < M; ++i) {
@@ -120,12 +127,13 @@ test_multishard(void)
       CHECK(Fail, (uint8_t)p[j] == (uint8_t)(i + 1));
   }
 
-  aggregate_cpu_result_free(&result);
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_info("  PASS");
   return 0;
 
 Fail:
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_error("  FAIL");
   return 1;
@@ -163,8 +171,11 @@ test_page_aligned(void)
   for (uint64_t i = 0; i < M; ++i)
     memset(compressed + i * max_comp, (int)(i + 1), comp_sizes[i]);
 
+  struct aggregate_cpu_workspace ws;
+  memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
-  CHECK(Fail, aggregate_cpu(compressed, comp_sizes, &layout, &result) == 0);
+  CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
+  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify shard boundaries are page-aligned.
   // Each shard has cps_inner chunks. The offset after each shard group
@@ -186,12 +197,13 @@ test_page_aligned(void)
       CHECK(Fail, (uint8_t)p[j] == (uint8_t)(i + 1));
   }
 
-  aggregate_cpu_result_free(&result);
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_info("  PASS");
   return 0;
 
 Fail:
+  aggregate_cpu_workspace_free(&ws);
   free(compressed);
   log_error("  FAIL");
   return 1;

@@ -159,31 +159,6 @@ dims_budget_chunk_bytes(struct dimension* dims,
                          ratios);
 }
 
-int
-dims_advise(struct dimension* dims,
-            uint8_t rank,
-            size_t target_chunk_bytes,
-            size_t bytes_per_element,
-            const uint8_t* ratios,
-            size_t budget_bytes,
-            dims_estimate_fn estimate,
-            void* estimate_ctx)
-{
-  if (bytes_per_element == 0 || budget_bytes == 0)
-    return 1;
-
-  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
-       target >>= 1) {
-    dims_budget_chunk_bytes(dims, rank, target, bytes_per_element, ratios);
-    size_t estimated = 0;
-    if (estimate(estimate_ctx, &estimated))
-      return 1;
-    if (estimated <= budget_bytes)
-      return 0;
-  }
-  return 1; // nothing fits
-}
-
 void
 dims_set_shard_counts(struct dimension* dims,
                       uint8_t rank,

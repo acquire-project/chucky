@@ -471,3 +471,26 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   computed_stream_layouts_free(&cl);
   return 0;
 }
+
+int
+tile_stream_gpu_advise_chunk_sizes(
+    struct tile_stream_configuration* config,
+    size_t target_chunk_bytes,
+    const uint8_t* ratios,
+    size_t budget_bytes)
+{
+  const size_t bpe = lod_dtype_bpe(config->dtype);
+  if (bpe == 0 || budget_bytes == 0)
+    return 1;
+
+  for (size_t target = target_chunk_bytes; target >= bpe; target >>= 1) {
+    dims_budget_chunk_bytes(
+      config->dimensions, config->rank, target, bpe, ratios);
+    struct tile_stream_memory_info mem;
+    if (tile_stream_gpu_memory_estimate(config, &mem))
+      return 1;
+    if (mem.device_bytes <= budget_bytes)
+      return 0;
+  }
+  return 1;
+}

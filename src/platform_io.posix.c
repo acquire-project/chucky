@@ -76,12 +76,6 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
-int
-platform_truncate(platform_fd fd, uint64_t size)
-{
-  return ftruncate(fd, (off_t)size);
-}
-
 void
 platform_close(platform_fd fd)
 {

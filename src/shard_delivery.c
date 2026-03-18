@@ -108,8 +108,8 @@ deliver_to_shards_batch(uint8_t level,
       size_t run_bytes =
         result->offsets[j_run_end] - result->offsets[j_run_start];
       if (run_bytes > 0) {
-        const void* src = (const char*)result->data +
-                          result->offsets[j_run_start];
+        const void* src =
+          (const char*)result->data + result->offsets[j_run_start];
         // Unbuffered IO: round write size up to alignment. The padding
         // region in h_aggregated is safe to read (buffer is oversized).
         size_t write_bytes = sa > 0 ? align_up(run_bytes, sa) : run_bytes;
@@ -119,6 +119,8 @@ deliver_to_shards_batch(uint8_t level,
         // Use write_direct when source pointer is page-aligned (always true
         // at shard-group boundaries; may not hold after a mid-batch shard
         // completion splits a group).
+        // FIXME: this logic should be handle by a wrapper that is exposed in
+        //        writer.h - something like write_append()
         int aligned = sa == 0 || ((uintptr_t)src % sa == 0);
         if (aligned && sh->writer->write_direct) {
           CHECK(Error,
@@ -140,9 +142,8 @@ deliver_to_shards_batch(uint8_t level,
           if (chunk_size > 0) {
             uint64_t within_inner = j - j_start;
             uint64_t slot_idx = eis * cps_inner + within_inner;
-            size_t chunk_off =
-              sh->data_cursor +
-              (result->offsets[j] - result->offsets[j_run_start]);
+            size_t chunk_off = sh->data_cursor + (result->offsets[j] -
+                                                  result->offsets[j_run_start]);
             sh->index[2 * slot_idx] = chunk_off;
             sh->index[2 * slot_idx + 1] = chunk_size;
           }

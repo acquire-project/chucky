@@ -36,6 +36,16 @@ int
 tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                 struct tile_stream_memory_info* info);
 
+// Find the largest power-of-2 chunk size (starting from target_chunk_bytes)
+// that fits within budget_bytes of GPU device memory.
+// Modifies config->dimensions in place. Returns 0 on success.
+int
+tile_stream_gpu_advise_chunk_sizes(
+    struct tile_stream_configuration* config,
+    size_t target_chunk_bytes,
+    const uint8_t* ratios,
+    size_t budget_bytes);
+
 // Allocate and initialize a tile_stream_gpu. Returns pointer on success,
 // NULL on failure. Caller must free with tile_stream_gpu_destroy.
 // The config->dimensions pointer must remain valid for the lifetime of the stream.

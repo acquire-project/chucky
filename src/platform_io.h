@@ -43,10 +43,6 @@ platform_pwrite(platform_fd fd,
 int
 platform_write(platform_fd fd, const void* buf, size_t nbytes);
 
-// Truncate a file to the given size. Returns 0 on success, -1 on error.
-int
-platform_truncate(platform_fd fd, uint64_t size);
-
 // Close a file descriptor/handle.
 void
 platform_close(platform_fd fd);
