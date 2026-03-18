@@ -1,11 +1,11 @@
-#include "zarr_sink.h"
+#include "defs.limits.h"
 #include "io_queue.h"
 #include "json_writer.h"
-#include "defs.limits.h"
 #include "lod_plan.h"
 #include "platform.h"
 #include "platform_io.h"
 #include "prelude.h"
+#include "zarr_sink.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -21,6 +21,7 @@ struct zarr_shard_writer
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
   _Atomic uint64_t* retired_bytes; // points to zarr_sink.retired_bytes
   uint64_t* queued_bytes;          // points to zarr_sink.queued_bytes
+  _Atomic int* io_error;           // points to zarr_sink.io_error
 };
 
 struct pwrite_job
@@ -30,6 +31,7 @@ struct pwrite_job
   size_t nbytes;
   size_t data_off;                 // byte offset from start of struct to data
   _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
+  _Atomic int* io_error;           // set on write failure
   uint8_t data[]; // used when data_off == sizeof(struct pwrite_job)
 };
 
@@ -38,8 +40,10 @@ pwrite_fn(void* arg)
 {
   struct pwrite_job* j = (struct pwrite_job*)arg;
   const void* data = (const char*)j + j->data_off;
-  if (platform_pwrite(j->fd, data, j->nbytes, j->offset) != 0)
+  if (platform_pwrite(j->fd, data, j->nbytes, j->offset) != 0) {
     log_error("zarr pwrite failed");
+    atomic_store(j->io_error, 1);
+  }
   atomic_fetch_add(j->retired_bytes, j->nbytes);
 }
 
@@ -72,6 +76,7 @@ zarr_shard_write(struct shard_writer* self,
     j->offset = offset;
     j->nbytes = nbytes;
     j->retired_bytes = w->retired_bytes;
+    j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
     if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
       job_free(j);
@@ -95,14 +100,17 @@ struct pwrite_ref_job
   size_t nbytes;
   const void* data;                // NOT owned — points into pinned memory
   _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
+  _Atomic int* io_error;           // set on write failure
 };
 
 static void
 pwrite_ref_fn(void* arg)
 {
   struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
-  if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0)
+  if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0) {
     log_error("zarr pwrite_ref failed");
+    atomic_store(j->io_error, 1);
+  }
   atomic_fetch_add(j->retired_bytes, j->nbytes);
 }
 
@@ -126,6 +134,7 @@ zarr_shard_write_direct(struct shard_writer* self,
     j->nbytes = nbytes;
     j->data = beg;
     j->retired_bytes = w->retired_bytes;
+    j->io_error = w->io_error;
     if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
       free(j);
       goto Error;
@@ -187,6 +196,7 @@ struct zarr_sink
   int unbuffered;
   uint64_t queued_bytes;          // written by main thread only
   _Atomic uint64_t retired_bytes; // written by io worker (atomic)
+  _Atomic int io_error;           // set by io worker on write failure
 
   // Geometry
   uint8_t rank;
@@ -296,7 +306,8 @@ zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   if (w->fd == PLATFORM_FD_INVALID) {
     // Directory may not exist yet (unbounded dim0) — create and retry
     char dir[4096];
-    memcpy(dir, path, sizeof(dir));
+    size_t pathlen = strlen(path);
+    memcpy(dir, path, pathlen + 1);
     char* last_slash = strrchr(dir, '/');
     if (last_slash) {
       *last_slash = '\0';
@@ -350,30 +361,26 @@ write_root_metadata(const char* store_path)
 static const char*
 zarr_dtype_string(enum zarr_dtype dt)
 {
+#define CAT(x, y) x##y
+#define CASE(T)                                                                \
+  case CAT(zarr_dtype_, T):                                                    \
+    return #T
+
   switch (dt) {
-    case zarr_dtype_uint8:
-      return "uint8";
-    case zarr_dtype_uint16:
-      return "uint16";
-    case zarr_dtype_uint32:
-      return "uint32";
-    case zarr_dtype_uint64:
-      return "uint64";
-    case zarr_dtype_int8:
-      return "int8";
-    case zarr_dtype_int16:
-      return "int16";
-    case zarr_dtype_int32:
-      return "int32";
-    case zarr_dtype_int64:
-      return "int64";
-    case zarr_dtype_float16:
-      return "float16";
-    case zarr_dtype_float32:
-      return "float32";
-    case zarr_dtype_float64:
-      return "float64";
+    CASE(uint8);
+    CASE(uint16);
+    CASE(uint32);
+    CASE(uint64);
+    CASE(int8);
+    CASE(int16);
+    CASE(int32);
+    CASE(int64);
+    CASE(float16);
+    CASE(float32);
+    CASE(float64);
   }
+#undef CAT
+#undef CASE
   return "unknown";
 }
 
@@ -665,6 +672,7 @@ zarr_sink_create(const struct zarr_config* cfg)
     zs->writers[i].alignment = zs->unbuffered ? platform_page_size() : 0;
     zs->writers[i].retired_bytes = &zs->retired_bytes;
     zs->writers[i].queued_bytes = &zs->queued_bytes;
+    zs->writers[i].io_error = &zs->io_error;
   }
 
   return zs;
@@ -711,6 +719,12 @@ zarr_sink_destroy(struct zarr_sink* s)
   }
   io_queue_destroy(s->queue);
   free(s);
+}
+
+int
+zarr_sink_has_error(struct zarr_sink* s)
+{
+  return s ? atomic_load(&s->io_error) : 0;
 }
 
 struct shard_sink*
@@ -811,12 +825,13 @@ write_multiscale_group_metadata(const struct zarr_multiscale_sink* ms)
     }
     jw_key(&jw, "type");
     {
-      const char* n = ms->dimensions[d].name;
-      const char* type = "space";
-      if (n && (n[0] == 't' || n[0] == 'T') && n[1] == '\0')
-        type = "time";
-      else if (n && (n[0] == 'c' || n[0] == 'C') && n[1] == '\0')
-        type = "channel";
+      const char* type;
+      switch (ms->dimensions[d].axis_type) {
+        case dimension_axis_time: type = "time"; break;
+        case dimension_axis_channel: type = "channel"; break;
+        case dimension_axis_other: type = "custom"; break;
+        default: type = "space"; break;
+      }
       jw_string(&jw, type);
     }
     jw_object_end(&jw);

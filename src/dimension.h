@@ -3,6 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+enum dimension_axis_type
+{
+  dimension_axis_space = 0, // default (zero-init = space)
+  dimension_axis_time,
+  dimension_axis_channel,
+  dimension_axis_other,
+};
+
 struct dimension
 {
   uint64_t size; // 0 means unbounded (dim 0 only: stream indefinitely)
@@ -14,6 +22,7 @@ struct dimension
   uint8_t storage_position;  // position in storage layout (0=outermost).
                              // dims[0].storage_position must be 0.
                              // Must be a valid permutation of 0..rank-1.
+  enum dimension_axis_type axis_type; // OME-NGFF axis type
 };
 
 // Initialize dims from a name string and sizes array.
