@@ -2,16 +2,16 @@
 
 ## TODO
 
+- [ ] s3 writer
+- [ ] make a report to characterize performance/memory by chunk size
 - [ ] interface for streaming from device, integrating with a cuda stream
 - [x] u8, u32, i8, i16, i32
 - [x] u64, i64, double?
 - [x] fp16
 - [x] cpu impl
-- [ ] s3 writer
 - [ ] whitepaper
 - [ ] coverage
 - [ ] ci/cd
-- [ ] make a report to characterize performance/memory by chunk size
 - [ ] metadata
 - [x] fix "temporal" vs "spatial" naming.
 - [x] fix uses of the work chunk, then fix uses of the word tile.
@@ -29,7 +29,7 @@
 - [x] make sure we're using the right condition to stop downsampling. all
       dims need to be bigger than tile size
 - [x] add metrics, bench
-- [x] optimize lod scatter, lod gather kernels.
+- [x] optimize lod scattner, lod gather kernels.
 - [x] within epoch transpose
 - [x] unbuffered io
 - [x] cleanup tests vs experiments
@@ -38,6 +38,28 @@
 Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
+
+## 2026-03-18
+
+- [ ] Should make dims_advise part of the tile_stream api since it depends on the
+      config.
+
+Alan's been working on this an interesting use case. People will have several
+arrays they are streaming to at the same time, possibly with different sizes? If
+you just open many independent streams you'll run out of resources - memory is
+the most precious one. It's usually for regimes that don't need performance and
+are more resource constrained.
+
+If you stream in an epoch before switching streams than theoretically you could
+reuse a bunch of the same resources. After you have a tiled epoch (with lods
+etc) everything downstream is just how to address the chunks to the correct
+shards. There could be a demuxing before the compress/aggregate followed
+by the usual muxing to shards. It's N-streams in to 1 compressor to M-shards
+out.
+
+I don't particularly like it. What does it save? It saves the overhead of the
+compress/aggregate step per stream. If you constrain callers to finish an
+epoch before switching, that can save a lot, but it's so constraining.
 
 ## 2026-03-17
 

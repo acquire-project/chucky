@@ -216,3 +216,61 @@ aggregate_cpu_into(const void* compressed,
   result->chunk_sizes = ws->chunk_sizes;
   return 0;
 }
+
+int
+aggregate_cpu_batch_into(const void* compressed_base,
+                          const size_t* comp_sizes_base,
+                          const uint32_t* gather,
+                          const struct aggregate_layout* layout,
+                          uint32_t n_active,
+                          struct aggregate_cpu_workspace* ws,
+                          struct aggregate_result* result)
+{
+  const uint64_t M = layout->chunks_per_epoch;
+  const uint64_t C = layout->covering_count;
+  const uint64_t batch_M = (uint64_t)n_active * M;
+  const uint64_t batch_C = (uint64_t)n_active * C;
+  const size_t max_comp = layout->max_comp_chunk_bytes;
+
+  memset(result, 0, sizeof(*result));
+
+  // Zero scratch.
+  memset(ws->permuted_sizes, 0, batch_C * sizeof(size_t));
+
+  // Pass 1: permute sizes using batch gather + perm.
+  for (uint64_t i = 0; i < batch_M; ++i)
+    ws->permuted_sizes[ws->perm[i]] = comp_sizes_base[gather[i]];
+
+  // Save pre-padding sizes for shard index.
+  memcpy(ws->chunk_sizes, ws->permuted_sizes, batch_C * sizeof(size_t));
+
+  // Pass 1.5: pad shard sizes — per-shard with n_active * cps_inner group size.
+  if (layout->page_size > 0 && layout->cps_inner > 0)
+    pad_shard_sizes(ws->permuted_sizes, batch_C,
+                    (uint64_t)n_active * layout->cps_inner, layout->page_size);
+
+  // Pass 2: exclusive prefix sum.
+  ws->offsets[0] = 0;
+  for (uint64_t i = 0; i < batch_C; ++i)
+    ws->offsets[i + 1] = ws->offsets[i] + ws->permuted_sizes[i];
+
+  // Pass 3: gather compressed chunks in shard order.
+  {
+    int i;
+#pragma omp parallel for schedule(static) if(batch_M > 1024)
+    for (i = 0; i < (int)batch_M; ++i) {
+      size_t nbytes = comp_sizes_base[gather[i]];
+      if (nbytes == 0)
+        continue;
+      const char* src =
+        (const char*)compressed_base + (uint64_t)gather[i] * max_comp;
+      char* dst = (char*)ws->data + ws->offsets[ws->perm[i]];
+      memcpy(dst, src, nbytes);
+    }
+  }
+
+  result->data = ws->data;
+  result->offsets = ws->offsets;
+  result->chunk_sizes = ws->chunk_sizes;
+  return 0;
+}

@@ -344,11 +344,17 @@ parse_bytes(const char* s)
   if (end && *end) {
     switch (*end) {
       case 'k':
-      case 'K': val <<= 10; break;
+      case 'K':
+        val <<= 10;
+        break;
       case 'm':
-      case 'M': val <<= 20; break;
+      case 'M':
+        val <<= 20;
+        break;
       case 'g':
-      case 'G': val <<= 30; break;
+      case 'G':
+        val <<= 30;
+        break;
     }
   }
   return val;
@@ -397,7 +403,8 @@ run_bench(const struct bench_config* cfg)
   const char* output_path = cfg->output_path;
   const char* array_name = cfg->array_name;
 
-  print_report("=== %s [%s] ===", label, cfg->backend == BENCH_CPU ? "cpu" : "gpu");
+  print_report(
+    "=== %s [%s] ===", label, cfg->backend == BENCH_CPU ? "cpu" : "gpu");
 
   int is_multiscale = 0;
   for (uint8_t d = 0; d < rank; ++d) {
@@ -408,24 +415,28 @@ run_bench(const struct bench_config* cfg)
   // --- Chunk sizing ---
   if (cfg->chunk_ratios) {
     size_t bpe = lod_dtype_bpe(lod_dtype_u16);
-    size_t target = cfg->target_chunk_bytes ? cfg->target_chunk_bytes : (1 << 20);
+    size_t target =
+      cfg->target_chunk_bytes ? cfg->target_chunk_bytes : (1 << 20);
     size_t budget = cfg->memory_budget;
 
     // Auto-detect memory budget
     if (budget == 0) {
       if (cfg->backend == BENCH_GPU) {
         size_t free_mem = 0, total_mem = 0;
-        if (cuMemGetInfo(&free_mem, &total_mem) == CUDA_SUCCESS && free_mem > 0) {
+        if (cuMemGetInfo(&free_mem, &total_mem) == CUDA_SUCCESS &&
+            free_mem > 0) {
           budget = (size_t)((double)free_mem * 0.8);
-          print_report("  auto-detect: %.2f GiB free GPU memory (using 80%%)",
-                       (double)free_mem / (1024.0 * 1024.0 * 1024.0));
+          print_report(
+            "  auto-detect: %.2f GiB free GPU memory (restrict to <80%%)",
+            (double)free_mem / (1024.0 * 1024.0 * 1024.0));
         }
       } else {
         size_t avail = platform_available_memory();
         if (avail > 0) {
           budget = (size_t)((double)avail * 0.8);
-          print_report("  auto-detect: %.2f GiB available RAM (using 80%%)",
-                       (double)avail / (1024.0 * 1024.0 * 1024.0));
+          print_report(
+            "  auto-detect: %.2f GiB available RAM (restrict to <80%%)",
+            (double)avail / (1024.0 * 1024.0 * 1024.0));
         }
       }
     }
@@ -451,15 +462,19 @@ run_bench(const struct bench_config* cfg)
         .config = &fit_config,
         .backend = cfg->backend,
       };
-      if (dims_advise(dims, rank, target, bpe, cfg->chunk_ratios, budget,
-                      autofit_estimate, &actx) == 0) {
+      if (dims_advise(dims,
+                      rank,
+                      target,
+                      bpe,
+                      cfg->chunk_ratios,
+                      budget,
+                      autofit_estimate,
+                      &actx) == 0) {
         fitted = 1;
         uint64_t vol = 1;
         for (uint8_t d = 0; d < rank; ++d)
           vol *= dims[d].chunk_size;
-        print_report("  auto-fit: %zu bytes/chunk (budget %.2f GiB)",
-                     (size_t)(vol * bpe),
-                     (double)budget / (1024.0 * 1024.0 * 1024.0));
+        print_report("  auto-fit: %zu bytes/chunk", (size_t)(vol * bpe));
       } else {
         print_report("  auto-fit: WARNING — no chunk size fits in budget");
       }
@@ -580,10 +595,11 @@ run_bench(const struct bench_config* cfg)
                    (double)mem.lod_bytes / (1024.0 * 1024.0),
                    (double)mem.shard_bytes / (1024.0 * 1024.0));
       print_report(
-        "    chunks:    %llu/epoch, %llu total (%d LOD levels)",
+        "    chunks:    %llu/epoch, %llu total (%d LOD levels, batch=%u)",
         (unsigned long long)mem.chunks_per_epoch,
         (unsigned long long)mem.total_chunks,
-        mem.nlod);
+        mem.nlod,
+        mem.epochs_per_batch);
     }
   }
 
@@ -608,9 +624,13 @@ run_bench(const struct bench_config* cfg)
     nlod = st.nlod;
   }
 
-  log_bench_header(layout, config.dtype, config.codec,
-                   max_compressed_size, codec_batch_size,
-                   total_bytes, total_elements);
+  log_bench_header(layout,
+                   config.dtype,
+                   config.codec,
+                   max_compressed_size,
+                   codec_batch_size,
+                   total_bytes,
+                   total_elements);
   if (is_multiscale && nlod > 0)
     print_report("  LOD levels:  %d", nlod);
 
@@ -637,19 +657,17 @@ run_bench(const struct bench_config* cfg)
     log_error("  cursor drift: expected %zu, got %zu (diff=%td)",
               total_elements,
               (size_t)bench_cursor(&h),
-              (ptrdiff_t)((int64_t)bench_cursor(&h) -
-                          (int64_t)total_elements));
+              (ptrdiff_t)((int64_t)bench_cursor(&h) - (int64_t)total_elements));
     goto Fail;
   }
 
   {
     struct stream_metrics m = bench_get_metrics(&h);
     struct sink_stats ss =
-      output_path
-        ? (struct sink_stats){ .total_bytes = meter.total_bytes,
-                               .total_chunks = est_total_chunks }
-        : (struct sink_stats){ .total_bytes = dss.total_bytes,
-                               .total_chunks = est_total_chunks };
+      output_path ? (struct sink_stats){ .total_bytes = meter.total_bytes,
+                                         .total_chunks = est_total_chunks }
+                  : (struct sink_stats){ .total_bytes = dss.total_bytes,
+                                         .total_chunks = est_total_chunks };
     print_bench_report(&m,
                        layout,
                        config.dtype,
@@ -845,8 +863,8 @@ bench_stream_main(int ac,
     .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = backend,
     .chunk_ratios = chunk_ratios,
-    .target_chunk_bytes = target_chunk_bytes ? target_chunk_bytes
-                                             : default_chunk_bytes,
+    .target_chunk_bytes =
+      target_chunk_bytes ? target_chunk_bytes : default_chunk_bytes,
     .memory_budget = memory_budget,
     .shard_counts = shard_counts,
   };

@@ -43,3 +43,16 @@ int aggregate_cpu_into(const void* compressed,
                        const struct aggregate_layout* layout,
                        struct aggregate_cpu_workspace* ws,
                        struct aggregate_result* result);
+
+// Batch variant: aggregate n_active epochs at once using gather LUT.
+// gather[n_active * M]: maps batch input index → compressed chunk index.
+// ws->perm must be the batch perm [n_active * M] (precomputed, interleaved).
+// ws buffers sized for n_active * C covering positions.
+// compressed_base / comp_sizes_base: full compressed buffer (all epochs).
+int aggregate_cpu_batch_into(const void* compressed_base,
+                              const size_t* comp_sizes_base,
+                              const uint32_t* gather,
+                              const struct aggregate_layout* layout,
+                              uint32_t n_active,
+                              struct aggregate_cpu_workspace* ws,
+                              struct aggregate_result* result);

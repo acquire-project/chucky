@@ -39,6 +39,7 @@ struct tile_stream_cpu_memory_info
   uint64_t total_chunks;
   size_t max_output_size;
   int nlod;
+  uint32_t epochs_per_batch;
 };
 
 int tile_stream_cpu_memory_estimate(
