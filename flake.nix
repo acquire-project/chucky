@@ -44,6 +44,17 @@
             pkg-config
             tokei
             zstd
+            # s3 writer
+            aws-c-common
+            aws-c-cal
+            aws-c-io
+            aws-c-http
+            aws-c-auth
+            aws-c-s3
+            aws-c-compression
+            aws-c-sdkutils
+            aws-checksums
+            s2n-tls
             # for viewing w neuroglancer
             python3
             uv

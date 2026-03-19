@@ -21,6 +21,7 @@ find_package(Nvcomp REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Lz4 REQUIRED)
 find_package(Zstd REQUIRED)
+find_package(aws-c-s3 REQUIRED CONFIG)
 
 add_subdirectory(src)
 

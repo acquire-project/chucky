@@ -1,4 +1,4 @@
-#include "zarr_sink.h"
+#include "zarr_fs_sink.h"
 #include "io_queue.h"
 #include "json_writer.h"
 #include "defs.limits.h"
@@ -19,8 +19,8 @@ struct zarr_shard_writer
   platform_fd fd;
   struct io_queue* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic uint64_t* retired_bytes; // points to zarr_sink.retired_bytes
-  uint64_t* queued_bytes;          // points to zarr_sink.queued_bytes
+  _Atomic uint64_t* retired_bytes; // points to zarr_fs_sink.retired_bytes
+  uint64_t* queued_bytes;          // points to zarr_fs_sink.queued_bytes
 };
 
 struct pwrite_job
@@ -180,7 +180,7 @@ Error:
 
 // --- Zarr sink ---
 
-struct zarr_sink
+struct zarr_fs_sink
 {
   struct shard_sink base;
   struct io_queue* queue;
@@ -250,28 +250,28 @@ shard_path(char* buf,
 // --- shard_sink fence ---
 
 static struct io_event
-zarr_sink_record_fence(struct shard_sink* self, uint8_t level)
+zarr_fs_sink_record_fence(struct shard_sink* self, uint8_t level)
 {
   (void)level;
-  struct zarr_sink* zs = (struct zarr_sink*)self;
+  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
   return io_queue_record(zs->queue);
 }
 
 static void
-zarr_sink_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+zarr_fs_sink_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
 {
   (void)level;
-  struct zarr_sink* zs = (struct zarr_sink*)self;
+  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
   io_event_wait(zs->queue, ev);
 }
 
 // --- shard_sink open ---
 
 static struct shard_writer*
-zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
+zarr_fs_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
   (void)level;
-  struct zarr_sink* zs = (struct zarr_sink*)self;
+  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
 
   // Map flat shard_index to inner writer index
   // flat = s0 * shard_inner_count + inner_flat
@@ -286,7 +286,7 @@ zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
                  zs->rank,
                  zs->shard_count,
                  shard_index) != 0) {
-    log_error("zarr_sink_open: path too long for shard %llu",
+    log_error("zarr_fs_sink_open: path too long for shard %llu",
               (unsigned long long)shard_index);
     return NULL;
   }
@@ -304,7 +304,7 @@ zarr_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
         w->fd = platform_open_write(path, flags);
     }
     if (w->fd == PLATFORM_FD_INVALID) {
-      log_error("zarr_sink_open: open(%s) failed", path);
+      log_error("zarr_fs_sink_open: open(%s) failed", path);
       return NULL;
     }
   }
@@ -537,12 +537,12 @@ write_array_metadata(const char* array_dir,
 // --- Metadata update ---
 
 static void
-zarr_sink_update_dim0(struct shard_sink* self,
+zarr_fs_sink_update_dim0(struct shard_sink* self,
                       uint8_t level,
                       uint64_t dim0_size)
 {
   (void)level;
-  struct zarr_sink* zs = (struct zarr_sink*)self;
+  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
   if (zs->dimensions[0].size == dim0_size)
     return;
   zs->dimensions[0].size = dim0_size;
@@ -553,14 +553,14 @@ zarr_sink_update_dim0(struct shard_sink* self,
                            zs->fill_value,
                            zs->chunks_per_shard,
                            zs->codec))
-    log_error("zarr_sink_update_dim0: failed to rewrite zarr.json for %s",
+    log_error("zarr_fs_sink_update_dim0: failed to rewrite zarr.json for %s",
               zs->array_dir);
 }
 
 // --- Create / Destroy ---
 
-struct zarr_sink*
-zarr_sink_create(const struct zarr_config* cfg)
+struct zarr_fs_sink*
+zarr_fs_sink_create(const struct zarr_config* cfg)
 {
   CHECK(Fail, cfg);
   CHECK(Fail, cfg->store_path);
@@ -568,13 +568,13 @@ zarr_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
 
-  struct zarr_sink* zs = (struct zarr_sink*)calloc(1, sizeof(*zs));
+  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)calloc(1, sizeof(*zs));
   CHECK(Fail, zs);
 
-  zs->base.open = zarr_sink_open;
-  zs->base.update_dim0 = zarr_sink_update_dim0;
-  zs->base.record_fence = zarr_sink_record_fence;
-  zs->base.wait_fence = zarr_sink_wait_fence;
+  zs->base.open = zarr_fs_sink_open;
+  zs->base.update_dim0 = zarr_fs_sink_update_dim0;
+  zs->base.record_fence = zarr_fs_sink_record_fence;
+  zs->base.wait_fence = zarr_fs_sink_wait_fence;
   zs->queue = io_queue_create();
   CHECK(Fail_alloc, zs->queue);
   zs->unbuffered = cfg->unbuffered;
@@ -610,7 +610,7 @@ zarr_sink_create(const struct zarr_config* cfg)
 
   // Create directory tree: ensure shard directories exist.
   // When dim0 is unbounded (size=0), only pre-create inner dirs for
-  // shard_epoch=0; further dirs are created on-demand in zarr_sink_open.
+  // shard_epoch=0; further dirs are created on-demand in zarr_fs_sink_open.
   {
     uint64_t total_shards =
       zs->shard_inner_count; // just inner dims for epoch 0
@@ -632,7 +632,7 @@ zarr_sink_create(const struct zarr_config* cfg)
       if (last_slash) {
         *last_slash = '\0';
         if (platform_mkdirp(path) != 0) {
-          log_error("zarr_sink: platform_mkdirp(%s) failed", path);
+          log_error("zarr_fs_sink: platform_mkdirp(%s) failed", path);
           goto Fail_alloc;
         }
       }
@@ -678,7 +678,7 @@ Fail:
 }
 
 size_t
-zarr_sink_pending_bytes(struct zarr_sink* s)
+zarr_fs_sink_pending_bytes(struct zarr_fs_sink* s)
 {
   if (!s || !s->queue)
     return 0;
@@ -686,7 +686,7 @@ zarr_sink_pending_bytes(struct zarr_sink* s)
 }
 
 void
-zarr_sink_flush(struct zarr_sink* s)
+zarr_fs_sink_flush(struct zarr_fs_sink* s)
 {
   if (!s || !s->queue)
     return;
@@ -695,12 +695,12 @@ zarr_sink_flush(struct zarr_sink* s)
 }
 
 void
-zarr_sink_destroy(struct zarr_sink* s)
+zarr_fs_sink_destroy(struct zarr_fs_sink* s)
 {
   if (!s)
     return;
 
-  zarr_sink_flush(s);
+  zarr_fs_sink_flush(s);
 
   if (s->writers) {
     for (uint64_t i = 0; i < s->num_writers; ++i) {
@@ -714,17 +714,17 @@ zarr_sink_destroy(struct zarr_sink* s)
 }
 
 struct shard_sink*
-zarr_sink_as_shard_sink(struct zarr_sink* s)
+zarr_fs_sink_as_shard_sink(struct zarr_fs_sink* s)
 {
   return &s->base;
 }
 
 // --- Multiscale sink ---
 
-struct zarr_multiscale_sink
+struct zarr_fs_multiscale_sink
 {
   struct shard_sink base;
-  struct zarr_sink** levels; // array of nlod zarr_sink*
+  struct zarr_fs_sink** levels; // array of nlod zarr_fs_sink*
   int nlod;
 
   // For group metadata regeneration
@@ -737,7 +737,7 @@ struct zarr_multiscale_sink
 static struct io_event
 zarr_multiscale_record_fence(struct shard_sink* self, uint8_t level)
 {
-  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
   if (level >= ms->nlod)
     return (struct io_event){ 0 };
   return io_queue_record(ms->levels[level]->queue);
@@ -748,7 +748,7 @@ zarr_multiscale_wait_fence(struct shard_sink* self,
                            uint8_t level,
                            struct io_event ev)
 {
-  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
   if (level < ms->nlod)
     io_event_wait(ms->levels[level]->queue, ev);
 }
@@ -758,7 +758,7 @@ zarr_multiscale_open(struct shard_sink* self,
                      uint8_t level,
                      uint64_t shard_index)
 {
-  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
   CHECK(Fail, level < ms->nlod);
   return ms->levels[level]->base.open(
     &ms->levels[level]->base, level, shard_index);
@@ -768,7 +768,7 @@ Fail:
 
 // Regenerate OME-NGFF group metadata from live per-level shapes.
 static int
-write_multiscale_group_metadata(const struct zarr_multiscale_sink* ms)
+write_multiscale_group_metadata(const struct zarr_fs_multiscale_sink* ms)
 {
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", ms->group_path);
@@ -899,13 +899,13 @@ zarr_multiscale_update_dim0(struct shard_sink* self,
                             uint8_t level,
                             uint64_t dim0_size)
 {
-  struct zarr_multiscale_sink* ms = (struct zarr_multiscale_sink*)self;
+  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
   if (level >= ms->nlod)
     return;
 
   // Skip if unchanged
   uint64_t old = ms->levels[level]->dimensions[0].size;
-  zarr_sink_update_dim0(&ms->levels[level]->base, level, dim0_size);
+  zarr_fs_sink_update_dim0(&ms->levels[level]->base, level, dim0_size);
   if (old == dim0_size)
     return;
 
@@ -916,8 +916,8 @@ zarr_multiscale_update_dim0(struct shard_sink* self,
       ms->group_path);
 }
 
-struct zarr_multiscale_sink*
-zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
+struct zarr_fs_multiscale_sink*
+zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 {
   CHECK(Fail, cfg);
   CHECK(Fail, cfg->store_path);
@@ -959,8 +959,8 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
         lod_plan_init_shapes(
           &plan, cfg->rank, shape, chunk_shape, lod_mask, max_lev) == 0);
 
-  struct zarr_multiscale_sink* ms =
-    (struct zarr_multiscale_sink*)calloc(1, sizeof(*ms));
+  struct zarr_fs_multiscale_sink* ms =
+    (struct zarr_fs_multiscale_sink*)calloc(1, sizeof(*ms));
   CHECK(Fail_plan, ms);
 
   ms->base.open = zarr_multiscale_open;
@@ -974,7 +974,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     ms->dimensions[d] = cfg->dimensions[d];
 
   ms->levels =
-    (struct zarr_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_sink*));
+    (struct zarr_fs_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_fs_sink*));
   CHECK(Fail_ms, ms->levels);
 
   // Ensure directories exist before writing metadata
@@ -986,7 +986,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
   }
 
-  // Create one zarr_sink per level
+  // Create one zarr_fs_sink per level
   for (int lv = 0; lv < plan.nlod; ++lv) {
     // Build per-level dimensions with downsampled sizes.
     // When dim0 is unbounded (size=0), set level shape[0]=0 (will grow).
@@ -1013,7 +1013,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
       .codec = cfg->codec,
     };
 
-    ms->levels[lv] = zarr_sink_create(&zcfg);
+    ms->levels[lv] = zarr_fs_sink_create(&zcfg);
     CHECK(Fail_levels, ms->levels[lv]);
   }
 
@@ -1026,7 +1026,7 @@ zarr_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 Fail_levels:
   for (int i = 0; i < plan.nlod; ++i) {
     if (ms->levels[i])
-      zarr_sink_destroy(ms->levels[i]);
+      zarr_fs_sink_destroy(ms->levels[i]);
   }
   free(ms->levels);
 Fail_ms:
@@ -1038,38 +1038,38 @@ Fail:
 }
 
 size_t
-zarr_multiscale_sink_pending_bytes(struct zarr_multiscale_sink* s)
+zarr_fs_multiscale_sink_pending_bytes(struct zarr_fs_multiscale_sink* s)
 {
   if (!s)
     return 0;
   size_t total = 0;
   for (int i = 0; i < s->nlod; ++i)
-    total += zarr_sink_pending_bytes(s->levels[i]);
+    total += zarr_fs_sink_pending_bytes(s->levels[i]);
   return total;
 }
 
 void
-zarr_multiscale_sink_flush(struct zarr_multiscale_sink* s)
+zarr_fs_multiscale_sink_flush(struct zarr_fs_multiscale_sink* s)
 {
   if (!s)
     return;
   for (int i = 0; i < s->nlod; ++i)
-    zarr_sink_flush(s->levels[i]);
+    zarr_fs_sink_flush(s->levels[i]);
 }
 
 void
-zarr_multiscale_sink_destroy(struct zarr_multiscale_sink* s)
+zarr_fs_multiscale_sink_destroy(struct zarr_fs_multiscale_sink* s)
 {
   if (!s)
     return;
   for (int i = 0; i < s->nlod; ++i)
-    zarr_sink_destroy(s->levels[i]);
+    zarr_fs_sink_destroy(s->levels[i]);
   free(s->levels);
   free(s);
 }
 
 struct shard_sink*
-zarr_multiscale_sink_as_shard_sink(struct zarr_multiscale_sink* s)
+zarr_fs_multiscale_sink_as_shard_sink(struct zarr_fs_multiscale_sink* s)
 {
   return &s->base;
 }

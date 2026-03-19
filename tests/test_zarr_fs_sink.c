@@ -5,7 +5,7 @@
 #include "test_platform.h"
 #include "test_shard_verify.h"
 #include "test_voxel_encode.h"
-#include "zarr_sink.h"
+#include "zarr_fs_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,7 +71,7 @@ test_metadata(const char* tmpdir)
     .dimensions = dims,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&cfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
   CHECK(Fail, zs);
 
   // Check root zarr.json
@@ -112,12 +112,12 @@ test_metadata(const char* tmpdir)
     free(data);
   }
 
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -182,7 +182,7 @@ test_pipeline(const char* tmpdir)
     .dimensions = dims,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
   CHECK(Fail2, zs);
 
   // Configure stream
@@ -192,7 +192,7 @@ test_pipeline(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -209,7 +209,7 @@ test_pipeline(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // Verify shard files exist and contents are correct
   {
@@ -323,7 +323,7 @@ test_pipeline(const char* tmpdir)
   }
 
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
@@ -331,7 +331,7 @@ test_pipeline(const char* tmpdir)
 Fail4:
   tile_stream_gpu_destroy(s);
 Fail3:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail2:
   free(src);
 Fail:
@@ -375,7 +375,7 @@ test_multiscale_metadata(const char* tmpdir)
     .nlod = 0, // auto
   };
 
-  struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
   CHECK(Fail, ms);
 
   // Check root zarr.json has multiscales attribute
@@ -431,12 +431,12 @@ test_multiscale_metadata(const char* tmpdir)
     free(data);
   }
 
-  zarr_multiscale_sink_destroy(ms);
+  zarr_fs_multiscale_sink_destroy(ms);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  zarr_multiscale_sink_destroy(ms);
+  zarr_fs_multiscale_sink_destroy(ms);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -477,7 +477,7 @@ test_unbounded_metadata_update(const char* tmpdir)
     .dimensions = dims,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&cfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
   CHECK(Fail, zs);
 
   // Initial zarr.json should have shape[0] = 0
@@ -503,7 +503,7 @@ test_unbounded_metadata_update(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -530,7 +530,7 @@ test_unbounded_metadata_update(const char* tmpdir)
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail4, r.error == 0);
 
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // After flush, zarr.json shape[0] should reflect data written.
   // 4 epochs of chunk_size=2 → shape[0] = 8.
@@ -554,7 +554,7 @@ test_unbounded_metadata_update(const char* tmpdir)
 
   free(src);
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   log_info("  PASS");
   return 0;
 
@@ -563,7 +563,7 @@ Fail4:
 Fail3:
   tile_stream_gpu_destroy(s);
 Fail2:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -605,7 +605,7 @@ test_multiscale_unbounded(const char* tmpdir)
     .nlod = 0, // auto
   };
 
-  struct zarr_multiscale_sink* ms = zarr_multiscale_sink_create(&cfg);
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
   CHECK(Fail, ms);
 
   // Check root zarr.json exists with multiscales
@@ -658,12 +658,12 @@ test_multiscale_unbounded(const char* tmpdir)
     log_info("  L1 shape: [0,32,32] OK");
   }
 
-  zarr_multiscale_sink_destroy(ms);
+  zarr_fs_multiscale_sink_destroy(ms);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  zarr_multiscale_sink_destroy(ms);
+  zarr_fs_multiscale_sink_destroy(ms);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -704,7 +704,7 @@ test_midstream_metadata_update(const char* tmpdir)
     .dimensions = dims,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&cfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
   CHECK(Fail, zs);
 
   // Enable periodic metadata updates with a tiny interval.
@@ -715,7 +715,7 @@ test_midstream_metadata_update(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .metadata_update_interval_s = 0.0f, // always fire
     .epochs_per_batch = 1,
   };
@@ -773,7 +773,7 @@ test_midstream_metadata_update(const char* tmpdir)
     struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // Verify final shape after flush: 6 epochs * chunk_size 2 = 12
   {
@@ -792,7 +792,7 @@ test_midstream_metadata_update(const char* tmpdir)
 
   free(src);
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   log_info("  PASS");
   return 0;
 
@@ -801,7 +801,7 @@ Fail4:
 Fail3:
   tile_stream_gpu_destroy(s);
 Fail2:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -852,7 +852,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     .unbuffered = 1,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
   CHECK(Fail, zs);
 
   const struct tile_stream_configuration config = {
@@ -861,7 +861,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .epochs_per_batch = 1,
     .shard_alignment = platform_page_size(),
   };
@@ -880,7 +880,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     CHECK(Fail3, r.error == 0);
   }
 
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // Verify shard file exists
   char path[4096];
@@ -964,7 +964,7 @@ test_unbuffered_pipeline(const char* tmpdir)
   }
 
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   log_info("  PASS");
   return 0;
 
@@ -972,7 +972,7 @@ Fail4:
 Fail3:
   tile_stream_gpu_destroy(s);
 Fail2:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -1059,7 +1059,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .unbuffered = 1,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
   CHECK(Fail2, zs);
 
   // Configure stream with shard alignment for unbuffered IO
@@ -1069,7 +1069,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .shard_alignment = platform_page_size(),
   };
 
@@ -1087,7 +1087,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // Verify shard files: same loop as test_pipeline
   {
@@ -1202,7 +1202,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
   }
 
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
@@ -1210,7 +1210,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
 Fail4:
   tile_stream_gpu_destroy(s);
 Fail3:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail2:
   free(src);
 Fail:
@@ -1415,7 +1415,7 @@ test_pipeline_storage_order(const char* tmpdir)
   // Tiles per shard:   1,   2,   2
   // storage_position: z→0, y→2, x→1 → storage dims: [z, x, y]
   //
-  // ONE dims array is used for both tile_stream and zarr_sink.
+  // ONE dims array is used for both tile_stream and zarr_fs_sink.
 
   const int acq_size[3] = { 4, 4, 6 };
   const int acq_tile[3] = { 2, 2, 3 };
@@ -1506,7 +1506,7 @@ test_pipeline_storage_order(const char* tmpdir)
     .dimensions = sto_dims,
   };
 
-  struct zarr_sink* zs = zarr_sink_create(&zcfg);
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
   CHECK(Fail2, zs);
 
   // tile_stream uses acquisition-order dims (same array, with storage_position)
@@ -1516,7 +1516,7 @@ test_pipeline_storage_order(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_sink_as_shard_sink(zs),
+    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -1533,7 +1533,7 @@ test_pipeline_storage_order(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  zarr_sink_flush(zs);
+  zarr_fs_sink_flush(zs);
 
   // Verify shard files and chunk contents
   {
@@ -1662,7 +1662,7 @@ test_pipeline_storage_order(const char* tmpdir)
   }
 
   tile_stream_gpu_destroy(s);
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
   free(src);
   log_info("  PASS");
   return 0;
@@ -1670,7 +1670,7 @@ test_pipeline_storage_order(const char* tmpdir)
 Fail4:
   tile_stream_gpu_destroy(s);
 Fail3:
-  zarr_sink_destroy(zs);
+  zarr_fs_sink_destroy(zs);
 Fail2:
   free(src);
 Fail:

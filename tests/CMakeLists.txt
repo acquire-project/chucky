@@ -78,7 +78,8 @@ add_test_exe(test_aggregate       test_aggregate.c       CUDA::cuda_driver CUDA:
 add_test_exe(test_json_writer test_json_writer.c json_writer chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 
-add_test_exe(test_zarr_sink   test_zarr_sink.c   CUDA::cuda_driver CUDA::cudart_static zarr_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+add_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   CUDA::cuda_driver CUDA::cudart_static zarr_fs_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_s3_sink platform_cmd chucky_log)
 
 add_test_exe(test_ingest       test_ingest.c       CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 add_test_exe(test_compress_agg test_compress_agg.c CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_gpu_helpers index_ops_util test_shard_verify)

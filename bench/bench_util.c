@@ -5,7 +5,7 @@
 #include "lod.h"
 #include "prelude.cuda.h"
 #include "prelude.h"
-#include "zarr_sink.h"
+#include "zarr_fs_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -482,14 +482,14 @@ run_bench(const struct bench_config* cfg)
   struct discard_shard_sink dss;
   discard_shard_sink_init(&dss);
 
-  struct zarr_sink* zsink = NULL;
-  struct zarr_multiscale_sink* zmsink = NULL;
+  struct zarr_fs_sink* zsink = NULL;
+  struct zarr_fs_multiscale_sink* zmsink = NULL;
   struct metering_sink meter = { 0 };
   struct shard_sink* sink = &dss.base;
   struct bench_handle h = { .backend = cfg->backend };
 
   if (output_path) {
-    struct shard_sink* zarr_sink_ptr = NULL;
+    struct shard_sink* zarr_fs_sink_ptr = NULL;
     if (is_multiscale) {
       struct zarr_multiscale_config zcfg = {
         .store_path = output_path,
@@ -501,9 +501,9 @@ run_bench(const struct bench_config* cfg)
         .nlod = 0,
         .unbuffered = 1,
       };
-      zmsink = zarr_multiscale_sink_create(&zcfg);
+      zmsink = zarr_fs_multiscale_sink_create(&zcfg);
       CHECK(Fail, zmsink);
-      zarr_sink_ptr = zarr_multiscale_sink_as_shard_sink(zmsink);
+      zarr_fs_sink_ptr = zarr_fs_multiscale_sink_as_shard_sink(zmsink);
     } else {
       struct zarr_config zcfg = {
         .store_path = output_path,
@@ -514,11 +514,11 @@ run_bench(const struct bench_config* cfg)
         .dimensions = dims,
         .unbuffered = 1,
       };
-      zsink = zarr_sink_create(&zcfg);
+      zsink = zarr_fs_sink_create(&zcfg);
       CHECK(Fail, zsink);
-      zarr_sink_ptr = zarr_sink_as_shard_sink(zsink);
+      zarr_fs_sink_ptr = zarr_fs_sink_as_shard_sink(zsink);
     }
-    metering_sink_init(&meter, zarr_sink_ptr);
+    metering_sink_init(&meter, zarr_fs_sink_ptr);
     sink = &meter.base;
   }
 
@@ -620,16 +620,16 @@ run_bench(const struct bench_config* cfg)
 
   size_t pending_bytes = 0;
   if (zsink)
-    pending_bytes = zarr_sink_pending_bytes(zsink);
+    pending_bytes = zarr_fs_sink_pending_bytes(zsink);
   if (zmsink)
-    pending_bytes = zarr_multiscale_sink_pending_bytes(zmsink);
+    pending_bytes = zarr_fs_multiscale_sink_pending_bytes(zmsink);
 
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
   if (zsink)
-    zarr_sink_flush(zsink);
+    zarr_fs_sink_flush(zsink);
   if (zmsink)
-    zarr_multiscale_sink_flush(zmsink);
+    zarr_fs_multiscale_sink_flush(zmsink);
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
@@ -674,12 +674,12 @@ Cleanup:
   // Flush before destroying the stream — pending write_direct jobs
   // reference pinned host buffers owned by the stream.
   if (zsink)
-    zarr_sink_flush(zsink);
+    zarr_fs_sink_flush(zsink);
   if (zmsink)
-    zarr_multiscale_sink_flush(zmsink);
+    zarr_fs_multiscale_sink_flush(zmsink);
   bench_destroy(&h);
-  zarr_sink_destroy(zsink);
-  zarr_multiscale_sink_destroy(zmsink);
+  zarr_fs_sink_destroy(zsink);
+  zarr_fs_multiscale_sink_destroy(zmsink);
   return rc;
 }
 

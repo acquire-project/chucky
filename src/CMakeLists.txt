@@ -29,6 +29,9 @@ add_platform_sources(io_queue)
 add_src_lib(platform_io SOURCES platform_io.h)
 add_platform_sources(platform_io)
 
+add_src_lib(platform_cmd SOURCES platform_cmd.h)
+add_platform_sources(platform_cmd)
+
 add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_queue chucky_log)
 
 add_src_lib(stream_config SOURCES stream.config.c stream.config.h
@@ -43,5 +46,11 @@ add_subdirectory(cpu)
 add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
     LINKS crc32c writer platform chucky_log)
 
-add_src_lib(zarr_sink SOURCES zarr_sink.c zarr_sink.h
+add_src_lib(zarr_fs_sink SOURCES zarr_fs_sink.c zarr_fs_sink.h
     LINKS writer json_writer io_queue platform_io lod_plan dimension chucky_log)
+
+add_src_lib(s3_client SOURCES s3_client.c s3_client.h
+    LINKS AWS::aws-c-s3 chucky_log)
+
+add_src_lib(zarr_s3_sink SOURCES zarr_s3_sink.c zarr_s3_sink.h
+    LINKS s3_client writer json_writer lod_plan dimension chucky_log)
