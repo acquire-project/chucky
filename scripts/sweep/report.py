@@ -20,34 +20,23 @@ from pathlib import Path
 TEMPLATE_PATH = Path(__file__).parent / "template.html"
 
 
-def load_and_merge(paths: list[Path]) -> dict:
-    """Load one or more result files and merge into a single data dict."""
-    if not paths:
-        print("No input files.", file=sys.stderr)
-        sys.exit(1)
-
-    all_runs = []
-    machine = None
-
+def load_files(paths: list[Path]) -> list[dict]:
+    """Load result files, returning a list of {label, machine, runs} dicts."""
+    files = []
     for p in paths:
         with open(p) as f:
             data = json.load(f)
-        file_machine = data.get("machine", {})
-        file_commit = file_machine.get("commit", "unknown")
-
-        if machine is None:
-            machine = file_machine
-
-        for run in data.get("runs", []):
-            if "commit" not in run:
-                run["commit"] = file_commit
-            all_runs.append(run)
-
-    return {
-        "version": 1,
-        "machine": machine,
-        "runs": all_runs,
-    }
+        machine = data.get("machine", {})
+        commit = machine.get("commit", "unknown")
+        date = machine.get("date", "")[:10]
+        label = f"{commit} ({date})" if date else commit
+        files.append({
+            "label": label,
+            "filename": p.name,
+            "machine": machine,
+            "runs": data.get("runs", []),
+        })
+    return files
 
 
 def main():
@@ -65,11 +54,13 @@ def main():
     if not paths:
         ap.error("No input files. Provide paths or use --results-dir.")
 
-    data = load_and_merge(paths)
-    print(f"Loaded {len(paths)} file(s), {len(data['runs'])} runs", file=sys.stderr)
+    files = load_files(paths)
+    total_runs = sum(len(f["runs"]) for f in files)
+    print(f"Loaded {len(files)} file(s), {total_runs} runs", file=sys.stderr)
+
+    data = {"version": 2, "files": files}
 
     template = TEMPLATE_PATH.read_text()
-    # Escape closing tags to prevent XSS via </script> in benchmark output
     json_str = json.dumps(data).replace("</", "<\\/")
     html = template.replace("__DATA_PLACEHOLDER__", json_str)
 
