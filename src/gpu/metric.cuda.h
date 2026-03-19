@@ -8,11 +8,12 @@ static inline void
 accumulate_metric_cu(struct stream_metric* m,
                      CUevent start,
                      CUevent end,
-                     size_t bytes)
+                     size_t input_bytes,
+                     size_t output_bytes)
 {
   float ms = 0;
   cuEventElapsedTime(&ms, start, end);
   if (ms < 1e-2f)
     return; // skip bogus measurements from seeded events
-  accumulate_metric_ms(m, ms, bytes);
+  accumulate_metric_ms(m, ms, input_bytes, output_bytes);
 }

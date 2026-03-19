@@ -109,10 +109,12 @@ struct bench_config
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method dim0_reduce_method;
   enum bench_backend backend;
+  enum lod_dtype dtype;              // element type (default lod_dtype_u16)
   const uint8_t* chunk_ratios;       // power-of-2 distribution ratios
   size_t target_chunk_bytes;         // 0 = use 1MB default
   size_t memory_budget;              // 0 = auto-detect
   const uint64_t* shard_counts;     // per-dim target shard counts (NULL = skip)
+  int json_output;                   // print JSON to stdout after run
 };
 
 int

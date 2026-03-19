@@ -175,7 +175,7 @@ dims_set_shard_counts(struct dimension* dims,
 void
 dims_print(const struct dimension* dims, uint8_t rank)
 {
-  printf("dim  name  %10s  %10s  %8s  %6s  %8s  storage  ds\n",
+  fprintf(stderr, "dim  name  %10s  %10s  %8s  %6s  %8s  storage  ds\n",
          "size",
          "chunk",
          "chunks",
@@ -187,7 +187,7 @@ dims_print(const struct dimension* dims, uint8_t rank)
     uint64_t tc = ceildiv(dims[i].size, dims[i].chunk_size);
     uint64_t cps = dims[i].chunks_per_shard ? dims[i].chunks_per_shard : tc;
     uint64_t sc = ceildiv(tc, cps);
-    printf("%3d  %-4s  %10llu  %10llu  %8llu  %6llu  %8llu  %7d  %s\n",
+    fprintf(stderr, "%3d  %-4s  %10llu  %10llu  %8llu  %6llu  %8llu  %7d  %s\n",
            i,
            dims[i].name ? dims[i].name : "?",
            (unsigned long long)dims[i].size,
@@ -202,7 +202,7 @@ dims_print(const struct dimension* dims, uint8_t rank)
       chunks_per_epoch *= tc;
   }
   double epoch_elements = (double)chunks_per_epoch * (double)chunk_elements;
-  printf("chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
+  fprintf(stderr, "chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
          (unsigned long long)chunk_elements,
          (unsigned long long)chunks_per_epoch,
          epoch_elements);

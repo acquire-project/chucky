@@ -19,6 +19,8 @@ set(BENCH_STREAM_SOURCES
     bench_stream_orca2_single.c
     bench_stream_orca2_multiscale.c
     bench_stream_orca2_multiscale_dim0.c
+    bench_stream_medfmt_single.c
+    bench_stream_smallepoch_single.c
 )
 
 foreach(src IN LISTS BENCH_STREAM_SOURCES)

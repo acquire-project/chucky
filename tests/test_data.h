@@ -33,3 +33,11 @@ dim_total_elements(const struct dimension* dims, uint8_t rank);
 // Fill data, pump through writer, flush. Returns 0 on success.
 int
 pump_data(struct writer* w, size_t total_elements, fill_fn fill);
+
+// Like pump_data but with explicit bytes-per-element.
+// Fill still works on uint16_t buffers; the slice end is trimmed to n*bpe.
+int
+pump_data_bpe(struct writer* w,
+              size_t total_elements,
+              fill_fn fill,
+              size_t bpe);

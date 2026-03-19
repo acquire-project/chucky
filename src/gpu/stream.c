@@ -135,10 +135,12 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
             accumulate_metric_cu(&s->metrics.h2d,
                                  ss->t_h2d_start,
                                  ss->t_h2d_end,
+                                 ss->dispatched_bytes,
                                  ss->dispatched_bytes);
             accumulate_metric_cu(&s->metrics.scatter,
                                  ss->t_scatter_start,
                                  ss->t_scatter_end,
+                                 ss->dispatched_bytes,
                                  ss->dispatched_bytes);
           }
         }
@@ -151,7 +153,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
                  src + written,
                  payload);
           accumulate_metric_ms(
-            &s->metrics.memcpy, (float)(platform_toc(&mc) * 1000.0), payload);
+            &s->metrics.memcpy, (float)(platform_toc(&mc) * 1000.0),
+            payload, payload);
         }
         s->stage.bytes_written += payload;
         written += payload;

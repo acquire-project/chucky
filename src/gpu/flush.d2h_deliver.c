@@ -176,11 +176,12 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       levels->total_chunks * layout->chunk_stride * bpe;
 
     accumulate_metric_cu(
-      &metrics->lod_gather, lod->t_start, lod->t_scatter_end, scatter_bytes);
+      &metrics->lod_gather, lod->t_start, lod->t_scatter_end,
+      scatter_bytes, scatter_bytes);
     accumulate_metric_cu(&metrics->lod_reduce,
                          lod->t_scatter_end,
                          lod->t_reduce_end,
-                         morton_bytes);
+                         scatter_bytes, morton_bytes);
     if (levels->dim0_downsample) {
       size_t accum_bpe =
         lod_accum_bpe(config->dtype, config->dim0_reduce_method);
@@ -188,12 +189,12 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       accumulate_metric_cu(&metrics->lod_dim0_fold,
                            lod->t_reduce_end,
                            lod->t_dim0_end,
-                           dim0_bytes);
+                           dim0_bytes, dim0_bytes);
     }
     accumulate_metric_cu(&metrics->lod_morton_chunk,
                          lod->t_dim0_end,
                          lod->t_end,
-                         unified_pool_bytes);
+                         morton_bytes, unified_pool_bytes);
   }
 
   {
@@ -201,12 +202,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                               layout->chunk_stride *
                               lod_dtype_bpe(config->dtype);
 
-    accumulate_metric_cu(&metrics->compress,
-                         handoff->t_compress_start,
-                         handoff->t_compress_end,
-                         pool_bytes);
-
-    // Use actual aggregated bytes from h_offsets (available after D2H sync).
+    // Compute actual aggregated bytes first (available after D2H sync).
     size_t agg_bytes = 0;
     for (int lv = 0; lv < levels->nlod; ++lv) {
       if (!(handoff->active_levels_mask & (1u << lv)))
@@ -221,12 +217,17 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       agg_bytes += lvl->agg[fc].h_offsets[batch_covering];
     }
 
+    accumulate_metric_cu(&metrics->compress,
+                         handoff->t_compress_start,
+                         handoff->t_compress_end,
+                         pool_bytes, agg_bytes);
     accumulate_metric_cu(&metrics->aggregate,
                          handoff->t_compress_end,
                          handoff->t_aggregate_end,
-                         agg_bytes);
+                         agg_bytes, agg_bytes);
     accumulate_metric_cu(
-      &metrics->d2h, stage->t_d2h_start[fc], stage->ready[fc], agg_bytes);
+      &metrics->d2h, stage->t_d2h_start[fc], stage->ready[fc],
+      agg_bytes, agg_bytes);
   }
 }
 
@@ -285,7 +286,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
-    accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes);
+    accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
   return writer_ok();

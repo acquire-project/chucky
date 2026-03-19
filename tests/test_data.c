@@ -136,10 +136,15 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
 }
 
 int
-pump_data(struct writer* w, size_t total_elements, fill_fn fill)
+pump_data_bpe(struct writer* w,
+              size_t total_elements,
+              fill_fn fill,
+              size_t bpe)
 {
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements = 64 MiB
-  uint16_t* data = (uint16_t*)malloc(nelements * sizeof(uint16_t));
+  const size_t nelements = 32 * 1024 * 1024; // 32M elements
+  // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits
+  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+  uint16_t* data = (uint16_t*)malloc(alloc);
   if (!data)
     return 1;
 
@@ -148,7 +153,8 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
     if (offset + n > total_elements)
       n = total_elements - offset;
     fill(data, n, offset, total_elements);
-    struct slice input = { .beg = data, .end = data + n };
+    struct slice input = { .beg = data,
+                           .end = (char*)data + n * bpe };
     struct writer_result r = writer_append_wait(w, input);
     if (r.error) {
       log_error("  append failed at offset %zu", offset);
@@ -160,4 +166,10 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
   struct writer_result r = writer_flush(w);
   free(data);
   return r.error;
+}
+
+int
+pump_data(struct writer* w, size_t total_elements, fill_fn fill)
+{
+  return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
 }
