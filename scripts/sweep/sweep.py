@@ -10,10 +10,10 @@
 Benchmark sweep runner for chucky streaming zarr write benchmarks.
 
 Usage:
-    uv run scripts/sweep/sweep.py run --tier compress --build-dir build --dry-run
-    uv run scripts/sweep/sweep.py run --tier compress --build-dir build
-    uv run scripts/sweep/sweep.py run --all --build-dir build
-    uv run scripts/sweep/sweep.py run --tier io --build-dir build
+    uv run scripts/sweep/sweep.py --tier compress --dry-run
+    uv run scripts/sweep/sweep.py --tier compress
+    uv run scripts/sweep/sweep.py --all
+    uv run scripts/sweep/sweep.py --tier io
 """
 
 from __future__ import annotations
@@ -262,13 +262,13 @@ def gpu_name() -> str:
 # Runner
 # ---------------------------------------------------------------------------
 
-def run_one(spec: RunSpec, build_dir: Path) -> dict:
-    """Execute a single benchmark run, return result dict."""
+def run_one(spec: RunSpec, build_dir: Path) -> dict | None:
+    """Execute a single benchmark run, return result dict or None if exe missing."""
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if sys.platform == "win32":
         exe = exe.with_suffix(".exe")
     if not exe.exists():
-        return {**spec.base_result(), "status": "missing", "error": f"{exe} not found"}
+        return None
 
     frames = SCENARIOS[spec.scenario]
     cmd = [
@@ -336,26 +336,21 @@ def status_style(status: str) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
-@click.group()
-def cli():
-    """Benchmark sweep runner for chucky."""
-    pass
-
-
-@cli.command()
+@click.command()
 @click.option("--tier", "-t", multiple=True, type=click.Choice(ALL_TIER_NAMES),
               help="Tier(s) to run. Repeat for multiple.")
 @click.option("--all", "run_all", is_flag=True, help="Run all tiers.")
-@click.option("--build-dir", type=click.Path(exists=False, path_type=Path), default=Path("build"),
-              help="CMake build directory.")
+@click.option("--build-dir", type=click.Path(exists=False, path_type=Path),
+              default=Path("build"),
+              show_default=True, help="CMake build directory.")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None,
               help="Output JSON path (default: bench/results/<host>-<commit>-<date>.json).")
 @click.option("--skip", multiple=True, help="Scenario(s) to skip.")
 @click.option("--retry", is_flag=True, help="Re-run previously failed or timed-out benchmarks.")
 @click.option("--rerun", multiple=True, help="Re-run benchmarks whose id contains this substring.")
 @click.option("--dry-run", is_flag=True, help="Preview run matrix without executing.")
-def run(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
-    """Execute benchmark sweeps."""
+def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
+    """Benchmark sweep runner for chucky."""
     commit = git_commit()
     hostname = platform.node()
 
@@ -420,7 +415,7 @@ def run(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
         data = raw_data
         for r in data.get("runs", []):
             rid = r["id"]
-            if retry and r.get("status") in ("error", "timeout"):
+            if retry and r.get("status") != "pass":
                 continue
             if rerun and any(pat in rid for pat in rerun):
                 continue
@@ -472,6 +467,11 @@ def run(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
             except Exception as e:
                 result = {**spec.base_result(), "status": "error", "error": str(e)}
 
+            if result is None:
+                progress.console.print(f"  {tag} [dim]SKIP (exe not found)[/dim]")
+                progress.advance(task)
+                continue
+
             st = result.get("status", "?")
             tp = result.get("throughput_in_gibs")
             suffix = f" {tp:.2f} GiB/s" if tp else ""
@@ -491,4 +491,4 @@ def run(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
 
 
 if __name__ == "__main__":
-    cli()
+    main()
