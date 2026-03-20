@@ -96,9 +96,26 @@ class RunSpec:
     def id(self) -> str:
         return f"{self.scenario}__{self.codec}__{self.fill}__{self.backend}__{self.dtype}__{self.chunk_label}"
 
+    def base_result(self) -> dict:
+        """Common fields shared by success, error, and timeout results."""
+        return {
+            "id": self.id,
+            "scenario": self.scenario,
+            "codec": self.codec,
+            "fill": self.fill,
+            "backend": self.backend,
+            "dtype": self.dtype,
+            "chunk_bytes": self.chunk_bytes,
+            "chunk_bytes_label": self.chunk_label,
+        }
+
 
 def compress_runs() -> list[RunSpec]:
-    """Core sweep: chunk_size x scenario x codec."""
+    """Core sweep: chunk_size x scenario x codec (GPU-only).
+
+    This is a subset of backend_runs() — all compress runs use backend="gpu".
+    Use the 'backend' tier to compare GPU vs CPU.
+    """
     runs = []
     for sc in SINGLE_SCENARIOS:
         for codec in ["none", "lz4", "zstd"]:
@@ -108,7 +125,7 @@ def compress_runs() -> list[RunSpec]:
 
 
 def backend_runs() -> list[RunSpec]:
-    """GPU vs CPU backend comparison."""
+    """GPU vs CPU backend comparison (superset of compress tier)."""
     runs = []
 
     for sc in SINGLE_SCENARIOS:
@@ -330,9 +347,9 @@ def main():
         try:
             result = run_one(spec, args.build_dir)
         except subprocess.TimeoutExpired:
-            result = {"id": spec.id, "status": "timeout"}
+            result = {**spec.base_result(), "status": "timeout"}
         except Exception as e:
-            result = {"id": spec.id, "status": "error", "error": str(e)}
+            result = {**spec.base_result(), "status": "error", "error": str(e)}
 
         tp = result.get("throughput_in_gibs")
         st = result.get("status", "?")
