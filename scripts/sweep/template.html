@@ -123,6 +123,62 @@ h1 { font-size: 1.4em; margin-bottom: 4px; }
 <script>
 const DATA = __DATA_PLACEHOLDER__;
 
+// =========================================================================
+// 1. CONSTANTS
+// =========================================================================
+
+const LAYOUT = {
+  margin:    {top: 40, right: 180, bottom: 60, left: 160},
+  lines:     {W: 800, H: 400},
+  subChart:  {W: 700, H: 200, margin: {top: 30, right: 180, bottom: 40, left: 80}},
+  stageBar:  {W: 500, margin: {left: 100, right: 60, top: 30}},
+  stageThru: {W: 600, margin: {left: 100, right: 80, top: 40}},
+};
+
+const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_dim0_fold","lod_morton","lod_morton_chunk","compress","aggregate","d2h","sink"];
+
+const GROUP_LABELS = { single: "Single", multiscale: "Multiscale", dim0: "Dim0" };
+const GROUP_ORDER = ["single", "multiscale", "dim0"];
+
+const colorSchemes = {
+  throughput_in_gibs: d3.interpolateViridis,
+  throughput_out_gibs: d3.interpolateViridis,
+  compression_fold: d3.interpolatePlasma,
+  wall_s: d3.interpolateInferno,
+  init_s: d3.interpolateInferno,
+};
+
+// =========================================================================
+// 2. DATA LAYER
+// =========================================================================
+
+function chunkLabelToBytes(cl) {
+  const m = cl.match(/^(\d+)([KMG])$/);
+  const v = parseInt(m[1]);
+  return m[2]==="K"? v*1024 : m[2]==="M"? v*1048576 : v*1073741824;
+}
+
+function stageSort(a, b) {
+  const ia = STAGE_ORDER.indexOf(a), ib = STAGE_ORDER.indexOf(b);
+  if (ia >= 0 && ib >= 0) return ia - ib;
+  if (ia >= 0) return -1;
+  if (ib >= 0) return 1;
+  return a.localeCompare(b);
+}
+
+function classifyScenario(name) {
+  if (name.includes("_dim0")) return "dim0";
+  if (name.includes("_multiscale") || name.includes("_lod")) return "multiscale";
+  return "single";
+}
+
+function scenarioSort(a, b) {
+  const ga = GROUP_ORDER.indexOf(classifyScenario(a));
+  const gb = GROUP_ORDER.indexOf(classifyScenario(b));
+  if (ga !== gb) return ga - gb;
+  return a.localeCompare(b);
+}
+
 // --- Support both v1 (single file) and v2 (multi-file) formats ---
 const files = DATA.files || [{
   label: "results",
@@ -131,22 +187,11 @@ const files = DATA.files || [{
   runs: DATA.runs || [],
 }];
 
-// --- Results file selector ---
-const resultsSel = document.getElementById("results-sel");
-files.forEach((f, i) => {
-  const opt = document.createElement("option");
-  opt.value = i;
-  opt.textContent = f.label || f.filename;
-  resultsSel.appendChild(opt);
-});
-// Default to last (most recent) file
-resultsSel.value = files.length - 1;
-if (files.length <= 1) document.getElementById("results-wrap").style.display = "none";
-
 // --- Active data (rebuilt on file switch) ---
 let runs = [];
 let failedRuns = [];
 let allCodecs = [], allFills = [], allBackends = [], allDtypes = [], allScenarios = [];
+let allChunkLabels = [];
 let allStageNames = [];
 
 function getActiveFile() { return files[resultsSel.value]; }
@@ -167,9 +212,210 @@ function rebuildData() {
   allDtypes = uniq("dtype");
   allScenarios = uniq("scenario");
 
+  allChunkLabels = [...new Set(runs.map(r => r.chunk_bytes_label))].sort((a, b) =>
+    chunkLabelToBytes(a) - chunkLabelToBytes(b));
+
   const stageSet = new Set();
   runs.forEach(r => { if (r.stages) Object.keys(r.stages).forEach(k => stageSet.add(k)); });
   allStageNames = [...stageSet].sort(stageSort);
+}
+
+function filterRuns({includeBackend = true} = {}) {
+  const codec = getRadio("codec-group");
+  const fill = getRadio("fill-group");
+  const backend = getRadio("backend-group");
+  const dtype = getRadio("dtype-group");
+  const checkedScenarios = new Set(getCheckedScenarios());
+  return runs.filter(r =>
+    r.codec === codec && r.fill === fill &&
+    (includeBackend ? r.backend === backend : true) &&
+    r.dtype === dtype && checkedScenarios.has(r.scenario)
+  );
+}
+
+function tooltipText(r) {
+  let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
+  t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  dtype: ${r.dtype}\n`;
+  if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
+  if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
+  if (r.wall_s != null) t += `wall: ${r.wall_s.toFixed(3)}s  init: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
+  if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
+  if (r.memory) {
+    const m = r.memory;
+    if (m.device_gib) t += `device: ${m.device_gib.toFixed(2)} GiB`;
+    if (m.chunk_pool_gib) t += `  chunk_pool: ${m.chunk_pool_gib.toFixed(2)} GiB`;
+    t += "\n";
+  }
+  return t.trim();
+}
+
+// =========================================================================
+// 3. UI CONTROLS
+// =========================================================================
+
+// --- Radio helpers ---
+function clearRadio(containerId) {
+  document.getElementById(containerId).innerHTML = "";
+}
+
+function makeRadio(containerId, values, defaultVal) {
+  const g = document.getElementById(containerId);
+  const name = containerId;
+  values.forEach((v,i) => {
+    const lbl = document.createElement("label");
+    const inp = document.createElement("input");
+    inp.type = "radio"; inp.name = name; inp.value = v;
+    if (v === defaultVal || (defaultVal === undefined && i === 0)) inp.checked = true;
+    const sp = document.createElement("span");
+    sp.textContent = v;
+    lbl.appendChild(inp);
+    lbl.appendChild(sp);
+    g.appendChild(lbl);
+    inp.addEventListener("change", render);
+  });
+}
+
+function getRadio(containerId) {
+  const el = document.querySelector(`#${containerId} input:checked`);
+  return el ? el.value : null;
+}
+
+function autoHide(wrapId, values) {
+  document.getElementById(wrapId).style.display = values.length <= 1 ? "none" : "";
+}
+
+// --- Scenario checkboxes (grouped) ---
+const scenarioGroup = document.getElementById("scenario-group");
+
+function rebuildScenarios() {
+  scenarioGroup.innerHTML = "";
+
+  // Group scenarios
+  const groups = {};
+  allScenarios.forEach(sc => {
+    const g = classifyScenario(sc);
+    (groups[g] = groups[g] || []).push(sc);
+  });
+
+  const activeGroups = GROUP_ORDER.filter(g => groups[g]);
+
+  // If only one group, show flat (no headers)
+  if (activeGroups.length <= 1) {
+    const box = document.createElement("div");
+    box.className = "checkbox-group";
+    allScenarios.forEach(sc => {
+      const lbl = document.createElement("label");
+      const inp = document.createElement("input");
+      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
+      inp.addEventListener("change", render);
+      lbl.appendChild(inp);
+      lbl.appendChild(document.createTextNode(sc));
+      box.appendChild(lbl);
+    });
+    scenarioGroup.appendChild(box);
+    return;
+  }
+
+  activeGroups.forEach(gKey => {
+    const scenarios = groups[gKey];
+    const box = document.createElement("div");
+    box.className = "scenario-group-box";
+
+    const header = document.createElement("div");
+    header.className = "group-header";
+    header.appendChild(document.createTextNode(GROUP_LABELS[gKey]));
+
+    const allBtn = document.createElement("button");
+    allBtn.textContent = "all";
+    allBtn.addEventListener("click", () => {
+      box.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; });
+      render();
+    });
+    const noneBtn = document.createElement("button");
+    noneBtn.textContent = "none";
+    noneBtn.addEventListener("click", () => {
+      box.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; });
+      render();
+    });
+    header.appendChild(allBtn);
+    header.appendChild(noneBtn);
+    box.appendChild(header);
+
+    const cbGroup = document.createElement("div");
+    cbGroup.className = "checkbox-group";
+    scenarios.forEach(sc => {
+      const lbl = document.createElement("label");
+      const inp = document.createElement("input");
+      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
+      inp.addEventListener("change", render);
+      lbl.appendChild(inp);
+      const short = sc.replace(/_single$/, "").replace(/_multiscale_dim0$/, "").replace(/_multiscale$/, "");
+      lbl.appendChild(document.createTextNode(short));
+      cbGroup.appendChild(lbl);
+    });
+    box.appendChild(cbGroup);
+    scenarioGroup.appendChild(box);
+  });
+}
+
+function getCheckedScenarios() {
+  return [...scenarioGroup.querySelectorAll("input[type=checkbox]:checked")].map(el => el.value);
+}
+
+// --- Stage filter checkboxes ---
+const stageFilterGroup = document.getElementById("stage-filter-group");
+
+function rebuildStageFilters() {
+  stageFilterGroup.innerHTML = "";
+  allStageNames.forEach(name => {
+    const lbl = document.createElement("label");
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.checked = true; inp.value = name;
+    inp.addEventListener("change", render);
+    lbl.appendChild(inp);
+    lbl.appendChild(document.createTextNode(name));
+    stageFilterGroup.appendChild(lbl);
+  });
+}
+
+function getCheckedStages() {
+  return new Set([...stageFilterGroup.querySelectorAll("input:checked")].map(el => el.value));
+}
+
+// --- Results file selector ---
+const resultsSel = document.getElementById("results-sel");
+
+// --- Rebuild all controls for the active file ---
+let prevCodec = "zstd", prevFill = "xor", prevBackend = "gpu", prevDtype = "u16";
+
+function rebuildControls() {
+  prevCodec = getRadio("codec-group") || prevCodec;
+  prevFill = getRadio("fill-group") || prevFill;
+  prevBackend = getRadio("backend-group") || prevBackend;
+  prevDtype = getRadio("dtype-group") || prevDtype;
+
+  clearRadio("codec-group");
+  clearRadio("fill-group");
+  clearRadio("backend-group");
+  clearRadio("dtype-group");
+
+  makeRadio("codec-group", allCodecs, allCodecs.includes(prevCodec) ? prevCodec : undefined);
+  makeRadio("fill-group", allFills, allFills.includes(prevFill) ? prevFill : undefined);
+  makeRadio("backend-group", allBackends, allBackends.includes(prevBackend) ? prevBackend : undefined);
+  makeRadio("dtype-group", allDtypes, allDtypes.includes(prevDtype) ? prevDtype : undefined);
+
+  autoHide("fill-wrap", allFills);
+  autoHide("dtype-wrap", allDtypes);
+
+  if (allBackends.length > 1) {
+    document.getElementById("overlay-wrap").style.display = "";
+  } else {
+    document.getElementById("overlay-wrap").style.display = "none";
+  }
+
+  rebuildScenarios();
+  rebuildStageFilters();
+  rebuildFailures();
 }
 
 // --- Failures table ---
@@ -214,268 +460,16 @@ function rebuildFailures() {
   container.appendChild(details);
 }
 
-// --- Pipeline stage ordering ---
-const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_dim0_fold","lod_morton","lod_morton_chunk","compress","aggregate","d2h","sink"];
-function stageSort(a, b) {
-  const ia = STAGE_ORDER.indexOf(a), ib = STAGE_ORDER.indexOf(b);
-  if (ia >= 0 && ib >= 0) return ia - ib;
-  if (ia >= 0) return -1;
-  if (ib >= 0) return 1;
-  return a.localeCompare(b);
-}
-
-const chunkLabels = ["16K","32K","64K","128K","256K","512K","1M","2M"];
-
-// --- Stage filter checkboxes ---
-const stageFilterGroup = document.getElementById("stage-filter-group");
-
-function rebuildStageFilters() {
-  stageFilterGroup.innerHTML = "";
-  allStageNames.forEach(name => {
-    const lbl = document.createElement("label");
-    const inp = document.createElement("input");
-    inp.type = "checkbox"; inp.checked = true; inp.value = name;
-    inp.addEventListener("change", render);
-    lbl.appendChild(inp);
-    lbl.appendChild(document.createTextNode(name));
-    stageFilterGroup.appendChild(lbl);
-  });
-}
-
-function getCheckedStages() {
-  return new Set([...stageFilterGroup.querySelectorAll("input:checked")].map(el => el.value));
-}
-
-// --- Radio groups ---
-function clearRadio(containerId) {
-  document.getElementById(containerId).innerHTML = "";
-}
-
-function makeRadio(containerId, values, defaultVal) {
-  const g = document.getElementById(containerId);
-  const name = containerId;
-  values.forEach((v,i) => {
-    const lbl = document.createElement("label");
-    const inp = document.createElement("input");
-    inp.type = "radio"; inp.name = name; inp.value = v;
-    if (v === defaultVal || (defaultVal === undefined && i === 0)) inp.checked = true;
-    const sp = document.createElement("span");
-    sp.textContent = v;
-    lbl.appendChild(inp);
-    lbl.appendChild(sp);
-    g.appendChild(lbl);
-    inp.addEventListener("change", render);
-  });
-}
-
-function getRadio(containerId) {
-  const el = document.querySelector(`#${containerId} input:checked`);
-  return el ? el.value : null;
-}
-
-function autoHide(wrapId, values) {
-  document.getElementById(wrapId).style.display = values.length <= 1 ? "none" : "";
-}
-
-// --- Scenario checkboxes (grouped) ---
-const scenarioGroup = document.getElementById("scenario-group");
-
-function classifyScenario(name) {
-  if (name.includes("_dim0")) return "dim0";
-  if (name.includes("_multiscale") || name.includes("_lod")) return "multiscale";
-  return "single";
-}
-
-const GROUP_LABELS = { single: "Single", multiscale: "Multiscale", dim0: "Dim0" };
-const GROUP_ORDER = ["single", "multiscale", "dim0"];
-
-function rebuildScenarios() {
-  scenarioGroup.innerHTML = "";
-
-  // Group scenarios
-  const groups = {};
-  allScenarios.forEach(sc => {
-    const g = classifyScenario(sc);
-    (groups[g] = groups[g] || []).push(sc);
-  });
-
-  const activeGroups = GROUP_ORDER.filter(g => groups[g]);
-
-  // If only one group, show flat (no headers)
-  if (activeGroups.length <= 1) {
-    const box = document.createElement("div");
-    box.className = "checkbox-group";
-    allScenarios.forEach(sc => {
-      const lbl = document.createElement("label");
-      const inp = document.createElement("input");
-      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
-      inp.addEventListener("change", render);
-      lbl.appendChild(inp);
-      // Strip suffix for display
-      lbl.appendChild(document.createTextNode(sc));
-      box.appendChild(lbl);
-    });
-    scenarioGroup.appendChild(box);
-    return;
-  }
-
-  activeGroups.forEach(gKey => {
-    const scenarios = groups[gKey];
-    const box = document.createElement("div");
-    box.className = "scenario-group-box";
-
-    const header = document.createElement("div");
-    header.className = "group-header";
-    header.appendChild(document.createTextNode(GROUP_LABELS[gKey]));
-
-    const allBtn = document.createElement("button");
-    allBtn.textContent = "all";
-    allBtn.addEventListener("click", () => {
-      box.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; });
-      render();
-    });
-    const noneBtn = document.createElement("button");
-    noneBtn.textContent = "none";
-    noneBtn.addEventListener("click", () => {
-      box.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; });
-      render();
-    });
-    header.appendChild(allBtn);
-    header.appendChild(noneBtn);
-    box.appendChild(header);
-
-    const cbGroup = document.createElement("div");
-    cbGroup.className = "checkbox-group";
-    scenarios.forEach(sc => {
-      const lbl = document.createElement("label");
-      const inp = document.createElement("input");
-      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
-      inp.addEventListener("change", render);
-      lbl.appendChild(inp);
-      // Show short name: strip _single, _multiscale, _multiscale_dim0 suffix
-      const short = sc.replace(/_single$/, "").replace(/_multiscale_dim0$/, "").replace(/_multiscale$/, "");
-      lbl.appendChild(document.createTextNode(short));
-      cbGroup.appendChild(lbl);
-    });
-    box.appendChild(cbGroup);
-    scenarioGroup.appendChild(box);
-  });
-}
-
-function getCheckedScenarios() {
-  return [...scenarioGroup.querySelectorAll("input[type=checkbox]:checked")].map(el => el.value);
-}
-
-// --- Rebuild all controls for the active file ---
-// Track previous radio selections to preserve across rebuilds when possible
-let prevCodec = "zstd", prevFill = "xor", prevBackend = "gpu", prevDtype = "u16";
-
-function rebuildControls() {
-  // Save current selections
-  prevCodec = getRadio("codec-group") || prevCodec;
-  prevFill = getRadio("fill-group") || prevFill;
-  prevBackend = getRadio("backend-group") || prevBackend;
-  prevDtype = getRadio("dtype-group") || prevDtype;
-
-  clearRadio("codec-group");
-  clearRadio("fill-group");
-  clearRadio("backend-group");
-  clearRadio("dtype-group");
-
-  makeRadio("codec-group", allCodecs, allCodecs.includes(prevCodec) ? prevCodec : undefined);
-  makeRadio("fill-group", allFills, allFills.includes(prevFill) ? prevFill : undefined);
-  makeRadio("backend-group", allBackends, allBackends.includes(prevBackend) ? prevBackend : undefined);
-  makeRadio("dtype-group", allDtypes, allDtypes.includes(prevDtype) ? prevDtype : undefined);
-
-  autoHide("fill-wrap", allFills);
-  autoHide("dtype-wrap", allDtypes);
-
-  if (allBackends.length > 1) {
-    document.getElementById("overlay-wrap").style.display = "";
-  } else {
-    document.getElementById("overlay-wrap").style.display = "none";
-  }
-
-  rebuildScenarios();
-  rebuildStageFilters();
-  rebuildFailures();
-}
-
-// View mode radio (static, doesn't depend on file)
-makeRadio("view-group", ["heatmap", "lines", "stages"], "heatmap");
-
-document.getElementById("metric-sel").addEventListener("change", render);
-document.getElementById("stage-metric-sel").addEventListener("change", render);
-
-// Backend overlay
-let overlayBackends = false;
-const overlayBtn = document.getElementById("overlay-toggle");
-overlayBtn.addEventListener("click", () => {
-  overlayBackends = !overlayBackends;
-  overlayBtn.classList.toggle("active", overlayBackends);
-  render();
-});
-
-// File selector
-resultsSel.addEventListener("change", () => {
-  rebuildData();
-  rebuildControls();
-  render();
-});
+// =========================================================================
+// 4. CHART RENDERERS
+// =========================================================================
 
 const tooltip = d3.select("body").append("div").attr("class","tooltip").style("display","none");
-
-function filterRuns() {
-  const codec = getRadio("codec-group");
-  const fill = getRadio("fill-group");
-  const backend = getRadio("backend-group");
-  const dtype = getRadio("dtype-group");
-  const checkedScenarios = new Set(getCheckedScenarios());
-  return runs.filter(r =>
-    r.codec === codec && r.fill === fill && r.backend === backend &&
-    r.dtype === dtype && checkedScenarios.has(r.scenario)
-  );
-}
-
-function filterRunsOverlay() {
-  const codec = getRadio("codec-group");
-  const fill = getRadio("fill-group");
-  const dtype = getRadio("dtype-group");
-  const checkedScenarios = new Set(getCheckedScenarios());
-  return runs.filter(r =>
-    r.codec === codec && r.fill === fill &&
-    r.dtype === dtype && checkedScenarios.has(r.scenario)
-  );
-}
-
-function tooltipText(r) {
-  let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
-  t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  dtype: ${r.dtype}\n`;
-  if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
-  if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
-  if (r.wall_s != null) t += `wall: ${r.wall_s.toFixed(3)}s  init: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
-  if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
-  if (r.memory) {
-    const m = r.memory;
-    if (m.device_gib) t += `device: ${m.device_gib.toFixed(2)} GiB`;
-    if (m.chunk_pool_gib) t += `  chunk_pool: ${m.chunk_pool_gib.toFixed(2)} GiB`;
-    t += "\n";
-  }
-  return t.trim();
-}
-
-function chunkLabelToBytes(cl) {
-  const m = cl.match(/^(\d+)([KMG])$/);
-  const v = parseInt(m[1]);
-  return m[2]==="K"? v*1024 : m[2]==="M"? v*1048576 : v*1073741824;
-}
-
-const margin = {top: 40, right: 180, bottom: 60, left: 160};
 
 function render() {
   const viewMode = getRadio("view-group");
   const useOverlay = overlayBackends && allBackends.length > 1 && (viewMode === "lines" || viewMode === "stages");
-  const filtered = useOverlay ? filterRunsOverlay() : filterRuns();
+  const filtered = filterRuns({includeBackend: !useOverlay});
   const metricKey = document.getElementById("metric-sel").value;
 
   const isStages = viewMode === "stages";
@@ -497,9 +491,9 @@ function render() {
     return;
   }
 
-  const presentChunks = chunkLabels.filter(cl =>
+  const presentChunks = allChunkLabels.filter(cl =>
     filtered.some(r => r.chunk_bytes_label === cl));
-  const presentScenarios = [...new Set(filtered.map(r => r.scenario))].sort();
+  const presentScenarios = [...new Set(filtered.map(r => r.scenario))].sort(scenarioSort);
 
   if (viewMode === "stages") {
     const stageMetric = document.getElementById("stage-metric-sel").value;
@@ -511,15 +505,8 @@ function render() {
   }
 }
 
-const colorSchemes = {
-  throughput_in_gibs: d3.interpolateViridis,
-  throughput_out_gibs: d3.interpolateViridis,
-  compression_fold: d3.interpolatePlasma,
-  wall_s: d3.interpolateInferno,
-  init_s: d3.interpolateInferno,
-};
-
 function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
+  const {margin} = LAYOUT;
   const W = Math.max(500, presentChunks.length * 70 + margin.left + margin.right);
   const H = presentScenarios.length * 50 + margin.top + margin.bottom;
 
@@ -535,7 +522,7 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
   filtered.forEach(r => lookup.set(`${r.scenario}__${r.chunk_bytes_label}`, r));
 
   // Use extent across all backends so color scale is stable when flipping
-  const allForScale = filterRunsOverlay();
+  const allForScale = filterRuns({includeBackend: false});
   const vals = allForScale.map(r => r[metricKey]).filter(v => v != null);
   const extent = d3.extent(vals);
   if (extent[0] == null) { d3.select("#chart").append("p").text("No data for this metric."); return; }
@@ -600,7 +587,8 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
 }
 
 function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOverlay) {
-  const W = 800, H = 400;
+  const {margin} = LAYOUT;
+  const {W, H} = LAYOUT.lines;
   const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
   const innerW = W - margin.left - margin.right;
@@ -701,14 +689,12 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
 
   const stageColors = d3.scaleOrdinal(d3.schemeTableau10).domain(allStageNames);
 
-  const subW = 700, subH = 200;
-  const subMargin = {top: 30, right: 180, bottom: 40, left: 80};
+  const {W: subW, H: subH, margin: subMargin} = LAYOUT.subChart;
   const innerW = subW - subMargin.left - subMargin.right;
   const innerH = subH - subMargin.top - subMargin.bottom;
 
   const container = d3.select("#chart");
 
-  // Vertical legend rendered inside each SVG's right margin
   function appendStageLegend(svg) {
     const lg = svg.append("g").attr("transform", `translate(${subW - subMargin.right + 8},${subMargin.top})`);
     stageNames.forEach((name, i) => {
@@ -834,9 +820,9 @@ function renderStages(run) {
 }
 
 function renderStagesTiming(run, stages) {
-  const W = 500, barH = 24, gap = 4;
+  const {W, margin: {left: mL, right: mR, top: mT}} = LAYOUT.stageBar;
+  const barH = 24, gap = 4;
   const H = stages.length * (barH + gap) + 60;
-  const mL = 100, mR = 60, mT = 30;
 
   const svg = d3.select("#stage-chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${mL},${mT})`);
@@ -864,9 +850,9 @@ function renderStagesTiming(run, stages) {
 }
 
 function renderStagesThroughput(run, stages) {
-  const W = 600, rowH = 36, gap = 6;
+  const {W, margin: {left: mL, right: mR, top: mT}} = LAYOUT.stageThru;
+  const rowH = 36, gap = 6;
   const H = stages.length * (rowH + gap) + 80;
-  const mL = 100, mR = 80, mT = 40;
 
   const svg = d3.select("#stage-chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${mL},${mT})`);
@@ -939,7 +925,42 @@ function renderStagesThroughput(run, stages) {
   leg.append("text").attr("x",106).attr("y",10).attr("font-size","10px").text("out (GiB/s)");
 }
 
-// --- Initial load ---
+// =========================================================================
+// 5. INITIALIZATION
+// =========================================================================
+
+// Results file selector
+files.forEach((f, i) => {
+  const opt = document.createElement("option");
+  opt.value = i;
+  opt.textContent = f.label || f.filename;
+  resultsSel.appendChild(opt);
+});
+resultsSel.value = files.length - 1;
+if (files.length <= 1) document.getElementById("results-wrap").style.display = "none";
+
+// Static radio setup
+makeRadio("view-group", ["heatmap", "lines", "stages"], "heatmap");
+
+// Event listeners
+document.getElementById("metric-sel").addEventListener("change", render);
+document.getElementById("stage-metric-sel").addEventListener("change", render);
+
+let overlayBackends = false;
+const overlayBtn = document.getElementById("overlay-toggle");
+overlayBtn.addEventListener("click", () => {
+  overlayBackends = !overlayBackends;
+  overlayBtn.classList.toggle("active", overlayBackends);
+  render();
+});
+
+resultsSel.addEventListener("change", () => {
+  rebuildData();
+  rebuildControls();
+  render();
+});
+
+// Initial load
 rebuildData();
 rebuildControls();
 render();
