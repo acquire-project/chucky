@@ -26,38 +26,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 SCENARIOS = {
-    "orca2_single": {
-        "exe": "bench_stream_orca2_single",
-        "frames": 200,
-    },
-    "256cube_single": {
-        "exe": "bench_stream_256cube_single",
-        "frames": 40,
-    },
-    "medfmt_single": {
-        "exe": "bench_stream_medfmt_single",
-        "frames": 10,
-    },
-    "smallepoch_single": {
-        "exe": "bench_stream_smallepoch_single",
-        "frames": 65536,
-    },
-    "orca2_multiscale": {
-        "exe": "bench_stream_orca2_multiscale",
-        "frames": 200,
-    },
-    "256cube_multiscale": {
-        "exe": "bench_stream_256cube_multiscale",
-        "frames": 40,
-    },
-    "orca2_multiscale_dim0": {
-        "exe": "bench_stream_orca2_multiscale_dim0",
-        "frames": 200,
-    },
-    "256cube_multiscale_dim0": {
-        "exe": "bench_stream_256cube_multiscale_dim0",
-        "frames": 40,
-    },
+    "orca2_single": 200,
+    "256cube_single": 40,
+    "medfmt_single": 10,
+    "smallepoch_single": 65536,
+    "orca2_multiscale": 200,
+    "256cube_multiscale": 40,
+    "orca2_multiscale_dim0": 200,
+    "256cube_multiscale_dim0": 40,
 }
 
 # Chunk-byte labels -> values (ordered small to large)
@@ -72,7 +48,7 @@ CHUNK_BYTES = {
     "2M": 2 << 20,
 }
 
-SINGLE_SCENARIOS = ["orca2_single", "256cube_single", "medfmt_single", "smallepoch_single"]
+SINGLE_SCENARIOS = [k for k in SCENARIOS if k.endswith("_single")]
 
 # ---------------------------------------------------------------------------
 # Run matrix generation
@@ -129,8 +105,8 @@ def backend_runs() -> list[RunSpec]:
     runs = []
 
     for sc in SINGLE_SCENARIOS:
-        for cl in CHUNK_BYTES:
-            for codec in ["none", "lz4", "zstd"]:
+        for codec in ["none", "lz4", "zstd"]:
+            for cl in CHUNK_BYTES:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(sc, codec, "xor", backend, "u16", cl))
 
@@ -171,7 +147,7 @@ def deduplicate(runs: list[RunSpec]) -> list[RunSpec]:
 
 
 # ---------------------------------------------------------------------------
-# GPU name helper
+# Environment helpers
 # ---------------------------------------------------------------------------
 
 def git_commit() -> str:
@@ -203,11 +179,11 @@ def gpu_name() -> str:
 
 def run_one(spec: RunSpec, build_dir: Path) -> dict:
     """Execute a single benchmark run, return result dict."""
-    sc = SCENARIOS[spec.scenario]
-    exe = build_dir / "bench" / sc["exe"]
+    exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if not exe.exists():
-        return {"id": spec.id, "status": "missing", "error": f"{exe} not found"}
+        return {**spec.base_result(), "status": "missing", "error": f"{exe} not found"}
 
+    frames = SCENARIOS[spec.scenario]
     cmd = [
         str(exe),
         "--codec", spec.codec,
@@ -215,7 +191,7 @@ def run_one(spec: RunSpec, build_dir: Path) -> dict:
         "--backend", spec.backend,
         "--dtype", spec.dtype,
         "--chunk-bytes", spec.chunk_label,
-        "--frames", str(sc["frames"]),
+        "--frames", str(frames),
         "--json",
     ]
 
@@ -240,18 +216,7 @@ def run_one(spec: RunSpec, build_dir: Path) -> dict:
         else:
             parsed["status"] = "unknown"
 
-    return {
-        "id": spec.id,
-        "scenario": spec.scenario,
-        "codec": spec.codec,
-        "fill": spec.fill,
-        "backend": spec.backend,
-        "dtype": spec.dtype,
-        "chunk_bytes": spec.chunk_bytes,
-        "chunk_bytes_label": spec.chunk_label,
-        "elapsed_s": round(elapsed, 2),
-        **parsed,
-    }
+    return {**spec.base_result(), "elapsed_s": round(elapsed, 2), **parsed}
 
 
 # ---------------------------------------------------------------------------
