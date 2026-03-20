@@ -20,7 +20,7 @@ test_multiscale_l0_correctness(void)
 
   // 5D: t, z, y, x, c. LOD on z, y, x.
   // Small enough for fast testing, large enough to exercise multiple epochs.
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 8,
       .chunk_size = 2,
       .chunks_per_shard = 2,
@@ -47,7 +47,7 @@ test_multiscale_l0_correctness(void)
       .name = "c",
       .storage_position = 4 },
   };
-  const struct dimension dims_ms[] = {
+  struct dimension dims_ms[] = {
     { .size = 8,
       .chunk_size = 2,
       .chunks_per_shard = 2,
@@ -222,7 +222,7 @@ test_dim0_l0_correctness(void)
 
   // 5D: t, z, y, x, c. Inner LOD on z, y, x.
   // 8 epochs along t so dim0 levels 1+ accumulate and emit.
-  const struct dimension dims_inner[] = {
+  struct dimension dims_inner[] = {
     { .size = 8,
       .chunk_size = 2,
       .chunks_per_shard = 2,
@@ -252,7 +252,7 @@ test_dim0_l0_correctness(void)
       .name = "c",
       .storage_position = 4 },
   };
-  const struct dimension dims_dim0[] = {
+  struct dimension dims_dim0[] = {
     { .size = 8,
       .chunk_size = 2,
       .chunks_per_shard = 2,
@@ -434,7 +434,7 @@ test_dim0_multi_epoch_levels(void)
   // 16 epochs along t to trigger multiple dim0 emissions.
   // Inner dims 32 with chunk 8 → 4 chunks → level 1 has 16 (>= chunk 8) →
   // nlod>=2
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 32,
       .chunk_size = 2,
       .chunks_per_shard = 4,

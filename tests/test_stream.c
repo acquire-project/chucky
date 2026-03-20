@@ -526,7 +526,7 @@ test_stream_null_config_fields(void)
 {
   log_info("=== test_stream_null_config_fields ===");
 
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 4, .chunk_size = 2, .storage_position = 0 },
     { .size = 6, .chunk_size = 3, .storage_position = 1 },
   };
@@ -560,7 +560,7 @@ test_stream_rank_1_dim(void)
 {
   log_info("=== test_stream_rank_1_dim ===");
 
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 12, .chunk_size = 4 },
   };
 
@@ -611,7 +611,7 @@ test_stream_flush_empty(void)
 {
   log_info("=== test_stream_flush_empty ===");
 
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 4, .chunk_size = 2, .storage_position = 0 },
     { .size = 6, .chunk_size = 3, .storage_position = 1 },
   };
@@ -720,7 +720,7 @@ test_stream_unbounded_requires_tps(void)
   log_info("=== test_stream_unbounded_requires_tps ===");
 
   // size=0, chunks_per_shard=0 → should fail validation
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 2,
       .chunks_per_shard = 0,
@@ -857,7 +857,7 @@ test_shard_index_structure(void)
     struct test_shard_sink mss;
     test_sink_init(&mss, num_shards, 256 * 1024);
 
-    const struct dimension dims[] = {
+    struct dimension dims[] = {
       { .size = 12,
         .chunk_size = 2,
         .chunks_per_shard = 3,
@@ -979,7 +979,7 @@ test_shard_index_structure(void)
 Case2:
   // --- Case 2: Single shard (u16 data, smaller shape) ---
   {
-    const struct dimension dims2[] = {
+    struct dimension dims2[] = {
       { .size = 4, .chunk_size = 2, .storage_position = 0 },
       { .size = 4, .chunk_size = 2, .storage_position = 1 },
       { .size = 6, .chunk_size = 3, .storage_position = 2 },

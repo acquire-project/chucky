@@ -11,7 +11,7 @@
 #include <string.h>
 
 static struct tile_stream_configuration
-make_config(const struct dimension* dims, struct shard_sink* sink)
+make_config(struct dimension* dims, struct shard_sink* sink)
 {
   return (struct tile_stream_configuration){
     .buffer_capacity_bytes = 48 * sizeof(uint16_t),

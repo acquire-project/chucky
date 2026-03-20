@@ -7,7 +7,6 @@
 #include "platform.h"
 #include "platform_io.h"
 #include "prelude.h"
-#include "zarr_sink.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>

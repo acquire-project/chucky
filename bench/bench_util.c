@@ -375,14 +375,6 @@ static const enum dtype dtype_vals[] = {
 };
 #define NUM_DTYPES (sizeof(dtype_vals) / sizeof(dtype_vals[0]))
 
-static const char*
-dtype_label(enum dtype dtype)
-{
-  for (size_t i = 0; i < NUM_DTYPES; ++i)
-    if (dtype_vals[i] == dtype)
-      return dtype_names[i];
-  return "unknown";
-}
 
 // --- Reusable bench driver ---
 //

@@ -155,7 +155,7 @@ test_pipeline(const char* tmpdir)
   CHECK(Fail, src);
 
   // Create zarr sink
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 12,
       .chunk_size = 2,
       .chunks_per_shard = 3,
@@ -816,7 +816,7 @@ test_unbuffered_pipeline(const char* tmpdir)
 
   // Simple 3D: 2 epochs, 1 shard
   // dim0=4 (epoch dim), dim1=4, dim2=4, chunk=2x2x2, cps=2x2x2 → 1 shard
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 4,
       .chunk_size = 2,
       .chunks_per_shard = 2,
@@ -1031,7 +1031,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
       }
 
   // Create zarr sink with unbuffered IO
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 12,
       .chunk_size = 2,
       .chunks_per_shard = 3,
@@ -1459,7 +1459,7 @@ test_pipeline_storage_order(const char* tmpdir)
 
   // Single dims array: acquisition order with storage_position.
   // z→pos0, y→pos2, x→pos1  ⇒  storage order is [z, x, y]
-  const struct dimension dims[] = {
+  struct dimension dims[] = {
     { .size = 4,
       .chunk_size = 2,
       .chunks_per_shard = 1,
@@ -1479,7 +1479,7 @@ test_pipeline_storage_order(const char* tmpdir)
 
   // Zarr_sink receives storage-ordered dims (permuted from above).
   // forward = {0, 2, 1}: storage pos 0→dim0(z), pos 1→dim2(x), pos 2→dim1(y)
-  const struct dimension sto_dims[] = {
+  struct dimension sto_dims[] = {
     { .size = 4,
       .chunk_size = 2,
       .chunks_per_shard = 1,
