@@ -376,7 +376,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run):
         runs.extend(TIERS[t]())
     runs = deduplicate(runs)
     if skip:
-        runs = [r for r in runs if r.scenario not in skip]
+        runs = [r for r in runs if not any(pat in r.scenario for pat in skip)]
 
     # -- dry run: rich table --
     if dry_run:
