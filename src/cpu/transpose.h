@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // CPU scatter transpose using the vadd() algorithm.
 // Scatters src_bytes/bpe elements from src into dst using lifted shape/strides.
 // i_offset is the global flat input offset (for multi-call accumulation).
@@ -15,3 +19,7 @@ int transpose_cpu(void* dst,
                   uint8_t lifted_rank,
                   const uint64_t* lifted_shape,
                   const int64_t* lifted_strides);
+
+#ifdef __cplusplus
+}
+#endif

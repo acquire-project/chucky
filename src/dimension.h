@@ -86,6 +86,12 @@ dims_budget_chunk_bytes(struct dimension* dims,
                         size_t bytes_per_element,
                         const uint8_t* ratios);
 
+// Validate a dimension array. Returns 0 on success, non-zero on error.
+// Checks: chunk_size > 0, storage_position is a valid permutation with
+// dims[0] pinned to position 0, and unbounded dim 0 has chunks_per_shard > 0.
+int
+dims_validate(const struct dimension* dims, uint8_t rank);
+
 // Print a summary table of the dimension configuration.
 void
 dims_print(const struct dimension* dims, uint8_t rank);

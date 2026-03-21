@@ -132,6 +132,9 @@ delivery. Input arrives as contiguous byte spans via a `struct writer` interface
 the library handles all tiling, padding, and shard assembly internally. See
 [docs/design.md](docs/design.md) for a detailed walkthrough.
 
+For writing directly to S3 (or S3-compatible stores), see the
+[S3 storage guide](docs/s3-guide.md).
+
 
 ## API
 

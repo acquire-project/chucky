@@ -10,10 +10,10 @@ struct s3_client;
 
 struct s3_client_config
 {
-  const char* region;        // NULL = from env/config
-  const char* endpoint;      // NULL = default AWS, e.g. "http://localhost:9000"
+  const char* region;        // required (e.g. "us-east-1")
+  const char* endpoint;      // required (e.g. "https://s3.us-east-1.amazonaws.com")
   size_t part_size;          // 0 = default (8 MiB)
-  double throughput_gbps;    // 0 = default (10.0)
+  double throughput_gbps;    // gigabits/s, 0 = default (10.0)
   size_t max_retries;        // 0 = CRT default (10)
   uint32_t backoff_scale_ms; // 0 = CRT default (500)
   uint32_t max_backoff_secs; // 0 = CRT default (20)

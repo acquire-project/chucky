@@ -172,6 +172,48 @@ dims_set_shard_counts(struct dimension* dims,
   }
 }
 
+int
+dims_validate(const struct dimension* dims, uint8_t rank)
+{
+  CHECK(Fail, dims);
+  CHECK(Fail, rank > 0 && rank <= HALF_MAX_RANK);
+
+  // chunk_size > 0
+  for (int d = 0; d < rank; ++d) {
+    if (dims[d].chunk_size == 0) {
+      log_error("dims[%d].chunk_size must be > 0", d);
+      goto Fail;
+    }
+  }
+
+  // unbounded dim 0 requires chunks_per_shard > 0
+  if (dims[0].size == 0 && dims[0].chunks_per_shard == 0) {
+    log_error("dims[0].size=0 (unbounded) requires chunks_per_shard > 0");
+    goto Fail;
+  }
+
+  // storage_position: valid permutation with dims[0] pinned to 0
+  {
+    if (dims[0].storage_position != 0) {
+      log_error("dims[0].storage_position must be 0");
+      goto Fail;
+    }
+    uint32_t seen = 0;
+    for (int d = 0; d < rank; ++d) {
+      uint8_t j = dims[d].storage_position;
+      if (j >= rank || (seen & (1u << j))) {
+        log_error("invalid storage_position permutation at dims[%d]", d);
+        goto Fail;
+      }
+      seen |= (1u << j);
+    }
+  }
+
+  return 0;
+Fail:
+  return 1;
+}
+
 void
 dims_print(const struct dimension* dims, uint8_t rank)
 {

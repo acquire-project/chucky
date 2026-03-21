@@ -1,5 +1,6 @@
 #include "zarr_s3_sink.h"
 #include "defs.limits.h"
+#include "dtype.h"
 #include "lod_plan.h"
 #include "prelude.h"
 #include "s3_client.h"
@@ -7,6 +8,133 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+// --- set_defaults / validate ---
+
+// Shared: fill transport defaults for any S3 config.
+static void
+s3_transport_set_defaults(size_t* part_size, double* throughput_gbps)
+{
+  if (*part_size == 0)
+    *part_size = S3_DEFAULT_PART_SIZE;
+  if (*throughput_gbps == 0.0)
+    *throughput_gbps = S3_DEFAULT_THROUGHPUT_GBPS;
+}
+
+// Shared: validate shard size vs part count.
+// Uses uncompressed size as an upper bound (compression can only shrink).
+static int
+s3_validate_part_count(uint8_t rank,
+                       const struct dimension* dimensions,
+                       enum dtype data_type,
+                       size_t part_size)
+{
+  size_t bpe = dtype_bpe(data_type);
+  if (bpe == 0)
+    return 1;
+
+  uint64_t shard_elements = 1;
+  uint64_t chunks_per_shard_total = 1;
+  for (int d = 0; d < rank; ++d) {
+    uint64_t cps = dimensions[d].chunks_per_shard;
+    if (cps == 0)
+      cps = dimensions[d].size == 0
+              ? 1
+              : ceildiv(dimensions[d].size, dimensions[d].chunk_size);
+    chunks_per_shard_total *= cps;
+    shard_elements *= dimensions[d].chunk_size * cps;
+  }
+
+  uint64_t shard_data_bytes = shard_elements * bpe;
+  uint64_t index_bytes = chunks_per_shard_total * 16 + 4;
+  uint64_t max_shard_bytes = shard_data_bytes + index_bytes;
+  uint64_t max_parts = ceildiv(max_shard_bytes, part_size);
+
+  if (max_parts > S3_MAX_PARTS) {
+    log_error(
+      "shard too large for S3 multipart upload: "
+      "%llu bytes (%llu parts with %zu-byte parts, limit %d). "
+      "Increase part_size or reduce shard dimensions.",
+      (unsigned long long)max_shard_bytes,
+      (unsigned long long)max_parts,
+      part_size,
+      S3_MAX_PARTS);
+    return 1;
+  }
+  return 0;
+}
+
+void
+zarr_s3_config_set_defaults(struct zarr_s3_config* cfg)
+{
+  if (!cfg)
+    return;
+  s3_transport_set_defaults(&cfg->part_size, &cfg->throughput_gbps);
+}
+
+// Reject empty strings or leading/trailing slashes in key components.
+static int
+s3_valid_key_part(const char* s)
+{
+  if (!s || s[0] == '\0' || s[0] == '/')
+    return 0;
+  size_t len = strlen(s);
+  return s[len - 1] != '/';
+}
+
+int
+zarr_s3_config_validate(const struct zarr_s3_config* cfg)
+{
+  CHECK(Fail, cfg);
+  CHECK(Fail, s3_valid_key_part(cfg->bucket));
+  CHECK(Fail, s3_valid_key_part(cfg->prefix));
+  CHECK(Fail, s3_valid_key_part(cfg->array_name));
+  CHECK(Fail, cfg->region && cfg->region[0]);
+  CHECK(Fail, cfg->endpoint && cfg->endpoint[0]);
+  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
+  CHECK(Fail, cfg->dimensions);
+  CHECK(Fail, dims_validate(cfg->dimensions, cfg->rank) == 0);
+  CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
+  CHECK(Fail, cfg->part_size > 0);
+  CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 2 < 4096);
+  CHECK(Fail,
+        s3_validate_part_count(
+          cfg->rank, cfg->dimensions, cfg->data_type, cfg->part_size) == 0);
+  return 0;
+Fail:
+  return 1;
+}
+
+void
+zarr_s3_multiscale_config_set_defaults(struct zarr_s3_multiscale_config* cfg)
+{
+  if (!cfg)
+    return;
+  s3_transport_set_defaults(&cfg->part_size, &cfg->throughput_gbps);
+}
+
+int
+zarr_s3_multiscale_config_validate(const struct zarr_s3_multiscale_config* cfg)
+{
+  CHECK(Fail, cfg);
+  CHECK(Fail, s3_valid_key_part(cfg->bucket));
+  CHECK(Fail, s3_valid_key_part(cfg->prefix));
+  CHECK(Fail, !cfg->array_name || s3_valid_key_part(cfg->array_name));
+  CHECK(Fail, cfg->region && cfg->region[0]);
+  CHECK(Fail, cfg->endpoint && cfg->endpoint[0]);
+  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
+  CHECK(Fail, cfg->dimensions);
+  CHECK(Fail, dims_validate(cfg->dimensions, cfg->rank) == 0);
+  CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
+  CHECK(Fail, cfg->part_size > 0);
+  // L0 is the largest level; if it fits, all LOD levels fit.
+  CHECK(Fail,
+        s3_validate_part_count(
+          cfg->rank, cfg->dimensions, cfg->data_type, cfg->part_size) == 0);
+  return 0;
+Fail:
+  return 1;
+}
 
 // --- S3 shard writer ---
 
@@ -53,6 +181,7 @@ struct s3_shard_writer
   struct s3_upload* upload;          // active upload (receiving writes)
   struct s3_upload* pending_upload;  // previous upload completing async
   int pending_eof_err;               // EOF send error from finish_async
+  int write_err;                     // set on part write failure
 };
 
 static int
@@ -63,10 +192,17 @@ s3_shard_write(struct shard_writer* self,
 {
   (void)offset; // writes are sequential; CRT handles ordering
   struct s3_shard_writer* w = (struct s3_shard_writer*)self;
+  if (!w->upload)
+    return 1; // already aborted
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
   if (nbytes == 0)
     return 0;
-  return s3_upload_write(w->upload, beg, nbytes);
+  if (s3_upload_write(w->upload, beg, nbytes)) {
+    w->write_err = 1;
+    w->parent->finalize_err = 1;
+    return 1;
+  }
+  return 0;
 }
 
 static int
@@ -90,6 +226,17 @@ s3_shard_finalize(struct shard_writer* self)
   struct s3_shard_writer* w = (struct s3_shard_writer*)self;
   if (!w->upload)
     return 0;
+
+  // A part write failed; abort the upload rather than completing it.
+  if (w->write_err) {
+    s3_upload_abort(w->upload);
+    w->upload = NULL;
+    w->write_err = 0;
+    w->parent->finalize_err = 1;
+    ++w->parent->finalize_seq;
+    return 1;
+  }
+
   int eof_err = s3_upload_finish_async(w->upload);
   w->pending_upload = w->upload;
   w->pending_eof_err = eof_err;
@@ -200,11 +347,6 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
                                 struct s3_client* client)
 {
   CHECK(Fail, cfg);
-  CHECK(Fail, cfg->bucket);
-  CHECK(Fail, cfg->prefix);
-  CHECK(Fail, cfg->array_name);
-  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
-  CHECK(Fail, cfg->dimensions);
   CHECK(Fail, client);
 
   struct zarr_s3_sink* zs =
@@ -294,9 +436,10 @@ Fail:
 }
 
 struct zarr_s3_sink*
-zarr_s3_sink_create(const struct zarr_s3_config* cfg)
+zarr_s3_sink_create(struct zarr_s3_config* cfg)
 {
-  CHECK(Fail, cfg);
+  zarr_s3_config_set_defaults(cfg);
+  CHECK(Fail, zarr_s3_config_validate(cfg) == 0);
 
   struct s3_client_config s3cfg = {
     .region = cfg->region,
@@ -461,13 +604,10 @@ s3_multiscale_update_dim0(struct shard_sink* self,
 }
 
 struct zarr_s3_multiscale_sink*
-zarr_s3_multiscale_sink_create(const struct zarr_s3_multiscale_config* cfg)
+zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
 {
-  CHECK(Fail, cfg);
-  CHECK(Fail, cfg->bucket);
-  CHECK(Fail, cfg->prefix);
-  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
-  CHECK(Fail, cfg->dimensions);
+  zarr_s3_multiscale_config_set_defaults(cfg);
+  CHECK(Fail, zarr_s3_multiscale_config_validate(cfg) == 0);
 
   // Build group prefix
   char group_prefix[4096];

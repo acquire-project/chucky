@@ -49,6 +49,9 @@ struct s3_client
 struct s3_client*
 s3_client_create(const struct s3_client_config* cfg)
 {
+  CHECK(Fail, cfg);
+  CHECK(Fail, cfg->region);
+  CHECK(Fail, cfg->endpoint);
   struct aws_allocator* alloc = aws_default_allocator();
   aws_s3_library_init(alloc);
 
@@ -76,20 +79,19 @@ s3_client_create(const struct s3_client_config* cfg)
   c->bootstrap = aws_client_bootstrap_new(alloc, &bootstrap_opts);
   CHECK(Fail_resolver, c->bootstrap);
 
-  // TLS (for HTTPS endpoints)
+  // Parse endpoint to determine TLS mode
   int use_tls = 1;
-  if (cfg->endpoint) {
-    // Parse endpoint to check scheme
+  {
     struct aws_byte_cursor ep_cur =
       aws_byte_cursor_from_c_str(cfg->endpoint);
-    if (aws_uri_init_parse(&c->endpoint_uri, alloc, &ep_cur) == AWS_OP_SUCCESS)
-    {
-      c->has_endpoint = 1;
-      const struct aws_byte_cursor* scheme = aws_uri_scheme(&c->endpoint_uri);
-      struct aws_byte_cursor http_scheme = aws_byte_cursor_from_c_str("http");
-      if (aws_byte_cursor_eq_ignore_case(scheme, &http_scheme))
-        use_tls = 0;
-    }
+    CHECK(Fail_bootstrap,
+          aws_uri_init_parse(&c->endpoint_uri, alloc, &ep_cur) ==
+            AWS_OP_SUCCESS);
+    c->has_endpoint = 1;
+    const struct aws_byte_cursor* scheme = aws_uri_scheme(&c->endpoint_uri);
+    struct aws_byte_cursor http_scheme = aws_byte_cursor_from_c_str("http");
+    if (aws_byte_cursor_eq_ignore_case(scheme, &http_scheme))
+      use_tls = 0;
   }
 
   if (use_tls) {
@@ -109,8 +111,7 @@ s3_client_create(const struct s3_client_config* cfg)
   CHECK(Fail_tls, c->cred_provider);
 
   // Region
-  const char* region = cfg->region ? cfg->region : "us-east-1";
-  c->region = aws_string_new_from_c_str(alloc, region);
+  c->region = aws_string_new_from_c_str(alloc, cfg->region);
   CHECK(Fail_cred, c->region);
 
   // Signing config
@@ -143,9 +144,8 @@ s3_client_create(const struct s3_client_config* cfg)
     .region = aws_byte_cursor_from_string(c->region),
     .client_bootstrap = c->bootstrap,
     .signing_config = &c->signing_config,
-    .part_size = cfg->part_size ? cfg->part_size : 8 * 1024 * 1024,
-    .throughput_target_gbps =
-      cfg->throughput_gbps > 0.0 ? cfg->throughput_gbps : 10.0,
+    .part_size = cfg->part_size,
+    .throughput_target_gbps = cfg->throughput_gbps,
     .tls_mode = use_tls ? AWS_MR_TLS_ENABLED : AWS_MR_TLS_DISABLED,
     .retry_strategy = c->retry_strategy,
   };

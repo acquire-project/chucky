@@ -10,6 +10,23 @@ unravel(int rank, const uint64_t* shape, uint64_t idx, uint64_t* coords)
 }
 
 uint64_t
+transposed_offset(int rank,
+                  const uint64_t* shape,
+                  const int64_t* strides,
+                  uint64_t idx,
+                  uint64_t* coords)
+{
+  uint64_t o = 0;
+  uint64_t rest = idx;
+  for (int d = rank - 1; d >= 0; --d) {
+    coords[d] = rest % shape[d];
+    rest /= shape[d];
+    o += coords[d] * (uint64_t)strides[d];
+  }
+  return o;
+}
+
+uint64_t
 ravel(int rank, const uint64_t* shape, const int64_t* strides, uint64_t idx)
 {
   uint64_t o = 0;

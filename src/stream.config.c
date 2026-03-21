@@ -135,13 +135,8 @@ validate_config(const struct tile_stream_configuration* config)
   CHECK(Fail, config->rank > 0);
   CHECK(Fail, config->rank <= HALF_MAX_RANK);
   CHECK(Fail, config->dimensions);
+  CHECK(Fail, dims_validate(config->dimensions, config->rank) == 0);
 
-  for (int d = 0; d < config->rank; ++d) {
-    if (config->dimensions[d].chunk_size == 0) {
-      log_error("dims[%d].chunk_size must be > 0", d);
-      goto Fail;
-    }
-  }
   {
     uint64_t chunk_elements = 1;
     for (int d = 0; d < config->rank; ++d)
@@ -149,12 +144,6 @@ validate_config(const struct tile_stream_configuration* config)
     if (chunk_elements <= 1)
       log_warn("total chunk elements is %llu (chunk_size=1 in all dims?)",
                (unsigned long long)chunk_elements);
-  }
-
-  if (config->dimensions[0].size == 0 &&
-      config->dimensions[0].chunks_per_shard == 0) {
-    log_error("dims[0].size=0 (unbounded) requires chunks_per_shard > 0");
-    goto Fail;
   }
 
   if (resolve_storage_order(config->rank, config->dimensions, NULL)) {

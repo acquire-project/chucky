@@ -12,6 +12,15 @@ extern "C"
   // coords[d] = idx % shape[d], then idx /= shape[d], for d=0..rank-1.
   void unravel(int rank, const uint64_t* shape, uint64_t idx, uint64_t* coords);
 
+  // Decompose idx into coords and compute the strided offset in one pass.
+  // Iterates d=rank-1..0: coords[d] = idx % shape[d], o += coords[d] *
+  // strides[d].
+  uint64_t transposed_offset(int rank,
+                             const uint64_t* shape,
+                             const int64_t* strides,
+                             uint64_t idx,
+                             uint64_t* coords);
+
   // Compute the flat output index for a transposed array.
   // Iterates d=rank-1..0: coord = idx % shape[d], o += coord * strides[d].
   uint64_t ravel(int rank,

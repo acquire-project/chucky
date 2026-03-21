@@ -48,11 +48,20 @@ commits and hosts. There's a `report.py` that generates some visualizations
 to browse things and it's all very very useful.
 
 - [ ] sweep doesn't include io at the moment
+- [ ] medfmt and smallepoch scenarios need some analysis/optimization
 
 The other thing I've been working on is s3 integration. It's pretty easy to
-test with a `minio` server launched via `docker`.
+test with a `minio` server launched via `docker`. Need to think about
+multipart upload failures; appending to shards is handled a one big multipart.
+Also need to think about the part budget. Need to write an s3 guide.
 
+I'm still thinking about the problem of writing to multiple arrays at once...
+The use case is how to have 100's of non-performant streams at once. Could
+think about a suspend state.
 
+- maybe separate zarr v ngff metadata
+- distinguish public vs private api more
+- should probably get struct slice out of the public api, it's not necessary
 
 ## 2026-03-18
 
