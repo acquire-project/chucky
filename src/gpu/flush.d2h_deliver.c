@@ -55,17 +55,16 @@ static void
 wait_io_fences(const struct d2h_deliver_stage* stage,
                int fc,
                uint32_t level_mask,
-               const struct tile_stream_configuration* config)
+               struct shard_sink* sink)
 {
-  if (!config->shard_sink->wait_fence)
+  if (!sink->wait_fence)
     return;
   for (int lv = 0; lv < stage->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
       continue;
     struct aggregate_slot* agg = &stage->levels[lv].agg[fc];
     if (agg->io_done.seq > 0)
-      config->shard_sink->wait_fence(
-        config->shard_sink, (uint8_t)lv, agg->io_done);
+      sink->wait_fence(sink, (uint8_t)lv, agg->io_done);
   }
 }
 
@@ -239,6 +238,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
                  const struct batch_state* batch,
                  const struct tile_stream_layout* layout,
                  const struct tile_stream_configuration* config,
+                 struct shard_sink* sink,
                  const struct lod_state* lod,
                  struct stream_metrics* metrics)
 {
@@ -274,15 +274,15 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
                                   &lvl->shard,
                                   &ar,
                                   active_count,
-                                  config->shard_sink,
+                                  sink,
                                   config->shard_alignment,
                                   &level_bytes))
         goto Error;
       sink_bytes += level_bytes;
 
-      if (config->shard_sink->record_fence)
+      if (sink->record_fence)
         lvl->agg[fc].io_done =
-          config->shard_sink->record_fence(config->shard_sink, (uint8_t)lv);
+          sink->record_fence(sink, (uint8_t)lv);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
@@ -299,9 +299,10 @@ Error:
 static int
 maybe_update_metadata(const struct d2h_deliver_stage* stage,
                       const struct tile_stream_configuration* config,
+                      struct shard_sink* sink,
                       struct platform_clock* metadata_update_clock)
 {
-  if (!config->shard_sink->update_dim0)
+  if (!sink->update_dim0)
     return 0;
 
   struct platform_clock peek = *metadata_update_clock;
@@ -316,8 +317,7 @@ maybe_update_metadata(const struct d2h_deliver_stage* stage,
     uint64_t dim0_chunks =
       ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
     uint64_t dim0_extent = dim0_chunks * dims[0].chunk_size;
-    if (config->shard_sink->update_dim0(
-          config->shard_sink, (uint8_t)lv, dim0_extent))
+    if (sink->update_dim0(sink, (uint8_t)lv, dim0_extent))
       return 1;
   }
   return 0;
@@ -331,12 +331,13 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
                  const struct tile_stream_configuration* config,
+                 struct shard_sink* sink,
                  CUstream d2h_stream)
 {
   const int fc = handoff->fc;
 
   // Wait for IO fences before reusing aggregate slots
-  wait_io_fences(stage, fc, handoff->active_levels_mask, config);
+  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
 
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
@@ -356,14 +357,15 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct batch_state* batch,
                   const struct tile_stream_layout* layout,
                   const struct tile_stream_configuration* config,
+                  struct shard_sink* sink,
                   const struct lod_state* lod,
                   struct stream_metrics* metrics,
                   struct platform_clock* metadata_update_clock)
 {
   struct writer_result r = sync_and_deliver(
-    stage, handoff, levels, batch, layout, config, lod, metrics);
+    stage, handoff, levels, batch, layout, config, sink, lod, metrics);
   if (!r.error) {
-    if (maybe_update_metadata(stage, config, metadata_update_clock))
+    if (maybe_update_metadata(stage, config, sink, metadata_update_clock))
       return writer_error();
   }
   return r;

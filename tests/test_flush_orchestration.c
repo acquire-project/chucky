@@ -60,7 +60,9 @@ orch_ctx_destroy(struct orch_ctx* c)
 
 // Set up all components for the flush orchestration test.
 static int
-orch_ctx_setup(struct orch_ctx* c, struct tile_stream_configuration* config)
+orch_ctx_setup(struct orch_ctx* c,
+               struct tile_stream_configuration* config,
+               struct shard_sink* sink)
 {
   CHECK(Fail,
         compute_stream_layouts(config,
@@ -72,6 +74,7 @@ orch_ctx_setup(struct orch_ctx* c, struct tile_stream_configuration* config)
   CHECK(Fail, c->s);
 
   c->s->config = *config;
+  c->s->shard_sink = sink;
   c->s->levels = c->cl.levels;
   c->s->layout = c->cl.l0;
 
@@ -175,13 +178,12 @@ test_accumulate_one_epoch(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
 
   struct orch_ctx c;
   orch_ctx_init(&c);
   int ok = 0;
 
-  CHECK(Fail, orch_ctx_setup(&c, &config) == 0);
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   // Fill epoch 0 in current pool
@@ -227,13 +229,12 @@ test_full_batch_auto_flush(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
 
   struct orch_ctx c;
   orch_ctx_init(&c);
   int ok = 0;
 
-  CHECK(Fail, orch_ctx_setup(&c, &config) == 0);
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
 
   // Fill and accumulate 2 epochs
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
@@ -278,13 +279,12 @@ test_drain_delivers_data(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
 
   struct orch_ctx c;
   orch_ctx_init(&c);
   int ok = 0;
 
-  CHECK(Fail, orch_ctx_setup(&c, &config) == 0);
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
 
   // Fill and accumulate 2 epochs (full batch → auto-kick)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
@@ -330,13 +330,12 @@ test_accumulated_sync_partial(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
 
   struct orch_ctx c;
   orch_ctx_init(&c);
   int ok = 0;
 
-  CHECK(Fail, orch_ctx_setup(&c, &config) == 0);
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
 
   // Fill and accumulate 1 epoch (partial batch)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
@@ -380,13 +379,12 @@ test_two_batch_cycle(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
-  config.shard_sink = &sink.base;
 
   struct orch_ctx c;
   orch_ctx_init(&c);
   int ok = 0;
 
-  CHECK(Fail, orch_ctx_setup(&c, &config) == 0);
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
 
   // --- Batch 1: epochs 0,1 on pool 0 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);

@@ -104,9 +104,8 @@ test_multiscale_l0_correctness(void)
       .rank = rank,
       .dimensions = dims,
       .codec = CODEC_ZSTD,
-      .shard_sink = &baseline_sink.base,
     };
-    CHECK(Fail1, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail1, (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
     xor_pattern_init(dims, rank, 2);
     CHECK(Fail1b,
           pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
@@ -134,9 +133,8 @@ Run2:
       .rank = rank,
       .dimensions = dims_ms,
       .codec = CODEC_ZSTD,
-      .shard_sink = &ms_sink.base,
     };
-    CHECK(Fail2b, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail2b, (s = tile_stream_gpu_create(&config, &ms_sink.base)) != NULL);
     xor_pattern_init(dims_ms, rank, 2);
     CHECK(Fail2c,
           pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
@@ -308,10 +306,9 @@ test_dim0_l0_correctness(void)
       .rank = rank,
       .dimensions = dims_inner,
       .codec = CODEC_ZSTD,
-      .shard_sink = &baseline_sink.base,
       .reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail1, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail1, (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
     xor_pattern_init(dims_inner, rank, 2);
     CHECK(Fail1b,
           pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
@@ -339,11 +336,10 @@ Run2d:
       .rank = rank,
       .dimensions = dims_dim0,
       .codec = CODEC_ZSTD,
-      .shard_sink = &dim0_sink.base,
       .reduce_method = lod_reduce_mean,
       .dim0_reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail2b, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail2b, (s = tile_stream_gpu_create(&config, &dim0_sink.base)) != NULL);
     {
       struct tile_stream_status st = tile_stream_gpu_status(s);
       log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
@@ -531,12 +527,11 @@ test_dim0_multi_epoch_levels(void)
       .rank = rank,
       .dimensions = dims,
       .codec = CODEC_ZSTD,
-      .shard_sink = &sink.base,
       .reduce_method = lod_reduce_mean,
       .dim0_reduce_method = lod_reduce_mean,
     };
 
-    CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail2, (s = tile_stream_gpu_create(&config, &sink.base)) != NULL);
     {
       struct tile_stream_status st = tile_stream_gpu_status(s);
       log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",

@@ -19,6 +19,7 @@ struct tile_stream_cpu
 {
   struct writer writer;
   struct tile_stream_configuration config;
+  struct shard_sink* shard_sink;
   struct computed_stream_layouts cl;
 
   // L0 layout (also in cl.l0, aliased here for convenience)

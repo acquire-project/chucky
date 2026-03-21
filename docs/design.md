@@ -633,11 +633,10 @@ struct tile_stream_configuration config = {
   .dtype              = lod_dtype_u16,
   .buffer_capacity_bytes = 4 * 1024 * 1024,
   .codec              = CODEC_ZSTD,
-  .shard_sink         = &my_zarr_sink,  // see Zarr store below
 };
 
 // 3. Create the stream and obtain a writer.
-struct tile_stream_gpu *s = tile_stream_gpu_create(&config);
+struct tile_stream_gpu *s = tile_stream_gpu_create(&config, &my_zarr_sink);
 struct writer *w = tile_stream_gpu_writer(s);
 
 // 4. Push data as it arrives — the library handles tiling,

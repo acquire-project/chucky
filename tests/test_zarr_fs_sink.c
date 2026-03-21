@@ -192,11 +192,12 @@ test_pipeline(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail3,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // Feed data
   {
@@ -503,11 +504,12 @@ test_unbounded_metadata_update(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail2,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // epoch_elements = chunks_per_epoch * chunk_elements
   // chunks_per_epoch = chunk_count[1] * chunk_count[2] = 2 * 4 = 8
@@ -715,13 +717,14 @@ test_midstream_metadata_update(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .metadata_update_interval_s = 0.0f, // always fire
     .epochs_per_batch = 1,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail2,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // Feed several epochs of data (enough to trigger timer-based update)
   const size_t total = 6 * tile_stream_gpu_layout(s)->epoch_elements;
@@ -861,13 +864,14 @@ test_unbuffered_pipeline(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .epochs_per_batch = 1,
     .shard_alignment = platform_page_size(),
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail2,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // Feed data
   {
@@ -1069,12 +1073,13 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
     .shard_alignment = platform_page_size(),
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail3,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // Feed data
   {
@@ -1516,11 +1521,12 @@ test_pipeline_storage_order(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = zarr_fs_sink_as_shard_sink(zs),
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail3, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail3,
+        (s = tile_stream_gpu_create(&config,
+                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
 
   // Feed data
   {

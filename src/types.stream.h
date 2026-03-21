@@ -33,7 +33,6 @@ struct tile_stream_configuration
   enum dtype dtype;
   uint8_t rank;
   struct dimension* dimensions;
-  struct shard_sink* shard_sink; // downstream shard writer factory, not owned
   enum compression_codec codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method dim0_reduce_method;

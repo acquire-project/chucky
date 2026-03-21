@@ -147,12 +147,11 @@ test_stream_single_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Verify computed layout
   log_info("  chunk_elements=%lu  chunks_per_epoch=%lu  epoch_elements=%lu",
@@ -235,12 +234,11 @@ test_stream_incremental_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   const int total = 96;
   uint16_t src[96];
@@ -316,11 +314,10 @@ test_stream_compressed_roundtrip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_ZSTD,
-    .shard_sink = &mss.base,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   log_info("  chunk_elements=%lu  chunk_stride=%lu  chunks_per_epoch=%lu  "
            "epoch_elements=%lu",
@@ -398,11 +395,10 @@ test_stream_lz4_roundtrip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = CODEC_LZ4,
-    .shard_sink = &mss.base,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Fill source with sequential u16 values
   uint16_t src[96];
@@ -481,12 +477,11 @@ test_stream_zero_length_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Append empty slice
   uint16_t dummy;
@@ -537,11 +532,10 @@ test_stream_null_config_fields(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
-    .shard_sink = NULL,
     .codec = CODEC_NONE,
   };
 
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, NULL);
   if (!s) {
     log_info("  create correctly returned NULL for NULL shard_sink");
     log_info("  PASS");
@@ -572,12 +566,11 @@ test_stream_rank_1_dim(void)
     .dtype = dtype_u16,
     .rank = 1,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Verify we can push data through
   uint16_t src[12];
@@ -624,12 +617,11 @@ test_stream_flush_empty(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Flush with no data appended — should be a no-op
   struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
@@ -666,12 +658,11 @@ test_stream_unbounded_dim0(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // chunks_per_epoch should be prod(chunk_count[d] for d>0) = 2*2 = 4
   CHECK(Fail, tile_stream_gpu_layout(s)->chunks_per_epoch == 4);
@@ -737,11 +728,10 @@ test_stream_unbounded_requires_tps(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &mss.base);
   if (!s) {
     log_info("  create correctly rejected unbounded dim0 with cps=0");
     test_sink_free(&mss);
@@ -774,12 +764,11 @@ test_stream_bounded_dim0(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &mss.base,
     .codec = CODEC_NONE,
   };
 
   struct tile_stream_gpu* s = NULL;
-  CHECK(Fail0, (s = tile_stream_gpu_create(&config)) != NULL);
+  CHECK(Fail0, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
   // Try to feed 150 elements (more than 96 capacity)
   const int total = 150;
@@ -878,11 +867,10 @@ test_shard_index_structure(void)
       .rank = 3,
       .dimensions = dims,
       .codec = CODEC_ZSTD,
-      .shard_sink = &mss.base,
     };
 
     struct tile_stream_gpu* s = NULL;
-    CHECK(Fail2, (s = tile_stream_gpu_create(&config)) != NULL);
+    CHECK(Fail2, (s = tile_stream_gpu_create(&config, &mss.base)) != NULL);
 
     {
       struct slice input = { .beg = src, .end = src + total_elements };
@@ -996,11 +984,10 @@ Case2:
       .rank = 3,
       .dimensions = dims2,
       .codec = CODEC_ZSTD,
-      .shard_sink = &mss2.base,
     };
 
     struct tile_stream_gpu* s2 = NULL;
-    CHECK(FailB1, (s2 = tile_stream_gpu_create(&config2)) != NULL);
+    CHECK(FailB1, (s2 = tile_stream_gpu_create(&config2, &mss2.base)) != NULL);
 
     uint16_t src2[96];
     for (int i = 0; i < 96; ++i)

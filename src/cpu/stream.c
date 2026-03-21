@@ -22,9 +22,10 @@ cpu_flush(struct writer* self);
 // ---- Create / Destroy ----
 
 struct tile_stream_cpu*
-tile_stream_cpu_create(const struct tile_stream_configuration* config)
+tile_stream_cpu_create(const struct tile_stream_configuration* config,
+                       struct shard_sink* sink)
 {
-  if (!config || !config->shard_sink)
+  if (!config || !sink)
     return NULL;
   if (config->dtype == dtype_f16)
     return NULL;
@@ -34,6 +35,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config)
     return NULL;
 
   s->config = *config;
+  s->shard_sink = sink;
 
   // CPU codec alignment is 1 (no nvcomp alignment needed).
   if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &s->cl))
@@ -557,7 +559,7 @@ flush_batch(struct tile_stream_cpu* s,
                                   &s->shard[lv],
                                   &ar,
                                   active_count,
-                                  s->config.shard_sink,
+                                  s->shard_sink,
                                   s->config.shard_alignment,
                                   &sink_bytes))
         return 1;
@@ -601,7 +603,7 @@ flush_batch(struct tile_stream_cpu* s,
                                     &s->shard[lv],
                                     &ar,
                                     1,
-                                    s->config.shard_sink,
+                                    s->shard_sink,
                                     s->config.shard_alignment,
                                     &sink_bytes))
           return 1;
@@ -831,7 +833,7 @@ cpu_append(struct writer* self, struct slice input)
       }
 
       // Periodic metadata update.
-      if (s->config.shard_sink->update_dim0) {
+      if (s->shard_sink->update_dim0) {
         struct platform_clock peek = s->metadata_update_clock;
         float elapsed = platform_toc(&peek);
         if (elapsed >= s->config.metadata_update_interval_s) {
@@ -841,8 +843,8 @@ cpu_append(struct writer* self, struct slice input)
             struct shard_state* ss = &s->shard[lv];
             uint64_t d0c =
               ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
-            if (s->config.shard_sink->update_dim0(
-                  s->config.shard_sink, (uint8_t)lv, d0c * dims[0].chunk_size))
+            if (s->shard_sink->update_dim0(
+                  s->shard_sink, (uint8_t)lv, d0c * dims[0].chunk_size))
               goto Error;
           }
         }
@@ -954,12 +956,12 @@ cpu_flush(struct writer* self)
   }
 
   // Final metadata.
-  if (s->config.shard_sink->update_dim0) {
+  if (s->shard_sink->update_dim0) {
     const struct dimension* dims = s->config.dimensions;
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t dim0_extent = dim0_chunks[lv] * dims[0].chunk_size;
-      if (s->config.shard_sink->update_dim0(
-            s->config.shard_sink, (uint8_t)lv, dim0_extent))
+      if (s->shard_sink->update_dim0(
+            s->shard_sink, (uint8_t)lv, dim0_extent))
         return writer_error();
     }
   }

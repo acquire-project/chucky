@@ -155,6 +155,7 @@ struct tile_stream_gpu
 {
   struct writer writer;
   struct tile_stream_configuration config;
+  struct shard_sink* shard_sink;
   struct tile_stream_layout layout;
   struct tile_stream_layout_gpu layout_gpu;
   struct level_geometry levels;

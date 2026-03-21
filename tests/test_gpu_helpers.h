@@ -25,14 +25,6 @@ make_test_config(struct tile_stream_configuration* config,
                  enum compression_codec codec,
                  uint8_t epochs_per_batch);
 
-// Like make_test_config, but also sets config->shard_sink.
-int
-make_test_config_full(struct tile_stream_configuration* config,
-                      struct dimension* dims,
-                      enum compression_codec codec,
-                      uint8_t epochs_per_batch,
-                      struct shard_sink* sink);
-
 // Fill one epoch of chunk pool on device.
 // Each chunk t gets all elements set to fill_fn(t).
 int

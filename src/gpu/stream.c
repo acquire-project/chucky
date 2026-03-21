@@ -219,12 +219,12 @@ tile_stream_gpu_flush(struct writer* self)
   }
 
   // Final metadata update using pre-emit chunk counts.
-  if (s->config.shard_sink->update_dim0) {
+  if (s->shard_sink->update_dim0) {
     const struct dimension* dims = s->config.dimensions;
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t dim0_extent = dim0_chunks[lv] * dims[0].chunk_size;
-      if (s->config.shard_sink->update_dim0(
-            s->config.shard_sink, (uint8_t)lv, dim0_extent))
+      if (s->shard_sink->update_dim0(
+            s->shard_sink, (uint8_t)lv, dim0_extent))
         return writer_error();
     }
   }

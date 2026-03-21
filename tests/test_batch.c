@@ -11,14 +11,13 @@
 #include <string.h>
 
 static struct tile_stream_configuration
-make_config(struct dimension* dims, struct shard_sink* sink)
+make_config(struct dimension* dims)
 {
   return (struct tile_stream_configuration){
     .buffer_capacity_bytes = 48 * sizeof(uint16_t),
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = sink,
     .codec = CODEC_NONE,
     .epochs_per_batch = 2,
   };
@@ -49,8 +48,8 @@ test_batch_counter_one_epoch(void)
 
   struct dimension dims[3];
   make_test_dims_3d_unbounded(dims);
-  struct tile_stream_configuration config = make_config(dims, &css.base);
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
   CHECK(Fail0, s);
 
   CHECK(Fail, tile_stream_gpu_layout(s)->epoch_elements == 48);
@@ -106,8 +105,8 @@ test_batch_full_triggers_swap(void)
 
   struct dimension dims[3];
   make_test_dims_3d_unbounded(dims);
-  struct tile_stream_configuration config = make_config(dims, &css.base);
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
   CHECK(Fail0, s);
 
   // Feed 96 elements (2 epochs = 1 full batch)
@@ -163,8 +162,8 @@ test_batch_multi_cycle(void)
 
   struct dimension dims[3];
   make_test_dims_3d_unbounded(dims);
-  struct tile_stream_configuration config = make_config(dims, &css.base);
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
   CHECK(Fail0, s);
 
   // Feed 192 elements (4 epochs = 2 batches)
@@ -219,8 +218,8 @@ test_batch_partial_flush(void)
 
   struct dimension dims[3];
   make_test_dims_3d_unbounded(dims);
-  struct tile_stream_configuration config = make_config(dims, &css.base);
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
   CHECK(Fail0, s);
 
   // Feed 48 elements (1 epoch, K=2), then flush
@@ -267,8 +266,8 @@ test_batch_3epochs_flush(void)
 
   struct dimension dims[3];
   make_test_dims_3d_unbounded(dims);
-  struct tile_stream_configuration config = make_config(dims, &css.base);
-  struct tile_stream_gpu* s = tile_stream_gpu_create(&config);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
   CHECK(Fail0, s);
 
   // Feed 144 elements (3 epochs, K=2)

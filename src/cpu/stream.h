@@ -8,7 +8,8 @@ struct tile_stream_cpu;
 // The config->dimensions pointer must remain valid for the lifetime of the
 // stream.
 struct tile_stream_cpu*
-tile_stream_cpu_create(const struct tile_stream_configuration* config);
+tile_stream_cpu_create(const struct tile_stream_configuration* config,
+                       struct shard_sink* sink);
 
 void
 tile_stream_cpu_destroy(struct tile_stream_cpu* s);

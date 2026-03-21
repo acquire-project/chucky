@@ -146,7 +146,7 @@ struct tile_stream_memory_info info;
 tile_stream_gpu_memory_estimate(&config, &info);
 
 // 2. Create the stream
-struct tile_stream_gpu* stream = tile_stream_gpu_create(&config);
+struct tile_stream_gpu* stream = tile_stream_gpu_create(&config, sink);
 
 // 3. Get a writer and feed data
 struct writer* w = tile_stream_gpu_writer(stream);

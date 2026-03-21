@@ -443,7 +443,6 @@ run_bench(const struct bench_config* cfg)
         .rank = rank,
         .dimensions = dims,
         .codec = cfg->codec,
-        .shard_sink = &fit_dss.base,
         .reduce_method = cfg->reduce_method,
         .dim0_reduce_method = cfg->dim0_reduce_method,
         .target_batch_chunks = 2048,
@@ -531,7 +530,6 @@ run_bench(const struct bench_config* cfg)
     .rank = rank,
     .dimensions = dims,
     .codec = cfg->codec,
-    .shard_sink = sink,
     .reduce_method = cfg->reduce_method,
     .dim0_reduce_method = cfg->dim0_reduce_method,
     .target_batch_chunks = 2048,
@@ -595,9 +593,9 @@ run_bench(const struct bench_config* cfg)
   platform_toc(&init_clock);
 
   if (cfg->backend == BENCH_CPU)
-    h.cpu = tile_stream_cpu_create(&config);
+    h.cpu = tile_stream_cpu_create(&config, sink);
   else
-    h.gpu = tile_stream_gpu_create(&config);
+    h.gpu = tile_stream_gpu_create(&config, sink);
   CHECK(Fail, !bench_is_null(&h));
   float init_s = platform_toc(&init_clock);
 

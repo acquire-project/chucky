@@ -189,12 +189,13 @@ init_metrics(int enable_multiscale)
 }
 
 struct tile_stream_gpu*
-tile_stream_gpu_create(const struct tile_stream_configuration* config)
+tile_stream_gpu_create(const struct tile_stream_configuration* config,
+                       struct shard_sink* sink)
 {
   struct computed_stream_layouts cl;
   memset(&cl, 0, sizeof(cl));
 
-  CHECK(FailPhase1, config && config->shard_sink);
+  CHECK(FailPhase1, config && sink);
 
   // Phase 1: CPU-only layout computation.
   CHECK(FailPhase1,
@@ -209,6 +210,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config)
   CHECK(FailPhase1b, out);
 
   out->config = *config;
+  out->shard_sink = sink;
   out->levels = cl.levels;
   tile_stream_gpu_init_writer(out);
 

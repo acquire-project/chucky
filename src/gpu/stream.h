@@ -53,7 +53,8 @@ tile_stream_gpu_advise_chunk_sizes(
 // NULL on failure. Caller must free with tile_stream_gpu_destroy.
 // The config->dimensions pointer must remain valid for the lifetime of the stream.
 struct tile_stream_gpu*
-tile_stream_gpu_create(const struct tile_stream_configuration* config);
+tile_stream_gpu_create(const struct tile_stream_configuration* config,
+                       struct shard_sink* sink);
 
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* stream);

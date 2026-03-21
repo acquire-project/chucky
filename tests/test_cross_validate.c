@@ -202,8 +202,7 @@ test_cross_validate_basic(void)
   };
 
   // Compute total elements from the GPU layout.
-  config.shard_sink = &gpu_sink.base;
-  gpu = tile_stream_gpu_create(&config);
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
   CHECK(Fail, gpu);
 
   const struct tile_stream_layout* lay = tile_stream_gpu_layout(gpu);
@@ -228,8 +227,7 @@ test_cross_validate_basic(void)
   }
 
   // CPU pipeline (same config, different sink)
-  config.shard_sink = &cpu_sink.base;
-  cpu = tile_stream_cpu_create(&config);
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
   CHECK(Fail, cpu);
 
   {
@@ -306,8 +304,7 @@ test_cross_validate_multishard(void)
     .codec = CODEC_NONE,
   };
 
-  config.shard_sink = &gpu_sink.base;
-  gpu = tile_stream_gpu_create(&config);
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
   CHECK(Fail, gpu);
 
   const struct tile_stream_layout* lay = tile_stream_gpu_layout(gpu);
@@ -327,8 +324,7 @@ test_cross_validate_multishard(void)
   }
 
   // CPU
-  config.shard_sink = &cpu_sink.base;
-  cpu = tile_stream_cpu_create(&config);
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
   CHECK(Fail, cpu);
 
   {
@@ -410,8 +406,7 @@ test_cross_validate_lod(void)
   };
 
   // GPU
-  config.shard_sink = &gpu_sink.base;
-  gpu = tile_stream_gpu_create(&config);
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
   CHECK(Fail, gpu);
 
   const struct tile_stream_layout* lay = tile_stream_gpu_layout(gpu);
@@ -435,8 +430,7 @@ test_cross_validate_lod(void)
   }
 
   // CPU
-  config.shard_sink = &cpu_sink.base;
-  cpu = tile_stream_cpu_create(&config);
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
   CHECK(Fail, cpu);
 
   {
@@ -551,8 +545,7 @@ test_cross_validate_lod_dim0(void)
   };
 
   // GPU
-  config.shard_sink = &gpu_sink.base;
-  gpu = tile_stream_gpu_create(&config);
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
   CHECK(Fail, gpu);
 
   const struct tile_stream_layout* lay = tile_stream_gpu_layout(gpu);
@@ -578,8 +571,7 @@ test_cross_validate_lod_dim0(void)
   }
 
   // CPU
-  config.shard_sink = &cpu_sink.base;
-  cpu = tile_stream_cpu_create(&config);
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
   CHECK(Fail, cpu);
 
   {

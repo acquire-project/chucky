@@ -46,18 +46,6 @@ make_test_config(struct tile_stream_configuration* config,
 }
 
 int
-make_test_config_full(struct tile_stream_configuration* config,
-                      struct dimension* dims,
-                      enum compression_codec codec,
-                      uint8_t epochs_per_batch,
-                      struct shard_sink* sink)
-{
-  make_test_config(config, dims, codec, epochs_per_batch);
-  config->shard_sink = sink;
-  return 0;
-}
-
-int
 fill_pool_epoch(CUdeviceptr pool_buf,
                 uint64_t n_chunks,
                 uint64_t chunk_stride,

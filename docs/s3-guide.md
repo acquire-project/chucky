@@ -7,6 +7,10 @@ Each Zarr v3 shard becomes a single S3 object. The [AWS Common Runtime
 compressed chunks into parts of `part_size` bytes and uploading them
 concurrently. Small objects (e.g. `zarr.json` metadata) use a simple PUT.
 
+FIXME: this is a transition to "what it means to use object storage". The
+reader might to adjust from file-system to object storage and needs to understand
+the limitations.
+
 S3 allows at most **10,000 parts** per [multipart upload][s3-limits].
 The sink rejects configurations that could exceed this limit (see
 [Choosing `part_size`](#choosing-part_size)).
@@ -16,6 +20,8 @@ The sink rejects configurations that could exceed this limit (see
 The S3 transport is configured via `zarr_s3_config`, defined in
 [`zarr_s3_sink.h`](../src/zarr/zarr_s3_sink.h). The transport-specific
 fields are:
+
+FIXME: the defaults are described twice. remove the mentions in the descriptions
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -35,6 +41,8 @@ with their defaults, or let `zarr_s3_sink_create()` do it for you — it
 calls `set_defaults` followed by `zarr_s3_config_validate()`
 internally. You can also call `validate` yourself for early error
 reporting.
+
+FIXME: confusing. does the user need to call set defaults or not?
 
 ```c
 zarr_s3_config_set_defaults(&cfg);       // fill part_size, throughput_gbps
@@ -64,6 +72,9 @@ environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`),
 `~/.aws/credentials`, or an IAM instance role.
 
 ### Choosing `part_size`
+
+FIXME: a better title for this section might be Limitations. and then we
+describe them and how to deal.
 
 The default 8 MiB works well for most workloads (~80 GB max object
 size). Reasons to change it:
@@ -184,8 +195,8 @@ credential chain picks them up.
 
 ## End-to-End Example
 
-A minimal example that streams a 3D array (with a streaming time
-dimension) to S3 using the GPU pipeline:
+The snippet below streams a 3D array (with a streaming time dimension) to S3
+using the GPU pipeline:
 
 ```c
 #include "zarr_s3_sink.h"
@@ -226,8 +237,7 @@ struct zarr_s3_config s3cfg = {
 struct zarr_s3_sink* sink = zarr_s3_sink_create(&s3cfg);
 
 // 4. Create the streaming pipeline
-stream_cfg.shard_sink = zarr_s3_sink_as_shard_sink(sink);
-struct tile_stream_gpu* stream = tile_stream_gpu_create(&stream_cfg);
+struct tile_stream_gpu* stream = tile_stream_gpu_create(&stream_cfg, zarr_s3_sink_as_shard_sink(sink));
 struct writer* w = tile_stream_gpu_writer(stream);
 
 // 5. Stream frames

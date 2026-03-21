@@ -168,6 +168,7 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
                          &s->levels,
                          &s->batch,
                          &s->config,
+                         s->shard_sink,
                          s->streams.d2h) == 0);
 
   // Save handoff for drain
@@ -221,6 +222,7 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                          &s->levels,
                          &s->batch,
                          &s->config,
+                         s->shard_sink,
                          s->streams.d2h) == 0);
 
   return d2h_deliver_drain(&s->d2h_deliver,
@@ -229,6 +231,7 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                            &s->batch,
                            &s->layout,
                            &s->config,
+                           s->shard_sink,
                            &s->lod,
                            &s->metrics,
                            &s->metadata_update_clock);
@@ -252,6 +255,7 @@ flush_drain_pending(struct tile_stream_gpu* s)
                            &s->batch,
                            &s->layout,
                            &s->config,
+                           s->shard_sink,
                            &s->lod,
                            &s->metrics,
                            &s->metadata_update_clock);
@@ -278,6 +282,7 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
                                                &s->batch,
                                                &s->layout,
                                                &s->config,
+                                               s->shard_sink,
                                                &s->lod,
                                                &s->metrics,
                                                &s->metadata_update_clock);
@@ -393,6 +398,7 @@ flush_partial_dim0(struct tile_stream_gpu* s)
                            &s->batch,
                            &s->layout,
                            &s->config,
+                           s->shard_sink,
                            &s->lod,
                            &s->metrics,
                            &s->metadata_update_clock);

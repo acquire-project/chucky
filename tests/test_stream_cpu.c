@@ -103,11 +103,10 @@ test_basic_pipeline(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .shard_sink = &sink.base,
     .codec = CODEC_NONE,
   };
 
-  struct tile_stream_cpu* s = tile_stream_cpu_create(&config);
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
   CHECK(Fail, s);
 
   const struct tile_stream_layout* lay = tile_stream_cpu_layout(s);
@@ -180,11 +179,10 @@ test_f16_rejected(void)
     .dtype = dtype_f16,
     .rank = 2,
     .dimensions = dims,
-    .shard_sink = &sink.base,
     .codec = CODEC_NONE,
   };
 
-  struct tile_stream_cpu* s = tile_stream_cpu_create(&config);
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
   CHECK(Fail, s == NULL); // should be rejected
 
   mem_sink_free(&sink);

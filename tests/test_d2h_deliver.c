@@ -110,6 +110,7 @@ Fail:
 static int
 test_ctx_kick_and_drain(struct test_ctx* c,
                         const struct tile_stream_configuration* config,
+                        struct shard_sink* sink,
                         int fc,
                         uint32_t n_epochs,
                         CUdeviceptr pool_buf,
@@ -137,7 +138,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
 
   CHECK(Fail,
         d2h_deliver_kick(
-          &c->d2h, handoff, &c->cl.levels, &c->batch, config, c->d2h_stream) ==
+          &c->d2h, handoff, &c->cl.levels, &c->batch, config, sink, c->d2h_stream) ==
           0);
 
   struct writer_result r = d2h_deliver_drain(&c->d2h,
@@ -146,6 +147,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                              &c->batch,
                                              &c->cl.l0,
                                              config,
+                                             sink,
                                              &c->lod,
                                              &c->metrics,
                                              &c->metadata_clock);
@@ -171,7 +173,7 @@ test_d2h_single_epoch_none(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
+
 
   struct test_ctx c;
   test_ctx_init(&c);
@@ -202,7 +204,7 @@ test_d2h_single_epoch_none(void)
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
+          &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
 
   // Verify sink state
   CHECK(Fail, sink.open_count == 1);     // shard_inner_count=1
@@ -237,7 +239,7 @@ test_d2h_batch_none(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
+
 
   struct test_ctx c;
   test_ctx_init(&c);
@@ -273,7 +275,7 @@ test_d2h_batch_none(void)
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, 0, 2, c.d_pool, c.epoch_events, &handoff) == 0);
+          &c, &config, &sink.base, 0, 2, c.d_pool, c.epoch_events, &handoff) == 0);
 
   // tps_0=2, 2 epochs → shard complete
   CHECK(Fail, sink.finalize_count == 1);
@@ -379,7 +381,7 @@ test_d2h_zstd_single_epoch(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
+
 
   struct test_ctx c;
   test_ctx_init(&c);
@@ -403,7 +405,7 @@ test_d2h_zstd_single_epoch(void)
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
+          &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
 
   CHECK(Fail, sink.writers[0][0].size > 0);
 
@@ -478,7 +480,7 @@ test_d2h_double_buffer(void)
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
-  config.shard_sink = &sink.base;
+
 
   struct test_ctx c;
   test_ctx_init(&c);
@@ -503,7 +505,7 @@ test_d2h_double_buffer(void)
     struct flush_handoff handoff;
     CHECK(Fail,
           test_ctx_kick_and_drain(
-            &c, &config, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
+            &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) == 0);
   }
 
   CHECK(Fail, sink.finalize_count == 0); // 1 of 2 epochs
@@ -523,6 +525,7 @@ test_d2h_double_buffer(void)
     CHECK(Fail,
           test_ctx_kick_and_drain(&c,
                                   &config,
+                                  &sink.base,
                                   1,
                                   1,
                                   c.d_pool + epoch_pool_bytes,
