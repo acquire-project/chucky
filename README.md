@@ -35,6 +35,7 @@ it alongside L0.
 - **CUDA Toolkit** (12.8+) — CUDA runtime and nvcc compiler
 - [**nvcomp**](https://developer.nvidia.com/nvcomp) (5.x) — NVIDIA compression
   library for GPU-accelerated codecs
+- **aws-c-s3** — Amazon S3 client library for S3 storage backend
 - **zstd** — Zstandard compression (CPU-side, used by tests)
 - **CMake** (3.18+) + **Ninja** — build system
 - NVIDIA GPU with 8+ GB VRAM (16+ GB recommended for multiscale workloads)
@@ -44,15 +45,28 @@ The default build targets SM 100 (Blackwell). For other GPUs, set
 
 ### Build
 
-When the dependencies are in standard locations, use the default preset:
+The easiest way to get the non-CUDA dependencies (lz4, zstd, aws-c-s3) is via
+[vcpkg](https://vcpkg.io/). A `vcpkg.json` manifest is included in the repo:
+
+```
+git clone https://github.com/microsoft/vcpkg.git
+./vcpkg/bootstrap-vcpkg.sh   # or bootstrap-vcpkg.bat on Windows
+
+cmake --preset default \
+  -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build
+```
+
+If you already have the dependencies installed (e.g. via your system package
+manager or Nix), just use the default preset directly:
 
 ```
 cmake --preset default
 cmake --build build
 ```
 
-If nvcomp or zstd are installed outside the default search paths, create a
-`CMakeUserPresets.json` (git-ignored) to set `CMAKE_PREFIX_PATH`:
+If nvcomp or other dependencies are installed outside the default search paths,
+create a `CMakeUserPresets.json` (git-ignored) to set `CMAKE_PREFIX_PATH`:
 
 ```json
 {

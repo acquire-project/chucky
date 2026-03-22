@@ -10,3 +10,4 @@ result
 CMakeUserPresets.json
 typos.toml
 __pycache__/
+vcpkg_installed/

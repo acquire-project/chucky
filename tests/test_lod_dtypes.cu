@@ -176,8 +176,6 @@ test_fold(const char* label,
   CUdeviceptr d_accum = 0, d_data = 0, d_out = 0;
   CUdeviceptr d_level_ids = 0, d_counts = 0;
 
-  const int level = 1; // matches memset(h_ids, 1, N) below
-
   T* h_data = (T*)malloc(n_epochs * N * sizeof(T));
   T* h_result = (T*)malloc(N * sizeof(T));
   T* h_expected = (T*)malloc(N * sizeof(T));
@@ -199,15 +197,16 @@ test_fold(const char* label,
       } else {
         // Integer: fold applies overflow_safe_add_shift per step
         T accum = h_data[i];
-        int s = level;
-        T mask = (T)((1u << s) - 1);
         for (int e = 1; e < n_epochs; ++e) {
           T b = h_data[e * N + i];
           if constexpr (sizeof(T) >= 8)
             accum = accum + b; // 64-bit: raw sum
-          else
+          else {
+            const int s = 1; // matches memset(h_ids, 1, N) below
+            T mask = (T)((1u << s) - 1);
             accum = (T)((accum >> s) + (b >> s) +
                         (((accum & mask) + (b & mask)) >> s));
+          }
         }
         h_expected[i] = accum; // already divided
       }

@@ -13,19 +13,25 @@
 #define MINIO_USER     "minioadmin"
 #define MINIO_PASS     "minioadmin"
 
+#ifdef _WIN32
+#define DEVNULL "NUL"
+#else
+#define DEVNULL "/dev/null"
+#endif
+
 static int
 minio_setup(void)
 {
   CHECK(Fail,
         platform_cmd_run("docker exec minio mc alias set local "
                          MINIO_ENDPOINT " " MINIO_USER " " MINIO_PASS
-                         " > /dev/null 2>&1") == 0);
+                         " > " DEVNULL " 2>&1") == 0);
   // Recreate bucket
   platform_cmd_run("docker exec minio mc rb --force local/" MINIO_BUCKET
-                   " > /dev/null 2>&1");
+                   " > " DEVNULL " 2>&1");
   CHECK(Fail,
         platform_cmd_run("docker exec minio mc mb local/" MINIO_BUCKET
-                         " > /dev/null 2>&1") == 0);
+                         " > " DEVNULL " 2>&1") == 0);
   return 0;
 Fail:
   return 1;
@@ -38,7 +44,7 @@ minio_get(const char* key, uint8_t** out, size_t* out_len)
   char cmd[4096];
   snprintf(cmd,
            sizeof(cmd),
-           "docker exec minio mc cat local/%s/%s 2>/dev/null",
+           "docker exec minio mc cat local/%s/%s 2>" DEVNULL,
            MINIO_BUCKET,
            key);
   return platform_cmd_capture(cmd, out, out_len);
@@ -50,7 +56,7 @@ minio_exists(const char* key)
   char cmd[4096];
   snprintf(cmd,
            sizeof(cmd),
-           "docker exec minio mc stat local/%s/%s > /dev/null 2>&1",
+           "docker exec minio mc stat local/%s/%s > " DEVNULL " 2>&1",
            MINIO_BUCKET,
            key);
   return platform_cmd_run(cmd) == 0;
@@ -61,8 +67,13 @@ minio_exists(const char* key)
 static void
 set_minio_creds(void)
 {
+#ifdef _WIN32
+  _putenv_s("AWS_ACCESS_KEY_ID", MINIO_USER);
+  _putenv_s("AWS_SECRET_ACCESS_KEY", MINIO_PASS);
+#else
   setenv("AWS_ACCESS_KEY_ID", MINIO_USER, 1);
   setenv("AWS_SECRET_ACCESS_KEY", MINIO_PASS, 1);
+#endif
 }
 
 static int
