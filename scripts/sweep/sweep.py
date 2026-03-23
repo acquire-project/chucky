@@ -399,11 +399,12 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
     if skip:
         runs = [r for r in runs if not any(pat in r.scenario for pat in skip)]
 
-    # Validate S3 config if any runs need it
-    has_s3_runs = any(r.sink == "s3" for r in runs)
-    if has_s3_runs and not dry_run and not s3_bucket:
-        console.print("[red]Error: S3 runs require --s3-bucket[/red]")
-        raise SystemExit(1)
+    # Skip S3 runs if --s3-bucket not provided
+    if not s3_bucket:
+        s3_count = sum(1 for r in runs if r.sink == "s3")
+        if s3_count:
+            runs = [r for r in runs if r.sink != "s3"]
+            console.print(f"Skipping [bold]{s3_count}[/bold] S3 runs (no --s3-bucket provided)")
 
     # -- dry run: rich table --
     if dry_run:
