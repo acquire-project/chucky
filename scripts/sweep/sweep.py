@@ -179,7 +179,8 @@ def io_runs() -> list[RunSpec]:
     """I/O tier: measure impact of zarr output vs discard sink."""
     runs = []
     chunk_labels = ["32K", "256K", "2M"]
-    scenarios = ["orca2_single", "256cube_single"]
+    scenarios = ["orca2_single", "256cube_single",
+                  "orca2_multiscale_dim0", "256cube_multiscale_dim0"]
     for sc in scenarios:
         for cl in chunk_labels:
             for codec in ["none", "zstd"]:

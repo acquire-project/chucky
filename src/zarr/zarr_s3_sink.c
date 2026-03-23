@@ -620,27 +620,11 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   else
     snprintf(group_prefix, sizeof(group_prefix), "%s", cfg->prefix);
 
-  // LOD plan
   struct lod_plan plan = { 0 };
-  uint64_t shape[MAX_ZARR_RANK];
-  uint64_t chunk_shape[MAX_ZARR_RANK];
-  for (int d = 0; d < cfg->rank; ++d) {
-    shape[d] = (cfg->dimensions[d].size == 0) ? cfg->dimensions[d].chunk_size
-                                               : cfg->dimensions[d].size;
-    chunk_shape[d] = cfg->dimensions[d].chunk_size;
-  }
-
-  uint32_t lod_mask = 0;
-  for (int d = 0; d < cfg->rank; ++d)
-    if (cfg->dimensions[d].downsample)
-      lod_mask |= (1u << d);
-  if (cfg->rank > 0 && cfg->dimensions[0].size == 0)
-    lod_mask &= ~1u;
-
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init_shapes(
-          &plan, cfg->rank, shape, chunk_shape, lod_mask, max_lev) == 0);
+        lod_plan_init_from_dims(
+          &plan, cfg->dimensions, cfg->rank, max_lev) == 0);
 
   struct zarr_s3_multiscale_sink* ms =
     (struct zarr_s3_multiscale_sink*)calloc(1, sizeof(*ms));

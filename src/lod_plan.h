@@ -3,6 +3,8 @@
 #include "defs.limits.h"
 #include <stdint.h>
 
+struct dimension;
+
 struct lod_span
 {
   uint64_t beg, end;
@@ -69,6 +71,15 @@ lod_plan_init_shapes(struct lod_plan* p,
                      const uint64_t* chunk_shape,
                      uint32_t lod_mask,
                      int max_levels);
+
+// Compute LOD plan from dimension array. Extracts shapes, chunk shapes,
+// and LOD mask (dims 1+ with downsample=1) from dimensions.
+// Uses chunk_size as placeholder shape for unbounded dims (size==0).
+int
+lod_plan_init_from_dims(struct lod_plan* p,
+                        const struct dimension* dims,
+                        uint8_t rank,
+                        int max_levels);
 
 void
 lod_plan_free(struct lod_plan* p);

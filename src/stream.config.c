@@ -206,8 +206,10 @@ compute_stream_layouts(
   uint8_t storage_order[HALF_MAX_RANK];
   CHECK(Fail, resolve_storage_order(rank, dims, storage_order) == 0);
 
-  uint32_t lod_mask = 0;
   int dim0_downsample = dims[0].downsample;
+  // LOD mask excludes dim0 — dim0 downsampling is handled separately.
+  // Must match lod_plan_init_from_dims().
+  uint32_t lod_mask = 0;
   for (int d = 1; d < rank; ++d)
     if (dims[d].downsample)
       lod_mask |= (1u << d);

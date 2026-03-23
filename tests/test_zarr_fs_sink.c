@@ -417,7 +417,7 @@ test_multiscale_metadata(const char* tmpdir)
     free(data);
   }
 
-  // Check L1 array zarr.json (dims 0 and 2 halved)
+  // Check L1 array zarr.json (dim 2 halved; dim 0 excluded from LOD mask)
   {
     char path[4096];
     snprintf(path, sizeof(path), "%s/1/zarr.json", tmpdir);
@@ -428,7 +428,7 @@ test_multiscale_metadata(const char* tmpdir)
     CHECK(Fail2, read_file_all(path, &data, &len) == 0);
     data[len < 4095 ? len : 4095] = '\0';
 
-    CHECK(Fail2, strstr((char*)data, "\"shape\":[32,32,32]"));
+    CHECK(Fail2, strstr((char*)data, "\"shape\":[64,32,32]"));
     free(data);
   }
 
