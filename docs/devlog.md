@@ -38,6 +38,18 @@
 Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
+- [ ] look into j8 failures
+
+## 2026-03-23
+
+Looking at aqz integrtion more. Need to think about what it takes to
+redistribute this thing.
+
+Will need to wheel variants - one with the cuda driver dependency and one
+without.
+
+Can use a docker-compose.yml to spin up the `minio` service that my
+`Dockerfile` can use.
 
 ## 2026-03-20
 
@@ -47,7 +59,7 @@ Results get recorded in jsons in `bench/results/` and I can aggregte across
 commits and hosts. There's a `report.py` that generates some visualizations
 to browse things and it's all very very useful.
 
-- [ ] sweep doesn't include io at the moment
+- [x] sweep doesn't include io at the moment
 - [ ] medfmt and smallepoch scenarios need some analysis/optimization
 
 The other thing I've been working on is s3 integration. It's pretty easy to
@@ -71,7 +83,7 @@ think about a suspend state.
 
 ## 2026-03-18
 
-- [ ] Should make dims_advise part of the tile_stream api since it depends on the
+- [x] Should make dims_advise part of the tile_stream api since it depends on the
       config.
 
 Alan's been working on this an interesting use case. People will have several
@@ -135,7 +147,6 @@ Started doing the cpu implementation. I moved a bunch of the source files around
 Got tests to pass. Adding a test to validate the results are the same between
 the cpu and gpu pipeline. Adding the cpu backend to the benchmarks.
 
-- [ ] look into j8 failures
 
 ## 2026-03-15
 
@@ -803,15 +814,15 @@ darkening or artifact at the boundary.
 TODO
 - [x] cleanup
 - [x] uniform handling of tiles across lods for compress and aggregate
-- [ ] uniform handling of tiles for shard writer
+- [x] uniform handling of tiles for shard writer
 - [x] shard writer handles lods
   - could still improve this a bit probably
 - [x] replicate boundary condition
-- [ ] support floats
-- [ ] min, max, median, 2-max
+- [x] support floats
+- [x] min, max, median, 2-max
 - [x] add metrics, bench
-- [ ] verify the multiscale zarr is visualizable
-- [ ] make sure we're using the right condition to stop downsampling. all
+- [x] verify the multiscale zarr is visualizable
+- [x] make sure we're using the right condition to stop downsampling. all
       dims need to be bigger than tile size
 
 

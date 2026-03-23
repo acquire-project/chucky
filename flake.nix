@@ -30,11 +30,14 @@
             cmake
             cudaPackages.cudatoolkit
             cudaPackages.nvcomp
+            cudaPackages.nvcomp.static
             docker
             gdb
             gh
             llvmPackages.openmp
-            lz4
+            (lz4.overrideAttrs (old: {
+              cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DBUILD_STATIC_LIBS=ON" ];
+            }))
             man-pages
             man-pages-posix
             neocmakelsp
@@ -43,7 +46,7 @@
             perf
             pkg-config
             tokei
-            zstd
+            (zstd.override { enableStatic = true; })
             # s3 writer
             aws-c-common
             aws-c-cal

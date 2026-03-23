@@ -6,8 +6,8 @@ large multidimensional arrays (tensors) using CUDA.
 ## Overview
 
 Chucky implements a GPU-accelerated streaming pipeline for writing compressed,
-sharded [Zarr v3](https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html)
-stores from high-throughput data sources (2–5 GB/s). Zarr v3 shards pack
+sharded [Zarr v3][zarr-v3] stores from high-throughput data sources (2–5 GB/s).
+Zarr v3 shards pack
 multiple compressed chunks into a single file, reducing file count by orders of
 magnitude compared to one-file-per-chunk layouts.
 
@@ -19,7 +19,7 @@ The pipeline stages are:
 4. **Aggregation** — pack compressed chunks into shards with an index
 5. **Delivery** — D2H transfer and write shards to a Zarr v3 store
 
-Output is [OME-NGFF v0.5](https://ngff.openmicroscopy.org/0.5/) with multiscale
+Output is [OME-NGFF v0.5][ome-ngff] with multiscale
 LOD pyramids built on the fly: after the base level (L0) is chunked, the pipeline
 scatters, reduces, and chunks each coarser level before compressing and delivering
 it alongside L0.
@@ -33,8 +33,8 @@ it alongside L0.
 ### Prerequisites
 
 - **CUDA Toolkit** (12.8+) — CUDA runtime and nvcc compiler
-- [**nvcomp**](https://developer.nvidia.com/nvcomp) (5.x) — NVIDIA compression
-  library for GPU-accelerated codecs
+- [**nvcomp**][nvcomp] (5.x) — NVIDIA compression library for GPU-accelerated
+  codecs
 - **aws-c-s3** — Amazon S3 client library for S3 storage backend
 - **zstd** — Zstandard compression (CPU-side, used by tests)
 - **CMake** (3.18+) + **Ninja** — build system
@@ -46,7 +46,7 @@ The default build targets SM 100 (Blackwell). For other GPUs, set
 ### Build
 
 The easiest way to get the non-CUDA dependencies (lz4, zstd, aws-c-s3) is via
-[vcpkg](https://vcpkg.io/). A `vcpkg.json` manifest is included in the repo:
+[vcpkg][vcpkg]. A `vcpkg.json` manifest is included in the repo:
 
 ```
 git clone https://github.com/microsoft/vcpkg.git
@@ -98,16 +98,28 @@ ctest --test-dir build
 
 ### Docker
 
-Build the image (compiles everything inside the container):
+Run the full test suite (including S3 integration tests against MinIO):
+
+```
+docker compose up --build
+docker compose down
+```
+
+This builds the project inside a CUDA container, starts a MinIO instance, and
+runs `ctest`. GPU access uses [CDI][nvidia-cdi] (`nvidia.com/gpu=all`). MinIO stays running
+after tests finish — `docker compose down` stops and removes everything.
+
+To run a single test:
+
+```
+docker compose run test ctest --test-dir build -R test_zarr_s3_sink --output-on-failure
+docker compose down
+```
+
+Build the image alone (no tests):
 
 ```
 docker build -t chucky .
-```
-
-Run with GPU access:
-
-```
-docker run --gpus all chucky
 ```
 
 ## Benchmarks
@@ -180,5 +192,11 @@ dimensions, shard layout, LOD reduction method, etc.). See
 
 Pre-release. Functional streaming pipeline with multiscale LOD support and Zarr
 v3 sharded output. The API may change without notice. Under active development.
-I plan to use this as a future backbone for 
-[acquire-zarr](https://github.com/acquire-project/acquire-zarr).
+I plan to use this as a future backbone for [acquire-zarr][acquire-zarr].
+
+[zarr-v3]: https://zarr-specs.readthedocs.io/en/latest/v3/core/v3.0.html
+[ome-ngff]: https://ngff.openmicroscopy.org/0.5/
+[nvcomp]: https://developer.nvidia.com/nvcomp
+[vcpkg]: https://vcpkg.io/
+[nvidia-cdi]: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html
+[acquire-zarr]: https://github.com/acquire-project/acquire-zarr

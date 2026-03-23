@@ -6,12 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- Minio / Docker helpers ---
+// --- S3 test helpers (via aws cli) ---
+//
+// Uses AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars.
+// Defaults target a local minio on localhost:9000.
 
-#define MINIO_ENDPOINT "http://localhost:9000"
-#define MINIO_BUCKET   "chucky-test"
-#define MINIO_USER     "minioadmin"
-#define MINIO_PASS     "minioadmin"
+#define S3_BUCKET "chucky-test"
+#define S3_USER   "minioadmin"
+#define S3_PASS   "minioadmin"
 
 #ifdef _WIN32
 #define DEVNULL "NUL"
@@ -19,45 +21,59 @@
 #define DEVNULL "/dev/null"
 #endif
 
-static int
-minio_setup(void)
+static const char*
+s3_endpoint(void)
 {
-  CHECK(Fail,
-        platform_cmd_run("docker exec minio mc alias set local "
-                         MINIO_ENDPOINT " " MINIO_USER " " MINIO_PASS
-                         " > " DEVNULL " 2>&1") == 0);
+  const char* p = getenv("AWS_ENDPOINT_URL");
+  return p ? p : "http://localhost:9000";
+}
+
+static int
+s3_setup(void)
+{
+  char cmd[4096];
   // Recreate bucket
-  platform_cmd_run("docker exec minio mc rb --force local/" MINIO_BUCKET
-                   " > " DEVNULL " 2>&1");
-  CHECK(Fail,
-        platform_cmd_run("docker exec minio mc mb local/" MINIO_BUCKET
-                         " > " DEVNULL " 2>&1") == 0);
+  snprintf(cmd,
+           sizeof(cmd),
+           "aws --endpoint-url %s s3 rb s3://%s --force > " DEVNULL " 2>&1",
+           s3_endpoint(),
+           S3_BUCKET);
+  platform_cmd_run(cmd);
+  snprintf(cmd,
+           sizeof(cmd),
+           "aws --endpoint-url %s s3 mb s3://%s > " DEVNULL " 2>&1",
+           s3_endpoint(),
+           S3_BUCKET);
+  CHECK(Fail, platform_cmd_run(cmd) == 0);
   return 0;
 Fail:
   return 1;
 }
 
-// Read an object from minio. Caller must free(*out).
+// Read an object from S3. Caller must free(*out).
 static int
-minio_get(const char* key, uint8_t** out, size_t* out_len)
+s3_get(const char* key, uint8_t** out, size_t* out_len)
 {
   char cmd[4096];
   snprintf(cmd,
            sizeof(cmd),
-           "docker exec minio mc cat local/%s/%s 2>" DEVNULL,
-           MINIO_BUCKET,
+           "aws --endpoint-url %s s3 cp s3://%s/%s - 2>" DEVNULL,
+           s3_endpoint(),
+           S3_BUCKET,
            key);
   return platform_cmd_capture(cmd, out, out_len);
 }
 
 static int
-minio_exists(const char* key)
+s3_exists(const char* key)
 {
   char cmd[4096];
   snprintf(cmd,
            sizeof(cmd),
-           "docker exec minio mc stat local/%s/%s > " DEVNULL " 2>&1",
-           MINIO_BUCKET,
+           "aws --endpoint-url %s s3api head-object --bucket %s --key %s"
+           " > " DEVNULL " 2>&1",
+           s3_endpoint(),
+           S3_BUCKET,
            key);
   return platform_cmd_run(cmd) == 0;
 }
@@ -65,14 +81,14 @@ minio_exists(const char* key)
 // --- Tests ---
 
 static void
-set_minio_creds(void)
+set_s3_creds(void)
 {
 #ifdef _WIN32
-  _putenv_s("AWS_ACCESS_KEY_ID", MINIO_USER);
-  _putenv_s("AWS_SECRET_ACCESS_KEY", MINIO_PASS);
+  _putenv_s("AWS_ACCESS_KEY_ID", S3_USER);
+  _putenv_s("AWS_SECRET_ACCESS_KEY", S3_PASS);
 #else
-  setenv("AWS_ACCESS_KEY_ID", MINIO_USER, 1);
-  setenv("AWS_SECRET_ACCESS_KEY", MINIO_PASS, 1);
+  setenv("AWS_ACCESS_KEY_ID", S3_USER, 1);
+  setenv("AWS_SECRET_ACCESS_KEY", S3_PASS, 1);
 #endif
 }
 
@@ -99,14 +115,14 @@ test_metadata(void)
       .storage_position = 2 },
   };
 
-  set_minio_creds();
+  set_s3_creds();
 
   struct zarr_s3_config cfg = {
-    .bucket = MINIO_BUCKET,
+    .bucket = S3_BUCKET,
     .prefix = "test-meta",
     .array_name = "0",
     .region = "us-east-1",
-    .endpoint = MINIO_ENDPOINT,
+    .endpoint = s3_endpoint(),
     .data_type = dtype_u32,
     .fill_value = 0,
     .rank = 3,
@@ -118,15 +134,15 @@ test_metadata(void)
   CHECK(Fail, sink);
 
   // Verify root zarr.json
-  CHECK(Fail_sink, minio_exists("test-meta/zarr.json"));
+  CHECK(Fail_sink, s3_exists("test-meta/zarr.json"));
 
   // Verify array zarr.json
-  CHECK(Fail_sink, minio_exists("test-meta/0/zarr.json"));
+  CHECK(Fail_sink, s3_exists("test-meta/0/zarr.json"));
 
   // Read and check array metadata
   uint8_t* data = NULL;
   size_t len = 0;
-  CHECK(Fail_sink, minio_get("test-meta/0/zarr.json", &data, &len) == 0);
+  CHECK(Fail_sink, s3_get("test-meta/0/zarr.json", &data, &len) == 0);
 
   // Null-terminate for string search
   uint8_t* tmp = (uint8_t*)realloc(data, len + 1);
@@ -168,14 +184,14 @@ test_shard_write(void)
       .storage_position = 0 },
   };
 
-  set_minio_creds();
+  set_s3_creds();
 
   struct zarr_s3_config cfg = {
-    .bucket = MINIO_BUCKET,
+    .bucket = S3_BUCKET,
     .prefix = "test-shard",
     .array_name = "0",
     .region = "us-east-1",
-    .endpoint = MINIO_ENDPOINT,
+    .endpoint = s3_endpoint(),
     .data_type = dtype_u16,
     .fill_value = 0,
     .rank = 1,
@@ -202,7 +218,7 @@ test_shard_write(void)
   // Read back the shard object
   uint8_t* data = NULL;
   size_t len = 0;
-  CHECK(Fail_sink, minio_get("test-shard/0/c/0", &data, &len) == 0);
+  CHECK(Fail_sink, s3_get("test-shard/0/c/0", &data, &len) == 0);
   CHECK(Fail_data, len >= sizeof(chunk_data));
   CHECK(Fail_data, memcmp(data, chunk_data, sizeof(chunk_data)) == 0);
 
@@ -250,14 +266,14 @@ test_concurrent_finalize(void)
       .storage_position = 2 },
   };
 
-  set_minio_creds();
+  set_s3_creds();
 
   struct zarr_s3_config cfg = {
-    .bucket = MINIO_BUCKET,
+    .bucket = S3_BUCKET,
     .prefix = "test-concurrent",
     .array_name = "0",
     .region = "us-east-1",
-    .endpoint = MINIO_ENDPOINT,
+    .endpoint = s3_endpoint(),
     .data_type = dtype_u16,
     .fill_value = 0,
     .rank = 3,
@@ -305,7 +321,7 @@ test_concurrent_finalize(void)
     snprintf(key, sizeof(key), "test-concurrent/0/c/0/%d/%d", i / 2, i % 2);
     uint8_t* obj = NULL;
     size_t len = 0;
-    CHECK(Fail_sink, minio_get(key, &obj, &len) == 0);
+    CHECK(Fail_sink, s3_get(key, &obj, &len) == 0);
     CHECK(Fail_obj, len >= sizeof(data));
     CHECK(Fail_obj, memcmp(obj, data, sizeof(data)) == 0);
     free(obj);
@@ -332,10 +348,9 @@ Fail:
 int
 main(void)
 {
-  if (minio_setup() != 0) {
-    log_error("minio not available — is the container running?");
-    log_error("  docker run -d --name minio -p 9000:9000 "
-              "minio/minio server /data");
+  if (s3_setup() != 0) {
+    log_error("S3 not available — is minio running?");
+    log_error("  docker compose up minio");
     return 1;
   }
 
