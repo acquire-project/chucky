@@ -35,6 +35,8 @@
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
 - [ ] bench 2 streams, 1 gpu
+- [ ] api: multiple append dimensions. how does that work for lod? These
+      would be all left dims where chunk shape is 1.
 Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
@@ -48,8 +50,39 @@ redistribute this thing.
 Will need to wheel variants - one with the cuda driver dependency and one
 without.
 
-Can use a docker-compose.yml to spin up the `minio` service that my
-`Dockerfile` can use.
+Can use a `docker-compose.yml` to spin up the `minio` service that my
+`Dockerfile` can use. Made some fixes to the `Dockerfile` as well.
+
+I can think more about creating `install` targets; one with and with out cuda.
+But first I need to figure out the approach around HCS support.
+
+I've described the problem before (below).
+
+Might be able to constrain: use cases tend to be single snapshot at each fov
+and folks just want to have a `tiff` replacement. Could force thin epochs/an
+epoch fill before switching streams.
+
+- [ ] api: multiple append dimensions. how does that work for lod? These
+      would be all left dims where chunk shape is 1.
+
+Could tier the epoch pool.
+
+So the ideas:
+
+1. everything compress and downstream is stateless. would need to track the
+   target array.
+2. if we have "thin" epochs, we can just serialize. Should think more about what
+   to do to enable this. In particular, if we have several left-dimensions where
+   the chunk shape is 1, we can generalize the concept of append dimension to apply
+   across them. Has some lod implications but otherwise could be straightforward.
+   Constraining streams to complete epochs before switching is probably workable
+   for these users.
+3. if we have to support "thick" epochs, we can think about tiered storage
+   across gpu, host ram, local persist.
+
+Best to force a single chunk shape across arrays. Keeps everything simple.
+Probably also need to force only the right-most append dimension to be
+downsamplable.
 
 ## 2026-03-20
 
@@ -237,13 +270,11 @@ up transpose (storage order) support. I decided to make it part of the
 dimension description which significantly simplifies reasoning about whether
 the `dims` array has been permuted to storage order or not.
 
-<<<<<<< Updated upstream
 Noticed I was transferring the uncompressed data size for the D2H. Using
 the compressed size means transmitting the size back to the host and a sync
 but it's on the `d2h` stream and should be quick.
-=======
+
 Added an api for setting up the dims array.
->>>>>>> Stashed changes
 
 ## 2026-03-11
 
