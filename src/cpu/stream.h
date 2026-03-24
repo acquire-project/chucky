@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.stream.h"
+#include "writer.h"
 
 struct tile_stream_cpu;
 

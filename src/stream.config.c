@@ -206,51 +206,25 @@ compute_stream_layouts(
   uint8_t storage_order[HALF_MAX_RANK];
   CHECK(Fail, resolve_storage_order(rank, dims, storage_order) == 0);
 
-  out->levels.nlod = 1;
+  // --- LOD plan (always runs) ---
+  CHECK(Fail,
+        lod_plan_init_from_epoch_dims(
+          &out->plan, dims, rank, LOD_MAX_LEVELS) == 0);
+  int enable_multiscale = out->plan.lod_mask != 0;
+  out->levels.enable_multiscale = enable_multiscale;
+  out->levels.dim0_downsample = dims[0].downsample;
+  out->levels.nlod = enable_multiscale ? out->plan.nlod : 1;
 
-  // --- L0 layout ---
-  {
-    uint64_t l0_shape[HALF_MAX_RANK];
-    for (int d = 0; d < rank; ++d)
-      l0_shape[d] = dims[d].size;
+  // --- All level layouts ---
+  for (int lv = 0; lv < out->levels.nlod; ++lv)
     CHECK(Fail,
-          compute_level_layout(
-            &out->layouts[0], rank, bpe, dims, l0_shape, codec_alignment,
-            storage_order) == 0);
-  }
+          compute_level_layout(&out->layouts[lv], rank, bpe, dims,
+                               out->plan.shapes[lv], codec_alignment,
+                               storage_order) == 0);
 
-  // --- LOD plan ---
-  {
-    CHECK(Fail,
-          lod_plan_init_from_epoch_dims(
-            &out->plan, dims, rank, LOD_MAX_LEVELS) == 0);
-
-    int enable_multiscale = out->plan.lod_mask != 0;
-    int dim0_downsample = dims[0].downsample;
-    out->levels.enable_multiscale = enable_multiscale;
-    out->levels.dim0_downsample = dim0_downsample;
-
-    if (enable_multiscale) {
-      out->levels.nlod = out->plan.nlod;
-
-      for (int lv = 1; lv < out->plan.nlod; ++lv)
-        CHECK(Fail,
-              compute_level_layout(&out->layouts[lv],
-                                   rank,
-                                   bpe,
-                                   dims,
-                                   out->plan.shapes[lv],
-                                   codec_alignment,
-                                   storage_order) == 0);
-    }
-  }
-
-  // --- Level geometry ---
-  out->levels.chunk_count[0] = out->layouts[0].chunks_per_epoch;
-  out->levels.chunk_offset[0] = 0;
-  out->levels.total_chunks = out->layouts[0].chunks_per_epoch;
-
-  for (int lv = 1; lv < out->levels.nlod; ++lv) {
+  // --- Level geometry (single loop) ---
+  out->levels.total_chunks = 0;
+  for (int lv = 0; lv < out->levels.nlod; ++lv) {
     out->levels.chunk_count[lv] = out->layouts[lv].chunks_per_epoch;
     out->levels.chunk_offset[lv] = out->levels.total_chunks;
     out->levels.total_chunks += out->levels.chunk_count[lv];

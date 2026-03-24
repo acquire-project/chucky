@@ -26,13 +26,6 @@ destroy_cuda_streams_and_events(struct gpu_streams* streams,
 }
 
 static void
-destroy_l0_layout_gpu(struct tile_stream_layout_gpu* gpu)
-{
-  cu_mem_free((CUdeviceptr)gpu->d_lifted_shape);
-  cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
-}
-
-static void
 destroy_chunk_pools(struct pool_state* pools)
 {
   for (int i = 0; i < 2; ++i)
@@ -68,7 +61,6 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   destroy_chunk_pools(&s->pools);
   lod_state_destroy(&s->lod);
   ingest_destroy(&s->stage);
-  destroy_l0_layout_gpu(&s->layout_gpu);
   destroy_cuda_streams_and_events(&s->streams, &s->pools);
   free(s);
 }
@@ -88,27 +80,6 @@ init_cuda_streams_and_events(struct gpu_streams* streams,
     CU(Fail, cuEventCreate(&pools->ready[i], CU_EVENT_DEFAULT));
   }
 
-  return 0;
-Fail:
-  return 1;
-}
-
-// Upload layout arrays to GPU. Returns 0 on success.
-static int
-upload_stream_layout(struct tile_stream_layout_gpu* gpu,
-                     const struct tile_stream_layout* layout)
-{
-  const size_t shape_bytes = layout->lifted_rank * sizeof(uint64_t);
-  const size_t strides_bytes = layout->lifted_rank * sizeof(int64_t);
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, shape_bytes));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, strides_bytes));
-  CU(Fail,
-     cuMemcpyHtoD(
-       (CUdeviceptr)gpu->d_lifted_shape, layout->lifted_shape, shape_bytes));
-  CU(Fail,
-     cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_strides,
-                  layout->lifted_strides,
-                  strides_bytes));
   return 0;
 Fail:
   return 1;
@@ -220,13 +191,11 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   // Copy L0 layout (host fields; d_* still NULL).
   out->layout = cl.layouts[0];
 
-  // Move LOD plan and level layouts.
-  if (cl.levels.enable_multiscale) {
-    out->lod.plan = cl.plan;
-    cl.plan = (struct lod_plan){ 0 }; // ownership transferred
-    for (int lv = 0; lv < cl.levels.nlod; ++lv)
-      out->lod.layouts[lv] = cl.layouts[lv];
-  }
+  // Move LOD plan and level layouts (always, including L0).
+  out->lod.plan = cl.plan;
+  cl.plan = (struct lod_plan){ 0 }; // ownership transferred
+  for (int lv = 0; lv < cl.levels.nlod; ++lv)
+    out->lod.layouts[lv] = cl.layouts[lv];
 
   // Copy batch info.
   CHECK(FailPhase2, (cl.epochs_per_batch & (cl.epochs_per_batch - 1)) == 0);
@@ -236,7 +205,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   // GPU allocation and init.
   CHECK(FailPhase2,
         init_cuda_streams_and_events(&out->streams, &out->pools) == 0);
-  CHECK(FailPhase2, upload_stream_layout(&out->layout_gpu, &out->layout) == 0);
   CHECK(FailPhase2,
         ingest_init(&out->stage,
                     out->config.buffer_capacity_bytes,

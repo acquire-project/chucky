@@ -179,7 +179,7 @@ Fail:
 static int
 upload_lod_level_layouts(struct lod_state* lod)
 {
-  for (int lv = 1; lv < lod->plan.nlod; ++lv) {
+  for (int lv = 0; lv < lod->plan.nlod; ++lv) {
     const struct tile_stream_layout* layout = &lod->layouts[lv];
     struct tile_stream_layout_gpu* gpu = &lod->layout_gpu[lv];
     const size_t sb = layout->lifted_rank * sizeof(uint64_t);
@@ -337,12 +337,13 @@ lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
                const struct tile_stream_configuration* config)
 {
+  // Always upload level layouts (L0 included).
+  CHECK(Fail, upload_lod_level_layouts(lod) == 0);
+
   if (!levels->enable_multiscale)
     return 0;
 
-  // Plan and level layouts are already populated (moved from
-  // compute_stream_layouts). Just do GPU uploads and LUT building.
-
+  // LOD-specific: plan shapes, gather LUT, reduce arrays, morton LUTs.
   for (int k = 0; k < lod->plan.nlod; ++k) {
     if (lod->plan.lod_nelem[k] > UINT32_MAX) {
       log_error("LOD level %d count %llu exceeds uint32_t limit",
@@ -355,7 +356,6 @@ lod_state_init(struct lod_state* lod,
   CHECK(Fail, upload_plan_shapes(lod, config->rank) == 0);
   CHECK(Fail, init_gather_lut(lod, config) == 0);
   CHECK(Fail, init_reduce_level_arrays(lod) == 0);
-  CHECK(Fail, upload_lod_level_layouts(lod) == 0);
   CHECK(Fail, init_morton_scatter_luts(lod) == 0);
 
   levels->nlod = lod->plan.nlod;
@@ -479,7 +479,7 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_parent_shapes[i]));
     CUWARN(cuMemFree(lod->d_level_ends[i]));
   }
-  for (int i = 1; i < lod->plan.nlod; ++i) {
+  for (int i = 0; i < lod->plan.nlod; ++i) {
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_strides));
   }
@@ -576,7 +576,6 @@ Error:
 static int
 scatter_morton_to_chunks(struct lod_state* lod,
                          const struct level_geometry* levels,
-                         const struct tile_stream_layout* layout,
                          void* pool_epoch,
                          enum dtype dtype,
                          uint32_t active_levels_mask,
@@ -584,35 +583,19 @@ scatter_morton_to_chunks(struct lod_state* lod,
 {
   struct lod_plan* p = &lod->plan;
   const size_t bpe = dtype_bpe(dtype);
+  const uint64_t chunk_stride = lod->layouts[0].chunk_stride;
 
-  // L0 always scattered
-  {
-    struct lod_span lev0 = lod_spans_at(&p->levels, 0);
-
-    CHECK(Error,
-          lod_morton_to_chunks_lut((CUdeviceptr)pool_epoch,
-                                   lod->d_morton + lev0.beg * bpe,
-                                   lod->d_morton_chunk_lut[0],
-                                   lod->d_morton_batch_chunk_offsets[0],
-                                   dtype,
-                                   p->lod_nelem[0],
-                                   p->batch_count,
-                                   compute) == 0);
-  }
-
-  for (int lv = 1; lv < p->nlod; ++lv) {
+  for (int lv = 0; lv < p->nlod; ++lv) {
     if (!(active_levels_mask & (1u << lv)))
       continue;
 
     struct lod_span lev = lod_spans_at(&p->levels, lv);
-    CUdeviceptr morton_lv = lod->d_morton + lev.beg * bpe;
-
     CUdeviceptr dst = (CUdeviceptr)pool_epoch +
-                      levels->chunk_offset[lv] * layout->chunk_stride * bpe;
+                      levels->chunk_offset[lv] * chunk_stride * bpe;
 
     CHECK(Error,
           lod_morton_to_chunks_lut(dst,
-                                   morton_lv,
+                                   lod->d_morton + lev.beg * bpe,
                                    lod->d_morton_chunk_lut[lv],
                                    lod->d_morton_batch_chunk_offsets[lv],
                                    dtype,
@@ -630,7 +613,6 @@ Error:
 int
 lod_run_epoch(struct lod_state* lod,
               const struct level_geometry* levels,
-              const struct tile_stream_layout* layout,
               void* pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
@@ -698,8 +680,7 @@ lod_run_epoch(struct lod_state* lod,
   CHECK(
     Error,
     scatter_morton_to_chunks(
-      lod, levels, layout, pool_epoch, dtype, active_levels_mask, compute) ==
-      0);
+      lod, levels, pool_epoch, dtype, active_levels_mask, compute) == 0);
 
   CU(Error, cuEventRecord(lod->t_end, compute));
 

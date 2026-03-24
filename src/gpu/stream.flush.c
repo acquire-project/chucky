@@ -60,7 +60,6 @@ flush_run_epoch_lod(struct tile_stream_gpu* s)
     CHECK(Error,
           lod_run_epoch(&s->lod,
                         &s->levels,
-                        &s->layout,
                         pool_epoch_ptr(s, s->batch.accumulated),
                         s->config.dtype,
                         s->config.reduce_method,

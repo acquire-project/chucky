@@ -7,7 +7,6 @@
 #include "types.aggregate.h"
 #include "types.codec.h"
 #include "types.lod.h"
-#include "writer.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,9 +36,11 @@ struct tile_stream_configuration
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method dim0_reduce_method;
   uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
-  uint32_t target_batch_chunks; // minimum chunks per compress batch (default 1024)
+  uint32_t
+    target_batch_chunks; // minimum chunks per compress batch (default 1024)
   float metadata_update_interval_s;
-  size_t shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
+  size_t
+    shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
 };
 
 struct tile_stream_layout

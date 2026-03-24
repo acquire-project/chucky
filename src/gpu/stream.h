@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.stream.h"
+#include "writer.h"
 #include <cuda.h>
 
 struct tile_stream_layout_gpu
@@ -23,7 +24,7 @@ struct tile_stream_memory_info
   size_t codec_bytes;           // nvcomp workspace + pointer arrays
 
   // Breakdown (host heap, not pinned)
-  size_t shard_bytes;           // active_shard arrays + index buffers
+  size_t shard_bytes; // active_shard arrays + index buffers
 
   // Key parameters used in the estimate
   uint64_t chunks_per_epoch; // L0
@@ -43,15 +44,15 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 // that fits within budget_bytes of GPU device memory.
 // Modifies config->dimensions in place. Returns 0 on success.
 int
-tile_stream_gpu_advise_chunk_sizes(
-    struct tile_stream_configuration* config,
-    size_t target_chunk_bytes,
-    const uint8_t* ratios,
-    size_t budget_bytes);
+tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
+                                   size_t target_chunk_bytes,
+                                   const uint8_t* ratios,
+                                   size_t budget_bytes);
 
 // Allocate and initialize a tile_stream_gpu. Returns pointer on success,
 // NULL on failure. Caller must free with tile_stream_gpu_destroy.
-// The config->dimensions pointer must remain valid for the lifetime of the stream.
+// The config->dimensions pointer must remain valid for the lifetime of the
+// stream.
 struct tile_stream_gpu*
 tile_stream_gpu_create(const struct tile_stream_configuration* config,
                        struct shard_sink* sink);

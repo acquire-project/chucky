@@ -69,7 +69,7 @@ struct lod_state
   CUdeviceptr d_parent_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_level_ends[LOD_MAX_LEVELS];
 
-  // Per-level chunk layouts [1..nlod-1], index 0 unused
+  // Per-level chunk layouts [0..nlod-1]
   struct tile_stream_layout layouts[LOD_MAX_LEVELS];
   struct tile_stream_layout_gpu layout_gpu[LOD_MAX_LEVELS];
 
@@ -157,7 +157,6 @@ struct tile_stream_gpu
   struct tile_stream_configuration config;
   struct shard_sink* shard_sink;
   struct tile_stream_layout layout;
-  struct tile_stream_layout_gpu layout_gpu;
   struct level_geometry levels;
   struct gpu_streams streams;
   struct batch_state batch;

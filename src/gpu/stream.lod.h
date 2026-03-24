@@ -2,7 +2,8 @@
 
 #include "stream.internal.h"
 
-// Upload pre-computed LOD plan/layouts to GPU and build scatter LUTs.
+// Upload level layouts to GPU (always, including L0). When multiscale is
+// enabled, also uploads LOD plan shapes and builds scatter/reduce LUTs.
 // Plan and level layouts must already be populated in lod->plan and
 // lod->layouts (from compute_stream_layouts). Sets levels->nlod.
 // Returns 0 on success.
@@ -36,7 +37,6 @@ lod_state_destroy(struct lod_state* lod);
 int
 lod_run_epoch(struct lod_state* lod,
               const struct level_geometry* levels,
-              const struct tile_stream_layout* layout,
               void* pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
