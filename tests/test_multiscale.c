@@ -464,21 +464,9 @@ test_dim0_multi_epoch_levels(void)
   const uint8_t rank = 5;
   const size_t total_elements = dim_total_elements(dims, rank);
 
-  // We need nlod — compute from lod_plan_init_shapes
+  // We need nlod — compute from lod_plan_init_from_dims
   struct lod_plan plan = { 0 };
-  {
-    uint64_t shape[5], tile_shape[5];
-    uint32_t lod_mask = 0;
-    for (int i = 0; i < rank; ++i) {
-      shape[i] = dims[i].size;
-      tile_shape[i] = dims[i].chunk_size;
-      if (dims[i].downsample)
-        lod_mask |= (1u << i);
-    }
-    CHECK(Fail,
-          lod_plan_init_shapes(
-            &plan, rank, shape, tile_shape, lod_mask, LOD_MAX_LEVELS) == 0);
-  }
+  CHECK(Fail, lod_plan_init_from_dims(&plan, dims, rank, LOD_MAX_LEVELS) == 0);
 
   int nlod = plan.nlod;
   log_info("  nlod=%d total_elements=%zu", nlod, total_elements);

@@ -218,14 +218,14 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
 
   // Copy L0 layout (host fields; d_* still NULL).
-  out->layout = cl.l0;
+  out->layout = cl.layouts[0];
 
   // Move LOD plan and level layouts.
   if (cl.levels.enable_multiscale) {
     out->lod.plan = cl.plan;
     cl.plan = (struct lod_plan){ 0 }; // ownership transferred
-    for (int lv = 1; lv < cl.levels.nlod; ++lv)
-      out->lod.layouts[lv] = cl.lod_layouts[lv];
+    for (int lv = 0; lv < cl.levels.nlod; ++lv)
+      out->lod.layouts[lv] = cl.layouts[lv];
   }
 
   // Copy batch info.
@@ -242,7 +242,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                     out->config.buffer_capacity_bytes,
                     out->streams.compute) == 0);
   CHECK(FailPhase2,
-        lod_state_init(&out->lod, &out->levels, &out->layout, &out->config) ==
+        lod_state_init(&out->lod, &out->levels, &out->config) ==
           0);
   CHECK(FailPhase2,
         init_chunk_pools(&out->pools,
@@ -265,7 +265,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(FailPhase2, init_batch_events(&out->batch, out->streams.compute) == 0);
   if (out->levels.enable_multiscale) {
     CHECK(FailPhase2,
-          lod_state_init_buffers(&out->lod, &out->layout, out->config.dtype) ==
+          lod_state_init_buffers(&out->lod, out->config.dtype) ==
             0);
     if (out->levels.dim0_downsample)
       CHECK(FailPhase2,
@@ -350,8 +350,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   const size_t bpe = dtype_bpe(config->dtype);
   const size_t buffer_capacity_bytes =
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
-  const uint64_t chunk_stride = cl.l0.chunk_stride;
-  const uint64_t chunks_per_epoch = cl.l0.chunks_per_epoch;
+  const uint64_t chunk_stride = cl.layouts[0].chunk_stride;
+  const uint64_t chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
   const uint64_t total_chunks = cl.levels.total_chunks;
   const uint32_t K = cl.epochs_per_batch;
   const int nlod = cl.levels.nlod;
@@ -437,7 +437,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   if (cl.levels.enable_multiscale) {
     const struct lod_plan* plan = &cl.plan;
 
-    lod_device += cl.l0.epoch_elements * bpe;
+    lod_device += cl.layouts[0].epoch_elements * bpe;
     uint64_t total_lod_vals = plan->levels.ends[plan->nlod - 1];
     lod_device += total_lod_vals * bpe;
 

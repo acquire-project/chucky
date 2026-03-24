@@ -2,6 +2,7 @@
 
 ## TODO
 
+- [ ] multiple-array streaming (HCS use case)
 - [x] s3 writer
 - [x] make a report to characterize performance/memory by chunk size
 - [ ] interface for streaming from device, integrating with a cuda stream

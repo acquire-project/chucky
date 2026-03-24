@@ -41,7 +41,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &s->cl))
     goto Fail;
 
-  s->layout = s->cl.l0;
+  s->layout = s->cl.layouts[0];
   s->levels = s->cl.levels;
 
   const uint32_t K = s->cl.epochs_per_batch;
@@ -201,7 +201,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       const struct lod_plan* plan = &s->cl.plan;
       const struct tile_stream_layout* layout_lv =
-        (lv == 0) ? &s->layout : &s->cl.lod_layouts[lv];
+        &s->cl.layouts[lv];
       uint64_t lod_count = plan->lod_nelem[lv];
 
       s->morton_lut[lv] = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
@@ -340,7 +340,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
 {
   const uint32_t K = cl->epochs_per_batch;
   const uint64_t total_chunks = cl->levels.total_chunks;
-  const size_t chunk_stride_bytes = cl->l0.chunk_stride * bpe;
+  const size_t chunk_stride_bytes = cl->layouts[0].chunk_stride * bpe;
   const size_t max_out = cl->max_output_size;
 
   info->chunk_pool_bytes = (uint64_t)K * total_chunks * chunk_stride_bytes;
@@ -389,7 +389,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
   {
     size_t lod = 0;
     if (cl->levels.enable_multiscale) {
-      lod += cl->l0.epoch_elements * bpe; // linear
+      lod += cl->layouts[0].epoch_elements * bpe; // linear
       uint64_t total_lod_elements = cl->plan.levels.ends[cl->plan.nlod - 1];
       lod += total_lod_elements * bpe; // lod_values
 
@@ -428,7 +428,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
                      info->aggregate_bytes + info->lod_bytes +
                      info->shard_bytes;
 
-  info->chunks_per_epoch = cl->l0.chunks_per_epoch;
+  info->chunks_per_epoch = cl->layouts[0].chunks_per_epoch;
   info->total_chunks = total_chunks;
   info->max_output_size = max_out;
   info->nlod = cl->levels.nlod;
@@ -708,7 +708,7 @@ scatter_epoch(struct tile_stream_cpu* s,
     if (!(active_levels_mask & (1u << lv)))
       continue;
     const struct tile_stream_layout* layout =
-      (lv == 0) ? &s->layout : &s->cl.lod_layouts[lv];
+      &s->cl.layouts[lv];
 
     CHECK(Error,
           lod_cpu_morton_to_chunks(&s->cl.plan,
@@ -904,7 +904,7 @@ cpu_flush(struct writer* self)
 
         // Scatter emitted level from morton space to chunk pool.
         // Drain always uses batch slot 0 (batch was just reset).
-        const struct tile_stream_layout* layout_lv = &s->cl.lod_layouts[lv];
+        const struct tile_stream_layout* layout_lv = &s->cl.layouts[lv];
         if (lod_cpu_morton_to_chunks(&s->cl.plan,
                                      s->lod_values,
                                      s->chunk_pool,

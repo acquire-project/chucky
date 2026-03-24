@@ -68,7 +68,7 @@ compress_agg_init(struct compress_agg_stage* stage,
   const size_t bpe = dtype_bpe(config->dtype);
   const uint32_t K = cl->epochs_per_batch;
   const uint64_t total_chunks = cl->levels.total_chunks;
-  const uint64_t chunk_stride = cl->l0.chunk_stride;
+  const uint64_t chunk_stride = cl->layouts[0].chunk_stride;
   CHECK_MUL_OVERFLOW(Fail, K, total_chunks, UINT64_MAX);
   const uint64_t M = (uint64_t)K * total_chunks;
   const size_t chunk_bytes = chunk_stride * bpe;

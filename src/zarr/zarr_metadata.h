@@ -56,3 +56,9 @@ void
 zarr_compute_geometry(struct zarr_geometry* g,
                       uint8_t rank,
                       const struct dimension* dimensions);
+
+void
+zarr_compute_geometry_from_shape(struct zarr_geometry* g,
+                                 uint8_t rank,
+                                 const uint64_t* shape,
+                                 const struct dimension* dimensions);

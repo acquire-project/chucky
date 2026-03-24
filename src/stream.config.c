@@ -3,6 +3,7 @@
 #include "index.ops.h"
 #include "prelude.h"
 #include "types.aggregate.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -184,8 +185,7 @@ computed_stream_layouts_free(struct computed_stream_layouts* cl)
 {
   if (!cl)
     return;
-  if (cl->levels.enable_multiscale)
-    lod_plan_free(&cl->plan);
+  lod_plan_free(&cl->plan);
 }
 
 int
@@ -206,17 +206,6 @@ compute_stream_layouts(
   uint8_t storage_order[HALF_MAX_RANK];
   CHECK(Fail, resolve_storage_order(rank, dims, storage_order) == 0);
 
-  int dim0_downsample = dims[0].downsample;
-  // LOD mask excludes dim0 — dim0 downsampling is handled separately.
-  // Must match lod_plan_init_from_dims().
-  uint32_t lod_mask = 0;
-  for (int d = 1; d < rank; ++d)
-    if (dims[d].downsample)
-      lod_mask |= (1u << d);
-  int enable_multiscale = lod_mask != 0;
-
-  out->levels.enable_multiscale = enable_multiscale;
-  out->levels.dim0_downsample = dim0_downsample;
   out->levels.nlod = 1;
 
   // --- L0 layout ---
@@ -226,45 +215,43 @@ compute_stream_layouts(
       l0_shape[d] = dims[d].size;
     CHECK(Fail,
           compute_level_layout(
-            &out->l0, rank, bpe, dims, l0_shape, codec_alignment,
+            &out->layouts[0], rank, bpe, dims, l0_shape, codec_alignment,
             storage_order) == 0);
   }
 
   // --- LOD plan ---
-  if (enable_multiscale) {
-    uint64_t shape[HALF_MAX_RANK];
-    uint64_t chunk_shape[HALF_MAX_RANK];
-    shape[0] = dims[0].chunk_size;
-    for (int d = 1; d < rank; ++d)
-      shape[d] = dims[d].size;
-    for (int d = 0; d < rank; ++d)
-      chunk_shape[d] = dims[d].chunk_size;
-
+  {
     CHECK(Fail,
-          lod_plan_init(
-            &out->plan, rank, shape, chunk_shape, lod_mask, LOD_MAX_LEVELS) ==
-            0);
+          lod_plan_init_from_epoch_dims(
+            &out->plan, dims, rank, LOD_MAX_LEVELS) == 0);
 
-    out->levels.nlod = out->plan.nlod;
+    int enable_multiscale = out->plan.lod_mask != 0;
+    int dim0_downsample = dims[0].downsample;
+    out->levels.enable_multiscale = enable_multiscale;
+    out->levels.dim0_downsample = dim0_downsample;
 
-    for (int lv = 1; lv < out->plan.nlod; ++lv)
-      CHECK(Fail,
-            compute_level_layout(&out->lod_layouts[lv],
-                                 rank,
-                                 bpe,
-                                 dims,
-                                 out->plan.shapes[lv],
-                                 codec_alignment,
-                                 storage_order) == 0);
+    if (enable_multiscale) {
+      out->levels.nlod = out->plan.nlod;
+
+      for (int lv = 1; lv < out->plan.nlod; ++lv)
+        CHECK(Fail,
+              compute_level_layout(&out->layouts[lv],
+                                   rank,
+                                   bpe,
+                                   dims,
+                                   out->plan.shapes[lv],
+                                   codec_alignment,
+                                   storage_order) == 0);
+    }
   }
 
   // --- Level geometry ---
-  out->levels.chunk_count[0] = out->l0.chunks_per_epoch;
+  out->levels.chunk_count[0] = out->layouts[0].chunks_per_epoch;
   out->levels.chunk_offset[0] = 0;
-  out->levels.total_chunks = out->l0.chunks_per_epoch;
+  out->levels.total_chunks = out->layouts[0].chunks_per_epoch;
 
   for (int lv = 1; lv < out->levels.nlod; ++lv) {
-    out->levels.chunk_count[lv] = out->lod_layouts[lv].chunks_per_epoch;
+    out->levels.chunk_count[lv] = out->layouts[lv].chunks_per_epoch;
     out->levels.chunk_offset[lv] = out->levels.total_chunks;
     out->levels.total_chunks += out->levels.chunk_count[lv];
   }
@@ -275,7 +262,7 @@ compute_stream_layouts(
 
   // --- Codec-derived max_output_size ---
   {
-    const size_t chunk_bytes = out->l0.chunk_stride * bpe;
+    const size_t chunk_bytes = out->layouts[0].chunk_stride * bpe;
     out->max_output_size = max_output_size_fn(config->codec, chunk_bytes);
     if (config->codec != CODEC_NONE && out->max_output_size == 0)
       goto Fail;
@@ -283,29 +270,18 @@ compute_stream_layouts(
 
   // --- Per-level aggregate layout and shard geometry ---
   for (int lv = 0; lv < out->levels.nlod; ++lv) {
-    uint64_t chunk_count[HALF_MAX_RANK];
-    uint64_t chunks_per_shard[HALF_MAX_RANK];
-
+    struct zarr_geometry geo;
     if (lv == 0) {
-      for (int d = 0; d < rank; ++d) {
-        chunk_count[d] =
-          (dims[d].size == 0) ? 1 : ceildiv(dims[d].size, dims[d].chunk_size);
-        uint64_t cps = dims[d].chunks_per_shard;
-        chunks_per_shard[d] = (cps == 0) ? chunk_count[d] : cps;
-      }
+      zarr_compute_geometry(&geo, rank, dims);
     } else {
-      const uint64_t* lv_shape = out->plan.shapes[lv];
-      for (int d = 0; d < rank; ++d) {
-        chunk_count[d] = ceildiv(lv_shape[d], dims[d].chunk_size);
-        uint64_t cps = dims[d].chunks_per_shard;
-        chunks_per_shard[d] = (cps == 0) ? chunk_count[d] : cps;
-      }
+      zarr_compute_geometry_from_shape(
+        &geo, rank, out->plan.shapes[lv], dims);
     }
 
     uint64_t chunks_lv = out->levels.chunk_count[lv];
 
     uint32_t batch_count = out->epochs_per_batch;
-    if (dim0_downsample && lv > 0) {
+    if (out->levels.dim0_downsample && lv > 0) {
       uint32_t period = 1u << lv;
       batch_count =
         (out->epochs_per_batch >= period) ? out->epochs_per_batch / period : 0;
@@ -314,8 +290,8 @@ compute_stream_layouts(
 
     uint64_t so_chunk_count[HALF_MAX_RANK], so_chunks_per_shard[HALF_MAX_RANK];
     for (int j = 0; j < rank; ++j) {
-      so_chunk_count[j] = chunk_count[storage_order[j]];
-      so_chunks_per_shard[j] = chunks_per_shard[storage_order[j]];
+      so_chunk_count[j] = geo.chunk_count[storage_order[j]];
+      so_chunks_per_shard[j] = geo.chunks_per_shard[storage_order[j]];
     }
 
     CHECK(Fail,
@@ -328,8 +304,8 @@ compute_stream_layouts(
                                    config->shard_alignment) == 0);
 
     {
-      uint64_t cps0 = chunks_per_shard[0];
-      if (dim0_downsample && lv > 0) {
+      uint64_t cps0 = geo.chunks_per_shard[0];
+      if (out->levels.dim0_downsample && lv > 0) {
         uint64_t divisor = 1ull << lv;
         cps0 = (cps0 > divisor) ? cps0 / divisor : 1;
       }
@@ -337,15 +313,12 @@ compute_stream_layouts(
     }
     out->per_level[lv].chunks_per_shard_inner = 1;
     for (int d = 1; d < rank; ++d)
-      out->per_level[lv].chunks_per_shard_inner *= chunks_per_shard[d];
+      out->per_level[lv].chunks_per_shard_inner *= geo.chunks_per_shard[d];
     out->per_level[lv].chunks_per_shard_total =
       out->per_level[lv].chunks_per_shard_0 *
       out->per_level[lv].chunks_per_shard_inner;
 
-    out->per_level[lv].shard_inner_count = 1;
-    for (int d = 1; d < rank; ++d)
-      out->per_level[lv].shard_inner_count *=
-        ceildiv(chunk_count[d], chunks_per_shard[d]);
+    out->per_level[lv].shard_inner_count = geo.shard_inner_count;
   }
 
   return 0;

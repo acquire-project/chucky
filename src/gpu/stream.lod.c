@@ -318,16 +318,13 @@ Fail:
 }
 
 static int
-init_morton_scatter_luts(struct lod_state* lod,
-                         const struct tile_stream_layout* l0)
+init_morton_scatter_luts(struct lod_state* lod)
 {
   if (lod->plan.lod_ndim == 0)
     return 0;
 
   for (int lv = 0; lv < lod->plan.nlod; ++lv) {
-    const struct tile_stream_layout* lay =
-      (lv == 0) ? l0 : &lod->layouts[lv];
-    CHECK(Fail, build_morton_lut_for_level(lod, lay, lv) == 0);
+    CHECK(Fail, build_morton_lut_for_level(lod, &lod->layouts[lv], lv) == 0);
   }
 
   return 0;
@@ -338,7 +335,6 @@ Fail:
 int
 lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
-               const struct tile_stream_layout* l0,
                const struct tile_stream_configuration* config)
 {
   if (!levels->enable_multiscale)
@@ -360,7 +356,7 @@ lod_state_init(struct lod_state* lod,
   CHECK(Fail, init_gather_lut(lod, config) == 0);
   CHECK(Fail, init_reduce_level_arrays(lod) == 0);
   CHECK(Fail, upload_lod_level_layouts(lod) == 0);
-  CHECK(Fail, init_morton_scatter_luts(lod, l0) == 0);
+  CHECK(Fail, init_morton_scatter_luts(lod) == 0);
 
   levels->nlod = lod->plan.nlod;
   return 0;
@@ -372,11 +368,10 @@ Fail:
 
 int
 lod_state_init_buffers(struct lod_state* lod,
-                       const struct tile_stream_layout* l0,
                        enum dtype dtype)
 {
   const size_t bpe = dtype_bpe(dtype);
-  size_t linear_bytes = l0->epoch_elements * bpe;
+  size_t linear_bytes = lod->layouts[0].epoch_elements * bpe;
   CU(Fail, cuMemAlloc(&lod->d_linear, linear_bytes));
 
   uint64_t total_vals = lod->plan.levels.ends[lod->plan.nlod - 1];

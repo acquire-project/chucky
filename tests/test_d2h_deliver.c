@@ -82,7 +82,7 @@ test_ctx_setup(struct test_ctx* c,
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
-                      c->cl.l0.chunk_stride * dtype_bpe(config->dtype);
+                      c->cl.layouts[0].chunk_stride * dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
   c->batch = (struct batch_state){
@@ -145,7 +145,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                              handoff,
                                              &c->cl.levels,
                                              &c->batch,
-                                             &c->cl.l0,
+                                             &c->cl.layouts[0],
                                              config,
                                              sink,
                                              &c->lod,
@@ -182,7 +182,7 @@ test_d2h_single_epoch_none(void)
   CHECK(Fail, test_ctx_setup(&c, &config, 1) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config.dtype);
   const size_t chunk_bytes = chunk_stride * bpe;
 
@@ -250,7 +250,7 @@ test_d2h_batch_none(void)
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config.dtype);
   const size_t chunk_bytes = chunk_stride * bpe;
 
@@ -391,7 +391,7 @@ test_d2h_zstd_single_epoch(void)
   CHECK(Fail, test_ctx_setup(&c, &config, 1) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config.dtype);
   const size_t chunk_bytes = chunk_stride * bpe;
 
@@ -489,7 +489,7 @@ test_d2h_double_buffer(void)
   CHECK(Fail, test_ctx_setup(&c, &config, 2) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config.dtype);
   const size_t chunk_bytes = chunk_stride * bpe;
   size_t epoch_pool_bytes = total_chunks * chunk_stride * bpe;

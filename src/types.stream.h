@@ -96,9 +96,8 @@ struct level_layout_info
 // and the memory estimate path.
 struct computed_stream_layouts
 {
-  struct tile_stream_layout l0;
   struct lod_plan plan; // owned if enable_multiscale
-  struct tile_stream_layout lod_layouts[LOD_MAX_LEVELS]; // [0] unused
+  struct tile_stream_layout layouts[LOD_MAX_LEVELS]; // [0] = L0
   struct level_geometry levels;
   uint32_t epochs_per_batch;
   size_t max_output_size;

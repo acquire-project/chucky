@@ -35,7 +35,7 @@ add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_queue chucky_log)
 
 add_src_lib(stream_config SOURCES stream.config.c stream.config.h
     types.aggregate.c types.stream.h types.aggregate.h types.codec.h types.lod.h defs.limits.h
-    LINKS lod_plan index_ops chucky_log)
+    LINKS lod_plan index_ops zarr_metadata chucky_log)
 
 # --- Backend subdirectories ---
 

@@ -76,11 +76,11 @@ orch_ctx_setup(struct orch_ctx* c,
   c->s->config = *config;
   c->s->shard_sink = sink;
   c->s->levels = c->cl.levels;
-  c->s->layout = c->cl.l0;
+  c->s->layout = c->cl.layouts[0];
 
   const uint32_t K = c->cl.epochs_per_batch;
   const uint64_t total_chunks = c->cl.levels.total_chunks;
-  const uint64_t chunk_stride = c->cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config->dtype);
   const size_t pool_bytes = (uint64_t)K * total_chunks * chunk_stride * bpe;
 
@@ -153,7 +153,7 @@ orch_ctx_fill_epoch(struct orch_ctx* c,
   CU(Fail, cuStreamSynchronize(c->s->streams.compute));
 
   const uint64_t total_chunks = c->cl.levels.total_chunks;
-  const uint64_t chunk_stride = c->cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(config->dtype);
   CUdeviceptr epoch_ptr =
     c->s->pools.buf[c->s->pools.current] +

@@ -264,6 +264,23 @@ lod_plan_init_shapes(struct lod_plan* p,
   return 0;
 }
 
+static void
+dims_lod_params(const struct dimension* dims,
+                uint8_t rank,
+                uint64_t* shape,
+                uint64_t* chunk_shape,
+                uint32_t* lod_mask)
+{
+  for (int d = 0; d < rank; ++d) {
+    shape[d] = (dims[d].size == 0) ? dims[d].chunk_size : dims[d].size;
+    chunk_shape[d] = dims[d].chunk_size;
+  }
+  *lod_mask = 0;
+  for (int d = 1; d < rank; ++d)
+    if (dims[d].downsample)
+      *lod_mask |= (1u << d);
+}
+
 int
 lod_plan_init_from_dims(struct lod_plan* p,
                         const struct dimension* dims,
@@ -272,18 +289,23 @@ lod_plan_init_from_dims(struct lod_plan* p,
 {
   uint64_t shape[LOD_MAX_NDIM];
   uint64_t chunk_shape[LOD_MAX_NDIM];
-  for (int d = 0; d < rank; ++d) {
-    shape[d] =
-      (dims[d].size == 0) ? dims[d].chunk_size : dims[d].size;
-    chunk_shape[d] = dims[d].chunk_size;
-  }
+  uint32_t lod_mask;
+  dims_lod_params(dims, rank, shape, chunk_shape, &lod_mask);
+  return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
+}
 
-  uint32_t lod_mask = 0;
-  for (int d = 1; d < rank; ++d)
-    if (dims[d].downsample)
-      lod_mask |= (1u << d);
-
-  return lod_plan_init_shapes(p, rank, shape, chunk_shape, lod_mask, max_levels);
+int
+lod_plan_init_from_epoch_dims(struct lod_plan* p,
+                               const struct dimension* dims,
+                               uint8_t rank,
+                               int max_levels)
+{
+  uint64_t shape[LOD_MAX_NDIM];
+  uint64_t chunk_shape[LOD_MAX_NDIM];
+  uint32_t lod_mask;
+  dims_lod_params(dims, rank, shape, chunk_shape, &lod_mask);
+  shape[0] = dims[0].chunk_size;
+  return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
 }
 
 void

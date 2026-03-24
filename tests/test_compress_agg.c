@@ -68,7 +68,7 @@ ca_ctx_setup(struct ca_test_ctx* c,
   c->stage_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
-                      c->cl.l0.chunk_stride * dtype_bpe(c->config.dtype);
+                      c->cl.layouts[0].chunk_stride * dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
   c->batch = (struct batch_state){
@@ -88,7 +88,7 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
                   uint16_t (*fill_fn)(uint64_t))
 {
   const uint64_t total_chunks = c->cl.levels.total_chunks;
-  const uint64_t chunk_stride = c->cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bpe = dtype_bpe(c->config.dtype);
   CUdeviceptr epoch_ptr =
     c->d_pool + (uint64_t)epoch_idx * total_chunks * chunk_stride * bpe;
@@ -170,7 +170,7 @@ verify_tiles_none(const struct flush_handoff* handoff,
   const struct aggregate_layout* al = handoff->agg_layout[0];
   const struct aggregate_slot* agg = handoff->agg[0];
   const uint64_t total_chunks = c->cl.levels.total_chunks;
-  const uint64_t chunk_stride = c->cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c->config.dtype);
 
   int errors = 0;
@@ -227,7 +227,7 @@ test_compress_agg_single_epoch(void)
 
   // Verify handoff
   const size_t chunk_bytes =
-    c.cl.l0.chunk_stride * dtype_bpe(c.config.dtype);
+    c.cl.layouts[0].chunk_stride * dtype_bpe(c.config.dtype);
   CHECK(Fail, handoff.fc == 0);
   CHECK(Fail, handoff.n_epochs == 1);
   CHECK(Fail, handoff.active_levels_mask == 0x1);
@@ -278,7 +278,7 @@ test_compress_agg_batch(void)
   struct flush_handoff handoff;
   CHECK(Fail, ca_ctx_kick(&c, 2, &handoff) == 0);
 
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
   CHECK(Fail, handoff.n_epochs == 2);
   CHECK(Fail, handoff.max_output_size == chunk_bytes);
@@ -374,7 +374,7 @@ test_compress_agg_partial_batch(void)
   CHECK(Fail, handoff.n_epochs == 1);
 
   const size_t chunk_bytes =
-    c.cl.l0.chunk_stride * dtype_bpe(c.config.dtype);
+    c.cl.layouts[0].chunk_stride * dtype_bpe(c.config.dtype);
   uint64_t C = handoff.agg_layout[0]->covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(handoff.agg[0]->h_offsets, C) == 0);
@@ -413,7 +413,7 @@ test_compress_agg_zstd_single_epoch(void)
   CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
 
   const struct aggregate_layout* al = handoff.agg_layout[0];
@@ -493,7 +493,7 @@ test_compress_agg_zstd_batch(void)
   struct flush_handoff handoff;
   CHECK(Fail, ca_ctx_kick(&c, 2, &handoff) == 0);
 
-  const uint64_t chunk_stride = c.cl.l0.chunk_stride;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
   const struct aggregate_layout* al = handoff.agg_layout[0];
   uint64_t C = al->covering_count;

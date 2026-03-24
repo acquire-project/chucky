@@ -81,5 +81,13 @@ lod_plan_init_from_dims(struct lod_plan* p,
                         uint8_t rank,
                         int max_levels);
 
+// Like _from_dims, but overrides shape[0] = dims[0].chunk_size (epoch-split).
+// Use for the streaming path where dim0 is split into per-epoch chunks.
+int
+lod_plan_init_from_epoch_dims(struct lod_plan* p,
+                               const struct dimension* dims,
+                               uint8_t rank,
+                               int max_levels);
+
 void
 lod_plan_free(struct lod_plan* p);

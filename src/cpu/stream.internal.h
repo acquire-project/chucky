@@ -22,7 +22,7 @@ struct tile_stream_cpu
   struct shard_sink* shard_sink;
   struct computed_stream_layouts cl;
 
-  // L0 layout (also in cl.l0, aliased here for convenience)
+  // L0 layout (also in cl.layouts[0], aliased here for convenience)
   struct tile_stream_layout layout;
   struct level_geometry levels;
 
