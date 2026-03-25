@@ -1,7 +1,7 @@
 #include "index.ops.util.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "stream.ingest.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "gpu/stream.ingest.h"
 
 #include "test_runner.h"
 

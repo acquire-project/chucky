@@ -1,11 +1,11 @@
-#include "stream.flush.h"
-#include "stream.ingest.h"
+#include "gpu/stream.flush.h"
+#include "gpu/stream.ingest.h"
 
-#include "metric.cuda.h"
-#include "platform.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "shard_delivery.h"
+#include "gpu/metric.cuda.h"
+#include "platform/platform.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "zarr/shard_delivery.h"
 
 #include <string.h>
 

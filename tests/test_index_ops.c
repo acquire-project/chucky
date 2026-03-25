@@ -1,5 +1,5 @@
-#include "index.ops.h"
-#include "prelude.h"
+#include "util/index.ops.h"
+#include "util/prelude.h"
 
 static int
 test_unravel_basic(void)

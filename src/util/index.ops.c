@@ -1,4 +1,4 @@
-#include "index.ops.h"
+#include "util/index.ops.h"
 
 void
 unravel(int rank, const uint64_t* shape, uint64_t idx, uint64_t* coords)

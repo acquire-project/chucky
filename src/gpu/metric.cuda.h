@@ -1,7 +1,7 @@
 /// PRIVATE: never include in other headers.
 #pragma once
 
-#include "metric.h"
+#include "util/metric.h"
 #include <cuda.h>
 
 static inline void

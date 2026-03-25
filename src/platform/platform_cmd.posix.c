@@ -1,20 +1,24 @@
-#define WIN32_LEAN_AND_MEAN
-#include "platform_cmd.h"
+#include "platform/platform_cmd.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 
 int
 platform_cmd_run(const char* cmd)
 {
   int rc = system(cmd);
-  return rc; // system() on Windows returns the exit code directly
+  if (rc == -1)
+    return -1;
+  if (!WIFEXITED(rc))
+    return -1;
+  return WEXITSTATUS(rc);
 }
 
 int
 platform_cmd_capture(const char* cmd, uint8_t** out, size_t* out_len)
 {
-  FILE* f = _popen(cmd, "rb");
+  FILE* f = popen(cmd, "r");
   if (!f)
     return -1;
 
@@ -22,7 +26,7 @@ platform_cmd_capture(const char* cmd, uint8_t** out, size_t* out_len)
   size_t len = 0;
   uint8_t* buf = (uint8_t*)malloc(cap);
   if (!buf) {
-    _pclose(f);
+    pclose(f);
     return -1;
   }
 
@@ -36,15 +40,15 @@ platform_cmd_capture(const char* cmd, uint8_t** out, size_t* out_len)
       uint8_t* tmp = (uint8_t*)realloc(buf, cap);
       if (!tmp) {
         free(buf);
-        _pclose(f);
+        pclose(f);
         return -1;
       }
       buf = tmp;
     }
   }
 
-  int rc = _pclose(f);
-  if (rc != 0) {
+  int rc = pclose(f);
+  if (!WIFEXITED(rc) || WEXITSTATUS(rc) != 0) {
     free(buf);
     return -1;
   }

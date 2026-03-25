@@ -1,6 +1,6 @@
-#include "aggregate.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/aggregate.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #pragma nv_diag_suppress 221
 #include <cub/cub.cuh>

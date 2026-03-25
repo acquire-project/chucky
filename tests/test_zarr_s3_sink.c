@@ -1,5 +1,5 @@
-#include "platform_cmd.h"
-#include "prelude.h"
+#include "platform/platform_cmd.h"
+#include "util/prelude.h"
 #include "zarr_s3_sink.h"
 
 #include <stdio.h>

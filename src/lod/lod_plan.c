@@ -1,8 +1,8 @@
-#include "lod_plan.h"
+#include "lod/lod_plan.h"
 
 #include "dimension.h"
-#include "index.ops.h"
-#include "prelude.h"
+#include "util/index.ops.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

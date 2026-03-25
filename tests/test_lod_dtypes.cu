@@ -1,9 +1,9 @@
 // Test lod_reduce and lod_accum_fold_fused + lod_accum_emit for all new dtypes.
 // Uses C++ templates to avoid per-type boilerplate.
 
-#include "lod.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/lod.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #include <cuda.h>
 #include <cuda_fp16.h>

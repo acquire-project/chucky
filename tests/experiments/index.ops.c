@@ -1,5 +1,5 @@
 #include "index.ops.util.h"
-#include "platform.h"
+#include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>

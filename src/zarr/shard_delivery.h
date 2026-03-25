@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.aggregate.h"
+#include "stream/types.aggregate.h"
 #include "writer.h"
 #include <stddef.h>
 #include <stdint.h>

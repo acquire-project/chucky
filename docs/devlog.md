@@ -45,7 +45,9 @@ Cleanup
 
 ## 2026-03-24
 
-Need to move to soa internal representation for dims
+Need to move to soa internal representation for dims. Doing some refactoring
+of the public/private interfaces first, so that I can clearly distinguish
+the soa representation as private.
 
 ## 2026-03-23
 
@@ -88,6 +90,9 @@ So the ideas:
 Best to force a single chunk shape across arrays. Keeps everything simple.
 Probably also need to force only the right-most append dimension to be
 downsamplable.
+
+For generalizing to multiple append dimensions, I think I just enforce a
+constraint that only the right-most append dimension is downsamplable.
 
 ## 2026-03-20
 

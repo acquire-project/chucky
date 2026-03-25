@@ -1,6 +1,6 @@
-#include "compress.h"
+#include "cpu/compress.h"
 
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <lz4.h>
 #include <stdatomic.h>

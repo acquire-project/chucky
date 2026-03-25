@@ -1,6 +1,6 @@
-#include "index.ops.h"
-#include "lod.h"
-#include "prelude.h"
+#include "util/index.ops.h"
+#include "gpu/lod.h"
+#include "util/prelude.h"
 
 #include <assert.h>
 #include <cuda_fp16.h>

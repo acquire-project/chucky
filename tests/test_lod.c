@@ -2,10 +2,10 @@
 
 #include "morton.util.h"
 
-#include "lod.h"
-#include "metric.cuda.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/lod.h"
+#include "gpu/metric.cuda.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #include <math.h>
 #include <stdio.h>

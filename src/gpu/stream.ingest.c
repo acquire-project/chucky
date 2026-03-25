@@ -1,7 +1,7 @@
-#include "stream.ingest.h"
+#include "gpu/stream.ingest.h"
 
-#include "prelude.cuda.h"
-#include "transpose.h"
+#include "gpu/prelude.cuda.h"
+#include "gpu/transpose.h"
 
 #include <string.h>
 

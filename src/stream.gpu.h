@@ -4,6 +4,8 @@
 #include "writer.h"
 #include <cuda.h>
 
+struct tile_stream_layout;
+
 struct tile_stream_layout_gpu
 {
   uint64_t* d_lifted_shape;  // device copy (allocated once)

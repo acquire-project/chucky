@@ -1,8 +1,8 @@
-#include "shard_delivery.h"
+#include "zarr/shard_delivery.h"
 
-#include "crc32c.h"
-#include "platform.h"
-#include "prelude.h"
+#include "zarr/crc32c.h"
+#include "platform/platform.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,7 +1,7 @@
 #include "cpu/transpose.h"
 #include "defs.limits.h"
 #include "index.ops.util.h"
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

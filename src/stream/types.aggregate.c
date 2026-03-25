@@ -1,7 +1,7 @@
-#include "types.aggregate.h"
+#include "stream/types.aggregate.h"
 
-#include "index.ops.h"
-#include "prelude.h"
+#include "util/index.ops.h"
+#include "util/prelude.h"
 
 #include <string.h>
 

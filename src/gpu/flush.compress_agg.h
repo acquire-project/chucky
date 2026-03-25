@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.internal.h"
+#include "gpu/stream.internal.h"
 
 struct computed_stream_layouts;
 

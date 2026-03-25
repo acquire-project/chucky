@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.aggregate.h"
+#include "stream/types.aggregate.h"
 #include <stddef.h>
 
 // Pre-allocated workspace for zero-allocation aggregation.

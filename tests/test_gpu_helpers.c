@@ -1,8 +1,8 @@
 #include "test_gpu_helpers.h"
 #include "dimension.h"
 
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

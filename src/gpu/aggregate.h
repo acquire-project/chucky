@@ -1,7 +1,7 @@
 #pragma once
 
-#include "io_queue.h"
-#include "types.aggregate.h"
+#include "stream/types.aggregate.h"
+#include "writer.h"
 
 #include <cuda.h>
 #include <stddef.h>

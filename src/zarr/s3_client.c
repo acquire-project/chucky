@@ -1,5 +1,5 @@
-#include "s3_client.h"
-#include "prelude.h"
+#include "zarr/s3_client.h"
+#include "util/prelude.h"
 
 #include <aws/auth/credentials.h>
 #include <aws/common/byte_buf.h>

@@ -1,13 +1,13 @@
-#include "flush.compress_agg.h"
-#include "flush.d2h_deliver.h"
-#include "stream.ingest.h"
-#include "stream.lod.h"
+#include "gpu/flush.compress_agg.h"
+#include "gpu/flush.d2h_deliver.h"
+#include "gpu/stream.ingest.h"
+#include "gpu/stream.lod.h"
 
-#include "lod.h"
-#include "platform.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "stream.config.h"
+#include "gpu/lod.h"
+#include "platform/platform.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "stream/config.h"
 
 #include <cuda.h>
 #include <stdlib.h>

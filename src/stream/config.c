@@ -1,8 +1,8 @@
-#include "stream.config.h"
+#include "stream/config.h"
 
-#include "index.ops.h"
-#include "prelude.h"
-#include "types.aggregate.h"
+#include "util/index.ops.h"
+#include "util/prelude.h"
+#include "stream/types.aggregate.h"
 
 #include <stdlib.h>
 #include <string.h>

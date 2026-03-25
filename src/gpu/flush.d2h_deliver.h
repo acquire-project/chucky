@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.internal.h"
+#include "gpu/stream.internal.h"
 
 // Initialize the D2H+deliver stage. Returns 0 on success.
 // `levels` is borrowed from compress_agg_stage — must outlive this stage.

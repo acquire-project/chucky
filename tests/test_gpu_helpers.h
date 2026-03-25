@@ -1,7 +1,7 @@
 #ifndef TEST_GPU_HELPERS_H
 #define TEST_GPU_HELPERS_H
 
-#include "stream.h"
+#include "stream.gpu.h"
 
 #include <cuda.h>
 #include <stddef.h>

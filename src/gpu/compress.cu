@@ -1,6 +1,6 @@
-#include "compress.h"
+#include "gpu/compress.h"
 #include "log/log.h"
-#include "prelude.cuda.h"
+#include "gpu/prelude.cuda.h"
 #include <nvcomp/lz4.h>
 #include <nvcomp/shared_types.h>
 #include <nvcomp/zstd.h>

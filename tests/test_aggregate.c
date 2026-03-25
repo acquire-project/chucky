@@ -1,7 +1,7 @@
-#include "aggregate.h"
+#include "gpu/aggregate.h"
 #include "index.ops.util.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 #include "test_runner.h"
 
 #include <stdio.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.internal.h"
+#include "gpu/stream.internal.h"
 
 // Upload level layouts to GPU (always, including L0). When multiscale is
 // enabled, also uploads LOD plan shapes and builds scatter/reduce LUTs.

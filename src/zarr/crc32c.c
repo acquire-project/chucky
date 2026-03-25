@@ -1,4 +1,4 @@
-#include "crc32c.h"
+#include "zarr/crc32c.h"
 
 static uint32_t crc32c_table[256];
 static int crc32c_table_ready;

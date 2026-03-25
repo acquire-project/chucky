@@ -1,13 +1,14 @@
-#include "stream.config.h"
-#include "stream.internal.h"
+#include "stream/config.h"
+#include "cpu/stream.internal.h"
 
-#include "aggregate.h"
-#include "compress.h"
-#include "index.ops.h"
-#include "lod.h"
-#include "platform.h"
-#include "prelude.h"
-#include "transpose.h"
+#include "cpu/aggregate.h"
+#include "cpu/compress.h"
+#include "cpu/lod.h"
+#include "cpu/transpose.h"
+#include "platform/platform.h"
+#include "util/index.ops.h"
+#include "util/metric.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

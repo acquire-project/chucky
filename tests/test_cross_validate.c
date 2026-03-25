@@ -1,9 +1,10 @@
+#include "stream/layouts.h"
 // Cross-validate GPU and CPU pipelines: feed identical input, compare
 // byte-exact shard output. Uses CODEC_NONE so chunk data is uncompressed.
 
-#include "cpu/stream.h"
-#include "gpu/stream.h"
-#include "prelude.h"
+#include "stream.cpu.h"
+#include "stream.gpu.h"
+#include "util/prelude.h"
 #include "test_runner.h"
 #include "writer.h"
 

@@ -1,7 +1,8 @@
-#include "cpu/stream.h"
-#include "crc32c.h"
+#include "stream/layouts.h"
+#include "stream.cpu.h"
+#include "zarr/crc32c.h"
 #include "defs.limits.h"
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

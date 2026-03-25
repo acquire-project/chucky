@@ -3,6 +3,7 @@
 #include "types.stream.h"
 #include "writer.h"
 
+struct tile_stream_layout;
 struct tile_stream_cpu;
 
 // Create a CPU streaming pipeline. Returns NULL on failure or f16 dtype.

@@ -1,6 +1,6 @@
 #include "test_shard_verify.h"
 
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

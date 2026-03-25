@@ -1,7 +1,7 @@
 #include "index.ops.util.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "transpose.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "gpu/transpose.h"
 #include <stdlib.h>
 #include <string.h>
 

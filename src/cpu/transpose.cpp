@@ -1,7 +1,7 @@
-#include "transpose.h"
+#include "cpu/transpose.h"
 
 #include "defs.limits.h"
-#include "index.ops.h"
+#include "util/index.ops.h"
 
 #include <omp.h>
 

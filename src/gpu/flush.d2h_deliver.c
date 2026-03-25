@@ -1,12 +1,12 @@
-#include "flush.d2h_deliver.h"
-#include "flush.helpers.h"
+#include "gpu/flush.d2h_deliver.h"
+#include "gpu/flush.helpers.h"
 
-#include "lod.h"
-#include "metric.cuda.h"
-#include "platform.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "shard_delivery.h"
+#include "gpu/lod.h"
+#include "gpu/metric.cuda.h"
+#include "platform/platform.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "zarr/shard_delivery.h"
 
 #include <string.h>
 

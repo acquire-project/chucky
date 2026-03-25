@@ -1,6 +1,6 @@
 #include "dimension.h"
 #include "defs.limits.h"
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <stdio.h>
 

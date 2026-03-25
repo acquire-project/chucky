@@ -1,12 +1,12 @@
-#include "flush.compress_agg.h"
-#include "flush.helpers.h"
+#include "gpu/flush.compress_agg.h"
+#include "gpu/flush.helpers.h"
 
-#include "aggregate.h"
-#include "compress.h"
-#include "crc32c.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
-#include "shard_delivery.h"
+#include "gpu/aggregate.h"
+#include "gpu/compress.h"
+#include "zarr/crc32c.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
+#include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
 #include <string.h>

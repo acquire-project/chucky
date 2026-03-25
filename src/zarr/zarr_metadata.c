@@ -1,6 +1,6 @@
-#include "zarr_metadata.h"
+#include "zarr/zarr_metadata.h"
 #include "defs.limits.h"
-#include "json_writer.h"
+#include "zarr/json_writer.h"
 
 #include <stdio.h>
 

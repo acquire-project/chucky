@@ -1,12 +1,13 @@
+#include "stream/layouts.h"
 #pragma once
 
 #include <stddef.h>
 
-#include "compress.h"
-#include "lod.h"
-#include "metric.h"
-#include "platform.h"
-#include "stream.h"
+#include "gpu/compress.h"
+#include "gpu/lod.h"
+#include "util/metric.h"
+#include "platform/platform.h"
+#include "stream.gpu.h"
 #include "test_data.h"
 
 #include <stddef.h>

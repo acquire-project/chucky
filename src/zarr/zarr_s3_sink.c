@@ -1,10 +1,10 @@
 #include "zarr_s3_sink.h"
 #include "defs.limits.h"
 #include "dtype.h"
-#include "lod_plan.h"
-#include "prelude.h"
-#include "s3_client.h"
-#include "zarr_metadata.h"
+#include "lod/lod_plan.h"
+#include "util/prelude.h"
+#include "zarr/s3_client.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdlib.h>
 #include <string.h>

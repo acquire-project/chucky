@@ -1,6 +1,6 @@
 #include "div.avx2.h"
 #include "index.ops.util.h"
-#include "platform.h"
+#include "platform/platform.h"
 #include <immintrin.h>
 #include <stdatomic.h>
 #include <stdint.h>

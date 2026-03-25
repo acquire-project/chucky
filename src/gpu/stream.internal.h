@@ -1,11 +1,12 @@
 #pragma once
 
-#include "aggregate.h"
-#include "compress.h"
-#include "flush.handoff.h"
-#include "platform.h"
-#include "shard_delivery.h"
-#include "stream.h" // public types (includes types.stream.h)
+#include "gpu/aggregate.h"
+#include "gpu/compress.h"
+#include "gpu/flush.handoff.h"
+#include "platform/platform.h"
+#include "stream/layouts.h"
+#include "stream.gpu.h" // public types (includes types.stream.h)
+#include "zarr/shard_delivery.h"
 #include <stddef.h>
 
 struct pool_state

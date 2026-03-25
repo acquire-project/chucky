@@ -1,7 +1,7 @@
 #include "writer.h"
 
 #include "log/log.h"
-#include "platform.h"
+#include "platform/platform.h"
 
 struct writer_result
 writer_append(struct writer* w, struct slice data)

@@ -1,13 +1,10 @@
 #pragma once
 
+#include "writer.h"
+
 #include <stdint.h>
 
 struct io_queue;
-
-struct io_event
-{
-  uint64_t seq;
-};
 
 struct io_queue*
 io_queue_create(void);

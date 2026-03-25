@@ -1,5 +1,5 @@
-#include "json_writer.h"
-#include "prelude.h"
+#include "zarr/json_writer.h"
+#include "util/prelude.h"
 
 #include <stdio.h>
 #include <string.h>

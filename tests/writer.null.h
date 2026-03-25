@@ -1,6 +1,6 @@
 #pragma once
 
-#include "stream.h"
+#include "stream.gpu.h"
 #include <stddef.h>
 
 struct null_writer

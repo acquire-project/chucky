@@ -1,6 +1,6 @@
 #include "index.ops.util.h"
 #include "defs.limits.h"
-#include "prelude.h"
+#include "util/prelude.h"
 #include <stdio.h>
 #include <stdlib.h>
 

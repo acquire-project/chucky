@@ -1,13 +1,13 @@
-#include "flush.compress_agg.h"
-#include "stream.config.h"
+#include "gpu/flush.compress_agg.h"
+#include "stream/config.h"
 
 #include "index.ops.util.h"
 #include "test_gpu_helpers.h"
 #include "test_runner.h"
 #include "test_shard_verify.h"
 
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

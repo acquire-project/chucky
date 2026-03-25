@@ -1,4 +1,4 @@
-#include "transpose.h"
+#include "gpu/transpose.h"
 #include <assert.h>
 #include <stdint.h>
 

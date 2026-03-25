@@ -1,8 +1,8 @@
 #ifndef TEST_RUNNER_H
 #define TEST_RUNNER_H
 
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 // RUN_GPU_TESTS({"name", fn}, ...)
 //   Replaces main() boilerplate: cuInit, cuDeviceGet, cuCtxCreate,

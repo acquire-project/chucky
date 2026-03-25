@@ -1,9 +1,9 @@
-#include "stream.lod.h"
+#include "gpu/stream.lod.h"
 
-#include "lod.h"
-#include "lod_plan.h"
-#include "prelude.cuda.h"
-#include "prelude.h"
+#include "gpu/lod.h"
+#include "lod/lod_plan.h"
+#include "gpu/prelude.cuda.h"
+#include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>

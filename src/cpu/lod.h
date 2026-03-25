@@ -1,8 +1,8 @@
 #pragma once
 
-#include "lod_plan.h"
+#include "lod/lod_plan.h"
+#include "stream/layouts.h"
 #include "types.lod.h"
-#include "types.stream.h"
 
 #include <stddef.h>
 #include <stdint.h>

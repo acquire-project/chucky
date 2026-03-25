@@ -1,6 +1,6 @@
 #include "cpu/lod.h"
-#include "lod_plan.h"
-#include "prelude.h"
+#include "lod/lod_plan.h"
+#include "util/prelude.h"
 
 #include <math.h>
 #include <stdlib.h>

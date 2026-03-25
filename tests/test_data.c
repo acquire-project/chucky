@@ -1,6 +1,6 @@
 #include "test_data.h"
 
-#include "prelude.h"
+#include "util/prelude.h"
 
 #include <stdio.h>
 #include <stdlib.h>

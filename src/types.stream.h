@@ -2,14 +2,21 @@
 
 #include "defs.limits.h"
 #include "dimension.h"
-#include "lod_plan.h"
-#include "metric.h"
-#include "types.aggregate.h"
 #include "types.codec.h"
 #include "types.lod.h"
 
 #include <stddef.h>
 #include <stdint.h>
+
+struct stream_metric
+{
+  const char* name;
+  float ms;            // cumulative
+  float best_ms;       // best single measurement (1e30f = not yet measured)
+  double input_bytes;  // cumulative bytes read by stage
+  double output_bytes; // cumulative bytes written by stage
+  int count;
+};
 
 struct stream_metrics
 {
@@ -43,30 +50,6 @@ struct tile_stream_configuration
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
 };
 
-struct tile_stream_layout
-{
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-
-  uint64_t chunk_elements;
-  uint64_t chunk_stride;
-  uint64_t chunks_per_epoch;
-  uint64_t epoch_elements;
-  size_t chunk_pool_bytes;
-};
-
-// Per-level chunk geometry (immutable after create)
-struct level_geometry
-{
-  int nlod;
-  int enable_multiscale;
-  int dim0_downsample;
-  uint64_t total_chunks;
-  uint64_t chunk_offset[LOD_MAX_LEVELS];
-  uint64_t chunk_count[LOD_MAX_LEVELS];
-};
-
 struct tile_stream_status
 {
   int nlod;
@@ -79,28 +62,4 @@ struct tile_stream_status
   uint32_t batch_accumulated;
   int pool_current;
   int flush_pending;
-};
-
-// Per-level pre-computed layout information (CPU only, no GPU pointers).
-struct level_layout_info
-{
-  struct aggregate_layout agg_layout;
-  uint32_t batch_active_count;
-  uint64_t chunks_per_shard_0;
-  uint64_t chunks_per_shard_inner;
-  uint64_t chunks_per_shard_total;
-  uint64_t shard_inner_count;
-};
-
-// All pre-computed layout data from CPU-only math.
-// Produced by compute_stream_layouts, consumed by the create path
-// and the memory estimate path.
-struct computed_stream_layouts
-{
-  struct lod_plan plan; // owned if enable_multiscale
-  struct tile_stream_layout layouts[LOD_MAX_LEVELS]; // [0] = L0
-  struct level_geometry levels;
-  uint32_t epochs_per_batch;
-  size_t max_output_size;
-  struct level_layout_info per_level[LOD_MAX_LEVELS];
 };

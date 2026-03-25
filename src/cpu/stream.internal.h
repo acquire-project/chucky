@@ -1,10 +1,10 @@
 #pragma once
 
-#include "aggregate.h"
-#include "platform.h"
-#include "shard_delivery.h"
-#include "stream.h"
-#include "types.aggregate.h"
+#include "cpu/aggregate.h"
+#include "platform/platform.h"
+#include "stream/layouts.h"
+#include "stream.cpu.h"
+#include "zarr/shard_delivery.h"
 
 // Aggregate output slot (one per level).
 struct cpu_agg_slot

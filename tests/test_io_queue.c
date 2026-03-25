@@ -1,5 +1,5 @@
-#include "io_queue.h"
-#include "prelude.h"
+#include "zarr/io_queue.h"
+#include "util/prelude.h"
 
 #include <stdatomic.h>
 #include <stdio.h>

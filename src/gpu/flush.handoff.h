@@ -1,8 +1,8 @@
 #pragma once
 
-#include "aggregate.h"
+#include "gpu/aggregate.h"
 #include "defs.limits.h"
-#include "lod_plan.h"
+#include "lod/lod_plan.h"
 
 #include <cuda.h>
 #include <stdint.h>

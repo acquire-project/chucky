@@ -1,7 +1,9 @@
-#include "io_queue.h"
+#include "zarr/io_queue.h"
 #include "log/log.h"
 
-#include <pthread.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,10 +17,10 @@ struct io_job
 
 struct io_queue
 {
-  pthread_t thread;
-  pthread_mutex_t mutex;
-  pthread_cond_t cond_not_empty;
-  pthread_cond_t cond_retired;
+  HANDLE thread;
+  SRWLOCK srw;
+  CONDITION_VARIABLE cond_not_empty;
+  CONDITION_VARIABLE cond_retired;
 
   struct io_job* ring;
   uint64_t ring_cap; // power of 2
@@ -32,38 +34,38 @@ struct io_queue
   int started;
 };
 
-static void*
-worker_thread(void* arg)
+static DWORD WINAPI
+worker_thread(LPVOID arg)
 {
   struct io_queue* q = (struct io_queue*)arg;
 
   for (;;) {
     struct io_job job;
 
-    pthread_mutex_lock(&q->mutex);
+    AcquireSRWLockExclusive(&q->srw);
     while (q->head == q->tail && !q->shutdown)
-      pthread_cond_wait(&q->cond_not_empty, &q->mutex);
+      SleepConditionVariableSRW(&q->cond_not_empty, &q->srw, INFINITE, 0);
 
     if (q->head == q->tail && q->shutdown) {
-      pthread_mutex_unlock(&q->mutex);
+      ReleaseSRWLockExclusive(&q->srw);
       break;
     }
 
     job = q->ring[q->tail & (q->ring_cap - 1)];
     q->tail++;
-    pthread_mutex_unlock(&q->mutex);
+    ReleaseSRWLockExclusive(&q->srw);
 
     job.fn(job.ctx);
     if (job.ctx_free)
       job.ctx_free(job.ctx);
 
-    pthread_mutex_lock(&q->mutex);
+    AcquireSRWLockExclusive(&q->srw);
     q->retired_seq = job.seq;
-    pthread_cond_broadcast(&q->cond_retired);
-    pthread_mutex_unlock(&q->mutex);
+    WakeAllConditionVariable(&q->cond_retired);
+    ReleaseSRWLockExclusive(&q->srw);
   }
 
-  return NULL;
+  return 0;
 }
 
 struct io_queue*
@@ -80,15 +82,13 @@ io_queue_create(void)
     return NULL;
   }
 
-  pthread_mutex_init(&q->mutex, NULL);
-  pthread_cond_init(&q->cond_not_empty, NULL);
-  pthread_cond_init(&q->cond_retired, NULL);
+  q->srw = (SRWLOCK)SRWLOCK_INIT;
+  InitializeConditionVariable(&q->cond_not_empty);
+  InitializeConditionVariable(&q->cond_retired);
 
-  if (pthread_create(&q->thread, NULL, worker_thread, q) != 0) {
+  q->thread = CreateThread(NULL, 0, worker_thread, q, 0, NULL);
+  if (!q->thread) {
     free(q->ring);
-    pthread_mutex_destroy(&q->mutex);
-    pthread_cond_destroy(&q->cond_not_empty);
-    pthread_cond_destroy(&q->cond_retired);
     free(q);
     return NULL;
   }
@@ -103,18 +103,18 @@ io_queue_destroy(struct io_queue* q)
   if (!q)
     return;
 
-  pthread_mutex_lock(&q->mutex);
+  AcquireSRWLockExclusive(&q->srw);
   q->shutdown = 1;
-  pthread_cond_signal(&q->cond_not_empty);
-  pthread_mutex_unlock(&q->mutex);
+  WakeConditionVariable(&q->cond_not_empty);
+  ReleaseSRWLockExclusive(&q->srw);
 
   if (q->started)
-    pthread_join(q->thread, NULL);
+    WaitForSingleObject(q->thread, INFINITE);
+
+  if (q->thread)
+    CloseHandle(q->thread);
 
   free(q->ring);
-  pthread_mutex_destroy(&q->mutex);
-  pthread_cond_destroy(&q->cond_not_empty);
-  pthread_cond_destroy(&q->cond_retired);
   free(q);
 }
 
@@ -148,11 +148,11 @@ io_queue_post(struct io_queue* q,
               void* ctx,
               void (*ctx_free)(void*))
 {
-  pthread_mutex_lock(&q->mutex);
+  AcquireSRWLockExclusive(&q->srw);
 
   if (q->head - q->tail == q->ring_cap) {
     if (ring_grow(q)) {
-      pthread_mutex_unlock(&q->mutex);
+      ReleaseSRWLockExclusive(&q->srw);
       return 1;
     }
   }
@@ -166,29 +166,27 @@ io_queue_post(struct io_queue* q,
   };
   q->head++;
 
-  pthread_cond_signal(&q->cond_not_empty);
-  pthread_mutex_unlock(&q->mutex);
+  WakeConditionVariable(&q->cond_not_empty);
+  ReleaseSRWLockExclusive(&q->srw);
   return 0;
 }
 
 struct io_event
 io_queue_record(struct io_queue* q)
 {
-  pthread_mutex_lock(&q->mutex);
+  AcquireSRWLockExclusive(&q->srw);
   struct io_event ev = { .seq = q->next_seq };
-  pthread_mutex_unlock(&q->mutex);
+  ReleaseSRWLockExclusive(&q->srw);
   return ev;
 }
 
 void
 io_event_wait(const struct io_queue* q, struct io_event ev)
 {
-  // Cast away const for mutex operations — the mutable sync state is logically
-  // separate from the queue's public identity.
   struct io_queue* mq = (struct io_queue*)q;
 
-  pthread_mutex_lock(&mq->mutex);
+  AcquireSRWLockExclusive(&mq->srw);
   while (mq->retired_seq < ev.seq && !mq->shutdown)
-    pthread_cond_wait(&mq->cond_retired, &mq->mutex);
-  pthread_mutex_unlock(&mq->mutex);
+    SleepConditionVariableSRW(&mq->cond_retired, &mq->srw, INFINITE, 0);
+  ReleaseSRWLockExclusive(&mq->srw);
 }

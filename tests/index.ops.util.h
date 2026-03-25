@@ -1,7 +1,7 @@
 #ifndef INDEX_OPS_UTIL_H
 #define INDEX_OPS_UTIL_H
 
-#include "index.ops.h"
+#include "util/index.ops.h"
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,4 +1,4 @@
-#include "platform.h"
+#include "platform/platform.h"
 
 #include <stdlib.h>
 #include <time.h>

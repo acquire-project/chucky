@@ -1,17 +1,9 @@
 /// PRIVATE: never include in other headers.
 #pragma once
 
-#include <stddef.h>
+#include "types.stream.h"
 
-struct stream_metric
-{
-  const char* name;
-  float ms;            // cumulative
-  float best_ms;       // best single measurement (1e30f = not yet measured)
-  double input_bytes;  // cumulative bytes read by stage
-  double output_bytes; // cumulative bytes written by stage
-  int count;
-};
+#include <stddef.h>
 
 struct stream_metric
 mk_stream_metric(const char* name);

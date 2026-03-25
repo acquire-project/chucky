@@ -1,11 +1,11 @@
 #include "zarr_fs_sink.h"
-#include "io_queue.h"
-#include "zarr_metadata.h"
+#include "zarr/io_queue.h"
+#include "zarr/zarr_metadata.h"
 #include "defs.limits.h"
-#include "lod_plan.h"
-#include "platform.h"
-#include "platform_io.h"
-#include "prelude.h"
+#include "lod/lod_plan.h"
+#include "platform/platform.h"
+#include "platform/platform_io.h"
+#include "util/prelude.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>

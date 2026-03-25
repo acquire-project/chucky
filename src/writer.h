@@ -1,8 +1,12 @@
 #pragma once
 
-#include "io_queue.h"
 #include <stddef.h>
 #include <stdint.h>
+
+struct io_event
+{
+  uint64_t seq;
+};
 
 struct slice
 {
@@ -68,14 +72,14 @@ struct shard_sink
 static inline struct writer_result
 writer_ok(void)
 {
-  struct writer_result r = { 0 };
+  struct writer_result r = { 0, { 0, 0 } };
   return r;
 }
 
 static inline struct writer_result
 writer_error(void)
 {
-  struct writer_result r = { 0 };
+  struct writer_result r = { 0, { 0, 0 } };
   r.error = 1;
   return r;
 }
@@ -83,7 +87,7 @@ writer_error(void)
 static inline struct writer_result
 writer_error_at(const void* beg, const void* end)
 {
-  struct writer_result r = { 0 };
+  struct writer_result r = { 0, { 0, 0 } };
   r.error = writer_error_fail;
   r.rest.beg = beg;
   r.rest.end = end;
@@ -93,7 +97,7 @@ writer_error_at(const void* beg, const void* end)
 static inline struct writer_result
 writer_finished_at(const void* beg, const void* end)
 {
-  struct writer_result r = { 0 };
+  struct writer_result r = { 0, { 0, 0 } };
   r.error = writer_error_finished;
   r.rest.beg = beg;
   r.rest.end = end;
