@@ -24,9 +24,11 @@ LOD pyramids built on the fly: after the base level (L0) is chunked, the pipelin
 scatters, reduces, and chunks each coarser level before compressing and delivering
 it alongside L0.
 
-**Supported element types:** `uint16` and `float32`.
+**Supported element types:** u8, u16, u32, u64, i8, i16, i32, i64, f16, f32, f64
+(see `enum dtype` in `src/dtype.h`).
 
-**Limits:** up to 32 dimensions (rank ≤ 32), up to 32 LOD levels.
+**Limits:** up to 32 dimensions for Zarr output (rank ≤ `MAX_ZARR_RANK`),
+up to 32 LOD levels. Internal layout supports up to 64 dimensions.
 
 ## Getting Started
 
@@ -156,7 +158,8 @@ The pipeline uses a four-stream CUDA model with double-buffered staging to
 overlap H2D transfer, GPU compute (scatter, compress, aggregate), and D2H
 delivery. Input arrives as contiguous byte spans via a `struct writer` interface;
 the library handles all tiling, padding, and shard assembly internally. See
-[docs/design.md](docs/design.md) for a detailed walkthrough.
+[docs/design.md](docs/design.md) for a detailed walkthrough, or
+[docs/guide.md](docs/guide.md) for a quick orientation to the module structure.
 
 For writing directly to S3 (or S3-compatible stores), see the
 [S3 storage guide](docs/s3-guide.md).
@@ -164,7 +167,9 @@ For writing directly to S3 (or S3-compatible stores), see the
 
 ## API
 
-The main entry points live in [`src/stream.h`](src/stream.h):
+The main entry points live in [`src/stream.gpu.h`](src/stream.gpu.h) (GPU) and
+[`src/stream.cpu.h`](src/stream.cpu.h) (CPU). Both backends expose the same
+`struct writer` interface for feeding data.
 
 ```c
 // 1. Estimate GPU memory requirements
@@ -172,21 +177,27 @@ struct tile_stream_memory_info info;
 tile_stream_gpu_memory_estimate(&config, &info);
 
 // 2. Create the stream
-struct tile_stream_gpu* stream = tile_stream_gpu_create(&config, sink);
+struct tile_stream_gpu* s = tile_stream_gpu_create(&config, sink);
 
 // 3. Get a writer and feed data
-struct writer* w = tile_stream_gpu_writer(stream);
-w->append(w, data, nbytes);  // call repeatedly as data arrives
-w->flush(w);                 // finalize
+struct writer* w = tile_stream_gpu_writer(s);
+struct slice frame = { .beg = data, .end = (const char*)data + nbytes };
+writer_append(w, frame);   // call repeatedly as data arrives
+writer_flush(w);            // finalize
 
 // 4. Query metrics and tear down
-struct stream_metrics m = tile_stream_gpu_get_metrics(stream);
-tile_stream_gpu_destroy(stream);
+struct stream_metrics m = tile_stream_gpu_get_metrics(s);
+tile_stream_gpu_destroy(s);
 ```
+
+The CPU backend (`tile_stream_cpu_create` / `tile_stream_cpu_writer`) follows
+the same pattern — swap `gpu` for `cpu` in the function names. The GPU backend
+uses CUDA streams + nvcomp; the CPU backend uses OpenMP + zstd/lz4.
 
 Configure the pipeline via `struct tile_stream_configuration` (codec, chunk
 dimensions, shard layout, LOD reduction method, etc.). See
-[`src/stream.h`](src/stream.h) for the full configuration struct.
+[`src/stream.gpu.h`](src/stream.gpu.h) or
+[`src/stream.cpu.h`](src/stream.cpu.h) for the full API.
 
 ## Status
 

@@ -59,6 +59,9 @@ add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer chucky_log)
 
+# CPU multi-array stream test (no CUDA)
+add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu writer chucky_log)
+
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_test_exe(test_cross_validate test_cross_validate.c CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
 

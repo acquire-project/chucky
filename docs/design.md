@@ -542,15 +542,14 @@ A stream is configured by filling a `tile_stream_configuration`:
 
 | Field | Type / Range | Purpose |
 |---|---|---|
-| `rank` | 1–16 | Number of dimensions |
+| `rank` | 1–32 | Number of dimensions (`MAX_ZARR_RANK`) |
 | `dimensions` | `struct dimension[]` | Per-dimension geometry (see below) |
-| `bytes_per_element` | 1, 2, 4 | Element size |
+| `dtype` | `enum dtype` | Element type (11 types, 1–8 bytes; see `src/dtype.h`) |
 | `buffer_capacity_bytes` | > 0 | H2D staging buffer size (doubled internally) |
 | `codec` | none / lz4 / zstd | Compression codec |
 | `epochs_per_batch` | 0 or power of 2 | Epochs per batch ($K$); 0 = auto |
 | `target_batch_chunks` | > 0 | Target chunk count for auto-$K$ (default 1024) |
-| `shard_sink` | `struct shard_sink*` | Downstream storage factory |
-| `reduce_method` | mean / median / min / max | Inner LOD reduction |
+| `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
 | `shard_alignment` | 0 or page size | Inter-shard padding for direct I/O |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |
@@ -565,14 +564,15 @@ Each `struct dimension` describes one axis:
 | `name` | Optional label (e.g. `"x"`) |
 | `downsample` | Include in LOD pyramid (0 or 1) |
 | `storage_position` | Position in storage layout; append dimension must be position 0 |
+| `axis_type` | OME-NGFF axis type: `dimension_axis_space`, `_time`, `_channel`, `_other` |
 
 #### Writer interface
 
 The caller interacts with the pipeline through a `struct writer` vtable:
 
-- **`append(self, data)`** — push a contiguous slice of row-major elements.
-  The library chunks, compresses, and delivers internally. Returns a result
-  indicating bytes consumed and whether the stream is ready for more.
+- **`append(self, data)`** — push a contiguous `struct slice` of row-major
+  elements. Returns a `struct writer_result` with an error code and a `rest`
+  slice pointing to any unconsumed input (empty on success).
 
 - **`flush(self)`** — drain any partially filled epochs. Call once at end of
   stream to ensure all data is written.
@@ -630,7 +630,7 @@ struct dimension dims[3] = {
 struct tile_stream_configuration config = {
   .rank               = 3,
   .dimensions         = dims,
-  .dtype              = lod_dtype_u16,
+  .dtype              = dtype_u16,
   .buffer_capacity_bytes = 4 * 1024 * 1024,
   .codec              = CODEC_ZSTD,
 };

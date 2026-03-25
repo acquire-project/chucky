@@ -7,7 +7,7 @@
 #define LOD_MAX_NDIM 64
 #define LOD_MAX_LEVELS 32
 #define MAX_BATCH_EPOCHS 128
-#define MAX_ZARR_RANK 8
+#define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // S3
 #define S3_MAX_PARTS 10000

@@ -43,4 +43,6 @@ add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts
 add_subdirectory(gpu)
 add_subdirectory(cpu)
 
+add_subdirectory(multiarray)
+
 add_subdirectory(zarr)
