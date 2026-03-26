@@ -225,11 +225,12 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
   // Append fold/emit: accumulate levels 1+ across epochs.
   // Without append downsample, all inner LOD levels are ready every epoch.
+  const int append_downsample = p->cl->dims.append_downsample;
   uint32_t active_levels_mask =
-    (levels->append_downsample && p->append_accum)
+    (append_downsample && p->append_accum)
       ? 1
       : (uint32_t)((1u << levels->nlod) - 1);
-  if (levels->append_downsample && p->append_accum) {
+  if (append_downsample && p->append_accum) {
     struct platform_clock append_clk = { 0 };
     if (p->metrics)
       platform_toc(&append_clk);
@@ -329,7 +330,7 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
       uint64_t total_chunks = levels->total_chunks;
       for (uint32_t a = 0; a < K_l; ++a) {
         uint32_t period =
-          (levels->append_downsample && lv > 0) ? (1u << lv) : 1;
+          (cl->dims.append_downsample && lv > 0) ? (1u << lv) : 1;
         uint32_t pool_epoch = (a + 1) * period - 1;
 
         for (uint64_t j = 0; j < M_lv; ++j) {

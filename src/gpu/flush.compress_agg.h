@@ -22,5 +22,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
                   const struct level_geometry* levels,
                   const struct batch_state* batch,
+                  int append_downsample,
                   CUstream compress_stream,
                   struct flush_handoff* out);

@@ -136,7 +136,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     // Uses the source dtype (not a wider accumulator) for integer mean —
     // overflow_safe_add_shift prevents overflow at the cost of rounding per
     // fold.
-    if (s->levels.append_downsample) {
+    if (s->cl.dims.append_downsample) {
       uint64_t append_total = 0;
       for (int lv = 1; lv < s->cl.plan.nlod; ++lv)
         append_total += s->cl.plan.batch_count * s->cl.plan.lod_nelem[lv];
@@ -206,7 +206,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   // Precompute max_cursor so cpu_append doesn't recompute each call.
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = s->levels.n_append;
+    const uint8_t na = dim_info_n_append(&s->cl.dims);
     if (dims[0].size > 0) {
       s->max_cursor_elements = s->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
@@ -356,7 +356,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       uint64_t total_lod_elements = cl->plan.levels.ends[cl->plan.nlod - 1];
       lod += total_lod_elements * bytes_per_element; // lod_values
 
-      if (cl->levels.append_downsample) {
+      if (cl->dims.append_downsample) {
         uint64_t append_total = 0;
         for (int lv = 1; lv < cl->plan.nlod; ++lv)
           append_total += cl->plan.batch_count * cl->plan.lod_nelem[lv];
@@ -609,16 +609,14 @@ cpu_append(struct writer* self, struct slice input)
         if (elapsed >= s->config.metadata_update_interval_s) {
           s->metadata_update_clock = peek;
           const struct dimension* dims = s->config.dimensions;
-          const uint8_t na = s->levels.n_append;
+          const uint8_t na = dim_info_n_append(&s->cl.dims);
           for (int lv = 0; lv < s->levels.nlod; ++lv) {
             struct shard_state* ss = &s->shard[lv];
             uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
             uint64_t append_sizes[HALF_MAX_RANK];
             for (int d = 1; d < na; ++d)
               append_sizes[d] = dims[d].size;
-            uint64_t iac = 1;
-            for (int d = 1; d < na; ++d)
-              iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+            const uint64_t iac = s->cl.dims.inner_append_count;
             append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
             if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
               goto Error;
@@ -664,7 +662,7 @@ cpu_flush(struct writer* self)
   }
 
   // Drain any partial append accumulators (levels that haven't emitted yet).
-  if (s->levels.append_downsample && s->append_accum) {
+  if (s->cl.dims.append_downsample && s->append_accum) {
     struct append_drain_params dp = {
       .cl = &s->cl,
       .dtype = s->config.dtype,
@@ -719,15 +717,13 @@ cpu_flush(struct writer* self)
   // Final metadata.
   if (s->shard_sink->update_append) {
     const struct dimension* dims = s->config.dimensions;
-    const uint8_t na = s->levels.n_append;
+    const uint8_t na = dim_info_n_append(&s->cl.dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t total_ac = append_chunks[lv];
       uint64_t append_sizes[HALF_MAX_RANK];
       for (int d = 1; d < na; ++d)
         append_sizes[d] = dims[d].size;
-      uint64_t iac = 1;
-      for (int d = 1; d < na; ++d)
-        iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+      const uint64_t iac = s->cl.dims.inner_append_count;
       append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
       if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();

@@ -73,7 +73,7 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   uint64_t max_cursor = 0;
   if (s->config.dimensions[0].size > 0) {
     max_cursor = s->layout.epoch_elements;
-    for (int d = 0; d < s->levels.n_append; ++d)
+    for (int d = 0; d < dim_info_n_append(&s->dims); ++d)
       max_cursor *=
         ceildiv(s->config.dimensions[d].size, s->config.dimensions[d].chunk_size);
   }
@@ -223,14 +223,12 @@ tile_stream_gpu_flush(struct writer* self)
   // Final metadata update using pre-emit chunk counts.
   if (s->shard_sink->update_append) {
     const struct dimension* dims = s->config.dimensions;
-    const uint8_t na = s->levels.n_append;
+    const uint8_t na = dim_info_n_append(&s->dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t append_sizes[HALF_MAX_RANK];
       for (int d = 1; d < na; ++d)
         append_sizes[d] = dims[d].size;
-      uint64_t iac = 1;
-      for (int d = 1; d < na; ++d)
-        iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+      const uint64_t iac = s->dims.inner_append_count;
       append_sizes[0] =
         (iac > 0) ? ceildiv(append_chunks[lv], iac) * dims[0].chunk_size : 0;
       if (s->shard_sink->update_append(

@@ -2,6 +2,7 @@
 
 #include "dimension.h"
 #include "dtype.h"
+#include "stream/dim_info.h"
 #include "types.stream.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
@@ -137,9 +138,11 @@ Fail:
 }
 
 // Validate a tile_stream_configuration.
+// On success, stores the resolved dim partition in *di.
 // Returns 0 on success, non-zero on invalid config.
 static int
-validate_config(const struct tile_stream_configuration* config)
+validate_config(const struct tile_stream_configuration* config,
+                struct dim_info* di)
 {
   CHECK(Fail, config);
   CHECK(Fail, dtype_bpe(config->dtype) > 0);
@@ -147,7 +150,9 @@ validate_config(const struct tile_stream_configuration* config)
   CHECK(Fail, config->rank > 0);
   CHECK(Fail, config->rank <= HALF_MAX_RANK);
   CHECK(Fail, config->dimensions);
-  CHECK(Fail, dims_validate(config->dimensions, config->rank) == 0);
+
+  // dim_info_init validates dims and computes the partition.
+  CHECK(Fail, dim_info_init(di, config->dimensions, config->rank) == 0);
 
   {
     uint64_t chunk_elements = 1;
@@ -158,37 +163,27 @@ validate_config(const struct tile_stream_configuration* config)
                (unsigned long long)chunk_elements);
   }
 
-  uint8_t na_val = dims_n_append(config->dimensions, config->rank);
-  if (resolve_storage_order(config->rank, na_val, config->dimensions, NULL)) {
-    log_error("invalid storage_order permutation");
-    goto Fail;
+  {
+    uint8_t na = dim_info_n_append(di);
+    if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
+      log_error("invalid storage_order permutation");
+      goto Fail;
+    }
   }
 
   {
-    uint8_t na = dims_n_append(config->dimensions, config->rank);
-    int append_ds = 0;
-    uint32_t lod_mask = 0;
-    for (int d = 0; d < config->rank; ++d) {
-      if (config->dimensions[d].downsample) {
-        if (d == na - 1) {
-          append_ds = 1;
-          enum lod_reduce_method m = config->append_reduce_method;
-          if (m != lod_reduce_mean && m != lod_reduce_min &&
-              m != lod_reduce_max) {
-            log_error("append reduce method must be mean, min, or max");
-            goto Fail;
-          }
-        } else if (d >= na) {
-          lod_mask |= (1u << d);
-        }
-        // dims < na-1 with downsample: n_append derivation already handled this
+    if (di->append_downsample) {
+      enum lod_reduce_method m = config->append_reduce_method;
+      if (m != lod_reduce_mean && m != lod_reduce_min &&
+          m != lod_reduce_max) {
+        log_error("append reduce method must be mean, min, or max");
+        goto Fail;
       }
-    }
-    uint32_t append_mask = (1u << na) - 1;
-    if (append_ds && (lod_mask & ~append_mask) == 0) {
-      log_error(
-        "append downsample requires at least one inner dim downsampled");
-      goto Fail;
+      if (di->lod_mask == 0) {
+        log_error(
+          "append downsample requires at least one inner dim downsampled");
+        goto Fail;
+      }
     }
   }
 
@@ -215,11 +210,11 @@ compute_stream_layouts(
   const uint8_t rank = config->rank;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   const struct dimension* dims = config->dimensions;
-  const uint8_t na = dims_n_append(dims, rank);
 
   memset(out, 0, sizeof(*out));
 
-  CHECK(Fail, validate_config(config) == 0);
+  CHECK(Fail, validate_config(config, &out->dims) == 0);
+  const uint8_t na = dim_info_n_append(&out->dims);
 
   uint8_t storage_order[HALF_MAX_RANK];
   CHECK(Fail, resolve_storage_order(rank, na, dims, storage_order) == 0);
@@ -230,8 +225,6 @@ compute_stream_layouts(
           &out->plan, dims, rank, na, LOD_MAX_LEVELS) == 0);
   int enable_multiscale = out->plan.lod_mask != 0;
   out->levels.enable_multiscale = enable_multiscale;
-  out->levels.n_append = na;
-  out->levels.append_downsample = (na > 0) && dims[na - 1].downsample;
   out->levels.nlod = enable_multiscale ? out->plan.nlod : 1;
 
   // --- All level layouts ---
@@ -282,7 +275,7 @@ compute_stream_layouts(
     uint64_t chunks_lv = out->levels.chunk_count[lv];
 
     uint32_t batch_count = out->epochs_per_batch;
-    if (out->levels.append_downsample && lv > 0) {
+    if (out->dims.append_downsample && lv > 0) {
       uint32_t period = 1u << lv;
       batch_count =
         (out->epochs_per_batch >= period) ? out->epochs_per_batch / period : 0;
@@ -309,7 +302,7 @@ compute_stream_layouts(
       uint64_t cps_append = 1;
       for (int d = 0; d < na; ++d)
         cps_append *= geo.chunks_per_shard[d];
-      if (out->levels.append_downsample && lv > 0) {
+      if (out->dims.append_downsample && lv > 0) {
         uint64_t divisor = 1ull << lv;
         cps_append = (cps_append > divisor) ? cps_append / divisor : 1;
       }
@@ -323,11 +316,6 @@ compute_stream_layouts(
       out->per_level[lv].chunks_per_shard_inner;
 
     out->per_level[lv].shard_inner_count = geo.shard_inner_count;
-
-    // inner_append_count: product of chunk counts for bounded append dims 1..na-1
-    out->per_level[lv].inner_append_count = 1;
-    for (int d = 1; d < na; ++d)
-      out->per_level[lv].inner_append_count *= geo.chunk_count[d];
   }
 
   return 0;

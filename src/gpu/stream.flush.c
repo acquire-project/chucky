@@ -64,6 +64,7 @@ flush_run_epoch_lod(struct tile_stream_gpu* s)
                         s->config.dtype,
                         s->config.reduce_method,
                         s->config.append_reduce_method,
+                        s->dims.append_downsample,
                         s->streams.compute,
                         &active_mask) == 0);
   }
@@ -158,6 +159,7 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
                           &in,
                           &s->levels,
                           &s->batch,
+                          s->dims.append_downsample,
                           s->streams.compress,
                           &handoff) == 0);
 
@@ -166,6 +168,7 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
                          &handoff,
                          &s->levels,
                          &s->batch,
+                         s->dims.append_downsample,
                          &s->config,
                          s->shard_sink,
                          s->streams.d2h) == 0);
@@ -212,6 +215,7 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                           &in,
                           &s->levels,
                           &s->batch,
+                          s->dims.append_downsample,
                           s->streams.compress,
                           &handoff) == 0);
 
@@ -220,6 +224,7 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                          &handoff,
                          &s->levels,
                          &s->batch,
+                         s->dims.append_downsample,
                          &s->config,
                          s->shard_sink,
                          s->streams.d2h) == 0);
@@ -228,10 +233,12 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                            &handoff,
                            &s->levels,
                            &s->batch,
+                           s->dims.append_downsample,
                            &s->layout,
                            &s->config,
                            s->shard_sink,
                            &s->lod,
+                           &s->dims,
                            &s->metrics,
                            &s->metadata_update_clock);
 
@@ -252,10 +259,12 @@ flush_drain_pending(struct tile_stream_gpu* s)
                            &s->flush.pending_handoff,
                            &s->levels,
                            &s->batch,
+                           s->dims.append_downsample,
                            &s->layout,
                            &s->config,
                            s->shard_sink,
                            &s->lod,
+                           &s->dims,
                            &s->metrics,
                            &s->metadata_update_clock);
 }
@@ -279,10 +288,12 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
                                                &s->flush.pending_handoff,
                                                &s->levels,
                                                &s->batch,
+                                               s->dims.append_downsample,
                                                &s->layout,
                                                &s->config,
                                                s->shard_sink,
                                                &s->lod,
+                                               &s->dims,
                                                &s->metrics,
                                                &s->metadata_update_clock);
     s->batch.accumulated = 0;
@@ -313,7 +324,7 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
 struct writer_result
 flush_partial_append(struct tile_stream_gpu* s)
 {
-  if (!s->levels.append_downsample || !s->levels.enable_multiscale)
+  if (!s->dims.append_downsample || !s->levels.enable_multiscale)
     return writer_ok();
 
   const struct lod_plan* p = &s->lod.plan;
@@ -395,10 +406,12 @@ flush_partial_append(struct tile_stream_gpu* s)
                            &s->flush.pending_handoff,
                            &s->levels,
                            &s->batch,
+                           s->dims.append_downsample,
                            &s->layout,
                            &s->config,
                            s->shard_sink,
                            &s->lod,
+                           &s->dims,
                            &s->metrics,
                            &s->metadata_update_clock);
 

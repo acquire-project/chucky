@@ -41,5 +41,6 @@ lod_run_epoch(struct lod_state* lod,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method append_reduce_method,
+              int append_downsample,
               CUstream compute,
               uint32_t* out_active_mask);

@@ -1,4 +1,5 @@
 #include "dimension.h"
+#include "stream/dim_info.h"
 #include "util/prelude.h"
 #include "stream.gpu.h"
 
@@ -282,6 +283,137 @@ test_dims_print(void)
   return !ok;
 }
 
+// --- dim_info tests ---
+
+static int
+test_dim_info_single_append(void)
+{
+  // Standard case: n_append=1 (dim 0 has chunk_size > 1)
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 0, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 1, 32, 32 };
+  dims_set_chunk_sizes(dims, 3, cs);
+  dims[0].chunks_per_shard = 4;
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 3) == 0);
+  CHECK(Error, dim_info_n_append(&info) == 1);
+  CHECK(Error, dim_info_rank(&info) == 3);
+  CHECK(Error, info.append.beg == &dims[0]);
+  CHECK(Error, info.append.end == &dims[1]);
+  CHECK(Error, info.inner.beg == &dims[1]);
+  CHECK(Error, info.inner.end == &dims[3]);
+  CHECK(Error, info.append_downsample == 0);
+  CHECK(Error, info.lod_mask == 0);
+  CHECK(Error, info.inner_append_count == 1);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dim_info_two_append(void)
+{
+  // n_append=2: dims "tzyx", chunk (1,1,64,64)
+  int ok = 0;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 0, 10, 128, 128 };
+  dims_create(dims, "tzyx", sizes);
+  uint64_t cs[] = { 1, 1, 64, 64 };
+  dims_set_chunk_sizes(dims, 4, cs);
+  dims[0].chunks_per_shard = 4;
+  dims[1].chunks_per_shard = 10;
+  dims_set_downsample_by_name(dims, 4, "yx");
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 4) == 0);
+  CHECK(Error, dim_info_n_append(&info) == 2);
+  CHECK(Error, dim_info_rank(&info) == 4);
+
+  // append = dims[0..2), inner = dims[2..4)
+  CHECK(Error, dim_slice_len(info.append) == 2);
+  CHECK(Error, dim_slice_len(info.inner) == 2);
+  CHECK(Error, info.append.beg == &dims[0]);
+  CHECK(Error, info.inner.beg == &dims[2]);
+
+  // No downsample on append dims -> append_downsample=0
+  CHECK(Error, info.append_downsample == 0);
+
+  // LOD mask: dims 2,3 have downsample -> bits 2,3
+  CHECK(Error, info.lod_mask == ((1u << 2) | (1u << 3)));
+
+  // inner_append_count = chunk_count for dim 1 = ceil(10/1) = 10
+  CHECK(Error, info.inner_append_count == 10);
+
+  // dim_index works
+  CHECK(Error, dim_index(&info, &dims[0]) == 0);
+  CHECK(Error, dim_index(&info, &dims[2]) == 2);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dim_info_two_append_with_downsample(void)
+{
+  // n_append=2, rightmost append dim (z) downsampled
+  // chunk (1,1,1,64,64), downsample on dims 1,3,4
+  // max_n = 3 (dims 0,1,2 have chunk_size=1)
+  // first downsample in prefix = dim 1 -> n_append = 2
+  int ok = 0;
+  struct dimension dims[5];
+  uint64_t sizes[] = { 0, 10, 20, 128, 128 };
+  dims_create(dims, "tzcyx", sizes);
+  uint64_t cs[] = { 1, 1, 1, 64, 64 };
+  dims_set_chunk_sizes(dims, 5, cs);
+  dims[0].chunks_per_shard = 4;
+  dims_set_downsample_by_name(dims, 5, "zyx");
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 5) == 0);
+  CHECK(Error, dim_info_n_append(&info) == 2);
+
+  // dim 1 (z) is rightmost append dim and has downsample
+  CHECK(Error, info.append_downsample == 1);
+
+  // LOD mask: dims 3,4 (y,x) have downsample, dim 2 (c) does not
+  // dim 1 (z) is append, not in LOD mask
+  CHECK(Error, info.lod_mask == ((1u << 3) | (1u << 4)));
+
+  // inner_append_count = chunk_count for dim 1 = ceil(10/1) = 10
+  CHECK(Error, info.inner_append_count == 10);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dim_info_rejects_unbounded_non_dim0(void)
+{
+  int ok = 0;
+  struct dimension dims[2];
+  uint64_t sizes[] = { 100, 0 }; // dim 1 unbounded — invalid
+  dims_create(dims, "xy", sizes);
+  uint64_t cs[] = { 1, 1 };
+  dims_set_chunk_sizes(dims, 2, cs);
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 2) != 0); // should fail
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
 int
 main(void)
 {
@@ -302,6 +434,10 @@ main(void)
     { "dims_set_storage_order", test_dims_set_storage_order },
     { "dims_set_downsample_by_name", test_dims_set_downsample_by_name },
     { "dims_print", test_dims_print },
+    { "dim_info_single_append", test_dim_info_single_append },
+    { "dim_info_two_append", test_dim_info_two_append },
+    { "dim_info_two_append_with_downsample", test_dim_info_two_append_with_downsample },
+    { "dim_info_rejects_unbounded_non_dim0", test_dim_info_rejects_unbounded_non_dim0 },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

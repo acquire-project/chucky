@@ -186,6 +186,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   out->config = *config;
   out->shard_sink = sink;
   out->levels = cl.levels;
+  out->dims = cl.dims;
   tile_stream_gpu_init_writer(out);
 
   out->config.buffer_capacity_bytes =
@@ -235,7 +236,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   if (out->levels.enable_multiscale) {
     CHECK(FailPhase2,
           lod_state_init_buffers(&out->lod, out->config.dtype) == 0);
-    if (out->levels.append_downsample)
+    if (out->dims.append_downsample)
       CHECK(FailPhase2,
             lod_state_init_accumulators(&out->lod, &out->config) == 0);
   }
@@ -286,7 +287,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
 {
   return (struct tile_stream_status){
     .nlod = s->levels.nlod,
-    .append_downsample = s->levels.append_downsample,
+    .append_downsample = s->dims.append_downsample,
     .epochs_per_batch = s->batch.epochs_per_batch,
     .max_compressed_size = s->compress_agg.codec.max_output_size,
     .dtype = s->config.dtype,
@@ -432,7 +433,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += 2 * rank * sizeof(int64_t);
     }
 
-    if (cl.levels.append_downsample) {
+    if (cl.dims.append_downsample) {
       size_t accum_bpe =
         dtype_accum_bpe(config->dtype, config->append_reduce_method);
       uint64_t total_elems = 0;

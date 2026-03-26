@@ -205,7 +205,7 @@ init_array_descriptor(struct array_descriptor* desc,
     }
 
     // Dim0 accum: per-array, not shared.
-    if (desc->levels.append_downsample) {
+    if (desc->cl.dims.append_downsample) {
       uint64_t dim0_total = 0;
       for (int lv = 1; lv < desc->cl.plan.nlod; ++lv)
         dim0_total += desc->cl.plan.batch_count * desc->cl.plan.lod_nelem[lv];
@@ -762,7 +762,7 @@ drain_dim0_all(struct multiarray_tile_stream_cpu* ms)
 
   for (int i = 0; i < ms->n_arrays; ++i) {
     struct array_descriptor* desc = &ms->arrays[i];
-    if (!desc->levels.append_downsample || !desc->append_accum)
+    if (!desc->cl.dims.append_downsample || !desc->append_accum)
       continue;
 
     if (i != ms->active)
@@ -814,7 +814,7 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
 
     if (desc->sink->update_append) {
       const struct dimension* dims = desc->config.dimensions;
-      const uint8_t na = desc->levels.n_append;
+      const uint8_t na = dim_info_n_append(&desc->cl.dims);
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
         struct shard_state* ss = &desc->shard[lv];
         uint64_t total_ac =
@@ -822,9 +822,7 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
         uint64_t append_sizes[16]; // HALF_MAX_RANK
         for (int d = 1; d < na; ++d)
           append_sizes[d] = dims[d].size;
-        uint64_t iac = 1;
-        for (int d = 1; d < na; ++d)
-          iac *= (dims[d].size + dims[d].chunk_size - 1) / dims[d].chunk_size;
+        const uint64_t iac = desc->cl.dims.inner_append_count;
         append_sizes[0] = (iac > 0)
           ? ((total_ac + iac - 1) / iac) * dims[0].chunk_size
           : 0;

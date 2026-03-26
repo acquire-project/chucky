@@ -134,21 +134,23 @@ test_ctx_kick_and_drain(struct test_ctx* c,
 
   CHECK(Fail,
         compress_agg_kick(
-          &c->ca, &in, &c->cl.levels, &c->batch, c->compute, handoff) == 0);
+          &c->ca, &in, &c->cl.levels, &c->batch, c->cl.dims.append_downsample, c->compute, handoff) == 0);
 
   CHECK(Fail,
         d2h_deliver_kick(
-          &c->d2h, handoff, &c->cl.levels, &c->batch, config, sink, c->d2h_stream) ==
+          &c->d2h, handoff, &c->cl.levels, &c->batch, c->cl.dims.append_downsample, config, sink, c->d2h_stream) ==
           0);
 
   struct writer_result r = d2h_deliver_drain(&c->d2h,
                                              handoff,
                                              &c->cl.levels,
                                              &c->batch,
+                                             c->cl.dims.append_downsample,
                                              &c->cl.layouts[0],
                                              config,
                                              sink,
                                              &c->lod,
+                                             &c->cl.dims,
                                              &c->metrics,
                                              &c->metadata_clock);
   CHECK(Fail, r.error == 0);

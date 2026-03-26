@@ -620,6 +620,7 @@ lod_run_epoch(struct lod_state* lod,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method append_reduce_method,
+              int append_downsample,
               CUstream compute,
               uint32_t* out_active_mask)
 {
@@ -672,7 +673,7 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(lod->t_reduce_end, compute));
 
   uint32_t active_levels_mask = 1; // L0 always active
-  if (levels->append_downsample && lod->append_accum.total_elements > 0) {
+  if (append_downsample && lod->append_accum.total_elements > 0) {
     CHECK(Error,
           run_append_fold_emit(
             lod, dtype, append_reduce_method, compute, &active_levels_mask) == 0);

@@ -159,6 +159,7 @@ struct tile_stream_gpu
   struct shard_sink* shard_sink;
   struct tile_stream_layout layout;
   struct level_geometry levels;
+  struct dim_info dims;
   struct gpu_streams streams;
   struct batch_state batch;
   struct flush_pipeline flush;
