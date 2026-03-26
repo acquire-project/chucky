@@ -1,19 +1,10 @@
 #pragma once
 
-#include "cpu/aggregate.h"
+#include "cpu/pipeline.h"
 #include "platform/platform.h"
 #include "stream/layouts.h"
 #include "stream.cpu.h"
 #include "zarr/shard_delivery.h"
-
-// Aggregate output slot (one per level).
-struct cpu_agg_slot
-{
-  void* data;           // aggregated compressed chunks in shard order
-  size_t data_capacity;
-  size_t* offsets;      // [C_lv + 1] exclusive prefix sum
-  size_t* chunk_sizes;  // [C_lv] pre-padding sizes for shard index
-};
 
 struct tile_stream_cpu
 {

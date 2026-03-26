@@ -1,12 +1,10 @@
 #include "multiarray.cpu.h"
+#include "cpu/pipeline.h"
 #include "stream/config.h"
 #include "zarr/shard_delivery.h"
 
-#include "cpu/aggregate.h"
 #include "cpu/compress.h"
-#include "cpu/lod.h"
 #include "cpu/transpose.h"
-#include "util/index.ops.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>
@@ -31,16 +29,6 @@ struct array_descriptor
   uint32_t dim0_counts[LOD_MAX_LEVELS];
   void* dim0_accum;
   int pool_fully_covered;
-};
-
-// ---- Aggregate output slot (one per level) ----
-
-struct cpu_agg_slot
-{
-  void* data;
-  size_t data_capacity;
-  size_t* offsets;
-  size_t* chunk_sizes;
 };
 
 // ---- Main struct ----
@@ -89,18 +77,6 @@ static struct multiarray_writer_result
 update_impl(struct multiarray_writer* self, int array_index, struct slice data);
 static struct multiarray_writer_result
 flush_impl(struct multiarray_writer* self);
-
-static int
-flush_batch(struct multiarray_tile_stream_cpu* ms,
-            struct array_descriptor* desc,
-            uint32_t n_epochs,
-            const uint32_t* active_masks);
-
-static int
-scatter_epoch(struct multiarray_tile_stream_cpu* ms,
-              struct array_descriptor* desc,
-              uint32_t epoch_in_batch,
-              uint32_t* out_mask);
 
 static void
 recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index);
@@ -444,257 +420,81 @@ static void
 recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
 {
   struct array_descriptor* d = &ms->arrays[array_index];
-
-  // Per-level chunk-to-shard map + batch LUTs.
+  struct lut_targets luts = {
+    .scatter_lut = ms->scatter_lut,
+    .scatter_batch_offsets = ms->scatter_batch_offsets,
+  };
   for (int lv = 0; lv < d->levels.nlod; ++lv) {
-    const struct aggregate_layout* al = &d->agg_layout[lv];
-    uint64_t M_lv = al->chunks_per_epoch;
-
-    // Single-epoch permutation.
-    for (uint64_t i = 0; i < M_lv; ++i)
-      ms->chunk_to_shard_map[lv][i] = (uint32_t)ravel(
-        al->lifted_rank, al->lifted_shape, al->lifted_strides, i);
-
-    // Batch LUTs (K_l > 1 only).
-    uint32_t K_l = d->batch_active_count[lv];
-    if (K_l > 1) {
-      uint64_t total_chunks = d->levels.total_chunks;
-      for (uint32_t a = 0; a < K_l; ++a) {
-        uint32_t period =
-          (d->levels.dim0_downsample && lv > 0) ? (1u << lv) : 1;
-        uint32_t pool_epoch = (a + 1) * period - 1;
-
-        for (uint64_t j = 0; j < M_lv; ++j) {
-          uint64_t idx = (uint64_t)a * M_lv + j;
-          ms->batch_gather[lv][idx] =
-            (uint32_t)(pool_epoch * total_chunks +
-                       d->levels.chunk_offset[lv] + j);
-          uint32_t perm_pos = (uint32_t)ravel(
-            al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
-          ms->batch_chunk_to_shard_map[lv][idx] = perm_pos * K_l + a;
-        }
-      }
-    }
+    luts.chunk_to_shard_map[lv] = ms->chunk_to_shard_map[lv];
+    luts.batch_gather[lv] = ms->batch_gather[lv];
+    luts.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
+    luts.morton_lut[lv] = ms->morton_lut[lv];
+    luts.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
   }
-
-  // LOD LUTs (multiscale only).
-  if (d->levels.enable_multiscale) {
-    const struct lod_plan* plan = &d->cl.plan;
-
-    lod_cpu_build_scatter_lut(plan, ms->scatter_lut);
-    lod_cpu_build_scatter_batch_offsets(plan, ms->scatter_batch_offsets);
-
-    for (int lv = 0; lv < d->levels.nlod; ++lv) {
-      const struct tile_stream_layout* layout_lv = &d->cl.layouts[lv];
-      lod_cpu_build_chunk_lut(plan, lv, layout_lv, ms->morton_lut[lv]);
-
-      for (uint64_t bi = 0; bi < plan->batch_count; ++bi) {
-        uint64_t remainder = bi;
-        int64_t offset = 0;
-        for (int k = plan->batch_ndim - 1; k >= 0; --k) {
-          uint64_t coord = remainder % plan->batch_shape[k];
-          remainder /= plan->batch_shape[k];
-          int dm = plan->batch_map[k];
-          uint64_t cs = layout_lv->lifted_shape[2 * dm + 1];
-          uint64_t ci = coord / cs;
-          uint64_t wi = coord % cs;
-          offset += (int64_t)ci * layout_lv->lifted_strides[2 * dm];
-          offset += (int64_t)wi * layout_lv->lifted_strides[2 * dm + 1];
-        }
-        ms->lod_batch_offsets[lv][bi] =
-          (uint64_t)offset +
-          d->levels.chunk_offset[lv] * layout_lv->chunk_stride;
-      }
-    }
-  }
+  cpu_pipeline_compute_luts(
+    &d->cl, &d->levels, d->batch_active_count, d->agg_layout, &luts);
 }
 
-// ---- Batch flush ----
+// ---- Pipeline helpers ----
 
-static int
-flush_batch(struct multiarray_tile_stream_cpu* ms,
-            struct array_descriptor* desc,
-            uint32_t n_epochs,
-            const uint32_t* active_masks)
+static struct flush_batch_params
+make_flush_params(struct multiarray_tile_stream_cpu* ms,
+                  struct array_descriptor* desc)
 {
   const size_t bpe = dtype_bpe(desc->config.dtype);
-  const size_t max_out = desc->cl.max_output_size;
-  const uint64_t total_chunks = desc->levels.total_chunks;
-
-  // Compress all epochs at once.
-  if (compress_cpu(desc->config.codec,
-                   ms->chunk_pool,
-                   desc->layout.chunk_stride * bpe,
-                   ms->compressed,
-                   max_out,
-                   ms->comp_sizes,
-                   desc->layout.chunk_elements * bpe,
-                   n_epochs * total_chunks))
-    return 1;
-
-  // Aggregate + deliver per-level.
+  struct flush_batch_params p = {
+    .codec = desc->config.codec,
+    .chunk_pool = ms->chunk_pool,
+    .chunk_stride_bytes = desc->layout.chunk_stride * bpe,
+    .chunk_bytes = desc->layout.chunk_elements * bpe,
+    .compressed = ms->compressed,
+    .max_output_size = desc->cl.max_output_size,
+    .comp_sizes = ms->comp_sizes,
+    .total_chunks = desc->levels.total_chunks,
+    .nlod = desc->levels.nlod,
+    .shard_order_sizes = ms->shard_order_sizes,
+    .sink = desc->sink,
+    .shard_alignment = desc->config.shard_alignment,
+    .metrics = NULL, // multiarray skips timing
+  };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    uint32_t active_count = 0;
-    for (uint32_t e = 0; e < n_epochs; ++e)
-      if (active_masks[e] & (1u << lv))
-        active_count++;
-    if (active_count == 0)
-      continue;
-
-    if (active_count == desc->batch_active_count[lv] &&
-        desc->batch_active_count[lv] > 1) {
-      // Batch aggregate.
-      struct aggregate_cpu_workspace ws = {
-        .perm = ms->batch_chunk_to_shard_map[lv],
-        .permuted_sizes = ms->shard_order_sizes,
-        .data = ms->agg_slots[lv].data,
-        .data_capacity = ms->agg_slots[lv].data_capacity,
-        .offsets = ms->agg_slots[lv].offsets,
-        .chunk_sizes = ms->agg_slots[lv].chunk_sizes,
-      };
-      struct aggregate_result ar;
-      if (aggregate_cpu_batch_into(ms->compressed,
-                                   ms->comp_sizes,
-                                   ms->batch_gather[lv],
-                                   &desc->agg_layout[lv],
-                                   active_count,
-                                   &ws,
-                                   &ar))
-        return 1;
-
-      size_t sink_bytes = 0;
-      if (deliver_to_shards_batch((uint8_t)lv,
-                                  &desc->shard[lv],
-                                  &ar,
-                                  active_count,
-                                  desc->sink,
-                                  desc->config.shard_alignment,
-                                  &sink_bytes))
-        return 1;
-    } else {
-      // Per-epoch fallback.
-      for (uint32_t e = 0; e < n_epochs; ++e) {
-        if (!(active_masks[e] & (1u << lv)))
-          continue;
-
-        uint64_t comp_base =
-          (uint64_t)e * total_chunks + desc->levels.chunk_offset[lv];
-
-        const void* comp_lv =
-          (const char*)ms->compressed + comp_base * max_out;
-        const size_t* sizes_lv = ms->comp_sizes + comp_base;
-
-        struct aggregate_cpu_workspace ws = {
-          .perm = ms->chunk_to_shard_map[lv],
-          .permuted_sizes = ms->shard_order_sizes,
-          .data = ms->agg_slots[lv].data,
-          .data_capacity = ms->agg_slots[lv].data_capacity,
-          .offsets = ms->agg_slots[lv].offsets,
-          .chunk_sizes = ms->agg_slots[lv].chunk_sizes,
-        };
-        struct aggregate_result ar;
-        if (aggregate_cpu_into(
-              comp_lv, sizes_lv, &desc->agg_layout[lv], &ws, &ar))
-          return 1;
-
-        size_t sink_bytes = 0;
-        if (deliver_to_shards_batch((uint8_t)lv,
-                                    &desc->shard[lv],
-                                    &ar,
-                                    1,
-                                    desc->sink,
-                                    desc->config.shard_alignment,
-                                    &sink_bytes))
-          return 1;
-      }
-    }
+    p.levels[lv] = (struct flush_level_view){
+      .agg_layout = &desc->agg_layout[lv],
+      .batch_active_count = desc->batch_active_count[lv],
+      .chunk_offset = desc->levels.chunk_offset[lv],
+      .chunk_to_shard_map = ms->chunk_to_shard_map[lv],
+      .batch_chunk_to_shard_map = ms->batch_chunk_to_shard_map[lv],
+      .batch_gather = ms->batch_gather[lv],
+      .agg_slot = &ms->agg_slots[lv],
+      .shard = &desc->shard[lv],
+    };
   }
-
-  return 0;
+  return p;
 }
 
-// ---- Scatter epoch (multiscale) ----
-
-static int
-scatter_epoch(struct multiarray_tile_stream_cpu* ms,
-              struct array_descriptor* desc,
-              uint32_t epoch_in_batch,
-              uint32_t* out_mask)
+static struct scatter_epoch_params
+make_scatter_params(struct multiarray_tile_stream_cpu* ms,
+                    struct array_descriptor* desc)
 {
-  const size_t bpe = dtype_bpe(desc->config.dtype);
-  void* epoch_pool =
-    (char*)ms->chunk_pool + (uint64_t)epoch_in_batch *
-                              desc->levels.total_chunks *
-                              desc->layout.chunk_stride * bpe;
-
-  if (!desc->levels.enable_multiscale) {
-    *out_mask = 1;
-    return 0;
-  }
-
-  CHECK(Error,
-        lod_cpu_gather(&desc->cl.plan,
-                       ms->linear,
-                       ms->lod_values,
-                       ms->scatter_lut,
-                       ms->scatter_batch_offsets,
-                       desc->config.dtype) == 0);
-
-  CHECK(Error,
-        lod_cpu_reduce(&desc->cl.plan,
-                       ms->lod_values,
-                       desc->config.dtype,
-                       desc->config.reduce_method) == 0);
-
-  uint32_t active_levels_mask = 1; // L0 always active
-
-  if (desc->levels.dim0_downsample && desc->dim0_accum) {
-    CHECK(Error,
-          lod_cpu_dim0_fold(&desc->cl.plan,
-                            ms->lod_values,
-                            desc->dim0_accum,
-                            desc->dim0_counts,
-                            desc->config.dtype,
-                            desc->config.dim0_reduce_method) == 0);
-
-    for (int lv = 1; lv < desc->cl.plan.nlod; ++lv) {
-      desc->dim0_counts[lv]++;
-      uint32_t period = 1u << lv;
-      if (desc->dim0_counts[lv] >= period) {
-        CHECK(Error,
-              lod_cpu_dim0_emit(&desc->cl.plan,
-                                ms->lod_values,
-                                desc->dim0_accum,
-                                lv,
-                                desc->dim0_counts[lv],
-                                desc->config.dtype,
-                                desc->config.dim0_reduce_method) == 0);
-        desc->dim0_counts[lv] = 0;
-        active_levels_mask |= (1u << lv);
-      }
-    }
-  }
-
+  struct scatter_epoch_params p = {
+    .dtype = desc->config.dtype,
+    .reduce_method = desc->config.reduce_method,
+    .dim0_reduce_method = desc->config.dim0_reduce_method,
+    .cl = &desc->cl,
+    .chunk_pool = ms->chunk_pool,
+    .linear = ms->linear,
+    .lod_values = ms->lod_values,
+    .scatter_lut = ms->scatter_lut,
+    .scatter_batch_offsets = ms->scatter_batch_offsets,
+    .dim0_accum = desc->dim0_accum,
+    .dim0_counts = desc->dim0_counts,
+    .metrics = NULL, // multiarray skips timing
+  };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    if (!(active_levels_mask & (1u << lv)))
-      continue;
-    const struct tile_stream_layout* layout = &desc->cl.layouts[lv];
-    CHECK(Error,
-          lod_cpu_morton_to_chunks(&desc->cl.plan,
-                                   ms->lod_values,
-                                   epoch_pool,
-                                   lv,
-                                   layout,
-                                   ms->morton_lut[lv],
-                                   ms->lod_batch_offsets[lv],
-                                   desc->config.dtype) == 0);
+    p.morton_lut[lv] = ms->morton_lut[lv];
+    p.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
   }
-
-  *out_mask = active_levels_mask;
-  return 0;
-
-Error:
-  return 1;
+  return p;
 }
 
 // ---- Writer: update ----
@@ -728,10 +528,9 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
       // Flush departing batch if any epochs accumulated.
       if (departing->batch_accumulated > 0) {
-        if (flush_batch(ms,
-                        departing,
-                        departing->batch_accumulated,
-                        departing->batch_active_masks))
+        struct flush_batch_params fp = make_flush_params(ms, departing);
+        if (cpu_pipeline_flush_batch(
+              &fp, departing->batch_accumulated, departing->batch_active_masks))
           return (struct multiarray_writer_result){
             .error = multiarray_writer_fail,
             .rest = data,
@@ -761,10 +560,9 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
     if (max_cursor > 0 && desc->cursor >= max_cursor) {
       // Flush this array completely.
       if (desc->batch_accumulated > 0) {
-        if (flush_batch(ms,
-                        desc,
-                        desc->batch_accumulated,
-                        desc->batch_active_masks))
+        struct flush_batch_params fp = make_flush_params(ms, desc);
+        if (cpu_pipeline_flush_batch(
+              &fp, desc->batch_accumulated, desc->batch_active_masks))
           return (struct multiarray_writer_result){
             .error = multiarray_writer_fail,
             .rest = { .beg = src, .end = end },
@@ -823,7 +621,9 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
         desc->cursor > 0) {
       uint32_t active_mask = 1;
       if (desc->levels.enable_multiscale) {
-        if (scatter_epoch(ms, desc, desc->batch_accumulated, &active_mask))
+        struct scatter_epoch_params sp = make_scatter_params(ms, desc);
+        if (cpu_pipeline_scatter_epoch(
+              &sp, desc->batch_accumulated, &active_mask))
           return (struct multiarray_writer_result){
             .error = multiarray_writer_fail,
             .rest = { .beg = src, .end = end },
@@ -834,8 +634,9 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       desc->batch_accumulated++;
 
       if (desc->batch_accumulated == desc->cl.epochs_per_batch) {
-        if (flush_batch(
-              ms, desc, desc->batch_accumulated, desc->batch_active_masks))
+        struct flush_batch_params fp = make_flush_params(ms, desc);
+        if (cpu_pipeline_flush_batch(
+              &fp, desc->batch_accumulated, desc->batch_active_masks))
           return (struct multiarray_writer_result){
             .error = multiarray_writer_fail,
             .rest = { .beg = src, .end = end },
@@ -878,7 +679,9 @@ flush_impl(struct multiarray_writer* self)
     if (desc->cursor % desc->layout.epoch_elements != 0) {
       uint32_t active_mask = 1;
       if (desc->levels.enable_multiscale) {
-        if (scatter_epoch(ms, desc, desc->batch_accumulated, &active_mask))
+        struct scatter_epoch_params sp = make_scatter_params(ms, desc);
+        if (cpu_pipeline_scatter_epoch(
+              &sp, desc->batch_accumulated, &active_mask))
           goto Error;
       }
       desc->batch_active_masks[desc->batch_accumulated] = active_mask;
@@ -890,8 +693,9 @@ flush_impl(struct multiarray_writer* self)
   if (ms->active >= 0) {
     struct array_descriptor* desc = &ms->arrays[ms->active];
     if (desc->batch_accumulated > 0) {
-      if (flush_batch(ms, desc, desc->batch_accumulated,
-                      desc->batch_active_masks))
+      struct flush_batch_params fp = make_flush_params(ms, desc);
+      if (cpu_pipeline_flush_batch(
+            &fp, desc->batch_accumulated, desc->batch_active_masks))
         goto Error;
       desc->batch_accumulated = 0;
     }
@@ -903,42 +707,35 @@ flush_impl(struct multiarray_writer* self)
     if (!desc->levels.dim0_downsample || !desc->dim0_accum)
       continue;
 
-    uint32_t drain_mask = 0;
-
-    for (int lv = 1; lv < desc->cl.plan.nlod; ++lv) {
-      if (desc->dim0_counts[lv] > 0) {
-        if (i != ms->active) {
-          ms->active = i;
-          recompute_luts(ms, i);
-        }
-
-        if (lod_cpu_dim0_emit(&desc->cl.plan,
-                              ms->lod_values,
-                              desc->dim0_accum,
-                              lv,
-                              desc->dim0_counts[lv],
-                              desc->config.dtype,
-                              desc->config.dim0_reduce_method))
-          goto Error;
-        desc->dim0_counts[lv] = 0;
-
-        const struct tile_stream_layout* layout_lv = &desc->cl.layouts[lv];
-        if (lod_cpu_morton_to_chunks(&desc->cl.plan,
-                                     ms->lod_values,
-                                     ms->chunk_pool,
-                                     lv,
-                                     layout_lv,
-                                     ms->morton_lut[lv],
-                                     ms->lod_batch_offsets[lv],
-                                     desc->config.dtype))
-          goto Error;
-        drain_mask |= (1u << lv);
-      }
+    // Ensure LUTs are current for this array.
+    if (i != ms->active) {
+      ms->active = i;
+      recompute_luts(ms, i);
     }
+
+    struct dim0_drain_params dp = {
+      .cl = &desc->cl,
+      .dtype = desc->config.dtype,
+      .dim0_reduce_method = desc->config.dim0_reduce_method,
+      .lod_values = ms->lod_values,
+      .dim0_accum = desc->dim0_accum,
+      .dim0_counts = desc->dim0_counts,
+      .chunk_pool = ms->chunk_pool,
+      .metrics = NULL,
+    };
+    for (int lv = 0; lv < desc->levels.nlod; ++lv) {
+      dp.morton_lut[lv] = ms->morton_lut[lv];
+      dp.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
+    }
+
+    uint32_t drain_mask = 0;
+    if (cpu_pipeline_dim0_drain(&dp, &drain_mask))
+      goto Error;
 
     if (drain_mask) {
       desc->batch_active_masks[0] = drain_mask;
-      if (flush_batch(ms, desc, 1, desc->batch_active_masks))
+      struct flush_batch_params fp = make_flush_params(ms, desc);
+      if (cpu_pipeline_flush_batch(&fp, 1, desc->batch_active_masks))
         goto Error;
     }
   }

@@ -1,0 +1,117 @@
+#pragma once
+
+#include "stream/layouts.h"
+#include "types.codec.h"
+#include "types.stream.h"
+#include "zarr/shard_delivery.h"
+
+// Aggregate output slot (one per level).
+struct cpu_agg_slot
+{
+  void* data;           // aggregated compressed chunks in shard order
+  size_t data_capacity;
+  size_t* offsets;      // [C_lv + 1] exclusive prefix sum
+  size_t* chunk_sizes;  // [C_lv] pre-padding sizes for shard index
+};
+
+// ---- flush_batch ----
+
+struct flush_level_view
+{
+  struct aggregate_layout* agg_layout;
+  uint32_t batch_active_count;
+  uint64_t chunk_offset;
+  uint32_t* chunk_to_shard_map;
+  uint32_t* batch_chunk_to_shard_map;
+  uint32_t* batch_gather;
+  struct cpu_agg_slot* agg_slot;
+  struct shard_state* shard;
+};
+
+struct flush_batch_params
+{
+  enum compression_codec codec;
+  const void* chunk_pool;
+  size_t chunk_stride_bytes;
+  size_t chunk_bytes;
+  void* compressed;
+  size_t max_output_size;
+  size_t* comp_sizes;
+  uint64_t total_chunks;
+  int nlod;
+  struct flush_level_view levels[LOD_MAX_LEVELS];
+  size_t* shard_order_sizes;
+  struct shard_sink* sink;
+  size_t shard_alignment;
+  struct stream_metrics* metrics; // NULL to skip timing
+};
+
+int
+cpu_pipeline_flush_batch(const struct flush_batch_params* p,
+                         uint32_t n_epochs,
+                         const uint32_t* active_masks);
+
+// ---- scatter_epoch ----
+
+struct scatter_epoch_params
+{
+  enum dtype dtype;
+  enum lod_reduce_method reduce_method;
+  enum lod_reduce_method dim0_reduce_method;
+  const struct computed_stream_layouts* cl;
+  void* chunk_pool;
+  void* linear;
+  void* lod_values;
+  uint32_t* scatter_lut;
+  uint64_t* scatter_batch_offsets;
+  uint32_t* morton_lut[LOD_MAX_LEVELS];
+  uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
+  void* dim0_accum;
+  uint32_t* dim0_counts; // mutable
+  struct stream_metrics* metrics; // NULL to skip timing
+};
+
+int
+cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
+                           uint32_t epoch_in_batch,
+                           uint32_t* out_mask);
+
+// ---- LUT computation ----
+
+struct lut_targets
+{
+  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];
+  uint32_t* batch_gather[LOD_MAX_LEVELS];
+  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
+  uint32_t* scatter_lut;
+  uint64_t* scatter_batch_offsets;
+  uint32_t* morton_lut[LOD_MAX_LEVELS];
+  uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
+};
+
+void
+cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
+                          const struct level_geometry* levels,
+                          const uint32_t batch_active_count[LOD_MAX_LEVELS],
+                          const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+                          struct lut_targets* out);
+
+// ---- dim0 drain ----
+
+struct dim0_drain_params
+{
+  const struct computed_stream_layouts* cl;
+  enum dtype dtype;
+  enum lod_reduce_method dim0_reduce_method;
+  void* lod_values;
+  void* dim0_accum;
+  uint32_t* dim0_counts;
+  void* chunk_pool;
+  uint32_t* morton_lut[LOD_MAX_LEVELS];
+  uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
+  struct stream_metrics* metrics; // NULL to skip timing
+};
+
+int
+cpu_pipeline_dim0_drain(const struct dim0_drain_params* p,
+                        uint32_t* out_drain_mask);
