@@ -120,7 +120,7 @@ compress_agg_init(struct compress_agg_stage* stage,
 
     // Shard state
     struct shard_state* ss = &stage->levels[lv].shard;
-    ss->chunks_per_shard_0 = li->chunks_per_shard_0;
+    ss->chunks_per_shard_append = li->chunks_per_shard_append;
     ss->chunks_per_shard_inner = li->chunks_per_shard_inner;
     ss->chunks_per_shard_total = li->chunks_per_shard_total;
     ss->shard_inner_count = li->shard_inner_count;
@@ -159,7 +159,7 @@ compress_agg_init(struct compress_agg_stage* stage,
 
       for (uint32_t a = 0; a < batch_count; ++a) {
         uint32_t period = 1;
-        if (cl->levels.dim0_downsample && lv > 0)
+        if (cl->levels.append_downsample && lv > 0)
           period = 1u << lv;
         uint32_t pool_epoch = (a + 1) * period - 1;
 
@@ -274,7 +274,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
     uint64_t chunks_lv = levels->chunk_count[lv];
 
     if (active_count == 0) {
-      // Infrequent dim0 level (period > K): scan actual per-epoch masks.
+      // Infrequent append-downsampled level (period > K): scan actual per-epoch masks.
       for (uint32_t e = 0; e < n_epochs; ++e) {
         if (!(in->batch_active_masks[e] & (1u << lv)))
           continue;
@@ -318,7 +318,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
         // K=1 or partial batch: per-epoch aggregate
         for (uint32_t a = 0; a < active_count; ++a) {
           uint32_t period = 1;
-          if (levels->dim0_downsample && lv > 0)
+          if (levels->append_downsample && lv > 0)
             period = 1u << lv;
           uint32_t pool_epoch = (n_epochs == 1) ? 0 : (a + 1) * period - 1;
 

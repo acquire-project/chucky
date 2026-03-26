@@ -22,7 +22,7 @@ extern "C"
   // d_* fields are GPU device pointers (NULL on CPU).
   struct aggregate_layout
   {
-    uint8_t lifted_rank; // 2 * (rank - 1)
+    uint8_t lifted_rank; // 2 * (rank - n_append)
     uint64_t lifted_shape[MAX_RANK];
     int64_t lifted_strides[MAX_RANK];
     uint64_t* d_lifted_shape;  // device copy (NULL on CPU)
@@ -37,6 +37,7 @@ extern "C"
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
   int aggregate_layout_compute(struct aggregate_layout* layout,
                                uint8_t rank,
+                               uint8_t n_append,
                                const uint64_t* chunk_count,
                                const uint64_t* chunks_per_shard,
                                uint64_t chunks_per_epoch,

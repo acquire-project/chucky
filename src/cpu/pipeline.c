@@ -223,49 +223,49 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                          0);
   }
 
-  // Dim0 fold/emit: accumulate levels 1+ across epochs.
-  // Without dim0 downsample, all inner LOD levels are ready every epoch.
+  // Append fold/emit: accumulate levels 1+ across epochs.
+  // Without append downsample, all inner LOD levels are ready every epoch.
   uint32_t active_levels_mask =
-    (levels->dim0_downsample && p->dim0_accum)
+    (levels->append_downsample && p->append_accum)
       ? 1
       : (uint32_t)((1u << levels->nlod) - 1);
-  if (levels->dim0_downsample && p->dim0_accum) {
-    struct platform_clock dim0_clk = { 0 };
+  if (levels->append_downsample && p->append_accum) {
+    struct platform_clock append_clk = { 0 };
     if (p->metrics)
-      platform_toc(&dim0_clk);
+      platform_toc(&append_clk);
 
     CHECK(Error,
-          lod_cpu_dim0_fold(&p->cl->plan,
+          lod_cpu_append_fold(&p->cl->plan,
                             p->lod_values,
-                            p->dim0_accum,
-                            p->dim0_counts,
+                            p->append_accum,
+                            p->append_counts,
                             p->dtype,
-                            p->dim0_reduce_method) == 0);
+                            p->append_reduce_method) == 0);
 
     for (int lv = 1; lv < p->cl->plan.nlod; ++lv) {
-      p->dim0_counts[lv]++;
+      p->append_counts[lv]++;
       uint32_t period = 1u << lv;
-      if (p->dim0_counts[lv] >= period) {
+      if (p->append_counts[lv] >= period) {
         CHECK(Error,
-              lod_cpu_dim0_emit(&p->cl->plan,
+              lod_cpu_append_emit(&p->cl->plan,
                                 p->lod_values,
-                                p->dim0_accum,
+                                p->append_accum,
                                 lv,
-                                p->dim0_counts[lv],
+                                p->append_counts[lv],
                                 p->dtype,
-                                p->dim0_reduce_method) == 0);
-        p->dim0_counts[lv] = 0;
+                                p->append_reduce_method) == 0);
+        p->append_counts[lv] = 0;
         active_levels_mask |= (1u << lv);
       }
     }
 
     if (p->metrics) {
-      float dim0_ms = (float)(platform_toc(&dim0_clk) * 1000.0);
-      size_t dim0_bytes = 0;
+      float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
+      size_t append_bytes = 0;
       for (int lv = 1; lv < p->cl->plan.nlod; ++lv)
-        dim0_bytes += p->cl->plan.batch_count * p->cl->plan.lod_nelem[lv] * bytes_per_element;
+        append_bytes += p->cl->plan.batch_count * p->cl->plan.lod_nelem[lv] * bytes_per_element;
       accumulate_metric_ms(
-        &p->metrics->lod_dim0_fold, dim0_ms, dim0_bytes, 0);
+        &p->metrics->lod_append_fold, append_ms, append_bytes, 0);
     }
   }
 
@@ -329,7 +329,7 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
       uint64_t total_chunks = levels->total_chunks;
       for (uint32_t a = 0; a < K_l; ++a) {
         uint32_t period =
-          (levels->dim0_downsample && lv > 0) ? (1u << lv) : 1;
+          (levels->append_downsample && lv > 0) ? (1u << lv) : 1;
         uint32_t pool_epoch = (a + 1) * period - 1;
 
         for (uint64_t j = 0; j < M_lv; ++j) {
@@ -380,31 +380,31 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
   }
 }
 
-// ---- dim0 drain ----
+// ---- append drain ----
 
 int
-cpu_pipeline_dim0_drain(const struct dim0_drain_params* p,
-                        uint32_t* out_drain_mask)
+cpu_pipeline_append_drain(const struct append_drain_params* p,
+                          uint32_t* out_drain_mask)
 {
   const size_t bytes_per_element = dtype_bpe(p->dtype);
   const struct lod_plan* plan = &p->cl->plan;
 
-  struct platform_clock dim0_clk = { 0 };
+  struct platform_clock append_clk = { 0 };
   if (p->metrics)
-    platform_toc(&dim0_clk);
+    platform_toc(&append_clk);
 
   uint32_t drain_mask = 0;
   for (int lv = 1; lv < plan->nlod; ++lv) {
-    if (p->dim0_counts[lv] > 0) {
+    if (p->append_counts[lv] > 0) {
       CHECK(Error,
-            lod_cpu_dim0_emit(plan,
+            lod_cpu_append_emit(plan,
                               p->lod_values,
-                              p->dim0_accum,
+                              p->append_accum,
                               lv,
-                              p->dim0_counts[lv],
+                              p->append_counts[lv],
                               p->dtype,
-                              p->dim0_reduce_method) == 0);
-      p->dim0_counts[lv] = 0;
+                              p->append_reduce_method) == 0);
+      p->append_counts[lv] = 0;
 
       // Scatter emitted level from morton space to chunk pool.
       const struct tile_stream_layout* layout_lv = &p->cl->layouts[lv];
@@ -422,11 +422,11 @@ cpu_pipeline_dim0_drain(const struct dim0_drain_params* p,
   }
 
   if (p->metrics) {
-    float dim0_ms = (float)(platform_toc(&dim0_clk) * 1000.0);
-    size_t dim0_bytes = 0;
+    float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
+    size_t append_bytes = 0;
     for (int lv = 1; lv < plan->nlod; ++lv)
-      dim0_bytes += plan->batch_count * plan->lod_nelem[lv] * bytes_per_element;
-    accumulate_metric_ms(&p->metrics->lod_dim0_fold, dim0_ms, dim0_bytes, 0);
+      append_bytes += plan->batch_count * plan->lod_nelem[lv] * bytes_per_element;
+    accumulate_metric_ms(&p->metrics->lod_append_fold, append_ms, append_bytes, 0);
   }
 
   *out_drain_mask = drain_mask;

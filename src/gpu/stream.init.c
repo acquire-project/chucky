@@ -136,7 +136,7 @@ seed_events(const struct pool_state* pools,
     CU(Fail, cuEventRecord(lod->t_start, compute));
     CU(Fail, cuEventRecord(lod->t_scatter_end, compute));
     CU(Fail, cuEventRecord(lod->t_reduce_end, compute));
-    CU(Fail, cuEventRecord(lod->t_dim0_end, compute));
+    CU(Fail, cuEventRecord(lod->t_append_end, compute));
     CU(Fail, cuEventRecord(lod->t_end, compute));
   }
 
@@ -154,7 +154,7 @@ init_metrics(int enable_multiscale)
     .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
     .lod_gather = mk_stream_metric("LOD Gather"),
     .lod_reduce = mk_stream_metric("LOD Reduce"),
-    .lod_dim0_fold = mk_stream_metric("Dim0 Fold"),
+    .lod_append_fold = mk_stream_metric("Dim0 Fold"),
     .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
     .compress = mk_stream_metric("Compress"),
     .aggregate = mk_stream_metric("Aggregate"),
@@ -235,7 +235,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   if (out->levels.enable_multiscale) {
     CHECK(FailPhase2,
           lod_state_init_buffers(&out->lod, out->config.dtype) == 0);
-    if (out->levels.dim0_downsample)
+    if (out->levels.append_downsample)
       CHECK(FailPhase2,
             lod_state_init_accumulators(&out->lod, &out->config) == 0);
   }
@@ -286,7 +286,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
 {
   return (struct tile_stream_status){
     .nlod = s->levels.nlod,
-    .dim0_downsample = s->levels.dim0_downsample,
+    .append_downsample = s->levels.append_downsample,
     .epochs_per_batch = s->batch.epochs_per_batch,
     .max_compressed_size = s->compress_agg.codec.max_output_size,
     .dtype = s->config.dtype,
@@ -432,9 +432,9 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += 2 * rank * sizeof(int64_t);
     }
 
-    if (cl.levels.dim0_downsample) {
+    if (cl.levels.append_downsample) {
       size_t accum_bpe =
-        dtype_accum_bpe(config->dtype, config->dim0_reduce_method);
+        dtype_accum_bpe(config->dtype, config->append_reduce_method);
       uint64_t total_elems = 0;
       for (int lv = 1; lv < plan->nlod; ++lv)
         total_elems += plan->batch_count * plan->lod_nelem[lv];

@@ -24,7 +24,7 @@ struct stream_metrics
   struct stream_metric h2d;
   struct stream_metric lod_gather;
   struct stream_metric lod_reduce;
-  struct stream_metric lod_dim0_fold;
+  struct stream_metric lod_append_fold;
   struct stream_metric lod_morton_chunk;
   struct stream_metric scatter;
   struct stream_metric compress;
@@ -41,7 +41,7 @@ struct tile_stream_configuration
   struct dimension* dimensions;
   enum compression_codec codec;
   enum lod_reduce_method reduce_method;
-  enum lod_reduce_method dim0_reduce_method;
+  enum lod_reduce_method append_reduce_method;
   uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
   uint32_t
     target_batch_chunks; // minimum chunks per compress batch (default 1024)
@@ -53,7 +53,7 @@ struct tile_stream_configuration
 struct tile_stream_status
 {
   int nlod;
-  int dim0_downsample;
+  int append_downsample;
   uint32_t epochs_per_batch;
   size_t max_compressed_size;
   enum dtype dtype;

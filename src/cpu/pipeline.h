@@ -57,7 +57,7 @@ struct scatter_epoch_params
 {
   enum dtype dtype;
   enum lod_reduce_method reduce_method;
-  enum lod_reduce_method dim0_reduce_method;
+  enum lod_reduce_method append_reduce_method;
   const struct computed_stream_layouts* cl;
   void* chunk_pool;
   void* linear;
@@ -66,8 +66,8 @@ struct scatter_epoch_params
   uint64_t* scatter_batch_offsets;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
-  void* dim0_accum;
-  uint32_t* dim0_counts; // mutable
+  void* append_accum;
+  uint32_t* append_counts; // mutable
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -96,16 +96,16 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
                           const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
                           struct lut_targets* out);
 
-// ---- dim0 drain ----
+// ---- append drain ----
 
-struct dim0_drain_params
+struct append_drain_params
 {
   const struct computed_stream_layouts* cl;
   enum dtype dtype;
-  enum lod_reduce_method dim0_reduce_method;
+  enum lod_reduce_method append_reduce_method;
   void* lod_values;
-  void* dim0_accum;
-  uint32_t* dim0_counts;
+  void* append_accum;
+  uint32_t* append_counts;
   void* chunk_pool;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
@@ -113,5 +113,5 @@ struct dim0_drain_params
 };
 
 int
-cpu_pipeline_dim0_drain(const struct dim0_drain_params* p,
-                        uint32_t* out_drain_mask);
+cpu_pipeline_append_drain(const struct append_drain_params* p,
+                          uint32_t* out_drain_mask);

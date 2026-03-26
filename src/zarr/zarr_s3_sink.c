@@ -165,7 +165,7 @@ struct zarr_s3_sink
   uint64_t finalize_seq; // monotonic count of finalizes issued
   int finalize_err;      // sticky error from any finalize
 
-  // Metadata (for update_dim0)
+  // Metadata (for update_append)
   struct dimension dimensions[MAX_ZARR_RANK];
   enum dtype data_type;
   double fill_value;
@@ -302,18 +302,20 @@ s3_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return &w->base;
 }
 
-// --- update_dim0 ---
+// --- update_append ---
 
 static int
-s3_sink_update_dim0(struct shard_sink* self,
-                    uint8_t level,
-                    uint64_t dim0_size)
+s3_sink_update_append(struct shard_sink* self,
+                      uint8_t level,
+                      uint8_t n_append,
+                      const uint64_t* append_sizes)
 {
   (void)level;
   struct zarr_s3_sink* zs = (struct zarr_s3_sink*)self;
-  if (zs->dimensions[0].size == dim0_size)
+  if (zs->dimensions[0].size == append_sizes[0])
     return 0;
-  zs->dimensions[0].size = dim0_size;
+  for (uint8_t d = 0; d < n_append; ++d)
+    zs->dimensions[d].size = append_sizes[d];
 
   char buf[4096];
   int len = zarr_array_json(buf,
@@ -325,14 +327,14 @@ s3_sink_update_dim0(struct shard_sink* self,
                             zs->chunks_per_shard,
                             zs->codec);
   if (len < 0) {
-    log_error("s3_sink_update_dim0: failed to generate zarr.json for %s",
+    log_error("s3_sink_update_append: failed to generate zarr.json for %s",
               zs->array_prefix);
     return 1;
   }
   char key[4096];
   snprintf(key, sizeof(key), "%s/zarr.json", zs->array_prefix);
   if (s3_client_put(zs->s3, zs->bucket, key, buf, (size_t)len)) {
-    log_error("s3_sink_update_dim0: failed to write zarr.json for %s",
+    log_error("s3_sink_update_append: failed to write zarr.json for %s",
               zs->array_prefix);
     return 1;
   }
@@ -354,7 +356,7 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
   CHECK(Fail, zs);
 
   zs->base.open = s3_sink_open;
-  zs->base.update_dim0 = s3_sink_update_dim0;
+  zs->base.update_append = s3_sink_update_append;
   zs->base.record_fence = s3_sink_record_fence;
   zs->base.wait_fence = s3_sink_wait_fence;
   zs->rank = cfg->rank;
@@ -379,7 +381,7 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
       cps[d] = cfg->dimensions[d].chunks_per_shard;
     }
     struct shard_geometry g;
-    shard_geometry_compute(&g, cfg->rank, shape, cs, cps);
+    shard_geometry_compute(&g, cfg->rank, 1, shape, cs, cps);
     memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
     memcpy(zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
     memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
@@ -588,23 +590,25 @@ put_multiscale_group_metadata(const struct zarr_s3_multiscale_sink* ms)
 }
 
 static int
-s3_multiscale_update_dim0(struct shard_sink* self,
-                          uint8_t level,
-                          uint64_t dim0_size)
+s3_multiscale_update_append(struct shard_sink* self,
+                            uint8_t level,
+                            uint8_t n_append,
+                            const uint64_t* append_sizes)
 {
   struct zarr_s3_multiscale_sink* ms = (struct zarr_s3_multiscale_sink*)self;
   if (level >= ms->nlod)
     return 1;
 
   uint64_t old = ms->levels[level]->dimensions[0].size;
-  if (s3_sink_update_dim0(&ms->levels[level]->base, level, dim0_size))
+  if (s3_sink_update_append(
+        &ms->levels[level]->base, level, n_append, append_sizes))
     return 1;
-  if (old == dim0_size)
+  if (old == append_sizes[0])
     return 0;
 
   if (put_multiscale_group_metadata(ms)) {
     log_error(
-      "s3_multiscale_update_dim0: failed to rewrite group zarr.json for %s",
+      "s3_multiscale_update_append: failed to rewrite group zarr.json for %s",
       ms->group_prefix);
     return 1;
   }
@@ -639,7 +643,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   CHECK(Fail_plan, ms);
 
   ms->base.open = s3_multiscale_open;
-  ms->base.update_dim0 = s3_multiscale_update_dim0;
+  ms->base.update_append = s3_multiscale_update_append;
   ms->base.record_fence = s3_multiscale_record_fence;
   ms->base.wait_fence = s3_multiscale_wait_fence;
   ms->nlod = plan.nlod;

@@ -71,9 +71,12 @@ dims_set_storage_order(struct dimension* dims, uint8_t rank, const char* order)
   }
   if (strlen(order) != rank)
     return 1;
-  // The append dimension (index 0) must stay at storage position 0.
-  if (rank > 0 && order[0] != dims[0].name[0])
-    return 1;
+  // Append dimensions must stay at their identity storage positions.
+  uint8_t na = dims_n_append(dims, rank);
+  for (uint8_t d = 0; d < na; ++d) {
+    if (order[d] != dims[d].name[0])
+      return 1;
+  }
   for (uint8_t i = 0; i < rank; ++i) {
     // Find which dim has name order[i].
     int found = 0;
@@ -172,6 +175,26 @@ dims_set_shard_counts(struct dimension* dims,
   }
 }
 
+uint8_t
+dims_n_append(const struct dimension* dims, uint8_t rank)
+{
+  uint8_t max_n = 0;
+  for (uint8_t d = 0; d < rank; ++d) {
+    if (dims[d].chunk_size != 1)
+      break;
+    max_n = d + 1;
+  }
+  if (max_n <= 1)
+    return 1;
+  // Only the rightmost append dim may be accumulator-downsampled.
+  // If a dim in the prefix has downsample, it becomes the rightmost append dim.
+  for (uint8_t d = 0; d < max_n; ++d) {
+    if (dims[d].downsample)
+      return d + 1;
+  }
+  return max_n;
+}
+
 int
 dims_validate(const struct dimension* dims, uint8_t rank)
 {
@@ -192,11 +215,14 @@ dims_validate(const struct dimension* dims, uint8_t rank)
     goto Fail;
   }
 
-  // storage_position: valid permutation with dims[0] pinned to 0
+  // storage_position: valid permutation with append dims pinned
   {
-    if (dims[0].storage_position != 0) {
-      log_error("dims[0].storage_position must be 0");
-      goto Fail;
+    uint8_t na = dims_n_append(dims, rank);
+    for (int d = 0; d < na; ++d) {
+      if (dims[d].storage_position != d) {
+        log_error("dims[%d].storage_position must be %d (append dim)", d, d);
+        goto Fail;
+      }
     }
     uint32_t seen = 0;
     for (int d = 0; d < rank; ++d) {
@@ -223,6 +249,7 @@ dims_print(const struct dimension* dims, uint8_t rank)
          "chunks",
          "cps",
          "shards");
+  uint8_t na = dims_n_append(dims, rank);
   uint64_t chunk_elements = 1;
   uint64_t chunks_per_epoch = 1;
   for (uint8_t i = 0; i < rank; ++i) {
@@ -240,7 +267,7 @@ dims_print(const struct dimension* dims, uint8_t rank)
            (int)dims[i].storage_position,
            dims[i].downsample ? "Y" : ".");
     chunk_elements *= dims[i].chunk_size;
-    if (i > 0)
+    if (i >= na)
       chunks_per_epoch *= tc;
   }
   double epoch_elements = (double)chunks_per_epoch * (double)chunk_elements;

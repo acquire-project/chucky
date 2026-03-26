@@ -333,15 +333,28 @@ write_array_metadata_file(const char* array_dir,
 // --- Metadata update ---
 
 static int
-zarr_fs_sink_update_dim0(struct shard_sink* self,
-                         uint8_t level,
-                         uint64_t dim0_size)
+zarr_fs_sink_update_append(struct shard_sink* self,
+                           uint8_t level,
+                           uint8_t n_append,
+                           const uint64_t* append_sizes)
 {
   (void)level;
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
-  if (zs->dimensions[0].size == dim0_size)
+
+  // Check if any append dim changed
+  int changed = 0;
+  for (uint8_t d = 0; d < n_append; ++d) {
+    if (zs->dimensions[d].size != append_sizes[d]) {
+      changed = 1;
+      break;
+    }
+  }
+  if (!changed)
     return 0;
-  zs->dimensions[0].size = dim0_size;
+
+  for (uint8_t d = 0; d < n_append; ++d)
+    zs->dimensions[d].size = append_sizes[d];
+
   if (write_array_metadata_file(zs->array_dir,
                                 zs->rank,
                                 zs->dimensions,
@@ -349,7 +362,7 @@ zarr_fs_sink_update_dim0(struct shard_sink* self,
                                 zs->fill_value,
                                 zs->chunks_per_shard,
                                 zs->codec)) {
-    log_error("zarr_fs_sink_update_dim0: failed to rewrite zarr.json for %s",
+    log_error("zarr_fs_sink_update_append: failed to rewrite zarr.json for %s",
               zs->array_dir);
     return 1;
   }
@@ -371,7 +384,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, zs);
 
   zs->base.open = zarr_fs_sink_open;
-  zs->base.update_dim0 = zarr_fs_sink_update_dim0;
+  zs->base.update_append = zarr_fs_sink_update_append;
   zs->base.record_fence = zarr_fs_sink_record_fence;
   zs->base.wait_fence = zarr_fs_sink_wait_fence;
   zs->queue = io_queue_create();
@@ -395,7 +408,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
       cps[d] = cfg->dimensions[d].chunks_per_shard;
     }
     struct shard_geometry g;
-    shard_geometry_compute(&g, cfg->rank, shape, cs, cps);
+    shard_geometry_compute(&g, cfg->rank, 1, shape, cs, cps);
     memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
     memcpy(zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
     memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
@@ -585,25 +598,27 @@ write_multiscale_group_metadata(const struct zarr_fs_multiscale_sink* ms)
 }
 
 static int
-zarr_multiscale_update_dim0(struct shard_sink* self,
-                            uint8_t level,
-                            uint64_t dim0_size)
+zarr_multiscale_update_append(struct shard_sink* self,
+                              uint8_t level,
+                              uint8_t n_append,
+                              const uint64_t* append_sizes)
 {
   struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
   if (level >= ms->nlod)
     return 1;
 
-  // Skip if unchanged
+  // Skip if unchanged (only dim 0 can be unbounded)
   uint64_t old = ms->levels[level]->dimensions[0].size;
-  if (zarr_fs_sink_update_dim0(&ms->levels[level]->base, level, dim0_size))
+  if (zarr_fs_sink_update_append(
+        &ms->levels[level]->base, level, n_append, append_sizes))
     return 1;
-  if (old == dim0_size)
+  if (old == append_sizes[0])
     return 0;
 
   // Regenerate group metadata
   if (write_multiscale_group_metadata(ms)) {
     log_error(
-      "zarr_multiscale_update_dim0: failed to rewrite group zarr.json for %s",
+      "zarr_multiscale_update_append: failed to rewrite group zarr.json for %s",
       ms->group_path);
     return 1;
   }
@@ -640,7 +655,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail_plan, ms);
 
   ms->base.open = zarr_multiscale_open;
-  ms->base.update_dim0 = zarr_multiscale_update_dim0;
+  ms->base.update_append = zarr_multiscale_update_append;
   ms->base.record_fence = zarr_multiscale_record_fence;
   ms->base.wait_fence = zarr_multiscale_wait_fence;
   ms->nlod = plan.nlod;

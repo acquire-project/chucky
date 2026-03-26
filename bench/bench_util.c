@@ -311,7 +311,7 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->scatter);
   print_metric_row(&metrics->lod_gather);
   print_metric_row(&metrics->lod_reduce);
-  print_metric_row(&metrics->lod_dim0_fold);
+  print_metric_row(&metrics->lod_append_fold);
   print_metric_row(&metrics->lod_morton_chunk);
   print_metric_row(&metrics->compress);
   print_metric_row(&metrics->aggregate);
@@ -445,7 +445,7 @@ run_bench(const struct bench_config* cfg)
         .dimensions = dims,
         .codec = cfg->codec,
         .reduce_method = cfg->reduce_method,
-        .dim0_reduce_method = cfg->dim0_reduce_method,
+        .append_reduce_method = cfg->append_reduce_method,
         .target_batch_chunks = 2048,
         .shard_alignment = (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
       };
@@ -574,7 +574,7 @@ run_bench(const struct bench_config* cfg)
     .dimensions = dims,
     .codec = cfg->codec,
     .reduce_method = cfg->reduce_method,
-    .dim0_reduce_method = cfg->dim0_reduce_method,
+    .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
     .shard_alignment = (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
   };
@@ -753,13 +753,13 @@ run_bench(const struct bench_config* cfg)
       jw_object_begin(&jw);
       const char* stage_names[] = {
         "memcpy", "h2d", "scatter",
-        "lod_gather", "lod_reduce", "lod_dim0_fold",
+        "lod_gather", "lod_reduce", "lod_append_fold",
         "lod_morton_chunk", "compress", "aggregate",
         "d2h",
       };
       const struct stream_metric* stage_ptrs[] = {
         &m.memcpy,          &m.h2d,           &m.scatter,
-        &m.lod_gather,      &m.lod_reduce,    &m.lod_dim0_fold,
+        &m.lod_gather,      &m.lod_reduce,    &m.lod_append_fold,
         &m.lod_morton_chunk, &m.compress,      &m.aggregate,
         &m.d2h,
       };
@@ -1051,7 +1051,7 @@ bench_stream_main(int ac,
     .s3_throughput_gbps = s3_throughput_gbps,
     .codec = codec,
     .reduce_method = reduce,
-    .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .append_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = backend,
     .dtype = dtype,
     .chunk_ratios = chunk_ratios,
@@ -1179,7 +1179,7 @@ run_bench_two_streams(const struct bench_config* cfg)
       .dimensions = dims,
       .codec = cfg->codec,
       .reduce_method = cfg->reduce_method,
-      .dim0_reduce_method = cfg->dim0_reduce_method,
+      .append_reduce_method = cfg->append_reduce_method,
       .target_batch_chunks = 2048,
     };
 
@@ -1253,7 +1253,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .dimensions = dims,
     .codec = cfg->codec,
     .reduce_method = cfg->reduce_method,
-    .dim0_reduce_method = cfg->dim0_reduce_method,
+    .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
     .shard_alignment = output_path ? platform_page_size() : 0,
   };
@@ -1351,7 +1351,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_metric_row(&m[k].scatter);
     print_metric_row(&m[k].lod_gather);
     print_metric_row(&m[k].lod_reduce);
-    print_metric_row(&m[k].lod_dim0_fold);
+    print_metric_row(&m[k].lod_append_fold);
     print_metric_row(&m[k].lod_morton_chunk);
     print_metric_row(&m[k].compress);
     print_metric_row(&m[k].aggregate);
@@ -1461,7 +1461,7 @@ bench_two_streams_main(int ac,
     .array_name = label,
     .codec = codec,
     .reduce_method = reduce,
-    .dim0_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .append_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = BENCH_GPU,
     .dtype = dtype,
     .chunk_ratios = chunk_ratios,

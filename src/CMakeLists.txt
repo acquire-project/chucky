@@ -16,9 +16,9 @@ endfunction()
 
 add_src_lib(chucky_log SOURCES log/log.c log/log.h)
 add_src_lib(index_ops  SOURCES util/index.ops.c util/index.ops.h)
-add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h LINKS index_ops)
-add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h)
 add_src_lib(dimension  SOURCES dimension.c dimension.h)
+add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h LINKS index_ops dimension)
+add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h)
 
 add_src_lib(platform SOURCES platform/platform.h)
 add_platform_sources(platform platform/platform)

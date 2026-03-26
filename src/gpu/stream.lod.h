@@ -19,7 +19,7 @@ int
 lod_state_init_buffers(struct lod_state* lod,
                        enum dtype dtype);
 
-// Allocate dim0 accumulators, level-ID buffer, and counts.
+// Allocate append-dim accumulators, level-ID buffer, and counts.
 // Must be called AFTER lod_state_init.
 // Returns 0 on success.
 int
@@ -30,7 +30,7 @@ lod_state_init_accumulators(struct lod_state* lod,
 void
 lod_state_destroy(struct lod_state* lod);
 
-// Run LOD pipeline for one epoch: gather -> reduce -> dim0 fold ->
+// Run LOD pipeline for one epoch: gather -> reduce -> append fold ->
 // morton-to-chunks. pool_epoch: pointer to this epoch's chunk pool region (all
 // levels). *out_active_mask: set to bitmask of active LOD levels for this
 // epoch. Returns 0 on success, non-zero on error.
@@ -40,6 +40,6 @@ lod_run_epoch(struct lod_state* lod,
               void* pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
-              enum lod_reduce_method dim0_reduce_method,
+              enum lod_reduce_method append_reduce_method,
               CUstream compute,
               uint32_t* out_active_mask);

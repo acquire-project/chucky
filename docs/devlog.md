@@ -2,7 +2,9 @@
 
 ## TODO
 
-- [ ] multiple-array streaming (HCS use case)
+- [x] multiple-array streaming (HCS use case) cpu
+- [ ] multiple-array streaming (HCS use case) gpu
+- [ ] generalized append dimensions
 - [x] s3 writer
 - [x] make a report to characterize performance/memory by chunk size
 - [ ] interface for streaming from device, integrating with a cuda stream
@@ -35,13 +37,22 @@
 - [x] unbuffered io
 - [x] cleanup tests vs experiments
 - [x] evaluate gather vs scatter for non-lod stream
-- [ ] bench 2 streams, 1 gpu
-- [ ] api: multiple append dimensions. how does that work for lod? These
-      would be all left dims where chunk shape is 1.
+- [x] bench 2 streams, 1 gpu
 Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
 - [ ] look into j8 failures
+
+## 2026-03-26
+
+Starting on generalizing the append dimensions.
+
+Append dimensions are the left-most dimensions with chunk size 1 — data
+is streamed in one slice at a time along these. Only the right-most append
+dimension may be downsampled.
+
+Inner dimensions are the remaining (right-most) dimensions — these form
+complete chunks within each epoch and are downsampled via the LOD pipeline.
 
 ## 2026-03-25
 

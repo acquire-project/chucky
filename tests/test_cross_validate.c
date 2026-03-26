@@ -459,7 +459,7 @@ test_cross_validate_lod(void)
 
   // Compare L0 shards (byte-exact). Higher LOD levels may differ because
   // the GPU pipeline batches LOD level activity differently (e.g. L1
-  // activates every 2 epochs on GPU with dim0_downsample).
+  // activates every 2 epochs on GPU with append_downsample).
   int l0_errors = 0;
   for (int si = 0; si < MAX_SHARDS; ++si) {
     const struct mem_writer* gw = &gpu_sink.w[0][si];
@@ -541,7 +541,7 @@ test_cross_validate_lod_dim0(void)
     .dimensions = dims,
     .codec = CODEC_NONE,
     .reduce_method = lod_reduce_mean,
-    .dim0_reduce_method = lod_reduce_mean,
+    .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,
   };
 
@@ -559,7 +559,7 @@ test_cross_validate_lod_dim0(void)
   log_info("  epoch_elements=%lu nlod=%d dim0_ds=%d",
            (unsigned long)lay->epoch_elements,
            st.nlod,
-           st.dim0_downsample);
+           st.append_downsample);
 
   {
     struct writer* w = tile_stream_gpu_writer(gpu);

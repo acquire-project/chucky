@@ -132,19 +132,19 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->lod_values = calloc(total_lod_elements, bytes_per_element);
     CHECK(Fail, s->lod_values);
 
-    // Dim0 accumulator: total elements in levels 1+ (packed).
+    // Append accumulator: total elements in levels 1+ (packed).
     // Uses the source dtype (not a wider accumulator) for integer mean —
     // overflow_safe_add_shift prevents overflow at the cost of rounding per
     // fold.
-    if (s->levels.dim0_downsample) {
-      uint64_t dim0_total = 0;
+    if (s->levels.append_downsample) {
+      uint64_t append_total = 0;
       for (int lv = 1; lv < s->cl.plan.nlod; ++lv)
-        dim0_total += s->cl.plan.batch_count * s->cl.plan.lod_nelem[lv];
-      if (dim0_total > 0) {
-        s->dim0_accum = calloc(dim0_total, bytes_per_element);
-        CHECK(Fail, s->dim0_accum);
+        append_total += s->cl.plan.batch_count * s->cl.plan.lod_nelem[lv];
+      if (append_total > 0) {
+        s->append_accum = calloc(append_total, bytes_per_element);
+        CHECK(Fail, s->append_accum);
       }
-      memset(s->dim0_counts, 0, sizeof(s->dim0_counts));
+      memset(s->append_counts, 0, sizeof(s->append_counts));
     }
 
     // Allocate L0 scatter LUT + batch offsets.
@@ -199,17 +199,21 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (s->levels.enable_multiscale) {
     s->metrics.lod_gather = mk_stream_metric("lod_gather");
     s->metrics.lod_reduce = mk_stream_metric("lod_reduce");
-    s->metrics.lod_dim0_fold = mk_stream_metric("lod_dim0_fold");
+    s->metrics.lod_append_fold = mk_stream_metric("lod_append_fold");
     s->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
   }
 
   // Precompute max_cursor so cpu_append doesn't recompute each call.
   {
     const struct dimension* dims = config->dimensions;
-    s->max_cursor_elements =
-      (dims[0].size > 0)
-        ? ceildiv(dims[0].size, dims[0].chunk_size) * s->layout.epoch_elements
-        : 0;
+    const uint8_t na = s->levels.n_append;
+    if (dims[0].size > 0) {
+      s->max_cursor_elements = s->layout.epoch_elements;
+      for (int d = 0; d < na; ++d)
+        s->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+    } else {
+      s->max_cursor_elements = 0;
+    }
   }
 
   s->writer.append = cpu_append;
@@ -257,7 +261,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s->scatter_batch_offsets);
   free(s->linear);
   free(s->lod_values);
-  free(s->dim0_accum);
+  free(s->append_accum);
   computed_stream_layouts_free(&s->cl);
   free(s);
 }
@@ -352,11 +356,11 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       uint64_t total_lod_elements = cl->plan.levels.ends[cl->plan.nlod - 1];
       lod += total_lod_elements * bytes_per_element; // lod_values
 
-      if (cl->levels.dim0_downsample) {
-        uint64_t dim0_total = 0;
+      if (cl->levels.append_downsample) {
+        uint64_t append_total = 0;
         for (int lv = 1; lv < cl->plan.nlod; ++lv)
-          dim0_total += cl->plan.batch_count * cl->plan.lod_nelem[lv];
-        lod += dim0_total * bytes_per_element; // dim0_accum
+          append_total += cl->plan.batch_count * cl->plan.lod_nelem[lv];
+        lod += append_total * bytes_per_element; // append_accum
       }
 
       lod += cl->plan.lod_nelem[0] * sizeof(uint32_t); // scatter_lut
@@ -478,15 +482,15 @@ make_scatter_params(struct tile_stream_cpu* s)
   struct scatter_epoch_params p = {
     .dtype = s->config.dtype,
     .reduce_method = s->config.reduce_method,
-    .dim0_reduce_method = s->config.dim0_reduce_method,
+    .append_reduce_method = s->config.append_reduce_method,
     .cl = &s->cl,
     .chunk_pool = s->chunk_pool,
     .linear = s->linear,
     .lod_values = s->lod_values,
     .scatter_lut = s->scatter_lut,
     .scatter_batch_offsets = s->scatter_batch_offsets,
-    .dim0_accum = s->dim0_accum,
-    .dim0_counts = s->dim0_counts,
+    .append_accum = s->append_accum,
+    .append_counts = s->append_counts,
     .metrics = &s->metrics,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -599,18 +603,24 @@ cpu_append(struct writer* self, struct slice input)
       }
 
       // Periodic metadata update.
-      if (s->shard_sink->update_dim0) {
+      if (s->shard_sink->update_append) {
         struct platform_clock peek = s->metadata_update_clock;
         float elapsed = platform_toc(&peek);
         if (elapsed >= s->config.metadata_update_interval_s) {
           s->metadata_update_clock = peek;
           const struct dimension* dims = s->config.dimensions;
+          const uint8_t na = s->levels.n_append;
           for (int lv = 0; lv < s->levels.nlod; ++lv) {
             struct shard_state* ss = &s->shard[lv];
-            uint64_t d0c =
-              ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
-            if (s->shard_sink->update_dim0(
-                  s->shard_sink, (uint8_t)lv, d0c * dims[0].chunk_size))
+            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+            uint64_t append_sizes[HALF_MAX_RANK];
+            for (int d = 1; d < na; ++d)
+              append_sizes[d] = dims[d].size;
+            uint64_t iac = 1;
+            for (int d = 1; d < na; ++d)
+              iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+            append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
+            if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
               goto Error;
           }
         }
@@ -653,15 +663,15 @@ cpu_flush(struct writer* self)
     s->batch_accumulated = 0;
   }
 
-  // Drain any partial dim0 accumulators (levels that haven't emitted yet).
-  if (s->levels.dim0_downsample && s->dim0_accum) {
-    struct dim0_drain_params dp = {
+  // Drain any partial append accumulators (levels that haven't emitted yet).
+  if (s->levels.append_downsample && s->append_accum) {
+    struct append_drain_params dp = {
       .cl = &s->cl,
       .dtype = s->config.dtype,
-      .dim0_reduce_method = s->config.dim0_reduce_method,
+      .append_reduce_method = s->config.append_reduce_method,
       .lod_values = s->lod_values,
-      .dim0_accum = s->dim0_accum,
-      .dim0_counts = s->dim0_counts,
+      .append_accum = s->append_accum,
+      .append_counts = s->append_counts,
       .chunk_pool = s->chunk_pool,
       .metrics = &s->metrics,
     };
@@ -671,7 +681,7 @@ cpu_flush(struct writer* self)
     }
 
     uint32_t drain_mask = 0;
-    if (cpu_pipeline_dim0_drain(&dp, &drain_mask))
+    if (cpu_pipeline_append_drain(&dp, &drain_mask))
       return writer_error();
 
     // Compress + aggregate + deliver drained levels (single-epoch batch).
@@ -684,11 +694,11 @@ cpu_flush(struct writer* self)
   }
 
   // Emit partial shards.
-  uint64_t dim0_chunks[LOD_MAX_LEVELS];
+  uint64_t append_chunks[LOD_MAX_LEVELS];
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     struct shard_state* ss = &s->shard[lv];
-    dim0_chunks[lv] =
-      ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
+    append_chunks[lv] =
+      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
   }
 
   {
@@ -707,12 +717,19 @@ cpu_flush(struct writer* self)
   }
 
   // Final metadata.
-  if (s->shard_sink->update_dim0) {
+  if (s->shard_sink->update_append) {
     const struct dimension* dims = s->config.dimensions;
+    const uint8_t na = s->levels.n_append;
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      uint64_t dim0_extent = dim0_chunks[lv] * dims[0].chunk_size;
-      if (s->shard_sink->update_dim0(
-            s->shard_sink, (uint8_t)lv, dim0_extent))
+      uint64_t total_ac = append_chunks[lv];
+      uint64_t append_sizes[HALF_MAX_RANK];
+      for (int d = 1; d < na; ++d)
+        append_sizes[d] = dims[d].size;
+      uint64_t iac = 1;
+      for (int d = 1; d < na; ++d)
+        iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+      append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
+      if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
     }
   }

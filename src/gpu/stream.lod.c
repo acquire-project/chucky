@@ -1,5 +1,6 @@
 #include "gpu/stream.lod.h"
 
+#include "dimension.h"
 #include "gpu/lod.h"
 #include "lod/lod_plan.h"
 #include "gpu/prelude.cuda.h"
@@ -90,8 +91,10 @@ init_gather_lut(struct lod_state* lod,
   struct lod_plan* p = &lod->plan;
 
   uint64_t shape[HALF_MAX_RANK];
-  shape[0] = dims[0].chunk_size;
-  for (int d = 1; d < rank; ++d)
+  const uint8_t na = dims_n_append(dims, rank);
+  for (int d = 0; d < na; ++d)
+    shape[d] = dims[d].chunk_size;
+  for (int d = na; d < rank; ++d)
     shape[d] = dims[d].size;
 
   {
@@ -381,7 +384,7 @@ lod_state_init_buffers(struct lod_state* lod,
   CU(Fail, cuEventCreate(&lod->t_start, CU_EVENT_DEFAULT));
   CU(Fail, cuEventCreate(&lod->t_scatter_end, CU_EVENT_DEFAULT));
   CU(Fail, cuEventCreate(&lod->t_reduce_end, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventCreate(&lod->t_dim0_end, CU_EVENT_DEFAULT));
+  CU(Fail, cuEventCreate(&lod->t_append_end, CU_EVENT_DEFAULT));
   CU(Fail, cuEventCreate(&lod->t_end, CU_EVENT_DEFAULT));
 
   return 0;
@@ -389,7 +392,7 @@ Fail:
   return 1;
 }
 
-// --- Dim0 accumulator allocation ---
+// --- Append-dim accumulator allocation ---
 
 int
 lod_state_init_accumulators(struct lod_state* lod,
@@ -397,21 +400,21 @@ lod_state_init_accumulators(struct lod_state* lod,
 {
   struct lod_plan* p = &lod->plan;
 
-  lod->dim0.morton_offset = p->levels.ends[0];
+  lod->append_accum.morton_offset = p->levels.ends[0];
 
-  lod->dim0.total_elements = 0;
+  lod->append_accum.total_elements = 0;
   for (int lv = 1; lv < p->nlod; ++lv)
-    lod->dim0.total_elements += p->batch_count * p->lod_nelem[lv];
+    lod->append_accum.total_elements += p->batch_count * p->lod_nelem[lv];
 
-  if (lod->dim0.total_elements == 0)
+  if (lod->append_accum.total_elements == 0)
     return 0;
 
-  size_t accum_bpe = dtype_accum_bpe(config->dtype, config->dim0_reduce_method);
-  size_t accum_bytes = lod->dim0.total_elements * accum_bpe;
-  CU(Fail, cuMemAlloc(&lod->dim0.d_accum, accum_bytes));
+  size_t accum_bpe = dtype_accum_bpe(config->dtype, config->append_reduce_method);
+  size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
+  CU(Fail, cuMemAlloc(&lod->append_accum.d_accum, accum_bytes));
 
   {
-    uint8_t* h_level_ids = (uint8_t*)malloc(lod->dim0.total_elements);
+    uint8_t* h_level_ids = (uint8_t*)malloc(lod->append_accum.total_elements);
     CHECK(Fail, h_level_ids);
 
     uint64_t offset = 0;
@@ -421,13 +424,13 @@ lod_state_init_accumulators(struct lod_state* lod,
       offset += n;
     }
 
-    CUresult r = cuMemAlloc(&lod->dim0.d_level_ids, lod->dim0.total_elements);
+    CUresult r = cuMemAlloc(&lod->append_accum.d_level_ids, lod->append_accum.total_elements);
     if (r != CUDA_SUCCESS) {
       free(h_level_ids);
       goto Fail;
     }
     r = cuMemcpyHtoD(
-      lod->dim0.d_level_ids, h_level_ids, lod->dim0.total_elements);
+      lod->append_accum.d_level_ids, h_level_ids, lod->append_accum.total_elements);
     free(h_level_ids);
     if (r != CUDA_SUCCESS)
       goto Fail;
@@ -435,11 +438,11 @@ lod_state_init_accumulators(struct lod_state* lod,
 
   {
     CU(Fail,
-       cuMemAlloc(&lod->dim0.d_counts, (uint64_t)p->nlod * sizeof(uint32_t)));
-    memset(lod->dim0.counts, 0, sizeof(lod->dim0.counts));
+       cuMemAlloc(&lod->append_accum.d_counts, (uint64_t)p->nlod * sizeof(uint32_t)));
+    memset(lod->append_accum.counts, 0, sizeof(lod->append_accum.counts));
     CU(Fail,
-       cuMemcpyHtoD(lod->dim0.d_counts,
-                    lod->dim0.counts,
+       cuMemcpyHtoD(lod->append_accum.d_counts,
+                    lod->append_accum.counts,
                     (uint64_t)p->nlod * sizeof(uint32_t)));
   }
 
@@ -453,13 +456,13 @@ Fail:
 void
 lod_state_destroy(struct lod_state* lod)
 {
-  // Dim0 state
-  if (lod->dim0.d_accum)
-    CUWARN(cuMemFree(lod->dim0.d_accum));
-  if (lod->dim0.d_level_ids)
-    CUWARN(cuMemFree(lod->dim0.d_level_ids));
-  if (lod->dim0.d_counts)
-    CUWARN(cuMemFree(lod->dim0.d_counts));
+  // Append-dim accumulation state
+  if (lod->append_accum.d_accum)
+    CUWARN(cuMemFree(lod->append_accum.d_accum));
+  if (lod->append_accum.d_level_ids)
+    CUWARN(cuMemFree(lod->append_accum.d_level_ids));
+  if (lod->append_accum.d_counts)
+    CUWARN(cuMemFree(lod->append_accum.d_counts));
 
   // LOD cleanup
   if (lod->d_linear)
@@ -487,7 +490,7 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuEventDestroy(lod->t_start));
     CUWARN(cuEventDestroy(lod->t_scatter_end));
     CUWARN(cuEventDestroy(lod->t_reduce_end));
-    CUWARN(cuEventDestroy(lod->t_dim0_end));
+    CUWARN(cuEventDestroy(lod->t_append_end));
     CUWARN(cuEventDestroy(lod->t_end));
   }
   lod_plan_free(&lod->plan);
@@ -495,7 +498,7 @@ lod_state_destroy(struct lod_state* lod)
 
 // --- LOD runtime ---
 
-// Dim0 fold + emit for dim0 downsampling.
+// Append-dim fold + emit for append-dim downsampling.
 //
 // Each LOD level l>0 accumulates 2^l inner-reduced epochs before emitting.
 // A running accumulator (wider type for mean, native for min/max) is
@@ -506,9 +509,9 @@ lod_state_destroy(struct lod_state* lod)
 //
 // *out_mask is OR'd with (1u << lv) for each level that emitted.
 static int
-run_dim0_fold_emit(struct lod_state* lod,
+run_append_fold_emit(struct lod_state* lod,
                    enum dtype dtype,
-                   enum lod_reduce_method dim0_reduce_method,
+                   enum lod_reduce_method append_reduce_method,
                    CUstream compute,
                    uint32_t* out_mask)
 {
@@ -517,29 +520,29 @@ run_dim0_fold_emit(struct lod_state* lod,
 
   // Upload current counts to device before fused kernel
   CU(Error,
-     cuMemcpyHtoDAsync(lod->dim0.d_counts,
-                       lod->dim0.counts,
+     cuMemcpyHtoDAsync(lod->append_accum.d_counts,
+                       lod->append_accum.counts,
                        p->nlod * sizeof(uint32_t),
                        compute));
 
   // Single fused fold over all levels 1+
-  CUdeviceptr morton_1plus = lod->d_morton + lod->dim0.morton_offset * bytes_per_element;
+  CUdeviceptr morton_1plus = lod->d_morton + lod->append_accum.morton_offset * bytes_per_element;
   CHECK(Error,
-        lod_accum_fold_fused(lod->dim0.d_accum,
+        lod_accum_fold_fused(lod->append_accum.d_accum,
                              morton_1plus,
-                             lod->dim0.d_level_ids,
-                             lod->dim0.d_counts,
+                             lod->append_accum.d_level_ids,
+                             lod->append_accum.d_counts,
                              dtype,
-                             dim0_reduce_method,
-                             lod->dim0.total_elements,
+                             append_reduce_method,
+                             lod->append_accum.total_elements,
                              compute) == 0);
 
   // Increment counts, emit ready levels back to morton
   for (int lv = 1; lv < p->nlod; ++lv) {
-    lod->dim0.counts[lv]++;
+    lod->append_accum.counts[lv]++;
     uint32_t period = 1u << lv;
 
-    if (lod->dim0.counts[lv] >= period) {
+    if (lod->append_accum.counts[lv] >= period) {
       struct lod_span lev = lod_spans_at(&p->levels, lv);
       uint64_t n_elements = p->batch_count * p->lod_nelem[lv];
 
@@ -547,21 +550,21 @@ run_dim0_fold_emit(struct lod_state* lod,
       for (int k = 1; k < lv; ++k)
         accum_offset += p->batch_count * p->lod_nelem[k];
 
-      size_t accum_bpe = dtype_accum_bpe(dtype, dim0_reduce_method);
+      size_t accum_bpe = dtype_accum_bpe(dtype, append_reduce_method);
 
       CUdeviceptr morton_lv = lod->d_morton + lev.beg * bytes_per_element;
-      CUdeviceptr accum_lv = lod->dim0.d_accum + accum_offset * accum_bpe;
+      CUdeviceptr accum_lv = lod->append_accum.d_accum + accum_offset * accum_bpe;
 
       CHECK(Error,
             lod_accum_emit(morton_lv,
                            accum_lv,
                            dtype,
-                           dim0_reduce_method,
+                           append_reduce_method,
                            n_elements,
-                           lod->dim0.counts[lv],
+                           lod->append_accum.counts[lv],
                            compute) == 0);
 
-      lod->dim0.counts[lv] = 0;
+      lod->append_accum.counts[lv] = 0;
       *out_mask |= (1u << lv);
     }
   }
@@ -616,7 +619,7 @@ lod_run_epoch(struct lod_state* lod,
               void* pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
-              enum lod_reduce_method dim0_reduce_method,
+              enum lod_reduce_method append_reduce_method,
               CUstream compute,
               uint32_t* out_active_mask)
 {
@@ -669,13 +672,13 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(lod->t_reduce_end, compute));
 
   uint32_t active_levels_mask = 1; // L0 always active
-  if (levels->dim0_downsample && lod->dim0.total_elements > 0) {
+  if (levels->append_downsample && lod->append_accum.total_elements > 0) {
     CHECK(Error,
-          run_dim0_fold_emit(
-            lod, dtype, dim0_reduce_method, compute, &active_levels_mask) == 0);
+          run_append_fold_emit(
+            lod, dtype, append_reduce_method, compute, &active_levels_mask) == 0);
   }
 
-  CU(Error, cuEventRecord(lod->t_dim0_end, compute));
+  CU(Error, cuEventRecord(lod->t_append_end, compute));
 
   CHECK(
     Error,

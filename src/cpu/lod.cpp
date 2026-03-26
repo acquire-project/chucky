@@ -517,7 +517,7 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
 }
 
 extern "C" int
-lod_cpu_dim0_fold(const lod_plan* p,
+lod_cpu_append_fold(const lod_plan* p,
                   const void* morton_values,
                   void* accum,
                   const uint32_t* counts,
@@ -545,7 +545,7 @@ lod_cpu_dim0_fold(const lod_plan* p,
 }
 
 extern "C" int
-lod_cpu_dim0_emit(const lod_plan* p,
+lod_cpu_append_emit(const lod_plan* p,
                   void* morton_values,
                   const void* accum,
                   int lv,

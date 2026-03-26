@@ -55,12 +55,14 @@ struct shard_sink
                                uint8_t level,
                                uint64_t shard_index);
 
-  // Optional: update dim0 extent in metadata (e.g. zarr.json shape[0]).
+  // Optional: update append dim extents in metadata (e.g. zarr.json shape).
   // Called periodically during streaming and at final flush.
+  // append_sizes has n_append elements (sizes for dims 0..n_append-1).
   // NULL means no-op (non-zarr sinks can ignore).
-  int (*update_dim0)(struct shard_sink* self,
-                     uint8_t level,
-                     uint64_t dim0_size);
+  int (*update_append)(struct shard_sink* self,
+                       uint8_t level,
+                       uint8_t n_append,
+                       const uint64_t* append_sizes);
 
   // IO fence for backpressure. NULL = no async IO.
   struct io_event (*record_fence)(struct shard_sink* self, uint8_t level);

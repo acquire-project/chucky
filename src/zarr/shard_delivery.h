@@ -20,7 +20,7 @@ struct shard_state
   uint64_t shard_inner_count;      // S_inner = prod(shard_count[d] for d>0)
   uint64_t chunks_per_shard_inner; // prod(tps[d] for d>0)
   uint64_t chunks_per_shard_total; // prod(tps[d] for all d)
-  uint64_t chunks_per_shard_0;     // tps[0]
+  uint64_t chunks_per_shard_append;     // tps[0]
   struct active_shard* shards;     // array[shard_inner_count]
 };
 

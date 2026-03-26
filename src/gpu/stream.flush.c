@@ -63,7 +63,7 @@ flush_run_epoch_lod(struct tile_stream_gpu* s)
                         pool_epoch_ptr(s, s->batch.accumulated),
                         s->config.dtype,
                         s->config.reduce_method,
-                        s->config.dim0_reduce_method,
+                        s->config.append_reduce_method,
                         s->streams.compute,
                         &active_mask) == 0);
   }
@@ -311,9 +311,9 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
 }
 
 struct writer_result
-flush_partial_dim0(struct tile_stream_gpu* s)
+flush_partial_append(struct tile_stream_gpu* s)
 {
-  if (!s->levels.dim0_downsample || !s->levels.enable_multiscale)
+  if (!s->levels.append_downsample || !s->levels.enable_multiscale)
     return writer_ok();
 
   const struct lod_plan* p = &s->lod.plan;
@@ -323,7 +323,7 @@ flush_partial_dim0(struct tile_stream_gpu* s)
   // Check if any level has pending data
   uint32_t active_levels_mask = 0;
   for (int lv = 1; lv < p->nlod; ++lv) {
-    if (s->lod.dim0.counts[lv] > 0)
+    if (s->lod.append_accum.counts[lv] > 0)
       active_levels_mask |= (1u << lv);
   }
 
@@ -333,7 +333,7 @@ flush_partial_dim0(struct tile_stream_gpu* s)
   const int fc = s->pools.current;
   struct flush_slot_gpu* fs = &s->flush.slot[fc];
   fs->active_levels_mask = active_levels_mask;
-  fs->batch_epoch_count = 1; // partial dim0 flush is always 1 epoch
+  fs->batch_epoch_count = 1; // partial append flush is always 1 epoch
 
   // Zero LOD level regions of pool, emit partial accums, scatter to chunks
   for (int lv = 1; lv < p->nlod; ++lv) {
@@ -347,23 +347,23 @@ flush_partial_dim0(struct tile_stream_gpu* s)
     for (int k = 1; k < lv; ++k)
       accum_offset += p->batch_count * p->lod_nelem[k];
 
-    size_t accum_bpe = dtype_accum_bpe(dtype, s->config.dim0_reduce_method);
+    size_t accum_bpe = dtype_accum_bpe(dtype, s->config.append_reduce_method);
 
     struct lod_span lev = lod_spans_at(&p->levels, lv);
     CUdeviceptr morton_lv = s->lod.d_morton + lev.beg * bytes_per_element;
-    CUdeviceptr accum_lv = s->lod.dim0.d_accum + accum_offset * accum_bpe;
+    CUdeviceptr accum_lv = s->lod.append_accum.d_accum + accum_offset * accum_bpe;
 
     // Emit with actual count (not period) -- mean divides by actual count
     CHECK(Error,
           lod_accum_emit(morton_lv,
                          accum_lv,
                          dtype,
-                         s->config.dim0_reduce_method,
+                         s->config.append_reduce_method,
                          n_elements,
-                         s->lod.dim0.counts[lv],
+                         s->lod.append_accum.counts[lv],
                          s->streams.compute) == 0);
 
-    s->lod.dim0.counts[lv] = 0;
+    s->lod.append_accum.counts[lv] = 0;
 
     // Zero and scatter to chunk pool (epoch 0 in current pool)
     CUdeviceptr dst =

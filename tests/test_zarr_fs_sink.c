@@ -749,7 +749,7 @@ test_midstream_metadata_update(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  // The timer-based update_dim0 fired during the second append batch,
+  // The timer-based update_append fired during the second append batch,
   // writing zarr.json synchronously. Verify shape[0] > 0 before writer_flush.
   {
     char path[4096];

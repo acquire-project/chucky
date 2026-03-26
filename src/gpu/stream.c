@@ -70,15 +70,17 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
-  const uint64_t dim0_size = s->config.dimensions[0].size;
-  const uint64_t max_cursor =
-    (dim0_size > 0) ? ceildiv(dim0_size, s->config.dimensions[0].chunk_size) *
-                        s->layout.epoch_elements
-                    : 0; // 0 = unbounded (never checked)
+  uint64_t max_cursor = 0;
+  if (s->config.dimensions[0].size > 0) {
+    max_cursor = s->layout.epoch_elements;
+    for (int d = 0; d < s->levels.n_append; ++d)
+      max_cursor *=
+        ceildiv(s->config.dimensions[d].size, s->config.dimensions[d].chunk_size);
+  }
 
   while (src < end) {
-    // Bounded dim0: check capacity
-    if (dim0_size > 0 && s->cursor >= max_cursor) {
+    // Bounded append dims: check capacity
+    if (max_cursor > 0 && s->cursor >= max_cursor) {
       struct writer_result fr = tile_stream_gpu_flush(&s->writer);
       if (fr.error)
         return writer_error_at(src, end);
@@ -91,8 +93,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     uint64_t elements_this_pass =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
 
-    // Bounded dim0: clamp to remaining capacity
-    if (dim0_size > 0) {
+    // Bounded append dims: clamp to remaining capacity
+    if (max_cursor > 0) {
       const uint64_t remaining_capacity = max_cursor - s->cursor;
       if (elements_this_pass > remaining_capacity)
         elements_this_pass = remaining_capacity;
@@ -195,18 +197,18 @@ tile_stream_gpu_flush(struct writer* self)
   if (r.error)
     return r;
 
-  // Drain any partial dim0 accumulators
-  r = flush_partial_dim0(s);
+  // Drain any partial append accumulators
+  r = flush_partial_append(s);
   if (r.error)
     return r;
 
-  // Capture actual dim0 chunk counts before partial shard emission,
+  // Capture actual append chunk counts before partial shard emission,
   // since finalize_shards resets epoch_in_shard and increments shard_epoch.
-  uint64_t dim0_chunks[LOD_MAX_LEVELS];
+  uint64_t append_chunks[LOD_MAX_LEVELS];
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     struct shard_state* ss = &s->compress_agg.levels[lv].shard;
-    dim0_chunks[lv] =
-      ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
+    append_chunks[lv] =
+      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
   }
 
   // Emit partial shards for all levels
@@ -219,12 +221,20 @@ tile_stream_gpu_flush(struct writer* self)
   }
 
   // Final metadata update using pre-emit chunk counts.
-  if (s->shard_sink->update_dim0) {
+  if (s->shard_sink->update_append) {
     const struct dimension* dims = s->config.dimensions;
+    const uint8_t na = s->levels.n_append;
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      uint64_t dim0_extent = dim0_chunks[lv] * dims[0].chunk_size;
-      if (s->shard_sink->update_dim0(
-            s->shard_sink, (uint8_t)lv, dim0_extent))
+      uint64_t append_sizes[HALF_MAX_RANK];
+      for (int d = 1; d < na; ++d)
+        append_sizes[d] = dims[d].size;
+      uint64_t iac = 1;
+      for (int d = 1; d < na; ++d)
+        iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+      append_sizes[0] =
+        (iac > 0) ? ceildiv(append_chunks[lv], iac) * dims[0].chunk_size : 0;
+      if (s->shard_sink->update_append(
+            s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
     }
   }

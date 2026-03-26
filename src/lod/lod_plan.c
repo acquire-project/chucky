@@ -267,6 +267,7 @@ lod_plan_init_shapes(struct lod_plan* p,
 static void
 dims_lod_params(const struct dimension* dims,
                 uint8_t rank,
+                uint8_t n_append,
                 uint64_t* shape,
                 uint64_t* chunk_shape,
                 uint32_t* lod_mask)
@@ -276,7 +277,7 @@ dims_lod_params(const struct dimension* dims,
     chunk_shape[d] = dims[d].chunk_size;
   }
   *lod_mask = 0;
-  for (int d = 1; d < rank; ++d)
+  for (int d = n_append; d < rank; ++d)
     if (dims[d].downsample)
       *lod_mask |= (1u << d);
 }
@@ -290,7 +291,8 @@ lod_plan_init_from_dims(struct lod_plan* p,
   uint64_t shape[LOD_MAX_NDIM];
   uint64_t chunk_shape[LOD_MAX_NDIM];
   uint32_t lod_mask;
-  dims_lod_params(dims, rank, shape, chunk_shape, &lod_mask);
+  uint8_t na = dims_n_append(dims, rank);
+  dims_lod_params(dims, rank, na, shape, chunk_shape, &lod_mask);
   return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
 }
 
@@ -298,13 +300,15 @@ int
 lod_plan_init_from_epoch_dims(struct lod_plan* p,
                                const struct dimension* dims,
                                uint8_t rank,
+                               uint8_t n_append,
                                int max_levels)
 {
   uint64_t shape[LOD_MAX_NDIM];
   uint64_t chunk_shape[LOD_MAX_NDIM];
   uint32_t lod_mask;
-  dims_lod_params(dims, rank, shape, chunk_shape, &lod_mask);
-  shape[0] = dims[0].chunk_size;
+  dims_lod_params(dims, rank, n_append, shape, chunk_shape, &lod_mask);
+  for (int d = 0; d < n_append; ++d)
+    shape[d] = dims[d].chunk_size;
   return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
 }
 
@@ -322,6 +326,7 @@ lod_plan_free(struct lod_plan* p)
 void
 shard_geometry_compute(struct shard_geometry* g,
                        uint8_t rank,
+                       uint8_t n_append,
                        const uint64_t* shape,
                        const uint64_t* chunk_size,
                        const uint64_t* chunks_per_shard)
@@ -333,7 +338,7 @@ shard_geometry_compute(struct shard_geometry* g,
     uint64_t cps = chunks_per_shard[d];
     g->chunks_per_shard[d] = (cps == 0) ? g->chunk_count[d] : cps;
     g->shard_count[d] = ceildiv(g->chunk_count[d], g->chunks_per_shard[d]);
-    if (d > 0)
+    if (d >= n_append)
       g->shard_inner_count *= g->shard_count[d];
   }
 }

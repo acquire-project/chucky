@@ -24,7 +24,8 @@ struct level_geometry
 {
   int nlod;
   int enable_multiscale;
-  int dim0_downsample;
+  int append_downsample;
+  uint8_t n_append;
   uint64_t total_chunks;
   uint64_t chunk_offset[LOD_MAX_LEVELS];
   uint64_t chunk_count[LOD_MAX_LEVELS];
@@ -35,10 +36,11 @@ struct level_layout_info
 {
   struct aggregate_layout agg_layout;
   uint32_t batch_active_count;
-  uint64_t chunks_per_shard_0;
+  uint64_t chunks_per_shard_append;
   uint64_t chunks_per_shard_inner;
   uint64_t chunks_per_shard_total;
   uint64_t shard_inner_count;
+  uint64_t inner_append_count; // prod(chunk_count[d] for d=1..n_append-1)
 };
 
 // All pre-computed layout data from CPU-only math.

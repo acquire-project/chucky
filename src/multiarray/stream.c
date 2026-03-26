@@ -1,5 +1,6 @@
 #include "multiarray.cpu.h"
 #include "cpu/pipeline.h"
+#include "dimension.h"
 #include "stream/config.h"
 #include "zarr/shard_delivery.h"
 
@@ -27,8 +28,8 @@ struct array_descriptor
   uint64_t max_cursor_elements;
   uint32_t batch_accumulated;
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
-  uint32_t dim0_counts[LOD_MAX_LEVELS];
-  void* dim0_accum;
+  uint32_t append_counts[LOD_MAX_LEVELS];
+  void* append_accum;
 };
 
 // ---- Main struct ----
@@ -204,16 +205,16 @@ init_array_descriptor(struct array_descriptor* desc,
     }
 
     // Dim0 accum: per-array, not shared.
-    if (desc->levels.dim0_downsample) {
+    if (desc->levels.append_downsample) {
       uint64_t dim0_total = 0;
       for (int lv = 1; lv < desc->cl.plan.nlod; ++lv)
         dim0_total += desc->cl.plan.batch_count * desc->cl.plan.lod_nelem[lv];
       if (dim0_total > 0) {
-        desc->dim0_accum = calloc(dim0_total, bytes_per_element);
-        if (!desc->dim0_accum)
+        desc->append_accum = calloc(dim0_total, bytes_per_element);
+        if (!desc->append_accum)
           return 1;
       }
-      memset(desc->dim0_counts, 0, sizeof(desc->dim0_counts));
+      memset(desc->append_counts, 0, sizeof(desc->append_counts));
     }
   }
 
@@ -355,7 +356,7 @@ multiarray_tile_stream_cpu_create(
     if (any_multiscale) {
       ms->metrics.lod_gather = mk_stream_metric("lod_gather");
       ms->metrics.lod_reduce = mk_stream_metric("lod_reduce");
-      ms->metrics.lod_dim0_fold = mk_stream_metric("lod_dim0_fold");
+      ms->metrics.lod_append_fold = mk_stream_metric("lod_append_fold");
       ms->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
     }
   }
@@ -384,7 +385,7 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
           free(ss->shards);
         }
       }
-      free(desc->dim0_accum);
+      free(desc->append_accum);
       computed_stream_layouts_free(&desc->cl);
     }
     free(ms->arrays);
@@ -500,15 +501,15 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
   struct scatter_epoch_params p = {
     .dtype = desc->config.dtype,
     .reduce_method = desc->config.reduce_method,
-    .dim0_reduce_method = desc->config.dim0_reduce_method,
+    .append_reduce_method = desc->config.append_reduce_method,
     .cl = &desc->cl,
     .chunk_pool = ms->chunk_pool,
     .linear = ms->linear,
     .lod_values = ms->lod_values,
     .scatter_lut = ms->scatter_lut,
     .scatter_batch_offsets = ms->scatter_batch_offsets,
-    .dim0_accum = desc->dim0_accum,
-    .dim0_counts = desc->dim0_counts,
+    .append_accum = desc->append_accum,
+    .append_counts = desc->append_counts,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
@@ -761,20 +762,20 @@ drain_dim0_all(struct multiarray_tile_stream_cpu* ms)
 
   for (int i = 0; i < ms->n_arrays; ++i) {
     struct array_descriptor* desc = &ms->arrays[i];
-    if (!desc->levels.dim0_downsample || !desc->dim0_accum)
+    if (!desc->levels.append_downsample || !desc->append_accum)
       continue;
 
     if (i != ms->active)
       ms->active = i;
     ensure_luts(ms, i);
 
-    struct dim0_drain_params dp = {
+    struct append_drain_params dp = {
       .cl = &desc->cl,
       .dtype = desc->config.dtype,
-      .dim0_reduce_method = desc->config.dim0_reduce_method,
+      .append_reduce_method = desc->config.append_reduce_method,
       .lod_values = ms->lod_values,
-      .dim0_accum = desc->dim0_accum,
-      .dim0_counts = desc->dim0_counts,
+      .append_accum = desc->append_accum,
+      .append_counts = desc->append_counts,
       .chunk_pool = ms->chunk_pool,
       .metrics = met,
     };
@@ -784,7 +785,7 @@ drain_dim0_all(struct multiarray_tile_stream_cpu* ms)
     }
 
     uint32_t drain_mask = 0;
-    if (cpu_pipeline_dim0_drain(&dp, &drain_mask))
+    if (cpu_pipeline_append_drain(&dp, &drain_mask))
       return 1;
 
     if (drain_mask) {
@@ -797,7 +798,7 @@ drain_dim0_all(struct multiarray_tile_stream_cpu* ms)
   return 0;
 }
 
-// Finalize partial shards and update dim0 metadata for all arrays.
+// Finalize partial shards and update append metadata for all arrays.
 static int
 finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
 {
@@ -811,14 +812,24 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
       }
     }
 
-    if (desc->sink->update_dim0) {
+    if (desc->sink->update_append) {
       const struct dimension* dims = desc->config.dimensions;
+      const uint8_t na = desc->levels.n_append;
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
         struct shard_state* ss = &desc->shard[lv];
-        uint64_t d0c =
-          ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
-        if (desc->sink->update_dim0(
-              desc->sink, (uint8_t)lv, d0c * dims[0].chunk_size))
+        uint64_t total_ac =
+          ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+        uint64_t append_sizes[16]; // HALF_MAX_RANK
+        for (int d = 1; d < na; ++d)
+          append_sizes[d] = dims[d].size;
+        uint64_t iac = 1;
+        for (int d = 1; d < na; ++d)
+          iac *= (dims[d].size + dims[d].chunk_size - 1) / dims[d].chunk_size;
+        append_sizes[0] = (iac > 0)
+          ? ((total_ac + iac - 1) / iac) * dims[0].chunk_size
+          : 0;
+        if (desc->sink->update_append(
+              desc->sink, (uint8_t)lv, na, append_sizes))
           return 1;
       }
     }

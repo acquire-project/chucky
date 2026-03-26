@@ -48,12 +48,12 @@ struct tile_stream_cpu
   uint32_t* morton_lut[LOD_MAX_LEVELS];        // [lod_nelem[lv]] per level
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS]; // [batch_count] per level
 
-  // Dim0 downsample accumulation state
-  void* dim0_accum;                    // accumulator for levels 1+
-  uint32_t dim0_counts[LOD_MAX_LEVELS]; // per-level fold count
+  // Append downsample accumulation state
+  void* append_accum;                    // accumulator for levels 1+
+  uint32_t append_counts[LOD_MAX_LEVELS]; // per-level fold count
 
   uint64_t cursor_elements;
-  uint64_t max_cursor_elements; // precomputed: total elements across all dim0 chunks
+  uint64_t max_cursor_elements; // precomputed: total elements across all append chunks
   int pool_fully_covered; // 1 if scatter overwrites every pool position
 
   // Batch accumulation state (K = cl.epochs_per_batch).

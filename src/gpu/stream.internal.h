@@ -81,10 +81,10 @@ struct lod_state
   CUevent t_start;
   CUevent t_scatter_end;
   CUevent t_reduce_end;
-  CUevent t_dim0_end;
+  CUevent t_append_end;
   CUevent t_end;
 
-  // Dim0 LOD accumulation state.
+  // Append-dim LOD accumulation state.
   struct
   {
     CUdeviceptr d_accum;
@@ -93,7 +93,7 @@ struct lod_state
     uint32_t counts[LOD_MAX_LEVELS];
     uint64_t total_elements;
     uint64_t morton_offset;
-  } dim0;
+  } append_accum;
 };
 
 // CUDA stream handles (all immutable after create)

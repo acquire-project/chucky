@@ -337,14 +337,14 @@ Run2d:
       .dimensions = dims_dim0,
       .codec = CODEC_ZSTD,
       .reduce_method = lod_reduce_mean,
-      .dim0_reduce_method = lod_reduce_mean,
+      .append_reduce_method = lod_reduce_mean,
     };
     CHECK(Fail2b, (s = tile_stream_gpu_create(&config, &dim0_sink.base)) != NULL);
     {
       struct tile_stream_status st = tile_stream_gpu_status(s);
-      log_info("  dim0 enabled: nlod=%d, dim0_downsample=%d",
+      log_info("  dim0 enabled: nlod=%d, append_downsample=%d",
                st.nlod,
-               st.dim0_downsample);
+               st.append_downsample);
     }
     xor_pattern_init(dims_dim0, rank, 2);
     CHECK(Fail2c,
@@ -516,15 +516,15 @@ test_dim0_multi_epoch_levels(void)
       .dimensions = dims,
       .codec = CODEC_ZSTD,
       .reduce_method = lod_reduce_mean,
-      .dim0_reduce_method = lod_reduce_mean,
+      .append_reduce_method = lod_reduce_mean,
     };
 
     CHECK(Fail2, (s = tile_stream_gpu_create(&config, &sink.base)) != NULL);
     {
       struct tile_stream_status st = tile_stream_gpu_status(s);
-      log_info("  stream nlod=%d dim0_downsample=%d epochs_per_batch=%u",
+      log_info("  stream nlod=%d append_downsample=%d epochs_per_batch=%u",
                st.nlod,
-               st.dim0_downsample,
+               st.append_downsample,
                st.epochs_per_batch);
     }
 

@@ -1,6 +1,7 @@
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/flush.helpers.h"
 
+#include "dimension.h"
 #include "gpu/lod.h"
 #include "gpu/metric.cuda.h"
 #include "platform/platform.h"
@@ -181,17 +182,17 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                          lod->t_scatter_end,
                          lod->t_reduce_end,
                          scatter_bytes, morton_bytes);
-    if (levels->dim0_downsample) {
+    if (levels->append_downsample) {
       size_t accum_bpe =
-        dtype_accum_bpe(config->dtype, config->dim0_reduce_method);
-      size_t dim0_bytes = lod->dim0.total_elements * accum_bpe;
-      accumulate_metric_cu(&metrics->lod_dim0_fold,
+        dtype_accum_bpe(config->dtype, config->append_reduce_method);
+      size_t dim0_bytes = lod->append_accum.total_elements * accum_bpe;
+      accumulate_metric_cu(&metrics->lod_append_fold,
                            lod->t_reduce_end,
-                           lod->t_dim0_end,
+                           lod->t_append_end,
                            dim0_bytes, dim0_bytes);
     }
     accumulate_metric_cu(&metrics->lod_morton_chunk,
-                         lod->t_dim0_end,
+                         lod->t_append_end,
                          lod->t_end,
                          morton_bytes, unified_pool_bytes);
   }
@@ -295,14 +296,14 @@ Error:
   return writer_error();
 }
 
-// Periodic metadata update (dim0 extent per level).
+// Periodic metadata update (append-dim extents per level).
 static int
 maybe_update_metadata(const struct d2h_deliver_stage* stage,
                       const struct tile_stream_configuration* config,
                       struct shard_sink* sink,
                       struct platform_clock* metadata_update_clock)
 {
-  if (!sink->update_dim0)
+  if (!sink->update_append)
     return 0;
 
   struct platform_clock peek = *metadata_update_clock;
@@ -312,12 +313,20 @@ maybe_update_metadata(const struct d2h_deliver_stage* stage,
 
   *metadata_update_clock = peek;
   const struct dimension* dims = config->dimensions;
+  const uint8_t na = dims_n_append(config->dimensions, config->rank);
   for (int lv = 0; lv < stage->nlod; ++lv) {
     struct shard_state* ss = &stage->levels[lv].shard;
-    uint64_t dim0_chunks =
-      ss->shard_epoch * ss->chunks_per_shard_0 + ss->epoch_in_shard;
-    uint64_t dim0_extent = dim0_chunks * dims[0].chunk_size;
-    if (sink->update_dim0(sink, (uint8_t)lv, dim0_extent))
+    uint64_t flat_append_chunks =
+      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+    uint64_t append_sizes[HALF_MAX_RANK];
+    for (int d = 1; d < na; ++d)
+      append_sizes[d] = dims[d].size;
+    uint64_t iac = 1;
+    for (int d = 1; d < na; ++d)
+      iac *= ceildiv(dims[d].size, dims[d].chunk_size);
+    append_sizes[0] =
+      (iac > 0) ? ceildiv(flat_append_chunks, iac) * dims[0].chunk_size : 0;
+    if (sink->update_append(sink, (uint8_t)lv, na, append_sizes))
       return 1;
   }
   return 0;

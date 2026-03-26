@@ -12,7 +12,7 @@ init_shard_state(struct shard_state* ss,
                  const struct level_layout_info* li)
 {
   *ss = (struct shard_state){
-    .chunks_per_shard_0 = li->chunks_per_shard_0,
+    .chunks_per_shard_append = li->chunks_per_shard_append,
     .chunks_per_shard_inner = li->chunks_per_shard_inner,
     .chunks_per_shard_total = li->chunks_per_shard_total,
     .shard_inner_count = li->shard_inner_count,
@@ -121,7 +121,7 @@ deliver_to_shards_batch(uint8_t level,
   uint32_t a = 0;
   while (a < n_active) {
     uint32_t remaining_in_shard =
-      (uint32_t)(ss->chunks_per_shard_0 - ss->epoch_in_shard);
+      (uint32_t)(ss->chunks_per_shard_append - ss->epoch_in_shard);
     uint32_t remaining_in_batch = n_active - a;
     uint32_t run_len = remaining_in_shard < remaining_in_batch
                          ? remaining_in_shard
@@ -191,7 +191,7 @@ deliver_to_shards_batch(uint8_t level,
     ss->epoch_in_shard += run_len;
     a += run_len;
 
-    if (ss->epoch_in_shard >= ss->chunks_per_shard_0) {
+    if (ss->epoch_in_shard >= ss->chunks_per_shard_append) {
       CHECK(Error, finalize_shards(ss, sa) == 0);
     }
   }

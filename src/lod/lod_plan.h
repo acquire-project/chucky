@@ -81,12 +81,14 @@ lod_plan_init_from_dims(struct lod_plan* p,
                         uint8_t rank,
                         int max_levels);
 
-// Like _from_dims, but overrides shape[0] = dims[0].chunk_size (epoch-split).
-// Use for the streaming path where dim0 is split into per-epoch chunks.
+// Like _from_dims, but overrides shape[d] = dims[d].chunk_size for
+// d < n_append (epoch-split). Use for the streaming path where append
+// dims are split into per-epoch chunks.
 int
 lod_plan_init_from_epoch_dims(struct lod_plan* p,
                                const struct dimension* dims,
                                uint8_t rank,
+                               uint8_t n_append,
                                int max_levels);
 
 void
@@ -98,15 +100,18 @@ struct shard_geometry
   uint64_t chunk_count[HALF_MAX_RANK];
   uint64_t chunks_per_shard[HALF_MAX_RANK];
   uint64_t shard_count[HALF_MAX_RANK];
-  uint64_t shard_inner_count; // prod(shard_count[d] for d > 0)
+  uint64_t shard_inner_count; // prod(shard_count[d] for d >= n_append)
 };
 
 // Compute shard geometry from explicit shape, chunk_size, and
 // chunks_per_shard arrays (each rank elements).
 // chunks_per_shard[d] == 0 means all chunks along that dimension.
+// n_append: number of append dims. shard_inner_count = prod(shard_count[d]
+// for d >= n_append).
 void
 shard_geometry_compute(struct shard_geometry* g,
                        uint8_t rank,
+                       uint8_t n_append,
                        const uint64_t* shape,
                        const uint64_t* chunk_size,
                        const uint64_t* chunks_per_shard);

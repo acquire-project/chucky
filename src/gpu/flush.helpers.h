@@ -3,7 +3,7 @@
 #include "gpu/stream.internal.h"
 
 // How many epochs fire for level `lv` within a batch of `n_epochs` epochs.
-// L0 fires every epoch; dim0-downsampled level lv fires every 2^lv epochs.
+// L0 fires every epoch; append-downsampled level lv fires every 2^lv epochs.
 // Returns 0 if the level doesn't fire at all in this batch.
 static inline uint32_t
 level_active_epochs(const struct level_flush_state* lvl,
@@ -15,12 +15,12 @@ level_active_epochs(const struct level_flush_state* lvl,
   uint32_t full = lvl->batch_active_count;
   if (n_epochs >= batch->epochs_per_batch)
     return full;
-  uint32_t period = (levels->dim0_downsample && lv > 0) ? (1u << lv) : 1;
+  uint32_t period = (levels->append_downsample && lv > 0) ? (1u << lv) : 1;
   return (n_epochs >= period) ? n_epochs / period : 0;
 }
 
 // Count actual active epochs for a level from per-epoch masks.
-// For infrequent dim0 levels (period > K, batch_active_count == 0),
+// For infrequent append-downsampled levels (period > K, batch_active_count == 0),
 // level_active_epochs returns 0 even when the level fired.  This function
 // falls back to scanning the per-epoch masks in that case.
 static inline uint32_t

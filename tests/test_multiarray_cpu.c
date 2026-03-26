@@ -642,7 +642,7 @@ test_lod_basic(void)
     .dimensions = dims,
     .codec = CODEC_NONE,
     .reduce_method = lod_reduce_mean,
-    .dim0_reduce_method = lod_reduce_mean,
+    .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,
   };
 
@@ -770,7 +770,7 @@ test_mixed_lod(void)
     .dimensions = dims1,
     .codec = CODEC_NONE,
     .reduce_method = lod_reduce_mean,
-    .dim0_reduce_method = lod_reduce_mean,
+    .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,
   };
 

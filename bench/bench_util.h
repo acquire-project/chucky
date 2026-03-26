@@ -113,7 +113,7 @@ struct bench_config
   double s3_throughput_gbps; // gigabits/s, 0 = CRT default (10.0)
   enum compression_codec codec;
   enum lod_reduce_method reduce_method;
-  enum lod_reduce_method dim0_reduce_method;
+  enum lod_reduce_method append_reduce_method;
   enum bench_backend backend;
   enum dtype dtype;                   // element type (default dtype_u16)
   const uint8_t* chunk_ratios;       // power-of-2 distribution ratios

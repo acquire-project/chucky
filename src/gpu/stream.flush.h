@@ -15,9 +15,9 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs);
 struct writer_result
 flush_accumulated_sync(struct tile_stream_gpu* s);
 
-// Drain partial dim0 accumulators on final flush.
+// Drain partial append-dim accumulators on final flush.
 struct writer_result
-flush_partial_dim0(struct tile_stream_gpu* s);
+flush_partial_append(struct tile_stream_gpu* s);
 
 // Compute active mask for current epoch (runs LOD if multiscale).
 // Updates flush slot active masks. Returns 0 on success.
