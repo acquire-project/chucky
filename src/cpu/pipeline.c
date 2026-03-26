@@ -224,7 +224,11 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
   }
 
   // Dim0 fold/emit: accumulate levels 1+ across epochs.
-  uint32_t active_levels_mask = 1; // L0 always active
+  // Without dim0 downsample, all inner LOD levels are ready every epoch.
+  uint32_t active_levels_mask =
+    (levels->dim0_downsample && p->dim0_accum)
+      ? 1
+      : (uint32_t)((1u << levels->nlod) - 1);
   if (levels->dim0_downsample && p->dim0_accum) {
     struct platform_clock dim0_clk = { 0 };
     if (p->metrics)

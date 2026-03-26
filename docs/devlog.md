@@ -45,7 +45,14 @@ Cleanup
 
 ## 2026-03-25
 
+Tested 2 streams on a single gpu. It does roughly what you would expect -
+the overall throughput of the system is the same, but it's split between two
+streams so each stream gets half the bandwidth.
 
+Adding a multiarray writer. The constraint is that a stream needs to be
+"flushable" or the write will get rejected. Once this is done, I should
+generalize the append dimension and then I think it's pretty usable. Doing
+it on the cpu first.
 
 ## 2026-03-24
 

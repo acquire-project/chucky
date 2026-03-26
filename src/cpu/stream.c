@@ -587,6 +587,7 @@ cpu_append(struct writer* self, struct slice input)
               cpu_pipeline_scatter_epoch(&sp, s->batch_accumulated, &active_mask) == 0);
       }
 
+      CHECK(Error, s->batch_accumulated < MAX_BATCH_EPOCHS);
       s->batch_active_masks[s->batch_accumulated] = active_mask;
       s->batch_accumulated++;
 
@@ -651,6 +652,8 @@ cpu_flush(struct writer* self)
       if (cpu_pipeline_scatter_epoch(&sp, s->batch_accumulated, &active_mask))
         return writer_error();
     }
+    if (s->batch_accumulated >= MAX_BATCH_EPOCHS)
+      return writer_error();
     s->batch_active_masks[s->batch_accumulated] = active_mask;
     s->batch_accumulated++;
   }

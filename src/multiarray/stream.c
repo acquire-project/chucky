@@ -28,7 +28,6 @@ struct array_descriptor
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
   uint32_t dim0_counts[LOD_MAX_LEVELS];
   void* dim0_accum;
-  int pool_fully_covered;
 };
 
 // ---- Main struct ----
@@ -151,9 +150,6 @@ multiarray_tile_stream_cpu_create(
     const uint64_t total_chunks = d->levels.total_chunks;
     const size_t chunk_stride_bytes = d->layout.chunk_stride * bpe;
     const size_t max_out = d->cl.max_output_size;
-
-    d->pool_fully_covered =
-      (d->layout.chunk_stride == d->layout.chunk_elements);
 
     // Compute max_cursor.
     {
@@ -542,9 +538,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
     ms->active = array_index;
     recompute_luts(ms, array_index);
 
-    // Zero chunk pool if not fully covered.
-    if (!desc->pool_fully_covered)
-      memset(ms->chunk_pool, 0, ms->chunk_pool_bytes);
+    // Zero chunk pool on array switch.
+    memset(ms->chunk_pool, 0, ms->chunk_pool_bytes);
 
     // Zero lod_values if multiscale.
     if (desc->levels.enable_multiscale && ms->lod_values)
@@ -630,6 +625,12 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
           };
       }
 
+      if (desc->batch_accumulated >= MAX_BATCH_EPOCHS)
+        return (struct multiarray_writer_result){
+          .error = multiarray_writer_fail,
+          .rest = { .beg = src, .end = end },
+        };
+
       desc->batch_active_masks[desc->batch_accumulated] = active_mask;
       desc->batch_accumulated++;
 
@@ -643,12 +644,11 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
           };
         desc->batch_accumulated = 0;
 
-        if (!desc->pool_fully_covered)
-          memset(ms->chunk_pool,
-                 0,
-                 (uint64_t)desc->cl.epochs_per_batch *
-                   desc->levels.total_chunks *
-                   desc->layout.chunk_stride * bpe);
+        memset(ms->chunk_pool,
+               0,
+               (uint64_t)desc->cl.epochs_per_batch *
+                 desc->levels.total_chunks *
+                 desc->layout.chunk_stride * bpe);
       }
 
       if (desc->levels.enable_multiscale && ms->lod_values) {
@@ -684,21 +684,27 @@ flush_impl(struct multiarray_writer* self)
               &sp, desc->batch_accumulated, &active_mask))
           goto Error;
       }
+      if (desc->batch_accumulated >= MAX_BATCH_EPOCHS)
+        goto Error;
       desc->batch_active_masks[desc->batch_accumulated] = active_mask;
       desc->batch_accumulated++;
     }
   }
 
-  // Flush the active array's batch (if any).
-  if (ms->active >= 0) {
-    struct array_descriptor* desc = &ms->arrays[ms->active];
-    if (desc->batch_accumulated > 0) {
-      struct flush_batch_params fp = make_flush_params(ms, desc);
-      if (cpu_pipeline_flush_batch(
-            &fp, desc->batch_accumulated, desc->batch_active_masks))
-        goto Error;
-      desc->batch_accumulated = 0;
+  // Flush pending batches (all arrays).
+  for (int i = 0; i < ms->n_arrays; ++i) {
+    struct array_descriptor* desc = &ms->arrays[i];
+    if (desc->batch_accumulated == 0)
+      continue;
+    if (i != ms->active) {
+      ms->active = i;
+      recompute_luts(ms, i);
     }
+    struct flush_batch_params fp = make_flush_params(ms, desc);
+    if (cpu_pipeline_flush_batch(
+          &fp, desc->batch_accumulated, desc->batch_active_masks))
+      goto Error;
+    desc->batch_accumulated = 0;
   }
 
   // Drain partial dim0 accumulators (multiscale dim0 downsample).

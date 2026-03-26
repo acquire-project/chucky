@@ -1,11 +1,12 @@
 #include "multiarray.cpu.h"
+#include "stream.cpu.h"
 #include "test_shard_sink.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#define SHARD_CAP     (1 << 20)
+#define SHARD_CAP (1 << 20)
 #define SINK_N_SHARDS 16
 #define test_sink_init_1(s) test_sink_init((s), SINK_N_SHARDS, SHARD_CAP)
 
@@ -32,11 +33,17 @@ test_basic_two_array(void)
 
   // Array 0: 3D 4x4x6, chunk 2x2x3, cps 1x2x2
   struct dimension dims0[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
-    { .size = 6, .chunk_size = 3, .chunks_per_shard = 2,
+    { .size = 6,
+      .chunk_size = 3,
+      .chunks_per_shard = 2,
       .storage_position = 2 },
   };
   struct tile_stream_configuration config0 = {
@@ -49,9 +56,13 @@ test_basic_two_array(void)
 
   // Array 1: 2D 8x8, chunk 4x4, cps 1x2
   struct dimension dims1[] = {
-    { .size = 8, .chunk_size = 4, .chunks_per_shard = 1,
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 8, .chunk_size = 4, .chunks_per_shard = 2,
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
   struct tile_stream_configuration config1 = {
@@ -73,11 +84,12 @@ test_basic_two_array(void)
   CHECK(Fail, w);
 
   // Write 1 epoch to array 0.
-  // epoch_elements for config0: 2*2*3 * (4/2)*(6/3) = 12 * 4 = 48 (per epoch-chunk * chunks)
-  // Actually, epoch_elements = chunk_elements * chunks_per_epoch
-  // For this config with K likely 1, just write enough for 1 epoch.
-  // Compute manually: epoch_elements = prod(chunk_size) * prod(ceil(size[d]/cs[d]) for d>0)
-  // = (2*2*3) * (2*2) = 12*4 = 48. For dims[0].chunk_size=2, epoch = 48 elements.
+  // epoch_elements for config0: 2*2*3 * (4/2)*(6/3) = 12 * 4 = 48 (per
+  // epoch-chunk * chunks) Actually, epoch_elements = chunk_elements *
+  // chunks_per_epoch For this config with K likely 1, just write enough for 1
+  // epoch. Compute manually: epoch_elements = prod(chunk_size) *
+  // prod(ceil(size[d]/cs[d]) for d>0) = (2*2*3) * (2*2) = 12*4 = 48. For
+  // dims[0].chunk_size=2, epoch = 48 elements.
   {
     size_t n = 48;
     uint16_t* data = (uint16_t*)malloc(n * sizeof(uint16_t));
@@ -145,9 +157,13 @@ test_switch_at_epoch_boundary(void)
   test_sink_init_1(&sink1);
 
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
 
@@ -169,7 +185,8 @@ test_switch_at_epoch_boundary(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
-  // epoch_elements = chunk_elements * chunks_per_epoch = (2*2) * (4/2) = 4 * 2 = 8
+  // epoch_elements = chunk_elements * chunks_per_epoch = (2*2) * (4/2) = 4 * 2
+  // = 8
   size_t n = 8;
   data = (uint8_t*)malloc(n);
   CHECK(Fail, data);
@@ -215,9 +232,13 @@ test_switch_mid_epoch_rejected(void)
   test_sink_init_1(&sink1);
 
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
 
@@ -292,9 +313,13 @@ test_flush_all(void)
   test_sink_init_1(&sink2);
 
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
 
@@ -365,12 +390,19 @@ test_many_arrays(void)
 {
   log_info("=== test_many_arrays ===");
 
-  enum { N = 100 };
+  enum
+  {
+    N = 100
+  };
 
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
 
@@ -455,9 +487,13 @@ test_same_array_repeated(void)
   test_sink_init_1(&sink);
 
   struct dimension dims[] = {
-    { .size = 8, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 8,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
 
@@ -533,9 +569,13 @@ test_content_isolation(void)
   // 2 epochs (dim0: 4/2=2), 2 chunks/epoch, 2 chunks/shard.
   // → 2 shards per array, each with 2 chunks of 4 u16 values.
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
       .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2,
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
       .storage_position = 1 },
   };
   struct tile_stream_configuration config = {
@@ -560,8 +600,7 @@ test_content_isolation(void)
     uint16_t data[16];
     for (int i = 0; i < 16; ++i)
       data[i] = (uint16_t)(0x1000 + i);
-    struct slice sl = { .beg = data,
-                        .end = (const char*)data + sizeof(data) };
+    struct slice sl = { .beg = data, .end = (const char*)data + sizeof(data) };
     struct multiarray_writer_result r = w->update(w, 0, sl);
     CHECK(Fail, r.error == multiarray_writer_ok);
   }
@@ -571,8 +610,7 @@ test_content_isolation(void)
     uint16_t data[16];
     for (int i = 0; i < 16; ++i)
       data[i] = (uint16_t)(0x2000 + i);
-    struct slice sl = { .beg = data,
-                        .end = (const char*)data + sizeof(data) };
+    struct slice sl = { .beg = data, .end = (const char*)data + sizeof(data) };
     struct multiarray_writer_result r = w->update(w, 1, sl);
     CHECK(Fail, r.error == multiarray_writer_ok);
   }
@@ -599,8 +637,7 @@ test_content_isolation(void)
       continue;
     CHECK(Fail, sw->size >= index_tail);
 
-    const uint64_t* idx =
-      (const uint64_t*)(sw->buf + sw->size - index_tail);
+    const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_tail);
     for (size_t c = 0; c < cps_total; ++c) {
       uint64_t off = idx[2 * c];
       uint64_t nb = idx[2 * c + 1];
@@ -625,8 +662,7 @@ test_content_isolation(void)
       continue;
     CHECK(Fail, sw->size >= index_tail);
 
-    const uint64_t* idx =
-      (const uint64_t*)(sw->buf + sw->size - index_tail);
+    const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_tail);
     for (size_t c = 0; c < cps_total; ++c) {
       uint64_t off = idx[2 * c];
       uint64_t nb = idx[2 * c + 1];
@@ -659,6 +695,212 @@ Fail:
   return 1;
 }
 
+// ---- Test: cross-validate multiarray (1 array) vs single-array ----
+
+static int
+test_cross_validate_single_array(void)
+{
+  log_info("=== test_cross_validate_single_array ===");
+
+  struct test_shard_sink sink_ref, sink_multi;
+  test_sink_init_1(&sink_ref);
+  test_sink_init_1(&sink_multi);
+
+  // 3D 4x4x6, chunk 2x2x3, cps 1x2x2, u16, CODEC_NONE
+  struct dimension dims[] = {
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+    { .size = 6,
+      .chunk_size = 3,
+      .chunks_per_shard = 2,
+      .storage_position = 2 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_NONE,
+  };
+
+  // epoch_elements = (2*2*3) * (2*2) = 48
+  // 2 epochs = dim0: 4/2 = 2
+  size_t epoch_elems = 48;
+  size_t total_elems = 2 * epoch_elems;
+  struct tile_stream_cpu* ref = NULL;
+  struct multiarray_tile_stream_cpu* ms = NULL;
+
+  uint16_t* data = (uint16_t*)malloc(total_elems * sizeof(uint16_t));
+  CHECK(Fail, data);
+  for (size_t i = 0; i < total_elems; ++i)
+    data[i] = (uint16_t)(i & 0xFFFF);
+
+  struct slice sl = {
+    .beg = data,
+    .end = (const char*)data + total_elems * sizeof(uint16_t),
+  };
+
+  // Single-array reference.
+  ref = tile_stream_cpu_create(&config, &sink_ref.base);
+  CHECK(Fail, ref);
+  {
+    struct writer* w = tile_stream_cpu_writer(ref);
+    struct writer_result r = w->append(w, sl);
+    CHECK(Fail, r.error == 0);
+    r = w->flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  // Multiarray (1 array).
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink_multi.base };
+  ms = multiarray_tile_stream_cpu_create(1, configs, sinks);
+  CHECK(Fail, ms);
+  {
+    struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
+    struct multiarray_writer_result r = w->update(w, 0, sl);
+    CHECK(Fail, r.error == multiarray_writer_ok);
+    r = w->flush(w);
+    CHECK(Fail, r.error == multiarray_writer_ok);
+  }
+
+  // Compare all shards byte-for-byte.
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    struct test_shard_writer* sw_ref = &sink_ref.writers[0][i];
+    struct test_shard_writer* sw_multi = &sink_multi.writers[0][i];
+    int ref_has = sw_ref->buf && sw_ref->size > 0;
+    int multi_has = sw_multi->buf && sw_multi->size > 0;
+    CHECK(Fail, ref_has == multi_has);
+    if (!ref_has)
+      continue;
+    CHECK(Fail, sw_ref->size == sw_multi->size);
+    CHECK(Fail, memcmp(sw_ref->buf, sw_multi->buf, sw_ref->size) == 0);
+  }
+
+  free(data);
+  tile_stream_cpu_destroy(ref);
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink_ref);
+  test_sink_free(&sink_multi);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_cpu_destroy(ref);
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink_ref);
+  test_sink_free(&sink_multi);
+  log_error("  FAIL");
+  return 1;
+}
+
+// ---- Test: minimal LOD (multiscale) ----
+
+static int
+test_lod_basic(void)
+{
+  log_info("=== test_lod_basic ===");
+
+  // 3D shape 4x8x8, chunk 2x4x4, cps 1x2x2
+  // dims 1,2 with downsample=1
+  struct dimension dims[] = {
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_NONE,
+    .reduce_method = lod_reduce_mean,
+    .dim0_reduce_method = lod_reduce_mean,
+    .epochs_per_batch = 1,
+  };
+
+  // Provide enough levels for LOD output.
+  int shards_per_level[] = { 16, 16, 16 };
+  struct test_shard_sink sink;
+  test_sink_init_multi(&sink, 3, shards_per_level, SHARD_CAP);
+
+  struct multiarray_tile_stream_cpu* ms = NULL;
+  uint16_t* data = NULL;
+
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+  ms = multiarray_tile_stream_cpu_create(1, configs, sinks);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
+
+  // epoch_elements = (2*4*4) * (2*2) = 32 * 4 = 128
+  // 2 epochs = 256 u16 values
+  size_t total_elems = 256;
+  data = (uint16_t*)malloc(total_elems * sizeof(uint16_t));
+  CHECK(Fail, data);
+  for (size_t i = 0; i < total_elems; ++i)
+    data[i] = (uint16_t)(i & 0xFFFF);
+
+  struct slice sl = {
+    .beg = data,
+    .end = (const char*)data + total_elems * sizeof(uint16_t),
+  };
+  struct multiarray_writer_result r = w->update(w, 0, sl);
+  CHECK(Fail, r.error == multiarray_writer_ok);
+
+  r = w->flush(w);
+  CHECK(Fail, r.error == multiarray_writer_ok);
+
+  // Verify L0 shards present.
+  int l0_count = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+    if (sink.writers[0][i].buf && sink.writers[0][i].size > 0)
+      l0_count++;
+  CHECK(Fail, l0_count > 0);
+
+  // Verify at least one L1+ shard present.
+  int lod_count = 0;
+  for (int lv = 1; lv < 3; ++lv)
+    for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+      if (sink.writers[lv][i].buf && sink.writers[lv][i].size > 0)
+        lod_count++;
+  CHECK(Fail, lod_count > 0);
+
+  log_info("  L0 shards: %d, L1+ shards: %d", l0_count, lod_count);
+
+  free(data);
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -673,5 +915,7 @@ main(int ac, char* av[])
   rc |= test_many_arrays();
   rc |= test_same_array_repeated();
   rc |= test_content_isolation();
+  rc |= test_cross_validate_single_array();
+  rc |= test_lod_basic();
   return rc;
 }
