@@ -312,6 +312,8 @@ s3_sink_update_append(struct shard_sink* self,
 {
   (void)level;
   struct zarr_s3_sink* zs = (struct zarr_s3_sink*)self;
+  if (n_append > zs->rank)
+    return 1;
   if (zs->dimensions[0].size == append_sizes[0])
     return 0;
   for (uint8_t d = 0; d < n_append; ++d)

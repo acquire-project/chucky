@@ -264,7 +264,7 @@ zarr_fs_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   int flags = zs->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
   w->fd = platform_open_write(path, flags);
   if (w->fd == PLATFORM_FD_INVALID) {
-    // Directory may not exist yet (unbounded dim0) — create and retry
+    // Directory may not exist yet (unbounded dim 0) — create and retry
     char dir[4096];
     size_t pathlen = strlen(path);
     memcpy(dir, path, pathlen + 1);
@@ -340,6 +340,8 @@ zarr_fs_sink_update_append(struct shard_sink* self,
 {
   (void)level;
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
+  if (n_append > zs->rank)
+    return 1;
 
   // Check if any append dim changed
   int changed = 0;
@@ -423,7 +425,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
            cfg->array_name);
 
   // Create directory tree: ensure shard directories exist.
-  // When dim0 is unbounded (size=0), only pre-create inner dirs for
+  // When dim 0 is unbounded (size=0), only pre-create inner dirs for
   // shard_epoch=0; further dirs are created on-demand in zarr_fs_sink_open.
   {
     uint64_t total_shards =
@@ -678,7 +680,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   // Create one zarr_fs_sink per level
   for (int lv = 0; lv < plan.nlod; ++lv) {
     // Build per-level dimensions with downsampled sizes.
-    // When dim0 is unbounded (size=0), set level shape[0]=0 (will grow).
+    // When dim 0 is unbounded (size=0), set level shape[0]=0 (will grow).
     struct dimension lv_dims[MAX_ZARR_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
       lv_dims[d] = cfg->dimensions[d];

@@ -608,16 +608,12 @@ cpu_append(struct writer* self, struct slice input)
         float elapsed = platform_toc(&peek);
         if (elapsed >= s->config.metadata_update_interval_s) {
           s->metadata_update_clock = peek;
-          const struct dimension* dims = s->config.dimensions;
           const uint8_t na = dim_info_n_append(&s->cl.dims);
           for (int lv = 0; lv < s->levels.nlod; ++lv) {
             struct shard_state* ss = &s->shard[lv];
             uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
             uint64_t append_sizes[HALF_MAX_RANK];
-            for (int d = 1; d < na; ++d)
-              append_sizes[d] = dims[d].size;
-            const uint64_t iac = s->cl.dims.inner_append_count;
-            append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
+            dim_info_decompose_append_sizes(&s->cl.dims, total_ac, append_sizes);
             if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
               goto Error;
           }
@@ -716,15 +712,10 @@ cpu_flush(struct writer* self)
 
   // Final metadata.
   if (s->shard_sink->update_append) {
-    const struct dimension* dims = s->config.dimensions;
     const uint8_t na = dim_info_n_append(&s->cl.dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      uint64_t total_ac = append_chunks[lv];
       uint64_t append_sizes[HALF_MAX_RANK];
-      for (int d = 1; d < na; ++d)
-        append_sizes[d] = dims[d].size;
-      const uint64_t iac = s->cl.dims.inner_append_count;
-      append_sizes[0] = (iac > 0) ? ceildiv(total_ac, iac) * dims[0].chunk_size : 0;
+      dim_info_decompose_append_sizes(&s->cl.dims, append_chunks[lv], append_sizes);
       if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
     }

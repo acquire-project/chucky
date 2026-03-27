@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu/stream.internal.h"
+#include "stream/dim_info.h"
 
 // Upload level layouts to GPU (always, including L0). When multiscale is
 // enabled, also uploads LOD plan shapes and builds scatter/reduce LUTs.
@@ -41,6 +42,6 @@ lod_run_epoch(struct lod_state* lod,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method append_reduce_method,
-              int append_downsample,
+              const struct dim_info* dims,
               CUstream compute,
               uint32_t* out_active_mask);

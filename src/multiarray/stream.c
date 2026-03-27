@@ -204,13 +204,13 @@ init_array_descriptor(struct array_descriptor* desc,
         max_sz(maxima->lod_batch_offsets_count[lv], desc->cl.plan.batch_count);
     }
 
-    // Dim0 accum: per-array, not shared.
+    // Append accum: per-array, not shared.
     if (desc->cl.dims.append_downsample) {
-      uint64_t dim0_total = 0;
+      uint64_t append_total = 0;
       for (int lv = 1; lv < desc->cl.plan.nlod; ++lv)
-        dim0_total += desc->cl.plan.batch_count * desc->cl.plan.lod_nelem[lv];
-      if (dim0_total > 0) {
-        desc->append_accum = calloc(dim0_total, bytes_per_element);
+        append_total += desc->cl.plan.batch_count * desc->cl.plan.lod_nelem[lv];
+      if (append_total > 0) {
+        desc->append_accum = calloc(append_total, bytes_per_element);
         if (!desc->append_accum)
           return 1;
       }
@@ -750,12 +750,12 @@ flush_all_batches(struct multiarray_tile_stream_cpu* ms)
   return 0;
 }
 
-// Drain partial dim0 accumulators for all multiscale arrays.
+// Drain partial append accumulators for all multiscale arrays.
 // NOTE: lod_values is a shared buffer and may contain stale data from a
-// previously active array.  This is harmless because lod_cpu_dim0_emit writes
+// previously active array.  This is harmless because the emit path writes
 // into lod_values before any read, so stale data is overwritten before use.
 static int
-drain_dim0_all(struct multiarray_tile_stream_cpu* ms)
+drain_append_all(struct multiarray_tile_stream_cpu* ms)
 {
   struct stream_metrics* met =
     ms->metrics_enabled ? &ms->metrics : NULL;
@@ -813,19 +813,13 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
     }
 
     if (desc->sink->update_append) {
-      const struct dimension* dims = desc->config.dimensions;
       const uint8_t na = dim_info_n_append(&desc->cl.dims);
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
         struct shard_state* ss = &desc->shard[lv];
         uint64_t total_ac =
           ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-        uint64_t append_sizes[16]; // HALF_MAX_RANK
-        for (int d = 1; d < na; ++d)
-          append_sizes[d] = dims[d].size;
-        const uint64_t iac = desc->cl.dims.inner_append_count;
-        append_sizes[0] = (iac > 0)
-          ? ((total_ac + iac - 1) / iac) * dims[0].chunk_size
-          : 0;
+        uint64_t append_sizes[HALF_MAX_RANK];
+        dim_info_decompose_append_sizes(&desc->cl.dims, total_ac, append_sizes);
         if (desc->sink->update_append(
               desc->sink, (uint8_t)lv, na, append_sizes))
           return 1;
@@ -847,7 +841,7 @@ flush_impl(struct multiarray_writer* self)
     goto Error;
   if (flush_all_batches(ms))
     goto Error;
-  if (drain_dim0_all(ms))
+  if (drain_append_all(ms))
     goto Error;
   if (finalize_all_shards(ms))
     goto Error;

@@ -127,7 +127,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
 
   CHECK(Fail,
         compress_agg_kick(
-          &c->stage, &in, &c->cl.levels, &c->batch, c->cl.dims.append_downsample, c->compute, handoff) == 0);
+          &c->stage, &in, &c->cl.levels, &c->batch, &c->cl.dims, c->compute, handoff) == 0);
   CU(Fail, cuStreamSynchronize(c->compute));
   return 0;
 

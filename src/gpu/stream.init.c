@@ -245,6 +245,17 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CU(FailPhase2, cuStreamSynchronize(out->streams.compute));
 
+  // Precompute max_cursor so append doesn't recompute each call.
+  {
+    const struct dimension* dims = config->dimensions;
+    const uint8_t na = dim_info_n_append(&out->dims);
+    if (dims[0].size > 0) {
+      out->max_cursor = out->layout.epoch_elements;
+      for (int d = 0; d < na; ++d)
+        out->max_cursor *= ceildiv(dims[d].size, dims[d].chunk_size);
+    }
+  }
+
   out->metrics = init_metrics(out->levels.enable_multiscale);
 
   // Initialize metadata update timer

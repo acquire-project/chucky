@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dimension.h"
+#include "util/prelude.h"
 #include <stdint.h>
 
 // View into a contiguous range of dimensions (beg/end pointer pair).
@@ -22,6 +23,9 @@ dim_slice_len(struct dim_slice s)
 // Append dims: leftmost contiguous prefix with chunk_size == 1.
 // Inner dims: everything else.
 // The slices point into the original dimension array (no copies).
+//
+// Lifetime: slices point into the dimension array passed to dim_info_init().
+// That array must outlive this struct and remain unmodified.
 struct dim_info
 {
   struct dim_slice append; // dims[0 .. n_append)
@@ -49,6 +53,24 @@ static inline int
 dim_index(const struct dim_info* info, const struct dimension* d)
 {
   return (int)(d - info->append.beg);
+}
+
+// Decompose a flat append-chunk count into per-dimension append sizes.
+// Fills append_sizes[0..n_append-1].
+static inline void
+dim_info_decompose_append_sizes(const struct dim_info* info,
+                                uint64_t total_append_chunks,
+                                uint64_t* append_sizes)
+{
+  uint8_t na = dim_info_n_append(info);
+  for (uint8_t i = 0; i < na; ++i)
+    append_sizes[i] = 0;
+  for (const struct dimension* d = info->append.beg + 1; d < info->append.end; ++d)
+    append_sizes[dim_index(info, d)] = d->size;
+  const uint64_t iac = info->inner_append_count;
+  append_sizes[0] = (iac > 0)
+    ? ceildiv(total_append_chunks, iac) * info->append.beg[0].chunk_size
+    : 0;
 }
 
 // Partition dims into append/inner, validate constraints, precompute

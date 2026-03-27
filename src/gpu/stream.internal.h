@@ -170,6 +170,7 @@ struct tile_stream_gpu
   struct pool_state pools;
   struct staging_state stage;
   uint64_t cursor;
+  uint64_t max_cursor; // 0 = unbounded
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };

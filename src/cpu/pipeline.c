@@ -184,7 +184,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
     return 0;
   }
 
-  // Multiscale path: scatter linear → morton, reduce, dim0 fold/emit,
+  // Multiscale path: scatter linear → morton, reduce, append fold/emit,
   // then scatter each level to chunk pool.
   struct platform_clock clk = { 0 };
   if (p->metrics)

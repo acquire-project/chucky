@@ -76,7 +76,7 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
               const struct flush_handoff* handoff,
               const struct level_geometry* levels,
               const struct batch_state* batch,
-              int append_downsample,
+              const struct dim_info* dims,
               const struct tile_stream_configuration* config,
               CUstream d2h_stream)
 {
@@ -94,7 +94,7 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
     uint32_t active_count = 1;
     if (n_epochs > 1) {
       active_count = level_actual_active_count(
-        lvl, batch, append_downsample, handoff->batch_active_masks, lv, n_epochs);
+        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
       if (active_count == 0)
         continue;
     }
@@ -121,7 +121,7 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
     uint32_t active_count = 1;
     if (n_epochs > 1) {
       active_count = level_actual_active_count(
-        lvl, batch, append_downsample, handoff->batch_active_masks, lv, n_epochs);
+        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
       if (active_count == 0)
         continue;
     }
@@ -161,7 +161,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                      const struct flush_handoff* handoff,
                      const struct level_geometry* levels,
                      const struct batch_state* batch,
-                     int append_downsample,
+                     const struct dim_info* dims,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
                      const struct lod_state* lod,
@@ -184,14 +184,14 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                          lod->t_scatter_end,
                          lod->t_reduce_end,
                          scatter_bytes, morton_bytes);
-    if (append_downsample) {
+    if (dims->append_downsample) {
       size_t accum_bpe =
         dtype_accum_bpe(config->dtype, config->append_reduce_method);
-      size_t dim0_bytes = lod->append_accum.total_elements * accum_bpe;
+      size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
       accumulate_metric_cu(&metrics->lod_append_fold,
                            lod->t_reduce_end,
                            lod->t_append_end,
-                           dim0_bytes, dim0_bytes);
+                           accum_bytes, accum_bytes);
     }
     accumulate_metric_cu(&metrics->lod_morton_chunk,
                          lod->t_append_end,
@@ -211,7 +211,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
         continue;
       struct level_flush_state* lvl = &stage->levels[lv];
       uint32_t active_count = level_actual_active_count(
-        lvl, batch, append_downsample, handoff->batch_active_masks, lv, n_epochs);
+        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
       if (active_count == 0)
         continue;
       uint64_t batch_covering =
@@ -239,7 +239,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
-                 int append_downsample,
+                 const struct dim_info* dims,
                  const struct tile_stream_layout* layout,
                  const struct tile_stream_configuration* config,
                  struct shard_sink* sink,
@@ -251,7 +251,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
 
   CU(Error, cuEventSynchronize(stage->ready[fc]));
   record_flush_metrics(
-    stage, handoff, levels, batch, append_downsample, layout, config, lod, metrics);
+    stage, handoff, levels, batch, dims, layout, config, lod, metrics);
 
   {
     struct platform_clock sink_clock = { 0 };
@@ -264,7 +264,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
 
       struct level_flush_state* lvl = &stage->levels[lv];
       uint32_t active_count = level_actual_active_count(
-        lvl, batch, append_downsample, handoff->batch_active_masks, lv, n_epochs);
+        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
       if (active_count == 0)
         continue;
 
@@ -316,18 +316,13 @@ maybe_update_metadata(const struct d2h_deliver_stage* stage,
     return 0;
 
   *metadata_update_clock = peek;
-  const struct dimension* dims = config->dimensions;
   const uint8_t na = dim_info_n_append(dims_info);
   for (int lv = 0; lv < stage->nlod; ++lv) {
     struct shard_state* ss = &stage->levels[lv].shard;
     uint64_t flat_append_chunks =
       ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
     uint64_t append_sizes[HALF_MAX_RANK];
-    for (int d = 1; d < na; ++d)
-      append_sizes[d] = dims[d].size;
-    const uint64_t iac = dims_info->inner_append_count;
-    append_sizes[0] =
-      (iac > 0) ? ceildiv(flat_append_chunks, iac) * dims[0].chunk_size : 0;
+    dim_info_decompose_append_sizes(dims_info, flat_append_chunks, append_sizes);
     if (sink->update_append(sink, (uint8_t)lv, na, append_sizes))
       return 1;
   }
@@ -341,7 +336,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
-                 int append_downsample,
+                 const struct dim_info* dims,
                  const struct tile_stream_configuration* config,
                  struct shard_sink* sink,
                  CUstream d2h_stream)
@@ -354,7 +349,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
   CHECK(Error,
-        two_phase_d2h(stage, handoff, levels, batch, append_downsample, config, d2h_stream) == 0);
+        two_phase_d2h(stage, handoff, levels, batch, dims, config, d2h_stream) == 0);
 
   return 0;
 
@@ -367,19 +362,18 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
                   const struct level_geometry* levels,
                   const struct batch_state* batch,
-                  int append_downsample,
+                  const struct dim_info* dims,
                   const struct tile_stream_layout* layout,
                   const struct tile_stream_configuration* config,
                   struct shard_sink* sink,
                   const struct lod_state* lod,
-                  const struct dim_info* dims_info,
                   struct stream_metrics* metrics,
                   struct platform_clock* metadata_update_clock)
 {
   struct writer_result r = sync_and_deliver(
-    stage, handoff, levels, batch, append_downsample, layout, config, sink, lod, metrics);
+    stage, handoff, levels, batch, dims, layout, config, sink, lod, metrics);
   if (!r.error) {
-    if (maybe_update_metadata(stage, dims_info, config, sink, metadata_update_clock))
+    if (maybe_update_metadata(stage, dims, config, sink, metadata_update_clock))
       return writer_error();
   }
   return r;

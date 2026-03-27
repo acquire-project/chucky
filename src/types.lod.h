@@ -17,7 +17,7 @@ extern "C"
     lod_reduce_min_suppressed, // 2nd lowest value
   };
 
-  // Accumulator bytes-per-element for dim0 fold/emit (device memory).
+  // Accumulator bytes-per-element for append fold/emit (device memory).
   // Always native type — no widening, to avoid doubling the buffer.
   // Integer mean may lose precision from wrapping; that's acceptable.
   static inline size_t dtype_accum_bpe(enum dtype dt,

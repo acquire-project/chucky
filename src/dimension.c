@@ -209,6 +209,14 @@ dims_validate(const struct dimension* dims, uint8_t rank)
     }
   }
 
+  // Only dim 0 may be unbounded
+  for (int d = 1; d < rank; ++d) {
+    if (dims[d].size == 0) {
+      log_error("dims[%d].size must be > 0 (only dim 0 may be unbounded)", d);
+      goto Fail;
+    }
+  }
+
   // unbounded dim 0 requires chunks_per_shard > 0
   if (dims[0].size == 0 && dims[0].chunks_per_shard == 0) {
     log_error("dims[0].size=0 (unbounded) requires chunks_per_shard > 0");

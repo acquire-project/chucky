@@ -235,7 +235,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
                   const struct level_geometry* levels,
                   const struct batch_state* batch,
-                  int append_downsample,
+                  const struct dim_info* dims,
                   CUstream compress_stream,
                   struct flush_handoff* out)
 {
@@ -269,7 +269,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
     struct level_flush_state* lvl = &stage->levels[lv];
     uint32_t active_count =
-      level_active_epochs(lvl, batch, append_downsample, lv, n_epochs);
+      level_active_epochs(lvl, batch, dims, lv, n_epochs);
 
     struct aggregate_slot* agg = &lvl->agg[fc];
     uint64_t chunks_lv = levels->chunk_count[lv];
@@ -319,7 +319,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
         // K=1 or partial batch: per-epoch aggregate
         for (uint32_t a = 0; a < active_count; ++a) {
           uint32_t period = 1;
-          if (append_downsample && lv > 0)
+          if (dims->append_downsample && lv > 0)
             period = 1u << lv;
           uint32_t pool_epoch = (n_epochs == 1) ? 0 : (a + 1) * period - 1;
 
