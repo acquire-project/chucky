@@ -33,7 +33,7 @@ target_link_libraries(test_gpu_helpers PUBLIC stream CUDA::cuda_driver)
 
 # Shared shard verification helpers (index parse, decompress+verify)
 add_test_lib(test_shard_verify test_shard_verify.c test_shard_verify.h)
-target_link_libraries(test_shard_verify PUBLIC stream Zstd::Zstd)
+target_link_libraries(test_shard_verify PUBLIC chucky_log Zstd::Zstd)
 
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
@@ -66,7 +66,7 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
 
 # CPU stream + zarr_fs_sink integration (exercises async IO fencing)
-add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd)
+add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd test_platform test_shard_verify)
 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_test_exe(test_cross_validate test_cross_validate.c CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
@@ -77,7 +77,7 @@ add_platform_sources(test_platform)
 
 # Shared test data generation library
 add_test_lib(test_data test_data.c test_data.h)
-target_link_libraries(test_data PUBLIC stream)
+target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 
 # Tests with zstd
 add_test_exe(test_stream          test_stream.c          CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)

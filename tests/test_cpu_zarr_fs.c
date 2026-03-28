@@ -3,42 +3,15 @@
 
 #include "stream.cpu.h"
 #include "stream/layouts.h"
+#include "test_platform.h"
+#include "test_shard_verify.h"
 #include "util/prelude.h"
 #include "zarr_fs_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <zstd.h>
-
-// ---- Inlined helpers (avoid GPU-only test_platform / test_shard_verify) ----
-
-static int
-tmpdir_create(char* buf, size_t cap)
-{
-  const char* tmpl = "/tmp/test_XXXXXX";
-  if (strlen(tmpl) + 1 > cap)
-    return -1;
-  memcpy(buf, tmpl, strlen(tmpl) + 1);
-  return mkdtemp(buf) ? 0 : -1;
-}
-
-static int
-tmpdir_remove(const char* path)
-{
-  char cmd[4200];
-  snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
-  return system(cmd);
-}
-
-static int
-file_exists(const char* path)
-{
-  struct stat st;
-  return stat(path, &st) == 0;
-}
 
 static int
 read_file_all(const char* path, uint8_t** out, size_t* out_len)
@@ -64,26 +37,6 @@ read_file_all(const char* path, uint8_t** out, size_t* out_len)
   *out_len = (size_t)len;
   return 0;
 }
-
-static int
-shard_index_parse(const uint8_t* buf,
-                  size_t shard_size,
-                  size_t chunks_per_shard,
-                  uint64_t* offsets,
-                  uint64_t* sizes)
-{
-  size_t index_data_bytes = chunks_per_shard * 2 * sizeof(uint64_t);
-  if (shard_size <= index_data_bytes + 4)
-    return 1;
-  const uint8_t* index_ptr = buf + shard_size - index_data_bytes - 4;
-  for (size_t i = 0; i < chunks_per_shard; ++i) {
-    memcpy(&offsets[i], index_ptr + i * 16, sizeof(uint64_t));
-    memcpy(&sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
-  }
-  return 0;
-}
-
-// ---- Shard verification ----
 
 // Verify a shard file: parse index, decompress each present chunk.
 // Returns number of valid (non-empty) chunks, or -1 on error.
@@ -130,12 +83,9 @@ verify_shard(const char* path,
       errors++;
       continue;
     }
-    size_t result = ZSTD_decompress(decomp, chunk_stride_bytes,
-                                    shard_data + offsets[i],
-                                    (size_t)nbytes[i]);
-    if (ZSTD_isError(result)) {
-      log_error("  %s chunk %zu: ZSTD error: %s", path, i,
-                ZSTD_getErrorName(result));
+    if (chunk_decompress(shard_data + offsets[i], (size_t)nbytes[i], decomp,
+                         chunk_stride_bytes)) {
+      log_error("  %s chunk %zu: decompress failed", path, i);
       errors++;
     } else {
       valid++;
@@ -241,7 +191,7 @@ test_pipeline(const char* tmpdir)
         int sx = si % 2;
         char path[4096];
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", tmpdir, sa, sy, sx);
-        CHECK(Fail4, file_exists(path));
+        CHECK(Fail4, test_file_exists(path));
 
         int valid = verify_shard(path, (size_t)chunks_per_shard_total,
                                  chunk_stride_bytes);
@@ -367,7 +317,7 @@ test_streaming_append(const char* tmpdir)
         int sx = si % 2;
         char path[4096];
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", tmpdir, sa, sy, sx);
-        CHECK(Fail4, file_exists(path));
+        CHECK(Fail4, test_file_exists(path));
 
         int valid = verify_shard(path, (size_t)chunks_per_shard_total,
                                  chunk_stride_bytes);
@@ -407,14 +357,14 @@ main(void)
   int err = 0;
 
   char tmpdir1[4096], tmpdir2[4096];
-  CHECK(Fail, tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
-  CHECK(Fail, tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
 
-  tmpdir_remove(tmpdir1);
-  tmpdir_remove(tmpdir2);
+  test_tmpdir_remove(tmpdir1);
+  test_tmpdir_remove(tmpdir2);
   return err;
 
 Fail:

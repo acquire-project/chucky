@@ -1,6 +1,7 @@
 #pragma once
 
-#include "stream.gpu.h"
+#include "dimension.h"
+#include "writer.h"
 
 #include <stddef.h>
 #include <stdint.h>
