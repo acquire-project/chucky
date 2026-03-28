@@ -3,7 +3,6 @@
 #include "stream/layouts.h"
 #include "types.codec.h"
 #include "types.stream.h"
-#include "writer.h"
 #include "zarr/shard_delivery.h"
 
 // Aggregate output slot (one per level).
