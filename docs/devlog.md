@@ -4,7 +4,7 @@
 
 - [x] multiple-array streaming (HCS use case) cpu
 - [ ] multiple-array streaming (HCS use case) gpu
-- [ ] generalized append dimensions
+- [x] generalized append dimensions
 - [x] s3 writer
 - [x] make a report to characterize performance/memory by chunk size
 - [ ] interface for streaming from device, integrating with a cuda stream
@@ -42,6 +42,19 @@ Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
 - [ ] look into j8 failures
+
+## 2026-03-28
+
+Starting integration in earnest. This is going to be interesting...
+
+## 2026-03-27
+
+On multiarray, if I were streaming timestamps while streaming video, I kind
+of want to wait till I have a full epoch's worth of timepoints before pushing
+the bytes so that I can switch streams... Either that or allow managing both
+epochs/batches in memory at the same time.
+
+On acquire-zarr integration. I think I can just hit the public api.
 
 ## 2026-03-26
 
