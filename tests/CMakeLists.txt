@@ -24,7 +24,11 @@ endfunction()
 
 function(add_gpu_test_lib TARGET)
     if(CHUCKY_ENABLE_GPU)
-        add_test_lib(${TARGET} ${ARGN})
+        cmake_parse_arguments(ARG "" "" "SOURCES;LINKS" ${ARGN})
+        add_test_lib(${TARGET} ${ARG_SOURCES})
+        if(ARG_LINKS)
+            target_link_libraries(${TARGET} PUBLIC ${ARG_LINKS})
+        endif()
     endif()
 endfunction()
 
@@ -33,26 +37,17 @@ add_test_lib(index_ops_util index.ops.util.c)
 target_link_libraries(index_ops_util PUBLIC index_ops)
 
 # Morton/LOD CPU reference library (shared between tests)
-add_gpu_test_lib(morton_util morton.util.c morton.util.h)
-if(CHUCKY_ENABLE_GPU)
-    target_link_libraries(morton_util PUBLIC lod_plan index_ops CUDA::cuda_driver)
-endif()
+add_gpu_test_lib(morton_util SOURCES morton.util.c morton.util.h LINKS lod_plan index_ops CUDA::cuda_driver)
 
 # Shared test shard sink (multi-shard-safe)
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)
 target_link_libraries(test_shard_sink PUBLIC writer)
 
 # Shared GPU test helpers (fill, config builder)
-add_gpu_test_lib(test_gpu_helpers test_gpu_helpers.c test_gpu_helpers.h)
-if(CHUCKY_ENABLE_GPU)
-    target_link_libraries(test_gpu_helpers PUBLIC stream CUDA::cuda_driver)
-endif()
+add_gpu_test_lib(test_gpu_helpers SOURCES test_gpu_helpers.c test_gpu_helpers.h LINKS stream CUDA::cuda_driver)
 
 # Shared shard verification helpers (index parse, decompress+verify)
-add_gpu_test_lib(test_shard_verify test_shard_verify.c test_shard_verify.h)
-if(CHUCKY_ENABLE_GPU)
-    target_link_libraries(test_shard_verify PUBLIC stream Zstd::Zstd)
-endif()
+add_gpu_test_lib(test_shard_verify SOURCES test_shard_verify.c test_shard_verify.h LINKS stream Zstd::Zstd)
 
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
@@ -88,16 +83,13 @@ add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_
 add_gpu_test_exe(test_cross_validate test_cross_validate.c CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
 
 # Test platform utilities
-add_gpu_test_lib(test_platform test_platform.h)
+add_gpu_test_lib(test_platform SOURCES test_platform.h)
 if(CHUCKY_ENABLE_GPU)
     add_platform_sources(test_platform)
 endif()
 
 # Shared test data generation library
-add_gpu_test_lib(test_data test_data.c test_data.h)
-if(CHUCKY_ENABLE_GPU)
-    target_link_libraries(test_data PUBLIC stream)
-endif()
+add_gpu_test_lib(test_data SOURCES test_data.c test_data.h LINKS stream)
 
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
