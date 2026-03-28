@@ -32,8 +32,7 @@ rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes)
     frame *= dims[i].size;
   rand_pattern_len = nframes * frame;
   free(rand_pattern_buf);
-  rand_pattern_buf =
-    (uint16_t*)malloc(rand_pattern_len * sizeof(uint16_t));
+  rand_pattern_buf = (uint16_t*)malloc(rand_pattern_len * sizeof(uint16_t));
 
   uint64_t rng = 0xdeadbeefcafebabeULL;
   for (size_t i = 0; i < rand_pattern_len; ++i)
@@ -136,10 +135,7 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
 }
 
 int
-pump_data_bpe(struct writer* w,
-              size_t total_elements,
-              fill_fn fill,
-              size_t bpe)
+pump_data_bpe(struct writer* w, size_t total_elements, fill_fn fill, size_t bpe)
 {
   const size_t nelements = 32 * 1024 * 1024; // 32M elements
   // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits
@@ -153,8 +149,7 @@ pump_data_bpe(struct writer* w,
     if (offset + n > total_elements)
       n = total_elements - offset;
     fill(data, n, offset, total_elements);
-    struct slice input = { .beg = data,
-                           .end = (char*)data + n * bpe };
+    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
     struct writer_result r = writer_append_wait(w, input);
     if (r.error) {
       log_error("  append failed at offset %zu", offset);

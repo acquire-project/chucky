@@ -299,10 +299,10 @@ lod_plan_init_from_dims(struct lod_plan* p,
 
 int
 lod_plan_init_from_epoch_dims(struct lod_plan* p,
-                               const struct dimension* dims,
-                               uint8_t rank,
-                               uint8_t n_append,
-                               int max_levels)
+                              const struct dimension* dims,
+                              uint8_t rank,
+                              uint8_t n_append,
+                              int max_levels)
 {
   assert(n_append > 0 && n_append <= rank);
   uint64_t shape[LOD_MAX_NDIM];
@@ -336,8 +336,7 @@ shard_geometry_compute(struct shard_geometry* g,
   assert(n_append > 0 && n_append <= rank);
   g->shard_inner_count = 1;
   for (int d = 0; d < rank; ++d) {
-    g->chunk_count[d] =
-      (shape[d] == 0) ? 1 : ceildiv(shape[d], chunk_size[d]);
+    g->chunk_count[d] = (shape[d] == 0) ? 1 : ceildiv(shape[d], chunk_size[d]);
     uint64_t cps = chunks_per_shard[d];
     g->chunks_per_shard[d] = (cps == 0) ? g->chunk_count[d] : cps;
     g->shard_count[d] = ceildiv(g->chunk_count[d], g->chunks_per_shard[d]);

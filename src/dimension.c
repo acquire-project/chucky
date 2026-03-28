@@ -132,14 +132,13 @@ dims_budget_chunk_size(struct dimension* dims,
 
   // Greedy bit allocation: each bit goes to the most underserved
   // dimension (lowest bits[i]/ratio[i]). Ties favor higher indices.
-  int bits[HALF_MAX_RANK] = {0};
+  int bits[HALF_MAX_RANK] = { 0 };
   for (int b = 0; b < total_bits; ++b) {
     int best = -1;
     for (uint8_t i = 0; i < rank; ++i) {
       if (ratios[i] == 0)
         continue;
-      if (best < 0 ||
-          bits[i] * ratios[best] <= bits[best] * ratios[i])
+      if (best < 0 || bits[i] * ratios[best] <= bits[best] * ratios[i])
         best = i;
     }
     bits[best]++;
@@ -158,8 +157,8 @@ dims_budget_chunk_bytes(struct dimension* dims,
 {
   if (bytes_per_element == 0 || target_chunk_bytes < bytes_per_element)
     return;
-  dims_budget_chunk_size(dims, rank, target_chunk_bytes / bytes_per_element,
-                         ratios);
+  dims_budget_chunk_size(
+    dims, rank, target_chunk_bytes / bytes_per_element, ratios);
 }
 
 void
@@ -251,12 +250,13 @@ Fail:
 void
 dims_print(const struct dimension* dims, uint8_t rank)
 {
-  fprintf(stderr, "dim  name  %10s  %10s  %8s  %6s  %8s  storage  ds\n",
-         "size",
-         "chunk",
-         "chunks",
-         "cps",
-         "shards");
+  fprintf(stderr,
+          "dim  name  %10s  %10s  %8s  %6s  %8s  storage  ds\n",
+          "size",
+          "chunk",
+          "chunks",
+          "cps",
+          "shards");
   uint8_t na = dims_n_append(dims, rank);
   uint64_t chunk_elements = 1;
   uint64_t chunks_per_epoch = 1;
@@ -264,23 +264,25 @@ dims_print(const struct dimension* dims, uint8_t rank)
     uint64_t tc = ceildiv(dims[i].size, dims[i].chunk_size);
     uint64_t cps = dims[i].chunks_per_shard ? dims[i].chunks_per_shard : tc;
     uint64_t sc = ceildiv(tc, cps);
-    fprintf(stderr, "%3d  %-4s  %10llu  %10llu  %8llu  %6llu  %8llu  %7d  %s\n",
-           i,
-           dims[i].name ? dims[i].name : "?",
-           (unsigned long long)dims[i].size,
-           (unsigned long long)dims[i].chunk_size,
-           (unsigned long long)tc,
-           (unsigned long long)cps,
-           (unsigned long long)sc,
-           (int)dims[i].storage_position,
-           dims[i].downsample ? "Y" : ".");
+    fprintf(stderr,
+            "%3d  %-4s  %10llu  %10llu  %8llu  %6llu  %8llu  %7d  %s\n",
+            i,
+            dims[i].name ? dims[i].name : "?",
+            (unsigned long long)dims[i].size,
+            (unsigned long long)dims[i].chunk_size,
+            (unsigned long long)tc,
+            (unsigned long long)cps,
+            (unsigned long long)sc,
+            (int)dims[i].storage_position,
+            dims[i].downsample ? "Y" : ".");
     chunk_elements *= dims[i].chunk_size;
     if (i >= na)
       chunks_per_epoch *= tc;
   }
   double epoch_elements = (double)chunks_per_epoch * (double)chunk_elements;
-  fprintf(stderr, "chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
-         (unsigned long long)chunk_elements,
-         (unsigned long long)chunks_per_epoch,
-         epoch_elements);
+  fprintf(stderr,
+          "chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
+          (unsigned long long)chunk_elements,
+          (unsigned long long)chunks_per_epoch,
+          epoch_elements);
 }

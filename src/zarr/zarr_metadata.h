@@ -42,4 +42,3 @@ zarr_multiscale_group_json(char* buf,
                            uint8_t rank,
                            int nlod,
                            const struct dimension* const* level_dims);
-

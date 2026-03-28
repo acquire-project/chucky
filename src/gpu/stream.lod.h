@@ -17,8 +17,7 @@ lod_state_init(struct lod_state* lod,
 // Must be called AFTER lod_state_init.
 // Returns 0 on success.
 int
-lod_state_init_buffers(struct lod_state* lod,
-                       enum dtype dtype);
+lod_state_init_buffers(struct lod_state* lod, enum dtype dtype);
 
 // Allocate append-dim accumulators, level-ID buffer, and counts.
 // Must be called AFTER lod_state_init.

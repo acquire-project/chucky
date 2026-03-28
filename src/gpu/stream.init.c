@@ -3,10 +3,10 @@
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
 
-#include "platform/platform.h"
 #include "gpu/prelude.cuda.h"
-#include "util/prelude.h"
+#include "platform/platform.h"
 #include "stream/config.h"
+#include "util/prelude.h"
 
 #include <cuda.h>
 #include <stdlib.h>
@@ -96,8 +96,8 @@ init_chunk_pools(struct pool_state* pools,
                  uint32_t epochs_per_batch,
                  CUstream compute)
 {
-  const size_t pool_bytes =
-    (uint64_t)epochs_per_batch * levels->total_chunks * chunk_stride * bytes_per_element;
+  const size_t pool_bytes = (uint64_t)epochs_per_batch * levels->total_chunks *
+                            chunk_stride * bytes_per_element;
 
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&pools->buf[i], pool_bytes));
@@ -489,7 +489,8 @@ tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
   if (bytes_per_element == 0 || budget_bytes == 0)
     return 1;
 
-  for (size_t target = target_chunk_bytes; target >= bytes_per_element; target >>= 1) {
+  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
+       target >>= 1) {
     dims_budget_chunk_bytes(
       config->dimensions, config->rank, target, bytes_per_element, ratios);
     struct tile_stream_memory_info mem;

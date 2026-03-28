@@ -222,10 +222,18 @@ zarr_multiscale_group_json(char* buf,
     {
       const char* type;
       switch (l0[d].axis_type) {
-        case dimension_axis_time: type = "time"; break;
-        case dimension_axis_channel: type = "channel"; break;
-        case dimension_axis_other: type = "custom"; break;
-        default: type = "space"; break;
+        case dimension_axis_time:
+          type = "time";
+          break;
+        case dimension_axis_channel:
+          type = "channel";
+          break;
+        case dimension_axis_other:
+          type = "custom";
+          break;
+        default:
+          type = "space";
+          break;
       }
       jw_string(&jw, type);
     }

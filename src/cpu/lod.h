@@ -46,21 +46,21 @@ extern "C"
   // accum: buffer sized to sum(batch_count * lod_nelem[lv]) for lv=1..nlod-1.
   // counts[nlod]: per-level fold count (caller increments after this call).
   int lod_cpu_append_fold(const struct lod_plan* p,
-                        const void* morton_values,
-                        void* accum,
-                        const uint32_t* counts,
-                        enum dtype dtype,
-                        enum lod_reduce_method method);
+                          const void* morton_values,
+                          void* accum,
+                          const uint32_t* counts,
+                          enum dtype dtype,
+                          enum lod_reduce_method method);
 
   // Append emit: finalize accumulator for level lv back to morton buffer.
   // For float mean: divides by count. For int mean/min/max: copies.
   int lod_cpu_append_emit(const struct lod_plan* p,
-                        void* morton_values,
-                        const void* accum,
-                        int lv,
-                        uint32_t count,
-                        enum dtype dtype,
-                        enum lod_reduce_method method);
+                          void* morton_values,
+                          const void* accum,
+                          int lv,
+                          uint32_t count,
+                          enum dtype dtype,
+                          enum lod_reduce_method method);
 
   // Build scatter LUT for L0: maps morton position to source linear offset
   // within one batch. lut must have room for lod_nelem[0] entries.

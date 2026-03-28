@@ -31,7 +31,7 @@ extern "C"
 
 #define CHECK_MUL_OVERFLOW(lbl, a, b, max_val)                                 \
   do {                                                                         \
-    if ((b) != 0 && (a) > (max_val) / (b)) {                                  \
+    if ((b) != 0 && (a) > (max_val) / (b)) {                                   \
       log_error("%s:%d overflow: %llu * %llu > %llu",                          \
                 __FILE__,                                                      \
                 __LINE__,                                                      \

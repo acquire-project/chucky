@@ -70,15 +70,11 @@ run_test(const char* name,
       p[i] = i;
   }
 
-  CHECK(Fail,
-        transpose_cpu(dst,
-                      src,
-                      src_bytes,
-                      bpe,
-                      0,
-                      lifted_rank,
-                      lifted_shape,
-                      lifted_strides) == 0);
+  CHECK(
+    Fail,
+    transpose_cpu(
+      dst, src, src_bytes, bpe, 0, lifted_rank, lifted_shape, lifted_strides) ==
+      0);
 
   // Verify against ravel() reference
   int errors = 0;

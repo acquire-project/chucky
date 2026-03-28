@@ -8,10 +8,10 @@
 // Aggregate output slot (one per level).
 struct cpu_agg_slot
 {
-  void* data;                // aggregated compressed chunks in shard order
+  void* data; // aggregated compressed chunks in shard order
   size_t data_capacity_bytes;
-  size_t* offsets;           // [C_lv + 1] exclusive prefix sum
-  size_t* chunk_sizes;       // [C_lv] pre-padding sizes for shard index
+  size_t* offsets;     // [C_lv + 1] exclusive prefix sum
+  size_t* chunk_sizes; // [C_lv] pre-padding sizes for shard index
 };
 
 // ---- flush_batch ----
@@ -26,7 +26,8 @@ struct flush_level_view
   uint32_t* batch_gather;
   struct cpu_agg_slot* agg_slot;
   struct shard_state* shard;
-  struct io_event* io_done; // tracks pending async IO for this level's agg buffer
+  struct io_event*
+    io_done; // tracks pending async IO for this level's agg buffer
 };
 
 struct flush_batch_params
@@ -68,7 +69,7 @@ struct scatter_epoch_params
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
   void* append_accum;
-  uint32_t* append_counts; // mutable
+  uint32_t* append_counts;        // mutable
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -91,11 +92,12 @@ struct lut_targets
 };
 
 void
-cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
-                          const struct level_geometry* levels,
-                          const uint32_t batch_active_count[LOD_MAX_LEVELS],
-                          const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
-                          struct lut_targets* out);
+cpu_pipeline_compute_luts(
+  const struct computed_stream_layouts* cl,
+  const struct level_geometry* levels,
+  const uint32_t batch_active_count[LOD_MAX_LEVELS],
+  const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+  struct lut_targets* out);
 
 // ---- append drain ----
 

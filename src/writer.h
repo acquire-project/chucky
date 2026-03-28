@@ -18,7 +18,8 @@ enum writer_error_code
 {
   writer_error_ok = 0,
   writer_error_fail = 1,
-  writer_error_finished = 2, // bounded append dims capacity reached, data flushed
+  writer_error_finished =
+    2, // bounded append dims capacity reached, data flushed
 };
 
 struct writer_result

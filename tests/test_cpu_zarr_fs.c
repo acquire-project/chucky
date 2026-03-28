@@ -58,8 +58,8 @@ verify_shard(const char* path,
     return -1;
   }
 
-  if (shard_index_parse(shard_data, shard_len, chunks_per_shard,
-                        offsets, nbytes)) {
+  if (shard_index_parse(
+        shard_data, shard_len, chunks_per_shard, offsets, nbytes)) {
     log_error("  shard_index_parse failed for %s", path);
     free(offsets);
     free(nbytes);
@@ -82,8 +82,10 @@ verify_shard(const char* path,
       errors++;
       continue;
     }
-    if (chunk_decompress(shard_data + offsets[i], (size_t)nbytes[i],
-                         decomp, chunk_stride_bytes)) {
+    if (chunk_decompress(shard_data + offsets[i],
+                         (size_t)nbytes[i],
+                         decomp,
+                         chunk_stride_bytes)) {
       log_error("  %s chunk %zu: decompress failed", path, i);
       errors++;
     } else {
@@ -190,8 +192,8 @@ test_pipeline(const char* tmpdir)
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", tmpdir, sa, sy, sx);
         CHECK(Fail4, test_file_exists(path));
 
-        int valid = verify_shard(path, (size_t)chunks_per_shard_total,
-                                 chunk_stride_bytes);
+        int valid = verify_shard(
+          path, (size_t)chunks_per_shard_total, chunk_stride_bytes);
         CHECK(Fail4, valid >= 0);
         total_valid_chunks += valid;
       }
@@ -200,7 +202,8 @@ test_pipeline(const char* tmpdir)
     int expected_chunks = n_epochs * chunks_per_epoch;
     if (total_valid_chunks != expected_chunks) {
       log_error("  expected %d valid chunks, got %d",
-                expected_chunks, total_valid_chunks);
+                expected_chunks,
+                total_valid_chunks);
       goto Fail4;
     }
   }
@@ -316,8 +319,8 @@ test_streaming_append(const char* tmpdir)
         snprintf(path, sizeof(path), "%s/0/c/%d/%d/%d", tmpdir, sa, sy, sx);
         CHECK(Fail4, test_file_exists(path));
 
-        int valid = verify_shard(path, (size_t)chunks_per_shard_total,
-                                 chunk_stride_bytes);
+        int valid = verify_shard(
+          path, (size_t)chunks_per_shard_total, chunk_stride_bytes);
         CHECK(Fail4, valid >= 0);
         total_valid_chunks += valid;
       }
@@ -326,7 +329,8 @@ test_streaming_append(const char* tmpdir)
     int expected_chunks = n_epochs * chunks_per_epoch;
     if (total_valid_chunks != expected_chunks) {
       log_error("  expected %d valid chunks, got %d",
-                expected_chunks, total_valid_chunks);
+                expected_chunks,
+                total_valid_chunks);
       goto Fail4;
     }
   }

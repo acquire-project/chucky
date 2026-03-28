@@ -1,10 +1,10 @@
-#include "lod/lod_plan.h"
 #include "gpu/prelude.cuda.h"
-#include "util/prelude.h"
+#include "lod/lod_plan.h"
 #include "stream.gpu.h"
 #include "test_data.h"
 #include "test_runner.h"
 #include "test_shard_sink.h"
+#include "util/prelude.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,7 +105,8 @@ test_multiscale_l0_correctness(void)
       .dimensions = dims,
       .codec = CODEC_ZSTD,
     };
-    CHECK(Fail1, (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
+    CHECK(Fail1,
+          (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
     xor_pattern_init(dims, rank, 2);
     CHECK(Fail1b,
           pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
@@ -308,7 +309,8 @@ test_dim0_l0_correctness(void)
       .codec = CODEC_ZSTD,
       .reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail1, (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
+    CHECK(Fail1,
+          (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
     xor_pattern_init(dims_inner, rank, 2);
     CHECK(Fail1b,
           pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
@@ -339,7 +341,8 @@ Run2d:
       .reduce_method = lod_reduce_mean,
       .append_reduce_method = lod_reduce_mean,
     };
-    CHECK(Fail2b, (s = tile_stream_gpu_create(&config, &dim0_sink.base)) != NULL);
+    CHECK(Fail2b,
+          (s = tile_stream_gpu_create(&config, &dim0_sink.base)) != NULL);
     {
       struct tile_stream_status st = tile_stream_gpu_status(s);
       log_info("  dim0 enabled: nlod=%d, append_downsample=%d",

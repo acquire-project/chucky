@@ -2,8 +2,8 @@
 
 #include "cpu/pipeline.h"
 #include "platform/platform.h"
-#include "stream/layouts.h"
 #include "stream.cpu.h"
+#include "stream/layouts.h"
 #include "zarr/shard_delivery.h"
 
 struct tile_stream_cpu
@@ -29,17 +29,18 @@ struct tile_stream_cpu
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
   // Per-level aggregate output (batch-scaled when K > 1).
-  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS]; // [M] chunk → shard position
+  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];  // [M] chunk → shard position
   struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS]; // [level] sized for batch
-  size_t* shard_order_sizes;   // [max_batch_C] shared scratch
+  size_t* shard_order_sizes;                     // [max_batch_C] shared scratch
 
   // Batch aggregate LUTs (K > 1 only, per level).
-  uint32_t* batch_gather[LOD_MAX_LEVELS];   // [K_l * M_l]
-  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS]; // [K_l * M_l] interleaved map
+  uint32_t* batch_gather[LOD_MAX_LEVELS]; // [K_l * M_l]
+  uint32_t*
+    batch_chunk_to_shard_map[LOD_MAX_LEVELS];  // [K_l * M_l] interleaved map
   uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
 
   // LOD (multiscale only)
-  void* linear;     // linear epoch buffer (input accumulated here before scatter)
+  void* linear; // linear epoch buffer (input accumulated here before scatter)
   void* lod_values; // morton-ordered LOD buffer (all levels packed)
 
   // Precomputed LOD LUTs (multiscale only)
@@ -49,11 +50,12 @@ struct tile_stream_cpu
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS]; // [batch_count] per level
 
   // Append downsample accumulation state
-  void* append_accum;                    // accumulator for levels 1+
+  void* append_accum;                     // accumulator for levels 1+
   uint32_t append_counts[LOD_MAX_LEVELS]; // per-level fold count
 
   uint64_t cursor_elements;
-  uint64_t max_cursor_elements; // precomputed: total elements across all append chunks
+  uint64_t
+    max_cursor_elements; // precomputed: total elements across all append chunks
   int pool_fully_covered; // 1 if scatter overwrites every pool position
 
   // Batch accumulation state (K = cl.epochs_per_batch).

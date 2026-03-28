@@ -2,9 +2,9 @@
 // Verifies that a 4D array "tzyx" with chunk (1,1,64,64) streams correctly
 // with two append dimensions (t unbounded, z bounded).
 
+#include "stream.cpu.h"
 #include "stream/dim_info.h"
 #include "stream/layouts.h"
-#include "stream.cpu.h"
 #include "test_shard_sink.h"
 #include "types.lod.h"
 #include "util/prelude.h"
@@ -101,8 +101,8 @@ test_two_append_basic(void)
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     if (sink.writers[0][i].buf && sink.writers[0][i].size > 0) {
       found = 1;
-      log_info("  shard %d: %lu bytes", i,
-               (unsigned long)sink.writers[0][i].size);
+      log_info(
+        "  shard %d: %lu bytes", i, (unsigned long)sink.writers[0][i].size);
     }
   }
   CHECK(Fail_data, found);
@@ -292,7 +292,8 @@ test_two_append_multiscale(void)
   struct tile_stream_cpu* s = NULL;
   struct test_shard_sink sink;
   int shards_per_level[] = { 16, 16, 16, 16, 16, 16, 16, 16 };
-  test_sink_init_multi(&sink, TEST_SHARD_SINK_MAX_LEVELS, shards_per_level, SHARD_CAP);
+  test_sink_init_multi(
+    &sink, TEST_SHARD_SINK_MAX_LEVELS, shards_per_level, SHARD_CAP);
 
   // 4D: t=unbounded, z=4, y=64, x=64
   // chunk: (1, 1, 32, 32), downsample on yx
@@ -396,7 +397,8 @@ test_two_append_with_append_downsample(void)
   struct tile_stream_cpu* s = NULL;
   struct test_shard_sink sink;
   int shards_per_level[] = { 16, 16, 16, 16, 16, 16, 16, 16 };
-  test_sink_init_multi(&sink, TEST_SHARD_SINK_MAX_LEVELS, shards_per_level, SHARD_CAP);
+  test_sink_init_multi(
+    &sink, TEST_SHARD_SINK_MAX_LEVELS, shards_per_level, SHARD_CAP);
 
   // 5D: t=unbounded, z=4, c=4, y=32, x=32
   // chunk: (1, 1, 1, 16, 16), downsample on zyx
@@ -418,7 +420,9 @@ test_two_append_with_append_downsample(void)
   struct dim_info info;
   CHECK(Fail, dim_info_init(&info, dims, rank) == 0);
   CHECK(Fail, dim_info_n_append(&info) == 2);
-  CHECK(Fail, info.append_downsample == 1); // z is rightmost append dim with downsample
+  CHECK(Fail,
+        info.append_downsample ==
+          1); // z is rightmost append dim with downsample
 
   struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 64 * 1024,
@@ -505,7 +509,8 @@ main(void)
     { "two_append_bounded", test_two_append_bounded },
     { "two_append_layout_geometry", test_two_append_layout_geometry },
     { "two_append_multiscale", test_two_append_multiscale },
-    { "two_append_with_append_downsample", test_two_append_with_append_downsample },
+    { "two_append_with_append_downsample",
+      test_two_append_with_append_downsample },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

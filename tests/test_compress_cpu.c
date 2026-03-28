@@ -7,7 +7,7 @@
 #include <zstd.h>
 
 #define CHUNK_BYTES 4096
-#define BATCH_SIZE  16
+#define BATCH_SIZE 16
 
 static void
 fill_pattern(void* buf, size_t bytes, uint8_t seed)
@@ -49,7 +49,9 @@ test_codec_none(void)
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] == CHUNK_BYTES);
     CHECK(Fail,
-          memcmp((char*)src + i * CHUNK_BYTES, (char*)dst + i * max_out, CHUNK_BYTES) == 0);
+          memcmp((char*)src + i * CHUNK_BYTES,
+                 (char*)dst + i * max_out,
+                 CHUNK_BYTES) == 0);
   }
 
   free(src);
@@ -98,10 +100,13 @@ test_codec_lz4(void)
 
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] > 0 && comp_sizes[i] <= max_out);
-    int rc = LZ4_decompress_safe(
-      (const char*)dst + i * max_out, (char*)recovered, (int)comp_sizes[i], CHUNK_BYTES);
+    int rc = LZ4_decompress_safe((const char*)dst + i * max_out,
+                                 (char*)recovered,
+                                 (int)comp_sizes[i],
+                                 CHUNK_BYTES);
     CHECK(Fail, rc == CHUNK_BYTES);
-    CHECK(Fail, memcmp((char*)src + i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
+    CHECK(Fail,
+          memcmp((char*)src + i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
   }
 
   free(src);
@@ -154,7 +159,8 @@ test_codec_zstd(void)
     size_t rc = ZSTD_decompress(
       recovered, CHUNK_BYTES, (const char*)dst + i * max_out, comp_sizes[i]);
     CHECK(Fail, !ZSTD_isError(rc) && rc == CHUNK_BYTES);
-    CHECK(Fail, memcmp((char*)src + i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
+    CHECK(Fail,
+          memcmp((char*)src + i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
   }
 
   free(src);

@@ -4,8 +4,8 @@
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
 #include "platform/platform.h"
-#include "stream/layouts.h"
 #include "stream.gpu.h" // public types (includes types.stream.h)
+#include "stream/layouts.h"
 #include "zarr/shard_delivery.h"
 #include <stddef.h>
 
@@ -181,4 +181,3 @@ _Static_assert(LOD_MAX_LEVELS <= 32,
 // Set writer vtable (append/flush).
 void
 tile_stream_gpu_init_writer(struct tile_stream_gpu* s);
-

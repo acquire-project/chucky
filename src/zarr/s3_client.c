@@ -82,8 +82,7 @@ s3_client_create(const struct s3_client_config* cfg)
   // Parse endpoint to determine TLS mode
   int use_tls = 1;
   {
-    struct aws_byte_cursor ep_cur =
-      aws_byte_cursor_from_c_str(cfg->endpoint);
+    struct aws_byte_cursor ep_cur = aws_byte_cursor_from_c_str(cfg->endpoint);
     CHECK(Fail_bootstrap,
           aws_uri_init_parse(&c->endpoint_uri, alloc, &ep_cur) ==
             AWS_OP_SUCCESS);
@@ -301,9 +300,9 @@ make_put_message(struct aws_allocator* alloc,
     snprintf(cl, sizeof(cl), "%zu", content_length);
     aws_http_message_add_header(
       msg,
-      (struct aws_http_header){
-        .name = aws_byte_cursor_from_c_str("Content-Length"),
-        .value = aws_byte_cursor_from_c_str(cl) });
+      (struct aws_http_header){ .name =
+                                  aws_byte_cursor_from_c_str("Content-Length"),
+                                .value = aws_byte_cursor_from_c_str(cl) });
   }
 
   return msg;
@@ -323,8 +322,7 @@ s3_client_put(struct s3_client* c,
   CHECK(Fail, msg);
 
   // Body stream
-  struct aws_byte_cursor body_cur =
-    aws_byte_cursor_from_array(data, len);
+  struct aws_byte_cursor body_cur = aws_byte_cursor_from_array(data, len);
   struct aws_input_stream* body_stream =
     aws_input_stream_new_from_cursor(c->alloc, &body_cur);
   CHECK(Fail_msg, body_stream);
@@ -517,16 +515,14 @@ s3_upload_wait(struct s3_upload* u)
     aws_s3_meta_request_cancel(u->meta_request);
     // Wait for CRT to acknowledge cancellation
     aws_mutex_lock(&u->mutex);
-    aws_condition_variable_wait_pred(
-      &u->cv, &u->mutex, is_upload_finished, u);
+    aws_condition_variable_wait_pred(&u->cv, &u->mutex, is_upload_finished, u);
     aws_mutex_unlock(&u->mutex);
     return 1;
   }
 
   if (u->error_code)
-    log_error("s3_upload_wait: error %d (HTTP %d)",
-              u->error_code,
-              u->response_status);
+    log_error(
+      "s3_upload_wait: error %d (HTTP %d)", u->error_code, u->response_status);
   return u->error_code ? 1 : 0;
 }
 
@@ -552,8 +548,7 @@ s3_upload_abort(struct s3_upload* u)
 
   // Wait for CRT to acknowledge cancellation
   aws_mutex_lock(&u->mutex);
-  aws_condition_variable_wait_pred(
-    &u->cv, &u->mutex, is_upload_finished, u);
+  aws_condition_variable_wait_pred(&u->cv, &u->mutex, is_upload_finished, u);
   aws_mutex_unlock(&u->mutex);
 
   s3_upload_destroy(u);

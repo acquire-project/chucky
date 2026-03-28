@@ -23,9 +23,8 @@ make_compress_input(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
     .active_levels_mask = fs->active_levels_mask,
     .epochs_per_batch = s->batch.epochs_per_batch,
     .pool_buf = s->pools.buf[fc],
-    .lod_done = (s->levels.enable_multiscale && s->lod.t_end)
-                  ? s->lod.t_end
-                  : NULL,
+    .lod_done =
+      (s->levels.enable_multiscale && s->lod.t_end) ? s->lod.t_end : NULL,
   };
   memcpy(
     in.batch_active_masks, fs->batch_active_masks, n_epochs * sizeof(uint32_t));
@@ -99,13 +98,10 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
   // Swap to fresh pool and zero it for next batch
   s->pools.current ^= 1;
   size_t pool_bytes = (uint64_t)K * s->levels.total_chunks *
-                      s->layout.chunk_stride *
-                      dtype_bpe(s->config.dtype);
+                      s->layout.chunk_stride * dtype_bpe(s->config.dtype);
   CU(Error,
-     cuMemsetD8Async(s->pools.buf[s->pools.current],
-                     0,
-                     pool_bytes,
-                     s->streams.compute));
+     cuMemsetD8Async(
+       s->pools.buf[s->pools.current], 0, pool_bytes, s->streams.compute));
 
   // Reset batch accumulation
   s->batch.accumulated = 0;
@@ -196,9 +192,8 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
     .n_epochs = 1,
     .active_levels_mask = active_mask,
     .epochs_per_batch = s->batch.epochs_per_batch,
-    .lod_done = (s->levels.enable_multiscale && s->lod.t_end)
-                  ? s->lod.t_end
-                  : NULL,
+    .lod_done =
+      (s->levels.enable_multiscale && s->lod.t_end) ? s->lod.t_end : NULL,
   };
   in.batch_active_masks[0] = active_mask;
   in.epoch_events[0] = s->batch.pool_events[epoch_in_batch];
@@ -206,8 +201,8 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
   // Point pool_buf at the specific epoch
   const size_t chunk_bytes =
     s->layout.chunk_stride * dtype_bpe(s->config.dtype);
-  in.pool_buf = s->pools.buf[fc] + (uint64_t)epoch_in_batch *
-                                      s->levels.total_chunks * chunk_bytes;
+  in.pool_buf = s->pools.buf[fc] +
+                (uint64_t)epoch_in_batch * s->levels.total_chunks * chunk_bytes;
 
   struct flush_handoff handoff = { 0 };
   CHECK(Error,
@@ -360,7 +355,8 @@ flush_partial_append(struct tile_stream_gpu* s)
 
     struct lod_span lev = lod_spans_at(&p->levels, lv);
     CUdeviceptr morton_lv = s->lod.d_morton + lev.beg * bytes_per_element;
-    CUdeviceptr accum_lv = s->lod.append_accum.d_accum + accum_offset * accum_bpe;
+    CUdeviceptr accum_lv =
+      s->lod.append_accum.d_accum + accum_offset * accum_bpe;
 
     // Emit with actual count (not period) -- mean divides by actual count
     CHECK(Error,

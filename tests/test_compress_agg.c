@@ -68,7 +68,8 @@ ca_ctx_setup(struct ca_test_ctx* c,
   c->stage_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
-                      c->cl.layouts[0].chunk_stride * dtype_bpe(c->config.dtype);
+                      c->cl.layouts[0].chunk_stride *
+                      dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
   c->batch = (struct batch_state){
@@ -90,10 +91,11 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
   const uint64_t total_chunks = c->cl.levels.total_chunks;
   const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bytes_per_element = dtype_bpe(c->config.dtype);
-  CUdeviceptr epoch_ptr =
-    c->d_pool + (uint64_t)epoch_idx * total_chunks * chunk_stride * bytes_per_element;
+  CUdeviceptr epoch_ptr = c->d_pool + (uint64_t)epoch_idx * total_chunks *
+                                        chunk_stride * bytes_per_element;
   CHECK(Fail,
-        fill_pool_epoch(epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
+        fill_pool_epoch(
+          epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
           0);
 
   CU(Fail, cuEventCreate(&c->epoch_events[epoch_idx], CU_EVENT_DEFAULT));
@@ -126,8 +128,13 @@ ca_ctx_kick(struct ca_test_ctx* c,
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(
-          &c->stage, &in, &c->cl.levels, &c->batch, &c->cl.dims, c->compute, handoff) == 0);
+        compress_agg_kick(&c->stage,
+                          &in,
+                          &c->cl.levels,
+                          &c->batch,
+                          &c->cl.dims,
+                          c->compute,
+                          handoff) == 0);
   CU(Fail, cuStreamSynchronize(c->compute));
   return 0;
 

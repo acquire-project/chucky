@@ -2,8 +2,8 @@
 #include "gpu/flush.helpers.h"
 
 #include "gpu/metric.cuda.h"
-#include "platform/platform.h"
 #include "gpu/prelude.cuda.h"
+#include "platform/platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
@@ -171,17 +171,21 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   if (levels->enable_multiscale && lod->t_start) {
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
-    const size_t morton_bytes = lod->plan.levels.ends[lod->plan.nlod - 1] * bytes_per_element;
+    const size_t morton_bytes =
+      lod->plan.levels.ends[lod->plan.nlod - 1] * bytes_per_element;
     const size_t unified_pool_bytes =
       levels->total_chunks * layout->chunk_stride * bytes_per_element;
 
-    accumulate_metric_cu(
-      &metrics->lod_gather, lod->t_start, lod->t_scatter_end,
-      scatter_bytes, scatter_bytes);
+    accumulate_metric_cu(&metrics->lod_gather,
+                         lod->t_start,
+                         lod->t_scatter_end,
+                         scatter_bytes,
+                         scatter_bytes);
     accumulate_metric_cu(&metrics->lod_reduce,
                          lod->t_scatter_end,
                          lod->t_reduce_end,
-                         scatter_bytes, morton_bytes);
+                         scatter_bytes,
+                         morton_bytes);
     if (dims->append_downsample) {
       size_t accum_bpe =
         dtype_accum_bpe(config->dtype, config->append_reduce_method);
@@ -189,18 +193,19 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       accumulate_metric_cu(&metrics->lod_append_fold,
                            lod->t_reduce_end,
                            lod->t_append_end,
-                           accum_bytes, accum_bytes);
+                           accum_bytes,
+                           accum_bytes);
     }
     accumulate_metric_cu(&metrics->lod_morton_chunk,
                          lod->t_append_end,
                          lod->t_end,
-                         morton_bytes, unified_pool_bytes);
+                         morton_bytes,
+                         unified_pool_bytes);
   }
 
   {
     const size_t pool_bytes = (uint64_t)n_epochs * levels->total_chunks *
-                              layout->chunk_stride *
-                              dtype_bpe(config->dtype);
+                              layout->chunk_stride * dtype_bpe(config->dtype);
 
     // Compute actual aggregated bytes first (available after D2H sync).
     size_t agg_bytes = 0;
@@ -220,14 +225,18 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
                          handoff->t_compress_end,
-                         pool_bytes, agg_bytes);
+                         pool_bytes,
+                         agg_bytes);
     accumulate_metric_cu(&metrics->aggregate,
                          handoff->t_compress_end,
                          handoff->t_aggregate_end,
-                         agg_bytes, agg_bytes);
-    accumulate_metric_cu(
-      &metrics->d2h, stage->t_d2h_start[fc], stage->ready[fc],
-      agg_bytes, agg_bytes);
+                         agg_bytes,
+                         agg_bytes);
+    accumulate_metric_cu(&metrics->d2h,
+                         stage->t_d2h_start[fc],
+                         stage->ready[fc],
+                         agg_bytes,
+                         agg_bytes);
   }
 }
 
@@ -283,8 +292,7 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
       sink_bytes += level_bytes;
 
       if (sink->record_fence)
-        lvl->agg[fc].io_done =
-          sink->record_fence(sink, (uint8_t)lv);
+        lvl->agg[fc].io_done = sink->record_fence(sink, (uint8_t)lv);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
@@ -320,7 +328,8 @@ maybe_update_metadata(const struct d2h_deliver_stage* stage,
     uint64_t flat_append_chunks =
       ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
     uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_decompose_append_sizes(dims_info, flat_append_chunks, append_sizes);
+    dim_info_decompose_append_sizes(
+      dims_info, flat_append_chunks, append_sizes);
     if (sink->update_append(sink, (uint8_t)lv, na, append_sizes))
       return 1;
   }
@@ -347,7 +356,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
   CHECK(Error,
-        two_phase_d2h(stage, handoff, levels, batch, dims, config, d2h_stream) == 0);
+        two_phase_d2h(
+          stage, handoff, levels, batch, dims, config, d2h_stream) == 0);
 
   return 0;
 

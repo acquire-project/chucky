@@ -1,5 +1,5 @@
-#include "stream/config.h"
 #include "cpu/stream.internal.h"
+#include "stream/config.h"
 
 #include "cpu/compress.h"
 #include "cpu/transpose.h"
@@ -108,7 +108,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
         uint64_t lut_len = (uint64_t)K_l * M_lv;
 
         s->batch_gather[lv] = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-        s->batch_chunk_to_shard_map[lv] = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+        s->batch_chunk_to_shard_map[lv] =
+          (uint32_t*)malloc(lut_len * sizeof(uint32_t));
         CHECK(Fail, s->batch_gather[lv] && s->batch_chunk_to_shard_map[lv]);
       }
 
@@ -150,8 +151,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     // Allocate L0 scatter LUT + batch offsets.
     {
       const struct lod_plan* plan = &s->cl.plan;
-      s->scatter_lut =
-        (uint32_t*)malloc(plan->lod_nelem[0] * sizeof(uint32_t));
+      s->scatter_lut = (uint32_t*)malloc(plan->lod_nelem[0] * sizeof(uint32_t));
       CHECK(Fail, s->scatter_lut);
 
       s->scatter_batch_offsets =
@@ -303,7 +303,8 @@ compute_memory_info(const struct computed_stream_layouts* cl,
 {
   const uint32_t K = cl->epochs_per_batch;
   const uint64_t total_chunks = cl->levels.total_chunks;
-  const size_t chunk_stride_bytes = cl->layouts[0].chunk_stride * bytes_per_element;
+  const size_t chunk_stride_bytes =
+    cl->layouts[0].chunk_stride * bytes_per_element;
   const size_t max_out = cl->max_output_size;
 
   info->chunk_pool_bytes = (uint64_t)K * total_chunks * chunk_stride_bytes;
@@ -364,11 +365,11 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       }
 
       lod += cl->plan.lod_nelem[0] * sizeof(uint32_t); // scatter_lut
-      lod += cl->plan.batch_count * sizeof(uint64_t);   // scatter_batch_offsets
+      lod += cl->plan.batch_count * sizeof(uint64_t);  // scatter_batch_offsets
 
       for (int lv = 0; lv < cl->levels.nlod; ++lv) {
         lod += cl->plan.lod_nelem[lv] * sizeof(uint32_t); // morton_lut
-        lod += cl->plan.batch_count * sizeof(uint64_t);    // batch_offsets
+        lod += cl->plan.batch_count * sizeof(uint64_t);   // batch_offsets
       }
     }
     info->lod_bytes = lod;
@@ -426,7 +427,8 @@ tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
   if (bytes_per_element == 0 || budget_bytes == 0)
     return 1;
 
-  for (size_t target = target_chunk_bytes; target >= bytes_per_element; target >>= 1) {
+  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
+       target >>= 1) {
     dims_budget_chunk_bytes(
       config->dimensions, config->rank, target, bytes_per_element, ratios);
     struct tile_stream_cpu_memory_info mem;
@@ -523,7 +525,8 @@ cpu_append(struct writer* self, struct slice input)
     }
 
     const uint64_t epoch_remaining =
-      s->layout.epoch_elements - (s->cursor_elements % s->layout.epoch_elements);
+      s->layout.epoch_elements -
+      (s->cursor_elements % s->layout.epoch_elements);
     const uint64_t input_remaining = (uint64_t)(end - src) / bytes_per_element;
     uint64_t elements =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
@@ -571,12 +574,14 @@ cpu_append(struct writer* self, struct slice input)
     src += bytes;
 
     // Epoch boundary: accumulate into batch, flush when full.
-    if (s->cursor_elements % s->layout.epoch_elements == 0 && s->cursor_elements > 0) {
+    if (s->cursor_elements % s->layout.epoch_elements == 0 &&
+        s->cursor_elements > 0) {
       uint32_t active_mask = 1; // L0 always active
       if (s->levels.enable_multiscale) {
         struct scatter_epoch_params sp = make_scatter_params(s);
         CHECK(Error,
-              cpu_pipeline_scatter_epoch(&sp, s->batch_accumulated, &active_mask) == 0);
+              cpu_pipeline_scatter_epoch(
+                &sp, s->batch_accumulated, &active_mask) == 0);
       }
 
       CHECK(Error, s->batch_accumulated < MAX_BATCH_EPOCHS);
@@ -586,7 +591,8 @@ cpu_append(struct writer* self, struct slice input)
       if (s->batch_accumulated == s->cl.epochs_per_batch) {
         struct flush_batch_params fp = make_flush_params(s);
         CHECK(Error,
-              cpu_pipeline_flush_batch(&fp, s->batch_accumulated, s->batch_active_masks) == 0);
+              cpu_pipeline_flush_batch(
+                &fp, s->batch_accumulated, s->batch_active_masks) == 0);
         s->batch_accumulated = 0;
 
         // Clear full batch pool for next batch (each epoch's slice
@@ -599,7 +605,8 @@ cpu_append(struct writer* self, struct slice input)
       }
 
       if (s->lod_values) {
-        size_t lod_bytes = s->cl.plan.levels.ends[s->cl.plan.nlod - 1] * bytes_per_element;
+        size_t lod_bytes =
+          s->cl.plan.levels.ends[s->cl.plan.nlod - 1] * bytes_per_element;
         memset(s->lod_values, 0, lod_bytes);
       }
 
@@ -612,10 +619,13 @@ cpu_append(struct writer* self, struct slice input)
           const uint8_t na = dim_info_n_append(&s->cl.dims);
           for (int lv = 0; lv < s->levels.nlod; ++lv) {
             struct shard_state* ss = &s->shard[lv];
-            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append +
+                                ss->epoch_in_shard;
             uint64_t append_sizes[HALF_MAX_RANK];
-            dim_info_decompose_append_sizes(&s->cl.dims, total_ac, append_sizes);
-            if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
+            dim_info_decompose_append_sizes(
+              &s->cl.dims, total_ac, append_sizes);
+            if (s->shard_sink->update_append(
+                  s->shard_sink, (uint8_t)lv, na, append_sizes))
               goto Error;
           }
         }
@@ -653,7 +663,8 @@ cpu_flush(struct writer* self)
   // Flush any accumulated batch (partial or full).
   if (s->batch_accumulated > 0) {
     struct flush_batch_params fp = make_flush_params(s);
-    if (cpu_pipeline_flush_batch(&fp, s->batch_accumulated, s->batch_active_masks))
+    if (cpu_pipeline_flush_batch(
+          &fp, s->batch_accumulated, s->batch_active_masks))
       return writer_error();
     s->batch_accumulated = 0;
   }
@@ -720,8 +731,10 @@ cpu_flush(struct writer* self)
     const uint8_t na = dim_info_n_append(&s->cl.dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_decompose_append_sizes(&s->cl.dims, append_chunks[lv], append_sizes);
-      if (s->shard_sink->update_append(s->shard_sink, (uint8_t)lv, na, append_sizes))
+      dim_info_decompose_append_sizes(
+        &s->cl.dims, append_chunks[lv], append_sizes);
+      if (s->shard_sink->update_append(
+            s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
     }
   }

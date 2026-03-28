@@ -1,7 +1,7 @@
-#include "index.ops.util.h"
 #include "gpu/prelude.cuda.h"
-#include "util/prelude.h"
 #include "gpu/stream.ingest.h"
+#include "index.ops.util.h"
+#include "util/prelude.h"
 
 #include "test_runner.h"
 
@@ -352,8 +352,13 @@ test_ingest_multiscale(void)
   {
     uint64_t cursor = 0;
     CHECK(Fail,
-          ingest_dispatch_multiscale(
-            &stage, d_linear, epoch_elements, &cursor, bytes_per_element, h2d, compute) == 0);
+          ingest_dispatch_multiscale(&stage,
+                                     d_linear,
+                                     epoch_elements,
+                                     &cursor,
+                                     bytes_per_element,
+                                     h2d,
+                                     compute) == 0);
     CHECK(Fail, cursor == epoch_elements);
   }
 

@@ -37,15 +37,15 @@ aggregate_cpu_workspace_init(struct aggregate_cpu_workspace* ws,
   ws->permuted_sizes = (size_t*)calloc(C, sizeof(size_t));
   ws->offsets = (size_t*)malloc((C + 1) * sizeof(size_t));
   ws->chunk_sizes = (size_t*)calloc(C, sizeof(size_t));
-  CHECK(Error, ws->perm && ws->permuted_sizes && ws->offsets && ws->chunk_sizes);
+  CHECK(Error,
+        ws->perm && ws->permuted_sizes && ws->offsets && ws->chunk_sizes);
 
   for (uint64_t i = 0; i < M; ++i)
     ws->perm[i] =
       (uint32_t)ravel(rank, layout->lifted_shape, layout->lifted_strides, i);
 
-  ws->data_capacity =
-    agg_pool_bytes(M, layout->max_comp_chunk_bytes,
-                   C, layout->cps_inner, layout->page_size);
+  ws->data_capacity = agg_pool_bytes(
+    M, layout->max_comp_chunk_bytes, C, layout->cps_inner, layout->page_size);
   if (ws->data_capacity > 0) {
     ws->data = malloc(ws->data_capacity);
     CHECK(Error, ws->data);
@@ -96,7 +96,8 @@ aggregate_cpu_into(const void* compressed,
 
   // Pass 1.5: pad shard sizes for page alignment.
   if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(ws->permuted_sizes, C, layout->cps_inner, layout->page_size);
+    pad_shard_sizes(
+      ws->permuted_sizes, C, layout->cps_inner, layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -106,7 +107,7 @@ aggregate_cpu_into(const void* compressed,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if(M > 1024)
+#pragma omp parallel for schedule(static) if (M > 1024)
     for (i = 0; i < (int)M; ++i) {
       size_t nbytes = comp_sizes[i];
       if (nbytes == 0)
@@ -125,12 +126,12 @@ aggregate_cpu_into(const void* compressed,
 
 int
 aggregate_cpu_batch_into(const void* compressed_base,
-                          const size_t* comp_sizes_base,
-                          const uint32_t* gather,
-                          const struct aggregate_layout* layout,
-                          uint32_t n_active,
-                          struct aggregate_cpu_workspace* ws,
-                          struct aggregate_result* result)
+                         const size_t* comp_sizes_base,
+                         const uint32_t* gather,
+                         const struct aggregate_layout* layout,
+                         uint32_t n_active,
+                         struct aggregate_cpu_workspace* ws,
+                         struct aggregate_result* result)
 {
   const uint64_t M = layout->chunks_per_epoch;
   const uint64_t C = layout->covering_count;
@@ -152,8 +153,10 @@ aggregate_cpu_batch_into(const void* compressed_base,
 
   // Pass 1.5: pad shard sizes — per-shard with n_active * cps_inner group size.
   if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(ws->permuted_sizes, batch_C,
-                    (uint64_t)n_active * layout->cps_inner, layout->page_size);
+    pad_shard_sizes(ws->permuted_sizes,
+                    batch_C,
+                    (uint64_t)n_active * layout->cps_inner,
+                    layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -163,7 +166,7 @@ aggregate_cpu_batch_into(const void* compressed_base,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if(batch_M > 1024)
+#pragma omp parallel for schedule(static) if (batch_M > 1024)
     for (i = 0; i < (int)batch_M; ++i) {
       size_t nbytes = comp_sizes_base[gather[i]];
       if (nbytes == 0)
