@@ -1,23 +1,36 @@
 cmake_minimum_required(VERSION 3.18)
-project(chucky LANGUAGES C CXX CUDA)
+project(chucky LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 17)
-set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(CMAKE_CUDA_ARCHITECTURES 100)
-
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(Msvc)
 include(Warnings)
 include(Nix)
 include(OpenMP)
 
-find_package(CUDAToolkit 12.8 REQUIRED)
-find_package(Nvcomp REQUIRED)
+# GPU auto-detection: ON if a CUDA compiler is found, OFF otherwise.
+# Override with -DCHUCKY_ENABLE_GPU=OFF to force a CPU-only build.
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    set(_GPU_DEFAULT ON)
+else()
+    set(_GPU_DEFAULT OFF)
+endif()
+option(CHUCKY_ENABLE_GPU "Build GPU (CUDA) backends and tests" ${_GPU_DEFAULT})
+
+if(CHUCKY_ENABLE_GPU)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_ARCHITECTURES 100)
+    find_package(CUDAToolkit 12.8 REQUIRED)
+    find_package(Nvcomp REQUIRED)
+endif()
 find_package(Threads REQUIRED)
 find_package(lz4 CONFIG QUIET)
 if(lz4_FOUND)
@@ -48,4 +61,7 @@ add_subdirectory(src)
 
 enable_testing()
 add_subdirectory(tests)
-add_subdirectory(bench)
+
+if(CHUCKY_ENABLE_GPU)
+    add_subdirectory(bench)
+endif()
