@@ -1,7 +1,7 @@
 #pragma once
 
-#include "gpu/aggregate.h"
 #include "defs.limits.h"
+#include "gpu/aggregate.h"
 #include "lod/lod_plan.h"
 
 #include <cuda.h>

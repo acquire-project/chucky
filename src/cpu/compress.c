@@ -37,7 +37,7 @@ compress_cpu(enum compression_codec codec,
   int i;
   switch (codec) {
     case CODEC_NONE:
-#pragma omp parallel for schedule(static) if(batch_size > 1024)
+#pragma omp parallel for schedule(static) if (batch_size > 1024)
       for (i = 0; i < (int)batch_size; ++i) {
         memcpy((char*)dst + i * max_output_size,
                (const char*)src + i * input_stride,
@@ -48,14 +48,14 @@ compress_cpu(enum compression_codec codec,
 
     case CODEC_LZ4: {
       _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if(batch_size > 1024)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
         const char* in = (const char*)src + i * input_stride;
         char* out = (char*)dst + i * max_output_size;
-        int rc = LZ4_compress_default(
-          in, out, (int)chunk_bytes, (int)max_output_size);
+        int rc =
+          LZ4_compress_default(in, out, (int)chunk_bytes, (int)max_output_size);
         if (rc <= 0)
           err = 1;
         else
@@ -66,13 +66,14 @@ compress_cpu(enum compression_codec codec,
 
     case CODEC_ZSTD: {
       _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if(batch_size > 1024)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
         const void* in = (const char*)src + i * input_stride;
         void* out = (char*)dst + i * max_output_size;
-        size_t rc = ZSTD_compress(out, max_output_size, in, chunk_bytes, ZSTD_COMPRESS_LEVEL);
+        size_t rc = ZSTD_compress(
+          out, max_output_size, in, chunk_bytes, ZSTD_COMPRESS_LEVEL);
         if (ZSTD_isError(rc))
           err = 1;
         else

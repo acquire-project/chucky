@@ -86,10 +86,10 @@ lod_plan_init_from_dims(struct lod_plan* p,
 // dims are split into per-epoch chunks.
 int
 lod_plan_init_from_epoch_dims(struct lod_plan* p,
-                               const struct dimension* dims,
-                               uint8_t rank,
-                               uint8_t n_append,
-                               int max_levels);
+                              const struct dimension* dims,
+                              uint8_t rank,
+                              uint8_t n_append,
+                              int max_levels);
 
 void
 lod_plan_free(struct lod_plan* p);

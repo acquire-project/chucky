@@ -74,9 +74,7 @@ upload(CUdeviceptr* d, const void* h, size_t bytes)
 
 template<typename T>
 static int
-test_reduce(const char* label,
-            enum dtype dtype,
-            enum lod_reduce_method method)
+test_reduce(const char* label, enum dtype dtype, enum lod_reduce_method method)
 {
   using Acc = typename reduce_acc<T>::type;
   log_info("=== %s ===", label);
@@ -436,11 +434,10 @@ test_fold_f16(const char* label, enum lod_reduce_method method, int n_epochs)
     }
   }
 
-  CHECK(
-    Fail,
-    lod_accum_emit(
-      d_out, d_accum, dtype_f16, method, N, (uint32_t)n_epochs, stream) ==
-      0);
+  CHECK(Fail,
+        lod_accum_emit(
+          d_out, d_accum, dtype_f16, method, N, (uint32_t)n_epochs, stream) ==
+          0);
   CU(Fail, cuStreamSynchronize(stream));
   CU(Fail, cuMemcpyDtoH(h_result, d_out, N * sizeof(__half)));
 

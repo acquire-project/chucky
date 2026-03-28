@@ -1,9 +1,9 @@
-#include "stream/layouts.h"
 #include "gpu/prelude.cuda.h"
-#include "util/prelude.h"
 #include "stream.gpu.h"
+#include "stream/layouts.h"
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
+#include "util/prelude.h"
 
 #include "test_runner.h"
 

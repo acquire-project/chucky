@@ -1,12 +1,12 @@
 #include "zarr_fs_sink.h"
-#include "zarr/io_queue.h"
-#include "zarr/zarr_metadata.h"
 #include "defs.limits.h"
 #include "dimension.h"
 #include "lod/lod_plan.h"
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
+#include "zarr/io_queue.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -231,7 +231,9 @@ zarr_fs_sink_record_fence(struct shard_sink* self, uint8_t level)
 }
 
 static void
-zarr_fs_sink_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+zarr_fs_sink_wait_fence(struct shard_sink* self,
+                        uint8_t level,
+                        struct io_event ev)
 {
   (void)level;
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
@@ -323,9 +325,14 @@ write_array_metadata_file(const char* array_dir,
   snprintf(path, sizeof(path), "%s/zarr.json", array_dir);
 
   char buf[4096];
-  int len = zarr_array_json(
-    buf, sizeof(buf), rank, dimensions, data_type, fill_value,
-    chunks_per_shard, codec);
+  int len = zarr_array_json(buf,
+                            sizeof(buf),
+                            rank,
+                            dimensions,
+                            data_type,
+                            fill_value,
+                            chunks_per_shard,
+                            codec);
   if (len < 0)
     return -1;
   return write_file(path, buf, (size_t)len);
@@ -414,7 +421,8 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
     struct shard_geometry g;
     shard_geometry_compute(&g, cfg->rank, na, shape, cs, cps);
     memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
-    memcpy(zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
+    memcpy(
+      zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
     memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
     zs->shard_inner_count = g.shard_inner_count;
   }
@@ -441,8 +449,8 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
 
     for (uint64_t flat = 0; flat < total_shards; ++flat) {
       char key[256];
-      if (zarr_shard_key(
-            key, sizeof(key), zs->rank, zs->shard_count, flat) != 0)
+      if (zarr_shard_key(key, sizeof(key), zs->rank, zs->shard_count, flat) !=
+          0)
         goto Fail_alloc;
 
       char path[4096];
@@ -658,8 +666,8 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   struct lod_plan plan = { 0 };
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev) == 0);
+        lod_plan_init_from_dims(&plan, cfg->dimensions, cfg->rank, max_lev) ==
+          0);
 
   struct zarr_fs_multiscale_sink* ms =
     (struct zarr_fs_multiscale_sink*)calloc(1, sizeof(*ms));
@@ -673,8 +681,8 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   ms->rank = cfg->rank;
   snprintf(ms->group_path, sizeof(ms->group_path), "%s", group_path);
 
-  ms->levels =
-    (struct zarr_fs_sink**)calloc((size_t)plan.nlod, sizeof(struct zarr_fs_sink*));
+  ms->levels = (struct zarr_fs_sink**)calloc((size_t)plan.nlod,
+                                             sizeof(struct zarr_fs_sink*));
   CHECK(Fail_ms, ms->levels);
 
   // Ensure directories exist before writing metadata

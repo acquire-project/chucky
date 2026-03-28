@@ -32,8 +32,8 @@ struct dim_info
   struct dim_slice append; // dims[0 .. n_append)
   struct dim_slice inner;  // dims[n_append .. rank)
 
-  int append_downsample;       // rightmost append dim has downsample
-  uint32_t lod_mask;           // bitmask: inner dims with downsample=1
+  int append_downsample;          // rightmost append dim has downsample
+  uint32_t lod_mask;              // bitmask: inner dims with downsample=1
   uint64_t bounded_append_chunks; // prod(chunk_count[d] for d=1..n_append-1)
 };
 

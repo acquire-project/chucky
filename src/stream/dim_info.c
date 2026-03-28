@@ -23,9 +23,7 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
 }
 
 int
-dim_info_init(struct dim_info* info,
-              const struct dimension* dims,
-              uint8_t rank)
+dim_info_init(struct dim_info* info, const struct dimension* dims, uint8_t rank)
 {
   CHECK(Fail, info);
   CHECK(Fail, dims_validate(dims, rank) == 0);
@@ -49,7 +47,8 @@ dim_info_init(struct dim_info* info,
   // Append downsample: rightmost append dim has downsample
   info->append_downsample = (na > 0) && dims[na - 1].downsample;
 
-  // bounded_append_chunks: product of chunk_count for bounded append dims 1..na-1
+  // bounded_append_chunks: product of chunk_count for bounded append
+  // dims 1..na-1
   info->bounded_append_chunks = 1;
   for (int d = 1; d < na; ++d)
     info->bounded_append_chunks *= ceildiv(dims[d].size, dims[d].chunk_size);

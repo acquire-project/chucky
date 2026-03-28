@@ -29,7 +29,8 @@ test_simple(void)
 
   CHECK(Fail,
         aggregate_layout_compute(
-          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) == 0);
+          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) ==
+          0);
 
   // Create fake compressed data: chunk i has size (10 + i) bytes,
   // filled with value i.
@@ -45,7 +46,8 @@ test_simple(void)
   memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
-  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+  CHECK(Fail,
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify: each chunk i should appear at its permuted position P[i].
   // The offsets should be a valid prefix sum.
@@ -99,7 +101,8 @@ test_multishard(void)
 
   CHECK(Fail,
         aggregate_layout_compute(
-          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) == 0);
+          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) ==
+          0);
 
   CHECK(Fail, layout.covering_count == 12);
 
@@ -115,7 +118,8 @@ test_multishard(void)
   memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
-  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+  CHECK(Fail,
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify round-trip: each chunk's data at its permuted offset
   for (uint64_t i = 0; i < M; ++i) {
@@ -161,9 +165,14 @@ test_page_aligned(void)
   char* compressed = NULL;
 
   CHECK(Fail,
-        aggregate_layout_compute(
-          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, page_size) ==
-          0);
+        aggregate_layout_compute(&layout,
+                                 rank,
+                                 1,
+                                 chunk_count,
+                                 chunks_per_shard,
+                                 M,
+                                 max_comp,
+                                 page_size) == 0);
 
   compressed = (char*)calloc(M, max_comp);
   CHECK(Fail, compressed);
@@ -175,7 +184,8 @@ test_page_aligned(void)
   memset(&ws, 0, sizeof(ws));
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
-  CHECK(Fail, aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+  CHECK(Fail,
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
 
   // Verify shard boundaries are page-aligned.
   // Each shard has cps_inner chunks. The offset after each shard group

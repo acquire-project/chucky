@@ -9,9 +9,11 @@ function(set_nix_rpath)
         return()
     endif()
     foreach(tgt IN LISTS ARGN)
-        set_target_properties(${tgt} PROPERTIES
-            BUILD_RPATH "/run/opengl-driver/lib"
-            INSTALL_RPATH "/run/opengl-driver/lib"
+        set_target_properties(
+            ${tgt}
+            PROPERTIES
+                BUILD_RPATH "/run/opengl-driver/lib"
+                INSTALL_RPATH "/run/opengl-driver/lib"
         )
     endforeach()
 endfunction()

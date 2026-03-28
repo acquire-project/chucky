@@ -35,7 +35,8 @@ struct tile_stream_cpu_memory_info
   size_t compressed_pool_bytes; // total_chunks * max_output_size
   size_t comp_sizes_bytes;      // total_chunks * sizeof(size_t)
   size_t aggregate_bytes;       // shared ws + per-level perm
-  size_t lod_bytes;   // linear + lod_values + morton_lut + batch_offsets + append_accum
+  size_t lod_bytes;   // linear + lod_values + morton_lut + batch_offsets +
+                      // append_accum
   size_t shard_bytes; // active_shard arrays + index buffers
 
   uint64_t chunks_per_epoch;

@@ -5,14 +5,18 @@
 
 add_library(warnings INTERFACE)
 if(MSVC)
-    target_compile_options(warnings INTERFACE
-        $<$<COMPILE_LANGUAGE:C>:/W3>
-        $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=/W3>
+    target_compile_options(
+        warnings
+        INTERFACE
+            $<$<COMPILE_LANGUAGE:C>:/W3>
+            $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=/W3>
     )
 else()
-    target_compile_options(warnings INTERFACE
-        $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Wpedantic>
-        $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-Wall,-Wextra>
+    target_compile_options(
+        warnings
+        INTERFACE
+            $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Wpedantic>
+            $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-Wall,-Wextra>
     )
 endif()
 

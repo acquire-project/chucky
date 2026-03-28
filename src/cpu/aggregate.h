@@ -15,28 +15,32 @@ struct aggregate_cpu_workspace
 };
 
 // Init workspace for a single layout: allocates all buffers, precomputes perm.
-int aggregate_cpu_workspace_init(struct aggregate_cpu_workspace* ws,
-                                 const struct aggregate_layout* layout);
+int
+aggregate_cpu_workspace_init(struct aggregate_cpu_workspace* ws,
+                             const struct aggregate_layout* layout);
 
-void aggregate_cpu_workspace_free(struct aggregate_cpu_workspace* ws);
+void
+aggregate_cpu_workspace_free(struct aggregate_cpu_workspace* ws);
 
 // Same as aggregate_cpu but uses pre-allocated workspace. Zero mallocs.
 // result->data/offsets/chunk_sizes point into ws — caller must NOT free them.
-int aggregate_cpu_into(const void* compressed,
-                       const size_t* comp_sizes,
-                       const struct aggregate_layout* layout,
-                       struct aggregate_cpu_workspace* ws,
-                       struct aggregate_result* result);
+int
+aggregate_cpu_into(const void* compressed,
+                   const size_t* comp_sizes,
+                   const struct aggregate_layout* layout,
+                   struct aggregate_cpu_workspace* ws,
+                   struct aggregate_result* result);
 
 // Batch variant: aggregate n_active epochs at once using gather LUT.
 // gather[n_active * M]: maps batch input index → compressed chunk index.
 // ws->perm must be the batch perm [n_active * M] (precomputed, interleaved).
 // ws buffers sized for n_active * C covering positions.
 // compressed_base / comp_sizes_base: full compressed buffer (all epochs).
-int aggregate_cpu_batch_into(const void* compressed_base,
-                              const size_t* comp_sizes_base,
-                              const uint32_t* gather,
-                              const struct aggregate_layout* layout,
-                              uint32_t n_active,
-                              struct aggregate_cpu_workspace* ws,
-                              struct aggregate_result* result);
+int
+aggregate_cpu_batch_into(const void* compressed_base,
+                         const size_t* comp_sizes_base,
+                         const uint32_t* gather,
+                         const struct aggregate_layout* layout,
+                         uint32_t n_active,
+                         struct aggregate_cpu_workspace* ws,
+                         struct aggregate_result* result);

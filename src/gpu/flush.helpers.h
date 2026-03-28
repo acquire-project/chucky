@@ -21,8 +21,8 @@ level_active_epochs(const struct level_flush_state* lvl,
 }
 
 // Count actual active epochs for a level from per-epoch masks.
-// For infrequent append-downsampled levels (period > K, batch_active_count == 0),
-// level_active_epochs returns 0 even when the level fired.  This function
+// For infrequent append-downsampled levels (period > K, batch_active_count ==
+// 0), level_active_epochs returns 0 even when the level fired.  This function
 // falls back to scanning the per-epoch masks in that case.
 static inline uint32_t
 level_actual_active_count(const struct level_flush_state* lvl,

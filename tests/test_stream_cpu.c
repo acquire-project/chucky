@@ -1,9 +1,9 @@
-#include "stream/layouts.h"
-#include "stream.cpu.h"
-#include "test_shard_sink.h"
-#include "zarr/crc32c.h"
 #include "defs.limits.h"
+#include "stream.cpu.h"
+#include "stream/layouts.h"
+#include "test_shard_sink.h"
 #include "util/prelude.h"
+#include "zarr/crc32c.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,9 +22,18 @@ test_basic_pipeline(void)
 
   // 3D: 4×4×6, chunk 2×2×3, chunks_per_shard = 1×2×2
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1, .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2, .storage_position = 1 },
-    { .size = 6, .chunk_size = 3, .chunks_per_shard = 2, .storage_position = 2 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+    { .size = 6,
+      .chunk_size = 3,
+      .chunks_per_shard = 2,
+      .storage_position = 2 },
   };
 
   struct tile_stream_configuration config = {
@@ -66,8 +75,8 @@ test_basic_pipeline(void)
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     if (sink.writers[0][i].buf && sink.writers[0][i].size > 0) {
       found = 1;
-      log_info("  shard %d: %lu bytes", i,
-               (unsigned long)sink.writers[0][i].size);
+      log_info(
+        "  shard %d: %lu bytes", i, (unsigned long)sink.writers[0][i].size);
     }
   }
   CHECK(Fail, found);
@@ -101,8 +110,14 @@ test_f16_rejected(void)
   test_sink_init(&sink, 16, SHARD_CAP);
 
   struct dimension dims[] = {
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 1, .storage_position = 0 },
-    { .size = 4, .chunk_size = 2, .chunks_per_shard = 2, .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
   };
   struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,

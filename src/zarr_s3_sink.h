@@ -1,9 +1,9 @@
 #pragma once
 
 #include "dimension.h"
+#include "dtype.h"
 #include "types.codec.h"
 #include "writer.h"
-#include "dtype.h"
 
 #include <stdint.h>
 
@@ -13,7 +13,7 @@ struct zarr_s3_config
   const char* prefix;     // key prefix (like store_path), no leading/trailing /
   const char* array_name; // e.g. "0"
   const char* region;     // required (e.g. "us-east-1")
-  const char* endpoint;   // required (e.g. "https://s3.us-east-1.amazonaws.com")
+  const char* endpoint; // required (e.g. "https://s3.us-east-1.amazonaws.com")
   enum dtype data_type;
   double fill_value;
   uint8_t rank;
@@ -70,7 +70,7 @@ struct zarr_s3_multiscale_config
   const char* prefix;
   const char* array_name; // group name; NULL = write at prefix
   const char* region;     // required (e.g. "us-east-1")
-  const char* endpoint;   // required (e.g. "https://s3.us-east-1.amazonaws.com")
+  const char* endpoint; // required (e.g. "https://s3.us-east-1.amazonaws.com")
   enum dtype data_type;
   double fill_value;
   uint8_t rank;

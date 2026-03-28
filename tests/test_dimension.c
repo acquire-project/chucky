@@ -482,9 +482,11 @@ main(void)
     { "dims_print", test_dims_print },
     { "dim_info_single_append", test_dim_info_single_append },
     { "dim_info_two_append", test_dim_info_two_append },
-    { "dim_info_two_append_with_downsample", test_dim_info_two_append_with_downsample },
+    { "dim_info_two_append_with_downsample",
+      test_dim_info_two_append_with_downsample },
     { "dim_info_three_append", test_dim_info_three_append },
-    { "dim_info_rejects_unbounded_non_dim0", test_dim_info_rejects_unbounded_non_dim0 },
+    { "dim_info_rejects_unbounded_non_dim0",
+      test_dim_info_rejects_unbounded_non_dim0 },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

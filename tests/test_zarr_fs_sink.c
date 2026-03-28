@@ -1,11 +1,11 @@
-#include "stream/layouts.h"
-#include "platform/platform.h"
 #include "gpu/prelude.cuda.h"
-#include "util/prelude.h"
+#include "platform/platform.h"
 #include "stream.gpu.h"
+#include "stream/layouts.h"
 #include "test_platform.h"
 #include "test_shard_verify.h"
 #include "test_voxel_encode.h"
+#include "util/prelude.h"
 #include "zarr_fs_sink.h"
 
 #include <stdio.h>
@@ -197,8 +197,8 @@ test_pipeline(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail3,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // Feed data
   {
@@ -609,8 +609,8 @@ test_unbounded_metadata_update(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail2,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // epoch_elements = chunks_per_epoch * chunk_elements
   // chunks_per_epoch = chunk_count[1] * chunk_count[2] = 2 * 4 = 8
@@ -824,8 +824,8 @@ test_midstream_metadata_update(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail2,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // Feed several epochs of data (enough to trigger timer-based update)
   const size_t total = 6 * tile_stream_gpu_layout(s)->epoch_elements;
@@ -971,8 +971,8 @@ test_unbuffered_pipeline(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail2,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // Feed data
   {
@@ -1179,8 +1179,8 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail3,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // Feed data
   {
@@ -1626,8 +1626,8 @@ test_pipeline_storage_order(const char* tmpdir)
 
   struct tile_stream_gpu* s = NULL;
   CHECK(Fail3,
-        (s = tile_stream_gpu_create(&config,
-                                    zarr_fs_sink_as_shard_sink(zs))) != NULL);
+        (s = tile_stream_gpu_create(&config, zarr_fs_sink_as_shard_sink(zs))) !=
+          NULL);
 
   // Feed data
   {

@@ -3,10 +3,10 @@
 #include "dimension.h"
 #include "dtype.h"
 #include "stream/dim_info.h"
+#include "stream/types.aggregate.h"
 #include "types.stream.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
-#include "stream/types.aggregate.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -124,8 +124,8 @@ compute_level_layout(struct tile_stream_layout* layout,
   layout->chunks_per_epoch = 1;
   for (int d = n_append; d < rank; ++d)
     layout->chunks_per_epoch *= chunk_count[d];
-  CHECK_MUL_OVERFLOW(Fail, layout->chunks_per_epoch, layout->chunk_elements,
-                      UINT64_MAX);
+  CHECK_MUL_OVERFLOW(
+    Fail, layout->chunks_per_epoch, layout->chunk_elements, UINT64_MAX);
   layout->epoch_elements = layout->chunks_per_epoch * layout->chunk_elements;
   // Collapse all append dims
   for (int d = 0; d < n_append; ++d)
@@ -174,8 +174,7 @@ validate_config(const struct tile_stream_configuration* config,
   {
     if (di->append_downsample) {
       enum lod_reduce_method m = config->append_reduce_method;
-      if (m != lod_reduce_mean && m != lod_reduce_min &&
-          m != lod_reduce_max) {
+      if (m != lod_reduce_mean && m != lod_reduce_min && m != lod_reduce_max) {
         log_error("append reduce method must be mean, min, or max");
         goto Fail;
       }
@@ -201,11 +200,11 @@ computed_stream_layouts_free(struct computed_stream_layouts* cl)
 }
 
 int
-compute_stream_layouts(
-  const struct tile_stream_configuration* config,
-  size_t codec_alignment,
-  size_t (*max_output_size_fn)(enum compression_codec, size_t chunk_bytes),
-  struct computed_stream_layouts* out)
+compute_stream_layouts(const struct tile_stream_configuration* config,
+                       size_t codec_alignment,
+                       size_t (*max_output_size_fn)(enum compression_codec,
+                                                    size_t chunk_bytes),
+                       struct computed_stream_layouts* out)
 {
   const uint8_t rank = config->rank;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
@@ -230,9 +229,13 @@ compute_stream_layouts(
   // --- All level layouts ---
   for (int lv = 0; lv < out->levels.nlod; ++lv)
     CHECK(Fail,
-          compute_level_layout(&out->layouts[lv], rank, na,
-                               bytes_per_element, dims,
-                               out->plan.shapes[lv], codec_alignment,
+          compute_level_layout(&out->layouts[lv],
+                               rank,
+                               na,
+                               bytes_per_element,
+                               dims,
+                               out->plan.shapes[lv],
+                               codec_alignment,
                                storage_order) == 0);
 
   // --- Level geometry (single loop) ---

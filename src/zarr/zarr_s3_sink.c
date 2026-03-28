@@ -52,14 +52,13 @@ s3_validate_part_count(uint8_t rank,
   uint64_t max_parts = ceildiv(max_shard_bytes, part_size);
 
   if (max_parts > S3_MAX_PARTS) {
-    log_error(
-      "shard too large for S3 multipart upload: "
-      "%llu bytes (%llu parts with %zu-byte parts, limit %d). "
-      "Increase part_size or reduce shard dimensions.",
-      (unsigned long long)max_shard_bytes,
-      (unsigned long long)max_parts,
-      part_size,
-      S3_MAX_PARTS);
+    log_error("shard too large for S3 multipart upload: "
+              "%llu bytes (%llu parts with %zu-byte parts, limit %d). "
+              "Increase part_size or reduce shard dimensions.",
+              (unsigned long long)max_shard_bytes,
+              (unsigned long long)max_parts,
+              part_size,
+              S3_MAX_PARTS);
     return 1;
   }
   return 0;
@@ -179,10 +178,10 @@ struct s3_shard_writer
 {
   struct shard_writer base;
   struct zarr_s3_sink* parent;
-  struct s3_upload* upload;          // active upload (receiving writes)
-  struct s3_upload* pending_upload;  // previous upload completing async
-  int pending_eof_err;               // EOF send error from finish_async
-  int write_err;                     // set on part write failure
+  struct s3_upload* upload;         // active upload (receiving writes)
+  struct s3_upload* pending_upload; // previous upload completing async
+  int pending_eof_err;              // EOF send error from finish_async
+  int write_err;                    // set on part write failure
 };
 
 static int
@@ -257,9 +256,7 @@ s3_sink_record_fence(struct shard_sink* self, uint8_t level)
 }
 
 static void
-s3_sink_wait_fence(struct shard_sink* self,
-                   uint8_t level,
-                   struct io_event ev)
+s3_sink_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
 {
   (void)level;
   struct zarr_s3_sink* zs = (struct zarr_s3_sink*)self;
@@ -296,7 +293,8 @@ s3_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 
   w->upload = s3_upload_begin(zs->s3, zs->bucket, key);
   if (!w->upload) {
-    log_error("s3_sink_open: failed to begin upload for %s/%s", zs->bucket, key);
+    log_error(
+      "s3_sink_open: failed to begin upload for %s/%s", zs->bucket, key);
     return NULL;
   }
 
@@ -394,7 +392,8 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
     struct shard_geometry g;
     shard_geometry_compute(&g, cfg->rank, na, shape, cs, cps);
     memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
-    memcpy(zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
+    memcpy(
+      zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
     memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
     zs->shard_inner_count = g.shard_inner_count;
   }
@@ -570,9 +569,7 @@ s3_multiscale_wait_fence(struct shard_sink* self,
 }
 
 static struct shard_writer*
-s3_multiscale_open(struct shard_sink* self,
-                   uint8_t level,
-                   uint64_t shard_index)
+s3_multiscale_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
   struct zarr_s3_multiscale_sink* ms = (struct zarr_s3_multiscale_sink*)self;
   CHECK(Fail, level < ms->nlod);
@@ -650,8 +647,8 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   struct lod_plan plan = { 0 };
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev) == 0);
+        lod_plan_init_from_dims(&plan, cfg->dimensions, cfg->rank, max_lev) ==
+          0);
 
   struct zarr_s3_multiscale_sink* ms =
     (struct zarr_s3_multiscale_sink*)calloc(1, sizeof(*ms));
@@ -683,7 +680,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   }
 
   ms->levels = (struct zarr_s3_sink**)calloc((size_t)plan.nlod,
-                                              sizeof(struct zarr_s3_sink*));
+                                             sizeof(struct zarr_s3_sink*));
   CHECK(Fail_s3, ms->levels);
 
   // Create one zarr_s3_sink per level, all borrowing the shared client

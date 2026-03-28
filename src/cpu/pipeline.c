@@ -38,8 +38,13 @@ deliver_aggregate(int lv,
     platform_toc(&sink_clk);
 
   size_t sink_bytes = 0;
-  if (deliver_to_shards_batch((uint8_t)lv, lvl->shard, ar, active_count,
-                              p->sink, p->shard_alignment_bytes, &sink_bytes))
+  if (deliver_to_shards_batch((uint8_t)lv,
+                              lvl->shard,
+                              ar,
+                              active_count,
+                              p->sink,
+                              p->shard_alignment_bytes,
+                              &sink_bytes))
     return 1;
 
   if (p->metrics) {
@@ -60,17 +65,20 @@ aggregate_and_deliver_batch(int lv,
   if (p->metrics)
     platform_toc(&clk);
 
-  struct aggregate_cpu_workspace ws =
-    make_agg_workspace(lvl, lvl->batch_chunk_to_shard_map, p->shard_order_sizes_bytes);
+  struct aggregate_cpu_workspace ws = make_agg_workspace(
+    lvl, lvl->batch_chunk_to_shard_map, p->shard_order_sizes_bytes);
   struct aggregate_result ar;
-  if (aggregate_cpu_batch_into(p->compressed, p->comp_sizes,
-                               lvl->batch_gather, lvl->agg_layout,
-                               active_count, &ws, &ar))
+  if (aggregate_cpu_batch_into(p->compressed,
+                               p->comp_sizes,
+                               lvl->batch_gather,
+                               lvl->agg_layout,
+                               active_count,
+                               &ws,
+                               &ar))
     return 1;
 
   if (p->metrics) {
-    uint64_t batch_C =
-      (uint64_t)active_count * lvl->agg_layout->covering_count;
+    uint64_t batch_C = (uint64_t)active_count * lvl->agg_layout->covering_count;
     float ms = (float)(platform_toc(&clk) * 1000.0);
     accumulate_metric_ms(&p->metrics->aggregate, ms, ar.offsets[batch_C], 0);
   }
@@ -93,8 +101,8 @@ aggregate_and_deliver_epoch(int lv,
     (const char*)p->compressed + comp_base * p->max_output_size_bytes;
   const size_t* sizes_lv = p->comp_sizes + comp_base;
 
-  struct aggregate_cpu_workspace ws =
-    make_agg_workspace(lvl, lvl->chunk_to_shard_map, p->shard_order_sizes_bytes);
+  struct aggregate_cpu_workspace ws = make_agg_workspace(
+    lvl, lvl->chunk_to_shard_map, p->shard_order_sizes_bytes);
   struct aggregate_result ar;
   if (aggregate_cpu_into(comp_lv, sizes_lv, lvl->agg_layout, &ws, &ar))
     return 1;
@@ -123,9 +131,14 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (p->metrics)
       platform_toc(&clk);
 
-    if (compress_cpu(p->codec, p->chunk_pool, p->chunk_stride_bytes,
-                     p->compressed, p->max_output_size_bytes, p->comp_sizes,
-                     p->chunk_bytes, n_epochs * total_chunks))
+    if (compress_cpu(p->codec,
+                     p->chunk_pool,
+                     p->chunk_stride_bytes,
+                     p->compressed,
+                     p->max_output_size_bytes,
+                     p->comp_sizes,
+                     p->chunk_bytes,
+                     n_epochs * total_chunks))
       return 1;
 
     if (p->metrics) {
@@ -146,6 +159,10 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (active_count == 0)
       continue;
 
+    // Wait for pending async IO before overwriting aggregate buffer.
+    if (p->sink->wait_fence)
+      p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
+
     if (active_count == lvl->batch_active_count &&
         lvl->batch_active_count > 1) {
       if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
@@ -154,12 +171,15 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
       for (uint32_t e = 0; e < n_epochs; ++e) {
         if (!(active_masks[e] & (1u << lv)))
           continue;
-        uint64_t comp_base =
-          (uint64_t)e * total_chunks + lvl->chunk_offset;
+        uint64_t comp_base = (uint64_t)e * total_chunks + lvl->chunk_offset;
         if (aggregate_and_deliver_epoch(lv, p, lvl, comp_base))
           return 1;
       }
     }
+
+    // Record fence so next batch waits for this delivery's IO.
+    if (p->sink->record_fence)
+      *lvl->io_done = p->sink->record_fence(p->sink, (uint8_t)lv);
   }
 
   return 0;
@@ -175,8 +195,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
   const size_t bytes_per_element = dtype_bpe(p->dtype);
   const struct level_geometry* levels = &p->cl->levels;
   void* epoch_pool =
-    (char*)p->chunk_pool + (uint64_t)epoch_in_batch *
-                             levels->total_chunks *
+    (char*)p->chunk_pool + (uint64_t)epoch_in_batch * levels->total_chunks *
                              p->cl->layouts[0].chunk_stride * bytes_per_element;
 
   if (!levels->enable_multiscale) {
@@ -210,26 +229,24 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
     platform_toc(&clk);
 
   CHECK(Error,
-        lod_cpu_reduce(&p->cl->plan,
-                       p->lod_values,
-                       p->dtype,
-                       p->reduce_method) == 0);
+        lod_cpu_reduce(
+          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method) == 0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
     accumulate_metric_ms(&p->metrics->lod_reduce,
                          ms,
-                         p->cl->plan.levels.ends[p->cl->plan.nlod - 1] * bytes_per_element,
+                         p->cl->plan.levels.ends[p->cl->plan.nlod - 1] *
+                           bytes_per_element,
                          0);
   }
 
   // Append fold/emit: accumulate levels 1+ across epochs.
   // Without append downsample, all inner LOD levels are ready every epoch.
   const int append_downsample = p->cl->dims.append_downsample;
-  uint32_t active_levels_mask =
-    (append_downsample && p->append_accum)
-      ? 1
-      : (uint32_t)((1u << levels->nlod) - 1);
+  uint32_t active_levels_mask = (append_downsample && p->append_accum)
+                                  ? 1
+                                  : (uint32_t)((1u << levels->nlod) - 1);
   if (append_downsample && p->append_accum) {
     struct platform_clock append_clk = { 0 };
     if (p->metrics)
@@ -237,11 +254,11 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
     CHECK(Error,
           lod_cpu_append_fold(&p->cl->plan,
-                            p->lod_values,
-                            p->append_accum,
-                            p->append_counts,
-                            p->dtype,
-                            p->append_reduce_method) == 0);
+                              p->lod_values,
+                              p->append_accum,
+                              p->append_counts,
+                              p->dtype,
+                              p->append_reduce_method) == 0);
 
     for (int lv = 1; lv < p->cl->plan.nlod; ++lv) {
       p->append_counts[lv]++;
@@ -249,12 +266,12 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
       if (p->append_counts[lv] >= period) {
         CHECK(Error,
               lod_cpu_append_emit(&p->cl->plan,
-                                p->lod_values,
-                                p->append_accum,
-                                lv,
-                                p->append_counts[lv],
-                                p->dtype,
-                                p->append_reduce_method) == 0);
+                                  p->lod_values,
+                                  p->append_accum,
+                                  lv,
+                                  p->append_counts[lv],
+                                  p->dtype,
+                                  p->append_reduce_method) == 0);
         p->append_counts[lv] = 0;
         active_levels_mask |= (1u << lv);
       }
@@ -264,7 +281,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
       float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
       size_t append_bytes = 0;
       for (int lv = 1; lv < p->cl->plan.nlod; ++lv)
-        append_bytes += p->cl->plan.batch_count * p->cl->plan.lod_nelem[lv] * bytes_per_element;
+        append_bytes += p->cl->plan.batch_count * p->cl->plan.lod_nelem[lv] *
+                        bytes_per_element;
       accumulate_metric_ms(
         &p->metrics->lod_append_fold, append_ms, append_bytes, 0);
     }
@@ -291,11 +309,11 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(
-      &p->metrics->lod_morton_chunk,
-      ms,
-      levels->total_chunks * p->cl->layouts[0].chunk_stride * bytes_per_element,
-      0);
+    accumulate_metric_ms(&p->metrics->lod_morton_chunk,
+                         ms,
+                         levels->total_chunks * p->cl->layouts[0].chunk_stride *
+                           bytes_per_element,
+                         0);
   }
 
   *out_mask = active_levels_mask;
@@ -308,11 +326,12 @@ Error:
 // ---- LUT computation ----
 
 void
-cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
-                          const struct level_geometry* levels,
-                          const uint32_t batch_active_count[LOD_MAX_LEVELS],
-                          const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
-                          struct lut_targets* out)
+cpu_pipeline_compute_luts(
+  const struct computed_stream_layouts* cl,
+  const struct level_geometry* levels,
+  const uint32_t batch_active_count[LOD_MAX_LEVELS],
+  const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+  struct lut_targets* out)
 {
   // Per-level chunk-to-shard map + batch LUTs.
   for (int lv = 0; lv < levels->nlod; ++lv) {
@@ -335,9 +354,8 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
 
         for (uint64_t j = 0; j < M_lv; ++j) {
           uint64_t idx = (uint64_t)a * M_lv + j;
-          out->batch_gather[lv][idx] =
-            (uint32_t)(pool_epoch * total_chunks +
-                       levels->chunk_offset[lv] + j);
+          out->batch_gather[lv][idx] = (uint32_t)(pool_epoch * total_chunks +
+                                                  levels->chunk_offset[lv] + j);
           uint32_t perm_pos = (uint32_t)ravel(
             agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
           out->batch_chunk_to_shard_map[lv][idx] = perm_pos * K_l + a;
@@ -374,8 +392,7 @@ cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
           offset += (int64_t)wi * layout_lv->lifted_strides[2 * d + 1];
         }
         out->lod_batch_offsets[lv][bi] =
-          (uint64_t)offset +
-          levels->chunk_offset[lv] * layout_lv->chunk_stride;
+          (uint64_t)offset + levels->chunk_offset[lv] * layout_lv->chunk_stride;
       }
     }
   }
@@ -399,12 +416,12 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
     if (p->append_counts[lv] > 0) {
       CHECK(Error,
             lod_cpu_append_emit(plan,
-                              p->lod_values,
-                              p->append_accum,
-                              lv,
-                              p->append_counts[lv],
-                              p->dtype,
-                              p->append_reduce_method) == 0);
+                                p->lod_values,
+                                p->append_accum,
+                                lv,
+                                p->append_counts[lv],
+                                p->dtype,
+                                p->append_reduce_method) == 0);
       p->append_counts[lv] = 0;
 
       // Scatter emitted level from morton space to chunk pool.
@@ -426,8 +443,10 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
     float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
     size_t append_bytes = 0;
     for (int lv = 1; lv < plan->nlod; ++lv)
-      append_bytes += plan->batch_count * plan->lod_nelem[lv] * bytes_per_element;
-    accumulate_metric_ms(&p->metrics->lod_append_fold, append_ms, append_bytes, 0);
+      append_bytes +=
+        plan->batch_count * plan->lod_nelem[lv] * bytes_per_element;
+    accumulate_metric_ms(
+      &p->metrics->lod_append_fold, append_ms, append_bytes, 0);
   }
 
   *out_drain_mask = drain_mask;

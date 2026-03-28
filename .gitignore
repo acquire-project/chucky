@@ -1,5 +1,6 @@
 target
 build
+build-cpu
 result
 .ninja_log
 .clangd

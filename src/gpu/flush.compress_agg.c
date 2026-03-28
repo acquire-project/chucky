@@ -3,9 +3,9 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
-#include "zarr/crc32c.h"
 #include "gpu/prelude.cuda.h"
 #include "util/prelude.h"
+#include "zarr/crc32c.h"
 #include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
@@ -268,14 +268,14 @@ compress_agg_kick(struct compress_agg_stage* stage,
       continue;
 
     struct level_flush_state* lvl = &stage->levels[lv];
-    uint32_t active_count =
-      level_active_epochs(lvl, batch, dims, lv, n_epochs);
+    uint32_t active_count = level_active_epochs(lvl, batch, dims, lv, n_epochs);
 
     struct aggregate_slot* agg = &lvl->agg[fc];
     uint64_t chunks_lv = levels->chunk_count[lv];
 
     if (active_count == 0) {
-      // Infrequent append-downsampled level (period > K): scan actual per-epoch masks.
+      // Infrequent append-downsampled level (period > K): scan actual per-epoch
+      // masks.
       for (uint32_t e = 0; e < n_epochs; ++e) {
         if (!(in->batch_active_masks[e] & (1u << lv)))
           continue;

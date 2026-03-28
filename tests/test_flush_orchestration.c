@@ -1,7 +1,7 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
-#include "stream/config.h"
 #include "gpu/stream.flush.h"
+#include "stream/config.h"
 
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
@@ -82,7 +82,8 @@ orch_ctx_setup(struct orch_ctx* c,
   const uint64_t total_chunks = c->cl.levels.total_chunks;
   const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
-  const size_t pool_bytes = (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
+  const size_t pool_bytes =
+    (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
 
   // GPU streams
   CU(Fail, cuStreamCreate(&c->s->streams.compute, CU_STREAM_NON_BLOCKING));
@@ -158,7 +159,8 @@ orch_ctx_fill_epoch(struct orch_ctx* c,
   CUdeviceptr epoch_ptr =
     c->s->pools.buf[c->s->pools.current] +
     (uint64_t)epoch_in_batch * total_chunks * chunk_stride * bytes_per_element;
-  return fill_pool_epoch(epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn);
+  return fill_pool_epoch(
+    epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn);
 
 Fail:
   return 1;

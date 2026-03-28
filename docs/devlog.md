@@ -42,6 +42,7 @@ Cleanup
 - [ ] make sure everything has extern c guards
 - [ ] comments at the top of each test
 - [ ] look into j8 failures
+- [ ] medfmt and smallepoch scenarios need some analysis/optimization
 
 ## 2026-03-28
 
@@ -109,7 +110,7 @@ Might be able to constrain: use cases tend to be single snapshot at each fov
 and folks just want to have a `tiff` replacement. Could force thin epochs/an
 epoch fill before switching streams.
 
-- [ ] api: multiple append dimensions. how does that work for lod? These
+- [x] api: multiple append dimensions. how does that work for lod? These
       would be all left dims where chunk shape is 1.
 
 Could tier the epoch pool.
@@ -757,7 +758,6 @@ On oreb (5090):
   Throughput:    1.96 GiB/s
   PASS  
 ```
-
 
 ## 2026-02-28
 

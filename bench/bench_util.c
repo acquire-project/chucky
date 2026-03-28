@@ -1,11 +1,11 @@
 #include "bench_util.h"
-#include "gpu/compress.h"
-#include "stream.cpu.h"
 #include "dimension.h"
-#include "zarr/json_writer.h"
+#include "gpu/compress.h"
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
+#include "stream.cpu.h"
 #include "util/prelude.h"
+#include "zarr/json_writer.h"
 #include "zarr_fs_sink.h"
 #include "zarr_s3_sink.h"
 
@@ -83,7 +83,8 @@ metering_write(struct shard_writer* self,
   w->parent->total_bytes += nbytes;
   accumulate_metric_ms(&w->parent->metric,
                        (float)(platform_toc(&w->parent->clock) * 1000.0),
-                       nbytes, 0);
+                       nbytes,
+                       0);
   return rc;
 }
 
@@ -100,7 +101,8 @@ metering_write_direct(struct shard_writer* self,
   w->parent->total_bytes += nbytes;
   accumulate_metric_ms(&w->parent->metric,
                        (float)(platform_toc(&w->parent->clock) * 1000.0),
-                       nbytes, 0);
+                       nbytes,
+                       0);
   return rc;
 }
 
@@ -247,11 +249,10 @@ log_bench_header(const struct tile_stream_layout* layout,
                (double)total_bytes / (1024.0 * 1024.0 * 1024.0),
                total_elements,
                num_epochs);
-  print_report(
-    "  chunk:       %lu elements = %lu KiB  (stride=%lu)",
-    (unsigned long)layout->chunk_elements,
-    (unsigned long)(layout->chunk_stride * dtype_bpe(dtype) / 1024),
-    (unsigned long)layout->chunk_stride);
+  print_report("  chunk:       %lu elements = %lu KiB  (stride=%lu)",
+               (unsigned long)layout->chunk_elements,
+               (unsigned long)(layout->chunk_stride * dtype_bpe(dtype) / 1024),
+               (unsigned long)layout->chunk_stride);
   print_report("  epoch:       %lu slots, %lu MiB pool",
                (unsigned long)layout->chunks_per_epoch,
                (unsigned long)(layout->chunk_pool_bytes / (1024 * 1024)));
@@ -362,7 +363,8 @@ parse_bytes(const char* s)
   return val;
 }
 
-// (autofit adapter removed — now using tile_stream_{gpu,cpu}_advise_chunk_sizes)
+// (autofit adapter removed — now using
+// tile_stream_{gpu,cpu}_advise_chunk_sizes)
 
 // --- dtype helpers ---
 
@@ -370,12 +372,10 @@ static const char* const dtype_names[] = {
   "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f16", "f32", "f64",
 };
 static const enum dtype dtype_vals[] = {
-  dtype_u8,  dtype_u16, dtype_u32, dtype_u64,
-  dtype_i8,  dtype_i16, dtype_i32, dtype_i64,
-  dtype_f16, dtype_f32, dtype_f64,
+  dtype_u8,  dtype_u16, dtype_u32, dtype_u64, dtype_i8,  dtype_i16,
+  dtype_i32, dtype_i64, dtype_f16, dtype_f32, dtype_f64,
 };
 #define NUM_DTYPES (sizeof(dtype_vals) / sizeof(dtype_vals[0]))
-
 
 // --- Reusable bench driver ---
 //
@@ -408,7 +408,8 @@ run_bench(const struct bench_config* cfg)
   // --- Chunk sizing ---
   if (cfg->chunk_ratios) {
     size_t bytes_per_element = dtype_bpe(dtype);
-    size_t target = cfg->target_chunk_bytes ? cfg->target_chunk_bytes : (1 << 20);
+    size_t target =
+      cfg->target_chunk_bytes ? cfg->target_chunk_bytes : (1 << 20);
     size_t budget = cfg->memory_budget;
 
     // Auto-detect memory budget
@@ -447,7 +448,8 @@ run_bench(const struct bench_config* cfg)
         .reduce_method = cfg->reduce_method,
         .append_reduce_method = cfg->append_reduce_method,
         .target_batch_chunks = 2048,
-        .shard_alignment = (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
+        .shard_alignment =
+          (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
       };
       int advise_ok;
       if (cfg->backend == BENCH_GPU) {
@@ -462,7 +464,8 @@ run_bench(const struct bench_config* cfg)
         uint64_t vol = 1;
         for (uint8_t d = 0; d < rank; ++d)
           vol *= dims[d].chunk_size;
-        print_report("  auto-fit: %zu bytes/chunk", (size_t)(vol * bytes_per_element));
+        print_report("  auto-fit: %zu bytes/chunk",
+                     (size_t)(vol * bytes_per_element));
       } else {
         print_report("  auto-fit: WARNING — no chunk size fits in budget");
       }
@@ -470,7 +473,8 @@ run_bench(const struct bench_config* cfg)
 
     // Fallback: just budget chunk sizes without memory constraint
     if (!fitted)
-      dims_budget_chunk_bytes(dims, rank, target, bytes_per_element, cfg->chunk_ratios);
+      dims_budget_chunk_bytes(
+        dims, rank, target, bytes_per_element, cfg->chunk_ratios);
 
     // Set shard counts after chunk sizing
     if (cfg->shard_counts)
@@ -576,7 +580,8 @@ run_bench(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
-    .shard_alignment = (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
+    .shard_alignment =
+      (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
   };
 
   uint64_t est_total_chunks = 0;
@@ -722,9 +727,8 @@ run_bench(const struct bench_config* cfg)
       const size_t total_chunks = num_epochs * chunks_per_epoch;
       const size_t total_decompressed = total_chunks * chunk_bytes;
       const double comp_fold =
-        ss.total_bytes > 0
-          ? (double)total_decompressed / (double)ss.total_bytes
-          : 0.0;
+        ss.total_bytes > 0 ? (double)total_decompressed / (double)ss.total_bytes
+                           : 0.0;
       const double GIB = 1024.0 * 1024.0 * 1024.0;
       double input_gib = (double)total_bytes / GIB;
       double compressed_gib = (double)ss.total_bytes / GIB;
@@ -736,32 +740,45 @@ run_bench(const struct bench_config* cfg)
       jw_init(&jw, json_buf, sizeof(json_buf));
 
       jw_object_begin(&jw);
-      jw_key(&jw, "status");           jw_string(&jw, "pass");
-      jw_key(&jw, "throughput_in_gibs"); jw_float(&jw, throughput_gib);
-      jw_key(&jw, "throughput_out_gibs"); jw_float(&jw, throughput_out_gib);
-      jw_key(&jw, "compression_fold"); jw_float(&jw, comp_fold);
-      jw_key(&jw, "input_gib");        jw_float(&jw, input_gib);
-      jw_key(&jw, "compressed_gib");   jw_float(&jw, compressed_gib);
-      jw_key(&jw, "total_chunks");     jw_uint(&jw, total_chunks);
-      jw_key(&jw, "chunks_per_epoch"); jw_uint(&jw, chunks_per_epoch);
-      jw_key(&jw, "wall_s");           jw_float(&jw, (double)wall_s);
-      jw_key(&jw, "init_s");           jw_float(&jw, (double)init_s);
-      jw_key(&jw, "flush_s");          jw_float(&jw, (double)flush_s);
+      jw_key(&jw, "status");
+      jw_string(&jw, "pass");
+      jw_key(&jw, "throughput_in_gibs");
+      jw_float(&jw, throughput_gib);
+      jw_key(&jw, "throughput_out_gibs");
+      jw_float(&jw, throughput_out_gib);
+      jw_key(&jw, "compression_fold");
+      jw_float(&jw, comp_fold);
+      jw_key(&jw, "input_gib");
+      jw_float(&jw, input_gib);
+      jw_key(&jw, "compressed_gib");
+      jw_float(&jw, compressed_gib);
+      jw_key(&jw, "total_chunks");
+      jw_uint(&jw, total_chunks);
+      jw_key(&jw, "chunks_per_epoch");
+      jw_uint(&jw, chunks_per_epoch);
+      jw_key(&jw, "wall_s");
+      jw_float(&jw, (double)wall_s);
+      jw_key(&jw, "init_s");
+      jw_float(&jw, (double)init_s);
+      jw_key(&jw, "flush_s");
+      jw_float(&jw, (double)flush_s);
 
       // Per-stage metrics
       jw_key(&jw, "stages");
       jw_object_begin(&jw);
       const char* stage_names[] = {
-        "memcpy", "h2d", "scatter",
-        "lod_gather", "lod_reduce", "lod_append_fold",
-        "lod_morton_chunk", "compress", "aggregate",
-        "d2h",
+        "memcpy",           "h2d",
+        "scatter",          "lod_gather",
+        "lod_reduce",       "lod_append_fold",
+        "lod_morton_chunk", "compress",
+        "aggregate",        "d2h",
       };
       const struct stream_metric* stage_ptrs[] = {
-        &m.memcpy,          &m.h2d,           &m.scatter,
-        &m.lod_gather,      &m.lod_reduce,    &m.lod_append_fold,
-        &m.lod_morton_chunk, &m.compress,      &m.aggregate,
-        &m.d2h,
+        &m.memcpy,           &m.h2d,
+        &m.scatter,          &m.lod_gather,
+        &m.lod_reduce,       &m.lod_append_fold,
+        &m.lod_morton_chunk, &m.compress,
+        &m.aggregate,        &m.d2h,
       };
       int nstages = sizeof(stage_ptrs) / sizeof(stage_ptrs[0]);
       for (int si = 0; si < nstages; ++si) {
@@ -773,12 +790,16 @@ run_bench(const struct bench_config* cfg)
         double out_gibs = gb_per_s(sm->output_bytes, (double)sm->ms);
         jw_key(&jw, stage_names[si]);
         jw_object_begin(&jw);
-        jw_key(&jw, "avg_ms");  jw_float(&jw, avg_ms);
+        jw_key(&jw, "avg_ms");
+        jw_float(&jw, avg_ms);
         if (sm->best_ms < 1e29f) {
-          jw_key(&jw, "best_ms"); jw_float(&jw, (double)sm->best_ms);
+          jw_key(&jw, "best_ms");
+          jw_float(&jw, (double)sm->best_ms);
         }
-        jw_key(&jw, "in_gibs"); jw_float(&jw, in_gibs);
-        jw_key(&jw, "out_gibs"); jw_float(&jw, out_gibs);
+        jw_key(&jw, "in_gibs");
+        jw_float(&jw, in_gibs);
+        jw_key(&jw, "out_gibs");
+        jw_float(&jw, out_gibs);
         jw_object_end(&jw);
       }
       if (meter.metric.count > 0) {
@@ -788,12 +809,16 @@ run_bench(const struct bench_config* cfg)
         double out_gibs = gb_per_s(sm->output_bytes, (double)sm->ms);
         jw_key(&jw, "sink");
         jw_object_begin(&jw);
-        jw_key(&jw, "avg_ms");  jw_float(&jw, avg_ms);
+        jw_key(&jw, "avg_ms");
+        jw_float(&jw, avg_ms);
         if (sm->best_ms < 1e29f) {
-          jw_key(&jw, "best_ms"); jw_float(&jw, (double)sm->best_ms);
+          jw_key(&jw, "best_ms");
+          jw_float(&jw, (double)sm->best_ms);
         }
-        jw_key(&jw, "in_gibs"); jw_float(&jw, in_gibs);
-        jw_key(&jw, "out_gibs"); jw_float(&jw, out_gibs);
+        jw_key(&jw, "in_gibs");
+        jw_float(&jw, in_gibs);
+        jw_key(&jw, "out_gibs");
+        jw_float(&jw, out_gibs);
         jw_object_end(&jw);
       }
       jw_object_end(&jw); // stages
@@ -813,7 +838,8 @@ Fail:
     struct json_writer ejw;
     jw_init(&ejw, err_buf, sizeof(err_buf));
     jw_object_begin(&ejw);
-    jw_key(&ejw, "status"); jw_string(&ejw, "error");
+    jw_key(&ejw, "status");
+    jw_string(&ejw, "error");
     jw_object_end(&ejw);
     printf("%.*s\n", (int)jw_length(&ejw), err_buf);
   }
@@ -1051,7 +1077,8 @@ bench_stream_main(int ac,
     .s3_throughput_gbps = s3_throughput_gbps,
     .codec = codec,
     .reduce_method = reduce,
-    .append_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .append_reduce_method =
+      reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = backend,
     .dtype = dtype,
     .chunk_ratios = chunk_ratios,
@@ -1233,8 +1260,7 @@ run_bench_two_streams(const struct bench_config* cfg)
       };
       zsink[k] = zarr_fs_sink_create(&zcfg);
       CHECK(Fail, zsink[k]);
-      metering_sink_init(&meter[k],
-                         zarr_fs_sink_as_shard_sink(zsink[k]));
+      metering_sink_init(&meter[k], zarr_fs_sink_as_shard_sink(zsink[k]));
       sink[k] = &meter[k].base;
     }
     print_report("  output-0: %s", path0);
@@ -1262,12 +1288,14 @@ run_bench_two_streams(const struct bench_config* cfg)
   {
     struct tile_stream_memory_info mem;
     if (tile_stream_gpu_memory_estimate(&config, &mem) == 0) {
-      print_report("  GPU memory (per stream): %.2f GiB device, %.2f GiB pinned",
-                   (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
-                   (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
-      print_report("  GPU memory (total x2):   %.2f GiB device, %.2f GiB pinned",
-                   2.0 * (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
-                   2.0 * (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report(
+        "  GPU memory (per stream): %.2f GiB device, %.2f GiB pinned",
+        (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
+        (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
+      print_report(
+        "  GPU memory (total x2):   %.2f GiB device, %.2f GiB pinned",
+        2.0 * (double)mem.device_bytes / (1024.0 * 1024.0 * 1024.0),
+        2.0 * (double)mem.host_pinned_bytes / (1024.0 * 1024.0 * 1024.0));
     }
   }
 
@@ -1283,7 +1311,8 @@ run_bench_two_streams(const struct bench_config* cfg)
   float init_s = platform_toc(&init_clock);
 
   const struct tile_stream_layout* layout = tile_stream_gpu_layout(s0);
-  log_bench_header(layout, dtype, cfg->codec, 0, 0, total_bytes, total_elements);
+  log_bench_header(
+    layout, dtype, cfg->codec, 0, 0, total_bytes, total_elements);
 
   struct writer* w0 = tile_stream_gpu_writer(s0);
   struct writer* w1 = tile_stream_gpu_writer(s1);
@@ -1326,7 +1355,8 @@ run_bench_two_streams(const struct bench_config* cfg)
   print_report("");
   print_report("  --- Combined ---");
   print_report("  Input:        %.2f GiB (%zu elements x 2 streams)",
-               combined_gib, total_elements);
+               combined_gib,
+               total_elements);
   print_report("  Compressed:   %.2f GiB",
                (double)(sink_bytes[0] + sink_bytes[1]) / GIB);
   print_report("  Init time:     %.3f s", (double)init_s);
@@ -1345,7 +1375,11 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_report("  Compressed:    %.2f GiB", (double)sink_bytes[k] / GIB);
     print_report("");
     print_report("  %-12s %8s %8s %10s %10s",
-                 "Stage", "avg GB/s", "best GB/s", "avg ms", "best ms");
+                 "Stage",
+                 "avg GB/s",
+                 "best GB/s",
+                 "avg ms",
+                 "best ms");
     print_metric_row(&m[k].memcpy);
     print_metric_row(&m[k].h2d);
     print_metric_row(&m[k].scatter);
@@ -1461,7 +1495,8 @@ bench_two_streams_main(int ac,
     .array_name = label,
     .codec = codec,
     .reduce_method = reduce,
-    .append_reduce_method = reduce == lod_reduce_median ? lod_reduce_max : reduce,
+    .append_reduce_method =
+      reduce == lod_reduce_median ? lod_reduce_max : reduce,
     .backend = BENCH_GPU,
     .dtype = dtype,
     .chunk_ratios = chunk_ratios,

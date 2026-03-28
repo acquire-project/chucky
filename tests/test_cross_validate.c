@@ -4,8 +4,8 @@
 
 #include "stream.cpu.h"
 #include "stream.gpu.h"
-#include "util/prelude.h"
 #include "test_runner.h"
+#include "util/prelude.h"
 #include "writer.h"
 
 #include <stdlib.h>

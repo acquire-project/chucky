@@ -1,15 +1,14 @@
 #include "zarr/shard_delivery.h"
 
-#include "zarr/crc32c.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
+#include "zarr/crc32c.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 int
-init_shard_state(struct shard_state* ss,
-                 const struct level_layout_info* li)
+init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
 {
   *ss = (struct shard_state){
     .chunks_per_shard_append = li->chunks_per_shard_append,
@@ -17,13 +16,13 @@ init_shard_state(struct shard_state* ss,
     .chunks_per_shard_total = li->chunks_per_shard_total,
     .shard_inner_count = li->shard_inner_count,
   };
-  ss->shards = (struct active_shard*)calloc(
-    li->shard_inner_count, sizeof(struct active_shard));
+  ss->shards = (struct active_shard*)calloc(li->shard_inner_count,
+                                            sizeof(struct active_shard));
   if (!ss->shards)
     return 1;
   for (uint64_t si = 0; si < li->shard_inner_count; ++si) {
-    ss->shards[si].index = (uint64_t*)malloc(
-      li->chunks_per_shard_total * 2 * sizeof(uint64_t));
+    ss->shards[si].index =
+      (uint64_t*)malloc(li->chunks_per_shard_total * 2 * sizeof(uint64_t));
     if (!ss->shards[si].index)
       return 1;
     memset(ss->shards[si].index,

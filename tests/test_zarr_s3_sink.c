@@ -12,8 +12,8 @@
 // Defaults target a local minio on localhost:9000.
 
 #define S3_BUCKET "chucky-test"
-#define S3_USER   "minioadmin"
-#define S3_PASS   "minioadmin"
+#define S3_USER "minioadmin"
+#define S3_PASS "minioadmin"
 
 #ifdef _WIN32
 #define DEVNULL "NUL"
@@ -290,8 +290,7 @@ test_concurrent_finalize(void)
   for (int i = 0; i < 4; ++i) {
     struct shard_writer* w = ss->open(ss, 0, (uint64_t)i);
     CHECK(Fail_sink, w);
-    CHECK(Fail_sink,
-          w->write(w, 0, data, (char*)data + sizeof(data)) == 0);
+    CHECK(Fail_sink, w->write(w, 0, data, (char*)data + sizeof(data)) == 0);
     CHECK(Fail_sink, w->finalize(w) == 0);
   }
 
@@ -304,8 +303,7 @@ test_concurrent_finalize(void)
   for (int i = 0; i < 4; ++i) {
     struct shard_writer* w = ss->open(ss, 0, (uint64_t)(4 + i));
     CHECK(Fail_sink, w);
-    CHECK(Fail_sink,
-          w->write(w, 0, data2, (char*)data2 + sizeof(data2)) == 0);
+    CHECK(Fail_sink, w->write(w, 0, data2, (char*)data2 + sizeof(data2)) == 0);
     CHECK(Fail_sink, w->finalize(w) == 0);
   }
 

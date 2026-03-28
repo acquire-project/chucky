@@ -1,5 +1,5 @@
-#include "multiarray.cpu.h"
 #include "dimension.h"
+#include "multiarray.cpu.h"
 #include "stream.cpu.h"
 #include "test_shard_sink.h"
 #include "util/prelude.h"
@@ -161,12 +161,10 @@ test_switch_at_epoch_boundary(void)
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
   // Write exactly 1 epoch (8 elements) to array 0.
-  CHECK(Fail,
-        write_fill(w, 0, 8, 1, 0xAB).error == multiarray_writer_ok);
+  CHECK(Fail, write_fill(w, 0, 8, 1, 0xAB).error == multiarray_writer_ok);
 
   // Switch to array 1 should succeed (at epoch boundary).
-  CHECK(Fail,
-        write_fill(w, 1, 8, 1, 0xCD).error == multiarray_writer_ok);
+  CHECK(Fail, write_fill(w, 1, 8, 1, 0xCD).error == multiarray_writer_ok);
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
@@ -208,8 +206,7 @@ test_switch_mid_epoch_rejected(void)
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
   // Write half an epoch (4 of 8 elements) to array 0.
-  CHECK(Fail,
-        write_fill(w, 0, 4, 1, 0xCD).error == multiarray_writer_ok);
+  CHECK(Fail, write_fill(w, 0, 4, 1, 0xCD).error == multiarray_writer_ok);
 
   // Try to switch to array 1 — should be rejected.
   {
@@ -221,8 +218,7 @@ test_switch_mid_epoch_rejected(void)
   }
 
   // Finish the epoch and flush.
-  CHECK(Fail,
-        write_fill(w, 0, 4, 1, 0xEF).error == multiarray_writer_ok);
+  CHECK(Fail, write_fill(w, 0, 4, 1, 0xEF).error == multiarray_writer_ok);
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
   multiarray_tile_stream_cpu_destroy(ms);
@@ -330,8 +326,7 @@ test_many_arrays(void)
 
   // epoch_elements = 8
   for (int i = 0; i < N; ++i)
-    CHECK(Fail,
-          write_fill(w, i, 8, 1, 0x42).error == multiarray_writer_ok);
+    CHECK(Fail, write_fill(w, i, 8, 1, 0x42).error == multiarray_writer_ok);
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
@@ -817,7 +812,9 @@ test_mixed_lod(void)
   CHECK(Fail, l0 > 0);
   CHECK(Fail, lod > 0);
   log_info("  plain: %d shards, lod L0: %d L1+: %d",
-           test_sink_shard_count(&sink0), l0, lod);
+           test_sink_shard_count(&sink0),
+           l0,
+           lod);
 
   multiarray_tile_stream_cpu_destroy(ms);
   test_sink_free(&sink0);
@@ -857,8 +854,7 @@ test_write_past_max_cursor(void)
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
   // Write exactly max_cursor (16 elements).
-  CHECK(Fail,
-        write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
+  CHECK(Fail, write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
 
   // Writing more should return finished.
   {
