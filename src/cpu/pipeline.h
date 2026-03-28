@@ -3,6 +3,7 @@
 #include "stream/layouts.h"
 #include "types.codec.h"
 #include "types.stream.h"
+#include "writer.h"
 #include "zarr/shard_delivery.h"
 
 // Aggregate output slot (one per level).
@@ -26,6 +27,7 @@ struct flush_level_view
   uint32_t* batch_gather;
   struct cpu_agg_slot* agg_slot;
   struct shard_state* shard;
+  struct io_event* io_done; // tracks pending async IO for this level's agg buffer
 };
 
 struct flush_batch_params

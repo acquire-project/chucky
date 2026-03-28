@@ -30,6 +30,7 @@ struct array_descriptor
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
+  struct io_event io_done[LOD_MAX_LEVELS];
 };
 
 // ---- Main struct ----
@@ -494,6 +495,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
       .batch_gather = ms->batch_gather[lv],
       .agg_slot = &ms->agg_slots[lv],
       .shard = &desc->shard[lv],
+      .io_done = &desc->io_done[lv],
     };
   }
   return p;
@@ -812,6 +814,10 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
     struct array_descriptor* desc = &ms->arrays[i];
 
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
+      // Wait for pending async IO before finalizing.
+      if (desc->sink->wait_fence && desc->io_done[lv].seq > 0)
+        desc->sink->wait_fence(desc->sink, (uint8_t)lv, desc->io_done[lv]);
+
       if (desc->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&desc->shard[lv], desc->config.shard_alignment))
           return 1;

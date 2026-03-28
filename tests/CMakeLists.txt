@@ -65,6 +65,9 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 # CPU stream with n_append > 1 (no CUDA)
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
 
+# CPU stream + zarr_fs_sink integration (exercises async IO fencing)
+add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd test_platform test_shard_verify)
+
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_test_exe(test_cross_validate test_cross_validate.c CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
 

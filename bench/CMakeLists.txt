@@ -9,7 +9,17 @@ endfunction()
 # bench_util: static library with pipeline benchmark infrastructure
 add_library(bench_util STATIC bench_util.c bench_util.h)
 target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(bench_util PUBLIC stream stream_cpu zarr_fs_sink zarr_s3_sink test_data CUDA::cuda_driver PRIVATE warnings)
+target_link_libraries(
+    bench_util
+    PUBLIC
+        stream
+        stream_cpu
+        zarr_fs_sink
+        zarr_s3_sink
+        test_data
+        CUDA::cuda_driver
+    PRIVATE warnings
+)
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES

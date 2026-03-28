@@ -470,6 +470,7 @@ make_flush_params(struct tile_stream_cpu* s)
       .batch_gather = s->batch_gather[lv],
       .agg_slot = &s->agg_slots[lv],
       .shard = &s->shard[lv],
+      .io_done = &s->io_done[lv],
     };
   }
   return p;
@@ -700,6 +701,10 @@ cpu_flush(struct writer* self)
     platform_toc(&emit_clk);
 
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
+      // Wait for pending async IO before finalizing.
+      if (s->shard_sink->wait_fence && s->io_done[lv].seq > 0)
+        s->shard_sink->wait_fence(s->shard_sink, (uint8_t)lv, s->io_done[lv]);
+
       if (s->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&s->shard[lv], s->config.shard_alignment))
           return writer_error();

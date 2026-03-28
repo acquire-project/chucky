@@ -146,6 +146,10 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (active_count == 0)
       continue;
 
+    // Wait for pending async IO before overwriting aggregate buffer.
+    if (p->sink->wait_fence && lvl->io_done->seq > 0)
+      p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
+
     if (active_count == lvl->batch_active_count &&
         lvl->batch_active_count > 1) {
       if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
@@ -160,6 +164,10 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
           return 1;
       }
     }
+
+    // Record fence so next batch waits for this delivery's IO.
+    if (p->sink->record_fence)
+      *lvl->io_done = p->sink->record_fence(p->sink, (uint8_t)lv);
   }
 
   return 0;

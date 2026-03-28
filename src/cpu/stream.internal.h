@@ -60,6 +60,10 @@ struct tile_stream_cpu
   uint32_t batch_accumulated;                    // 0..K-1
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS]; // per-epoch active level mask
 
+  // IO fence state: tracks pending async IO per level so we don't
+  // overwrite aggregate buffers before write_direct completes.
+  struct io_event io_done[LOD_MAX_LEVELS];
+
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
