@@ -3,6 +3,8 @@
 A high-performance streaming library for tiled transformation and compression of
 large multidimensional arrays (tensors) using CUDA.
 
+[Benchmarks](https://acquire-project.github.io/chucky/)
+
 ## Overview
 
 Chucky implements a GPU-accelerated streaming pipeline for writing compressed,
