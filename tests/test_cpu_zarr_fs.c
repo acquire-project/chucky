@@ -356,7 +356,7 @@ main(void)
 {
   int err = 0;
 
-  char tmpdir1[4096], tmpdir2[4096];
+  char tmpdir1[256], tmpdir2[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
 

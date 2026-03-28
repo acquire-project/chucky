@@ -88,11 +88,9 @@ add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
 
-# Test platform utilities (GPU-only; add_platform_sources needs the target to exist)
-if(CHUCKY_ENABLE_GPU)
-    add_test_lib(test_platform test_platform.h)
-    add_platform_sources(test_platform)
-endif()
+# Test platform utilities
+add_test_lib(test_platform test_platform.h)
+add_platform_sources(test_platform)
 
 # Shared test data generation library
 add_test_lib(test_data test_data.c test_data.h)
