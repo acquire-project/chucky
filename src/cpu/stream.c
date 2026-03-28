@@ -702,7 +702,7 @@ cpu_flush(struct writer* self)
 
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       // Wait for pending async IO before finalizing.
-      if (s->shard_sink->wait_fence && s->io_done[lv].seq > 0)
+      if (s->shard_sink->wait_fence)
         s->shard_sink->wait_fence(s->shard_sink, (uint8_t)lv, s->io_done[lv]);
 
       if (s->shard[lv].epoch_in_shard > 0) {

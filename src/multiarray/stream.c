@@ -815,7 +815,7 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
 
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
       // Wait for pending async IO before finalizing.
-      if (desc->sink->wait_fence && desc->io_done[lv].seq > 0)
+      if (desc->sink->wait_fence)
         desc->sink->wait_fence(desc->sink, (uint8_t)lv, desc->io_done[lv]);
 
       if (desc->shard[lv].epoch_in_shard > 0) {

@@ -147,7 +147,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
       continue;
 
     // Wait for pending async IO before overwriting aggregate buffer.
-    if (p->sink->wait_fence && lvl->io_done->seq > 0)
+    if (p->sink->wait_fence)
       p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
 
     if (active_count == lvl->batch_active_count &&
