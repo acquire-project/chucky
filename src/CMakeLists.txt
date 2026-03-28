@@ -42,7 +42,9 @@ add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts
 
 # --- Backend subdirectories ---
 
-add_subdirectory(gpu)
+if(CHUCKY_ENABLE_GPU)
+    add_subdirectory(gpu)
+endif()
 add_subdirectory(cpu)
 
 add_subdirectory(multiarray)

@@ -16,6 +16,13 @@
         "CMAKE_C_FLAGS": "-I/usr/local/cuda/include",
         "CMAKE_CXX_FLAGS": "-I/usr/local/cuda/include"
       }
+    },
+    {
+      "name": "cpu-only",
+      "inherits": "default",
+      "cacheVariables": {
+        "CHUCKY_ENABLE_GPU": "OFF"
+      }
     }
   ]
 }

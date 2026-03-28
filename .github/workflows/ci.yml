@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build CPU-only image
+        run: docker build -f Dockerfile.cpu -t chucky-cpu .
+
+      - name: Run CPU tests
+        run: >
+          docker run --rm chucky-cpu
+          ctest --test-dir build --output-on-failure
+          --exclude-regex test-test_zarr_s3_sink
+
+  gpu-tests:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test (GPU)
+        run: docker compose run --rm test

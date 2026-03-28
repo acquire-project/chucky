@@ -36,18 +36,39 @@ up to 32 LOD levels. Internal layout supports up to 64 dimensions.
 
 ### Prerequisites
 
+**Full (GPU) build:**
+
 - **CUDA Toolkit** (12.8+) — CUDA runtime and nvcc compiler
 - [**nvcomp**][nvcomp] (5.x) — NVIDIA compression library for GPU-accelerated
   codecs
-- **aws-c-s3** — Amazon S3 client library for S3 storage backend
-- **zstd** — Zstandard compression (CPU-side, used by tests)
-- **CMake** (3.18+) + **Ninja** — build system
 - NVIDIA GPU with 8+ GB VRAM (16+ GB recommended for multiscale workloads)
+
+**CPU-only build** — no CUDA or GPU required.
+
+**Both:**
+
+- **aws-c-s3** — Amazon S3 client library for S3 storage backend
+- **lz4**, **zstd** — compression libraries
+- **CMake** (3.18+) + **Ninja** — build system
 
 The default build targets SM 100 (Blackwell). For other GPUs, set
 `CMAKE_CUDA_ARCHITECTURES` at configure time.
 
 ### Build
+
+The build auto-detects CUDA. If a CUDA compiler is found, GPU backends are
+enabled automatically. To force a CPU-only build, use the `cpu-only` preset or
+pass `-DCHUCKY_ENABLE_GPU=OFF`.
+
+```
+# Full build (auto-detects CUDA)
+cmake --preset default
+cmake --build build
+
+# CPU-only build (no CUDA required)
+cmake --preset cpu-only
+cmake --build build
+```
 
 The easiest way to get the non-CUDA dependencies (lz4, zstd, aws-c-s3) is via
 [vcpkg][vcpkg]. A `vcpkg.json` manifest is included in the repo:
