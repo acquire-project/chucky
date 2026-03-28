@@ -2,10 +2,11 @@
 #   Creates a STATIC library, exposes its headers, and links warnings.
 #   LINKS are added as PUBLIC dependencies.
 #   All targets get src/ as their single public include root.
+set(_SRC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 function(add_src_lib TARGET)
     cmake_parse_arguments(ARG "" "" "SOURCES;LINKS" ${ARGN})
     add_library(${TARGET} STATIC ${ARG_SOURCES})
-    target_include_directories(${TARGET} PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(${TARGET} PUBLIC ${_SRC_INCLUDE_DIR})
     target_link_libraries(${TARGET} PRIVATE warnings)
     if(ARG_LINKS)
         target_link_libraries(${TARGET} PUBLIC ${ARG_LINKS})
