@@ -66,6 +66,22 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t total_append_chunks,
                                 uint64_t* append_sizes);
 
+// Compute the exact dim 0 extent from a flat element cursor.
+// Returns cursor_elements / product(dim[d].size for d=1..rank-1).
+// Use this to fix up append_sizes[0] after decompose_append_sizes when
+// the exact cursor is known (e.g. at final flush).
+static inline uint64_t
+dim_info_exact_dim0(const struct dim_info* info, uint64_t cursor_elements)
+{
+  uint64_t inner = 1;
+  for (const struct dimension* d = info->append.beg + 1; d < info->append.end;
+       ++d)
+    inner *= d->size;
+  for (const struct dimension* d = info->inner.beg; d < info->inner.end; ++d)
+    inner *= d->size;
+  return inner > 0 ? cursor_elements / inner : 0;
+}
+
 // Partition dims into append/inner, validate constraints, precompute
 // derived values. Returns 0 on success.
 //

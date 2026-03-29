@@ -733,6 +733,9 @@ cpu_flush(struct writer* self)
       uint64_t append_sizes[HALF_MAX_RANK];
       dim_info_decompose_append_sizes(
         &s->cl.dims, append_chunks[lv], append_sizes);
+      if (lv == 0)
+        append_sizes[0] =
+          dim_info_exact_dim0(&s->cl.dims, s->cursor_elements);
       if (s->shard_sink->update_append(
             s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
