@@ -242,8 +242,10 @@ zarr_multiscale_group_json(char* buf,
       }
       jw_string(&jw, type);
     }
-    jw_key(&jw, "unit");
-    jw_string(&jw, l0[d].ngff.unit ? l0[d].ngff.unit : "index");
+    if (l0[d].ngff.unit) {
+      jw_key(&jw, "unit");
+      jw_string(&jw, l0[d].ngff.unit);
+    }
     jw_object_end(&jw);
   }
   jw_array_end(&jw);

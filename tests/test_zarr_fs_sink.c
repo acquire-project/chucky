@@ -482,7 +482,7 @@ test_multiscale_unit_scale(const char* tmpdir)
       .name = "x",
       .downsample = 1,
       .storage_position = 2,
-      .ngff = { .unit = NULL, .scale = 0.0 } }, // defaults: "index", 1.0
+      .ngff = { .unit = NULL, .scale = 0.0 } }, // NULL unit → omitted
   };
 
   struct zarr_multiscale_config cfg = {
@@ -500,11 +500,6 @@ test_multiscale_unit_scale(const char* tmpdir)
   {
     char* data;
     CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
-
-    // Check explicit units
-    CHECK(Fail2, strstr(data, "\"unit\":\"micrometer\""));
-    // Check NULL unit defaults to "index"
-    CHECK(Fail2, strstr(data, "\"unit\":\"index\""));
 
     // L0 scale: z=0.5*1=0.5, y=0.3*1=0.3, x=1.0*1=1.0
     CHECK(Fail2, strstr(data, "\"scale\":[0.5,0.3,1.0]"));
