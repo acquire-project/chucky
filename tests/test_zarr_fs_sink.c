@@ -467,25 +467,22 @@ test_multiscale_unit_scale(const char* tmpdir)
       .chunk_size = 8,
       .chunks_per_shard = 4,
       .name = "z",
-      .unit = "micrometer",
-      .scale = 0.5,
       .downsample = 1,
-      .storage_position = 0 },
+      .storage_position = 0,
+      .ngff = { .unit = "micrometer", .scale = 0.5 } },
     { .size = 32,
       .chunk_size = 8,
       .chunks_per_shard = 2,
       .name = "y",
-      .unit = "micrometer",
-      .scale = 0.3,
-      .storage_position = 1 },
+      .storage_position = 1,
+      .ngff = { .unit = "micrometer", .scale = 0.3 } },
     { .size = 64,
       .chunk_size = 8,
       .chunks_per_shard = 4,
       .name = "x",
-      .unit = NULL, // should default to "index"
-      .scale = 0.0, // should default to 1.0
       .downsample = 1,
-      .storage_position = 2 },
+      .storage_position = 2,
+      .ngff = { .unit = NULL, .scale = 0.0 } }, // defaults: "index", 1.0
   };
 
   struct zarr_multiscale_config cfg = {

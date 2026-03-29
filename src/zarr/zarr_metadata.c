@@ -226,7 +226,7 @@ zarr_multiscale_group_json(char* buf,
     jw_key(&jw, "type");
     {
       const char* type;
-      switch (l0[d].axis_type) {
+      switch (l0[d].ngff.type) {
         case dimension_axis_time:
           type = "time";
           break;
@@ -243,7 +243,7 @@ zarr_multiscale_group_json(char* buf,
       jw_string(&jw, type);
     }
     jw_key(&jw, "unit");
-    jw_string(&jw, l0[d].unit ? l0[d].unit : "index");
+    jw_string(&jw, l0[d].ngff.unit ? l0[d].ngff.unit : "index");
     jw_object_end(&jw);
   }
   jw_array_end(&jw);
@@ -260,7 +260,7 @@ zarr_multiscale_group_json(char* buf,
     // Precompute per-axis physical scale and downsample factor
     double scale[MAX_ZARR_RANK], translation[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
-      double phys = l0[d].scale > 0 ? l0[d].scale : 1.0;
+      double phys = l0[d].ngff.scale > 0 ? l0[d].ngff.scale : 1.0;
       double factor = 1.0;
       if (l0[d].downsample && level_dims[lv][d].size > 0) {
         if (l0[d].size == 0)

@@ -13,6 +13,17 @@ enum dimension_axis_type
   dimension_axis_other,
 };
 
+// OME-NGFF v0.5 axis metadata: unit, scale, and type.
+// Only consumed by zarr metadata writers.
+struct omengff_axis
+{
+  const char* unit; // axis unit (e.g. "micrometer"),
+                    // NULL defaults to "index" in metadata
+  double scale;     // physical pixel scale for coordinateTransformations
+                    // (must be non-negative; 0 treated as 1.0)
+  enum dimension_axis_type type; // space, time, channel, or other
+};
+
 struct dimension
 {
   uint64_t size; // 0 means unbounded (dim 0 only: stream indefinitely)
@@ -20,15 +31,11 @@ struct dimension
   uint64_t chunks_per_shard; // 0 means all chunks along this dimension
                              // (must be > 0 when size == 0)
   const char* name;          // optional label (e.g. "x"), may be NULL
-  const char* unit;          // OME-NGFF v0.5 axis unit (e.g. "micrometer"),
-                             // NULL defaults to "index" in metadata
-  double scale;   // physical pixel scale for coordinateTransformations
-                  // (must be non-negative; 0 treated as 1.0)
-  int downsample; // include in LOD pyramid
-  uint8_t storage_position; // position in storage layout (0=outermost).
-                            // dims[0].storage_position must be 0.
-                            // Must be a valid permutation of 0..rank-1.
-  enum dimension_axis_type axis_type; // OME-NGFF axis type
+  int downsample;            // include in LOD pyramid
+  uint8_t storage_position;  // position in storage layout (0=outermost).
+                             // dims[0].storage_position must be 0.
+                             // Must be a valid permutation of 0..rank-1.
+  struct omengff_axis ngff;  // OME-NGFF v0.5 axis metadata
 };
 
 // Initialize dims from a name string and sizes array.
