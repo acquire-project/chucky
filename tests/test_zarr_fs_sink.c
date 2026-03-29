@@ -409,6 +409,7 @@ test_multiscale_metadata(const char* tmpdir)
     CHECK(Fail2, strstr(data, "\"path\":\"0\""));
     CHECK(Fail2, strstr(data, "\"path\":\"1\""));
     CHECK(Fail2, strstr(data, "\"coordinateTransformations\""));
+    CHECK(Fail2, strstr(data, "\"unit\":\"index\""));
     free(data);
   }
 
@@ -440,6 +441,74 @@ test_multiscale_metadata(const char* tmpdir)
     data[len < 4095 ? len : 4095] = '\0';
 
     CHECK(Fail2, strstr((char*)data, "\"shape\":[64,32,32]"));
+    free(data);
+  }
+
+  zarr_fs_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: unit and scale in multiscale metadata ---
+
+static int
+test_multiscale_unit_scale(const char* tmpdir)
+{
+  log_info("=== test_multiscale_unit_scale ===");
+
+  struct dimension dims[] = {
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "z",
+      .downsample = 1,
+      .storage_position = 0,
+      .ngff = { .unit = "micrometer", .scale = 0.5 } },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1,
+      .ngff = { .unit = "micrometer", .scale = 0.3 } },
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 2,
+      .ngff = { .unit = NULL, .scale = 0.0 } }, // defaults: "index", 1.0
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .nlod = 0,
+  };
+
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  {
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+
+    // Check explicit units
+    CHECK(Fail2, strstr(data, "\"unit\":\"micrometer\""));
+    // Check NULL unit defaults to "index"
+    CHECK(Fail2, strstr(data, "\"unit\":\"index\""));
+
+    // L0 scale: z=0.5*1=0.5, y=0.3*1=0.3, x=1.0*1=1.0
+    CHECK(Fail2, strstr(data, "\"scale\":[0.5,0.3,1.0]"));
+
     free(data);
   }
 
@@ -1815,6 +1884,14 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/msmeta", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_metadata(sub);
+  }
+
+  // Multiscale unit/scale metadata test (no CUDA needed)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/msunitscale", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_multiscale_unit_scale(sub);
   }
 
   // Multiscale unbounded metadata test (no CUDA needed)

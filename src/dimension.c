@@ -55,7 +55,7 @@ dims_create(struct dimension* dims, const char* names, const uint64_t* sizes)
       .name = name_table[ch],
       .downsample = 0,
       .storage_position = i,
-      .axis_type = dimension_axis_space,
+      .ngff = { .unit = NULL, .scale = 1.0, .type = dimension_axis_space },
     };
   }
   return rank;
