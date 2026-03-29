@@ -244,14 +244,14 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CU(FailPhase2, cuStreamSynchronize(out->streams.compute));
 
-  // Precompute max_cursor so append doesn't recompute each call.
+  // Precompute max_cursor_elements so append doesn't recompute each call.
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&out->dims);
     if (dims[0].size > 0) {
-      out->max_cursor = out->layout.epoch_elements;
+      out->max_cursor_elements = out->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        out->max_cursor *= ceildiv(dims[d].size, dims[d].chunk_size);
+        out->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
 
@@ -289,7 +289,7 @@ tile_stream_gpu_writer(struct tile_stream_gpu* s)
 uint64_t
 tile_stream_gpu_cursor(const struct tile_stream_gpu* s)
 {
-  return s->cursor;
+  return s->cursor_elements;
 }
 
 struct tile_stream_status
