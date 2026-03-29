@@ -487,6 +487,29 @@ test_dim_info_final_append_sizes(void)
   dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
   CHECK(Error, append_sizes[0] == 12);
 
+  // n_append=2: "tzyx", chunk (1,1,64,64), z bounded at size=10
+  {
+    struct dimension dims2[4];
+    uint64_t sizes2[] = { 0, 10, 128, 128 };
+    dims_create(dims2, "tzyx", sizes2);
+    uint64_t cs2[] = { 1, 1, 64, 64 };
+    dims_set_chunk_sizes(dims2, 4, cs2);
+    dims2[0].chunks_per_shard = 4;
+    dims2[1].chunks_per_shard = 10;
+    dims_set_downsample_by_name(dims2, 4, "yx");
+
+    struct dim_info info2;
+    CHECK(Error, dim_info_init(&info2, dims2, 4) == 0);
+    CHECK(Error, dim_info_n_append(&info2) == 2);
+
+    // 7 frames of 10×128×128
+    uint64_t cursor2 = 7 * 10 * 128 * 128;
+    uint64_t as2[2];
+    dim_info_final_append_sizes(&info2, cursor2, 0, as2);
+    CHECK(Error, as2[0] == 7);  // dim 0: exact from cursor
+    CHECK(Error, as2[1] == 10); // dim 1: bounded, declared size
+  }
+
   ok = 1;
 Error:
   REPORT_TEST(ok);
