@@ -53,6 +53,8 @@ dims_create(struct dimension* dims, const char* names, const uint64_t* sizes)
       .chunk_size = sizes[i],
       .chunks_per_shard = 0,
       .name = name_table[ch],
+      .unit = NULL,
+      .scale = 1.0,
       .downsample = 0,
       .storage_position = i,
       .axis_type = dimension_axis_space,
