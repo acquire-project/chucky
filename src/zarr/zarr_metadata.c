@@ -15,6 +15,8 @@ zarr_root_json(char* buf, size_t cap)
   jw_int(&jw, 3);
   jw_key(&jw, "node_type");
   jw_string(&jw, "group");
+  jw_key(&jw, "consolidated_metadata");
+  jw_null(&jw);
   jw_object_end(&jw);
 
   if (jw_error(&jw))
@@ -193,6 +195,9 @@ zarr_multiscale_group_json(char* buf,
 
   jw_key(&jw, "node_type");
   jw_string(&jw, "group");
+
+  jw_key(&jw, "consolidated_metadata");
+  jw_null(&jw);
 
   jw_key(&jw, "attributes");
   jw_object_begin(&jw);
