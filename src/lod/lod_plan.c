@@ -141,18 +141,19 @@ lod_segment(const struct lod_plan* p, int level)
   return (struct lod_span){ .beg = next.beg - base, .end = next.end - base };
 }
 
-// Would halving produce a level where any LOD dim < its chunk size?
+// Are all LOD dims already at 1 chunk or fewer?
+// Stop generating levels when every dim fits in a single chunk.
 static int
-next_level_below_chunk(int lod_ndim,
-                       const uint64_t* lod_shape,
-                       const uint64_t* lod_chunk)
+all_chunks_le_one(int lod_ndim,
+                  const uint64_t* lod_shape,
+                  const uint64_t* lod_chunk)
 {
   for (int d = 0; d < lod_ndim; ++d) {
-    uint64_t next = (lod_shape[d] + 1) / 2;
-    if (next < lod_chunk[d])
-      return 1;
+    uint64_t nchunks = (lod_shape[d] + lod_chunk[d] - 1) / lod_chunk[d];
+    if (nchunks > 1)
+      return 0;
   }
-  return 0;
+  return 1;
 }
 
 int
@@ -249,9 +250,8 @@ lod_plan_init_shapes(struct lod_plan* p,
 
   p->nlod = 1;
   while (p->nlod < max_levels &&
-         !is_all_ones(p->lod_ndim, p->lod_shapes[p->nlod - 1]) &&
-         !next_level_below_chunk(
-           p->lod_ndim, p->lod_shapes[p->nlod - 1], lod_chunk)) {
+         !all_chunks_le_one(p->lod_ndim, p->lod_shapes[p->nlod - 1],
+                            lod_chunk)) {
     for (int k = 0; k < p->lod_ndim; ++k)
       p->lod_shapes[p->nlod][k] = (p->lod_shapes[p->nlod - 1][k] + 1) / 2;
     memcpy(p->shapes[p->nlod],
