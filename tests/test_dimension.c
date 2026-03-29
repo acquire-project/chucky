@@ -460,6 +460,86 @@ Error:
   return !ok;
 }
 
+static int
+test_dim_info_final_append_sizes(void)
+{
+  // Bug scenario: 12 frames with chunk_size=5 should report 12, not 15.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 0, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 32, 32 };
+  dims_set_chunk_sizes(dims, 3, cs);
+  dims[0].chunks_per_shard = 4;
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 3) == 0);
+
+  // 12 frames of 64x64
+  uint64_t cursor = 12 * 64 * 64;
+  uint64_t append_sizes[1];
+
+  // Level 0: exact dim0 = 12 (not ceildiv(12,5)*5 = 15)
+  dim_info_final_append_sizes(&info, cursor, 0, append_sizes);
+  CHECK(Error, append_sizes[0] == 12);
+
+  // Without append_downsample, all levels report the same dim0
+  dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
+  CHECK(Error, append_sizes[0] == 12);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dim_info_final_append_sizes_lod(void)
+{
+  // With append_downsample, LOD levels halve dim 0.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 0, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 1, 32, 32 };
+  dims_set_chunk_sizes(dims, 3, cs);
+  dims[0].chunks_per_shard = 4;
+  dims_set_downsample_by_name(dims, 3, "tyx");
+
+  struct dim_info info;
+  CHECK(Error, dim_info_init(&info, dims, 3) == 0);
+  CHECK(Error, info.append_downsample == 1);
+
+  uint64_t cursor = 12 * 64 * 64;
+  uint64_t append_sizes[1];
+
+  // Level 0: exact
+  dim_info_final_append_sizes(&info, cursor, 0, append_sizes);
+  CHECK(Error, append_sizes[0] == 12);
+
+  // Level 1: ceildiv(12, 2) = 6
+  dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
+  CHECK(Error, append_sizes[0] == 6);
+
+  // Level 2: ceildiv(12, 4) = 3
+  dim_info_final_append_sizes(&info, cursor, 2, append_sizes);
+  CHECK(Error, append_sizes[0] == 3);
+
+  // Level 3: ceildiv(12, 8) = 2
+  dim_info_final_append_sizes(&info, cursor, 3, append_sizes);
+  CHECK(Error, append_sizes[0] == 2);
+
+  // Odd count: 11 frames
+  cursor = 11 * 64 * 64;
+  dim_info_final_append_sizes(&info, cursor, 1, append_sizes);
+  CHECK(Error, append_sizes[0] == 6); // ceildiv(11, 2)
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
 int
 main(void)
 {
@@ -487,6 +567,8 @@ main(void)
     { "dim_info_three_append", test_dim_info_three_append },
     { "dim_info_rejects_unbounded_non_dim0",
       test_dim_info_rejects_unbounded_non_dim0 },
+    { "dim_info_final_append_sizes", test_dim_info_final_append_sizes },
+    { "dim_info_final_append_sizes_lod", test_dim_info_final_append_sizes_lod },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

@@ -700,13 +700,6 @@ cpu_flush(struct writer* self)
   }
 
   // Emit partial shards.
-  uint64_t append_chunks[LOD_MAX_LEVELS];
-  for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    struct shard_state* ss = &s->shard[lv];
-    append_chunks[lv] =
-      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  }
-
   {
     struct platform_clock emit_clk = { 0 };
     platform_toc(&emit_clk);
@@ -731,11 +724,8 @@ cpu_flush(struct writer* self)
     const uint8_t na = dim_info_n_append(&s->cl.dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_decompose_append_sizes(
-        &s->cl.dims, append_chunks[lv], append_sizes);
-      if (lv == 0)
-        append_sizes[0] =
-          dim_info_exact_dim0(&s->cl.dims, s->cursor_elements);
+      dim_info_final_append_sizes(
+        &s->cl.dims, s->cursor_elements, lv, append_sizes);
       if (s->shard_sink->update_append(
             s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();

@@ -842,14 +842,9 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
     if (desc->sink->update_append) {
       const uint8_t na = dim_info_n_append(&desc->cl.dims);
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-        struct shard_state* ss = &desc->shard[lv];
-        uint64_t total_ac =
-          ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
         uint64_t append_sizes[HALF_MAX_RANK];
-        dim_info_decompose_append_sizes(&desc->cl.dims, total_ac, append_sizes);
-        if (lv == 0)
-          append_sizes[0] =
-            dim_info_exact_dim0(&desc->cl.dims, desc->cursor_elements);
+        dim_info_final_append_sizes(
+          &desc->cl.dims, desc->cursor_elements, lv, append_sizes);
         if (desc->sink->update_append(
               desc->sink, (uint8_t)lv, na, append_sizes))
           return 1;

@@ -37,7 +37,7 @@ dispatch_ingest(struct tile_stream_gpu* s)
     return ingest_dispatch_multiscale(&s->stage,
                                       s->lod.d_linear,
                                       s->layout.epoch_elements,
-                                      &s->cursor,
+                                      &s->cursor_elements,
                                       dtype_bpe(s->config.dtype),
                                       s->streams.h2d,
                                       s->streams.compute);
@@ -47,7 +47,7 @@ dispatch_ingest(struct tile_stream_gpu* s)
                                    &s->lod.layout_gpu[0],
                                    current_pool_epoch(s, s->batch.accumulated),
                                    s->pools.ready[s->pools.current],
-                                   &s->cursor,
+                                   &s->cursor_elements,
                                    dtype_bpe(s->config.dtype),
                                    s->streams.h2d,
                                    s->streams.compute);
@@ -70,11 +70,11 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
-  const uint64_t max_cursor = s->max_cursor;
+  const uint64_t max_cursor_elements = s->max_cursor_elements;
 
   while (src < end) {
     // Bounded append dims: check capacity
-    if (max_cursor > 0 && s->cursor >= max_cursor) {
+    if (max_cursor_elements > 0 && s->cursor_elements >= max_cursor_elements) {
       struct writer_result fr = tile_stream_gpu_flush(&s->writer);
       if (fr.error)
         return writer_error_at(src, end);
@@ -82,14 +82,16 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     }
 
     const uint64_t epoch_remaining =
-      s->layout.epoch_elements - (s->cursor % s->layout.epoch_elements);
+      s->layout.epoch_elements -
+      (s->cursor_elements % s->layout.epoch_elements);
     const uint64_t input_remaining = (uint64_t)(end - src) / bytes_per_element;
     uint64_t elements_this_pass =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
 
     // Bounded append dims: clamp to remaining capacity
-    if (max_cursor > 0) {
-      const uint64_t remaining_capacity = max_cursor - s->cursor;
+    if (max_cursor_elements > 0) {
+      const uint64_t remaining_capacity =
+        max_cursor_elements - s->cursor_elements;
       if (elements_this_pass > remaining_capacity)
         elements_this_pass = remaining_capacity;
     }
@@ -108,7 +110,7 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
           struct staging_slot* ss = &s->stage.slot[si];
           CU(Error, cuEventSynchronize(ss->t_h2d_end));
 
-          if (s->cursor > 0) {
+          if (s->cursor_elements > 0) {
             accumulate_metric_cu(&s->metrics.h2d,
                                  ss->t_h2d_start,
                                  ss->t_h2d_end,
@@ -146,7 +148,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     }
     src += bytes_this_pass;
 
-    if (s->cursor % s->layout.epoch_elements == 0 && s->cursor > 0) {
+    if (s->cursor_elements % s->layout.epoch_elements == 0 &&
+        s->cursor_elements > 0) {
       struct writer_result fr = flush_accumulate_epoch(s);
       if (fr.error)
         return writer_error_at(src, end);
@@ -177,7 +180,7 @@ tile_stream_gpu_flush(struct writer* self)
     return r;
 
   // Flush any partial epoch first (sub-epoch data)
-  if (s->cursor % s->layout.epoch_elements != 0) {
+  if (s->cursor_elements % s->layout.epoch_elements != 0) {
     // run_lod + record pool event + increment epochs_accumulated
     if (flush_run_epoch_lod(s))
       return writer_error();
@@ -197,15 +200,6 @@ tile_stream_gpu_flush(struct writer* self)
   if (r.error)
     return r;
 
-  // Capture actual append chunk counts before partial shard emission,
-  // since finalize_shards resets epoch_in_shard and increments shard_epoch.
-  uint64_t append_chunks[LOD_MAX_LEVELS];
-  for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    struct shard_state* ss = &s->compress_agg.levels[lv].shard;
-    append_chunks[lv] =
-      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  }
-
   // Emit partial shards for all levels
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     if (s->compress_agg.levels[lv].shard.epoch_in_shard > 0) {
@@ -220,10 +214,8 @@ tile_stream_gpu_flush(struct writer* self)
     const uint8_t na = dim_info_n_append(&s->dims);
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_decompose_append_sizes(
-        &s->dims, append_chunks[lv], append_sizes);
-      if (lv == 0)
-        append_sizes[0] = dim_info_exact_dim0(&s->dims, s->cursor);
+      dim_info_final_append_sizes(
+        &s->dims, s->cursor_elements, lv, append_sizes);
       if (s->shard_sink->update_append(
             s->shard_sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
