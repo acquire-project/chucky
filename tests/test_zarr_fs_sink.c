@@ -38,6 +38,34 @@ read_file_all(const char* path, uint8_t** out, size_t* out_len)
   return 0;
 }
 
+// Read a group zarr.json at `dir`/zarr.json and validate common fields.
+// On success returns 0 and sets *out (caller must free).
+// On failure returns non-zero.
+static int
+check_group_zarr_json(const char* dir, char** out, size_t bufsz)
+{
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/zarr.json", dir);
+  if (!test_file_exists(path))
+    return 1;
+
+  uint8_t* data;
+  size_t len;
+  if (read_file_all(path, &data, &len))
+    return 1;
+  data[len < bufsz - 1 ? len : bufsz - 1] = '\0';
+
+  int ok = strstr((char*)data, "\"zarr_format\":3") &&
+           strstr((char*)data, "\"node_type\":\"group\"") &&
+           strstr((char*)data, "\"consolidated_metadata\":null");
+  if (!ok) {
+    free(data);
+    return 1;
+  }
+  *out = (char*)data;
+  return 0;
+}
+
 // --- Test: metadata files ---
 
 static int
@@ -75,18 +103,9 @@ test_metadata(const char* tmpdir)
   struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
   CHECK(Fail, zs);
 
-  // Check root zarr.json
   {
-    char path[4096];
-    snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-    CHECK(Fail2, test_file_exists(path));
-
-    uint8_t* data;
-    size_t len;
-    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
-    data[len < 4095 ? len : 4095] = '\0';
-    CHECK(Fail2, strstr((char*)data, "\"zarr_format\":3"));
-    CHECK(Fail2, strstr((char*)data, "\"node_type\":\"group\""));
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
     free(data);
   }
 
@@ -382,23 +401,14 @@ test_multiscale_metadata(const char* tmpdir)
 
   // Check root zarr.json has multiscales attribute
   {
-    char path[4096];
-    snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-    CHECK(Fail2, test_file_exists(path));
-
-    uint8_t* data;
-    size_t len;
-    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
-    data[len < 8191 ? len : 8191] = '\0';
-
-    CHECK(Fail2, strstr((char*)data, "\"zarr_format\":3"));
-    CHECK(Fail2, strstr((char*)data, "\"node_type\":\"group\""));
-    CHECK(Fail2, strstr((char*)data, "\"ome\""));
-    CHECK(Fail2, strstr((char*)data, "\"multiscales\""));
-    CHECK(Fail2, strstr((char*)data, "\"version\":\"0.5\""));
-    CHECK(Fail2, strstr((char*)data, "\"path\":\"0\""));
-    CHECK(Fail2, strstr((char*)data, "\"path\":\"1\""));
-    CHECK(Fail2, strstr((char*)data, "\"coordinateTransformations\""));
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+    CHECK(Fail2, strstr(data, "\"ome\""));
+    CHECK(Fail2, strstr(data, "\"multiscales\""));
+    CHECK(Fail2, strstr(data, "\"version\":\"0.5\""));
+    CHECK(Fail2, strstr(data, "\"path\":\"0\""));
+    CHECK(Fail2, strstr(data, "\"path\":\"1\""));
+    CHECK(Fail2, strstr(data, "\"coordinateTransformations\""));
     free(data);
   }
 
@@ -488,18 +498,9 @@ test_metadata_two_append(const char* tmpdir)
   struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
   CHECK(Fail, zs);
 
-  // Check root zarr.json
   {
-    char path[4096];
-    snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-    CHECK(Fail2, test_file_exists(path));
-
-    uint8_t* data;
-    size_t len;
-    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
-    data[len < 4095 ? len : 4095] = '\0';
-    CHECK(Fail2, strstr((char*)data, "\"zarr_format\":3"));
-    CHECK(Fail2, strstr((char*)data, "\"node_type\":\"group\""));
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
     free(data);
   }
 
@@ -713,16 +714,10 @@ test_multiscale_unbounded(const char* tmpdir)
 
   // Check root zarr.json exists with multiscales
   {
-    char path[4096];
-    snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-    CHECK(Fail2, test_file_exists(path));
-
-    uint8_t* data;
-    size_t len;
-    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
-    data[len < 8191 ? len : 8191] = '\0';
-    int has_ms = strstr((char*)data, "\"multiscales\"") != NULL;
-    int has_p0 = strstr((char*)data, "\"path\":\"0\"") != NULL;
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+    int has_ms = strstr(data, "\"multiscales\"") != NULL;
+    int has_p0 = strstr(data, "\"path\":\"0\"") != NULL;
     free(data);
     CHECK(Fail2, has_ms);
     CHECK(Fail2, has_p0);
