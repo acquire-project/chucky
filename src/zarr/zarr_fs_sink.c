@@ -386,7 +386,6 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
 {
   CHECK(Fail, cfg);
   CHECK(Fail, cfg->store_path);
-  CHECK(Fail, cfg->array_name);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
 
@@ -428,11 +427,15 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   }
 
   // Build array directory path
-  snprintf(zs->array_dir,
-           sizeof(zs->array_dir),
-           "%s/%s",
-           cfg->store_path,
-           cfg->array_name);
+  if (cfg->array_name)
+    snprintf(zs->array_dir,
+             sizeof(zs->array_dir),
+             "%s/%s",
+             cfg->store_path,
+             cfg->array_name);
+  else
+    snprintf(
+      zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
 
   // Create directory tree: ensure shard directories exist.
   // shard_inner_count = prod(shard_count[d] for d >= n_append).
@@ -469,7 +472,8 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   }
 
   // Write metadata
-  CHECK(Fail_alloc, write_root_metadata_file(cfg->store_path) == 0);
+  if (cfg->array_name)
+    CHECK(Fail_alloc, write_root_metadata_file(cfg->store_path) == 0);
   CHECK(Fail_alloc,
         write_array_metadata_file(zs->array_dir,
                                   zs->rank,
