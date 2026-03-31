@@ -12,13 +12,16 @@ include(Msvc)
 include(Warnings)
 include(Nix)
 include(OpenMP)
-include(Coverage)
 include(Gpu)
 include(Lz4)
 include(Zstd)
 
 find_package(Threads REQUIRED)
 find_package(aws-c-s3 REQUIRED CONFIG)
+
+# Coverage flags must come after find_package calls — the instrumentation
+# flags break CMake's try_compile checks (e.g. FindThreads).
+include(Coverage)
 
 add_subdirectory(src)
 
