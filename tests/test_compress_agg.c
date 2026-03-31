@@ -51,14 +51,14 @@ ca_ctx_destroy(struct ca_test_ctx* c)
 // Setup: compute layouts, init compress_agg, allocate pool for n_pool_epochs.
 static int
 ca_ctx_setup(struct ca_test_ctx* c,
-             enum compression_codec codec,
+             struct codec_config codec,
              uint8_t epochs_per_batch,
              int n_pool_epochs)
 {
   make_test_config(&c->config, c->dims, codec, epochs_per_batch);
   CHECK(Fail,
         compute_stream_layouts(&c->config,
-                               codec_alignment(c->config.codec),
+                               codec_alignment(c->config.codec.id),
                                codec_max_output_size,
                                &c->cl) == 0);
 
@@ -226,7 +226,8 @@ test_compress_agg_single_epoch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 1, 1) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 1, 1) == 0);
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
@@ -276,7 +277,8 @@ test_compress_agg_batch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
@@ -370,7 +372,8 @@ test_compress_agg_partial_batch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
@@ -413,7 +416,8 @@ test_compress_agg_zstd_single_epoch(void)
   uint8_t* decomp_buf = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_ZSTD, 1, 1) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_ZSTD }, 1, 1) == 0);
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
@@ -491,7 +495,8 @@ test_compress_agg_zstd_batch(void)
   uint8_t* decomp_buf = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_ZSTD, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_ZSTD }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);

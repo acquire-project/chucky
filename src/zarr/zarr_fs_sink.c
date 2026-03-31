@@ -217,7 +217,7 @@ struct zarr_fs_sink
   struct dimension dimensions[MAX_ZARR_RANK];
   enum dtype data_type;
   double fill_value;
-  enum compression_codec codec;
+  struct codec_config codec;
 };
 
 // --- shard_sink fence ---
@@ -319,7 +319,7 @@ write_array_metadata_file(const char* array_dir,
                           enum dtype data_type,
                           double fill_value,
                           const uint64_t* chunks_per_shard,
-                          enum compression_codec codec)
+                          struct codec_config codec)
 {
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", array_dir);
@@ -434,8 +434,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
              cfg->store_path,
              cfg->array_name);
   else
-    snprintf(
-      zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
+    snprintf(zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
 
   // Create directory tree: ensure shard directories exist.
   // shard_inner_count = prod(shard_count[d] for d >= n_append).

@@ -41,7 +41,7 @@ test_basic_pipeline(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
@@ -124,7 +124,7 @@ test_f16_rejected(void)
     .dtype = dtype_f16,
     .rank = 2,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);

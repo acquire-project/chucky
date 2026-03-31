@@ -169,7 +169,7 @@ struct zarr_s3_sink
   struct dimension dimensions[MAX_ZARR_RANK];
   enum dtype data_type;
   double fill_value;
-  enum compression_codec codec;
+  struct codec_config codec;
 };
 
 // --- S3 shard writer ---

@@ -253,8 +253,8 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   // --- Codec-derived max_output_size ---
   {
     const size_t chunk_bytes = out->layouts[0].chunk_stride * bytes_per_element;
-    out->max_output_size = max_output_size_fn(config->codec, chunk_bytes);
-    if (config->codec != CODEC_NONE && out->max_output_size == 0)
+    out->max_output_size = max_output_size_fn(config->codec.id, chunk_bytes);
+    if (config->codec.id != CODEC_NONE && out->max_output_size == 0)
       goto Fail;
   }
 

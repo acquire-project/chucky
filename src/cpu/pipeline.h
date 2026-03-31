@@ -32,7 +32,7 @@ struct flush_level_view
 
 struct flush_batch_params
 {
-  enum compression_codec codec;
+  struct codec_config codec;
   const void* chunk_pool;
   size_t chunk_stride_bytes;
   size_t chunk_bytes;

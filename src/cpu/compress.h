@@ -13,7 +13,7 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes);
 //   comp_sizes[i] receives actual compressed size.
 // Returns 0 on success.
 int
-compress_cpu(enum compression_codec codec,
+compress_cpu(struct codec_config codec,
              const void* src,
              size_t input_stride,
              void* dst,

@@ -2,6 +2,7 @@
 
 #include "util/prelude.h"
 
+#include <blosc.h>
 #include <lz4.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -19,13 +20,16 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
       return (size_t)LZ4_compressBound((int)chunk_bytes);
     case CODEC_ZSTD:
       return ZSTD_compressBound(chunk_bytes);
+    case CODEC_BLOSC_LZ4:
+    case CODEC_BLOSC_ZSTD:
+      return chunk_bytes + BLOSC_MAX_OVERHEAD;
     default:
       return 0;
   }
 }
 
 int
-compress_cpu(enum compression_codec codec,
+compress_cpu(struct codec_config codec,
              const void* src,
              size_t input_stride,
              void* dst,
@@ -35,7 +39,7 @@ compress_cpu(enum compression_codec codec,
              size_t batch_size)
 {
   int i;
-  switch (codec) {
+  switch (codec.id) {
     case CODEC_NONE:
 #pragma omp parallel for schedule(static) if (batch_size > 1024)
       for (i = 0; i < (int)batch_size; ++i) {
@@ -65,6 +69,7 @@ compress_cpu(enum compression_codec codec,
     }
 
     case CODEC_ZSTD: {
+      int level = codec.level > 0 ? codec.level : ZSTD_COMPRESS_LEVEL;
       _Atomic int err = 0;
 #pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
       for (i = 0; i < (int)batch_size; ++i) {
@@ -72,12 +77,42 @@ compress_cpu(enum compression_codec codec,
           continue;
         const void* in = (const char*)src + i * input_stride;
         void* out = (char*)dst + i * max_output_size;
-        size_t rc = ZSTD_compress(
-          out, max_output_size, in, chunk_bytes, ZSTD_COMPRESS_LEVEL);
+        size_t rc = ZSTD_compress(out, max_output_size, in, chunk_bytes, level);
         if (ZSTD_isError(rc))
           err = 1;
         else
           comp_sizes[i] = rc;
+      }
+      return err;
+    }
+
+    case CODEC_BLOSC_LZ4:
+    case CODEC_BLOSC_ZSTD: {
+      const char* compname =
+        codec.id == CODEC_BLOSC_LZ4 ? BLOSC_LZ4_COMPNAME : BLOSC_ZSTD_COMPNAME;
+      int clevel = codec.level > 0 ? codec.level : 5;
+      int doshuffle = codec.shuffle;
+      _Atomic int err = 0;
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
+      for (i = 0; i < (int)batch_size; ++i) {
+        if (err)
+          continue;
+        const void* in = (const char*)src + i * input_stride;
+        void* out = (char*)dst + i * max_output_size;
+        int rc = blosc_compress_ctx(clevel,
+                                    doshuffle,
+                                    1, // typesize (byte-level)
+                                    chunk_bytes,
+                                    in,
+                                    out,
+                                    max_output_size,
+                                    compname,
+                                    0,  // blocksize (auto)
+                                    1); // numinternalthreads
+        if (rc <= 0)
+          err = 1;
+        else
+          comp_sizes[i] = (size_t)rc;
       }
       return err;
     }

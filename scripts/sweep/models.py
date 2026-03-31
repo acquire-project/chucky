@@ -8,7 +8,7 @@ from pydantic import BaseModel, model_validator
 # Schema enums (single source of truth)
 # ---------------------------------------------------------------------------
 
-VALID_CODECS = {"none", "lz4", "zstd"}
+VALID_CODECS = {"none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"}
 VALID_FILLS = {"xor", "zeros", "rand"}
 VALID_BACKENDS = {"gpu", "cpu"}
 VALID_SINKS = {"discard", "fs", "s3"}

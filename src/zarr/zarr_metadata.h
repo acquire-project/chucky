@@ -22,7 +22,7 @@ zarr_array_json(char* buf,
                 enum dtype data_type,
                 double fill_value,
                 const uint64_t* chunks_per_shard,
-                enum compression_codec codec);
+                struct codec_config codec);
 
 // Compute shard key/path suffix: "c/0/1/2" for a flat shard index.
 // Writes into buf. Returns 0 on success, -1 on error.

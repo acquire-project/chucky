@@ -13,6 +13,7 @@ include(Warnings)
 include(Nix)
 include(OpenMP)
 include(Gpu)
+include(Blosc)
 include(Lz4)
 include(Zstd)
 

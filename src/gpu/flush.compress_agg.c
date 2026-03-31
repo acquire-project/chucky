@@ -74,7 +74,7 @@ compress_agg_init(struct compress_agg_stage* stage,
   const size_t chunk_bytes = chunk_stride * bytes_per_element;
 
   // Codec
-  CHECK(Fail, codec_init(&stage->codec, config->codec, chunk_bytes, M) == 0);
+  CHECK(Fail, codec_init(&stage->codec, config->codec.id, chunk_bytes, M) == 0);
 
   CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
   // Compressed buffers + events

@@ -211,7 +211,7 @@ test_pipeline(const char* tmpdir)
     .dtype = dtype_u32,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -734,7 +734,7 @@ test_unbounded_metadata_update(const char* tmpdir)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -941,7 +941,7 @@ test_midstream_metadata_update(const char* tmpdir)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
     .metadata_update_interval_s = 0.0f, // always fire
     .epochs_per_batch = 1,
   };
@@ -1088,7 +1088,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     .dtype = dtype_u32,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 1,
     .shard_alignment = platform_page_size(),
   };
@@ -1297,7 +1297,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .dtype = dtype_u32,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
     .shard_alignment = platform_page_size(),
   };
 
@@ -1745,7 +1745,7 @@ test_pipeline_storage_order(const char* tmpdir)
     .dtype = dtype_u32,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
   };
 
   struct tile_stream_gpu* s = NULL;

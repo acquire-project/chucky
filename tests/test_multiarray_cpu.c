@@ -34,7 +34,7 @@ make_2d_config(struct dimension dims[2], enum dtype dt)
     .dtype = dt,
     .rank = 2,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 }
 
@@ -78,7 +78,7 @@ test_basic_two_array(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims0,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   // Array 1: 2D 8x8, chunk 4x4, cps 1x2 → epoch_elements=32
@@ -91,7 +91,7 @@ test_basic_two_array(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims1,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_configuration configs[] = { config0, config1 };
@@ -374,7 +374,7 @@ test_same_array_repeated(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_configuration configs[] = { config };
@@ -546,7 +546,7 @@ test_cross_validate_single_array(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims_r,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
   struct tile_stream_configuration config_m = config_r;
   config_m.dimensions = dims_m;
@@ -635,7 +635,7 @@ test_lod_basic(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_mean,
     .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,
@@ -763,7 +763,7 @@ test_mixed_lod(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims1,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_mean,
     .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,

@@ -72,6 +72,7 @@
             llvmPackages.llvm   # llvm-profdata, llvm-cov for coverage
             perf
             pkg-config
+            tmux
             tokei
             awscli2
             python3
@@ -79,6 +80,7 @@
           ];
 
           buildInputs = with pkgs; [
+            c-blosc
             cudaPackages.cudatoolkit
             cudaPackages.nvcomp
             cudaPackages.nvcomp.static

@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         llvm \
         cmake \
         ninja-build \
+        libblosc-dev \
         libzstd-dev \
         liblz4-dev \
         libomp-dev \
