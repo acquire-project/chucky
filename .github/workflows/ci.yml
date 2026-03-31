@@ -25,14 +25,58 @@ jobs:
           file: ./Dockerfile.cpu
           tags: chucky-cpu
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cpu
+          cache-to: type=gha,mode=max,scope=cpu
 
       - name: Run CPU tests
         run: >
           docker run --rm chucky-cpu
           ctest --test-dir build --output-on-failure
           --exclude-regex test-test_zarr_s3_sink
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build coverage image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.coverage
+          tags: chucky-coverage
+          load: true
+          cache-from: type=gha,scope=coverage
+          cache-to: type=gha,mode=max,scope=coverage
+
+      - name: Run tests and generate coverage
+        run: |
+          docker run --name coverage-run chucky-coverage \
+            cmake --build build --target coverage
+
+      - name: Extract coverage report
+        if: always()
+        run: |
+          docker cp coverage-run:/src/build/coverage ./coverage-report
+          docker rm coverage-run
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report/
+          retention-days: 30
+
+      - name: Upload to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-report/lcov.info
+          fail_ci_if_error: false
 
   gpu-tests:
     runs-on: [self-hosted, gpu]

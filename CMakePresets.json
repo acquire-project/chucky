@@ -23,6 +23,13 @@
       "cacheVariables": {
         "CHUCKY_ENABLE_GPU": "OFF"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "cpu-only",
+      "cacheVariables": {
+        "CHUCKY_ENABLE_COVERAGE": "ON"
+      }
     }
   ]
 }

@@ -62,4 +62,20 @@ execute_process(
         -ignore-filename-regex=tests/.*
 )
 
+# Generate LCOV output for Codecov / CI upload
+execute_process(
+    COMMAND ${LLVM_COV} export
+        "${_first}"
+        ${_object_args}
+        "-instr-profile=${PROFDATA_FILE}"
+        -format=lcov
+        -ignore-filename-regex=tests/.*
+    OUTPUT_FILE "${COVERAGE_DIR}/lcov.info"
+    RESULT_VARIABLE _rc
+)
+if(NOT _rc EQUAL 0)
+    message(WARNING "llvm-cov export (lcov) failed (${_rc})")
+endif()
+
 message(STATUS "Coverage report: ${COVERAGE_DIR}/index.html")
+message(STATUS "LCOV data:       ${COVERAGE_DIR}/lcov.info")
