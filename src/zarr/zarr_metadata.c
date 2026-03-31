@@ -264,11 +264,10 @@ zarr_multiscale_group_json(char* buf,
     for (int d = 0; d < rank; ++d) {
       double phys = l0[d].ngff.scale > 0 ? l0[d].ngff.scale : 1.0;
       double factor = 1.0;
-      if (l0[d].downsample && level_dims[lv][d].size > 0) {
-        if (l0[d].size == 0)
-          factor = (double)(1u << lv);
-        else
-          factor = (double)l0[d].size / (double)level_dims[lv][d].size;
+      _Static_assert(LOD_MAX_LEVELS <= 32,
+                     "1u << lv overflows for > 32 levels");
+      if (l0[d].downsample) {
+        factor = (double)(1u << lv);
       }
       scale[d] = phys * factor;
       translation[d] = 0.5 * phys * (factor - 1.0);

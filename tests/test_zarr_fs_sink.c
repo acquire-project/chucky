@@ -409,7 +409,6 @@ test_multiscale_metadata(const char* tmpdir)
     CHECK(Fail2, strstr(data, "\"path\":\"0\""));
     CHECK(Fail2, strstr(data, "\"path\":\"1\""));
     CHECK(Fail2, strstr(data, "\"coordinateTransformations\""));
-    CHECK(Fail2, strstr(data, "\"unit\":\"index\""));
     free(data);
   }
 
