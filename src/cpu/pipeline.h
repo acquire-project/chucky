@@ -33,6 +33,7 @@ struct flush_level_view
 struct flush_batch_params
 {
   struct codec_config codec;
+  size_t bytes_per_element;
   const void* chunk_pool;
   size_t chunk_stride_bytes;
   size_t chunk_bytes;

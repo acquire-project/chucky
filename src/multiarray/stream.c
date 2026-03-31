@@ -486,6 +486,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
   const size_t bytes_per_element = dtype_bpe(desc->config.dtype);
   struct flush_batch_params p = {
     .codec = desc->config.codec,
+    .bytes_per_element = bytes_per_element,
     .chunk_pool = ms->chunk_pool,
     .chunk_stride_bytes = desc->layout.chunk_stride * bytes_per_element,
     .chunk_bytes = desc->layout.chunk_elements * bytes_per_element,

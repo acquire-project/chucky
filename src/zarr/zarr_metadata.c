@@ -3,7 +3,14 @@
 #include "dtype.h"
 #include "zarr/json_writer.h"
 
+#include <blosc.h>
 #include <stdio.h>
+
+static int
+codec_is_blosc(enum compression_codec c)
+{
+  return c == CODEC_BLOSC_LZ4 || c == CODEC_BLOSC_ZSTD;
+}
 
 int
 zarr_root_json(char* buf, size_t cap)
@@ -116,7 +123,11 @@ zarr_array_json(char* buf,
       jw_string(&jw, codec.id == CODEC_LZ4 ? "lz4" : "zstd");
     jw_key(&jw, "configuration");
     jw_object_begin(&jw);
-    if (codec.id == CODEC_ZSTD && codec.level > 0) {
+    if (codec.id == CODEC_ZSTD) {
+      jw_key(&jw, "level");
+      jw_int(&jw, codec.level);
+    }
+    if (codec.id == CODEC_LZ4) {
       jw_key(&jw, "level");
       jw_int(&jw, codec.level);
     }
@@ -124,12 +135,12 @@ zarr_array_json(char* buf,
       jw_key(&jw, "cname");
       jw_string(&jw, codec.id == CODEC_BLOSC_LZ4 ? "lz4" : "zstd");
       jw_key(&jw, "clevel");
-      jw_int(&jw, codec.level > 0 ? codec.level : 5);
+      jw_int(&jw, codec.level);
       jw_key(&jw, "shuffle");
       jw_string(&jw,
-                codec.shuffle == 2   ? "bitshuffle"
-                : codec.shuffle == 1 ? "shuffle"
-                                     : "noshuffle");
+                codec.shuffle == BLOSC_BITSHUFFLE ? "bitshuffle"
+                : codec.shuffle == BLOSC_SHUFFLE  ? "shuffle"
+                                                  : "noshuffle");
       jw_key(&jw, "typesize");
       jw_int(&jw, (int64_t)dtype_bpe(data_type));
       jw_key(&jw, "blocksize");

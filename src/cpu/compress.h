@@ -11,6 +11,8 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes);
 //   Input:  src + i * input_stride  (each chunk_bytes bytes)
 //   Output: dst + i * max_output_size
 //   comp_sizes[i] receives actual compressed size.
+//   bytes_per_element: element size for blosc typesize (ignored for other
+//   codecs)
 // Returns 0 on success.
 int
 compress_cpu(struct codec_config codec,
@@ -20,4 +22,5 @@ compress_cpu(struct codec_config codec,
              size_t max_output_size,
              size_t* comp_sizes,
              size_t chunk_bytes,
-             size_t batch_size);
+             size_t batch_size,
+             size_t bytes_per_element);

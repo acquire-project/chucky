@@ -167,6 +167,11 @@ codec_init(struct codec* c,
   c->alignment = codec_alignment(type);
 
   switch (type) {
+    case CODEC_BLOSC_LZ4:
+    case CODEC_BLOSC_ZSTD:
+      log_error("blosc codecs are not supported on GPU");
+      goto Fail;
+
     case CODEC_NONE:
       c->max_output_size = chunk_bytes;
       c->temp_bytes = 0;

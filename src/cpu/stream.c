@@ -449,6 +449,7 @@ make_flush_params(struct tile_stream_cpu* s)
   const size_t bytes_per_element = dtype_bpe(s->config.dtype);
   struct flush_batch_params p = {
     .codec = s->config.codec,
+    .bytes_per_element = bytes_per_element,
     .chunk_pool = s->chunk_pool,
     .chunk_stride_bytes = s->layout.chunk_stride * bytes_per_element,
     .chunk_bytes = s->layout.chunk_elements * bytes_per_element,

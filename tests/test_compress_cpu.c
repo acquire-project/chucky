@@ -45,7 +45,8 @@ test_codec_none(void)
                      max_out,
                      comp_sizes,
                      CHUNK_BYTES,
-                     BATCH_SIZE) == 0);
+                     BATCH_SIZE,
+                     1) == 0);
 
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] == CHUNK_BYTES);
@@ -93,7 +94,8 @@ test_codec_lz4(void)
                      max_out,
                      comp_sizes,
                      CHUNK_BYTES,
-                     BATCH_SIZE) == 0);
+                     BATCH_SIZE,
+                     1) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -149,7 +151,8 @@ test_codec_zstd(void)
                      max_out,
                      comp_sizes,
                      CHUNK_BYTES,
-                     BATCH_SIZE) == 0);
+                     BATCH_SIZE,
+                     1) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -205,7 +208,8 @@ test_codec_blosc(enum compression_codec id, const char* name)
                      max_out,
                      comp_sizes,
                      CHUNK_BYTES,
-                     BATCH_SIZE) == 0);
+                     BATCH_SIZE,
+                     1) == 0);
 
   // Decompress and verify round-trip
   recovered = malloc(CHUNK_BYTES);

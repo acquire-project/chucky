@@ -138,7 +138,8 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                      p->max_output_size_bytes,
                      p->comp_sizes,
                      p->chunk_bytes,
-                     n_epochs * total_chunks))
+                     n_epochs * total_chunks,
+                     p->bytes_per_element))
       return 1;
 
     if (p->metrics) {
