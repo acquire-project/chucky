@@ -136,6 +136,45 @@ Fail:
   return 1;
 }
 
+// Write group zarr.json for each intermediate directory in array_name.
+// For array_name = "path/to/data", writes group metadata at:
+//   {prefix}/path/zarr.json
+//   {prefix}/path/to/zarr.json
+static int
+put_intermediate_group_metadata(struct s3_client* s3,
+                                const char* bucket,
+                                const char* prefix,
+                                const char* array_name)
+{
+  if (!array_name)
+    return 0;
+
+  char buf[256];
+  int len = zarr_root_json(buf, sizeof(buf));
+  if (len < 0)
+    return -1;
+
+  char name[4096];
+  size_t nlen = strlen(array_name);
+  if (nlen >= sizeof(name))
+    return -1;
+  memcpy(name, array_name, nlen + 1);
+
+  for (size_t i = 0; i < nlen; ++i) {
+    if (name[i] == '/') {
+      name[i] = '\0';
+
+      char key[4096];
+      snprintf(key, sizeof(key), "%s/%s/zarr.json", prefix, name);
+      if (s3_client_put(s3, bucket, key, buf, (size_t)len) != 0)
+        return -1;
+
+      name[i] = '/';
+    }
+  }
+  return 0;
+}
+
 // --- S3 shard writer ---
 
 // --- Zarr S3 sink ---
@@ -415,6 +454,11 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
     CHECK(Fail_alloc,
           s3_client_put(zs->s3, zs->bucket, key, buf, (size_t)len) == 0);
   }
+
+  // Write intermediate group metadata
+  CHECK(Fail_alloc,
+        put_intermediate_group_metadata(
+          zs->s3, zs->bucket, cfg->prefix, cfg->array_name) == 0);
 
   // Write array metadata
   {
@@ -723,6 +767,9 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
     snprintf(key, sizeof(key), "%s/zarr.json", cfg->prefix);
     CHECK(Fail_levels,
           s3_client_put(ms->s3, ms->bucket, key, buf, (size_t)len) == 0);
+    CHECK(Fail_levels,
+          put_intermediate_group_metadata(
+            ms->s3, ms->bucket, cfg->prefix, cfg->array_name) == 0);
   }
 
   // Write OME-NGFF group metadata
