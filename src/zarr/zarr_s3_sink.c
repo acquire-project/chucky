@@ -96,8 +96,10 @@ zarr_s3_config_validate(const struct zarr_s3_config* cfg)
   CHECK(Fail, dims_validate(cfg->dimensions, cfg->rank) == 0);
   CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
   CHECK(Fail, cfg->part_size > 0);
-  // +12: '/' + array_name + "/zarr.json" + '\0'
-  CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 12 < 4096);
+  CHECK(Fail,
+        strlen(cfg->prefix) + 1 + strlen(cfg->array_name) +
+            sizeof("/zarr.json") <
+          4096);
   CHECK(Fail,
         s3_validate_part_count(
           cfg->rank, cfg->dimensions, cfg->data_type, cfg->part_size) == 0);
@@ -129,7 +131,10 @@ zarr_s3_multiscale_config_validate(const struct zarr_s3_multiscale_config* cfg)
   CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
   CHECK(Fail, cfg->part_size > 0);
   if (cfg->array_name)
-    CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 12 < 4096);
+    CHECK(Fail,
+          strlen(cfg->prefix) + 1 + strlen(cfg->array_name) +
+              sizeof("/zarr.json") <
+            4096);
   // L0 is the largest level; if it fits, all LOD levels fit.
   CHECK(Fail,
         s3_validate_part_count(

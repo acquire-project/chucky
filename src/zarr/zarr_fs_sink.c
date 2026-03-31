@@ -404,9 +404,11 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, cfg->store_path);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
-  // Ensure composed paths (store_path/array_name/zarr.json) fit in 4096
   if (cfg->array_name)
-    CHECK(Fail, strlen(cfg->store_path) + strlen(cfg->array_name) + 12 < 4096);
+    CHECK(Fail,
+          strlen(cfg->store_path) + 1 + strlen(cfg->array_name) +
+              sizeof("/zarr.json") <
+            4096);
 
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)calloc(1, sizeof(*zs));
   CHECK(Fail, zs);
@@ -679,7 +681,10 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
   if (cfg->array_name)
-    CHECK(Fail, strlen(cfg->store_path) + strlen(cfg->array_name) + 12 < 4096);
+    CHECK(Fail,
+          strlen(cfg->store_path) + 1 + strlen(cfg->array_name) +
+              sizeof("/zarr.json") <
+            4096);
 
   // Build group path: store_path/array_name when array_name is set
   char group_path[4096];
