@@ -96,7 +96,8 @@ zarr_s3_config_validate(const struct zarr_s3_config* cfg)
   CHECK(Fail, dims_validate(cfg->dimensions, cfg->rank) == 0);
   CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
   CHECK(Fail, cfg->part_size > 0);
-  CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 2 < 4096);
+  // +12: '/' + array_name + "/zarr.json" + '\0'
+  CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 12 < 4096);
   CHECK(Fail,
         s3_validate_part_count(
           cfg->rank, cfg->dimensions, cfg->data_type, cfg->part_size) == 0);
@@ -127,6 +128,8 @@ zarr_s3_multiscale_config_validate(const struct zarr_s3_multiscale_config* cfg)
   CHECK(Fail, dims_validate(cfg->dimensions, cfg->rank) == 0);
   CHECK(Fail, dtype_bpe(cfg->data_type) > 0);
   CHECK(Fail, cfg->part_size > 0);
+  if (cfg->array_name)
+    CHECK(Fail, strlen(cfg->prefix) + strlen(cfg->array_name) + 12 < 4096);
   // L0 is the largest level; if it fits, all LOD levels fit.
   CHECK(Fail,
         s3_validate_part_count(
@@ -136,43 +139,22 @@ Fail:
   return 1;
 }
 
-// Write group zarr.json for each intermediate directory in array_name.
-// For array_name = "path/to/data", writes group metadata at:
-//   {prefix}/path/zarr.json
-//   {prefix}/path/to/zarr.json
-static int
-put_intermediate_group_metadata(struct s3_client* s3,
-                                const char* bucket,
-                                const char* prefix,
-                                const char* array_name)
+struct s3_intermediate_ctx
 {
-  if (!array_name)
-    return 0;
+  struct s3_client* s3;
+  const char* bucket;
+  const char* prefix;
+  const char* metadata;
+  size_t metadata_len;
+};
 
-  char buf[256];
-  int len = zarr_root_json(buf, sizeof(buf));
-  if (len < 0)
-    return -1;
-
-  char name[4096];
-  size_t nlen = strlen(array_name);
-  if (nlen >= sizeof(name))
-    return -1;
-  memcpy(name, array_name, nlen + 1);
-
-  for (size_t i = 0; i < nlen; ++i) {
-    if (name[i] == '/') {
-      name[i] = '\0';
-
-      char key[4096];
-      snprintf(key, sizeof(key), "%s/%s/zarr.json", prefix, name);
-      if (s3_client_put(s3, bucket, key, buf, (size_t)len) != 0)
-        return -1;
-
-      name[i] = '/';
-    }
-  }
-  return 0;
+static int
+put_s3_intermediate(const char* partial, void* ctx)
+{
+  const struct s3_intermediate_ctx* c = (const struct s3_intermediate_ctx*)ctx;
+  char key[4096];
+  snprintf(key, sizeof(key), "%s/%s/zarr.json", c->prefix, partial);
+  return s3_client_put(c->s3, c->bucket, key, c->metadata, c->metadata_len);
 }
 
 // --- S3 shard writer ---
@@ -391,9 +373,12 @@ s3_sink_update_append(struct shard_sink* self,
 // --- Create / Destroy ---
 
 // Internal: create a sink that borrows an existing client (does not own it).
+// When skip_group_metadata is set, root and intermediate group zarr.json
+// writes are skipped (the caller handles them, e.g. multiscale).
 static struct zarr_s3_sink*
 zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
-                                struct s3_client* client)
+                                struct s3_client* client,
+                                int skip_group_metadata)
 {
   CHECK(Fail, cfg);
   CHECK(Fail, client);
@@ -444,8 +429,8 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
            cfg->prefix,
            cfg->array_name);
 
-  // Write root metadata
-  {
+  // Write root + intermediate group metadata (skipped for sub-sinks)
+  if (!skip_group_metadata) {
     char buf[256];
     int len = zarr_root_json(buf, sizeof(buf));
     CHECK(Fail_alloc, len >= 0);
@@ -453,12 +438,17 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
     snprintf(key, sizeof(key), "%s/zarr.json", cfg->prefix);
     CHECK(Fail_alloc,
           s3_client_put(zs->s3, zs->bucket, key, buf, (size_t)len) == 0);
+    struct s3_intermediate_ctx ictx = {
+      .s3 = zs->s3,
+      .bucket = zs->bucket,
+      .prefix = cfg->prefix,
+      .metadata = buf,
+      .metadata_len = (size_t)len,
+    };
+    CHECK(Fail_alloc,
+          zarr_for_each_intermediate(
+            cfg->array_name, put_s3_intermediate, &ictx) == 0);
   }
-
-  // Write intermediate group metadata
-  CHECK(Fail_alloc,
-        put_intermediate_group_metadata(
-          zs->s3, zs->bucket, cfg->prefix, cfg->array_name) == 0);
 
   // Write array metadata
   {
@@ -518,7 +508,7 @@ zarr_s3_sink_create(struct zarr_s3_config* cfg)
   struct s3_client* client = s3_client_create(&s3cfg);
   CHECK(Fail, client);
 
-  struct zarr_s3_sink* zs = zarr_s3_sink_create_with_client(cfg, client);
+  struct zarr_s3_sink* zs = zarr_s3_sink_create_with_client(cfg, client, 0);
   CHECK(Fail_client, zs);
 
   zs->owns_s3 = 1;
@@ -727,6 +717,27 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
                                              sizeof(struct zarr_s3_sink*));
   CHECK(Fail_s3, ms->levels);
 
+  // Write root + intermediate metadata before creating levels
+  if (cfg->array_name) {
+    char buf[256];
+    int len = zarr_root_json(buf, sizeof(buf));
+    CHECK(Fail_levels, len >= 0);
+    char key[4096];
+    snprintf(key, sizeof(key), "%s/zarr.json", cfg->prefix);
+    CHECK(Fail_levels,
+          s3_client_put(ms->s3, ms->bucket, key, buf, (size_t)len) == 0);
+    struct s3_intermediate_ctx ictx = {
+      .s3 = ms->s3,
+      .bucket = ms->bucket,
+      .prefix = cfg->prefix,
+      .metadata = buf,
+      .metadata_len = (size_t)len,
+    };
+    CHECK(Fail_levels,
+          zarr_for_each_intermediate(
+            cfg->array_name, put_s3_intermediate, &ictx) == 0);
+  }
+
   // Create one zarr_s3_sink per level, all borrowing the shared client
   for (int lv = 0; lv < plan.nlod; ++lv) {
     struct dimension lv_dims[MAX_ZARR_RANK];
@@ -754,22 +765,8 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
       .codec = cfg->codec,
     };
 
-    ms->levels[lv] = zarr_s3_sink_create_with_client(&zcfg, ms->s3);
+    ms->levels[lv] = zarr_s3_sink_create_with_client(&zcfg, ms->s3, 1);
     CHECK(Fail_levels, ms->levels[lv]);
-  }
-
-  // Write root metadata (at prefix level, above group)
-  if (cfg->array_name) {
-    char buf[256];
-    int len = zarr_root_json(buf, sizeof(buf));
-    CHECK(Fail_levels, len >= 0);
-    char key[4096];
-    snprintf(key, sizeof(key), "%s/zarr.json", cfg->prefix);
-    CHECK(Fail_levels,
-          s3_client_put(ms->s3, ms->bucket, key, buf, (size_t)len) == 0);
-    CHECK(Fail_levels,
-          put_intermediate_group_metadata(
-            ms->s3, ms->bucket, cfg->prefix, cfg->array_name) == 0);
   }
 
   // Write OME-NGFF group metadata

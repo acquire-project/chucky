@@ -338,40 +338,20 @@ write_array_metadata_file(const char* array_dir,
   return write_file(path, buf, (size_t)len);
 }
 
-// Write group zarr.json for each intermediate directory in array_name.
-// For array_name = "path/to/data", writes group metadata at:
-//   {store_path}/path/zarr.json
-//   {store_path}/path/to/zarr.json
-static int
-write_intermediate_group_metadata(const char* store_path,
-                                  const char* array_name)
+struct fs_intermediate_ctx
 {
-  if (!array_name)
-    return 0;
+  const char* store_path;
+};
 
-  // Work on a mutable copy of array_name
-  char name[4096];
-  size_t len = strlen(array_name);
-  if (len >= sizeof(name))
+static int
+write_fs_intermediate(const char* partial, void* ctx)
+{
+  const struct fs_intermediate_ctx* c = (const struct fs_intermediate_ctx*)ctx;
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "%s/%s", c->store_path, partial);
+  if (platform_mkdirp(dir) != 0)
     return -1;
-  memcpy(name, array_name, len + 1);
-
-  // Walk each '/' separator — everything before it is an intermediate group
-  for (size_t i = 0; i < len; ++i) {
-    if (name[i] == '/') {
-      name[i] = '\0';
-
-      char dir[4096];
-      snprintf(dir, sizeof(dir), "%s/%s", store_path, name);
-      if (platform_mkdirp(dir) != 0)
-        return -1;
-      if (write_root_metadata_file(dir) != 0)
-        return -1;
-
-      name[i] = '/';
-    }
-  }
-  return 0;
+  return write_root_metadata_file(dir);
 }
 
 // --- Metadata update ---
@@ -424,6 +404,9 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, cfg->store_path);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
+  // Ensure composed paths (store_path/array_name/zarr.json) fit in 4096
+  if (cfg->array_name)
+    CHECK(Fail, strlen(cfg->store_path) + strlen(cfg->array_name) + 12 < 4096);
 
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)calloc(1, sizeof(*zs));
   CHECK(Fail, zs);
@@ -509,9 +492,10 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   // Write metadata
   if (cfg->array_name) {
     CHECK(Fail_alloc, write_root_metadata_file(cfg->store_path) == 0);
+    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
     CHECK(Fail_alloc,
-          write_intermediate_group_metadata(cfg->store_path, cfg->array_name) ==
-            0);
+          zarr_for_each_intermediate(
+            cfg->array_name, write_fs_intermediate, &ictx) == 0);
   }
   CHECK(Fail_alloc,
         write_array_metadata_file(zs->array_dir,
@@ -694,6 +678,8 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail, cfg->store_path);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
+  if (cfg->array_name)
+    CHECK(Fail, strlen(cfg->store_path) + strlen(cfg->array_name) + 12 < 4096);
 
   // Build group path: store_path/array_name when array_name is set
   char group_path[4096];
@@ -733,9 +719,10 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     CHECK(Fail_ms, platform_mkdirp(cfg->store_path) == 0);
     CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
     CHECK(Fail_ms, write_root_metadata_file(cfg->store_path) == 0);
+    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
     CHECK(Fail_ms,
-          write_intermediate_group_metadata(cfg->store_path, cfg->array_name) ==
-            0);
+          zarr_for_each_intermediate(
+            cfg->array_name, write_fs_intermediate, &ictx) == 0);
   } else {
     CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
   }

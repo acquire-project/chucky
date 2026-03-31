@@ -3,6 +3,7 @@
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
+#include <string.h>
 
 int
 zarr_root_json(char* buf, size_t cap)
@@ -311,6 +312,32 @@ zarr_multiscale_group_json(char* buf,
   if (jw_error(&jw))
     return -1;
   return (int)jw_length(&jw);
+}
+
+int
+zarr_for_each_intermediate(const char* array_name,
+                           int (*fn)(const char* partial, void* ctx),
+                           void* ctx)
+{
+  if (!array_name)
+    return 0;
+
+  char name[4096];
+  size_t len = strlen(array_name);
+  if (len >= sizeof(name))
+    return -1;
+  memcpy(name, array_name, len + 1);
+
+  for (size_t i = 0; i < len; ++i) {
+    if (name[i] == '/') {
+      name[i] = '\0';
+      int rc = fn(name, ctx);
+      name[i] = '/';
+      if (rc != 0)
+        return rc;
+    }
+  }
+  return 0;
 }
 
 int

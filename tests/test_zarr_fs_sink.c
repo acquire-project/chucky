@@ -1975,7 +1975,7 @@ test_nested_array_name(const char* tmpdir)
     uint8_t* data;
     size_t len;
     CHECK(Fail2, read_file_all(path, &data, &len) == 0);
-    data[len < 4095 ? len : 4095] = '\0';
+    data[len] = '\0';
     CHECK(Fail2, strstr((char*)data, "\"node_type\":\"array\""));
     free(data);
   }
@@ -1986,6 +1986,87 @@ test_nested_array_name(const char* tmpdir)
 
 Fail2:
   zarr_fs_sink_destroy(zs);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: nested array_name in multiscale sink ---
+
+static int
+test_nested_multiscale_array_name(const char* tmpdir)
+{
+  log_info("=== test_nested_multiscale_array_name ===");
+
+  struct dimension dims[] = {
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .array_name = "path/to/group",
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 2,
+    .dimensions = dims,
+    .nlod = 0,
+  };
+
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  // Check root group zarr.json
+  {
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/to/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path/to", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check multiscale group: {tmpdir}/path/to/group/zarr.json has OME metadata
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path/to/group", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 8192) == 0);
+    CHECK(Fail2, strstr(data, "\"multiscales\""));
+    free(data);
+  }
+
+  zarr_fs_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_multiscale_sink_destroy(ms);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -2026,6 +2107,14 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/nested", tmpdir);
     test_mkdir(sub);
     ecode |= test_nested_array_name(sub);
+  }
+
+  // Nested multiscale array_name intermediate group metadata test (no CUDA)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/nested_ms", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_nested_multiscale_array_name(sub);
   }
 
   // Multiscale metadata test (no CUDA needed)

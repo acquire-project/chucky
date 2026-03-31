@@ -33,6 +33,14 @@ zarr_shard_key(char* buf,
                const uint64_t* shard_count,
                uint64_t flat);
 
+// Walk intermediate path segments of array_name, calling fn for each.
+// For array_name = "a/b/c", calls fn("a", ctx) then fn("a/b", ctx).
+// Returns 0 on success, first non-zero fn return on failure.
+int
+zarr_for_each_intermediate(const char* array_name,
+                           int (*fn)(const char* partial, void* ctx),
+                           void* ctx);
+
 // Generate OME-NGFF v0.5 multiscale group JSON into buf.
 // level_dims[lv] points to the rank-length dimension array for level lv.
 // Returns JSON length on success, -1 on error.
