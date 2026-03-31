@@ -17,15 +17,6 @@ clamped_extent(uint64_t shape_d, uint64_t lo, uint64_t scale)
   return (e < scale) ? e : scale;
 }
 
-static int
-is_all_ones(int n, const uint64_t* v)
-{
-  for (int d = 0; d < n; ++d)
-    if (v[d] > 1)
-      return 0;
-  return 1;
-}
-
 uint64_t
 morton_rank(int ndim, const uint64_t* shape, const uint64_t* coords, int depth)
 {
@@ -149,7 +140,7 @@ all_chunks_le_one(int lod_ndim,
                   const uint64_t* lod_chunk)
 {
   for (int d = 0; d < lod_ndim; ++d) {
-    uint64_t nchunks = (lod_shape[d] + lod_chunk[d] - 1) / lod_chunk[d];
+    uint64_t nchunks = ceildiv(lod_shape[d], lod_chunk[d]);
     if (nchunks > 1)
       return 0;
   }
