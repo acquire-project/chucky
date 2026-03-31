@@ -15,6 +15,8 @@ zarr_root_json(char* buf, size_t cap)
   jw_int(&jw, 3);
   jw_key(&jw, "node_type");
   jw_string(&jw, "group");
+  jw_key(&jw, "consolidated_metadata");
+  jw_null(&jw);
   jw_object_end(&jw);
 
   if (jw_error(&jw))
@@ -194,6 +196,9 @@ zarr_multiscale_group_json(char* buf,
   jw_key(&jw, "node_type");
   jw_string(&jw, "group");
 
+  jw_key(&jw, "consolidated_metadata");
+  jw_null(&jw);
+
   jw_key(&jw, "attributes");
   jw_object_begin(&jw);
 
@@ -221,7 +226,7 @@ zarr_multiscale_group_json(char* buf,
     jw_key(&jw, "type");
     {
       const char* type;
-      switch (l0[d].axis_type) {
+      switch (l0[d].ngff.type) {
         case dimension_axis_time:
           type = "time";
           break;
@@ -237,6 +242,10 @@ zarr_multiscale_group_json(char* buf,
       }
       jw_string(&jw, type);
     }
+    if (l0[d].ngff.unit) {
+      jw_key(&jw, "unit");
+      jw_string(&jw, l0[d].ngff.unit);
+    }
     jw_object_end(&jw);
   }
   jw_array_end(&jw);
@@ -250,6 +259,21 @@ zarr_multiscale_group_json(char* buf,
     snprintf(lvstr, sizeof(lvstr), "%d", lv);
     jw_string(&jw, lvstr);
 
+    // Precompute per-axis physical scale and downsample factor
+    double scale[MAX_ZARR_RANK], translation[MAX_ZARR_RANK];
+    for (int d = 0; d < rank; ++d) {
+      double phys = l0[d].ngff.scale > 0 ? l0[d].ngff.scale : 1.0;
+      double factor = 1.0;
+      if (l0[d].downsample && level_dims[lv][d].size > 0) {
+        if (l0[d].size == 0)
+          factor = (double)(1u << lv);
+        else
+          factor = (double)l0[d].size / (double)level_dims[lv][d].size;
+      }
+      scale[d] = phys * factor;
+      translation[d] = 0.5 * phys * (factor - 1.0);
+    }
+
     jw_key(&jw, "coordinateTransformations");
     jw_array_begin(&jw);
     // scale
@@ -258,16 +282,8 @@ zarr_multiscale_group_json(char* buf,
     jw_string(&jw, "scale");
     jw_key(&jw, "scale");
     jw_array_begin(&jw);
-    for (int d = 0; d < rank; ++d) {
-      double scale = 1.0;
-      if (l0[d].downsample && level_dims[lv][d].size > 0) {
-        if (l0[d].size == 0)
-          scale = (double)(1u << lv);
-        else
-          scale = (double)l0[d].size / (double)level_dims[lv][d].size;
-      }
-      jw_float(&jw, scale);
-    }
+    for (int d = 0; d < rank; ++d)
+      jw_float(&jw, scale[d]);
     jw_array_end(&jw);
     jw_object_end(&jw);
     // translation
@@ -276,18 +292,8 @@ zarr_multiscale_group_json(char* buf,
     jw_string(&jw, "translation");
     jw_key(&jw, "translation");
     jw_array_begin(&jw);
-    for (int d = 0; d < rank; ++d) {
-      double t = 0.0;
-      if (l0[d].downsample && level_dims[lv][d].size > 0) {
-        double factor;
-        if (l0[d].size == 0)
-          factor = (double)(1u << lv);
-        else
-          factor = (double)l0[d].size / (double)level_dims[lv][d].size;
-        t = 0.5 * (factor - 1.0);
-      }
-      jw_float(&jw, t);
-    }
+    for (int d = 0; d < rank; ++d)
+      jw_float(&jw, translation[d]);
     jw_array_end(&jw);
     jw_object_end(&jw);
     jw_array_end(&jw);

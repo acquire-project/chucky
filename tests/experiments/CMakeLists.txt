@@ -25,5 +25,8 @@ add_gpu_experiment(index.ops.cuda index.ops.cuda.c LINKS CUDA::cuda_driver CUDA:
 
 add_gpu_experiment(test_morton morton.c LINKS lod_plan lod index_ops chucky_log)
 if(CHUCKY_ENABLE_GPU)
-    target_include_directories(test_morton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_include_directories(
+        test_morton
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
+    )
 endif()

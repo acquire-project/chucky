@@ -7,6 +7,8 @@
     claude-code.url = "github:sadjow/claude-code-nix";
     claude-code.inputs.nixpkgs.follows = "nixpkgs";
     claude-code.inputs.flake-utils.follows = "flake-utils";
+    git-hooks.url = "github:cachix/git-hooks.nix";
+    git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -15,6 +17,7 @@
       nixpkgs,
       flake-utils,
       claude-code,
+      git-hooks,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -23,12 +26,37 @@
           inherit system;
           config.allowUnfree = true;
         };
+        pre-commit-check = git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            clang-format = {
+              enable = true;
+              types_or = pkgs.lib.mkForce [
+                "c"
+                "c++"
+                "cuda"
+              ];
+            };
+            gersemi = {
+              enable = true;
+              name = "gersemi";
+              entry = "${pkgs.gersemi}/bin/gersemi -i";
+              files = "(\\.cmake$|CMakeLists\\.txt$)";
+              pass_filenames = true;
+            };
+          };
+        };
       in
       {
+        checks = {
+          inherit pre-commit-check;
+        };
+
         formatter = pkgs.nixfmt-tree;
 
         devShells.default = pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
           name = "chucky";
+          inherit (pre-commit-check) shellHook;
 
           nativeBuildInputs = with pkgs; [
             cmake
