@@ -20,6 +20,8 @@ crc32c_init(void)
 uint32_t
 crc32c(const void* data, size_t len)
 {
+  if (!crc32c_table_ready)
+    crc32c_init();
   uint32_t crc = 0xFFFFFFFF;
   const uint8_t* p = (const uint8_t*)data;
   for (size_t i = 0; i < len; ++i)

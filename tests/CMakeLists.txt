@@ -85,6 +85,9 @@ add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_
 # CPU stream + zarr_fs_sink integration (exercises async IO fencing)
 add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd test_platform test_shard_verify)
 
+# Zarr readback validation via zarr-python (requires uv)
+add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu zarr_fs_sink writer dimension test_platform chucky_log)
+
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
 
