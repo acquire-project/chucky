@@ -140,6 +140,83 @@ Fail:
   return 1;
 }
 
+// Test that append after flush returns an error.
+static int
+test_append_after_flush(void)
+{
+  log_info("=== test_stream_cpu_append_after_flush ===");
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, 16, SHARD_CAP);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+    { .size = 6,
+      .chunk_size = 3,
+      .chunks_per_shard = 2,
+      .storage_position = 2 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_NONE,
+  };
+
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
+  CHECK(Fail, s);
+
+  const struct tile_stream_layout* lay = tile_stream_cpu_layout(s);
+  uint64_t epoch_elems = lay->epoch_elements;
+  size_t epoch_bytes = epoch_elems * sizeof(uint16_t);
+  uint16_t* data = (uint16_t*)malloc(epoch_bytes);
+  CHECK(Fail, data);
+  for (uint64_t i = 0; i < epoch_elems; ++i)
+    data[i] = (uint16_t)i;
+
+  struct writer* w = tile_stream_cpu_writer(s);
+
+  // Write one epoch, then flush.
+  {
+    struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  // Append after flush must return "finished" (not a hard error).
+  {
+    struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == writer_error_finished);
+  }
+
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -149,5 +226,6 @@ main(int ac, char* av[])
   int rc = 0;
   rc |= test_basic_pipeline();
   rc |= test_f16_rejected();
+  rc |= test_append_after_flush();
   return rc;
 }

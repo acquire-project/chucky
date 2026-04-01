@@ -1,9 +1,11 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.helpers.h"
 
+#include "defs.limits.h"
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
+#include "stream/layouts.h"
 #include "util/prelude.h"
 #include "zarr/crc32c.h"
 #include "zarr/shard_delivery.h"
@@ -140,62 +142,53 @@ compress_agg_init(struct compress_agg_stage* stage,
     ss->shard_epoch = 0;
   }
 
-  // Batch LUTs (K > 1 only)
-  if (K > 1) {
-    for (int lv = 0; lv < cl->levels.nlod; ++lv) {
-      struct level_flush_state* lvl = &stage->levels[lv];
-      uint32_t batch_count = lvl->batch_active_count;
-      uint64_t chunks_lv = cl->levels.chunk_count[lv];
-      uint64_t lut_len = (uint64_t)batch_count * chunks_lv;
+  // Batch LUTs (gather + perm, epoch-major shard order).
+  for (int lv = 0; lv < cl->levels.nlod; ++lv) {
+    struct level_flush_state* lvl = &stage->levels[lv];
+    uint32_t batch_count = lvl->batch_active_count;
+    uint32_t slot_count = batch_count > 0 ? batch_count : 1;
+    uint64_t chunks_lv = cl->levels.chunk_count[lv];
+    uint64_t lut_len = (uint64_t)slot_count * chunks_lv;
 
-      if (lut_len == 0)
-        continue;
+    if (lut_len == 0)
+      continue;
 
-      uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-      uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-      CHECK(Fail, h_gather && h_perm);
+    uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+    uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+    CHECK(Fail, h_gather && h_perm);
 
-      const struct aggregate_layout* al = &lvl->agg_layout;
-
-      for (uint32_t a = 0; a < batch_count; ++a) {
+    {
+      uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+      for (uint32_t a = 0; a < slot_count; ++a) {
         uint32_t period = 1;
         if (cl->dims.append_downsample && lv > 0)
           period = 1u << lv;
-        uint32_t pool_epoch = (a + 1) * period - 1;
-
-        for (uint64_t j = 0; j < chunks_lv; ++j) {
-          uint64_t idx = (uint64_t)a * chunks_lv + j;
-          h_gather[idx] = (uint32_t)(pool_epoch * total_chunks +
-                                     cl->levels.chunk_offset[lv] + j);
-
-          uint64_t perm_pos = 0;
-          uint64_t rest = j;
-          for (int d = al->lifted_rank - 1; d >= 0; --d) {
-            uint64_t coord = rest % al->lifted_shape[d];
-            rest /= al->lifted_shape[d];
-            perm_pos += coord * (uint64_t)al->lifted_strides[d];
-          }
-          h_perm[idx] = (uint32_t)(perm_pos * batch_count + a);
-        }
+        pool_epochs[a] = (a + 1) * period - 1;
       }
-
-      CU(LutFail, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
-      CU(LutFail,
-         cuMemcpyHtoD(
-           lvl->d_batch_gather, h_gather, lut_len * sizeof(uint32_t)));
-      CU(LutFail, cuMemAlloc(&lvl->d_batch_perm, lut_len * sizeof(uint32_t)));
-      CU(LutFail,
-         cuMemcpyHtoD(lvl->d_batch_perm, h_perm, lut_len * sizeof(uint32_t)));
-
-      free(h_gather);
-      free(h_perm);
-      continue;
-
-    LutFail:
-      free(h_gather);
-      free(h_perm);
-      goto Fail;
+      aggregate_batch_luts(&lvl->agg_layout,
+                           &cl->levels,
+                           lv,
+                           slot_count,
+                           pool_epochs,
+                           h_gather,
+                           h_perm);
     }
+
+    CU(LutFail, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
+    CU(LutFail,
+       cuMemcpyHtoD(lvl->d_batch_gather, h_gather, lut_len * sizeof(uint32_t)));
+    CU(LutFail, cuMemAlloc(&lvl->d_batch_perm, lut_len * sizeof(uint32_t)));
+    CU(LutFail,
+       cuMemcpyHtoD(lvl->d_batch_perm, h_perm, lut_len * sizeof(uint32_t)));
+
+    free(h_gather);
+    free(h_perm);
+    continue;
+
+  LutFail:
+    free(h_gather);
+    free(h_perm);
+    goto Fail;
   }
 
   // Seed events
@@ -262,7 +255,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
                         compress_stream) == 0);
   }
 
-  // Per-level batch aggregate on compress stream
+  // Per-level batch aggregate on compress stream.
+  // Always use the batch aggregate path (LUT-based).  When active_count
+  // differs from the pre-computed batch_active_count, recompute host-side
+  // LUTs and upload them before launching the kernel.
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(in->active_levels_mask & (1u << lv)))
       continue;
@@ -270,73 +266,86 @@ compress_agg_kick(struct compress_agg_stage* stage,
     struct level_flush_state* lvl = &stage->levels[lv];
     uint32_t active_count = level_active_epochs(lvl, batch, dims, lv, n_epochs);
 
-    struct aggregate_slot* agg = &lvl->agg[fc];
-    uint64_t chunks_lv = levels->chunk_count[lv];
-
+    // Scan masks to determine active_count and pool epochs.
+    // level_active_epochs returns 0 for infrequent append-downsampled levels
+    // (period > K); in that case we scan masks directly.
+    uint32_t pool_epochs_buf[MAX_BATCH_EPOCHS];
     if (active_count == 0) {
-      // Infrequent append-downsampled level (period > K): scan actual per-epoch
-      // masks.
-      for (uint32_t e = 0; e < n_epochs; ++e) {
-        if (!(in->batch_active_masks[e] & (1u << lv)))
-          continue;
-        active_count++;
-
-        // aggregate_epoch_level but with compress_stream
-        void* d_comp =
-          (char*)stage->d_compressed[fc] +
-          ((uint64_t)e * levels->total_chunks + levels->chunk_offset[lv]) *
-            stage->codec.max_output_size;
-        size_t* d_sizes = stage->codec.d_comp_sizes +
-                          (uint64_t)e * levels->total_chunks +
-                          levels->chunk_offset[lv];
-        CHECK(Error,
-              aggregate_by_shard_async(
-                &lvl->agg_layout, d_comp, d_sizes, agg, compress_stream) == 0);
-      }
+      for (uint32_t e = 0; e < n_epochs; ++e)
+        if (in->batch_active_masks[e] & (1u << lv))
+          pool_epochs_buf[active_count++] = e;
       if (active_count == 0)
         continue;
-    } else {
-      uint64_t batch_chunk_count = (uint64_t)active_count * chunks_lv;
-      uint64_t batch_covering =
-        (uint64_t)active_count * lvl->agg_layout.covering_count;
-
-      int use_luts = (in->epochs_per_batch > 1 && lvl->d_batch_gather &&
-                      active_count == lvl->batch_active_count);
-      if (use_luts) {
-        CHECK(Error,
-              aggregate_batch_by_shard_async(
-                (void*)stage->d_compressed[fc],
-                stage->codec.d_comp_sizes,
-                (const uint32_t*)(uintptr_t)lvl->d_batch_gather,
-                (const uint32_t*)(uintptr_t)lvl->d_batch_perm,
-                batch_chunk_count,
-                batch_covering,
-                stage->codec.max_output_size,
-                &lvl->agg_layout,
-                agg,
-                compress_stream) == 0);
-      } else {
-        // K=1 or partial batch: per-epoch aggregate
-        for (uint32_t a = 0; a < active_count; ++a) {
-          uint32_t period = 1;
-          if (dims->append_downsample && lv > 0)
-            period = 1u << lv;
-          uint32_t pool_epoch = (n_epochs == 1) ? 0 : (a + 1) * period - 1;
-
-          void* d_comp = (char*)stage->d_compressed[fc] +
-                         ((uint64_t)pool_epoch * levels->total_chunks +
-                          levels->chunk_offset[lv]) *
-                           stage->codec.max_output_size;
-          size_t* d_sizes = stage->codec.d_comp_sizes +
-                            (uint64_t)pool_epoch * levels->total_chunks +
-                            levels->chunk_offset[lv];
-          CHECK(Error,
-                aggregate_by_shard_async(
-                  &lvl->agg_layout, d_comp, d_sizes, agg, compress_stream) ==
-                  0);
-        }
-      }
     }
+
+    struct aggregate_slot* agg = &lvl->agg[fc];
+    uint64_t chunks_lv = levels->chunk_count[lv];
+    uint64_t batch_chunk_count = (uint64_t)active_count * chunks_lv;
+    uint64_t batch_covering =
+      (uint64_t)active_count * lvl->agg_layout.covering_count;
+
+    // Recompute LUTs if active_count doesn't match pre-computed.
+    if (active_count != lvl->batch_active_count) {
+      // LUT buffers are sized for max(batch_active_count, 1) * chunks_lv.
+      uint32_t lut_cap =
+        lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
+      CHECK(Error, active_count <= lut_cap);
+
+      // Scan masks for actual pool positions (unless already done above).
+      {
+        uint32_t ai = 0;
+        for (uint32_t e = 0; e < n_epochs; ++e)
+          if (in->batch_active_masks[e] & (1u << lv))
+            pool_epochs_buf[ai++] = e;
+      }
+
+      uint64_t lut_len = batch_chunk_count;
+      uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+      uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
+      CHECK(LutRecompute, h_gather && h_perm);
+
+      aggregate_batch_luts(&lvl->agg_layout,
+                           levels,
+                           lv,
+                           active_count,
+                           pool_epochs_buf,
+                           h_gather,
+                           h_perm);
+
+      CU(LutRecompute,
+         cuMemcpyHtoDAsync(lvl->d_batch_gather,
+                           h_gather,
+                           lut_len * sizeof(uint32_t),
+                           compress_stream));
+      CU(LutRecompute,
+         cuMemcpyHtoDAsync(lvl->d_batch_perm,
+                           h_perm,
+                           lut_len * sizeof(uint32_t),
+                           compress_stream));
+
+      free(h_gather);
+      free(h_perm);
+      goto LutRecomputeDone;
+
+    LutRecompute:
+      free(h_gather);
+      free(h_perm);
+      goto Error;
+    LutRecomputeDone:;
+    }
+
+    CHECK(Error,
+          aggregate_batch_by_shard_async(
+            (void*)stage->d_compressed[fc],
+            stage->codec.d_comp_sizes,
+            (const uint32_t*)(uintptr_t)lvl->d_batch_gather,
+            (const uint32_t*)(uintptr_t)lvl->d_batch_perm,
+            batch_chunk_count,
+            batch_covering,
+            stage->codec.max_output_size,
+            &lvl->agg_layout,
+            agg,
+            compress_stream) == 0);
   }
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));

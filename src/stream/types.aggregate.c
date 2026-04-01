@@ -1,5 +1,6 @@
 #include "stream/types.aggregate.h"
 
+#include "stream/layouts.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
@@ -21,6 +22,35 @@ agg_pool_bytes(uint64_t chunk_count,
   return bytes;
 Overflow:
   return 0;
+}
+
+void
+aggregate_batch_luts(const struct aggregate_layout* agg,
+                     const struct level_geometry* levels,
+                     int lv,
+                     uint32_t active_count,
+                     const uint32_t* pool_epochs,
+                     uint32_t* out_gather,
+                     uint32_t* out_perm)
+{
+  const uint64_t total_chunks = levels->total_chunks;
+  const uint64_t M_lv = agg->chunks_per_epoch;
+  const uint32_t cps_inner = (uint32_t)agg->cps_inner;
+
+  for (uint32_t a = 0; a < active_count; ++a) {
+    uint32_t pool_epoch = pool_epochs[a];
+    for (uint64_t j = 0; j < M_lv; ++j) {
+      uint64_t idx = (uint64_t)a * M_lv + j;
+      out_gather[idx] =
+        (uint32_t)(pool_epoch * total_chunks + levels->chunk_offset[lv] + j);
+
+      uint32_t perm_pos = (uint32_t)ravel(
+        agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
+      uint32_t si = perm_pos / cps_inner;
+      uint32_t c = perm_pos % cps_inner;
+      out_perm[idx] = si * active_count * cps_inner + a * cps_inner + c;
+    }
+  }
 }
 
 int
