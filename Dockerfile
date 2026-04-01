@@ -16,11 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblz4-dev \
         libomp-dev \
         libssl-dev \
+        python3 \
         git \
         wget \
+        curl \
         unzip \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 # Build AWS C libraries from source (not packaged in Ubuntu 24.04).
 # Explicit &&-chain so any failure aborts the layer.
