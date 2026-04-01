@@ -5,11 +5,16 @@
 #ifdef HAVE_BLOSC
 #include <blosc.h>
 #endif
-#include <lz4.h>
 #include <lz4hc.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <zstd.h>
+
+#ifdef HAVE_BLOSC
+#define BLOSC_OVERHEAD BLOSC_MAX_OVERHEAD
+#else
+#define BLOSC_OVERHEAD 16
+#endif
 
 size_t
 compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
@@ -21,11 +26,9 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
       return (size_t)LZ4_compressBound((int)chunk_bytes);
     case CODEC_ZSTD:
       return ZSTD_compressBound(chunk_bytes);
-#ifdef HAVE_BLOSC
     case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD:
-      return chunk_bytes + BLOSC_MAX_OVERHEAD;
-#endif
+      return chunk_bytes + BLOSC_OVERHEAD;
     default:
       return 0;
   }
@@ -63,13 +66,8 @@ compress_cpu(struct codec_config codec,
           continue;
         const char* in = (const char*)src + i * input_stride;
         char* out = (char*)dst + i * max_output_size;
-        int rc;
-        if (level > 0)
-          rc = LZ4_compress_HC(
-            in, out, (int)chunk_bytes, (int)max_output_size, level);
-        else
-          rc = LZ4_compress_default(
-            in, out, (int)chunk_bytes, (int)max_output_size);
+        int rc = LZ4_compress_HC(
+          in, out, (int)chunk_bytes, (int)max_output_size, level);
         if (rc <= 0)
           err = 1;
         else
@@ -96,9 +94,9 @@ compress_cpu(struct codec_config codec,
       return err;
     }
 
-#ifdef HAVE_BLOSC
     case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD: {
+#ifdef HAVE_BLOSC
       const char* compname =
         codec.id == CODEC_BLOSC_LZ4 ? BLOSC_LZ4_COMPNAME : BLOSC_ZSTD_COMPNAME;
       int clevel = codec.level;
@@ -127,8 +125,11 @@ compress_cpu(struct codec_config codec,
           comp_sizes[i] = (size_t)rc;
       }
       return err;
-    }
+#else
+      log_error("blosc codec requested but not compiled in");
+      return 1;
 #endif
+    }
 
     default:
       return 1;

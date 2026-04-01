@@ -1,9 +1,11 @@
 #include "zarr/crc32c.h"
 
-static uint32_t crc32c_table[256];
-static int crc32c_table_ready;
+#include <stdatomic.h>
 
-void
+static uint32_t crc32c_table[256];
+static _Atomic int crc32c_table_ready;
+
+static void
 crc32c_init(void)
 {
   if (crc32c_table_ready)

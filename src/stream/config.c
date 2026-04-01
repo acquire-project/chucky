@@ -164,6 +164,16 @@ validate_config(const struct tile_stream_configuration* config,
   }
 
   {
+    enum compression_codec cid = config->codec.id;
+    if (cid == CODEC_BLOSC_LZ4 || cid == CODEC_BLOSC_ZSTD) {
+#ifndef HAVE_BLOSC
+      log_error("blosc codec requested but blosc support is not compiled in");
+      goto Fail;
+#endif
+    }
+  }
+
+  {
     uint8_t na = dim_info_n_append(di);
     if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
       log_error("invalid storage_order permutation");

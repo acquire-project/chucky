@@ -7,7 +7,6 @@
 #include "gpu/prelude.cuda.h"
 #include "stream/layouts.h"
 #include "util/prelude.h"
-#include "zarr/crc32c.h"
 #include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
@@ -89,8 +88,6 @@ compress_agg_init(struct compress_agg_stage* stage,
   }
 
   // Per-level aggregate + shard + LUTs
-  crc32c_init();
-
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     const struct level_layout_info* li = &cl->per_level[lv];
 
