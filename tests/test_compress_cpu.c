@@ -89,7 +89,7 @@ test_codec_lz4(void)
     fill_pattern((char*)src + i * CHUNK_BYTES, CHUNK_BYTES, (uint8_t)i);
 
   CHECK(Fail,
-        compress_cpu((struct codec_config){ .id = CODEC_LZ4 },
+        compress_cpu((struct codec_config){ .id = CODEC_LZ4, .level = 1 },
                      src,
                      CHUNK_BYTES,
                      dst,

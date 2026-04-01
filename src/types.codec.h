@@ -26,7 +26,9 @@ extern "C"
   struct codec_config
   {
     enum compression_codec id;
-    uint8_t level;              // passed to codec as-is
+    uint8_t level;              // LZ4: 1..12 (HC), 0 rejected.
+                                // ZSTD: 0 valid (ZSTD default).
+                                // Blosc: 0 = store only.
     enum codec_shuffle shuffle; // blosc only
   };
 

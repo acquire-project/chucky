@@ -163,6 +163,11 @@ validate_config(const struct tile_stream_configuration* config,
                (unsigned long long)chunk_elements);
   }
 
+  if (config->codec.id == CODEC_LZ4 && config->codec.level == 0) {
+    log_error("LZ4 requires level >= 1 (LZ4 HC levels 1..12)");
+    goto Fail;
+  }
+
   {
     uint8_t na = dim_info_n_append(di);
     if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {

@@ -1,6 +1,7 @@
 // Test that zarr output is readable by zarr-python.
 // Writes zarr stores with various codecs, then runs a Python validation script.
 
+#include "cpu/compress_blosc.h"
 #include "dimension.h"
 #include "stream.cpu.h"
 #include "test_platform.h"
@@ -18,6 +19,13 @@
 static int
 write_zarr(const char* store_path, struct codec_config codec)
 {
+  // Check blosc availability before attempting a full pipeline setup.
+  if (codec.id == CODEC_BLOSC_LZ4 || codec.id == CODEC_BLOSC_ZSTD) {
+    int rc = compress_blosc(codec, NULL, 0, NULL, 0, NULL, 0, 0, 0);
+    if (rc == COMPRESS_BLOSC_NOT_AVAILABLE)
+      return rc;
+  }
+
   const int total = NT * NY * NX;
   uint16_t* src = (uint16_t*)malloc((size_t)total * sizeof(uint16_t));
   CHECK(Fail, src);
@@ -107,10 +115,16 @@ main(void)
     snprintf(store, sizeof(store), "%s/%s", tmpdir, codecs[i].name);
     CHECK(Cleanup, test_mkdir(store) == 0);
     log_info("Writing %s ...", codecs[i].name);
-    if (write_zarr(store, codecs[i].codec)) {
+    int wrc = write_zarr(store, codecs[i].codec);
+    if (wrc == COMPRESS_BLOSC_NOT_AVAILABLE) {
       log_info("  skipped: %s (codec not available)", codecs[i].name);
       test_tmpdir_remove(store);
       continue;
+    }
+    if (wrc) {
+      log_error("  write failed: %s", codecs[i].name);
+      err = 1;
+      goto Cleanup;
     }
   }
 

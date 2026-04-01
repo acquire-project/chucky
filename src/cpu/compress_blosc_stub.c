@@ -29,5 +29,5 @@ compress_blosc(struct codec_config codec,
   (void)batch_size;
   (void)bytes_per_element;
   log_error("blosc codec requested but not compiled in");
-  return 1;
+  return COMPRESS_BLOSC_NOT_AVAILABLE;
 }

@@ -104,6 +104,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
     layout->lifted_shape[2 * k + 1] = eff_cps[d];
     layout->covering_count *= shard_count[d] * eff_cps[d];
   }
+  CHECK(Error, layout->covering_count <= UINT32_MAX);
 
   // cps_inner = prod(eff_cps[d] for d=n_append..D-1)
   for (int d = n_append; d < D; ++d)
