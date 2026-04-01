@@ -6,6 +6,7 @@
 #include "test_shard_verify.h"
 #include "test_voxel_encode.h"
 #include "util/prelude.h"
+#include "zarr/zarr_metadata.h"
 #include "zarr_fs_sink.h"
 
 #include <stdio.h>
@@ -1909,6 +1910,236 @@ Fail:
   return 1;
 }
 
+// --- Test: zarr_for_each_intermediate edge cases ---
+
+struct intermediate_record
+{
+  int count;
+  char segments[8][256];
+};
+
+static int
+record_segment(const char* partial, void* ctx)
+{
+  struct intermediate_record* r = (struct intermediate_record*)ctx;
+  if (r->count < 8)
+    snprintf(r->segments[r->count], 256, "%s", partial);
+  r->count++;
+  return 0;
+}
+
+static int
+test_for_each_intermediate(void)
+{
+  log_info("=== test_for_each_intermediate ===");
+  struct intermediate_record rec;
+
+  // No slash: zero callbacks
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("data", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 0);
+
+  // Single slash: one callback
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("a/b", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 1);
+  CHECK(Fail, strcmp(rec.segments[0], "a") == 0);
+
+  // Two slashes: two callbacks
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("a/b/c", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 2);
+  CHECK(Fail, strcmp(rec.segments[0], "a") == 0);
+  CHECK(Fail, strcmp(rec.segments[1], "a/b") == 0);
+
+  // NULL: no-op
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate(NULL, record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 0);
+
+  // Leading slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("/a/b", record_segment, &rec) != 0);
+
+  // Trailing slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("a/b/", record_segment, &rec) != 0);
+
+  // Double slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("a//b", record_segment, &rec) != 0);
+
+  // Empty string: rejected
+  CHECK(Fail, zarr_for_each_intermediate("", record_segment, &rec) != 0);
+
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: nested array_name writes intermediate group zarr.json ---
+
+static int
+test_nested_array_name(const char* tmpdir)
+{
+  log_info("=== test_nested_array_name ===");
+
+  struct dimension dims[] = {
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .name = "z",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+  };
+
+  struct zarr_config cfg = {
+    .store_path = tmpdir,
+    .array_name = "path/to/data",
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 2,
+    .dimensions = dims,
+  };
+
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&cfg);
+  CHECK(Fail, zs);
+
+  // Check root group zarr.json
+  {
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/to/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path/to", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check leaf array zarr.json exists
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/path/to/data/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len] = '\0';
+    CHECK(Fail2, strstr((char*)data, "\"node_type\":\"array\""));
+    free(data);
+  }
+
+  zarr_fs_sink_destroy(zs);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_sink_destroy(zs);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: nested array_name in multiscale sink ---
+
+static int
+test_nested_multiscale_array_name(const char* tmpdir)
+{
+  log_info("=== test_nested_multiscale_array_name ===");
+
+  struct dimension dims[] = {
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .array_name = "path/to/group",
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 2,
+    .dimensions = dims,
+    .nlod = 0,
+  };
+
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  // Check root group zarr.json
+  {
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check intermediate group: {tmpdir}/path/to/zarr.json
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path/to", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    free(data);
+  }
+
+  // Check multiscale group: {tmpdir}/path/to/group/zarr.json has OME metadata
+  {
+    char dir[4096];
+    snprintf(dir, sizeof(dir), "%s/path/to/group", tmpdir);
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(dir, &data, 8192) == 0);
+    CHECK(Fail2, strstr(data, "\"multiscales\""));
+    free(data);
+  }
+
+  zarr_fs_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -1921,6 +2152,9 @@ main(int ac, char* av[])
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   log_info("temp dir: %s", tmpdir);
+
+  // zarr_for_each_intermediate unit test (no CUDA, no tmpdir needed)
+  ecode |= test_for_each_intermediate();
 
   // Metadata tests (no CUDA needed)
   {
@@ -1936,6 +2170,22 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/meta2app", tmpdir);
     test_mkdir(sub);
     ecode |= test_metadata_two_append(sub);
+  }
+
+  // Nested array_name intermediate group metadata test (no CUDA needed)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/nested", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_nested_array_name(sub);
+  }
+
+  // Nested multiscale array_name intermediate group metadata test (no CUDA)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/nested_ms", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_nested_multiscale_array_name(sub);
   }
 
   // Multiscale metadata test (no CUDA needed)

@@ -338,6 +338,22 @@ write_array_metadata_file(const char* array_dir,
   return write_file(path, buf, (size_t)len);
 }
 
+struct fs_intermediate_ctx
+{
+  const char* store_path;
+};
+
+static int
+write_fs_intermediate(const char* partial, void* ctx)
+{
+  const struct fs_intermediate_ctx* c = (const struct fs_intermediate_ctx*)ctx;
+  char dir[4096];
+  snprintf(dir, sizeof(dir), "%s/%s", c->store_path, partial);
+  if (platform_mkdirp(dir) != 0)
+    return -1;
+  return write_root_metadata_file(dir);
+}
+
 // --- Metadata update ---
 
 static int
@@ -388,6 +404,11 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   CHECK(Fail, cfg->store_path);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
+  if (cfg->array_name)
+    CHECK(Fail,
+          strlen(cfg->store_path) + 1 + strlen(cfg->array_name) +
+              sizeof("/zarr.json") <
+            4096);
 
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)calloc(1, sizeof(*zs));
   CHECK(Fail, zs);
@@ -434,8 +455,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
              cfg->store_path,
              cfg->array_name);
   else
-    snprintf(
-      zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
+    snprintf(zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
 
   // Create directory tree: ensure shard directories exist.
   // shard_inner_count = prod(shard_count[d] for d >= n_append).
@@ -472,8 +492,13 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   }
 
   // Write metadata
-  if (cfg->array_name)
+  if (cfg->array_name) {
     CHECK(Fail_alloc, write_root_metadata_file(cfg->store_path) == 0);
+    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
+    CHECK(Fail_alloc,
+          zarr_for_each_intermediate(
+            cfg->array_name, write_fs_intermediate, &ictx) == 0);
+  }
   CHECK(Fail_alloc,
         write_array_metadata_file(zs->array_dir,
                                   zs->rank,
@@ -655,6 +680,11 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   CHECK(Fail, cfg->store_path);
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
+  if (cfg->array_name)
+    CHECK(Fail,
+          strlen(cfg->store_path) + 1 + strlen(cfg->array_name) +
+              sizeof("/zarr.json") <
+            4096);
 
   // Build group path: store_path/array_name when array_name is set
   char group_path[4096];
@@ -694,6 +724,10 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
     CHECK(Fail_ms, platform_mkdirp(cfg->store_path) == 0);
     CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
     CHECK(Fail_ms, write_root_metadata_file(cfg->store_path) == 0);
+    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
+    CHECK(Fail_ms,
+          zarr_for_each_intermediate(
+            cfg->array_name, write_fs_intermediate, &ictx) == 0);
   } else {
     CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
   }
