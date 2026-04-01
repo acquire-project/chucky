@@ -309,16 +309,17 @@ test_compress_agg_batch(void)
   // Verify data per epoch
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
   uint32_t cps_inner = (uint32_t)al->cps_inner;
+  uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
+  const uint64_t shard_shape[2] = { num_shards, cps_inner };
+  const int64_t shard_strides[2] = { (int64_t)(batch_count * cps_inner), 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint32_t perm_pos = (uint32_t)ravel(
-        al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
-      uint32_t si = perm_pos / cps_inner;
-      uint32_t ci = perm_pos % cps_inner;
+      uint64_t perm_pos =
+        ravel(al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
       uint64_t out_idx =
-        (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
+        ravel(2, shard_shape, shard_strides, perm_pos) + a * cps_inner;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
       if (sz != chunk_bytes) {
@@ -521,16 +522,17 @@ test_compress_agg_zstd_batch(void)
 
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
   uint32_t cps_inner = (uint32_t)al->cps_inner;
+  uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
+  const uint64_t shard_shape[2] = { num_shards, cps_inner };
+  const int64_t shard_strides[2] = { (int64_t)(batch_count * cps_inner), 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint32_t perm_pos = (uint32_t)ravel(
-        al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
-      uint32_t si = perm_pos / cps_inner;
-      uint32_t ci = perm_pos % cps_inner;
+      uint64_t perm_pos =
+        ravel(al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
       uint64_t out_idx =
-        (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
+        ravel(2, shard_shape, shard_strides, perm_pos) + a * cps_inner;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t comp_sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
 

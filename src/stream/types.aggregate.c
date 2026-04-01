@@ -36,6 +36,14 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
   const uint64_t total_chunks = levels->total_chunks;
   const uint64_t M_lv = agg->chunks_per_epoch;
   const uint32_t cps_inner = (uint32_t)agg->cps_inner;
+  const uint32_t num_shards = (uint32_t)(agg->covering_count / cps_inner);
+
+  // Output perm maps (epoch, chunk) → position in shard-major order:
+  //   [num_shards, active_count, cps_inner]
+  // ravel through lifted strides gives shard-grouped position,
+  // second ravel inserts the epoch dimension.
+  const uint64_t shard_shape[2] = { num_shards, cps_inner };
+  const int64_t shard_strides[2] = { (int64_t)(active_count * cps_inner), 1 };
 
   for (uint32_t a = 0; a < active_count; ++a) {
     uint32_t pool_epoch = pool_epochs[a];
@@ -44,11 +52,11 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
       out_gather[idx] =
         (uint32_t)(pool_epoch * total_chunks + levels->chunk_offset[lv] + j);
 
-      uint32_t perm_pos = (uint32_t)ravel(
-        agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
-      uint32_t si = perm_pos / cps_inner;
-      uint32_t c = perm_pos % cps_inner;
-      out_perm[idx] = si * active_count * cps_inner + a * cps_inner + c;
+      uint64_t perm_pos =
+        ravel(agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
+      out_perm[idx] =
+        (uint32_t)(ravel(2, shard_shape, shard_strides, perm_pos) +
+                   a * cps_inner);
     }
   }
 }
