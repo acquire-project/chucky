@@ -4,6 +4,7 @@
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int
 codec_is_blosc(enum compression_codec c)
@@ -340,6 +341,39 @@ zarr_multiscale_group_json(char* buf,
   if (jw_error(&jw))
     return -1;
   return (int)jw_length(&jw);
+}
+
+int
+zarr_for_each_intermediate(const char* array_name,
+                           int (*fn)(const char* partial, void* ctx),
+                           void* ctx)
+{
+  if (!array_name)
+    return 0;
+
+  size_t len = strlen(array_name);
+  if (len == 0 || len >= 4096)
+    return -1;
+
+  // Reject leading slash, trailing slash, or empty segments (//)
+  if (array_name[0] == '/' || array_name[len - 1] == '/')
+    return -1;
+  if (strstr(array_name, "//"))
+    return -1;
+
+  char name[4096];
+  memcpy(name, array_name, len + 1);
+
+  for (size_t i = 0; i < len; ++i) {
+    if (name[i] == '/') {
+      name[i] = '\0';
+      int rc = fn(name, ctx);
+      name[i] = '/';
+      if (rc != 0)
+        return rc;
+    }
+  }
+  return 0;
 }
 
 int
