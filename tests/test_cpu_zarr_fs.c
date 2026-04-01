@@ -445,7 +445,7 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
     snprintf(path, sizeof(path), "%s/0/c/0/0/0", tmpdir);
     CHECK(Fail4, test_file_exists(path));
 
-    uint8_t* shard_data;
+    uint8_t* shard_data = NULL;
     size_t shard_len;
     CHECK(Fail4, read_file_all(path, &shard_data, &shard_len) == 0);
 
@@ -453,14 +453,23 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
       (uint64_t*)malloc((size_t)chunks_per_shard_total * sizeof(uint64_t));
     uint64_t* nbytes =
       (uint64_t*)malloc((size_t)chunks_per_shard_total * sizeof(uint64_t));
-    CHECK(Fail5, offsets && nbytes);
+    if (!offsets || !nbytes) {
+      free(offsets);
+      free(nbytes);
+      free(shard_data);
+      goto Fail4;
+    }
 
-    CHECK(Fail5,
-          shard_index_parse(shard_data,
-                            shard_len,
-                            (size_t)chunks_per_shard_total,
-                            offsets,
-                            nbytes) == 0);
+    if (shard_index_parse(shard_data,
+                          shard_len,
+                          (size_t)chunks_per_shard_total,
+                          offsets,
+                          nbytes)) {
+      free(offsets);
+      free(nbytes);
+      free(shard_data);
+      goto Fail4;
+    }
 
     // Verify each chunk: slot (t, j) should decompress to all-t values.
     // Shard index slot = t * cps_inner + j, where cps_inner = 4.
@@ -488,7 +497,8 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
     free(offsets);
     free(nbytes);
     free(shard_data);
-    CHECK(Fail4, errors == 0);
+    if (errors)
+      goto Fail4;
   }
 
   tile_stream_cpu_destroy(s);
@@ -496,8 +506,6 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
   free(src);
   return 0;
 
-Fail5:
-  // offsets/nbytes freed above if allocated
 Fail4:
   tile_stream_cpu_destroy(s);
 Fail3:

@@ -741,7 +741,6 @@ cpu_flush_final(struct writer* self)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
   struct writer_result r = cpu_flush(self);
-  if (!r.error)
-    s->flushed = 1;
+  s->flushed = 1;
   return r;
 }

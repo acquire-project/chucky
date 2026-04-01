@@ -286,6 +286,11 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
     // Recompute LUTs if active_count doesn't match pre-computed.
     if (active_count != lvl->batch_active_count) {
+      // LUT buffers are sized for max(batch_active_count, 1) * chunks_lv.
+      uint32_t lut_cap =
+        lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
+      CHECK(Error, active_count <= lut_cap);
+
       // Scan masks for actual pool positions (unless already done above).
       {
         uint32_t ai = 0;

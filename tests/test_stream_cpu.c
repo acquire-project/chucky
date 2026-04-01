@@ -210,6 +210,7 @@ test_append_after_flush(void)
   return 0;
 
 Fail:
+  free(data);
   tile_stream_cpu_destroy(s);
   test_sink_free(&sink);
   log_error("  FAIL");
