@@ -31,4 +31,24 @@ if(Blosc_FOUND AND NOT TARGET Blosc::Blosc)
             IMPORTED_LOCATION "${BLOSC_LIBRARY}"
             INTERFACE_INCLUDE_DIRECTORIES "${BLOSC_INCLUDE_DIR}"
     )
+
+    # Static blosc pulls in zlib and snappy as transitive dependencies
+    if(BLOSC_LIBRARY MATCHES "\\.a$")
+        find_package(ZLIB QUIET)
+        if(TARGET ZLIB::ZLIB)
+            set_property(
+                TARGET Blosc::Blosc
+                APPEND
+                PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB
+            )
+        endif()
+        find_library(_SNAPPY_LIB NAMES snappy)
+        if(_SNAPPY_LIB)
+            set_property(
+                TARGET Blosc::Blosc
+                APPEND
+                PROPERTY INTERFACE_LINK_LIBRARIES "${_SNAPPY_LIB}"
+            )
+        endif()
+    endif()
 endif()
