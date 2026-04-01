@@ -56,7 +56,6 @@ struct multiarray_tile_stream_cpu
   size_t* shard_order_sizes;
 
   // Shared LUT storage (recomputed on switch).
-  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* batch_gather[LOD_MAX_LEVELS];
   uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
@@ -107,7 +106,6 @@ struct pool_maxima
   size_t lod_values_bytes;
   size_t agg_data_bytes[LOD_MAX_LEVELS];
   uint64_t agg_batch_C_count[LOD_MAX_LEVELS];
-  size_t chunk_to_shard_map_count[LOD_MAX_LEVELS];
   size_t batch_gather_count[LOD_MAX_LEVELS];
   size_t scatter_lut_count;
   size_t scatter_batch_offsets_count;
@@ -178,8 +176,6 @@ init_array_descriptor(struct array_descriptor* desc,
 
     if (batch_C > maxima->batch_covering_count)
       maxima->batch_covering_count = batch_C;
-    maxima->chunk_to_shard_map_count[lv] =
-      max_sz(maxima->chunk_to_shard_map_count[lv], M_lv);
     if (batch_C > maxima->agg_batch_C_count[lv])
       maxima->agg_batch_C_count[lv] = batch_C;
     maxima->agg_data_bytes[lv] =
@@ -190,9 +186,8 @@ init_array_descriptor(struct array_descriptor* desc,
                             al->cps_inner,
                             al->page_size));
 
-    if (K_l > 1)
-      maxima->batch_gather_count[lv] =
-        max_sz(maxima->batch_gather_count[lv], (uint64_t)K_l * M_lv);
+    maxima->batch_gather_count[lv] =
+      max_sz(maxima->batch_gather_count[lv], (uint64_t)slot_count * M_lv);
 
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
@@ -269,11 +264,6 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
       as->data = malloc(mx->agg_data_bytes[lv]);
       as->data_capacity_bytes = mx->agg_data_bytes[lv];
       CHECK(Fail, as->data);
-    }
-    if (mx->chunk_to_shard_map_count[lv] > 0) {
-      ms->chunk_to_shard_map[lv] =
-        (uint32_t*)malloc(mx->chunk_to_shard_map_count[lv] * sizeof(uint32_t));
-      CHECK(Fail, ms->chunk_to_shard_map[lv]);
     }
     if (mx->batch_gather_count[lv] > 0) {
       ms->batch_gather[lv] =
@@ -417,7 +407,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     free(ms->agg_slots[lv].data);
     free(ms->agg_slots[lv].offsets);
     free(ms->agg_slots[lv].chunk_sizes);
-    free(ms->chunk_to_shard_map[lv]);
     free(ms->batch_gather[lv]);
     free(ms->batch_chunk_to_shard_map[lv]);
     free(ms->morton_lut[lv]);
@@ -455,7 +444,6 @@ recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
     .scatter_batch_offsets = ms->scatter_batch_offsets,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    luts.chunk_to_shard_map[lv] = ms->chunk_to_shard_map[lv];
     luts.batch_gather[lv] = ms->batch_gather[lv];
     luts.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
     luts.morton_lut[lv] = ms->morton_lut[lv];
@@ -495,6 +483,8 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
     .comp_sizes = ms->comp_sizes,
     .total_chunks = desc->levels.total_chunks,
     .nlod = desc->levels.nlod,
+    .cl = &desc->cl,
+    .levels_geo = &desc->levels,
     .shard_order_sizes_bytes = ms->shard_order_sizes,
     .sink = desc->sink,
     .shard_alignment_bytes = desc->config.shard_alignment,
@@ -505,7 +495,6 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
       .agg_layout = &desc->agg_layout[lv],
       .batch_active_count = desc->batch_active_count[lv],
       .chunk_offset = desc->levels.chunk_offset[lv],
-      .chunk_to_shard_map = ms->chunk_to_shard_map[lv],
       .batch_chunk_to_shard_map = ms->batch_chunk_to_shard_map[lv],
       .batch_gather = ms->batch_gather[lv],
       .agg_slot = &ms->agg_slots[lv],

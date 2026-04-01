@@ -16,6 +16,8 @@ static struct writer_result
 cpu_append(struct writer* self, struct slice input);
 static struct writer_result
 cpu_flush(struct writer* self);
+static struct writer_result
+cpu_flush_final(struct writer* self);
 
 // ---- Create / Destroy ----
 
@@ -79,10 +81,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       if (batch_C > max_batch_C)
         max_batch_C = batch_C;
 
-      // Per-level perm (single-epoch, for fallback).
-      s->chunk_to_shard_map[lv] = (uint32_t*)malloc(M_lv * sizeof(uint32_t));
-      CHECK(Fail, s->chunk_to_shard_map[lv]);
-
       // Per-level aggregate output buffers (batch-scaled).
       size_t data_lv = agg_pool_bytes((uint64_t)slot_count * M_lv,
                                       agg->max_comp_chunk_bytes,
@@ -103,9 +101,9 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
         }
       }
 
-      // Batch aggregate LUTs (K_l > 1 only).
-      if (K_l > 1) {
-        uint64_t lut_len = (uint64_t)K_l * M_lv;
+      // Batch aggregate LUTs (gather + perm).
+      if (M_lv > 0) {
+        uint64_t lut_len = (uint64_t)slot_count * M_lv;
 
         s->batch_gather[lv] = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
         s->batch_chunk_to_shard_map[lv] =
@@ -180,7 +178,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       .scatter_batch_offsets = s->scatter_batch_offsets,
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      luts.chunk_to_shard_map[lv] = s->chunk_to_shard_map[lv];
       luts.batch_gather[lv] = s->batch_gather[lv];
       luts.batch_chunk_to_shard_map[lv] = s->batch_chunk_to_shard_map[lv];
       luts.morton_lut[lv] = s->morton_lut[lv];
@@ -217,7 +214,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   }
 
   s->writer.append = cpu_append;
-  s->writer.flush = cpu_flush;
+  s->writer.flush = cpu_flush_final;
 
   platform_toc(&s->metadata_update_clock);
 
@@ -241,7 +238,6 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
         free(ss->shards[si].index);
       free(ss->shards);
     }
-    free(s->chunk_to_shard_map[lv]);
     free(s->batch_gather[lv]);
     free(s->batch_chunk_to_shard_map[lv]);
     free(s->morton_lut[lv]);
@@ -333,14 +329,13 @@ compute_memory_info(const struct computed_stream_layouts* cl,
                                       al->cps_inner,
                                       al->page_size);
 
-      agg += M_lv * sizeof(uint32_t); // per-epoch perm
       agg += data_lv +
              (batch_C + 1) * sizeof(size_t) + // offsets (batch-scaled)
              batch_C * sizeof(size_t);        // chunk_sizes (batch-scaled)
 
       // Batch LUTs (gather + perm).
-      if (K_l > 1) {
-        uint64_t lut_len = (uint64_t)K_l * M_lv;
+      {
+        uint64_t lut_len = (uint64_t)slot_count * M_lv;
         agg += 2 * lut_len * sizeof(uint32_t);
       }
     }
@@ -458,6 +453,8 @@ make_flush_params(struct tile_stream_cpu* s)
     .comp_sizes = s->comp_sizes,
     .total_chunks = s->levels.total_chunks,
     .nlod = s->levels.nlod,
+    .cl = &s->cl,
+    .levels_geo = &s->levels,
     .shard_order_sizes_bytes = s->shard_order_sizes,
     .sink = s->shard_sink,
     .shard_alignment_bytes = s->config.shard_alignment,
@@ -468,7 +465,6 @@ make_flush_params(struct tile_stream_cpu* s)
       .agg_layout = &s->agg_layout[lv],
       .batch_active_count = s->batch_active_count[lv],
       .chunk_offset = s->levels.chunk_offset[lv],
-      .chunk_to_shard_map = s->chunk_to_shard_map[lv],
       .batch_chunk_to_shard_map = s->batch_chunk_to_shard_map[lv],
       .batch_gather = s->batch_gather[lv],
       .agg_slot = &s->agg_slots[lv],
@@ -511,6 +507,10 @@ cpu_append(struct writer* self, struct slice input)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
+
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   const size_t bytes_per_element = dtype_bpe(s->config.dtype);
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
@@ -734,4 +734,14 @@ cpu_flush(struct writer* self)
   }
 
   return writer_ok();
+}
+
+static struct writer_result
+cpu_flush_final(struct writer* self)
+{
+  struct tile_stream_cpu* s =
+    container_of(self, struct tile_stream_cpu, writer);
+  struct writer_result r = cpu_flush(self);
+  s->flushed = 1;
+  return r;
 }

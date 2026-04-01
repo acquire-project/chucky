@@ -21,9 +21,8 @@ struct flush_level_view
   struct aggregate_layout* agg_layout;
   uint32_t batch_active_count;
   uint64_t chunk_offset;
-  uint32_t* chunk_to_shard_map;
-  uint32_t* batch_chunk_to_shard_map;
-  uint32_t* batch_gather;
+  uint32_t* batch_chunk_to_shard_map; // [K_l * M_lv] perm LUT (mutable)
+  uint32_t* batch_gather;             // [K_l * M_lv] gather LUT (mutable)
   struct cpu_agg_slot* agg_slot;
   struct shard_state* shard;
   struct io_event*
@@ -42,6 +41,8 @@ struct flush_batch_params
   size_t* comp_sizes;
   uint64_t total_chunks;
   int nlod;
+  const struct computed_stream_layouts* cl;
+  const struct level_geometry* levels_geo;
   struct flush_level_view levels[LOD_MAX_LEVELS];
   size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
@@ -83,7 +84,6 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
 struct lut_targets
 {
-  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* batch_gather[LOD_MAX_LEVELS];
   uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;

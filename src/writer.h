@@ -19,7 +19,7 @@ enum writer_error_code
   writer_error_ok = 0,
   writer_error_fail = 1,
   writer_error_finished =
-    2, // bounded append dims capacity reached, data flushed
+    2, // stream complete: capacity reached or flush already called
 };
 
 struct writer_result
@@ -31,7 +31,8 @@ struct writer_result
 struct writer
 {
   struct writer_result (*append)(struct writer* self, struct slice data);
-  struct writer_result (*flush)(struct writer* self);
+  struct writer_result (*flush)(struct writer* self); // terminal: append after
+                                                      // flush returns finished
 };
 
 struct shard_writer
