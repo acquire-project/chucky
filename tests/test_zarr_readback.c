@@ -92,6 +92,7 @@ main(void)
     const char* name;
     struct codec_config codec;
   } codecs[] = {
+    { "none", { .id = CODEC_NONE } },
     { "zstd", { .id = CODEC_ZSTD } },
 #ifdef HAVE_BLOSC
     { "blosc_lz4",
