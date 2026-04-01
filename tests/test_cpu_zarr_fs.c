@@ -355,20 +355,202 @@ Fail:
   return 1;
 }
 
+// Readback test: verify chunk data integrity when all epochs fit in one shard.
+// This exercises the batch aggregate perm layout: with chunks_per_shard_append
+// >= total epochs, a perm that produces chunk-major instead of epoch-major
+// order would cause the shard index to point chunks at wrong data.
+//
+// epochs_per_batch controls the batch size:
+//   == n_epochs: full-batch path (pre-computed LUTs)
+//   >  n_epochs: partial-batch path (dynamic LUT recompute at flush)
+static int
+test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
+{
+  const int n_epochs = 4;
+  const int inner_size[2] = { 8, 12 };
+  const int epoch_elements = inner_size[0] * inner_size[1];
+  const int total_elements = n_epochs * epoch_elements;
+  // chunks_per_shard = [4, 2, 2] => all 4 epochs in one shard, one inner shard
+  const int chunks_per_shard_append = 4;
+  const int chunks_per_shard_total = 4 * 2 * 2; // 16
+
+  // Fill each epoch with a constant: epoch t -> all values = t.
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int t = 0; t < n_epochs; ++t)
+    for (int i = 0; i < epoch_elements; ++i)
+      src[t * epoch_elements + i] = (uint16_t)t;
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = chunks_per_shard_append,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = inner_size[0],
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = inner_size[1],
+      .chunk_size = 6,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct zarr_config zcfg = {
+    .store_path = tmpdir,
+    .array_name = "0",
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+  };
+
+  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
+  CHECK(Fail2, zs);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = CODEC_ZSTD,
+    .epochs_per_batch = (uint8_t)epochs_per_batch,
+  };
+
+  struct tile_stream_cpu* s =
+    tile_stream_cpu_create(&config, zarr_fs_sink_as_shard_sink(zs));
+  CHECK(Fail3, s);
+
+  const struct tile_stream_layout* lay = tile_stream_cpu_layout(s);
+  size_t chunk_stride_bytes = lay->chunk_stride * sizeof(uint16_t);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+  zarr_fs_sink_flush(zs);
+
+  // There should be exactly one shard (all epochs + all inner chunks).
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/c/0/0/0", tmpdir);
+    CHECK(Fail4, test_file_exists(path));
+
+    uint8_t* shard_data;
+    size_t shard_len;
+    CHECK(Fail4, read_file_all(path, &shard_data, &shard_len) == 0);
+
+    uint64_t* offsets =
+      (uint64_t*)malloc((size_t)chunks_per_shard_total * sizeof(uint64_t));
+    uint64_t* nbytes =
+      (uint64_t*)malloc((size_t)chunks_per_shard_total * sizeof(uint64_t));
+    CHECK(Fail5, offsets && nbytes);
+
+    CHECK(Fail5,
+          shard_index_parse(shard_data,
+                            shard_len,
+                            (size_t)chunks_per_shard_total,
+                            offsets,
+                            nbytes) == 0);
+
+    // Verify each chunk: slot (t, j) should decompress to all-t values.
+    // Shard index slot = t * cps_inner + j, where cps_inner = 4.
+    const int cps_inner = 4;
+    int errors = 0;
+    for (int t = 0; t < n_epochs; ++t) {
+      for (int j = 0; j < cps_inner; ++j) {
+        int slot = t * cps_inner + j;
+        if (nbytes[slot] == (uint64_t)-1 || nbytes[slot] == 0) {
+          log_error("  slot (%d,%d): empty", t, j);
+          errors++;
+          continue;
+        }
+        if (chunk_decompress_verify_u16(shard_data + offsets[slot],
+                                        (size_t)nbytes[slot],
+                                        chunk_stride_bytes,
+                                        lay->chunk_stride,
+                                        (uint16_t)t)) {
+          log_error("  slot (%d,%d): data mismatch (expected all %d)", t, j, t);
+          errors++;
+        }
+      }
+    }
+
+    free(offsets);
+    free(nbytes);
+    free(shard_data);
+    CHECK(Fail4, errors == 0);
+  }
+
+  tile_stream_cpu_destroy(s);
+  zarr_fs_sink_destroy(zs);
+  free(src);
+  return 0;
+
+Fail5:
+  // offsets/nbytes freed above if allocated
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  zarr_fs_sink_destroy(zs);
+Fail2:
+  free(src);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Full-batch readback: K == n_epochs, exercises pre-computed LUTs.
+static int
+test_batch_readback(const char* tmpdir)
+{
+  log_info("=== test_cpu_zarr_batch_readback ===");
+  int rc = test_batch_readback_impl(tmpdir, 4);
+  if (rc == 0)
+    log_info("  PASS");
+  return rc;
+}
+
+// Partial-batch readback: K > n_epochs, exercises dynamic LUT recompute.
+static int
+test_partial_batch_readback(const char* tmpdir)
+{
+  log_info("=== test_cpu_zarr_partial_batch_readback ===");
+  int rc = test_batch_readback_impl(tmpdir, 8);
+  if (rc == 0)
+    log_info("  PASS");
+  return rc;
+}
+
 int
 main(void)
 {
   int err = 0;
 
-  char tmpdir1[256], tmpdir2[256];
+  char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir3, sizeof(tmpdir3)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir4, sizeof(tmpdir4)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
+  err |= test_batch_readback(tmpdir3);
+  err |= test_partial_batch_readback(tmpdir4);
 
   test_tmpdir_remove(tmpdir1);
   test_tmpdir_remove(tmpdir2);
+  test_tmpdir_remove(tmpdir3);
+  test_tmpdir_remove(tmpdir4);
   return err;
 
 Fail:
