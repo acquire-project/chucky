@@ -169,16 +169,17 @@ test_append_after_flush(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
+  uint16_t* data = NULL;
   struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
   CHECK(Fail, s);
 
   const struct tile_stream_layout* lay = tile_stream_cpu_layout(s);
   uint64_t epoch_elems = lay->epoch_elements;
   size_t epoch_bytes = epoch_elems * sizeof(uint16_t);
-  uint16_t* data = (uint16_t*)malloc(epoch_bytes);
+  data = (uint16_t*)malloc(epoch_bytes);
   CHECK(Fail, data);
   for (uint64_t i = 0; i < epoch_elems; ++i)
     data[i] = (uint16_t)i;
