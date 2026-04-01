@@ -901,6 +901,8 @@ parse_codec(const char* s, struct codec_config* out)
   int i = match_option(s, names, 5);
   if (i < 5) {
     out->id = vals[i];
+    if (out->id == CODEC_LZ4 && out->level == 0)
+      out->level = 1;
     return 1;
   }
   fprintf(stderr,

@@ -2,10 +2,15 @@
 
 #include "util/prelude.h"
 
+int
+compress_blosc_available(void)
+{
+  return 0;
+}
+
 size_t
 compress_blosc_max_output_size(size_t chunk_bytes)
 {
-  // Conservative estimate matching blosc's BLOSC_MAX_OVERHEAD (16 bytes).
   return chunk_bytes + 16;
 }
 
@@ -20,6 +25,7 @@ compress_blosc(struct codec_config codec,
                size_t batch_size,
                size_t bytes_per_element)
 {
+  (void)codec;
   (void)src;
   (void)input_stride;
   (void)dst;
@@ -29,5 +35,5 @@ compress_blosc(struct codec_config codec,
   (void)batch_size;
   (void)bytes_per_element;
   log_error("blosc codec requested but not compiled in");
-  return COMPRESS_BLOSC_NOT_AVAILABLE;
+  return 1;
 }

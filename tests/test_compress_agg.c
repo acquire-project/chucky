@@ -311,7 +311,7 @@ test_compress_agg_batch(void)
   uint32_t cps_inner = (uint32_t)al->cps_inner;
   uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
   const uint64_t shard_shape[2] = { num_shards, cps_inner };
-  const int64_t shard_strides[2] = { (int64_t)(batch_count * cps_inner), 1 };
+  const int64_t shard_strides[2] = { (int64_t)batch_count * cps_inner, 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
@@ -524,7 +524,7 @@ test_compress_agg_zstd_batch(void)
   uint32_t cps_inner = (uint32_t)al->cps_inner;
   uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
   const uint64_t shard_shape[2] = { num_shards, cps_inner };
-  const int64_t shard_strides[2] = { (int64_t)(batch_count * cps_inner), 1 };
+  const int64_t shard_strides[2] = { (int64_t)batch_count * cps_inner, 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;

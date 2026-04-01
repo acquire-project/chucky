@@ -43,7 +43,7 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
   // ravel through lifted strides gives shard-grouped position,
   // second ravel inserts the epoch dimension.
   const uint64_t shard_shape[2] = { num_shards, cps_inner };
-  const int64_t shard_strides[2] = { (int64_t)(active_count * cps_inner), 1 };
+  const int64_t shard_strides[2] = { (int64_t)active_count * cps_inner, 1 };
 
   for (uint32_t a = 0; a < active_count; ++a) {
     uint32_t pool_epoch = pool_epochs[a];

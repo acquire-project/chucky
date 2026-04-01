@@ -19,12 +19,9 @@
 static int
 write_zarr(const char* store_path, struct codec_config codec)
 {
-  // Check blosc availability before attempting a full pipeline setup.
-  if (codec.id == CODEC_BLOSC_LZ4 || codec.id == CODEC_BLOSC_ZSTD) {
-    int rc = compress_blosc(codec, NULL, 0, NULL, 0, NULL, 0, 0, 0);
-    if (rc == COMPRESS_BLOSC_NOT_AVAILABLE)
-      return rc;
-  }
+  if ((codec.id == CODEC_BLOSC_LZ4 || codec.id == CODEC_BLOSC_ZSTD) &&
+      !compress_blosc_available())
+    return 2;
 
   const int total = NT * NY * NX;
   uint16_t* src = (uint16_t*)malloc((size_t)total * sizeof(uint16_t));
@@ -116,7 +113,7 @@ main(void)
     CHECK(Cleanup, test_mkdir(store) == 0);
     log_info("Writing %s ...", codecs[i].name);
     int wrc = write_zarr(store, codecs[i].codec);
-    if (wrc == COMPRESS_BLOSC_NOT_AVAILABLE) {
+    if (wrc == 2) { // blosc not available
       log_info("  skipped: %s (codec not available)", codecs[i].name);
       test_tmpdir_remove(store);
       continue;

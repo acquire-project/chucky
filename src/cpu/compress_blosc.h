@@ -3,11 +3,9 @@
 #include "types.codec.h"
 #include <stddef.h>
 
-// Return codes for compress_blosc:
-//   0 = success
-//   1 = compression error
-//   2 = blosc not available (stub)
-#define COMPRESS_BLOSC_NOT_AVAILABLE 2
+// Returns 1 if blosc codecs are available, 0 if compiled out.
+int
+compress_blosc_available(void);
 
 size_t
 compress_blosc_max_output_size(size_t chunk_bytes);

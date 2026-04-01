@@ -169,6 +169,15 @@ validate_config(const struct tile_stream_configuration* config,
   }
 
   {
+    enum compression_codec cid = config->codec.id;
+    if ((cid == CODEC_BLOSC_LZ4 || cid == CODEC_BLOSC_ZSTD) &&
+        config->codec.level > 9) {
+      log_error("blosc level must be 0..9 (got %d)", config->codec.level);
+      goto Fail;
+    }
+  }
+
+  {
     uint8_t na = dim_info_n_append(di);
     if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
       log_error("invalid storage_order permutation");
@@ -259,8 +268,11 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   {
     const size_t chunk_bytes = out->layouts[0].chunk_stride * bytes_per_element;
     out->max_output_size = max_output_size_fn(config->codec.id, chunk_bytes);
-    if (config->codec.id != CODEC_NONE && out->max_output_size == 0)
+    if (config->codec.id != CODEC_NONE && out->max_output_size == 0) {
+      log_error("codec %d: max_output_size is 0 (unsupported codec?)",
+                config->codec.id);
       goto Fail;
+    }
   }
 
   // --- Per-level aggregate layout and shard geometry ---

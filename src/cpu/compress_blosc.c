@@ -3,6 +3,12 @@
 #include <blosc.h>
 #include <stdatomic.h>
 
+int
+compress_blosc_available(void)
+{
+  return 1;
+}
+
 size_t
 compress_blosc_max_output_size(size_t chunk_bytes)
 {
