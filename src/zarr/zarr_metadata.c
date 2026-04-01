@@ -322,10 +322,17 @@ zarr_for_each_intermediate(const char* array_name,
   if (!array_name)
     return 0;
 
-  char name[4096];
   size_t len = strlen(array_name);
-  if (len >= sizeof(name))
+  if (len == 0 || len >= 4096)
     return -1;
+
+  // Reject leading slash, trailing slash, or empty segments (//)
+  if (array_name[0] == '/' || array_name[len - 1] == '/')
+    return -1;
+  if (strstr(array_name, "//"))
+    return -1;
+
+  char name[4096];
   memcpy(name, array_name, len + 1);
 
   for (size_t i = 0; i < len; ++i) {

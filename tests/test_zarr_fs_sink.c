@@ -6,6 +6,7 @@
 #include "test_shard_verify.h"
 #include "test_voxel_encode.h"
 #include "util/prelude.h"
+#include "zarr/zarr_metadata.h"
 #include "zarr_fs_sink.h"
 
 #include <stdio.h>
@@ -1909,6 +1910,73 @@ Fail:
   return 1;
 }
 
+// --- Test: zarr_for_each_intermediate edge cases ---
+
+struct intermediate_record
+{
+  int count;
+  char segments[8][256];
+};
+
+static int
+record_segment(const char* partial, void* ctx)
+{
+  struct intermediate_record* r = (struct intermediate_record*)ctx;
+  if (r->count < 8)
+    snprintf(r->segments[r->count], 256, "%s", partial);
+  r->count++;
+  return 0;
+}
+
+static int
+test_for_each_intermediate(void)
+{
+  log_info("=== test_for_each_intermediate ===");
+  struct intermediate_record rec;
+
+  // No slash: zero callbacks
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("data", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 0);
+
+  // Single slash: one callback
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("a/b", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 1);
+  CHECK(Fail, strcmp(rec.segments[0], "a") == 0);
+
+  // Two slashes: two callbacks
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate("a/b/c", record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 2);
+  CHECK(Fail, strcmp(rec.segments[0], "a") == 0);
+  CHECK(Fail, strcmp(rec.segments[1], "a/b") == 0);
+
+  // NULL: no-op
+  memset(&rec, 0, sizeof(rec));
+  CHECK(Fail, zarr_for_each_intermediate(NULL, record_segment, &rec) == 0);
+  CHECK(Fail, rec.count == 0);
+
+  // Leading slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("/a/b", record_segment, &rec) != 0);
+
+  // Trailing slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("a/b/", record_segment, &rec) != 0);
+
+  // Double slash: rejected
+  CHECK(Fail, zarr_for_each_intermediate("a//b", record_segment, &rec) != 0);
+
+  // Empty string: rejected
+  CHECK(Fail, zarr_for_each_intermediate("", record_segment, &rec) != 0);
+
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 // --- Test: nested array_name writes intermediate group zarr.json ---
 
 static int
@@ -2084,6 +2152,9 @@ main(int ac, char* av[])
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   log_info("temp dir: %s", tmpdir);
+
+  // zarr_for_each_intermediate unit test (no CUDA, no tmpdir needed)
+  ecode |= test_for_each_intermediate();
 
   // Metadata tests (no CUDA needed)
   {
