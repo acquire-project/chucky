@@ -126,10 +126,6 @@ zarr_array_json(char* buf,
       jw_key(&jw, "level");
       jw_int(&jw, codec.level);
     }
-    if (codec.id == CODEC_LZ4) {
-      jw_key(&jw, "level");
-      jw_int(&jw, codec.level);
-    }
     if (codec_is_blosc(codec.id)) {
       jw_key(&jw, "cname");
       jw_string(&jw, codec.id == CODEC_BLOSC_LZ4 ? "lz4" : "zstd");
