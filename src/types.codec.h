@@ -16,11 +16,18 @@ extern "C"
     CODEC_BLOSC_ZSTD,
   };
 
+  enum codec_shuffle
+  {
+    CODEC_SHUFFLE_NONE = 0,
+    CODEC_SHUFFLE_BYTE = 1,
+    CODEC_SHUFFLE_BIT = 2,
+  };
+
   struct codec_config
   {
     enum compression_codec id;
-    uint8_t level;   // 0 = codec default
-    uint8_t shuffle; // blosc only: 0=none, 1=byte, 2=bit
+    uint8_t level;              // passed to codec as-is
+    enum codec_shuffle shuffle; // blosc only
   };
 
 #ifdef __cplusplus

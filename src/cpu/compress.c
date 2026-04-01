@@ -2,7 +2,9 @@
 
 #include "util/prelude.h"
 
+#ifdef HAVE_BLOSC
 #include <blosc.h>
+#endif
 #include <lz4.h>
 #include <lz4hc.h>
 #include <stdatomic.h>
@@ -19,9 +21,11 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
       return (size_t)LZ4_compressBound((int)chunk_bytes);
     case CODEC_ZSTD:
       return ZSTD_compressBound(chunk_bytes);
+#ifdef HAVE_BLOSC
     case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD:
       return chunk_bytes + BLOSC_MAX_OVERHEAD;
+#endif
     default:
       return 0;
   }
@@ -92,6 +96,7 @@ compress_cpu(struct codec_config codec,
       return err;
     }
 
+#ifdef HAVE_BLOSC
     case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD: {
       const char* compname =
@@ -123,6 +128,7 @@ compress_cpu(struct codec_config codec,
       }
       return err;
     }
+#endif
 
     default:
       return 1;

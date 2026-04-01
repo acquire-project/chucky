@@ -1,7 +1,9 @@
 #include "cpu/compress.h"
 #include "util/prelude.h"
 
+#ifdef HAVE_BLOSC
 #include <blosc.h>
+#endif
 #include <lz4.h>
 #include <stdlib.h>
 #include <string.h>
@@ -179,6 +181,7 @@ Fail:
   return 1;
 }
 
+#ifdef HAVE_BLOSC
 static int
 test_codec_blosc(enum compression_codec id, const char* name)
 {
@@ -217,8 +220,8 @@ test_codec_blosc(enum compression_codec id, const char* name)
 
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] > 0 && comp_sizes[i] <= max_out);
-    int rc =
-      blosc_decompress((const char*)dst + i * max_out, recovered, CHUNK_BYTES);
+    int rc = blosc_decompress_ctx(
+      (const char*)dst + i * max_out, recovered, CHUNK_BYTES, 1);
     CHECK(Fail, rc == (int)CHUNK_BYTES);
     CHECK(Fail,
           memcmp((char*)src + i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
@@ -236,6 +239,7 @@ Fail:
   log_error("  FAIL");
   return 1;
 }
+#endif // HAVE_BLOSC
 
 int
 main(int ac, char* av[])
@@ -247,7 +251,9 @@ main(int ac, char* av[])
   rc |= test_codec_none();
   rc |= test_codec_lz4();
   rc |= test_codec_zstd();
+#ifdef HAVE_BLOSC
   rc |= test_codec_blosc(CODEC_BLOSC_LZ4, "blosc_lz4");
   rc |= test_codec_blosc(CODEC_BLOSC_ZSTD, "blosc_zstd");
+#endif
   return rc;
 }

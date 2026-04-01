@@ -3,7 +3,6 @@
 #include "dtype.h"
 #include "zarr/json_writer.h"
 
-#include <blosc.h>
 #include <stdio.h>
 
 static int
@@ -138,9 +137,9 @@ zarr_array_json(char* buf,
       jw_int(&jw, codec.level);
       jw_key(&jw, "shuffle");
       jw_string(&jw,
-                codec.shuffle == BLOSC_BITSHUFFLE ? "bitshuffle"
-                : codec.shuffle == BLOSC_SHUFFLE  ? "shuffle"
-                                                  : "noshuffle");
+                codec.shuffle == CODEC_SHUFFLE_BIT    ? "bitshuffle"
+                : codec.shuffle == CODEC_SHUFFLE_BYTE ? "shuffle"
+                                                      : "noshuffle");
       jw_key(&jw, "typesize");
       jw_int(&jw, (int64_t)dtype_bpe(data_type));
       jw_key(&jw, "blocksize");

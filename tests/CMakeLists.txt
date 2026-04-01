@@ -65,7 +65,10 @@ add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::c
 add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
 
 # CPU compress test (no CUDA)
-add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu Blosc::Blosc Lz4::Lz4 Zstd::Zstd chucky_log)
+add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu Lz4::Lz4 Zstd::Zstd chucky_log)
+if(HAVE_BLOSC)
+    target_link_libraries(test_compress_cpu PRIVATE Blosc::Blosc)
+endif()
 
 # CPU aggregate test (no CUDA)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)

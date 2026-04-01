@@ -4,8 +4,12 @@ add_src_lib(transpose_cpu SOURCES transpose.cpp transpose.h
 enable_openmp(transpose_cpu)
 
 add_src_lib(compress_cpu SOURCES compress.c compress.h
-    LINKS Blosc::Blosc Lz4::Lz4 Zstd::Zstd chucky_log
+    LINKS Lz4::Lz4 Zstd::Zstd chucky_log
 )
+if(HAVE_BLOSC)
+    target_link_libraries(compress_cpu PRIVATE Blosc::Blosc)
+    target_compile_definitions(compress_cpu PUBLIC HAVE_BLOSC)
+endif()
 enable_openmp(compress_cpu)
 
 add_src_lib(aggregate_cpu SOURCES aggregate.c aggregate.h
