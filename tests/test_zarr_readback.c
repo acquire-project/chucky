@@ -120,7 +120,7 @@ main(void)
     char cmd[1024];
     snprintf(cmd,
              sizeof(cmd),
-             "uv run tests/validate_zarr.py %s %d %d %d",
+             "uv run " SOURCE_DIR "/tests/validate_zarr.py %s %d %d %d",
              tmpdir,
              NT,
              NY,

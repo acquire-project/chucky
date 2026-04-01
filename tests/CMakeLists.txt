@@ -87,6 +87,10 @@ add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer 
 
 # Zarr readback validation via zarr-python (requires uv)
 add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu zarr_fs_sink writer dimension test_platform chucky_log)
+target_compile_definitions(
+    test_zarr_readback
+    PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
