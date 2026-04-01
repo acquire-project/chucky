@@ -8,21 +8,19 @@ static _Atomic int crc32c_table_ready;
 static void
 crc32c_init(void)
 {
-  if (crc32c_table_ready)
-    return;
   for (int i = 0; i < 256; ++i) {
     uint32_t crc = (uint32_t)i;
     for (int j = 0; j < 8; ++j)
       crc = (crc >> 1) ^ (0x82F63B78 & (0u - (crc & 1)));
     crc32c_table[i] = crc;
   }
-  crc32c_table_ready = 1;
+  atomic_store_explicit(&crc32c_table_ready, 1, memory_order_release);
 }
 
 uint32_t
 crc32c(const void* data, size_t len)
 {
-  if (!crc32c_table_ready)
+  if (!atomic_load_explicit(&crc32c_table_ready, memory_order_acquire))
     crc32c_init();
   uint32_t crc = 0xFFFFFFFF;
   const uint8_t* p = (const uint8_t*)data;
