@@ -309,13 +309,12 @@ test_d2h_batch_none(void)
     const uint64_t* idx =
       (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
-    // The batch LUT aggregate interleaves epochs: output position =
-    // perm_pos * batch_count + epoch. deliver_to_shards_batch reads
-    // them linearly, so shard index slot_idx maps as:
-    //   perm_pos = slot_idx / batch_count
-    //   epoch    = slot_idx % batch_count
+    // The batch LUT aggregate uses shard-major ordering:
+    //   slot = si * batch_count * cps_inner + epoch * cps_inner + ci
+    // where perm_pos = si * cps_inner + ci.
     const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
     uint32_t batch_count = c.ca.levels[0].batch_active_count;
+    uint32_t cps_inner = (uint32_t)al->cps_inner;
     uint64_t chunks_lv = c.cl.levels.chunk_count[0];
 
     // Build inverse perm: inv_perm[perm_pos] = original chunk j
@@ -329,8 +328,12 @@ test_d2h_batch_none(void)
 
     int errors = 0;
     for (uint64_t slot = 0; slot < tps_total; ++slot) {
-      uint64_t perm_pos = slot / batch_count;
-      uint32_t epoch = (uint32_t)(slot % batch_count);
+      uint32_t shard_stride = batch_count * cps_inner;
+      uint32_t si = (uint32_t)(slot / shard_stride);
+      uint32_t rem = (uint32_t)(slot % shard_stride);
+      uint32_t epoch = rem / cps_inner;
+      uint32_t ci = rem % cps_inner;
+      uint32_t perm_pos = si * cps_inner + ci;
       uint16_t (*fill_fn)(uint64_t) = (epoch == 0) ? fill_epoch0 : fill_epoch1;
       uint32_t orig_tile = inv_perm[perm_pos];
 

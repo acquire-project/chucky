@@ -308,6 +308,7 @@ test_compress_agg_batch(void)
 
   // Verify data per epoch
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint32_t cps_inner = (uint32_t)al->cps_inner;
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
@@ -319,7 +320,10 @@ test_compress_agg_batch(void)
         rest /= al->lifted_shape[d];
         perm_pos += coord * (uint64_t)al->lifted_strides[d];
       }
-      uint64_t out_idx = perm_pos * batch_count + a;
+      uint32_t si = (uint32_t)perm_pos / cps_inner;
+      uint32_t ci = (uint32_t)perm_pos % cps_inner;
+      uint64_t out_idx =
+        (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
       if (sz != chunk_bytes) {
@@ -521,6 +525,7 @@ test_compress_agg_zstd_batch(void)
   CHECK(Fail, decomp_buf);
 
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint32_t cps_inner = (uint32_t)al->cps_inner;
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
@@ -532,7 +537,10 @@ test_compress_agg_zstd_batch(void)
         rest /= al->lifted_shape[d];
         perm_pos += coord * (uint64_t)al->lifted_strides[d];
       }
-      uint64_t out_idx = perm_pos * batch_count + a;
+      uint32_t si = (uint32_t)perm_pos / cps_inner;
+      uint32_t ci = (uint32_t)perm_pos % cps_inner;
+      uint64_t out_idx =
+        (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t comp_sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
 
