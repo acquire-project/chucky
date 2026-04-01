@@ -313,15 +313,10 @@ test_compress_agg_batch(void)
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint64_t perm_pos = 0;
-      uint64_t rest = j;
-      for (int d = al->lifted_rank - 1; d >= 0; --d) {
-        uint64_t coord = rest % al->lifted_shape[d];
-        rest /= al->lifted_shape[d];
-        perm_pos += coord * (uint64_t)al->lifted_strides[d];
-      }
-      uint32_t si = (uint32_t)perm_pos / cps_inner;
-      uint32_t ci = (uint32_t)perm_pos % cps_inner;
+      uint32_t perm_pos = (uint32_t)ravel(
+        al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
+      uint32_t si = perm_pos / cps_inner;
+      uint32_t ci = perm_pos % cps_inner;
       uint64_t out_idx =
         (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
@@ -530,15 +525,10 @@ test_compress_agg_zstd_batch(void)
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint64_t perm_pos = 0;
-      uint64_t rest = j;
-      for (int d = al->lifted_rank - 1; d >= 0; --d) {
-        uint64_t coord = rest % al->lifted_shape[d];
-        rest /= al->lifted_shape[d];
-        perm_pos += coord * (uint64_t)al->lifted_strides[d];
-      }
-      uint32_t si = (uint32_t)perm_pos / cps_inner;
-      uint32_t ci = (uint32_t)perm_pos % cps_inner;
+      uint32_t perm_pos = (uint32_t)ravel(
+        al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
+      uint32_t si = perm_pos / cps_inner;
+      uint32_t ci = perm_pos % cps_inner;
       uint64_t out_idx =
         (uint64_t)si * batch_count * cps_inner + a * cps_inner + ci;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
