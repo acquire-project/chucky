@@ -1,20 +1,12 @@
 #include "cpu/compress.h"
+#include "cpu/compress_blosc.h"
 
 #include "util/prelude.h"
 
-#ifdef HAVE_BLOSC
-#include <blosc.h>
-#endif
 #include <lz4hc.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <zstd.h>
-
-#ifdef HAVE_BLOSC
-#define BLOSC_OVERHEAD BLOSC_MAX_OVERHEAD
-#else
-#define BLOSC_OVERHEAD 16
-#endif
 
 size_t
 compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
@@ -28,7 +20,7 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
       return ZSTD_compressBound(chunk_bytes);
     case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD:
-      return chunk_bytes + BLOSC_OVERHEAD;
+      return compress_blosc_max_output_size(chunk_bytes);
     default:
       return 0;
   }
@@ -95,41 +87,16 @@ compress_cpu(struct codec_config codec,
     }
 
     case CODEC_BLOSC_LZ4:
-    case CODEC_BLOSC_ZSTD: {
-#ifdef HAVE_BLOSC
-      const char* compname =
-        codec.id == CODEC_BLOSC_LZ4 ? BLOSC_LZ4_COMPNAME : BLOSC_ZSTD_COMPNAME;
-      int clevel = codec.level;
-      int doshuffle = codec.shuffle;
-      size_t typesize = bytes_per_element > 0 ? bytes_per_element : 1;
-      _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
-      for (i = 0; i < (int)batch_size; ++i) {
-        if (err)
-          continue;
-        const void* in = (const char*)src + i * input_stride;
-        void* out = (char*)dst + i * max_output_size;
-        int rc = blosc_compress_ctx(clevel,
-                                    doshuffle,
-                                    typesize,
-                                    chunk_bytes,
-                                    in,
-                                    out,
-                                    max_output_size,
-                                    compname,
-                                    0,  // blocksize (auto)
-                                    1); // numinternalthreads
-        if (rc <= 0)
-          err = 1;
-        else
-          comp_sizes[i] = (size_t)rc;
-      }
-      return err;
-#else
-      log_error("blosc codec requested but not compiled in");
-      return 1;
-#endif
-    }
+    case CODEC_BLOSC_ZSTD:
+      return compress_blosc(codec,
+                            src,
+                            input_stride,
+                            dst,
+                            max_output_size,
+                            comp_sizes,
+                            chunk_bytes,
+                            batch_size,
+                            bytes_per_element);
 
     default:
       return 1;

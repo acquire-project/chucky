@@ -818,8 +818,6 @@ test_shard_index_structure(void)
 {
   log_info("=== test_shard_index_structure ===");
 
-  crc32c_init();
-
   // --- Case 1: Even tiling (all chunks fill shard evenly) ---
   {
     const int size[3] = { 12, 8, 12 };
