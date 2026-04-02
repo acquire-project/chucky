@@ -275,6 +275,45 @@ Fail:
   return 1;
 }
 
+// Test max_nlod semantics: negative=auto, 0=none, positive=cap.
+// Uses lod_plan_init_shapes to verify plan computation directly.
+static int
+test_max_nlod_semantics(void)
+{
+  log_info("=== test_max_nlod_semantics ===");
+
+  // shape=256, chunk=1, mask=0x1 → auto gives many levels
+  uint64_t shape[] = { 256 };
+  uint64_t chunk[] = { 1 };
+  uint32_t mask = 0x1;
+  struct lod_plan plan;
+
+  // negative max_nlod → auto (use LOD_MAX_LEVELS=32)
+  // With shape=256, chunk=1, auto should give 9 levels (256→128→64→32→16→8→4→2→1)
+  CHECK(Fail,
+        lod_plan_init_shapes(&plan, 1, shape, chunk, mask, LOD_MAX_LEVELS) == 0);
+  int auto_nlod = plan.nlod;
+  CHECK(Fail, auto_nlod == 9);
+  log_info("  negative (auto): nlod=%d", auto_nlod);
+
+  // max_nlod=0 → max_levels=1 → nlod=1 (no downsampling)
+  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 1) == 0);
+  CHECK(Fail, plan.nlod == 1);
+  log_info("  zero (none): nlod=%d", plan.nlod);
+
+  // max_nlod=3 → max_levels=4 → nlod capped at 4
+  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 4) == 0);
+  CHECK(Fail, plan.nlod == 4);
+  CHECK(Fail, plan.nlod < auto_nlod);
+  log_info("  positive (cap=3 downsampled → max_levels=4): nlod=%d", plan.nlod);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -290,5 +329,6 @@ main(int ac, char* av[])
   rc |= test_level_count_regression();
   rc |= test_level_count_shape_le_chunk();
   rc |= test_level_count_max_levels();
+  rc |= test_max_nlod_semantics();
   return rc;
 }

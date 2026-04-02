@@ -42,6 +42,7 @@ struct tile_stream_configuration
   enum compression_codec codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
+  int max_nlod; // <0 = auto, 0 = none, N>0 = N downsampled levels
   uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
   uint32_t
     target_batch_chunks; // minimum chunks per compress batch (default 1024)
