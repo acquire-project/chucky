@@ -37,13 +37,12 @@ compress_cpu(struct codec_config codec,
              size_t chunk_bytes,
              size_t batch_size,
              size_t bytes_per_element,
-             int max_threads)
+             int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
   int i;
   switch (codec.id) {
     case CODEC_NONE:
-#pragma omp parallel for schedule(static) if (batch_size > 1024) num_threads(nt)
+#pragma omp parallel for schedule(static) if (batch_size > 1024) num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         memcpy((char*)dst + i * max_output_size,
                (const char*)src + i * input_stride,
@@ -55,7 +54,7 @@ compress_cpu(struct codec_config codec,
     case CODEC_LZ4: {
       _Atomic int err = 0;
       int level = codec.level;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nt)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
@@ -74,7 +73,7 @@ compress_cpu(struct codec_config codec,
     case CODEC_ZSTD: {
       int level = codec.level;
       _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nt)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
@@ -100,7 +99,7 @@ compress_cpu(struct codec_config codec,
                             chunk_bytes,
                             batch_size,
                             bytes_per_element,
-                            max_threads);
+                            nthreads);
 
     default:
       return 1;

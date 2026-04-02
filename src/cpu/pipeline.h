@@ -47,7 +47,7 @@ struct flush_batch_params
   size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
-  int max_threads; // 0 = OpenMP default
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -73,7 +73,7 @@ struct scatter_epoch_params
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
   void* append_accum;
   uint32_t* append_counts;        // mutable
-  int max_threads; // 0 = OpenMP default
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -100,6 +100,7 @@ cpu_pipeline_compute_luts(
   const struct level_geometry* levels,
   const uint32_t batch_active_count[LOD_MAX_LEVELS],
   const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+  int nthreads,
   struct lut_targets* out);
 
 // ---- append drain ----
@@ -115,7 +116,7 @@ struct append_drain_params
   void* chunk_pool;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
-  int max_threads; // 0 = OpenMP default
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 

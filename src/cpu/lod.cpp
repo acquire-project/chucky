@@ -176,7 +176,7 @@ scatter_typed(const lod_plan* p, const T* src, T* dst, int nt)
 // ---- Scatter LUT + Gather ----
 
 static void
-build_scatter_lut(const lod_plan* p, uint32_t* lut)
+build_scatter_lut(const lod_plan* p, uint32_t* lut, int nthreads)
 {
   const int ndim = p->ndim;
   const int lod_ndim = p->lod_ndim;
@@ -194,7 +194,7 @@ build_scatter_lut(const lod_plan* p, uint32_t* lut)
   for (int k = 0; k < lod_ndim; ++k)
     lod_src_strides[k] = full_strides[p->lod_map[k]];
 
-#pragma omp parallel for schedule(static) if(lod_count > 1024)
+#pragma omp parallel for schedule(static) if(lod_count > 1024) num_threads(nthreads)
   for (uint64_t gid = 0; gid < lod_count; ++gid) {
     uint64_t coords[LOD_MAX_NDIM];
     uint64_t rest = gid;
@@ -210,8 +210,9 @@ build_scatter_lut(const lod_plan* p, uint32_t* lut)
 }
 
 static void
-build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets)
+build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets, int nthreads)
 {
+  (void)nthreads;
   const int ndim = p->ndim;
 
   uint64_t full_strides[LOD_MAX_NDIM];
@@ -315,13 +316,14 @@ static void
 build_chunk_lut(const lod_plan* p,
                 int lv,
                 const tile_stream_layout* layout,
-                uint32_t* chunk_lut)
+                uint32_t* chunk_lut,
+                int nthreads)
 {
   const uint64_t* lod_shape = p->lod_shapes[lv];
   const uint64_t lod_count = p->lod_nelem[lv];
   const int lod_ndim = p->lod_ndim;
 
-#pragma omp parallel for schedule(static) if(lod_count > 1024)
+#pragma omp parallel for schedule(static) if(lod_count > 1024) num_threads(nthreads)
   for (uint64_t gid = 0; gid < lod_count; ++gid) {
     uint64_t coords[LOD_MAX_NDIM];
     int64_t offset = 0;
@@ -469,10 +471,9 @@ lod_cpu_reduce(const lod_plan* p,
                void* values,
                enum dtype dtype,
                lod_reduce_method method,
-               int max_threads)
+               int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
-#define DO(T) reduce_typed(p, (T*)values, method, nt)
+#define DO(T) reduce_typed(p, (T*)values, method, nthreads)
   DISPATCH(dtype, DO);
 #undef DO
   return 0;
@@ -482,9 +483,10 @@ extern "C" void
 lod_cpu_build_chunk_lut(const lod_plan* p,
                         int lv,
                         const tile_stream_layout* layout,
-                        uint32_t* chunk_lut)
+                        uint32_t* chunk_lut,
+                        int nthreads)
 {
-  build_chunk_lut(p, lv, layout, chunk_lut);
+  build_chunk_lut(p, lv, layout, chunk_lut, nthreads);
 }
 
 extern "C" int
@@ -496,9 +498,8 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
                          const uint32_t* chunk_lut_in,
                          const uint64_t* batch_chunk_offsets,
                          enum dtype dtype,
-                         int max_threads)
+                         int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
   const uint64_t lod_count = p->lod_nelem[lv];
   const lod_span lv_span = lod_spans_at(&p->levels, (uint64_t)lv);
   const size_t bytes_per_element = dtype_bpe(dtype);
@@ -511,13 +512,13 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
     chunk_lut_alloc = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
     if (!chunk_lut_alloc)
       return 1;
-    build_chunk_lut(p, lv, layout, chunk_lut_alloc);
+    build_chunk_lut(p, lv, layout, chunk_lut_alloc, nthreads);
     chunk_lut = chunk_lut_alloc;
   }
 
 #define DO(T)                                                                  \
   morton_to_chunks_typed((const T*)lv_values, (T*)chunk_pool, chunk_lut,       \
-                         batch_chunk_offsets, lod_count, p->batch_count, nt)
+                         batch_chunk_offsets, lod_count, p->batch_count, nthreads)
   DISPATCH(dtype, DO);
 #undef DO
 
@@ -532,9 +533,8 @@ lod_cpu_append_fold(const lod_plan* p,
                   const uint32_t* counts,
                   enum dtype dtype,
                   lod_reduce_method method,
-                  int max_threads)
+                  int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
   const size_t bytes_per_element = dtype_bpe(dtype);
   uint64_t accum_offset = 0;
 
@@ -545,7 +545,7 @@ lod_cpu_append_fold(const lod_plan* p,
     char* dst = (char*)accum + accum_offset * bytes_per_element;
 
 #define DO(T)                                                                  \
-  dim0_fold_typed((T*)dst, (const T*)src, n, counts[lv], lv, method, nt)
+  dim0_fold_typed((T*)dst, (const T*)src, n, counts[lv], lv, method, nthreads)
     DISPATCH(dtype, DO);
 #undef DO
 
@@ -563,9 +563,8 @@ lod_cpu_append_emit(const lod_plan* p,
                   uint32_t count,
                   enum dtype dtype,
                   lod_reduce_method method,
-                  int max_threads)
+                  int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
   const size_t bytes_per_element = dtype_bpe(dtype);
   lod_span lev = lod_spans_at(&p->levels, (uint64_t)lv);
   uint64_t n = p->batch_count * p->lod_nelem[lv];
@@ -578,7 +577,7 @@ lod_cpu_append_emit(const lod_plan* p,
   char* dst = (char*)morton_values + lev.beg * bytes_per_element;
   const char* src = (const char*)accum + accum_offset * bytes_per_element;
 
-#define DO(T) dim0_emit_typed((T*)dst, (const T*)src, n, count, method, nt)
+#define DO(T) dim0_emit_typed((T*)dst, (const T*)src, n, count, method, nthreads)
   DISPATCH(dtype, DO);
 #undef DO
 
@@ -586,15 +585,17 @@ lod_cpu_append_emit(const lod_plan* p,
 }
 
 extern "C" void
-lod_cpu_build_scatter_lut(const lod_plan* p, uint32_t* lut)
+lod_cpu_build_scatter_lut(const lod_plan* p, uint32_t* lut, int nthreads)
 {
-  build_scatter_lut(p, lut);
+  build_scatter_lut(p, lut, nthreads);
 }
 
 extern "C" void
-lod_cpu_build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets)
+lod_cpu_build_scatter_batch_offsets(const lod_plan* p,
+                                    uint64_t* offsets,
+                                    int nthreads)
 {
-  build_scatter_batch_offsets(p, offsets);
+  build_scatter_batch_offsets(p, offsets, nthreads);
 }
 
 extern "C" int
@@ -604,11 +605,10 @@ lod_cpu_gather(const lod_plan* p,
                const uint32_t* scatter_lut,
                const uint64_t* batch_offsets,
                enum dtype dtype,
-               int max_threads)
+               int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
 #define DO(T)                                                                  \
-  gather_typed(p, (const T*)src, (T*)dst, scatter_lut, batch_offsets, nt)
+  gather_typed(p, (const T*)src, (T*)dst, scatter_lut, batch_offsets, nthreads)
   DISPATCH(dtype, DO);
 #undef DO
   return 0;

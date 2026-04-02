@@ -18,14 +18,15 @@ extern "C"
                      void* values,
                      enum dtype dtype,
                      enum lod_reduce_method method,
-                     int max_threads);
+                     int nthreads);
 
   // Build morton-to-chunk-pool LUT for level lv.
   // chunk_lut must have room for lod_nelem[lv] entries.
   void lod_cpu_build_chunk_lut(const struct lod_plan* p,
                                int lv,
                                const struct tile_stream_layout* layout,
-                               uint32_t* chunk_lut);
+                               uint32_t* chunk_lut,
+                               int nthreads);
 
   // Scatter level `lv` from morton-ordered values into chunk pool using
   // the given tile_stream_layout (lifted shape/strides for that level).
@@ -40,7 +41,7 @@ extern "C"
                                const uint32_t* chunk_lut,
                                const uint64_t* batch_chunk_offsets,
                                enum dtype dtype,
-                               int max_threads);
+                               int nthreads);
 
   // Append fold: accumulate inner-reduced data (levels 1+) from the morton
   // buffer into the accumulator. On first call (counts[lv]==0) copies;
@@ -53,7 +54,7 @@ extern "C"
                           const uint32_t* counts,
                           enum dtype dtype,
                           enum lod_reduce_method method,
-                          int max_threads);
+                          int nthreads);
 
   // Append emit: finalize accumulator for level lv back to morton buffer.
   // For float mean: divides by count. For int mean/min/max: copies.
@@ -64,17 +65,20 @@ extern "C"
                           uint32_t count,
                           enum dtype dtype,
                           enum lod_reduce_method method,
-                          int max_threads);
+                          int nthreads);
 
   // Build scatter LUT for L0: maps morton position to source linear offset
   // within one batch. lut must have room for lod_nelem[0] entries.
   // Computed once at init, reused every epoch.
-  void lod_cpu_build_scatter_lut(const struct lod_plan* p, uint32_t* lut);
+  void lod_cpu_build_scatter_lut(const struct lod_plan* p,
+                                 uint32_t* lut,
+                                 int nthreads);
 
   // Build per-batch offsets into the linear source for scatter/gather.
   // offsets must have room for batch_count entries.
   void lod_cpu_build_scatter_batch_offsets(const struct lod_plan* p,
-                                           uint64_t* offsets);
+                                           uint64_t* offsets,
+                                           int nthreads);
 
   // Gather linear input into morton-ordered LOD L0 buffer using
   // precomputed LUT. Sequential writes, random reads.
@@ -85,7 +89,7 @@ extern "C"
                      const uint32_t* scatter_lut,
                      const uint64_t* batch_offsets,
                      enum dtype dtype,
-                     int max_threads);
+                     int nthreads);
 
 #ifdef __cplusplus
 }

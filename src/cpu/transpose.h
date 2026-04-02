@@ -20,7 +20,7 @@ extern "C"
                     uint8_t lifted_rank,
                     const uint64_t* lifted_shape,
                     const int64_t* lifted_strides,
-                    int max_threads);
+                    int nthreads);
 
 #ifdef __cplusplus
 }

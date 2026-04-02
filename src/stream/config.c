@@ -151,6 +151,11 @@ validate_config(const struct tile_stream_configuration* config,
   CHECK(Fail, config->rank <= HALF_MAX_RANK);
   CHECK(Fail, config->dimensions);
 
+  if (config->max_threads < 0) {
+    log_error("max_threads must be >= 0 (got %d)", config->max_threads);
+    goto Fail;
+  }
+
   // dim_info_init validates dims and computes the partition.
   CHECK(Fail, dim_info_init(di, config->dimensions, config->rank) == 0);
 

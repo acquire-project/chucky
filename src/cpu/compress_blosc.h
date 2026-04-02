@@ -22,4 +22,4 @@ compress_blosc(struct codec_config codec,
                size_t chunk_bytes,
                size_t batch_size,
                size_t bytes_per_element,
-               int max_threads);
+               int nthreads);

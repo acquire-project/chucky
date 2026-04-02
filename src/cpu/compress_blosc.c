@@ -30,9 +30,8 @@ compress_blosc(struct codec_config codec,
                size_t chunk_bytes,
                size_t batch_size,
                size_t bytes_per_element,
-               int max_threads)
+               int nthreads)
 {
-  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
   const char* compname =
     codec.id == CODEC_BLOSC_LZ4 ? BLOSC_LZ4_COMPNAME : BLOSC_ZSTD_COMPNAME;
   int clevel = codec.level;
@@ -40,7 +39,7 @@ compress_blosc(struct codec_config codec,
   size_t typesize = bytes_per_element > 0 ? bytes_per_element : 1;
   _Atomic int err = 0;
   int i;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nt)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nthreads)
   for (i = 0; i < (int)batch_size; ++i) {
     if (err)
       continue;

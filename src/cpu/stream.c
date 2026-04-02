@@ -8,6 +8,7 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,6 +40,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     return NULL;
 
   s->config = *config;
+  s->nthreads = config->max_threads > 0 ? config->max_threads
+                                        : omp_get_max_threads();
   s->shard_sink = sink;
 
   // CPU codec alignment is 1 (no nvcomp alignment needed).
@@ -188,7 +191,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       luts.lod_batch_offsets[lv] = s->lod_batch_offsets[lv];
     }
     cpu_pipeline_compute_luts(
-      &s->cl, &s->levels, s->batch_active_count, s->agg_layout, &luts);
+      &s->cl, &s->levels, s->batch_active_count, s->agg_layout, s->nthreads, &luts);
   }
 
   // Metrics.
@@ -462,7 +465,7 @@ make_flush_params(struct tile_stream_cpu* s)
     .shard_order_sizes_bytes = s->shard_order_sizes,
     .sink = s->shard_sink,
     .shard_alignment_bytes = s->config.shard_alignment,
-    .max_threads = s->config.max_threads,
+    .nthreads = s->nthreads,
     .metrics = &s->metrics,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -496,7 +499,7 @@ make_scatter_params(struct tile_stream_cpu* s)
     .scatter_batch_offsets = s->scatter_batch_offsets,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
-    .max_threads = s->config.max_threads,
+    .nthreads = s->nthreads,
     .metrics = &s->metrics,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -571,7 +574,7 @@ cpu_append(struct writer* self, struct slice input)
                             s->layout.lifted_rank,
                             s->layout.lifted_shape,
                             s->layout.lifted_strides,
-                            s->config.max_threads) == 0);
+                            s->nthreads) == 0);
       }
 
       float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -687,7 +690,7 @@ cpu_flush(struct writer* self)
       .append_accum = s->append_accum,
       .append_counts = s->append_counts,
       .chunk_pool = s->chunk_pool,
-      .max_threads = s->config.max_threads,
+      .nthreads = s->nthreads,
       .metrics = &s->metrics,
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {

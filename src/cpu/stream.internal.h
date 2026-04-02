@@ -65,6 +65,8 @@ struct tile_stream_cpu
   // overwrite aggregate buffers before write_direct completes.
   struct io_event io_done[LOD_MAX_LEVELS];
 
+  int nthreads; // resolved at init: always > 0
+
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
