@@ -8,6 +8,7 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,6 +34,9 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (codec_is_blosc(config->codec.id) &&
       compress_blosc_validate(config->codec))
     return NULL;
+
+  if (config->max_threads > 0)
+    omp_set_num_threads(config->max_threads);
 
   struct tile_stream_cpu* s = (struct tile_stream_cpu*)calloc(1, sizeof(*s));
   if (!s)
