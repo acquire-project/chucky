@@ -163,8 +163,8 @@ Fail:
   return 1;
 }
 
-// LZ4 roundtrip: compress with codec_compress(CODEC_LZ4_RAW), decompress with
-// nvcomp LZ4 decompress on GPU, compare with original.
+// LZ4 roundtrip: compress with codec_compress(CODEC_LZ4_NON_STANDARD),
+// decompress with nvcomp LZ4 decompress on GPU, compare with original.
 static int
 test_compress_lz4_roundtrip(void)
 {
@@ -185,7 +185,8 @@ test_compress_lz4_roundtrip(void)
   CUstream stream = 0;
   int ok = 0;
 
-  CHECK(Fail, codec_init(&c, CODEC_LZ4_RAW, chunk_bytes, n_chunks) == 0);
+  CHECK(Fail,
+        codec_init(&c, CODEC_LZ4_NON_STANDARD, chunk_bytes, n_chunks) == 0);
 
   const size_t comp_pool = n_chunks * c.max_output_size;
 

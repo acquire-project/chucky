@@ -14,7 +14,7 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
   switch (type) {
     case CODEC_NONE:
       return chunk_bytes;
-    case CODEC_LZ4_RAW:
+    case CODEC_LZ4_NON_STANDARD:
       return (size_t)LZ4_compressBound((int)chunk_bytes);
     case CODEC_ZSTD:
       return ZSTD_compressBound(chunk_bytes);
@@ -49,7 +49,7 @@ compress_cpu(struct codec_config codec,
       }
       return 0;
 
-    case CODEC_LZ4_RAW: {
+    case CODEC_LZ4_NON_STANDARD: {
       _Atomic int err = 0;
       int level = codec.level;
 #pragma omp parallel for schedule(dynamic) if (batch_size > 1024)

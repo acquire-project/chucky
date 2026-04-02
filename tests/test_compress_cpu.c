@@ -77,7 +77,8 @@ test_codec_lz4(void)
   void* src = NULL;
   void* dst = NULL;
 
-  size_t max_out = compress_cpu_max_output_size(CODEC_LZ4_RAW, CHUNK_BYTES);
+  size_t max_out =
+    compress_cpu_max_output_size(CODEC_LZ4_NON_STANDARD, CHUNK_BYTES);
   CHECK(Fail, max_out > 0);
 
   src = malloc(BATCH_SIZE * CHUNK_BYTES);
@@ -89,15 +90,16 @@ test_codec_lz4(void)
     fill_pattern((char*)src + i * CHUNK_BYTES, CHUNK_BYTES, (uint8_t)i);
 
   CHECK(Fail,
-        compress_cpu((struct codec_config){ .id = CODEC_LZ4_RAW, .level = 1 },
-                     src,
-                     CHUNK_BYTES,
-                     dst,
-                     max_out,
-                     comp_sizes,
-                     CHUNK_BYTES,
-                     BATCH_SIZE,
-                     1) == 0);
+        compress_cpu(
+          (struct codec_config){ .id = CODEC_LZ4_NON_STANDARD, .level = 1 },
+          src,
+          CHUNK_BYTES,
+          dst,
+          max_out,
+          comp_sizes,
+          CHUNK_BYTES,
+          BATCH_SIZE,
+          1) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);

@@ -215,7 +215,7 @@ test_zarr_array_json_lz4(void)
     { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "x" },
   };
   uint64_t cps[3] = { 2, 1, 1 };
-  struct codec_config codec = { .id = CODEC_LZ4_RAW, .level = 1 };
+  struct codec_config codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 };
 
   int len =
     zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
