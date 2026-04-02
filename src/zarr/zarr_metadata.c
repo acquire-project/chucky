@@ -1,8 +1,10 @@
 #include "zarr/zarr_metadata.h"
 #include "defs.limits.h"
+#include "dtype.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
+#include <string.h>
 
 int
 zarr_root_json(char* buf, size_t cap)
@@ -32,7 +34,7 @@ zarr_array_json(char* buf,
                 enum dtype data_type,
                 double fill_value,
                 const uint64_t* chunks_per_shard,
-                enum compression_codec codec)
+                struct codec_config codec)
 {
   struct json_writer jw;
   jw_init(&jw, buf, cap);
@@ -106,12 +108,34 @@ zarr_array_json(char* buf,
   jw_string(&jw, "little");
   jw_object_end(&jw);
   jw_object_end(&jw);
-  if (codec != CODEC_NONE) {
+  if (codec.id != CODEC_NONE) {
     jw_object_begin(&jw);
     jw_key(&jw, "name");
-    jw_string(&jw, codec == CODEC_LZ4 ? "lz4" : "zstd");
+    if (codec_is_blosc(codec.id))
+      jw_string(&jw, "blosc");
+    else
+      jw_string(&jw, codec.id == CODEC_LZ4 ? "lz4" : "zstd");
     jw_key(&jw, "configuration");
     jw_object_begin(&jw);
+    if (codec.id == CODEC_ZSTD) {
+      jw_key(&jw, "level");
+      jw_int(&jw, codec.level);
+    }
+    if (codec_is_blosc(codec.id)) {
+      jw_key(&jw, "cname");
+      jw_string(&jw, codec.id == CODEC_BLOSC_LZ4 ? "lz4" : "zstd");
+      jw_key(&jw, "clevel");
+      jw_int(&jw, codec.level);
+      jw_key(&jw, "shuffle");
+      jw_string(&jw,
+                codec.shuffle == CODEC_SHUFFLE_BIT    ? "bitshuffle"
+                : codec.shuffle == CODEC_SHUFFLE_BYTE ? "shuffle"
+                                                      : "noshuffle");
+      jw_key(&jw, "typesize");
+      jw_int(&jw, (int64_t)dtype_bpe(data_type));
+      jw_key(&jw, "blocksize");
+      jw_int(&jw, 0);
+    }
     jw_object_end(&jw);
     jw_object_end(&jw);
   }
@@ -311,6 +335,39 @@ zarr_multiscale_group_json(char* buf,
   if (jw_error(&jw))
     return -1;
   return (int)jw_length(&jw);
+}
+
+int
+zarr_for_each_intermediate(const char* array_name,
+                           int (*fn)(const char* partial, void* ctx),
+                           void* ctx)
+{
+  if (!array_name)
+    return 0;
+
+  size_t len = strlen(array_name);
+  if (len == 0 || len >= 4096)
+    return -1;
+
+  // Reject leading slash, trailing slash, or empty segments (//)
+  if (array_name[0] == '/' || array_name[len - 1] == '/')
+    return -1;
+  if (strstr(array_name, "//"))
+    return -1;
+
+  char name[4096];
+  memcpy(name, array_name, len + 1);
+
+  for (size_t i = 0; i < len; ++i) {
+    if (name[i] == '/') {
+      name[i] = '\0';
+      int rc = fn(name, ctx);
+      name[i] = '/';
+      if (rc != 0)
+        return rc;
+    }
+  }
+  return 0;
 }
 
 int

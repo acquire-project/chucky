@@ -148,7 +148,7 @@ test_stream_single_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -235,7 +235,7 @@ test_stream_incremental_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -314,7 +314,7 @@ test_stream_compressed_roundtrip(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -395,7 +395,7 @@ test_stream_lz4_roundtrip(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_LZ4,
+    .codec = { .id = CODEC_LZ4, .level = 1 },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -478,7 +478,7 @@ test_stream_zero_length_append(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -533,7 +533,7 @@ test_stream_null_config_fields(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config, NULL);
@@ -567,7 +567,7 @@ test_stream_rank_1_dim(void)
     .dtype = dtype_u16,
     .rank = 1,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -618,7 +618,7 @@ test_stream_flush_empty(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -659,7 +659,7 @@ test_stream_unbounded_dim0(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -729,7 +729,7 @@ test_stream_unbounded_requires_tps(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &mss.base);
@@ -765,7 +765,7 @@ test_stream_bounded_dim0(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -818,8 +818,6 @@ test_shard_index_structure(void)
 {
   log_info("=== test_shard_index_structure ===");
 
-  crc32c_init();
-
   // --- Case 1: Even tiling (all chunks fill shard evenly) ---
   {
     const int size[3] = { 12, 8, 12 };
@@ -867,7 +865,7 @@ test_shard_index_structure(void)
       .dtype = dtype_u32,
       .rank = 3,
       .dimensions = dims,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
     };
 
     struct tile_stream_gpu* s = NULL;
@@ -984,7 +982,7 @@ Case2:
       .dtype = dtype_u16,
       .rank = 3,
       .dimensions = dims2,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
     };
 
     struct tile_stream_gpu* s2 = NULL;

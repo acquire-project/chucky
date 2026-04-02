@@ -171,6 +171,8 @@ struct tile_stream_gpu
   struct staging_state stage;
   uint64_t cursor_elements;
   uint64_t max_cursor_elements; // 0 = unbounded
+  int flushed;                  // 1 after flush; append after flush returns
+                                // finished
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };

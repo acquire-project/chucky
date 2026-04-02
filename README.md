@@ -1,5 +1,8 @@
 # Chucky
 
+[![CI](https://github.com/acquire-project/chucky/actions/workflows/ci.yml/badge.svg)](https://github.com/acquire-project/chucky/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/acquire-project/chucky/graph/badge.svg)](https://codecov.io/gh/acquire-project/chucky)
+
 A high-performance streaming library for tiled transformation and compression of
 large multidimensional arrays (tensors) using CUDA.
 

@@ -14,6 +14,8 @@ static struct writer_result
 tile_stream_gpu_append(struct writer* self, struct slice input);
 static struct writer_result
 tile_stream_gpu_flush(struct writer* self);
+static struct writer_result
+tile_stream_gpu_flush_final(struct writer* self);
 
 // --- Helpers ---
 
@@ -65,6 +67,10 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
+
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   const size_t bytes_per_element = dtype_bpe(s->config.dtype);
   const size_t buffer_capacity = s->config.buffer_capacity_bytes;
   const uint8_t* src = (const uint8_t*)input.beg;
@@ -228,9 +234,19 @@ Error:
   return writer_error();
 }
 
+static struct writer_result
+tile_stream_gpu_flush_final(struct writer* self)
+{
+  struct tile_stream_gpu* s =
+    container_of(self, struct tile_stream_gpu, writer);
+  struct writer_result r = tile_stream_gpu_flush(self);
+  s->flushed = 1;
+  return r;
+}
+
 void
 tile_stream_gpu_init_writer(struct tile_stream_gpu* s)
 {
   s->writer.append = tile_stream_gpu_append;
-  s->writer.flush = tile_stream_gpu_flush;
+  s->writer.flush = tile_stream_gpu_flush_final;
 }
