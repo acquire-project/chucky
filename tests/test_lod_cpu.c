@@ -1,5 +1,7 @@
+#include "cpu/compress.h"
 #include "cpu/lod.h"
 #include "lod/lod_plan.h"
+#include "stream/config.h"
 #include "util/prelude.h"
 
 #include <math.h>
@@ -314,6 +316,145 @@ Fail:
   return 1;
 }
 
+// Test that max_nlod > LOD_MAX_LEVELS-1 is rejected by compute_stream_layouts.
+static int
+test_max_nlod_validation_rejection(void)
+{
+  log_info("=== test_max_nlod_validation_rejection ===");
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = 32, // exceeds LOD_MAX_LEVELS - 1
+  };
+
+  struct computed_stream_layouts cl;
+  int rc = compute_stream_layouts(
+    &config, 1, compress_cpu_max_output_size, &cl);
+  CHECK(Fail, rc != 0); // must be rejected
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Test that max_nlod=0 through compute_stream_layouts yields nlod==1.
+static int
+test_max_nlod_zero_via_layouts(void)
+{
+  log_info("=== test_max_nlod_zero_via_layouts ===");
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = 0, // no downsampled levels
+  };
+
+  struct computed_stream_layouts cl;
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config, 1, compress_cpu_max_output_size, &cl) == 0);
+  CHECK(Fail, cl.levels.nlod == 1); // base level only
+  computed_stream_layouts_free(&cl);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Test that positive max_nlod caps the level count via compute_stream_layouts.
+static int
+test_max_nlod_positive_cap_via_layouts(void)
+{
+  log_info("=== test_max_nlod_positive_cap_via_layouts ===");
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 256,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  // First, compute with auto to see uncapped nlod.
+  struct tile_stream_configuration config_auto = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = -1, // auto
+  };
+
+  struct computed_stream_layouts cl_auto;
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config_auto, 1, compress_cpu_max_output_size, &cl_auto) == 0);
+  CHECK(Fail, cl_auto.levels.nlod > 3); // auto should produce more than 3
+  computed_stream_layouts_free(&cl_auto);
+
+  // Now cap at max_nlod=2 → expect nlod==3 (base + 2 downsampled).
+  struct tile_stream_configuration config_cap = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = 2,
+  };
+
+  struct computed_stream_layouts cl_cap;
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config_cap, 1, compress_cpu_max_output_size, &cl_cap) == 0);
+  CHECK(Fail, cl_cap.levels.nlod == 3); // base + 2 downsampled
+  computed_stream_layouts_free(&cl_cap);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -330,5 +471,8 @@ main(int ac, char* av[])
   rc |= test_level_count_shape_le_chunk();
   rc |= test_level_count_max_levels();
   rc |= test_max_nlod_semantics();
+  rc |= test_max_nlod_validation_rejection();
+  rc |= test_max_nlod_zero_via_layouts();
+  rc |= test_max_nlod_positive_cap_via_layouts();
   return rc;
 }

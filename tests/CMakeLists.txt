@@ -71,7 +71,7 @@ add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu chucky_log)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)
 
 # CPU LOD test (no CUDA)
-add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu chucky_log)
 
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)
