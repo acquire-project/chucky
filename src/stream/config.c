@@ -173,8 +173,12 @@ validate_config(const struct tile_stream_configuration* config,
     goto Fail;
   }
 
-  if (config->max_nlod > 0 && config->max_nlod + 1 > LOD_MAX_LEVELS) {
-    log_error("max_nlod %d exceeds limit (%d)", config->max_nlod, LOD_MAX_LEVELS - 1);
+  if (config->max_nlod < 0) {
+    log_error("max_nlod must be >= 0 (got %d)", config->max_nlod);
+    goto Fail;
+  }
+  if (config->max_nlod > LOD_MAX_LEVELS) {
+    log_error("max_nlod %d exceeds limit (%d)", config->max_nlod, LOD_MAX_LEVELS);
     goto Fail;
   }
 
@@ -235,12 +239,10 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 
   // --- LOD plan (always runs) ---
   int max_levels;
-  if (config->max_nlod < 0)
+  if (config->max_nlod == 0)
     max_levels = LOD_MAX_LEVELS;
-  else if (config->max_nlod == 0)
-    max_levels = 1;
   else
-    max_levels = config->max_nlod + 1;
+    max_levels = config->max_nlod;
   CHECK(Fail,
         lod_plan_init_from_epoch_dims(
           &out->plan, dims, rank, na, max_levels) == 0);
