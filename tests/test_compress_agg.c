@@ -51,14 +51,14 @@ ca_ctx_destroy(struct ca_test_ctx* c)
 // Setup: compute layouts, init compress_agg, allocate pool for n_pool_epochs.
 static int
 ca_ctx_setup(struct ca_test_ctx* c,
-             enum compression_codec codec,
+             struct codec_config codec,
              uint8_t epochs_per_batch,
              int n_pool_epochs)
 {
   make_test_config(&c->config, c->dims, codec, epochs_per_batch);
   CHECK(Fail,
         compute_stream_layouts(&c->config,
-                               codec_alignment(c->config.codec),
+                               codec_alignment(c->config.codec.id),
                                codec_max_output_size,
                                &c->cl) == 0);
 
@@ -226,7 +226,8 @@ test_compress_agg_single_epoch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 1, 1) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 1, 1) == 0);
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
@@ -276,7 +277,8 @@ test_compress_agg_batch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
@@ -306,18 +308,18 @@ test_compress_agg_batch(void)
 
   // Verify data per epoch
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint32_t cps_inner = (uint32_t)al->cps_inner;
+  uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
+  const uint64_t shard_shape[2] = { num_shards, cps_inner };
+  const int64_t shard_strides[2] = { (int64_t)batch_count * cps_inner, 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint64_t perm_pos = 0;
-      uint64_t rest = j;
-      for (int d = al->lifted_rank - 1; d >= 0; --d) {
-        uint64_t coord = rest % al->lifted_shape[d];
-        rest /= al->lifted_shape[d];
-        perm_pos += coord * (uint64_t)al->lifted_strides[d];
-      }
-      uint64_t out_idx = perm_pos * batch_count + a;
+      uint64_t perm_pos =
+        ravel(al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
+      uint64_t out_idx =
+        ravel(2, shard_shape, shard_strides, perm_pos) + a * cps_inner;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
       if (sz != chunk_bytes) {
@@ -370,7 +372,8 @@ test_compress_agg_partial_batch(void)
   void* h_agg = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_NONE, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
@@ -413,7 +416,8 @@ test_compress_agg_zstd_single_epoch(void)
   uint8_t* decomp_buf = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_ZSTD, 1, 1) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_ZSTD }, 1, 1) == 0);
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
@@ -491,7 +495,8 @@ test_compress_agg_zstd_batch(void)
   uint8_t* decomp_buf = NULL;
   int ok = 0;
 
-  CHECK(Fail, ca_ctx_setup(&c, CODEC_ZSTD, 2, 2) == 0);
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_ZSTD }, 2, 2) == 0);
   CHECK(Fail, c.cl.epochs_per_batch == 2);
 
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
@@ -516,18 +521,18 @@ test_compress_agg_zstd_batch(void)
   CHECK(Fail, decomp_buf);
 
   uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint32_t cps_inner = (uint32_t)al->cps_inner;
+  uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
+  const uint64_t shard_shape[2] = { num_shards, cps_inner };
+  const int64_t shard_strides[2] = { (int64_t)batch_count * cps_inner, 1 };
   int errors = 0;
   for (uint32_t a = 0; a < batch_count; ++a) {
     uint16_t (*fill_fn)(uint64_t) = (a == 0) ? fill_epoch0 : fill_epoch1;
     for (uint64_t j = 0; j < chunks_lv; ++j) {
-      uint64_t perm_pos = 0;
-      uint64_t rest = j;
-      for (int d = al->lifted_rank - 1; d >= 0; --d) {
-        uint64_t coord = rest % al->lifted_shape[d];
-        rest /= al->lifted_shape[d];
-        perm_pos += coord * (uint64_t)al->lifted_strides[d];
-      }
-      uint64_t out_idx = perm_pos * batch_count + a;
+      uint64_t perm_pos =
+        ravel(al->lifted_rank, al->lifted_shape, al->lifted_strides, j);
+      uint64_t out_idx =
+        ravel(2, shard_shape, shard_strides, perm_pos) + a * cps_inner;
       size_t off = handoff.agg[0]->h_offsets[out_idx];
       size_t comp_sz = handoff.agg[0]->h_offsets[out_idx + 1] - off;
 

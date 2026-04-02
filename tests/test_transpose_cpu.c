@@ -3,6 +3,7 @@
 #include "index.ops.util.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -73,7 +74,7 @@ run_test(const char* name,
   CHECK(
     Fail,
     transpose_cpu(
-      dst, src, src_bytes, bpe, 0, lifted_rank, lifted_shape, lifted_strides) ==
+      dst, src, src_bytes, bpe, 0, lifted_rank, lifted_shape, lifted_strides, omp_get_max_threads()) ==
       0);
 
   // Verify against ravel() reference
@@ -203,7 +204,8 @@ run_offset_test(const char* name,
                       0,
                       lifted_rank,
                       lifted_shape,
-                      lifted_strides) == 0);
+                      lifted_strides,
+                      omp_get_max_threads()) == 0);
 
   // Split: two calls with offset
   uint64_t split = epoch_elements / 3;
@@ -217,7 +219,8 @@ run_offset_test(const char* name,
                       0,
                       lifted_rank,
                       lifted_shape,
-                      lifted_strides) == 0);
+                      lifted_strides,
+                      omp_get_max_threads()) == 0);
   CHECK(Fail,
         transpose_cpu(dst_split,
                       (const char*)full_src + split_bytes,
@@ -226,7 +229,8 @@ run_offset_test(const char* name,
                       split,
                       lifted_rank,
                       lifted_shape,
-                      lifted_strides) == 0);
+                      lifted_strides,
+                      omp_get_max_threads()) == 0);
 
   // Compare
   if (memcmp(dst_full, dst_split, dst_bytes) != 0) {

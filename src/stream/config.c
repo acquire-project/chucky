@@ -151,6 +151,11 @@ validate_config(const struct tile_stream_configuration* config,
   CHECK(Fail, config->rank <= HALF_MAX_RANK);
   CHECK(Fail, config->dimensions);
 
+  if (config->max_threads < 0) {
+    log_error("max_threads must be >= 0 (got %d)", config->max_threads);
+    goto Fail;
+  }
+
   // dim_info_init validates dims and computes the partition.
   CHECK(Fail, dim_info_init(di, config->dimensions, config->rank) == 0);
 
@@ -163,6 +168,26 @@ validate_config(const struct tile_stream_configuration* config,
                (unsigned long long)chunk_elements);
   }
 
+  if (config->codec.id == CODEC_LZ4_NON_STANDARD && config->codec.level == 0) {
+    log_error("LZ4 requires level >= 1 (LZ4 HC levels 1..12)");
+    goto Fail;
+  }
+
+  if (codec_is_blosc(config->codec.id) && config->codec.level > 9) {
+    log_error("blosc level must be 0..9 (got %d)", config->codec.level);
+    goto Fail;
+  }
+
+  if (config->max_nlod < 0) {
+    log_error("max_nlod must be >= 0 (got %d)", config->max_nlod);
+    goto Fail;
+  }
+  if (config->max_nlod > LOD_MAX_LEVELS) {
+    log_error(
+      "max_nlod %d exceeds limit (%d)", config->max_nlod, LOD_MAX_LEVELS);
+    goto Fail;
+  }
+
   {
     uint8_t na = dim_info_n_append(di);
     if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
@@ -170,6 +195,10 @@ validate_config(const struct tile_stream_configuration* config,
       goto Fail;
     }
   }
+
+  if (config->codec.id == CODEC_LZ4_NON_STANDARD)
+    log_warn("LZ4 raw block format is not interoperable with existing zarr v3 "
+             "readers");
 
   {
     if (di->append_downsample) {
@@ -219,9 +248,14 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   CHECK(Fail, resolve_storage_order(rank, na, dims, storage_order) == 0);
 
   // --- LOD plan (always runs) ---
+  int max_levels;
+  if (config->max_nlod == 0)
+    max_levels = LOD_MAX_LEVELS;
+  else
+    max_levels = config->max_nlod;
   CHECK(Fail,
-        lod_plan_init_from_epoch_dims(
-          &out->plan, dims, rank, na, LOD_MAX_LEVELS) == 0);
+        lod_plan_init_from_epoch_dims(&out->plan, dims, rank, na, max_levels) ==
+          0);
   int enable_multiscale = out->plan.lod_mask != 0;
   out->levels.enable_multiscale = enable_multiscale;
   out->levels.nlod = enable_multiscale ? out->plan.nlod : 1;
@@ -253,9 +287,12 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
   // --- Codec-derived max_output_size ---
   {
     const size_t chunk_bytes = out->layouts[0].chunk_stride * bytes_per_element;
-    out->max_output_size = max_output_size_fn(config->codec, chunk_bytes);
-    if (config->codec != CODEC_NONE && out->max_output_size == 0)
+    out->max_output_size = max_output_size_fn(config->codec.id, chunk_bytes);
+    if (config->codec.id != CODEC_NONE && out->max_output_size == 0) {
+      log_error("codec %d: max_output_size is 0 (unsupported codec?)",
+                config->codec.id);
       goto Fail;
+    }
   }
 
   // --- Per-level aggregate layout and shard geometry ---

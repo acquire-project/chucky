@@ -127,7 +127,7 @@ test_metadata(void)
     .fill_value = 0,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_ZSTD,
+    .codec = { .id = CODEC_ZSTD },
   };
 
   struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
@@ -196,7 +196,7 @@ test_shard_write(void)
     .fill_value = 0,
     .rank = 1,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
@@ -278,7 +278,7 @@ test_concurrent_finalize(void)
     .fill_value = 0,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);

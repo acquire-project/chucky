@@ -66,7 +66,7 @@ orch_ctx_setup(struct orch_ctx* c,
 {
   CHECK(Fail,
         compute_stream_layouts(config,
-                               codec_alignment(config->codec),
+                               codec_alignment(config->codec.id),
                                codec_max_output_size,
                                &c->cl) == 0);
 
@@ -176,7 +176,7 @@ test_accumulate_one_epoch(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -227,7 +227,7 @@ test_full_batch_auto_flush(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -277,7 +277,7 @@ test_drain_delivers_data(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -328,7 +328,7 @@ test_accumulated_sync_partial(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -377,7 +377,7 @@ test_two_batch_cycle(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);

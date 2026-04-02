@@ -66,7 +66,7 @@ test_ctx_setup(struct test_ctx* c,
 {
   CHECK(Fail,
         compute_stream_layouts(config,
-                               codec_alignment(config->codec),
+                               codec_alignment(config->codec.id),
                                codec_max_output_size,
                                &c->cl) == 0);
 
@@ -180,7 +180,7 @@ test_d2h_single_epoch_none(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 1);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 1);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -248,7 +248,7 @@ test_d2h_batch_none(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 2);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -309,14 +309,15 @@ test_d2h_batch_none(void)
     const uint64_t* idx =
       (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
-    // The batch LUT aggregate interleaves epochs: output position =
-    // perm_pos * batch_count + epoch. deliver_to_shards_batch reads
-    // them linearly, so shard index slot_idx maps as:
-    //   perm_pos = slot_idx / batch_count
-    //   epoch    = slot_idx % batch_count
+    // Shard output layout: [num_shards, batch_count, cps_inner] row-major.
+    // Slot → (si, epoch, ci) via unravel, then perm_pos = si * cps_inner + ci.
     const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
     uint32_t batch_count = c.ca.levels[0].batch_active_count;
+    uint32_t cps_inner = (uint32_t)al->cps_inner;
+    uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
     uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+    // unravel uses column-major (d=0 fastest), so reverse for row-major order.
+    const uint64_t slot_shape[3] = { cps_inner, batch_count, num_shards };
 
     // Build inverse perm: inv_perm[perm_pos] = original chunk j
     inv_perm = (uint32_t*)malloc(chunks_lv * sizeof(uint32_t));
@@ -329,8 +330,10 @@ test_d2h_batch_none(void)
 
     int errors = 0;
     for (uint64_t slot = 0; slot < tps_total; ++slot) {
-      uint64_t perm_pos = slot / batch_count;
-      uint32_t epoch = (uint32_t)(slot % batch_count);
+      uint64_t coords[3];
+      unravel(3, slot_shape, slot, coords);
+      uint32_t perm_pos = (uint32_t)(coords[2] * cps_inner + coords[0]);
+      uint32_t epoch = (uint32_t)coords[1];
       uint16_t (*fill_fn)(uint64_t) = (epoch == 0) ? fill_epoch0 : fill_epoch1;
       uint32_t orig_tile = inv_perm[perm_pos];
 
@@ -392,7 +395,7 @@ test_d2h_zstd_single_epoch(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_ZSTD, 1);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_ZSTD }, 1);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -493,7 +496,7 @@ test_d2h_double_buffer(void)
 
   struct dimension dims[3];
   struct tile_stream_configuration config;
-  make_test_config(&config, dims, CODEC_NONE, 1);
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 1);
 
   struct test_shard_sink sink;
   test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
