@@ -4,6 +4,7 @@
 #include "util/prelude.h"
 
 #include <lz4hc.h>
+#include <omp.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <zstd.h>
@@ -35,12 +36,14 @@ compress_cpu(struct codec_config codec,
              size_t* comp_sizes,
              size_t chunk_bytes,
              size_t batch_size,
-             size_t bytes_per_element)
+             size_t bytes_per_element,
+             int nthreads)
 {
   int i;
   switch (codec.id) {
     case CODEC_NONE:
-#pragma omp parallel for schedule(static) if (batch_size > 1024)
+#pragma omp parallel for schedule(static) if (batch_size > 1024)               \
+  num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         memcpy((char*)dst + i * max_output_size,
                (const char*)src + i * input_stride,
@@ -52,7 +55,8 @@ compress_cpu(struct codec_config codec,
     case CODEC_LZ4_NON_STANDARD: {
       _Atomic int err = 0;
       int level = codec.level;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)              \
+  num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
@@ -71,7 +75,8 @@ compress_cpu(struct codec_config codec,
     case CODEC_ZSTD: {
       int level = codec.level;
       _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 1024)              \
+  num_threads(nthreads)
       for (i = 0; i < (int)batch_size; ++i) {
         if (err)
           continue;
@@ -96,7 +101,8 @@ compress_cpu(struct codec_config codec,
                             comp_sizes,
                             chunk_bytes,
                             batch_size,
-                            bytes_per_element);
+                            bytes_per_element,
+                            nthreads);
 
     default:
       return 1;

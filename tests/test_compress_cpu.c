@@ -5,6 +5,7 @@
 #include <blosc.h>
 #endif
 #include <lz4.h>
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zstd.h>
@@ -48,7 +49,8 @@ test_codec_none(void)
                      comp_sizes,
                      CHUNK_BYTES,
                      BATCH_SIZE,
-                     1) == 0);
+                     1,
+                     omp_get_max_threads()) == 0);
 
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] == CHUNK_BYTES);
@@ -99,7 +101,8 @@ test_codec_lz4(void)
           comp_sizes,
           CHUNK_BYTES,
           BATCH_SIZE,
-          1) == 0);
+          1,
+          omp_get_max_threads()) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -156,7 +159,8 @@ test_codec_zstd(void)
                      comp_sizes,
                      CHUNK_BYTES,
                      BATCH_SIZE,
-                     1) == 0);
+                     1,
+                     omp_get_max_threads()) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -179,6 +183,74 @@ test_codec_zstd(void)
 Fail:
   free(src);
   free(dst);
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_nthreads_1(void)
+{
+  log_info("=== test_compress_cpu_nthreads_1 ===");
+
+  enum
+  {
+    MT_BATCH = 2048
+  };
+  void* src = NULL;
+  void* dst = NULL;
+  void* recovered = NULL;
+  size_t* comp_sizes = NULL;
+
+  size_t max_out = compress_cpu_max_output_size(CODEC_ZSTD, CHUNK_BYTES);
+  CHECK(Fail, max_out > 0);
+
+  src = malloc((size_t)MT_BATCH * CHUNK_BYTES);
+  dst = calloc(MT_BATCH, max_out);
+  comp_sizes = (size_t*)calloc(MT_BATCH, sizeof(size_t));
+  CHECK(Fail, src && dst && comp_sizes);
+
+  for (int i = 0; i < MT_BATCH; ++i)
+    fill_pattern((char*)src + (size_t)i * CHUNK_BYTES, CHUNK_BYTES, (uint8_t)i);
+
+  CHECK(Fail,
+        compress_cpu((struct codec_config){ .id = CODEC_ZSTD },
+                     src,
+                     CHUNK_BYTES,
+                     dst,
+                     max_out,
+                     comp_sizes,
+                     CHUNK_BYTES,
+                     MT_BATCH,
+                     1,
+                     1) == 0);
+
+  // Decompress and verify round-trip
+  recovered = malloc(CHUNK_BYTES);
+  CHECK(Fail, recovered);
+
+  for (int i = 0; i < MT_BATCH; ++i) {
+    CHECK(Fail, comp_sizes[i] > 0 && comp_sizes[i] <= max_out);
+    size_t rc = ZSTD_decompress(recovered,
+                                CHUNK_BYTES,
+                                (const char*)dst + (size_t)i * max_out,
+                                comp_sizes[i]);
+    CHECK(Fail, !ZSTD_isError(rc) && rc == CHUNK_BYTES);
+    CHECK(Fail,
+          memcmp(
+            (char*)src + (size_t)i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
+  }
+
+  free(src);
+  free(dst);
+  free(comp_sizes);
+  free(recovered);
+  log_info("  PASS");
+  return 0;
+Fail:
+  free(src);
+  free(dst);
+  free(comp_sizes);
+  free(recovered);
   log_error("  FAIL");
   return 1;
 }
@@ -214,7 +286,8 @@ test_codec_blosc(enum compression_codec id, const char* name)
                      comp_sizes,
                      CHUNK_BYTES,
                      BATCH_SIZE,
-                     1) == 0);
+                     1,
+                     omp_get_max_threads()) == 0);
 
   // Decompress and verify round-trip
   recovered = malloc(CHUNK_BYTES);
@@ -253,6 +326,7 @@ main(int ac, char* av[])
   rc |= test_codec_none();
   rc |= test_codec_lz4();
   rc |= test_codec_zstd();
+  rc |= test_nthreads_1();
 #ifdef HAVE_BLOSC
   rc |= test_codec_blosc(CODEC_BLOSC_LZ4, "blosc_lz4");
   rc |= test_codec_blosc(CODEC_BLOSC_ZSTD, "blosc_zstd");

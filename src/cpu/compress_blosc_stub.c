@@ -26,7 +26,8 @@ compress_blosc(struct codec_config codec,
                size_t* comp_sizes,
                size_t chunk_bytes,
                size_t batch_size,
-               size_t bytes_per_element)
+               size_t bytes_per_element,
+               int nthreads)
 {
   (void)codec;
   (void)src;
@@ -37,6 +38,7 @@ compress_blosc(struct codec_config codec,
   (void)chunk_bytes;
   (void)batch_size;
   (void)bytes_per_element;
+  (void)nthreads;
   log_error("blosc codec requested but not compiled in");
   return 1;
 }

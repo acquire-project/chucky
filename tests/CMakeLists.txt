@@ -63,15 +63,19 @@ add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::c
 
 # CPU transpose test (no CUDA)
 add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
+enable_openmp(test_transpose_cpu)
 
 # CPU compress test (no CUDA)
 add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu chucky_log)
+enable_openmp(test_compress_cpu)
 
 # CPU aggregate test (no CUDA)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)
+enable_openmp(test_aggregate_cpu)
 
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
+enable_openmp(test_lod_cpu)
 
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)

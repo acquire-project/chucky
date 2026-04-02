@@ -2,6 +2,7 @@
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,7 +48,7 @@ test_simple(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
 
   // Verify: each chunk i should appear at its permuted position P[i].
   // The offsets should be a valid prefix sum.
@@ -119,7 +120,7 @@ test_multishard(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
 
   // Verify round-trip: each chunk's data at its permuted offset
   for (uint64_t i = 0; i < M; ++i) {
@@ -185,7 +186,7 @@ test_page_aligned(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result) == 0);
+        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
 
   // Verify shard boundaries are page-aligned.
   // Each shard has cps_inner chunks. The offset after each shard group

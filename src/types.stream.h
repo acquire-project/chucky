@@ -48,6 +48,7 @@ struct tile_stream_configuration
   float metadata_update_interval_s;
   size_t
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
+  int max_threads;   // 0 = OpenMP default
 };
 
 struct tile_stream_status
