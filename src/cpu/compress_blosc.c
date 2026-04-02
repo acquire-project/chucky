@@ -3,6 +3,8 @@
 #include <blosc.h>
 #include <stdatomic.h>
 
+// Real impl always succeeds for blosc ids. The stub overrides this to
+// return 1 with an error, providing build-time unavailability detection.
 int
 compress_blosc_validate(struct codec_config codec)
 {

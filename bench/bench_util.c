@@ -903,6 +903,8 @@ parse_codec(const char* s, struct codec_config* out)
     out->id = vals[i];
     if (out->id == CODEC_LZ4 && out->level == 0)
       out->level = 1;
+    if (codec_is_blosc(out->id) && out->level == 0)
+      out->level = 3;
     return 1;
   }
   fprintf(stderr,

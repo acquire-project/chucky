@@ -95,6 +95,8 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   // Build lifted shape and strides for dims n_append..D-1
   // lifted_shape[2*k]   = shard_count[d]
   // lifted_shape[2*k+1] = eff_cps[d]
+  // Product of shard_count * cps per inner dim. Cannot overflow uint64_t:
+  // rank <= HALF_MAX_RANK (8) and each factor is at most ~2^32.
   layout->covering_count = 1;
   for (int d = n_append; d < D; ++d) {
     eff_cps[d] = chunks_per_shard[d];

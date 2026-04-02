@@ -85,7 +85,7 @@ main(void)
 {
   if (system("uv --version > /dev/null 2>&1") != 0) {
     log_error("uv not found — install it: https://docs.astral.sh/uv/");
-    return 1;
+    return 77; // CTest SKIP_RETURN_CODE
   }
 
   char tmpdir[256];
@@ -96,6 +96,7 @@ main(void)
     const char* name;
     struct codec_config codec;
   } codecs[] = {
+    // lz4 omitted: no zarr v3 LZ4 codec spec; zarr-python can't read it.
     { "none", { .id = CODEC_NONE } },
     { "zstd", { .id = CODEC_ZSTD } },
     { "blosc_lz4",

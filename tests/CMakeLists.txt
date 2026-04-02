@@ -91,6 +91,7 @@ target_compile_definitions(
     test_zarr_readback
     PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+set_tests_properties(test-test_zarr_readback PROPERTIES SKIP_RETURN_CODE 77)
 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)

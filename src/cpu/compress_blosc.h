@@ -3,9 +3,9 @@
 #include "types.codec.h"
 #include <stddef.h>
 
-// Validate a blosc codec config. Returns 0 on success, non-zero on error.
-// Rejects non-blosc codec ids, unavailable blosc (stub), and out-of-range
-// level.
+// Check blosc codec availability. Returns 0 if blosc is available, non-zero
+// if not (stub build). Rejects non-blosc codec ids.
+// Level range is validated separately in validate_config.
 int
 compress_blosc_validate(struct codec_config codec);
 
