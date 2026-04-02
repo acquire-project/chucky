@@ -1,5 +1,6 @@
 #include "util/prelude.h"
 #include "zarr/json_writer.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -204,6 +205,33 @@ Fail:
   return 1;
 }
 
+static int
+test_zarr_array_json_lz4(void)
+{
+  char buf[4096];
+  struct dimension dims[3] = {
+    { .size = 0, .chunk_size = 1, .chunks_per_shard = 2, .name = "t" },
+    { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "y" },
+    { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "x" },
+  };
+  uint64_t cps[3] = { 2, 1, 1 };
+  struct codec_config codec = { .id = CODEC_LZ4_RAW, .level = 1 };
+
+  int len =
+    zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  // The codec name in zarr metadata must be "lz4" (not "lz4_raw")
+  CHECK(Fail, strstr(buf, "\"name\":\"lz4\""));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", (int)sizeof(buf), buf);
+  return 1;
+}
+
 int
 main(void)
 {
@@ -213,10 +241,14 @@ main(void)
     const char* name;
     int (*fn)(void);
   } tests[] = {
-    { "simple_object", test_simple_object },     { "nested", test_nested },
-    { "string_escaping", test_string_escaping }, { "overflow", test_overflow },
-    { "array_commas", test_array_commas },       { "uint", test_uint },
+    { "simple_object", test_simple_object },
+    { "nested", test_nested },
+    { "string_escaping", test_string_escaping },
+    { "overflow", test_overflow },
+    { "array_commas", test_array_commas },
+    { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },
+    { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();
