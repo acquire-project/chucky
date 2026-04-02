@@ -493,6 +493,89 @@ Fail:
   return 1;
 }
 
+// Test that max_nlod=0 (auto) produces identical results to LOD_MAX_LEVELS.
+// Both should resolve to the natural (uncapped) level count.
+static int
+test_max_nlod_zero_equals_uncapped(void)
+{
+  log_info("=== test_max_nlod_zero_equals_uncapped ===");
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 256,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 256,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  // max_nlod=0 -> auto (should resolve to LOD_MAX_LEVELS internally)
+  struct tile_stream_configuration config_auto = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = 0,
+  };
+
+  // max_nlod=LOD_MAX_LEVELS -> explicitly uncapped
+  struct tile_stream_configuration config_uncapped = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = LOD_MAX_LEVELS,
+  };
+
+  struct computed_stream_layouts cl_auto, cl_uncapped;
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config_auto, 1, compress_cpu_max_output_size, &cl_auto) == 0);
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config_uncapped, 1, compress_cpu_max_output_size, &cl_uncapped) ==
+          0);
+
+  // Both should produce multiple levels (sanity check the config is
+  // interesting)
+  CHECK(Fail, cl_auto.levels.nlod > 1);
+
+  // nlod must match
+  CHECK(Fail, cl_auto.levels.nlod == cl_uncapped.levels.nlod);
+
+  // Per-level chunk counts must match
+  for (int lv = 0; lv < cl_auto.levels.nlod; ++lv)
+    CHECK(Fail,
+          cl_auto.levels.chunk_count[lv] == cl_uncapped.levels.chunk_count[lv]);
+
+  // Total chunks must match
+  CHECK(Fail, cl_auto.levels.total_chunks == cl_uncapped.levels.total_chunks);
+
+  log_info("  nlod=%d (auto=0 and uncapped=%d agree)",
+           cl_auto.levels.nlod,
+           LOD_MAX_LEVELS);
+
+  computed_stream_layouts_free(&cl_auto);
+  computed_stream_layouts_free(&cl_uncapped);
+  log_info("  PASS");
+  return 0;
+Fail:
+  computed_stream_layouts_free(&cl_auto);
+  computed_stream_layouts_free(&cl_uncapped);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -512,5 +595,6 @@ main(int ac, char* av[])
   rc |= test_max_nlod_validation_rejection();
   rc |= test_max_nlod_one_via_layouts();
   rc |= test_max_nlod_positive_cap_via_layouts();
+  rc |= test_max_nlod_zero_equals_uncapped();
   return rc;
 }
