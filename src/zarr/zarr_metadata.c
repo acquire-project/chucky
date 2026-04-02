@@ -109,7 +109,7 @@ zarr_array_json(char* buf,
   if (codec != CODEC_NONE) {
     jw_object_begin(&jw);
     jw_key(&jw, "name");
-    jw_string(&jw, codec == CODEC_LZ4 ? "lz4" : "zstd");
+    jw_string(&jw, codec == CODEC_LZ4_RAW ? "lz4" : "zstd");
     jw_key(&jw, "configuration");
     jw_object_begin(&jw);
     jw_object_end(&jw);

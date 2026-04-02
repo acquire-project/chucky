@@ -894,7 +894,7 @@ parse_codec(const char* s, enum compression_codec* out)
 {
   static const char* const names[] = { "none", "lz4", "zstd" };
   static const enum compression_codec vals[] = { CODEC_NONE,
-                                                 CODEC_LZ4,
+                                                 CODEC_LZ4_RAW,
                                                  CODEC_ZSTD };
   int i = match_option(s, names, 3);
   if (i < 3) {

@@ -10,7 +10,8 @@ extern "C"
   enum compression_codec
   {
     CODEC_NONE,
-    CODEC_LZ4,
+    CODEC_LZ4_RAW, // Raw LZ4 block format (not framed). Not interoperable
+                    // with existing zarr v3 readers (e.g. numcodecs).
     CODEC_ZSTD,
   };
 

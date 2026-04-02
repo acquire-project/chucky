@@ -16,7 +16,7 @@ struct zarr_config
   uint8_t rank;
   const struct dimension* dimensions;
   int unbuffered;               // use FILE_FLAG_NO_BUFFERING or O_DIRECT
-  enum compression_codec codec; // CODEC_ZSTD, CODEC_LZ4, or CODEC_NONE
+  enum compression_codec codec; // CODEC_ZSTD, CODEC_LZ4_RAW, or CODEC_NONE
 };
 
 struct zarr_fs_sink;
@@ -54,7 +54,7 @@ struct zarr_multiscale_config
   const struct dimension* dimensions; // L0 dimensions
   int nlod;                           // number of levels (0 = auto)
   int unbuffered;                     // use unbuffered IO for shard data
-  enum compression_codec codec;       // CODEC_ZSTD, CODEC_LZ4, or CODEC_NONE
+  enum compression_codec codec;       // CODEC_ZSTD, CODEC_LZ4_RAW, or CODEC_NONE
 };
 
 struct zarr_fs_multiscale_sink;

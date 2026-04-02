@@ -171,6 +171,10 @@ validate_config(const struct tile_stream_configuration* config,
     }
   }
 
+  if (config->codec == CODEC_LZ4_RAW)
+    log_warn("LZ4 raw block format is not interoperable with existing zarr v3 "
+             "readers");
+
   {
     if (di->append_downsample) {
       enum lod_reduce_method m = config->append_reduce_method;

@@ -395,7 +395,7 @@ test_stream_lz4_roundtrip(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_LZ4,
+    .codec = CODEC_LZ4_RAW,
   };
 
   struct tile_stream_gpu* s = NULL;

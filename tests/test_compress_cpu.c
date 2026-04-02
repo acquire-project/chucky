@@ -73,7 +73,7 @@ test_codec_lz4(void)
   void* src = NULL;
   void* dst = NULL;
 
-  size_t max_out = compress_cpu_max_output_size(CODEC_LZ4, CHUNK_BYTES);
+  size_t max_out = compress_cpu_max_output_size(CODEC_LZ4_RAW, CHUNK_BYTES);
   CHECK(Fail, max_out > 0);
 
   src = malloc(BATCH_SIZE * CHUNK_BYTES);
@@ -85,7 +85,7 @@ test_codec_lz4(void)
     fill_pattern((char*)src + i * CHUNK_BYTES, CHUNK_BYTES, (uint8_t)i);
 
   CHECK(Fail,
-        compress_cpu(CODEC_LZ4,
+        compress_cpu(CODEC_LZ4_RAW,
                      src,
                      CHUNK_BYTES,
                      dst,
