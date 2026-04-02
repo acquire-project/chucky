@@ -173,6 +173,11 @@ validate_config(const struct tile_stream_configuration* config,
     goto Fail;
   }
 
+  if (config->max_nlod > 0 && config->max_nlod + 1 > LOD_MAX_LEVELS) {
+    log_error("max_nlod %d exceeds limit (%d)", config->max_nlod, LOD_MAX_LEVELS - 1);
+    goto Fail;
+  }
+
   {
     uint8_t na = dim_info_n_append(di);
     if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
