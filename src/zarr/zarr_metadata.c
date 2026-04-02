@@ -114,7 +114,7 @@ zarr_array_json(char* buf,
     if (codec_is_blosc(codec.id))
       jw_string(&jw, "blosc");
     else
-      jw_string(&jw, codec.id == CODEC_LZ4 ? "lz4" : "zstd");
+      jw_string(&jw, codec.id == CODEC_LZ4_NON_STANDARD ? "lz4" : "zstd");
     jw_key(&jw, "configuration");
     jw_object_begin(&jw);
     if (codec.id == CODEC_ZSTD) {

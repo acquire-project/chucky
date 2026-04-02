@@ -168,7 +168,7 @@ validate_config(const struct tile_stream_configuration* config,
                (unsigned long long)chunk_elements);
   }
 
-  if (config->codec.id == CODEC_LZ4 && config->codec.level == 0) {
+  if (config->codec.id == CODEC_LZ4_NON_STANDARD && config->codec.level == 0) {
     log_error("LZ4 requires level >= 1 (LZ4 HC levels 1..12)");
     goto Fail;
   }
@@ -195,6 +195,10 @@ validate_config(const struct tile_stream_configuration* config,
       goto Fail;
     }
   }
+
+  if (config->codec.id == CODEC_LZ4_NON_STANDARD)
+    log_warn("LZ4 raw block format is not interoperable with existing zarr v3 "
+             "readers");
 
   {
     if (di->append_downsample) {

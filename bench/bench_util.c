@@ -895,13 +895,15 @@ parse_codec(const char* s, struct codec_config* out)
   static const char* const names[] = {
     "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"
   };
-  static const enum compression_codec vals[] = {
-    CODEC_NONE, CODEC_LZ4, CODEC_ZSTD, CODEC_BLOSC_LZ4, CODEC_BLOSC_ZSTD
-  };
+  static const enum compression_codec vals[] = { CODEC_NONE,
+                                                 CODEC_LZ4_NON_STANDARD,
+                                                 CODEC_ZSTD,
+                                                 CODEC_BLOSC_LZ4,
+                                                 CODEC_BLOSC_ZSTD };
   int i = match_option(s, names, 5);
   if (i < 5) {
     out->id = vals[i];
-    if (out->id == CODEC_LZ4 && out->level == 0)
+    if (out->id == CODEC_LZ4_NON_STANDARD && out->level == 0)
       out->level = 1;
     if (codec_is_blosc(out->id) && out->level == 0)
       out->level = 3;
