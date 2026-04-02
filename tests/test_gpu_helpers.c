@@ -29,7 +29,7 @@ make_test_dims_3d_unbounded(struct dimension* dims)
 int
 make_test_config(struct tile_stream_configuration* config,
                  struct dimension* dims,
-                 enum compression_codec codec,
+                 struct codec_config codec,
                  uint8_t epochs_per_batch)
 {
   make_test_dims_3d(dims);

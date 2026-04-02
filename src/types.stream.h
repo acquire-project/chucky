@@ -39,7 +39,7 @@ struct tile_stream_configuration
   enum dtype dtype;
   uint8_t rank;
   struct dimension* dimensions;
-  enum compression_codec codec;
+  struct codec_config codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
@@ -57,7 +57,7 @@ struct tile_stream_status
   uint32_t epochs_per_batch;
   size_t max_compressed_size;
   enum dtype dtype;
-  enum compression_codec codec;
+  struct codec_config codec;
   size_t codec_batch_size;
   uint32_t batch_accumulated;
   int pool_current;

@@ -54,7 +54,7 @@ test_two_append_basic(void)
     .dtype = dtype_u16,
     .rank = rank,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   s = tile_stream_cpu_create(&config, &sink.base);
@@ -157,7 +157,7 @@ test_two_append_bounded(void)
     .dtype = dtype_u16,
     .rank = rank,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   s = tile_stream_cpu_create(&config, &sink.base);
@@ -242,7 +242,7 @@ test_two_append_layout_geometry(void)
     .dtype = dtype_u16,
     .rank = rank,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   s = tile_stream_cpu_create(&config, &sink.base);
@@ -321,7 +321,7 @@ test_two_append_multiscale(void)
     .dtype = dtype_u16,
     .rank = rank,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_max,
     .epochs_per_batch = 1,
   };
@@ -429,7 +429,7 @@ test_two_append_with_append_downsample(void)
     .dtype = dtype_u16,
     .rank = rank,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_max,
     .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,

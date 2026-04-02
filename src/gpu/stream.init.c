@@ -171,11 +171,17 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CHECK(FailPhase1, config && sink);
 
+  if (!codec_is_gpu_supported(config->codec.id)) {
+    log_error("codec %d is not supported on GPU", config->codec.id);
+    goto FailPhase1;
+  }
+
   // Phase 1: CPU-only layout computation.
   CHECK(FailPhase1,
-        compute_stream_layouts(
-          config, codec_alignment(config->codec), codec_max_output_size, &cl) ==
-          0);
+        compute_stream_layouts(config,
+                               codec_alignment(config->codec.id),
+                               codec_max_output_size,
+                               &cl) == 0);
 
   // Phase 2: Allocate and initialize tile_stream_gpu.
   struct tile_stream_gpu* out =
@@ -322,7 +328,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 
   struct computed_stream_layouts cl;
   if (compute_stream_layouts(
-        config, codec_alignment(config->codec), codec_max_output_size, &cl))
+        config, codec_alignment(config->codec.id), codec_max_output_size, &cl))
     return 1;
 
   const uint8_t rank = config->rank;
@@ -339,7 +345,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   const size_t chunk_bytes = chunk_stride * bytes_per_element;
   const uint64_t codec_batch = (uint64_t)K * total_chunks;
   const size_t nvcomp_temp =
-    codec_temp_bytes(config->codec, chunk_bytes, codec_batch);
+    codec_temp_bytes(config->codec.id, chunk_bytes, codec_batch);
 
   const size_t staging_bytes = 2 * buffer_capacity_bytes;
   const size_t staging_host = 2 * buffer_capacity_bytes;
@@ -353,7 +359,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   size_t codec_bytes = 0;
   codec_bytes += codec_batch * sizeof(size_t); // d_comp_sizes
   codec_bytes += codec_batch * sizeof(size_t); // d_uncomp_sizes
-  if (config->codec != CODEC_NONE)
+  if (config->codec.id != CODEC_NONE)
     codec_bytes += 2 * codec_batch * sizeof(void*); // d_ptrs
   codec_bytes += nvcomp_temp;
 

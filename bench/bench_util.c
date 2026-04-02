@@ -236,7 +236,7 @@ print_metric_row(const struct stream_metric* m)
 void
 log_bench_header(const struct tile_stream_layout* layout,
                  enum dtype dtype,
-                 enum compression_codec codec,
+                 struct codec_config codec,
                  size_t max_compressed_size,
                  size_t codec_batch_size,
                  size_t total_bytes,
@@ -256,7 +256,7 @@ log_bench_header(const struct tile_stream_layout* layout,
   print_report("  epoch:       %lu slots, %lu MiB pool",
                (unsigned long)layout->chunks_per_epoch,
                (unsigned long)(layout->chunk_pool_bytes / (1024 * 1024)));
-  if (codec != CODEC_NONE && max_compressed_size > 0)
+  if (codec.id != CODEC_NONE && max_compressed_size > 0)
     print_report("  compress:    max_output=%zu comp_pool=%zu MiB",
                  max_compressed_size,
                  (codec_batch_size * max_compressed_size) / (1024 * 1024));
@@ -890,18 +890,27 @@ parse_fill(const char* s)
 }
 
 static int
-parse_codec(const char* s, enum compression_codec* out)
+parse_codec(const char* s, struct codec_config* out)
 {
-  static const char* const names[] = { "none", "lz4", "zstd" };
-  static const enum compression_codec vals[] = { CODEC_NONE,
-                                                 CODEC_LZ4_RAW,
-                                                 CODEC_ZSTD };
-  int i = match_option(s, names, 3);
-  if (i < 3) {
-    *out = vals[i];
+  static const char* const names[] = {
+    "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"
+  };
+  static const enum compression_codec vals[] = {
+    CODEC_NONE, CODEC_LZ4_RAW, CODEC_ZSTD, CODEC_BLOSC_LZ4, CODEC_BLOSC_ZSTD
+  };
+  int i = match_option(s, names, 5);
+  if (i < 5) {
+    out->id = vals[i];
+    if (out->id == CODEC_LZ4_RAW && out->level == 0)
+      out->level = 1;
+    if (codec_is_blosc(out->id) && out->level == 0)
+      out->level = 3;
     return 1;
   }
-  fprintf(stderr, "Unknown codec: %s (expected none, lz4, zstd)\n", s);
+  fprintf(stderr,
+          "Unknown codec: %s (expected none, lz4, zstd, blosc-lz4, "
+          "blosc-zstd)\n",
+          s);
   return 0;
 }
 
@@ -976,7 +985,7 @@ bench_stream_main(int ac,
                   const uint64_t* shard_counts)
 {
   fill_fn fill = fill_xor;
-  enum compression_codec codec = CODEC_ZSTD;
+  struct codec_config codec = { .id = CODEC_ZSTD };
   enum lod_reduce_method reduce = lod_reduce_mean;
   const char* output_path = NULL;
   const char* s3_bucket = NULL;
@@ -1428,7 +1437,7 @@ bench_two_streams_main(int ac,
                        const uint64_t* shard_counts)
 {
   fill_fn fill = fill_xor;
-  enum compression_codec codec = CODEC_ZSTD;
+  struct codec_config codec = { .id = CODEC_ZSTD };
   enum lod_reduce_method reduce = lod_reduce_mean;
   enum dtype dtype = dtype_u16;
   size_t target_chunk_bytes = 0;

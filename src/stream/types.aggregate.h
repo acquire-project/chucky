@@ -52,6 +52,19 @@ extern "C"
     size_t* chunk_sizes; // [C] real pre-padding compressed sizes
   };
 
+  // Compute gather + perm LUTs for a batch of active_count epochs.
+  // pool_epochs[a] gives the compressed-pool epoch index for active slot a.
+  // Perm uses epoch-major shard order matching deliver_to_shards_batch():
+  //   target = si * active_count * cps_inner + a * cps_inner + c
+  struct level_geometry;
+  void aggregate_batch_luts(const struct aggregate_layout* agg,
+                            const struct level_geometry* levels,
+                            int lv,
+                            uint32_t active_count,
+                            const uint32_t* pool_epochs,
+                            uint32_t* out_gather,
+                            uint32_t* out_perm);
+
 #ifdef __cplusplus
 }
 #endif
