@@ -6,12 +6,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static int
-codec_is_blosc(enum compression_codec c)
-{
-  return c == CODEC_BLOSC_LZ4 || c == CODEC_BLOSC_ZSTD;
-}
-
 int
 zarr_root_json(char* buf, size_t cap)
 {

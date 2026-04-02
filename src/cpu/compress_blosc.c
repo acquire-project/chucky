@@ -4,9 +4,11 @@
 #include <stdatomic.h>
 
 int
-compress_blosc_available(void)
+compress_blosc_validate(struct codec_config codec)
 {
-  return 1;
+  if (!codec_is_blosc(codec.id))
+    return 1;
+  return 0;
 }
 
 size_t

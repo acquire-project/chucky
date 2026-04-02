@@ -168,13 +168,9 @@ validate_config(const struct tile_stream_configuration* config,
     goto Fail;
   }
 
-  {
-    enum compression_codec cid = config->codec.id;
-    if ((cid == CODEC_BLOSC_LZ4 || cid == CODEC_BLOSC_ZSTD) &&
-        config->codec.level > 9) {
-      log_error("blosc level must be 0..9 (got %d)", config->codec.level);
-      goto Fail;
-    }
+  if (codec_is_blosc(config->codec.id) && config->codec.level > 9) {
+    log_error("blosc level must be 0..9 (got %d)", config->codec.level);
+    goto Fail;
   }
 
   {

@@ -19,8 +19,7 @@
 static int
 write_zarr(const char* store_path, struct codec_config codec)
 {
-  if ((codec.id == CODEC_BLOSC_LZ4 || codec.id == CODEC_BLOSC_ZSTD) &&
-      !compress_blosc_available())
+  if (codec_is_blosc(codec.id) && compress_blosc_validate(codec))
     return 2;
 
   const int total = NT * NY * NX;

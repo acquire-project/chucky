@@ -3,9 +3,12 @@
 #include "util/prelude.h"
 
 int
-compress_blosc_available(void)
+compress_blosc_validate(struct codec_config codec)
 {
-  return 0;
+  if (!codec_is_blosc(codec.id))
+    return 1;
+  log_error("blosc codec requested but not compiled in");
+  return 1;
 }
 
 size_t

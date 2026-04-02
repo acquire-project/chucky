@@ -32,6 +32,10 @@ extern "C"
     enum codec_shuffle shuffle; // blosc only
   };
 
+  int codec_is_blosc(enum compression_codec c);
+
+  int codec_is_gpu_supported(enum compression_codec c);
+
 #ifdef __cplusplus
 }
 #endif

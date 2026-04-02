@@ -171,6 +171,11 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CHECK(FailPhase1, config && sink);
 
+  if (!codec_is_gpu_supported(config->codec.id)) {
+    log_error("codec %d is not supported on GPU", config->codec.id);
+    goto FailPhase1;
+  }
+
   // Phase 1: CPU-only layout computation.
   CHECK(FailPhase1,
         compute_stream_layouts(config,

@@ -4,7 +4,7 @@ add_src_lib(transpose_cpu SOURCES transpose.cpp transpose.h
 enable_openmp(transpose_cpu)
 
 add_src_lib(compress_cpu SOURCES compress.c compress.h compress_blosc.h
-    LINKS Lz4::Lz4 Zstd::Zstd chucky_log
+    LINKS codec_types Lz4::Lz4 Zstd::Zstd chucky_log
 )
 if(HAVE_BLOSC)
     target_sources(compress_cpu PRIVATE compress_blosc.c)

@@ -30,12 +30,9 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     return NULL;
   if (config->dtype == dtype_f16)
     return NULL;
-  if ((config->codec.id == CODEC_BLOSC_LZ4 ||
-       config->codec.id == CODEC_BLOSC_ZSTD) &&
-      !compress_blosc_available()) {
-    log_error("blosc codec requested but blosc is not available");
+  if (codec_is_blosc(config->codec.id) &&
+      compress_blosc_validate(config->codec))
     return NULL;
-  }
 
   struct tile_stream_cpu* s = (struct tile_stream_cpu*)calloc(1, sizeof(*s));
   if (!s)
