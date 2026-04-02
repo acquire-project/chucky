@@ -79,7 +79,8 @@ test_codec_lz4(void)
   void* src = NULL;
   void* dst = NULL;
 
-  size_t max_out = compress_cpu_max_output_size(CODEC_LZ4, CHUNK_BYTES);
+  size_t max_out =
+    compress_cpu_max_output_size(CODEC_LZ4_NON_STANDARD, CHUNK_BYTES);
   CHECK(Fail, max_out > 0);
 
   src = malloc(BATCH_SIZE * CHUNK_BYTES);
@@ -91,16 +92,17 @@ test_codec_lz4(void)
     fill_pattern((char*)src + i * CHUNK_BYTES, CHUNK_BYTES, (uint8_t)i);
 
   CHECK(Fail,
-        compress_cpu((struct codec_config){ .id = CODEC_LZ4, .level = 1 },
-                     src,
-                     CHUNK_BYTES,
-                     dst,
-                     max_out,
-                     comp_sizes,
-                     CHUNK_BYTES,
-                     BATCH_SIZE,
-                     1,
-                     omp_get_max_threads()) == 0);
+        compress_cpu(
+          (struct codec_config){ .id = CODEC_LZ4_NON_STANDARD, .level = 1 },
+          src,
+          CHUNK_BYTES,
+          dst,
+          max_out,
+          comp_sizes,
+          CHUNK_BYTES,
+          BATCH_SIZE,
+          1,
+          omp_get_max_threads()) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -190,7 +192,10 @@ test_nthreads_1(void)
 {
   log_info("=== test_compress_cpu_nthreads_1 ===");
 
-  enum { MT_BATCH = 2048 };
+  enum
+  {
+    MT_BATCH = 2048
+  };
   void* src = NULL;
   void* dst = NULL;
   void* recovered = NULL;
@@ -225,11 +230,14 @@ test_nthreads_1(void)
 
   for (int i = 0; i < MT_BATCH; ++i) {
     CHECK(Fail, comp_sizes[i] > 0 && comp_sizes[i] <= max_out);
-    size_t rc = ZSTD_decompress(
-      recovered, CHUNK_BYTES, (const char*)dst + (size_t)i * max_out, comp_sizes[i]);
+    size_t rc = ZSTD_decompress(recovered,
+                                CHUNK_BYTES,
+                                (const char*)dst + (size_t)i * max_out,
+                                comp_sizes[i]);
     CHECK(Fail, !ZSTD_isError(rc) && rc == CHUNK_BYTES);
     CHECK(Fail,
-          memcmp((char*)src + (size_t)i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
+          memcmp(
+            (char*)src + (size_t)i * CHUNK_BYTES, recovered, CHUNK_BYTES) == 0);
   }
 
   free(src);
