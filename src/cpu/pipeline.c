@@ -94,7 +94,8 @@ aggregate_and_deliver_batch(int lv,
                                lvl->agg_layout,
                                active_count,
                                &ws,
-                               &ar))
+                               &ar,
+                               p->max_threads))
     return 1;
 
   if (p->metrics) {
@@ -129,7 +130,8 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                      p->comp_sizes,
                      p->chunk_bytes,
                      n_epochs * total_chunks,
-                     p->bytes_per_element))
+                     p->bytes_per_element,
+                     p->max_threads))
       return 1;
 
     if (p->metrics) {
@@ -217,7 +219,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                        p->lod_values,
                        p->scatter_lut,
                        p->scatter_batch_offsets,
-                       p->dtype) == 0);
+                       p->dtype,
+                       p->max_threads) == 0);
 
   if (p->metrics) {
     float scatter_ms = (float)(platform_toc(&clk) * 1000.0);
@@ -232,7 +235,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
   CHECK(Error,
         lod_cpu_reduce(
-          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method) == 0);
+          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method, p->max_threads) == 0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -260,7 +263,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                               p->append_accum,
                               p->append_counts,
                               p->dtype,
-                              p->append_reduce_method) == 0);
+                              p->append_reduce_method,
+                              p->max_threads) == 0);
 
     for (int lv = 1; lv < p->cl->plan.nlod; ++lv) {
       p->append_counts[lv]++;
@@ -273,7 +277,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                                   lv,
                                   p->append_counts[lv],
                                   p->dtype,
-                                  p->append_reduce_method) == 0);
+                                  p->append_reduce_method,
+                                  p->max_threads) == 0);
         p->append_counts[lv] = 0;
         active_levels_mask |= (1u << lv);
       }
@@ -306,7 +311,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                                    layout,
                                    p->morton_lut[lv],
                                    p->lod_batch_offsets[lv],
-                                   p->dtype) == 0);
+                                   p->dtype,
+                                   p->max_threads) == 0);
   }
 
   if (p->metrics) {
@@ -408,7 +414,8 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
                                 lv,
                                 p->append_counts[lv],
                                 p->dtype,
-                                p->append_reduce_method) == 0);
+                                p->append_reduce_method,
+                                p->max_threads) == 0);
       p->append_counts[lv] = 0;
 
       // Scatter emitted level from morton space to chunk pool.
@@ -421,7 +428,8 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
                                      layout_lv,
                                      p->morton_lut[lv],
                                      p->lod_batch_offsets[lv],
-                                     p->dtype) == 0);
+                                     p->dtype,
+                                     p->max_threads) == 0);
       drain_mask |= (1u << lv);
     }
   }

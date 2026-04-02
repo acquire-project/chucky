@@ -492,6 +492,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
     .shard_order_sizes_bytes = ms->shard_order_sizes,
     .sink = desc->sink,
     .shard_alignment_bytes = desc->config.shard_alignment,
+    .max_threads = desc->config.max_threads,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
@@ -526,6 +527,7 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
     .scatter_batch_offsets = ms->scatter_batch_offsets,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
+    .max_threads = desc->config.max_threads,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
@@ -675,7 +677,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
                         desc->cursor_elements,
                         desc->layout.lifted_rank,
                         desc->layout.lifted_shape,
-                        desc->layout.lifted_strides))
+                        desc->layout.lifted_strides,
+                        desc->config.max_threads))
         return multiarray_writer_fail_at(src, end);
     }
 
@@ -794,6 +797,7 @@ drain_append_all(struct multiarray_tile_stream_cpu* ms)
       .append_accum = desc->append_accum,
       .append_counts = desc->append_counts,
       .chunk_pool = ms->chunk_pool,
+      .max_threads = desc->config.max_threads,
       .metrics = met,
     };
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {

@@ -41,7 +41,8 @@ transpose_cpu(void* dst,
               uint64_t i_offset,
               uint8_t lifted_rank,
               const uint64_t* lifted_shape,
-              const int64_t* lifted_strides)
+              const int64_t* lifted_strides,
+              int max_threads)
 {
   if (bpe != 1 && bpe != 2 && bpe != 4 && bpe != 8)
     return 1;
@@ -61,7 +62,8 @@ transpose_cpu(void* dst,
 
   const int64_t inner_stride = strides[rank - 1];
 
-#pragma omp parallel if (n > 1024)
+  int nt = max_threads > 0 ? max_threads : omp_get_max_threads();
+#pragma omp parallel if (n > 1024) num_threads(nt)
   {
     int tid = omp_get_thread_num();
     int nthreads = omp_get_num_threads();

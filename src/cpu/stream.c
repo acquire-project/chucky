@@ -8,7 +8,6 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,9 +33,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (codec_is_blosc(config->codec.id) &&
       compress_blosc_validate(config->codec))
     return NULL;
-
-  if (config->max_threads > 0)
-    omp_set_num_threads(config->max_threads);
 
   struct tile_stream_cpu* s = (struct tile_stream_cpu*)calloc(1, sizeof(*s));
   if (!s)
@@ -466,6 +462,7 @@ make_flush_params(struct tile_stream_cpu* s)
     .shard_order_sizes_bytes = s->shard_order_sizes,
     .sink = s->shard_sink,
     .shard_alignment_bytes = s->config.shard_alignment,
+    .max_threads = s->config.max_threads,
     .metrics = &s->metrics,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -499,6 +496,7 @@ make_scatter_params(struct tile_stream_cpu* s)
     .scatter_batch_offsets = s->scatter_batch_offsets,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
+    .max_threads = s->config.max_threads,
     .metrics = &s->metrics,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -572,7 +570,8 @@ cpu_append(struct writer* self, struct slice input)
                             s->cursor_elements,
                             s->layout.lifted_rank,
                             s->layout.lifted_shape,
-                            s->layout.lifted_strides) == 0);
+                            s->layout.lifted_strides,
+                            s->config.max_threads) == 0);
       }
 
       float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -688,6 +687,7 @@ cpu_flush(struct writer* self)
       .append_accum = s->append_accum,
       .append_counts = s->append_counts,
       .chunk_pool = s->chunk_pool,
+      .max_threads = s->config.max_threads,
       .metrics = &s->metrics,
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {

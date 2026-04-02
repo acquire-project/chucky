@@ -45,8 +45,8 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   CHECK(Fail, values);
   CHECK(Fail,
         lod_cpu_gather(
-          &plan, src, values, scatter_lut, batch_offsets, dtype_f32) == 0);
-  CHECK(Fail, lod_cpu_reduce(&plan, values, dtype_f32, method) == 0);
+          &plan, src, values, scatter_lut, batch_offsets, dtype_f32, 0) == 0);
+  CHECK(Fail, lod_cpu_reduce(&plan, values, dtype_f32, method, 0) == 0);
 
   // Verify L0: all source values should be present in the morton buffer.
   struct lod_span l0 = lod_spans_at(&plan.levels, 0);
@@ -121,8 +121,8 @@ test_scatter_reduce_u16(void)
   CHECK(Fail, values);
   CHECK(Fail,
         lod_cpu_gather(
-          &plan, src, values, scatter_lut, batch_offsets, dtype_u16) == 0);
-  CHECK(Fail, lod_cpu_reduce(&plan, values, dtype_u16, lod_reduce_min) == 0);
+          &plan, src, values, scatter_lut, batch_offsets, dtype_u16, 0) == 0);
+  CHECK(Fail, lod_cpu_reduce(&plan, values, dtype_u16, lod_reduce_min, 0) == 0);
 
   // Basic sanity: L1 min values should be <= any L0 value.
   uint16_t* uv = (uint16_t*)values;
@@ -179,7 +179,7 @@ test_f16_rejected(void)
   values = calloc(total, 2); // f16 = 2 bytes
   CHECK(Fail, values);
   int rc = lod_cpu_gather(
-    &plan, values, values, scatter_lut, batch_offsets, dtype_f16);
+    &plan, values, values, scatter_lut, batch_offsets, dtype_f16, 0);
   CHECK(Fail, rc != 0); // should fail
   free(scatter_lut);
   free(batch_offsets);

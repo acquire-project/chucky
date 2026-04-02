@@ -35,4 +35,3 @@ add_src_lib(stream_cpu SOURCES stream.c ../stream.cpu.h stream.internal.h
     LINKS transpose_cpu pipeline_cpu
           stream_config dimension shard_delivery platform chucky_log
 )
-enable_openmp(stream_cpu)

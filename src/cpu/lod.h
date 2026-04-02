@@ -17,7 +17,8 @@ extern "C"
   int lod_cpu_reduce(const struct lod_plan* p,
                      void* values,
                      enum dtype dtype,
-                     enum lod_reduce_method method);
+                     enum lod_reduce_method method,
+                     int max_threads);
 
   // Build morton-to-chunk-pool LUT for level lv.
   // chunk_lut must have room for lod_nelem[lv] entries.
@@ -38,7 +39,8 @@ extern "C"
                                const struct tile_stream_layout* layout,
                                const uint32_t* chunk_lut,
                                const uint64_t* batch_chunk_offsets,
-                               enum dtype dtype);
+                               enum dtype dtype,
+                               int max_threads);
 
   // Append fold: accumulate inner-reduced data (levels 1+) from the morton
   // buffer into the accumulator. On first call (counts[lv]==0) copies;
@@ -50,7 +52,8 @@ extern "C"
                           void* accum,
                           const uint32_t* counts,
                           enum dtype dtype,
-                          enum lod_reduce_method method);
+                          enum lod_reduce_method method,
+                          int max_threads);
 
   // Append emit: finalize accumulator for level lv back to morton buffer.
   // For float mean: divides by count. For int mean/min/max: copies.
@@ -60,7 +63,8 @@ extern "C"
                           int lv,
                           uint32_t count,
                           enum dtype dtype,
-                          enum lod_reduce_method method);
+                          enum lod_reduce_method method,
+                          int max_threads);
 
   // Build scatter LUT for L0: maps morton position to source linear offset
   // within one batch. lut must have room for lod_nelem[0] entries.
@@ -80,7 +84,8 @@ extern "C"
                      void* dst,
                      const uint32_t* scatter_lut,
                      const uint64_t* batch_offsets,
-                     enum dtype dtype);
+                     enum dtype dtype,
+                     int max_threads);
 
 #ifdef __cplusplus
 }
