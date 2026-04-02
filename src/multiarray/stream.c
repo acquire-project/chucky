@@ -10,6 +10,7 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,6 +44,7 @@ struct multiarray_tile_stream_cpu
   int active;            // -1 = none
   int luts_computed_for; // -1 = none, array index of last LUT computation
   int metrics_enabled;
+  int nthreads; // resolved at init: always > 0
 
   struct array_descriptor* arrays;
 
@@ -340,6 +342,8 @@ multiarray_tile_stream_cpu_create(
   ms->n_arrays = n_arrays;
   ms->active = -1;
   ms->luts_computed_for = -1;
+  ms->nthreads = configs[0].max_threads > 0 ? configs[0].max_threads
+                                             : omp_get_max_threads();
 
   ms->arrays = (struct array_descriptor*)calloc(
     (size_t)n_arrays, sizeof(struct array_descriptor));
@@ -457,6 +461,7 @@ recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
                             &desc->levels,
                             desc->batch_active_count,
                             desc->agg_layout,
+                            ms->nthreads,
                             &luts);
   ms->luts_computed_for = array_index;
 }
@@ -492,6 +497,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
     .shard_order_sizes_bytes = ms->shard_order_sizes,
     .sink = desc->sink,
     .shard_alignment_bytes = desc->config.shard_alignment,
+    .nthreads = ms->nthreads,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
@@ -526,6 +532,7 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
     .scatter_batch_offsets = ms->scatter_batch_offsets,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
+    .nthreads = ms->nthreads,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
@@ -675,7 +682,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
                         desc->cursor_elements,
                         desc->layout.lifted_rank,
                         desc->layout.lifted_shape,
-                        desc->layout.lifted_strides))
+                        desc->layout.lifted_strides,
+                        ms->nthreads))
         return multiarray_writer_fail_at(src, end);
     }
 
@@ -794,6 +802,7 @@ drain_append_all(struct multiarray_tile_stream_cpu* ms)
       .append_accum = desc->append_accum,
       .append_counts = desc->append_counts,
       .chunk_pool = ms->chunk_pool,
+      .nthreads = ms->nthreads,
       .metrics = met,
     };
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {

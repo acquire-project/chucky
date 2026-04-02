@@ -3,6 +3,7 @@
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
+#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -76,7 +77,8 @@ aggregate_cpu_into(const void* compressed,
                    const size_t* comp_sizes,
                    const struct aggregate_layout* layout,
                    struct aggregate_cpu_workspace* ws,
-                   struct aggregate_result* result)
+                   struct aggregate_result* result,
+                   int nthreads)
 {
   const uint64_t M = layout->chunks_per_epoch;
   const uint64_t C = layout->covering_count;
@@ -107,7 +109,7 @@ aggregate_cpu_into(const void* compressed,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if (M > 1024)
+#pragma omp parallel for schedule(static) if (M > 1024) num_threads(nthreads)
     for (i = 0; i < (int)M; ++i) {
       size_t nbytes = comp_sizes[i];
       if (nbytes == 0)
@@ -131,7 +133,8 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          const struct aggregate_layout* layout,
                          uint32_t n_active,
                          struct aggregate_cpu_workspace* ws,
-                         struct aggregate_result* result)
+                         struct aggregate_result* result,
+                         int nthreads)
 {
   const uint64_t M = layout->chunks_per_epoch;
   const uint64_t C = layout->covering_count;
@@ -166,7 +169,7 @@ aggregate_cpu_batch_into(const void* compressed_base,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if (batch_M > 1024)
+#pragma omp parallel for schedule(static) if (batch_M > 1024) num_threads(nthreads)
     for (i = 0; i < (int)batch_M; ++i) {
       size_t nbytes = comp_sizes_base[gather[i]];
       if (nbytes == 0)
