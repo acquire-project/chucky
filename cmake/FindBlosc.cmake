@@ -35,7 +35,7 @@ if(Blosc_FOUND AND NOT TARGET Blosc::Blosc)
 
     # Static blosc bundles lz4/zstd/zlib/snappy — re-link them so they
     # appear after libblosc.a and satisfy its undefined references.
-    if(BLOSC_LIBRARY MATCHES "\\.a$")
+    if(BLOSC_LIBRARY MATCHES "\\.(a|lib)$")
         set(_blosc_deps Lz4::Lz4 Zstd::Zstd)
 
         find_package(ZLIB QUIET)
