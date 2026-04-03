@@ -21,6 +21,8 @@ struct lod_plan
   int ndim;
   int nlod;
   uint64_t shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
+  uint32_t chunk_sizes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
+  uint32_t cps[LOD_MAX_LEVELS][LOD_MAX_NDIM]; // clamped chunks_per_shard
 
   uint32_t lod_mask;
   int lod_ndim;

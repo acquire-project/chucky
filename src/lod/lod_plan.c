@@ -253,6 +253,15 @@ lod_plan_init_shapes(struct lod_plan* p,
     ++p->nlod;
   }
 
+  // Clamp chunk_sizes: at coarse levels the array may be smaller than chunk.
+  for (int lv = 0; lv < p->nlod; ++lv) {
+    for (int d = 0; d < ndim; ++d) {
+      uint32_t cs = chunk_shape ? (uint32_t)chunk_shape[d] : 1;
+      uint64_t s = p->shapes[lv][d];
+      p->chunk_sizes[lv][d] = (s > 0 && s < cs) ? (uint32_t)s : cs;
+    }
+  }
+
   return 0;
 }
 
@@ -274,6 +283,27 @@ dims_lod_params(const struct dimension* dims,
       *lod_mask |= (1u << d);
 }
 
+// Populate plan->cps (clamped chunks_per_shard) from L0 config and
+// the already-computed plan->chunk_sizes and plan->shapes.
+static void
+lod_plan_compute_cps(struct lod_plan* p,
+                     const struct dimension* dims,
+                     uint8_t rank)
+{
+  for (int lv = 0; lv < p->nlod; ++lv) {
+    for (int d = 0; d < rank; ++d) {
+      uint64_t s = p->shapes[lv][d];
+      uint32_t cs = p->chunk_sizes[lv][d];
+      uint64_t chunk_count = (s == 0) ? 1 : ceildiv(s, cs);
+      uint64_t l0_cps = dims[d].chunks_per_shard;
+      if (l0_cps == 0)
+        l0_cps = chunk_count;
+      p->cps[lv][d] =
+        (uint32_t)(chunk_count < l0_cps ? chunk_count : l0_cps);
+    }
+  }
+}
+
 int
 lod_plan_init_from_dims(struct lod_plan* p,
                         const struct dimension* dims,
@@ -285,7 +315,10 @@ lod_plan_init_from_dims(struct lod_plan* p,
   uint32_t lod_mask;
   uint8_t na = dims_n_append(dims, rank);
   dims_lod_params(dims, rank, na, shape, chunk_shape, &lod_mask);
-  return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
+  if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
+    return 1;
+  lod_plan_compute_cps(p, dims, rank);
+  return 0;
 }
 
 int
@@ -302,7 +335,10 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
   dims_lod_params(dims, rank, n_append, shape, chunk_shape, &lod_mask);
   for (int d = 0; d < n_append; ++d)
     shape[d] = dims[d].chunk_size;
-  return lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels);
+  if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
+    return 1;
+  lod_plan_compute_cps(p, dims, rank);
+  return 0;
 }
 
 void

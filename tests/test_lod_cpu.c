@@ -576,6 +576,79 @@ Fail:
   return 1;
 }
 
+// Regression: chunk_sizes and chunks_per_shard must be clamped at coarse
+// LOD levels where the array is smaller than the L0 chunk/shard config.
+static int
+test_chunk_clamp_at_coarse_levels(void)
+{
+  log_info("=== test_chunk_clamp_at_coarse_levels ===");
+
+  // 2D: shape=(10,10), chunk=(8,8), lod on both dims.
+  // L0: shape=(10,10), chunk=(8,8), chunk_count=(2,2)
+  // L1: shape=(5,5),   chunk=min(8,5)=5, chunk_count=1
+  uint64_t shape[] = { 10, 10 };
+  uint64_t chunk[] = { 8, 8 };
+  uint32_t mask = 0x3; // both dims in LOD
+
+  struct lod_plan plan;
+  CHECK(Fail,
+        lod_plan_init_shapes(&plan, 2, shape, chunk, mask, LOD_MAX_LEVELS) ==
+          0);
+  CHECK(Fail, plan.nlod >= 2);
+
+  // L0: chunk_sizes == L0 chunk config
+  CHECK(Fail, plan.chunk_sizes[0][0] == 8);
+  CHECK(Fail, plan.chunk_sizes[0][1] == 8);
+
+  // L1: shape=(5,5), chunk clamped to 5
+  CHECK(Fail, plan.shapes[1][0] == 5);
+  CHECK(Fail, plan.shapes[1][1] == 5);
+  CHECK(Fail, plan.chunk_sizes[1][0] == 5);
+  CHECK(Fail, plan.chunk_sizes[1][1] == 5);
+
+  // Now test cps via _from_dims with a config that uses chunks_per_shard.
+  // We need n_append >= 1 with chunk_size=1 on dim 0 for _from_dims.
+  struct dimension dims2[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 10,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 10,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  struct lod_plan plan2;
+  CHECK(Fail, lod_plan_init_from_dims(&plan2, dims2, 3, LOD_MAX_LEVELS) == 0);
+  CHECK(Fail, plan2.nlod >= 2);
+
+  // L0: cps = L0 config
+  CHECK(Fail, plan2.cps[0][1] == 2);
+  CHECK(Fail, plan2.cps[0][2] == 2);
+
+  // L1: shape halved => (5,5) on LOD dims; chunk clamped to 5;
+  // chunk_count = ceil(5/5) = 1; cps = min(2,1) = 1
+  CHECK(Fail, plan2.chunk_sizes[1][1] == 5);
+  CHECK(Fail, plan2.chunk_sizes[1][2] == 5);
+  CHECK(Fail, plan2.cps[1][1] == 1);
+  CHECK(Fail, plan2.cps[1][2] == 1);
+
+  lod_plan_free(&plan2);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -596,5 +669,6 @@ main(int ac, char* av[])
   rc |= test_max_nlod_one_via_layouts();
   rc |= test_max_nlod_positive_cap_via_layouts();
   rc |= test_max_nlod_zero_equals_uncapped();
+  rc |= test_chunk_clamp_at_coarse_levels();
   return rc;
 }

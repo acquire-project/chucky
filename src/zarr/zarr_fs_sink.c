@@ -734,8 +734,8 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
 
   // Create one zarr_fs_sink per level
   for (int lv = 0; lv < plan.nlod; ++lv) {
-    // Build per-level dimensions with downsampled sizes.
-    // When dim 0 is unbounded (size=0), set level shape[0]=0 (will grow).
+    // Build per-level dimensions with downsampled sizes and clamped
+    // chunk_size / chunks_per_shard from the plan.
     struct dimension lv_dims[MAX_ZARR_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
       lv_dims[d] = cfg->dimensions[d];
@@ -743,6 +743,8 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
         lv_dims[d].size = 0;
       else
         lv_dims[d].size = plan.shapes[lv][d];
+      lv_dims[d].chunk_size = plan.chunk_sizes[lv][d];
+      lv_dims[d].chunks_per_shard = plan.cps[lv][d];
     }
 
     char name[8];
