@@ -1,3 +1,4 @@
+#include "defs.limits.h"
 #include "util/prelude.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
@@ -208,15 +209,21 @@ Fail:
 static int
 test_zarr_root_json(void)
 {
-  char buf[256];
+  char buf[ZARR_GROUP_JSON_CAP];
   int len = zarr_root_json(buf, sizeof(buf));
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 
+  // Check all required fields are present
   CHECK(Fail, strstr(buf, "\"zarr_format\":3"));
   CHECK(Fail, strstr(buf, "\"node_type\":\"group\""));
-  CHECK(Fail, strstr(buf, "\"attributes\":{}"));
   CHECK(Fail, strstr(buf, "\"consolidated_metadata\":null"));
+  CHECK(Fail, strstr(buf, "\"attributes\":{}"));
+
+  // Check no duplicate "attributes" key
+  char* first = strstr(buf, "\"attributes\"");
+  CHECK(Fail, first);
+  CHECK(Fail, !strstr(first + 1, "\"attributes\""));
 
   return 0;
 
