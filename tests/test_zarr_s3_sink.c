@@ -114,7 +114,6 @@ check_group_zarr_json(const char* prefix, char** out)
 {
   char key[4096];
   snprintf(key, sizeof(key), "%s/zarr.json", prefix);
-  CHECK(Fail, s3_exists(key));
 
   uint8_t* data = NULL;
   size_t len = 0;
@@ -126,10 +125,12 @@ check_group_zarr_json(const char* prefix, char** out)
   data = tmp;
   data[len] = '\0';
 
-  CHECK(Fail_data, strstr((char*)data, "\"zarr_format\":3"));
-  CHECK(Fail_data, strstr((char*)data, "\"node_type\":\"group\""));
-  CHECK(Fail_data, strstr((char*)data, "\"consolidated_metadata\":null"));
-  CHECK(Fail_data, strstr((char*)data, "\"attributes\""));
+  int ok = strstr((char*)data, "\"zarr_format\":3") &&
+           strstr((char*)data, "\"node_type\":\"group\"") &&
+           strstr((char*)data, "\"consolidated_metadata\":null") &&
+           strstr((char*)data, "\"attributes\":{");
+  if (!ok)
+    goto Fail_data;
 
   *out = (char*)data;
   return 0;
@@ -453,13 +454,13 @@ test_multiscale_metadata(void)
   {
     char* data;
     CHECK(Fail2, check_group_zarr_json("test-multiscale", &data) == 0);
-    CHECK(Fail2, strstr(data, "\"ome\""));
-    CHECK(Fail2, strstr(data, "\"multiscales\""));
-    CHECK(Fail2, strstr(data, "\"version\":\"0.5\""));
-    CHECK(Fail2, strstr(data, "\"path\":\"0\""));
-    CHECK(Fail2, strstr(data, "\"path\":\"1\""));
-    CHECK(Fail2, strstr(data, "\"coordinateTransformations\""));
+    int ok = strstr(data, "\"ome\"") && strstr(data, "\"multiscales\"") &&
+             strstr(data, "\"version\":\"0.5\"") &&
+             strstr(data, "\"path\":\"0\"") &&
+             strstr(data, "\"path\":\"1\"") &&
+             strstr(data, "\"coordinateTransformations\"");
     free(data);
+    CHECK(Fail2, ok);
   }
 
   // Check L0 array zarr.json
@@ -483,6 +484,86 @@ Fail:
   return 1;
 }
 
+// --- Test: multiscale metadata with array_name ---
+
+static int
+test_multiscale_metadata_named(void)
+{
+  log_info("=== test_s3_multiscale_metadata_named ===");
+
+  struct dimension dims[] = {
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "z",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  set_s3_creds();
+
+  struct zarr_s3_multiscale_config cfg = {
+    .bucket = S3_BUCKET,
+    .prefix = "test-ms-named",
+    .array_name = "ms",
+    .region = "us-east-1",
+    .endpoint = s3_endpoint(),
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .nlod = 0,
+  };
+
+  struct zarr_s3_multiscale_sink* ms = zarr_s3_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  // Root zarr.json should be a plain group (attributes:{})
+  {
+    char* data;
+    CHECK(Fail_sink,
+          check_group_zarr_json("test-ms-named", &data) == 0);
+    int ok = strstr(data, "\"attributes\":{}") != NULL;
+    free(data);
+    CHECK(Fail_sink, ok);
+  }
+
+  // Sub-group zarr.json should have OME multiscales
+  {
+    char* data;
+    CHECK(Fail_sink,
+          check_group_zarr_json("test-ms-named/ms", &data) == 0);
+    int ok = strstr(data, "\"attributes\":{\"ome\"") != NULL &&
+             strstr(data, "\"multiscales\"") != NULL;
+    free(data);
+    CHECK(Fail_sink, ok);
+  }
+
+  // L0 array zarr.json
+  CHECK(Fail_sink, s3_exists("test-ms-named/ms/0/zarr.json"));
+
+  zarr_s3_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail_sink:
+  zarr_s3_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 // --- Main ---
 
 int
@@ -499,5 +580,6 @@ main(void)
   rc |= test_shard_write();
   rc |= test_concurrent_finalize();
   rc |= test_multiscale_metadata();
+  rc |= test_multiscale_metadata_named();
   return rc;
 }

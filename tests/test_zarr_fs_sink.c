@@ -43,7 +43,7 @@ read_file_all(const char* path, uint8_t** out, size_t* out_len)
 // On success returns 0 and sets *out (caller must free).
 // On failure returns non-zero.
 static int
-check_group_zarr_json(const char* dir, char** out, size_t bufsz)
+check_group_zarr_json(const char* dir, char** out)
 {
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", dir);
@@ -54,11 +54,11 @@ check_group_zarr_json(const char* dir, char** out, size_t bufsz)
   size_t len;
   if (read_file_all(path, &data, &len))
     return 1;
-  data[len < bufsz - 1 ? len : bufsz - 1] = '\0';
+  data[len] = '\0';
 
   int ok = strstr((char*)data, "\"zarr_format\":3") &&
            strstr((char*)data, "\"node_type\":\"group\"") &&
-           strstr((char*)data, "\"attributes\"") &&
+           strstr((char*)data, "\"attributes\":{") &&
            strstr((char*)data, "\"consolidated_metadata\":null");
   if (!ok) {
     free(data);
@@ -107,7 +107,7 @@ test_metadata(const char* tmpdir)
 
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
     free(data);
   }
 
@@ -404,14 +404,14 @@ test_multiscale_metadata(const char* tmpdir)
   // Check root zarr.json has multiscales attribute
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
-    CHECK(Fail2, strstr(data, "\"ome\""));
-    CHECK(Fail2, strstr(data, "\"multiscales\""));
-    CHECK(Fail2, strstr(data, "\"version\":\"0.5\""));
-    CHECK(Fail2, strstr(data, "\"path\":\"0\""));
-    CHECK(Fail2, strstr(data, "\"path\":\"1\""));
-    CHECK(Fail2, strstr(data, "\"coordinateTransformations\""));
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
+    int ok = strstr(data, "\"ome\"") && strstr(data, "\"multiscales\"") &&
+             strstr(data, "\"version\":\"0.5\"") &&
+             strstr(data, "\"path\":\"0\"") &&
+             strstr(data, "\"path\":\"1\"") &&
+             strstr(data, "\"coordinateTransformations\"");
     free(data);
+    CHECK(Fail2, ok);
   }
 
   // Check L0 array zarr.json
@@ -499,16 +499,16 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
 
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
 
     // L0: scale [1,1,1]
-    CHECK(Fail2, strstr(data, "\"scale\":[1.0,1.0,1.0]"));
     // L1: z=1, y=2, x=2
-    CHECK(Fail2, strstr(data, "\"scale\":[1.0,2.0,2.0]"));
     // L2: z=1, y=4 (not 3!), x=4 (not 3!)
-    CHECK(Fail2, strstr(data, "\"scale\":[1.0,4.0,4.0]"));
-
+    int ok = strstr(data, "\"scale\":[1.0,1.0,1.0]") &&
+             strstr(data, "\"scale\":[1.0,2.0,2.0]") &&
+             strstr(data, "\"scale\":[1.0,4.0,4.0]");
     free(data);
+    CHECK(Fail2, ok);
   }
 
   zarr_fs_multiscale_sink_destroy(ms);
@@ -566,12 +566,12 @@ test_multiscale_unit_scale(const char* tmpdir)
 
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
 
     // L0 scale: z=0.5*1=0.5, y=0.3*1=0.3, x=1.0*1=1.0
-    CHECK(Fail2, strstr(data, "\"scale\":[0.5,0.3,1.0]"));
-
+    int ok = strstr(data, "\"scale\":[0.5,0.3,1.0]") != NULL;
     free(data);
+    CHECK(Fail2, ok);
   }
 
   zarr_fs_multiscale_sink_destroy(ms);
@@ -631,7 +631,7 @@ test_metadata_two_append(const char* tmpdir)
 
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
     free(data);
   }
 
@@ -846,7 +846,7 @@ test_multiscale_unbounded(const char* tmpdir)
   // Check root zarr.json exists with multiscales
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
     int has_ms = strstr(data, "\"multiscales\"") != NULL;
     int has_p0 = strstr(data, "\"path\":\"0\"") != NULL;
     free(data);
@@ -2013,7 +2013,7 @@ test_nested_array_name(const char* tmpdir)
   // Check root group zarr.json
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
     free(data);
   }
 
@@ -2022,7 +2022,7 @@ test_nested_array_name(const char* tmpdir)
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s/path", tmpdir);
     char* data;
-    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(dir, &data) == 0);
     free(data);
   }
 
@@ -2031,7 +2031,7 @@ test_nested_array_name(const char* tmpdir)
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s/path/to", tmpdir);
     char* data;
-    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(dir, &data) == 0);
     free(data);
   }
 
@@ -2098,7 +2098,7 @@ test_nested_multiscale_array_name(const char* tmpdir)
   // Check root group zarr.json
   {
     char* data;
-    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data) == 0);
     free(data);
   }
 
@@ -2107,7 +2107,7 @@ test_nested_multiscale_array_name(const char* tmpdir)
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s/path", tmpdir);
     char* data;
-    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(dir, &data) == 0);
     free(data);
   }
 
@@ -2116,7 +2116,7 @@ test_nested_multiscale_array_name(const char* tmpdir)
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s/path/to", tmpdir);
     char* data;
-    CHECK(Fail2, check_group_zarr_json(dir, &data, 4096) == 0);
+    CHECK(Fail2, check_group_zarr_json(dir, &data) == 0);
     free(data);
   }
 
@@ -2125,9 +2125,10 @@ test_nested_multiscale_array_name(const char* tmpdir)
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s/path/to/group", tmpdir);
     char* data;
-    CHECK(Fail2, check_group_zarr_json(dir, &data, 8192) == 0);
-    CHECK(Fail2, strstr(data, "\"multiscales\""));
+    CHECK(Fail2, check_group_zarr_json(dir, &data) == 0);
+    int ok = strstr(data, "\"multiscales\"") != NULL;
     free(data);
+    CHECK(Fail2, ok);
   }
 
   zarr_fs_multiscale_sink_destroy(ms);
