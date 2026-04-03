@@ -3,6 +3,7 @@
 #include "dtype.h"
 #include "zarr/json_writer.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -120,6 +121,8 @@ zarr_array_json(char* buf,
     if (codec.id == CODEC_ZSTD) {
       jw_key(&jw, "level");
       jw_int(&jw, codec.level);
+      jw_key(&jw, "checksum");
+      jw_bool(&jw, false);
     }
     if (codec_is_blosc(codec.id)) {
       jw_key(&jw, "cname");
