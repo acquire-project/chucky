@@ -497,11 +497,11 @@ test_dim0_multi_epoch_levels(void)
     }
     log_info("  level %d: shape=(%lu,%lu,%lu,%lu,%lu) shards=%d",
              lv,
-             (unsigned long)plan.shapes[lv][0],
-             (unsigned long)plan.shapes[lv][1],
-             (unsigned long)plan.shapes[lv][2],
-             (unsigned long)plan.shapes[lv][3],
-             (unsigned long)plan.shapes[lv][4],
+             (unsigned long)plan.levels.shapes[lv][0],
+             (unsigned long)plan.levels.shapes[lv][1],
+             (unsigned long)plan.levels.shapes[lv][2],
+             (unsigned long)plan.levels.shapes[lv][3],
+             (unsigned long)plan.levels.shapes[lv][4],
              num_shards_per_level[lv]);
   }
 

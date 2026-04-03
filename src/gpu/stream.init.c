@@ -423,7 +423,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     const struct lod_plan* plan = &cl.plan;
 
     lod_device += cl.layouts[0].epoch_elements * bytes_per_element;
-    uint64_t total_lod_vals = plan->levels.ends[plan->nlod - 1];
+    uint64_t total_lod_vals = plan->level_spans.ends[plan->nlod - 1];
     lod_device += total_lod_vals * bytes_per_element;
 
     lod_device += rank * sizeof(uint64_t);

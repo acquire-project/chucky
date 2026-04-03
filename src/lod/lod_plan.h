@@ -16,12 +16,14 @@ struct lod_spans
   uint64_t n;
 };
 
-// WARNING: This struct is ~49 KB. Callers that stack-allocate it should be
-// aware of stack usage, especially in deeply recursive or thread-heavy code.
-struct lod_plan
+// Per-level chunk geometry (immutable after create).
+struct level_geometry
 {
-  int ndim;
   int nlod;
+  int enable_multiscale;
+  uint64_t total_chunks;
+  uint64_t chunk_offset[LOD_MAX_LEVELS];
+  uint64_t chunk_count[LOD_MAX_LEVELS];
 
   // Per-level full shape (all dims). Populated by init_shapes and above.
   uint64_t shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
@@ -33,6 +35,13 @@ struct lod_plan
   // Per-level chunks_per_shard, clamped to min(config_cps, chunk_count).
   // Only populated by _from_dims / _from_epoch_dims (needs dims[d].chunks_per_shard).
   uint32_t chunks_per_shard[LOD_MAX_LEVELS][LOD_MAX_NDIM];
+};
+
+struct lod_plan
+{
+  int ndim;
+  int nlod;
+  struct level_geometry levels;
 
   uint32_t lod_mask;
   int lod_ndim;
@@ -42,11 +51,10 @@ struct lod_plan
   uint64_t batch_shape[LOD_MAX_NDIM];
   uint64_t batch_count;
 
-  uint64_t lod_shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
   uint64_t lod_nelem[LOD_MAX_LEVELS];
 
   // Heap-allocated arrays. Populated by init and above (not by init_shapes).
-  struct lod_spans levels;
+  struct lod_spans level_spans;
   struct lod_spans lod_levels;
   uint64_t* ends;
 };
@@ -81,7 +89,7 @@ lod_plan_init(struct lod_plan* p,
 // Compute only nlod and per-level shapes (no ends/counts/levels).
 // Use when you only need the level geometry (e.g. for metadata).
 // Populates: ndim, nlod, shapes, chunk_sizes, lod_mask, lod_ndim,
-// lod_map, batch_ndim, batch_map, batch_shape, batch_count, lod_shapes.
+// lod_map, batch_ndim, batch_map, batch_shape, batch_count.
 int
 lod_plan_init_shapes(struct lod_plan* p,
                      int ndim,
@@ -113,6 +121,24 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
 
 void
 lod_plan_free(struct lod_plan* p);
+
+// Get lod_shape[lv][k] = shapes[lv][lod_map[k]].
+// lod_shapes was previously stored but is now derived from shapes + lod_map.
+static inline uint64_t
+lod_plan_lod_shape(const struct lod_plan* p, int lv, int k)
+{
+  return p->levels.shapes[lv][p->lod_map[k]];
+}
+
+// Fill dst[0..lod_ndim-1] with projected lod shapes for level lv.
+static inline void
+lod_plan_fill_lod_shapes(const struct lod_plan* p,
+                         int lv,
+                         uint64_t* dst)
+{
+  for (int k = 0; k < p->lod_ndim; ++k)
+    dst[k] = p->levels.shapes[lv][p->lod_map[k]];
+}
 
 // Shard geometry computed from array shape, chunk sizes, and shard config.
 struct shard_geometry

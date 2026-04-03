@@ -751,9 +751,9 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
       if (d == 0 && cfg->dimensions[0].size == 0)
         lv_dims[d].size = 0;
       else
-        lv_dims[d].size = plan.shapes[lv][d];
-      lv_dims[d].chunk_size = plan.chunk_sizes[lv][d];
-      lv_dims[d].chunks_per_shard = plan.chunks_per_shard[lv][d];
+        lv_dims[d].size = plan.levels.shapes[lv][d];
+      lv_dims[d].chunk_size = plan.levels.chunk_sizes[lv][d];
+      lv_dims[d].chunks_per_shard = plan.levels.chunks_per_shard[lv][d];
     }
 
     char name[8];

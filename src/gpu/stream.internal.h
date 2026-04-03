@@ -62,7 +62,7 @@ struct lod_state
   CUdeviceptr d_morton; // morton-ordered LOD output (all levels packed)
 
   CUdeviceptr d_full_shape;    // device copy of shapes[0]
-  CUdeviceptr d_lod_shape;     // device copy of lod_shapes[0]
+  CUdeviceptr d_lod_shape;     // device copy of LOD-projected shapes[0]
   CUdeviceptr d_gather_lut;    // u32, lod_nelem[0] entries
   CUdeviceptr d_batch_offsets; // u32, batch_count entries
 

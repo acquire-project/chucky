@@ -20,16 +20,6 @@ struct tile_stream_layout
   size_t chunk_pool_bytes;
 };
 
-// Per-level chunk geometry (immutable after create)
-struct level_geometry
-{
-  int nlod;
-  int enable_multiscale;
-  uint64_t total_chunks;
-  uint64_t chunk_offset[LOD_MAX_LEVELS];
-  uint64_t chunk_count[LOD_MAX_LEVELS];
-};
-
 // Per-level pre-computed layout information (CPU only, no GPU pointers).
 struct level_layout_info
 {

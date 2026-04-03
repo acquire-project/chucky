@@ -172,7 +172,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
     const size_t morton_bytes =
-      lod->plan.levels.ends[lod->plan.nlod - 1] * bytes_per_element;
+      lod->plan.level_spans.ends[lod->plan.nlod - 1] * bytes_per_element;
     const size_t unified_pool_bytes =
       levels->total_chunks * layout->chunk_stride * bytes_per_element;
 

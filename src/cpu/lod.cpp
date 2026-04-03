@@ -154,8 +154,11 @@ template<typename T>
 static void
 scatter_typed(const lod_plan* p, const T* src, T* dst, int nt)
 {
-  const uint64_t* full_shape = p->shapes[0];
-  uint64_t n = lod_span_len(lod_spans_at(&p->levels, 0));
+  const uint64_t* full_shape = p->levels.shapes[0];
+  uint64_t n = lod_span_len(lod_spans_at(&p->level_spans, 0));
+
+  uint64_t lod_shape0[LOD_MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, 0, lod_shape0);
 
 #pragma omp parallel for schedule(static) if(n > 1024) num_threads(nt)
   for (uint64_t i = 0; i < n; ++i) {
@@ -168,7 +171,7 @@ scatter_typed(const lod_plan* p, const T* src, T* dst, int nt)
     }
     uint64_t b = plan_batch_index(p, full_coords);
     plan_extract_lod(p, full_coords, lod_coords);
-    uint64_t pos = morton_rank(p->lod_ndim, p->lod_shapes[0], lod_coords, 0);
+    uint64_t pos = morton_rank(p->lod_ndim, lod_shape0, lod_coords, 0);
     dst[b * p->lod_nelem[0] + pos] = src[i];
   }
 }
@@ -180,14 +183,15 @@ build_scatter_lut(const lod_plan* p, uint32_t* lut, int nthreads)
 {
   const int ndim = p->ndim;
   const int lod_ndim = p->lod_ndim;
-  const uint64_t* lod_shape = p->lod_shapes[0];
+  uint64_t lod_shape[LOD_MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, 0, lod_shape);
   const uint64_t lod_count = p->lod_nelem[0];
 
   // Compute full-shape row-major strides.
   uint64_t full_strides[LOD_MAX_NDIM];
   full_strides[ndim - 1] = 1;
   for (int d = ndim - 2; d >= 0; --d)
-    full_strides[d] = full_strides[d + 1] * p->shapes[0][d + 1];
+    full_strides[d] = full_strides[d + 1] * p->levels.shapes[0][d + 1];
 
   // Precompute LOD strides in the source linear layout.
   uint64_t lod_src_strides[LOD_MAX_NDIM];
@@ -218,7 +222,7 @@ build_scatter_batch_offsets(const lod_plan* p, uint64_t* offsets, int nthreads)
   uint64_t full_strides[LOD_MAX_NDIM];
   full_strides[ndim - 1] = 1;
   for (int d = ndim - 2; d >= 0; --d)
-    full_strides[d] = full_strides[d + 1] * p->shapes[0][d + 1];
+    full_strides[d] = full_strides[d + 1] * p->levels.shapes[0][d + 1];
 
   for (uint64_t b = 0; b < p->batch_count; ++b) {
     uint64_t rest = b;
@@ -267,8 +271,8 @@ reduce_typed(const lod_plan* p, T* values, lod_reduce_method method, int nt)
     lod_span seg = lod_segment(p, l);
     uint64_t src_ds = p->lod_nelem[l];
     uint64_t dst_ds = p->lod_nelem[l + 1];
-    lod_span src_lv = lod_spans_at(&p->levels, l);
-    lod_span dst_lv = lod_spans_at(&p->levels, l + 1);
+    lod_span src_lv = lod_spans_at(&p->level_spans, l);
+    lod_span dst_lv = lod_spans_at(&p->level_spans, l + 1);
 
     // Batches and destination elements within a level are independent.
     uint64_t total_work = p->batch_count * dst_ds;
@@ -319,7 +323,8 @@ build_chunk_lut(const lod_plan* p,
                 uint32_t* chunk_lut,
                 int nthreads)
 {
-  const uint64_t* lod_shape = p->lod_shapes[lv];
+  uint64_t lod_shape[LOD_MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, lv, lod_shape);
   const uint64_t lod_count = p->lod_nelem[lv];
   const int lod_ndim = p->lod_ndim;
 
@@ -501,7 +506,7 @@ lod_cpu_morton_to_chunks(const lod_plan* p,
                          int nthreads)
 {
   const uint64_t lod_count = p->lod_nelem[lv];
-  const lod_span lv_span = lod_spans_at(&p->levels, (uint64_t)lv);
+  const lod_span lv_span = lod_spans_at(&p->level_spans, (uint64_t)lv);
   const size_t bytes_per_element = dtype_bpe(dtype);
   const char* lv_values = (const char*)values + lv_span.beg * bytes_per_element;
 
@@ -539,7 +544,7 @@ lod_cpu_append_fold(const lod_plan* p,
   uint64_t accum_offset = 0;
 
   for (int lv = 1; lv < p->nlod; ++lv) {
-    lod_span lev = lod_spans_at(&p->levels, (uint64_t)lv);
+    lod_span lev = lod_spans_at(&p->level_spans, (uint64_t)lv);
     uint64_t n = p->batch_count * p->lod_nelem[lv];
     const char* src = (const char*)morton_values + lev.beg * bytes_per_element;
     char* dst = (char*)accum + accum_offset * bytes_per_element;
@@ -566,7 +571,7 @@ lod_cpu_append_emit(const lod_plan* p,
                   int nthreads)
 {
   const size_t bytes_per_element = dtype_bpe(dtype);
-  lod_span lev = lod_spans_at(&p->levels, (uint64_t)lv);
+  lod_span lev = lod_spans_at(&p->level_spans, (uint64_t)lv);
   uint64_t n = p->batch_count * p->lod_nelem[lv];
 
   // Compute accum offset for this level

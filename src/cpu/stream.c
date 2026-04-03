@@ -134,7 +134,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->linear = calloc(s->layout.epoch_elements, bytes_per_element);
     CHECK(Fail, s->linear);
 
-    uint64_t total_lod_elements = s->cl.plan.levels.ends[s->cl.plan.nlod - 1];
+    uint64_t total_lod_elements = s->cl.plan.level_spans.ends[s->cl.plan.nlod - 1];
     s->lod_values = calloc(total_lod_elements, bytes_per_element);
     CHECK(Fail, s->lod_values);
 
@@ -356,7 +356,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
     size_t lod = 0;
     if (cl->levels.enable_multiscale) {
       lod += cl->layouts[0].epoch_elements * bytes_per_element; // linear
-      uint64_t total_lod_elements = cl->plan.levels.ends[cl->plan.nlod - 1];
+      uint64_t total_lod_elements = cl->plan.level_spans.ends[cl->plan.nlod - 1];
       lod += total_lod_elements * bytes_per_element; // lod_values
 
       if (cl->dims.append_downsample) {
@@ -617,7 +617,7 @@ cpu_append(struct writer* self, struct slice input)
 
       if (s->lod_values) {
         size_t lod_bytes =
-          s->cl.plan.levels.ends[s->cl.plan.nlod - 1] * bytes_per_element;
+          s->cl.plan.level_spans.ends[s->cl.plan.nlod - 1] * bytes_per_element;
         memset(s->lod_values, 0, lod_bytes);
       }
 

@@ -44,7 +44,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
   lod_cpu_build_scatter_batch_offsets(
     &plan, batch_offsets, omp_get_max_threads());
-  size_t total = plan.levels.ends[plan.nlod - 1];
+  size_t total = plan.level_spans.ends[plan.nlod - 1];
   values = calloc(total, dtype_bpe(dtype_f32));
   CHECK(Fail, values);
   CHECK(Fail,
@@ -60,7 +60,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
           &plan, values, dtype_f32, method, omp_get_max_threads()) == 0);
 
   // Verify L0: all source values should be present in the morton buffer.
-  struct lod_span l0 = lod_spans_at(&plan.levels, 0);
+  struct lod_span l0 = lod_spans_at(&plan.level_spans, 0);
   uint64_t l0_count = lod_span_len(l0);
   float* fv = (float*)values;
 
@@ -74,7 +74,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
 
   // Verify higher levels have fewer elements.
   for (int lv = 1; lv < plan.nlod; ++lv) {
-    struct lod_span lvs = lod_spans_at(&plan.levels, (uint64_t)lv);
+    struct lod_span lvs = lod_spans_at(&plan.level_spans, (uint64_t)lv);
     CHECK(Fail, lod_span_len(lvs) < l0_count);
   }
 
@@ -128,7 +128,7 @@ test_scatter_reduce_u16(void)
   lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
   lod_cpu_build_scatter_batch_offsets(
     &plan, batch_offsets, omp_get_max_threads());
-  size_t total = plan.levels.ends[plan.nlod - 1];
+  size_t total = plan.level_spans.ends[plan.nlod - 1];
   values = calloc(total, dtype_bpe(dtype_u16));
   CHECK(Fail, values);
   CHECK(Fail,
@@ -146,8 +146,8 @@ test_scatter_reduce_u16(void)
 
   // Basic sanity: L1 min values should be <= any L0 value.
   uint16_t* uv = (uint16_t*)values;
-  struct lod_span l0 = lod_spans_at(&plan.levels, 0);
-  struct lod_span l1 = lod_spans_at(&plan.levels, 1);
+  struct lod_span l0 = lod_spans_at(&plan.level_spans, 0);
+  struct lod_span l1 = lod_spans_at(&plan.level_spans, 1);
 
   uint16_t l0_min = uv[l0.beg];
   for (uint64_t i = l0.beg + 1; i < l0.end; ++i)
@@ -196,7 +196,7 @@ test_f16_rejected(void)
   lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
   lod_cpu_build_scatter_batch_offsets(
     &plan, batch_offsets, omp_get_max_threads());
-  size_t total = plan.levels.ends[plan.nlod - 1];
+  size_t total = plan.level_spans.ends[plan.nlod - 1];
   values = calloc(total, 2); // f16 = 2 bytes
   CHECK(Fail, values);
   int rc = lod_cpu_gather(&plan,
@@ -597,14 +597,14 @@ test_chunk_clamp_at_coarse_levels(void)
   CHECK(Fail, plan.nlod >= 2);
 
   // L0: chunk_sizes == L0 chunk config
-  CHECK(Fail, plan.chunk_sizes[0][0] == 8);
-  CHECK(Fail, plan.chunk_sizes[0][1] == 8);
+  CHECK(Fail, plan.levels.chunk_sizes[0][0] == 8);
+  CHECK(Fail, plan.levels.chunk_sizes[0][1] == 8);
 
   // L1: shape=(5,5), chunk clamped to 5
-  CHECK(Fail, plan.shapes[1][0] == 5);
-  CHECK(Fail, plan.shapes[1][1] == 5);
-  CHECK(Fail, plan.chunk_sizes[1][0] == 5);
-  CHECK(Fail, plan.chunk_sizes[1][1] == 5);
+  CHECK(Fail, plan.levels.shapes[1][0] == 5);
+  CHECK(Fail, plan.levels.shapes[1][1] == 5);
+  CHECK(Fail, plan.levels.chunk_sizes[1][0] == 5);
+  CHECK(Fail, plan.levels.chunk_sizes[1][1] == 5);
 
   // Now test chunks_per_shard via _from_dims.
   // We need n_append >= 1 with chunk_size=1 on dim 0 for _from_dims.
@@ -683,25 +683,25 @@ test_from_epoch_dims_clamp(void)
   CHECK(Fail, plan.nlod >= 2);
 
   // L0: shapes = (1, 10, 6), chunk_sizes = (1, 8, 4)
-  CHECK(Fail, plan.shapes[0][1] == 10);
-  CHECK(Fail, plan.shapes[0][2] == 6);
-  CHECK(Fail, plan.chunk_sizes[0][0] == 1);
-  CHECK(Fail, plan.chunk_sizes[0][1] == 8);
-  CHECK(Fail, plan.chunk_sizes[0][2] == 4);
+  CHECK(Fail, plan.levels.shapes[0][1] == 10);
+  CHECK(Fail, plan.levels.shapes[0][2] == 6);
+  CHECK(Fail, plan.levels.chunk_sizes[0][0] == 1);
+  CHECK(Fail, plan.levels.chunk_sizes[0][1] == 8);
+  CHECK(Fail, plan.levels.chunk_sizes[0][2] == 4);
 
   // L1: shapes = (1, 5, 3), chunk_sizes clamped to (1, 5, 3)
-  CHECK(Fail, plan.shapes[1][1] == 5);
-  CHECK(Fail, plan.shapes[1][2] == 3);
-  CHECK(Fail, plan.chunk_sizes[1][1] == 5); // clamped: min(8, 5)
-  CHECK(Fail, plan.chunk_sizes[1][2] == 3); // clamped: min(4, 3)
+  CHECK(Fail, plan.levels.shapes[1][1] == 5);
+  CHECK(Fail, plan.levels.shapes[1][2] == 3);
+  CHECK(Fail, plan.levels.chunk_sizes[1][1] == 5); // clamped: min(8, 5)
+  CHECK(Fail, plan.levels.chunk_sizes[1][2] == 3); // clamped: min(4, 3)
 
   // chunks_per_shard at L0: cps=0 => all chunks: ceildiv(10,8)=2, ceildiv(6,4)=2
-  CHECK(Fail, plan.chunks_per_shard[0][1] == 2);
-  CHECK(Fail, plan.chunks_per_shard[0][2] == 2);
+  CHECK(Fail, plan.levels.chunks_per_shard[0][1] == 2);
+  CHECK(Fail, plan.levels.chunks_per_shard[0][2] == 2);
 
   // chunks_per_shard at L1: ceildiv(5,5)=1, ceildiv(3,3)=1
-  CHECK(Fail, plan.chunks_per_shard[1][1] == 1);
-  CHECK(Fail, plan.chunks_per_shard[1][2] == 1);
+  CHECK(Fail, plan.levels.chunks_per_shard[1][1] == 1);
+  CHECK(Fail, plan.levels.chunks_per_shard[1][2] == 1);
 
   lod_plan_free(&plan);
   log_info("  PASS");

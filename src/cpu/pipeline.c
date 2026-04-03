@@ -241,7 +241,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
     float ms = (float)(platform_toc(&clk) * 1000.0);
     accumulate_metric_ms(&p->metrics->lod_reduce,
                          ms,
-                         p->cl->plan.levels.ends[p->cl->plan.nlod - 1] *
+                         p->cl->plan.level_spans.ends[p->cl->plan.nlod - 1] *
                            bytes_per_element,
                          0);
   }

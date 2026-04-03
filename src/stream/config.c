@@ -268,7 +268,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                na,
                                bytes_per_element,
                                dims,
-                               out->plan.shapes[lv],
+                               out->plan.levels.shapes[lv],
                                codec_alignment,
                                storage_order) == 0);
 
@@ -308,7 +308,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     array_shape[d] = dims[d].size;
 
   for (int lv = 0; lv < out->levels.nlod; ++lv) {
-    const uint64_t* shape = (lv == 0) ? array_shape : out->plan.shapes[lv];
+    const uint64_t* shape = (lv == 0) ? array_shape : out->plan.levels.shapes[lv];
     struct shard_geometry geo;
     shard_geometry_compute(&geo, rank, na, shape, chunk_size, cps);
 

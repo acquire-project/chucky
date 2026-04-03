@@ -18,14 +18,16 @@ upload_plan_shapes(struct lod_state* lod, uint8_t rank)
   CU(Fail, cuMemAlloc(&lod->d_full_shape, rank * sizeof(uint64_t)));
   CU(Fail,
      cuMemcpyHtoD(
-       lod->d_full_shape, lod->plan.shapes[0], rank * sizeof(uint64_t)));
+       lod->d_full_shape, lod->plan.levels.shapes[0], rank * sizeof(uint64_t)));
 
   if (lod->plan.lod_ndim > 0) {
+    uint64_t lod_shape0[LOD_MAX_NDIM];
+    lod_plan_fill_lod_shapes(&lod->plan, 0, lod_shape0);
     CU(Fail,
        cuMemAlloc(&lod->d_lod_shape, lod->plan.lod_ndim * sizeof(uint64_t)));
     CU(Fail,
        cuMemcpyHtoD(lod->d_lod_shape,
-                    lod->plan.lod_shapes[0],
+                    lod_shape0,
                     lod->plan.lod_ndim * sizeof(uint64_t)));
   }
 
@@ -62,13 +64,16 @@ build_gather_lut_with_strides(struct lod_state* lod,
   CU(Fail,
      cuMemcpyHtoD(d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
 
+  uint64_t lod_shape0[LOD_MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, 0, lod_shape0);
+
   CU(Fail, cuMemAlloc(&lod->d_gather_lut, p->lod_nelem[0] * sizeof(uint32_t)));
   CHECK(Fail,
         lod_build_gather_lut(lod->d_gather_lut,
                              lod->d_lod_shape,
                              d_lod_strides,
                              p->lod_ndim,
-                             p->lod_shapes[0],
+                             lod_shape0,
                              p->lod_nelem[0],
                              0) == 0);
 
@@ -162,9 +167,13 @@ init_reduce_level_arrays(struct lod_state* lod)
     CU(Fail,
        cuMemAlloc(&lod->d_child_shapes[l],
                   lod->plan.lod_ndim * sizeof(uint64_t)));
+    uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
+    lod_plan_fill_lod_shapes(&lod->plan, l, child_lod);
+    lod_plan_fill_lod_shapes(&lod->plan, l + 1, parent_lod);
+
     CU(Fail,
        cuMemcpyHtoD(lod->d_child_shapes[l],
-                    lod->plan.lod_shapes[l],
+                    child_lod,
                     lod->plan.lod_ndim * sizeof(uint64_t)));
 
     CU(Fail,
@@ -172,7 +181,7 @@ init_reduce_level_arrays(struct lod_state* lod)
                   lod->plan.lod_ndim * sizeof(uint64_t)));
     CU(Fail,
        cuMemcpyHtoD(lod->d_parent_shapes[l],
-                    lod->plan.lod_shapes[l + 1],
+                    parent_lod,
                     lod->plan.lod_ndim * sizeof(uint64_t)));
 
     CU(Fail, cuMemAlloc(&lod->d_level_ends[l], n_parents * sizeof(uint64_t)));
@@ -219,6 +228,8 @@ build_chunk_scatter_with_temps(struct lod_state* lod,
 {
   CUdeviceptr d_chunk_sizes = 0, d_chunk_strides = 0;
   uint64_t lod_count = p->lod_nelem[lv];
+  uint64_t lod_shape_lv[LOD_MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, lv, lod_shape_lv);
 
   uint64_t lod_chunk_sizes[LOD_MAX_NDIM];
   int64_t lod_chunk_strides[2 * LOD_MAX_NDIM];
@@ -247,7 +258,7 @@ build_chunk_scatter_with_temps(struct lod_state* lod,
                                     d_chunk_sizes,
                                     d_chunk_strides,
                                     p->lod_ndim,
-                                    p->lod_shapes[lv],
+                                    lod_shape_lv,
                                     lod_count,
                                     0) == 0);
 
@@ -277,8 +288,10 @@ build_morton_lut_for_level(struct lod_state* lod,
     const size_t lod_shape_bytes = p->lod_ndim * sizeof(uint64_t);
     CU(Fail, cuMemAlloc(&d_lod_shape_lv, lod_shape_bytes));
     free_shape = 1;
+    uint64_t lod_shape_buf[LOD_MAX_NDIM];
+    lod_plan_fill_lod_shapes(p, lv, lod_shape_buf);
     CU(FailShape,
-       cuMemcpyHtoD(d_lod_shape_lv, p->lod_shapes[lv], lod_shape_bytes));
+       cuMemcpyHtoD(d_lod_shape_lv, lod_shape_buf, lod_shape_bytes));
   }
 
   CHECK(FailShape,
@@ -388,7 +401,7 @@ lod_state_init_buffers(struct lod_state* lod, enum dtype dtype)
   size_t linear_bytes = lod->layouts[0].epoch_elements * bytes_per_element;
   CU(Fail, cuMemAlloc(&lod->d_linear, linear_bytes));
 
-  uint64_t total_vals = lod->plan.levels.ends[lod->plan.nlod - 1];
+  uint64_t total_vals = lod->plan.level_spans.ends[lod->plan.nlod - 1];
   size_t morton_bytes = total_vals * bytes_per_element;
   CU(Fail, cuMemAlloc(&lod->d_morton, morton_bytes));
 
@@ -411,7 +424,7 @@ lod_state_init_accumulators(struct lod_state* lod,
 {
   struct lod_plan* p = &lod->plan;
 
-  lod->append_accum.morton_offset = p->levels.ends[0];
+  lod->append_accum.morton_offset = p->level_spans.ends[0];
 
   lod->append_accum.total_elements = 0;
   for (int lv = 1; lv < p->nlod; ++lv)
@@ -559,7 +572,7 @@ run_append_fold_emit(struct lod_state* lod,
     uint32_t period = 1u << lv;
 
     if (lod->append_accum.counts[lv] >= period) {
-      struct lod_span lev = lod_spans_at(&p->levels, lv);
+      struct lod_span lev = lod_spans_at(&p->level_spans, lv);
       uint64_t n_elements = p->batch_count * p->lod_nelem[lv];
 
       uint64_t accum_offset = 0;
@@ -609,7 +622,7 @@ scatter_morton_to_chunks(struct lod_state* lod,
     if (!(active_levels_mask & (1u << lv)))
       continue;
 
-    struct lod_span lev = lod_spans_at(&p->levels, lv);
+    struct lod_span lev = lod_spans_at(&p->level_spans, lv);
     CUdeviceptr dst = (CUdeviceptr)pool_epoch + levels->chunk_offset[lv] *
                                                   chunk_stride *
                                                   bytes_per_element;
@@ -662,18 +675,22 @@ lod_run_epoch(struct lod_state* lod,
     struct lod_span seg = lod_segment(p, l);
     uint64_t n_parents = lod_span_len(seg);
 
+    uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
+    lod_plan_fill_lod_shapes(p, l, child_lod);
+    lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
+
     CHECK(Error,
           lod_fill_ends_gpu(lod->d_level_ends[l],
                             p->lod_ndim,
                             lod->d_child_shapes[l],
                             lod->d_parent_shapes[l],
-                            p->lod_shapes[l],
-                            p->lod_shapes[l + 1],
+                            child_lod,
+                            parent_lod,
                             n_parents,
                             compute) == 0);
 
-    struct lod_span src_level = lod_spans_at(&p->levels, l);
-    struct lod_span dst_level = lod_spans_at(&p->levels, l + 1);
+    struct lod_span src_level = lod_spans_at(&p->level_spans, l);
+    struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
     CHECK(Error,
           lod_reduce(lod->d_morton,

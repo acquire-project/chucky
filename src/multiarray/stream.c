@@ -205,7 +205,7 @@ init_array_descriptor(struct array_descriptor* desc,
       maxima->linear_bytes, desc->layout.epoch_elements * bytes_per_element);
 
     uint64_t total_lod_elements =
-      desc->cl.plan.levels.ends[desc->cl.plan.nlod - 1];
+      desc->cl.plan.level_spans.ends[desc->cl.plan.nlod - 1];
     maxima->lod_values_bytes =
       max_sz(maxima->lod_values_bytes, total_lod_elements * bytes_per_element);
     maxima->scatter_lut_count =
@@ -605,7 +605,7 @@ clear_lod_values(struct multiarray_tile_stream_cpu* ms,
 {
   if (desc->levels.enable_multiscale && ms->lod_values) {
     size_t lod_bytes =
-      desc->cl.plan.levels.ends[desc->cl.plan.nlod - 1] * bytes_per_element;
+      desc->cl.plan.level_spans.ends[desc->cl.plan.nlod - 1] * bytes_per_element;
     memset(ms->lod_values, 0, lod_bytes);
   }
 }
