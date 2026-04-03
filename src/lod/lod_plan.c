@@ -263,8 +263,10 @@ lod_plan_init_shapes(struct lod_plan* p,
   // Clamp chunk_sizes: at coarse levels the array may be smaller than chunk.
   for (int lv = 0; lv < p->nlod; ++lv) {
     for (int d = 0; d < ndim; ++d) {
+      assert(!chunk_shape || chunk_shape[d] <= UINT32_MAX);
       uint32_t cs = chunk_shape ? (uint32_t)chunk_shape[d] : 1;
       uint64_t s = p->levels.shapes[lv][d];
+      assert(s <= UINT32_MAX);
       p->levels.chunk_sizes[lv][d] = (s > 0 && s < cs) ? (uint32_t)s : cs;
     }
   }
@@ -307,7 +309,9 @@ fill_chunks_per_shard(struct lod_plan* p,
       uint64_t cps = dims[d].chunks_per_shard;
       if (cps == 0)
         cps = cc;
-      p->levels.chunks_per_shard[lv][d] = (uint32_t)(cc < cps ? cc : cps);
+      uint64_t val = cc < cps ? cc : cps;
+      assert(val <= UINT32_MAX);
+      p->levels.chunks_per_shard[lv][d] = (uint32_t)val;
     }
   }
 }

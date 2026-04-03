@@ -627,23 +627,25 @@ test_chunk_clamp_at_coarse_levels(void)
 
   struct lod_plan plan2;
   CHECK(Fail, lod_plan_init_from_dims(&plan2, dims2, 3, LOD_MAX_LEVELS) == 0);
-  CHECK(Fail, plan2.nlod >= 2);
+  CHECK(Fail2, plan2.nlod >= 2);
 
   // L0: chunks_per_shard = L0 config
-  CHECK(Fail, plan2.chunks_per_shard[0][1] == 2);
-  CHECK(Fail, plan2.chunks_per_shard[0][2] == 2);
+  CHECK(Fail2, plan2.levels.chunks_per_shard[0][1] == 2);
+  CHECK(Fail2, plan2.levels.chunks_per_shard[0][2] == 2);
 
   // L1: shape halved => (5,5) on LOD dims; chunk clamped to 5;
   // chunk_count = ceil(5/5) = 1; chunks_per_shard = min(2,1) = 1
-  CHECK(Fail, plan2.chunk_sizes[1][1] == 5);
-  CHECK(Fail, plan2.chunk_sizes[1][2] == 5);
-  CHECK(Fail, plan2.chunks_per_shard[1][1] == 1);
-  CHECK(Fail, plan2.chunks_per_shard[1][2] == 1);
+  CHECK(Fail2, plan2.levels.chunk_sizes[1][1] == 5);
+  CHECK(Fail2, plan2.levels.chunk_sizes[1][2] == 5);
+  CHECK(Fail2, plan2.levels.chunks_per_shard[1][1] == 1);
+  CHECK(Fail2, plan2.levels.chunks_per_shard[1][2] == 1);
 
   lod_plan_free(&plan2);
   log_info("  PASS");
   return 0;
 
+Fail2:
+  lod_plan_free(&plan2);
 Fail:
   log_error("  FAIL");
   return 1;

@@ -2140,6 +2140,90 @@ Fail:
   return 1;
 }
 
+// --- Test: chunk_size clamped in zarr metadata at coarse LOD levels ---
+// When a downsampled dim's shape < chunk_size, the written chunk_size
+// must reflect the smaller value (issue #44).
+
+static int
+test_multiscale_chunk_clamp_metadata(const char* tmpdir)
+{
+  log_info("=== test_multiscale_chunk_clamp_metadata ===");
+
+  // dim0: not downsampled (y=32, chunk=8)
+  // dim1: downsampled (x=10, chunk=8)
+  //   L0: x=10 -> chunk_size=8 (fits: ceildiv(10,8)=2 chunks)
+  //   L1: x=5  -> chunk_size must be clamped to 5 (5 < 8)
+  struct dimension dims[] = {
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 0 },
+    { .size = 10,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 2,
+    .dimensions = dims,
+    .nlod = 0, // auto
+  };
+
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  // L0 zarr.json: shape=[32,10], chunk_size=8 in both dims
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+
+    CHECK(Fail2, strstr((char*)data, "\"shape\":[32,10]"));
+    // Inner chunk_shape in sharding codec should be [8,8]
+    CHECK(Fail2, strstr((char*)data, "\"chunk_shape\":[8,8]"));
+    free(data);
+  }
+
+  // L1 zarr.json: shape=[32,5], chunk_size in dim1 must be clamped to 5
+  {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/1/zarr.json", tmpdir);
+    CHECK(Fail2, test_file_exists(path));
+
+    uint8_t* data;
+    size_t len;
+    CHECK(Fail2, read_file_all(path, &data, &len) == 0);
+    data[len < 4095 ? len : 4095] = '\0';
+
+    CHECK(Fail2, strstr((char*)data, "\"shape\":[32,5]"));
+    // Inner chunk_shape must be [8,5] (x clamped from 8 to 5)
+    CHECK(Fail2, strstr((char*)data, "\"chunk_shape\":[8,5]"));
+    free(data);
+  }
+
+  zarr_fs_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -2218,6 +2302,14 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/msunbounded", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_unbounded(sub);
+  }
+
+  // Multiscale chunk_size clamping test (no CUDA needed, issue #44)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/mschunkclamp", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_multiscale_chunk_clamp_metadata(sub);
   }
 
   // Storage order validation test (no CUDA needed)
