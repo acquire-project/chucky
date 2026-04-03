@@ -455,7 +455,7 @@ Fail:
   return 1;
 }
 
-// --- Test: non-power-of-2 sizes get pow(2,level) scale, not shape ratio ---
+// --- Test: scale uses actual shape ratio, not 2^level ---
 
 static int
 test_multiscale_scale_non_pow2(const char* tmpdir)
@@ -463,7 +463,7 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
   log_info("=== test_multiscale_scale_non_pow2 ===");
 
   // x=6 (non-power-of-2): L0 x=6, L1 x=3, L2 x=2.
-  // Old code gave scale ratio 6/3=2, 6/2=3. Correct: 2, 4.
+  // Scale factor = L0_size / Lv_size: L1 = 6/3 = 2, L2 = 6/2 = 3.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -502,9 +502,76 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
 
     // L0: scale [1,1,1]
     CHECK(Fail2, strstr(data, "\"scale\":[1.0,1.0,1.0]"));
-    // L1: z=1, y=2, x=2
+    // L1: z=1, y=6/3=2, x=6/3=2
     CHECK(Fail2, strstr(data, "\"scale\":[1.0,2.0,2.0]"));
-    // L2: z=1, y=4 (not 3!), x=4 (not 3!)
+    // L2: z=1, y=6/2=3, x=6/2=3
+    CHECK(Fail2, strstr(data, "\"scale\":[1.0,3.0,3.0]"));
+
+    free(data);
+  }
+
+  zarr_fs_multiscale_sink_destroy(ms);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  zarr_fs_multiscale_sink_destroy(ms);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: size-1 downsample dim keeps scale=1 at all levels ---
+
+static int
+test_multiscale_scale_size1(const char* tmpdir)
+{
+  log_info("=== test_multiscale_scale_size1 ===");
+
+  // z=1 with downsample=1: cannot actually downsample, scale stays 1.
+  // y=8, x=8 with downsample=1: L0=8, L1=4, L2=2.
+  struct dimension dims[] = {
+    { .size = 1,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .name = "z",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 2,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  struct zarr_multiscale_config cfg = {
+    .store_path = tmpdir,
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .nlod = 0,
+  };
+
+  struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);
+  CHECK(Fail, ms);
+
+  {
+    char* data;
+    CHECK(Fail2, check_group_zarr_json(tmpdir, &data, 8192) == 0);
+
+    // L0: scale [1,1,1]
+    CHECK(Fail2, strstr(data, "\"scale\":[1.0,1.0,1.0]"));
+    // L1: z=1/1=1, y=8/4=2, x=8/4=2
+    CHECK(Fail2, strstr(data, "\"scale\":[1.0,2.0,2.0]"));
+    // L2: z=1/1=1, y=8/2=4, x=8/2=4
     CHECK(Fail2, strstr(data, "\"scale\":[1.0,4.0,4.0]"));
 
     free(data);
@@ -2202,6 +2269,14 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/msscalenp2", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_scale_non_pow2(sub);
+  }
+
+  // Multiscale scale with size-1 downsample dim (no CUDA needed)
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/msscalesz1", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_multiscale_scale_size1(sub);
   }
 
   // Multiscale unit/scale metadata test (no CUDA needed)
