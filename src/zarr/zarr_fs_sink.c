@@ -305,7 +305,7 @@ write_root_metadata_file(const char* store_path)
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", store_path);
 
-  char buf[ZARR_GROUP_JSON_CAP];
+  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
   int len = zarr_root_json(buf, sizeof(buf));
   if (len < 0)
     return -1;
@@ -634,7 +634,7 @@ write_multiscale_group_metadata(const struct zarr_fs_multiscale_sink* ms)
   for (int lv = 0; lv < ms->nlod; ++lv)
     level_ptrs[lv] = ms->levels[lv]->dimensions;
 
-  char buf[8192];
+  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
   int len = zarr_multiscale_group_json(
     buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs);
   if (len < 0)

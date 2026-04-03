@@ -209,7 +209,7 @@ Fail:
 static int
 test_zarr_root_json(void)
 {
-  char buf[ZARR_GROUP_JSON_CAP];
+  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
   int len = zarr_root_json(buf, sizeof(buf));
   CHECK(Fail, len > 0);
   buf[len] = '\0';

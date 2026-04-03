@@ -10,7 +10,7 @@
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // Zarr group metadata
-#define ZARR_GROUP_JSON_CAP 256
+#define ZARR_GROUP_JSON_MAX_LENGTH 8192
 
 // S3
 #define S3_MAX_PARTS 10000
