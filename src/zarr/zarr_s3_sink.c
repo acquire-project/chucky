@@ -436,7 +436,7 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
 
   // Write root + intermediate group metadata (skipped for sub-sinks)
   if (!skip_group_metadata) {
-    char buf[256];
+    char buf[ZARR_GROUP_JSON_CAP];
     int len = zarr_root_json(buf, sizeof(buf));
     CHECK(Fail_alloc, len >= 0);
     char key[4096];
@@ -724,7 +724,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
 
   // Write root + intermediate metadata before creating levels
   if (cfg->array_name) {
-    char buf[256];
+    char buf[ZARR_GROUP_JSON_CAP];
     int len = zarr_root_json(buf, sizeof(buf));
     CHECK(Fail_levels, len >= 0);
     char key[4096];

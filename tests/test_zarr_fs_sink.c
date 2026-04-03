@@ -58,6 +58,7 @@ check_group_zarr_json(const char* dir, char** out, size_t bufsz)
 
   int ok = strstr((char*)data, "\"zarr_format\":3") &&
            strstr((char*)data, "\"node_type\":\"group\"") &&
+           strstr((char*)data, "\"attributes\"") &&
            strstr((char*)data, "\"consolidated_metadata\":null");
   if (!ok) {
     free(data);

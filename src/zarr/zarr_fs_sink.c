@@ -305,7 +305,7 @@ write_root_metadata_file(const char* store_path)
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", store_path);
 
-  char buf[256];
+  char buf[ZARR_GROUP_JSON_CAP];
   int len = zarr_root_json(buf, sizeof(buf));
   if (len < 0)
     return -1;

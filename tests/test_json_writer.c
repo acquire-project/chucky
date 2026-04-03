@@ -206,6 +206,26 @@ Fail:
 }
 
 static int
+test_zarr_root_json(void)
+{
+  char buf[256];
+  int len = zarr_root_json(buf, sizeof(buf));
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  CHECK(Fail, strstr(buf, "\"zarr_format\":3"));
+  CHECK(Fail, strstr(buf, "\"node_type\":\"group\""));
+  CHECK(Fail, strstr(buf, "\"attributes\":{}"));
+  CHECK(Fail, strstr(buf, "\"consolidated_metadata\":null"));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", len, buf);
+  return 1;
+}
+
+static int
 test_zarr_array_json_lz4(void)
 {
   char buf[4096];
@@ -248,6 +268,7 @@ main(void)
     { "array_commas", test_array_commas },
     { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },
+    { "zarr_root_json", test_zarr_root_json },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
