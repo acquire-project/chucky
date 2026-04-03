@@ -19,6 +19,9 @@ zarr_root_json(char* buf, size_t cap)
   jw_string(&jw, "group");
   jw_key(&jw, "consolidated_metadata");
   jw_null(&jw);
+  jw_key(&jw, "attributes");
+  jw_object_begin(&jw);
+  jw_object_end(&jw);
   jw_object_end(&jw);
 
   if (jw_error(&jw))
