@@ -103,7 +103,7 @@ test_multiscale_l0_correctness(void)
       .dtype = dtype_u16,
       .rank = rank,
       .dimensions = dims,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
     };
     CHECK(Fail1,
           (s = tile_stream_gpu_create(&config, &baseline_sink.base)) != NULL);
@@ -133,7 +133,7 @@ Run2:
       .dtype = dtype_u16,
       .rank = rank,
       .dimensions = dims_ms,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
     };
     CHECK(Fail2b, (s = tile_stream_gpu_create(&config, &ms_sink.base)) != NULL);
     xor_pattern_init(dims_ms, rank, 2);
@@ -306,7 +306,7 @@ test_dim0_l0_correctness(void)
       .dtype = dtype_u16,
       .rank = rank,
       .dimensions = dims_inner,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
       .reduce_method = lod_reduce_mean,
     };
     CHECK(Fail1,
@@ -337,7 +337,7 @@ Run2d:
       .dtype = dtype_u16,
       .rank = rank,
       .dimensions = dims_dim0,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
       .reduce_method = lod_reduce_mean,
       .append_reduce_method = lod_reduce_mean,
     };
@@ -517,7 +517,7 @@ test_dim0_multi_epoch_levels(void)
       .dtype = dtype_u16,
       .rank = rank,
       .dimensions = dims,
-      .codec = CODEC_ZSTD,
+      .codec = { .id = CODEC_ZSTD },
       .reduce_method = lod_reduce_mean,
       .append_reduce_method = lod_reduce_mean,
     };

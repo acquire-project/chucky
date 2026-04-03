@@ -3,20 +3,40 @@
 #include "cpu/aggregate.h"
 #include "cpu/compress.h"
 #include "cpu/lod.h"
+#include "defs.limits.h"
 #include "platform/platform.h"
-#include "util/index.ops.h"
 #include "util/metric.h"
 #include "util/prelude.h"
+
+// ---- batch LUT computation ----
+
+// Convenience: compute pool_epochs from the standard formula
+// pool_epoch = (a + 1) * period - 1, then delegate to aggregate_batch_luts.
+static void
+compute_batch_luts(const struct computed_stream_layouts* cl,
+                   const struct level_geometry* levels,
+                   const struct aggregate_layout* agg,
+                   int lv,
+                   uint32_t active_count,
+                   uint32_t* out_gather,
+                   uint32_t* out_perm)
+{
+  uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+  for (uint32_t a = 0; a < active_count; ++a) {
+    uint32_t period = (cl->dims.append_downsample && lv > 0) ? (1u << lv) : 1;
+    pool_epochs[a] = (a + 1) * period - 1;
+  }
+  aggregate_batch_luts(
+    agg, levels, lv, active_count, pool_epochs, out_gather, out_perm);
+}
 
 // ---- flush_batch helpers ----
 
 static struct aggregate_cpu_workspace
-make_agg_workspace(const struct flush_level_view* lvl,
-                   uint32_t* perm,
-                   size_t* permuted_sizes)
+make_agg_workspace(const struct flush_level_view* lvl, size_t* permuted_sizes)
 {
   return (struct aggregate_cpu_workspace){
-    .perm = perm,
+    .perm = lvl->batch_chunk_to_shard_map,
     .permuted_sizes = permuted_sizes,
     .data = lvl->agg_slot->data,
     .data_capacity = lvl->agg_slot->data_capacity_bytes,
@@ -54,7 +74,7 @@ deliver_aggregate(int lv,
   return 0;
 }
 
-// Aggregate + deliver using the batch path (K_l > 1 with full batch).
+// Aggregate + deliver a batch of active_count epochs.
 static int
 aggregate_and_deliver_batch(int lv,
                             const struct flush_batch_params* p,
@@ -65,8 +85,8 @@ aggregate_and_deliver_batch(int lv,
   if (p->metrics)
     platform_toc(&clk);
 
-  struct aggregate_cpu_workspace ws = make_agg_workspace(
-    lvl, lvl->batch_chunk_to_shard_map, p->shard_order_sizes_bytes);
+  struct aggregate_cpu_workspace ws =
+    make_agg_workspace(lvl, p->shard_order_sizes_bytes);
   struct aggregate_result ar;
   if (aggregate_cpu_batch_into(p->compressed,
                                p->comp_sizes,
@@ -74,7 +94,8 @@ aggregate_and_deliver_batch(int lv,
                                lvl->agg_layout,
                                active_count,
                                &ws,
-                               &ar))
+                               &ar,
+                               p->nthreads))
     return 1;
 
   if (p->metrics) {
@@ -84,36 +105,6 @@ aggregate_and_deliver_batch(int lv,
   }
 
   return deliver_aggregate(lv, p, lvl, &ar, active_count);
-}
-
-// Aggregate + deliver one epoch using the per-epoch fallback path.
-static int
-aggregate_and_deliver_epoch(int lv,
-                            const struct flush_batch_params* p,
-                            const struct flush_level_view* lvl,
-                            uint64_t comp_base)
-{
-  struct platform_clock clk = { 0 };
-  if (p->metrics)
-    platform_toc(&clk);
-
-  const void* comp_lv =
-    (const char*)p->compressed + comp_base * p->max_output_size_bytes;
-  const size_t* sizes_lv = p->comp_sizes + comp_base;
-
-  struct aggregate_cpu_workspace ws = make_agg_workspace(
-    lvl, lvl->chunk_to_shard_map, p->shard_order_sizes_bytes);
-  struct aggregate_result ar;
-  if (aggregate_cpu_into(comp_lv, sizes_lv, lvl->agg_layout, &ws, &ar))
-    return 1;
-
-  if (p->metrics) {
-    float ms = (float)(platform_toc(&clk) * 1000.0);
-    size_t agg_bytes = ar.offsets[lvl->agg_layout->covering_count];
-    accumulate_metric_ms(&p->metrics->aggregate, ms, agg_bytes, 0);
-  }
-
-  return deliver_aggregate(lv, p, lvl, &ar, 1);
 }
 
 // ---- flush_batch ----
@@ -138,7 +129,9 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                      p->max_output_size_bytes,
                      p->comp_sizes,
                      p->chunk_bytes,
-                     n_epochs * total_chunks))
+                     n_epochs * total_chunks,
+                     p->bytes_per_element,
+                     p->nthreads))
       return 1;
 
     if (p->metrics) {
@@ -163,19 +156,30 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (p->sink->wait_fence)
       p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
 
-    if (active_count == lvl->batch_active_count &&
-        lvl->batch_active_count > 1) {
-      if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
+    // Recompute batch LUTs if active_count differs from pre-computed.
+    if (active_count != lvl->batch_active_count) {
+      // LUT buffers are sized for max(batch_active_count, 1) * M entries.
+      uint32_t lut_cap =
+        lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
+      if (active_count > lut_cap)
         return 1;
-    } else {
-      for (uint32_t e = 0; e < n_epochs; ++e) {
-        if (!(active_masks[e] & (1u << lv)))
-          continue;
-        uint64_t comp_base = (uint64_t)e * total_chunks + lvl->chunk_offset;
-        if (aggregate_and_deliver_epoch(lv, p, lvl, comp_base))
-          return 1;
-      }
+
+      uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+      uint32_t ai = 0;
+      for (uint32_t e = 0; e < n_epochs; ++e)
+        if (active_masks[e] & (1u << lv))
+          pool_epochs[ai++] = e;
+      aggregate_batch_luts(lvl->agg_layout,
+                           p->levels_geo,
+                           lv,
+                           active_count,
+                           pool_epochs,
+                           lvl->batch_gather,
+                           lvl->batch_chunk_to_shard_map);
     }
+
+    if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
+      return 1;
 
     // Record fence so next batch waits for this delivery's IO.
     if (p->sink->record_fence)
@@ -215,7 +219,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                        p->lod_values,
                        p->scatter_lut,
                        p->scatter_batch_offsets,
-                       p->dtype) == 0);
+                       p->dtype,
+                       p->nthreads) == 0);
 
   if (p->metrics) {
     float scatter_ms = (float)(platform_toc(&clk) * 1000.0);
@@ -230,7 +235,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
   CHECK(Error,
         lod_cpu_reduce(
-          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method) == 0);
+          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method, p->nthreads) == 0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -258,7 +263,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                               p->append_accum,
                               p->append_counts,
                               p->dtype,
-                              p->append_reduce_method) == 0);
+                              p->append_reduce_method,
+                              p->nthreads) == 0);
 
     for (int lv = 1; lv < p->cl->plan.nlod; ++lv) {
       p->append_counts[lv]++;
@@ -271,7 +277,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                                   lv,
                                   p->append_counts[lv],
                                   p->dtype,
-                                  p->append_reduce_method) == 0);
+                                  p->append_reduce_method,
+                                  p->nthreads) == 0);
         p->append_counts[lv] = 0;
         active_levels_mask |= (1u << lv);
       }
@@ -304,7 +311,8 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                                    layout,
                                    p->morton_lut[lv],
                                    p->lod_batch_offsets[lv],
-                                   p->dtype) == 0);
+                                   p->dtype,
+                                   p->nthreads) == 0);
   }
 
   if (p->metrics) {
@@ -331,49 +339,35 @@ cpu_pipeline_compute_luts(
   const struct level_geometry* levels,
   const uint32_t batch_active_count[LOD_MAX_LEVELS],
   const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+  int nthreads,
   struct lut_targets* out)
 {
-  // Per-level chunk-to-shard map + batch LUTs.
+  // Per-level batch LUTs.
   for (int lv = 0; lv < levels->nlod; ++lv) {
     const struct aggregate_layout* agg = &agg_layout[lv];
-    uint64_t M_lv = agg->chunks_per_epoch;
-
-    // Single-epoch permutation.
-    for (uint64_t i = 0; i < M_lv; ++i)
-      out->chunk_to_shard_map[lv][i] = (uint32_t)ravel(
-        agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, i);
-
-    // Batch LUTs (K_l > 1 only).
     uint32_t K_l = batch_active_count[lv];
-    if (K_l > 1) {
-      uint64_t total_chunks = levels->total_chunks;
-      for (uint32_t a = 0; a < K_l; ++a) {
-        uint32_t period =
-          (cl->dims.append_downsample && lv > 0) ? (1u << lv) : 1;
-        uint32_t pool_epoch = (a + 1) * period - 1;
+    uint32_t slot_count = K_l > 0 ? K_l : 1;
 
-        for (uint64_t j = 0; j < M_lv; ++j) {
-          uint64_t idx = (uint64_t)a * M_lv + j;
-          out->batch_gather[lv][idx] = (uint32_t)(pool_epoch * total_chunks +
-                                                  levels->chunk_offset[lv] + j);
-          uint32_t perm_pos = (uint32_t)ravel(
-            agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
-          out->batch_chunk_to_shard_map[lv][idx] = perm_pos * K_l + a;
-        }
-      }
-    }
+    if (out->batch_gather[lv] && out->batch_chunk_to_shard_map[lv])
+      compute_batch_luts(cl,
+                         levels,
+                         agg,
+                         lv,
+                         slot_count,
+                         out->batch_gather[lv],
+                         out->batch_chunk_to_shard_map[lv]);
   }
 
   // LOD LUTs (multiscale only).
   if (levels->enable_multiscale) {
     const struct lod_plan* plan = &cl->plan;
 
-    lod_cpu_build_scatter_lut(plan, out->scatter_lut);
-    lod_cpu_build_scatter_batch_offsets(plan, out->scatter_batch_offsets);
+    lod_cpu_build_scatter_lut(plan, out->scatter_lut, nthreads);
+    lod_cpu_build_scatter_batch_offsets(plan, out->scatter_batch_offsets, nthreads);
 
     for (int lv = 0; lv < levels->nlod; ++lv) {
       const struct tile_stream_layout* layout_lv = &cl->layouts[lv];
-      lod_cpu_build_chunk_lut(plan, lv, layout_lv, out->morton_lut[lv]);
+      lod_cpu_build_chunk_lut(plan, lv, layout_lv, out->morton_lut[lv], nthreads);
 
       // Convert flat batch index → lifted-space chunk pool offset.
       // Decomposes bi into per-dimension coordinates, then maps each
@@ -421,7 +415,8 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
                                 lv,
                                 p->append_counts[lv],
                                 p->dtype,
-                                p->append_reduce_method) == 0);
+                                p->append_reduce_method,
+                                p->nthreads) == 0);
       p->append_counts[lv] = 0;
 
       // Scatter emitted level from morton space to chunk pool.
@@ -434,7 +429,8 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
                                      layout_lv,
                                      p->morton_lut[lv],
                                      p->lod_batch_offsets[lv],
-                                     p->dtype) == 0);
+                                     p->dtype,
+                                     p->nthreads) == 0);
       drain_mask |= (1u << lv);
     }
   }

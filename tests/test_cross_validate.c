@@ -199,7 +199,7 @@ test_cross_validate_basic(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   // Compute total elements from the GPU layout.
@@ -302,7 +302,7 @@ test_cross_validate_multishard(void)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
   };
 
   gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
@@ -401,7 +401,7 @@ test_cross_validate_lod(void)
     .dtype = dtype_u16,
     .rank = 4,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,
   };
@@ -539,7 +539,7 @@ test_cross_validate_lod_dim0(void)
     .dtype = dtype_u16,
     .rank = 4,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .reduce_method = lod_reduce_mean,
     .append_reduce_method = lod_reduce_mean,
     .epochs_per_batch = 1,

@@ -28,16 +28,14 @@ struct tile_stream_cpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
-  // Per-level aggregate output (batch-scaled when K > 1).
-  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];  // [M] chunk → shard position
+  // Per-level aggregate output (batch-scaled).
   struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS]; // [level] sized for batch
   size_t* shard_order_sizes;                     // [max_batch_C] shared scratch
 
-  // Batch aggregate LUTs (K > 1 only, per level).
-  uint32_t* batch_gather[LOD_MAX_LEVELS]; // [K_l * M_l]
-  uint32_t*
-    batch_chunk_to_shard_map[LOD_MAX_LEVELS];  // [K_l * M_l] interleaved map
-  uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
+  // Batch aggregate LUTs (per level).
+  uint32_t* batch_gather[LOD_MAX_LEVELS];             // [K_l * M_l]
+  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS]; // [K_l * M_l]
+  uint32_t batch_active_count[LOD_MAX_LEVELS];        // K_l per level
 
   // LOD (multiscale only)
   void* linear; // linear epoch buffer (input accumulated here before scatter)
@@ -57,6 +55,7 @@ struct tile_stream_cpu
   uint64_t
     max_cursor_elements; // precomputed: total elements across all append chunks
   int pool_fully_covered; // 1 if scatter overwrites every pool position
+  int flushed;            // 1 after flush; append after flush is an error
 
   // Batch accumulation state (K = cl.epochs_per_batch).
   uint32_t batch_accumulated;                    // 0..K-1
@@ -65,6 +64,8 @@ struct tile_stream_cpu
   // IO fence state: tracks pending async IO per level so we don't
   // overwrite aggregate buffers before write_direct completes.
   struct io_event io_done[LOD_MAX_LEVELS];
+
+  int nthreads; // resolved at init: always > 0
 
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;

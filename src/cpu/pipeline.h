@@ -21,9 +21,8 @@ struct flush_level_view
   struct aggregate_layout* agg_layout;
   uint32_t batch_active_count;
   uint64_t chunk_offset;
-  uint32_t* chunk_to_shard_map;
-  uint32_t* batch_chunk_to_shard_map;
-  uint32_t* batch_gather;
+  uint32_t* batch_chunk_to_shard_map; // [K_l * M_lv] perm LUT (mutable)
+  uint32_t* batch_gather;             // [K_l * M_lv] gather LUT (mutable)
   struct cpu_agg_slot* agg_slot;
   struct shard_state* shard;
   struct io_event*
@@ -32,7 +31,8 @@ struct flush_level_view
 
 struct flush_batch_params
 {
-  enum compression_codec codec;
+  struct codec_config codec;
+  size_t bytes_per_element;
   const void* chunk_pool;
   size_t chunk_stride_bytes;
   size_t chunk_bytes;
@@ -41,10 +41,13 @@ struct flush_batch_params
   size_t* comp_sizes;
   uint64_t total_chunks;
   int nlod;
+  const struct computed_stream_layouts* cl;
+  const struct level_geometry* levels_geo;
   struct flush_level_view levels[LOD_MAX_LEVELS];
   size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -70,6 +73,7 @@ struct scatter_epoch_params
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
   void* append_accum;
   uint32_t* append_counts;        // mutable
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -82,7 +86,6 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
 struct lut_targets
 {
-  uint32_t* chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* batch_gather[LOD_MAX_LEVELS];
   uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
@@ -97,6 +100,7 @@ cpu_pipeline_compute_luts(
   const struct level_geometry* levels,
   const uint32_t batch_active_count[LOD_MAX_LEVELS],
   const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
+  int nthreads,
   struct lut_targets* out);
 
 // ---- append drain ----
@@ -112,6 +116,7 @@ struct append_drain_params
   void* chunk_pool;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
+  int nthreads; // resolved at init: always > 0
   struct stream_metrics* metrics; // NULL to skip timing
 };
 

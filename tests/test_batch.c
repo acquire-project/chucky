@@ -19,7 +19,7 @@ make_config(struct dimension* dims)
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
-    .codec = CODEC_NONE,
+    .codec = { .id = CODEC_NONE },
     .epochs_per_batch = 2,
   };
 }

@@ -18,13 +18,13 @@ struct zarr_s3_config
   double fill_value;
   uint8_t rank;
   const struct dimension* dimensions;
-  enum compression_codec codec; // CODEC_ZSTD, CODEC_LZ4, or CODEC_NONE
-  size_t part_size;             // 0 = default (8 MiB)
-  double throughput_gbps;       // gigabits/s, 0 = default (10.0)
-  size_t max_retries;           // 0 = CRT default (10)
-  uint32_t backoff_scale_ms;    // 0 = CRT default (500)
-  uint32_t max_backoff_secs;    // 0 = CRT default (20)
-  uint64_t timeout_ns;          // 0 = no timeout (infinite)
+  struct codec_config codec;
+  size_t part_size;          // 0 = default (8 MiB)
+  double throughput_gbps;    // gigabits/s, 0 = default (10.0)
+  size_t max_retries;        // 0 = CRT default (10)
+  uint32_t backoff_scale_ms; // 0 = CRT default (500)
+  uint32_t max_backoff_secs; // 0 = CRT default (20)
+  uint64_t timeout_ns;       // 0 = no timeout (infinite)
 };
 
 struct zarr_s3_sink;
@@ -76,7 +76,7 @@ struct zarr_s3_multiscale_config
   uint8_t rank;
   const struct dimension* dimensions; // L0 dimensions
   int nlod;                           // number of levels (0 = auto)
-  enum compression_codec codec;
+  struct codec_config codec;
   size_t part_size;          // 0 = default (8 MiB)
   double throughput_gbps;    // 0 = default (10.0)
   size_t max_retries;        // 0 = CRT default (10)

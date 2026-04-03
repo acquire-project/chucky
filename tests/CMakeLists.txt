@@ -63,15 +63,19 @@ add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::c
 
 # CPU transpose test (no CUDA)
 add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
+enable_openmp(test_transpose_cpu)
 
 # CPU compress test (no CUDA)
-add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu Lz4::Lz4 Zstd::Zstd chucky_log)
+add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu chucky_log)
+enable_openmp(test_compress_cpu)
 
 # CPU aggregate test (no CUDA)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)
+enable_openmp(test_aggregate_cpu)
 
 # CPU LOD test (no CUDA)
-add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu chucky_log)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu chucky_log)
+enable_openmp(test_lod_cpu)
 
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)
@@ -84,6 +88,14 @@ add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_
 
 # CPU stream + zarr_fs_sink integration (exercises async IO fencing)
 add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd test_platform test_shard_verify)
+
+# Zarr readback validation via zarr-python (requires uv)
+add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu zarr_fs_sink writer dimension test_platform chucky_log)
+target_compile_definitions(
+    test_zarr_readback
+    PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(test-test_zarr_readback PROPERTIES SKIP_RETURN_CODE 77)
 
 # Cross-validate GPU vs CPU (byte-exact shard comparison with CODEC_NONE)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer)
@@ -101,7 +113,7 @@ add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_driver CUDA::cudart_static aggregate index_ops_util)
 
-add_test_exe(test_json_writer test_json_writer.c json_writer chucky_log)
+add_test_exe(test_json_writer test_json_writer.c zarr_metadata chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static zarr_fs_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
@@ -113,6 +125,7 @@ add_gpu_test_exe(test_batch        test_batch.c        LINKS CUDA::cuda_driver C
 add_gpu_test_exe(test_d2h_deliver  test_d2h_deliver.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink test_gpu_helpers index_ops_util)
 add_gpu_test_exe(test_flush_orch  test_flush_orchestration.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_log)
+add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)
 add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data test_shard_sink)

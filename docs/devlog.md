@@ -43,7 +43,42 @@ Cleanup
 - [ ] comments at the top of each test
 - [ ] look into j8 failures
 - [ ] medfmt and smallepoch scenarios need some analysis/optimization
+- [ ] move bench sweep data to it's own repo
 
+## 2026-04-01
+
+Noticed ls4 isn't supported by the zarr v3 spec! So so silly. Will warn here
+and rip out the thing I just did for acquire-zarr.
+
+## 2026-03-31
+
+Moving to issue/pr-driven development style in the repo. Probably won't update
+this devlog much anymore.
+
+## 2026-03-30
+
+Working on compression in the shim. I'll need to add blosc support to the
+cpu compression to maintain api compatibility.
+
+Maintaining api compatibility is hard. Lots of little compromises.
+
+Added test coverage. It's very useful, which is no surprise. I'll have to
+come back to this.
+
+Found an issue with how scales were being calculated for ome-ngff output.
+
+## 2026-03-29
+
+Moved into acquire-project. Added the shim to acquire zarr, and slowly working
+through adding functionality/passing tests.
+
+ - added usesles "consolidated_metadata" field that zarr-python requires. I
+   should submit an issue.
+ - there's more ngff dimension metadata I needed to add to the dims struct.
+   Ended up factoring into it's own struct.
+ - Found a bug around truncating the shape for the append dims
+ - Updated lod termination logic to match acquire-zarr. 
+  
 ## 2026-03-28
 
 Starting integration in earnest. This is going to be interesting...

@@ -39,15 +39,17 @@ struct tile_stream_configuration
   enum dtype dtype;
   uint8_t rank;
   struct dimension* dimensions;
-  enum compression_codec codec;
+  struct codec_config codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
+  int max_nlod; // 0 = auto, N>0 = max N total levels (1 = base only)
   uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
   uint32_t
     target_batch_chunks; // minimum chunks per compress batch (default 1024)
   float metadata_update_interval_s;
   size_t
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
+  int max_threads;   // 0 = OpenMP default
 };
 
 struct tile_stream_status
@@ -57,7 +59,7 @@ struct tile_stream_status
   uint32_t epochs_per_batch;
   size_t max_compressed_size;
   enum dtype dtype;
-  enum compression_codec codec;
+  struct codec_config codec;
   size_t codec_batch_size;
   uint32_t batch_accumulated;
   int pool_current;
