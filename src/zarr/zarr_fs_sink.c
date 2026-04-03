@@ -744,7 +744,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
       else
         lv_dims[d].size = plan.shapes[lv][d];
       lv_dims[d].chunk_size = plan.chunk_sizes[lv][d];
-      lv_dims[d].chunks_per_shard = plan.cps[lv][d];
+      lv_dims[d].chunks_per_shard = plan.chunks_per_shard[lv][d];
     }
 
     char name[8];

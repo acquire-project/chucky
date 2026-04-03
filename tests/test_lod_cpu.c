@@ -606,7 +606,7 @@ test_chunk_clamp_at_coarse_levels(void)
   CHECK(Fail, plan.chunk_sizes[1][0] == 5);
   CHECK(Fail, plan.chunk_sizes[1][1] == 5);
 
-  // Now test cps via _from_dims with a config that uses chunks_per_shard.
+  // Now test chunks_per_shard via _from_dims.
   // We need n_append >= 1 with chunk_size=1 on dim 0 for _from_dims.
   struct dimension dims2[] = {
     { .size = 0,
@@ -629,22 +629,86 @@ test_chunk_clamp_at_coarse_levels(void)
   CHECK(Fail, lod_plan_init_from_dims(&plan2, dims2, 3, LOD_MAX_LEVELS) == 0);
   CHECK(Fail, plan2.nlod >= 2);
 
-  // L0: cps = L0 config
-  CHECK(Fail, plan2.cps[0][1] == 2);
-  CHECK(Fail, plan2.cps[0][2] == 2);
+  // L0: chunks_per_shard = L0 config
+  CHECK(Fail, plan2.chunks_per_shard[0][1] == 2);
+  CHECK(Fail, plan2.chunks_per_shard[0][2] == 2);
 
   // L1: shape halved => (5,5) on LOD dims; chunk clamped to 5;
-  // chunk_count = ceil(5/5) = 1; cps = min(2,1) = 1
+  // chunk_count = ceil(5/5) = 1; chunks_per_shard = min(2,1) = 1
   CHECK(Fail, plan2.chunk_sizes[1][1] == 5);
   CHECK(Fail, plan2.chunk_sizes[1][2] == 5);
-  CHECK(Fail, plan2.cps[1][1] == 1);
-  CHECK(Fail, plan2.cps[1][2] == 1);
+  CHECK(Fail, plan2.chunks_per_shard[1][1] == 1);
+  CHECK(Fail, plan2.chunks_per_shard[1][2] == 1);
 
   lod_plan_free(&plan2);
   log_info("  PASS");
   return 0;
 
 Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Test lod_plan_init_from_epoch_dims with non-power-of-two inner shape.
+// Verifies that chunk_sizes and chunks_per_shard are correctly clamped
+// when using the epoch-split path.
+static int
+test_from_epoch_dims_clamp(void)
+{
+  log_info("=== test_from_epoch_dims_clamp ===");
+
+  // 3D: dim 0 is append (chunk_size=1), dims 1,2 are inner with downsample.
+  // dim 1: size=10, chunk_size=8 -> L0 shape=10, L1 shape=5 (< chunk 8 -> clamp)
+  // dim 2: size=6, chunk_size=4 -> L0 shape=6, L1 shape=3 (< chunk 4 -> clamp)
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 10,
+      .chunk_size = 8,
+      .chunks_per_shard = 0, // all chunks
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 6,
+      .chunk_size = 4,
+      .chunks_per_shard = 0, // all chunks
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  struct lod_plan plan;
+  CHECK(Fail,
+        lod_plan_init_from_epoch_dims(&plan, dims, 3, 1, LOD_MAX_LEVELS) == 0);
+  CHECK(Fail, plan.nlod >= 2);
+
+  // L0: shapes = (1, 10, 6), chunk_sizes = (1, 8, 4)
+  CHECK(Fail, plan.shapes[0][1] == 10);
+  CHECK(Fail, plan.shapes[0][2] == 6);
+  CHECK(Fail, plan.chunk_sizes[0][0] == 1);
+  CHECK(Fail, plan.chunk_sizes[0][1] == 8);
+  CHECK(Fail, plan.chunk_sizes[0][2] == 4);
+
+  // L1: shapes = (1, 5, 3), chunk_sizes clamped to (1, 5, 3)
+  CHECK(Fail, plan.shapes[1][1] == 5);
+  CHECK(Fail, plan.shapes[1][2] == 3);
+  CHECK(Fail, plan.chunk_sizes[1][1] == 5); // clamped: min(8, 5)
+  CHECK(Fail, plan.chunk_sizes[1][2] == 3); // clamped: min(4, 3)
+
+  // chunks_per_shard at L0: cps=0 => all chunks: ceildiv(10,8)=2, ceildiv(6,4)=2
+  CHECK(Fail, plan.chunks_per_shard[0][1] == 2);
+  CHECK(Fail, plan.chunks_per_shard[0][2] == 2);
+
+  // chunks_per_shard at L1: ceildiv(5,5)=1, ceildiv(3,3)=1
+  CHECK(Fail, plan.chunks_per_shard[1][1] == 1);
+  CHECK(Fail, plan.chunks_per_shard[1][2] == 1);
+
+  lod_plan_free(&plan);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  lod_plan_free(&plan);
   log_error("  FAIL");
   return 1;
 }
@@ -670,5 +734,6 @@ main(int ac, char* av[])
   rc |= test_max_nlod_positive_cap_via_layouts();
   rc |= test_max_nlod_zero_equals_uncapped();
   rc |= test_chunk_clamp_at_coarse_levels();
+  rc |= test_from_epoch_dims_clamp();
   return rc;
 }

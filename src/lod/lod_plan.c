@@ -283,23 +283,24 @@ dims_lod_params(const struct dimension* dims,
       *lod_mask |= (1u << d);
 }
 
-// Populate plan->cps (clamped chunks_per_shard) from L0 config and
-// the already-computed plan->chunk_sizes and plan->shapes.
+// Fill plan->chunks_per_shard from dims[d].chunks_per_shard and the
+// already-computed plan->chunk_sizes and plan->shapes.
+// cps==0 in dims means "all chunks along that dim".
+// Result is clamped to min(config_cps, chunk_count).
 static void
-lod_plan_compute_cps(struct lod_plan* p,
-                     const struct dimension* dims,
-                     uint8_t rank)
+fill_chunks_per_shard(struct lod_plan* p,
+                      const struct dimension* dims,
+                      uint8_t rank)
 {
   for (int lv = 0; lv < p->nlod; ++lv) {
     for (int d = 0; d < rank; ++d) {
       uint64_t s = p->shapes[lv][d];
       uint32_t cs = p->chunk_sizes[lv][d];
-      uint64_t chunk_count = (s == 0) ? 1 : ceildiv(s, cs);
-      uint64_t l0_cps = dims[d].chunks_per_shard;
-      if (l0_cps == 0)
-        l0_cps = chunk_count;
-      p->cps[lv][d] =
-        (uint32_t)(chunk_count < l0_cps ? chunk_count : l0_cps);
+      uint64_t cc = (s == 0) ? 1 : ceildiv(s, cs);
+      uint64_t cps = dims[d].chunks_per_shard;
+      if (cps == 0)
+        cps = cc;
+      p->chunks_per_shard[lv][d] = (uint32_t)(cc < cps ? cc : cps);
     }
   }
 }
@@ -317,7 +318,7 @@ lod_plan_init_from_dims(struct lod_plan* p,
   dims_lod_params(dims, rank, na, shape, chunk_shape, &lod_mask);
   if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
     return 1;
-  lod_plan_compute_cps(p, dims, rank);
+  fill_chunks_per_shard(p, dims, rank);
   return 0;
 }
 
@@ -337,7 +338,7 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
     shape[d] = dims[d].chunk_size;
   if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
     return 1;
-  lod_plan_compute_cps(p, dims, rank);
+  fill_chunks_per_shard(p, dims, rank);
   return 0;
 }
 

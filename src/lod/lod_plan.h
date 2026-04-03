@@ -16,13 +16,23 @@ struct lod_spans
   uint64_t n;
 };
 
+// WARNING: This struct is ~49 KB. Callers that stack-allocate it should be
+// aware of stack usage, especially in deeply recursive or thread-heavy code.
 struct lod_plan
 {
   int ndim;
   int nlod;
+
+  // Per-level full shape (all dims). Populated by init_shapes and above.
   uint64_t shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
+
+  // Per-level chunk sizes, clamped to min(chunk_size, level_shape[d]).
+  // Populated by init_shapes and above.
   uint32_t chunk_sizes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
-  uint32_t cps[LOD_MAX_LEVELS][LOD_MAX_NDIM]; // clamped chunks_per_shard
+
+  // Per-level chunks_per_shard, clamped to min(config_cps, chunk_count).
+  // Only populated by _from_dims / _from_epoch_dims (needs dims[d].chunks_per_shard).
+  uint32_t chunks_per_shard[LOD_MAX_LEVELS][LOD_MAX_NDIM];
 
   uint32_t lod_mask;
   int lod_ndim;
@@ -35,6 +45,7 @@ struct lod_plan
   uint64_t lod_shapes[LOD_MAX_LEVELS][LOD_MAX_NDIM];
   uint64_t lod_nelem[LOD_MAX_LEVELS];
 
+  // Heap-allocated arrays. Populated by init and above (not by init_shapes).
   struct lod_spans levels;
   struct lod_spans lod_levels;
   uint64_t* ends;
@@ -56,6 +67,9 @@ lod_segment(const struct lod_plan* p, int level);
 // Initialize a plan. Returns 0 on success, non-zero on failure.
 // chunk_shape: per-dimension chunk sizes (may be NULL). When provided,
 // levels stop before any LOD dimension would drop below its chunk size.
+// Populates everything from init_shapes plus heap-allocated arrays
+// (ends, levels, lod_levels, lod_nelem).
+// Does NOT populate chunks_per_shard (use _from_dims variants for that).
 int
 lod_plan_init(struct lod_plan* p,
               int ndim,
@@ -66,6 +80,8 @@ lod_plan_init(struct lod_plan* p,
 
 // Compute only nlod and per-level shapes (no ends/counts/levels).
 // Use when you only need the level geometry (e.g. for metadata).
+// Populates: ndim, nlod, shapes, chunk_sizes, lod_mask, lod_ndim,
+// lod_map, batch_ndim, batch_map, batch_shape, batch_count, lod_shapes.
 int
 lod_plan_init_shapes(struct lod_plan* p,
                      int ndim,
@@ -77,6 +93,7 @@ lod_plan_init_shapes(struct lod_plan* p,
 // Compute LOD plan from dimension array. Extracts shapes, chunk shapes,
 // and LOD mask (dims 1+ with downsample=1) from dimensions.
 // Uses chunk_size as placeholder shape for unbounded dims (size==0).
+// Populates everything from init plus chunks_per_shard.
 int
 lod_plan_init_from_dims(struct lod_plan* p,
                         const struct dimension* dims,
@@ -86,6 +103,7 @@ lod_plan_init_from_dims(struct lod_plan* p,
 // Like _from_dims, but overrides shape[d] = dims[d].chunk_size for
 // d < n_append (epoch-split). Use for the streaming path where append
 // dims are split into per-epoch chunks.
+// Populates everything from init plus chunks_per_shard.
 int
 lod_plan_init_from_epoch_dims(struct lod_plan* p,
                               const struct dimension* dims,
