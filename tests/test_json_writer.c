@@ -219,7 +219,7 @@ test_zarr_array_json_lz4(void)
 
   int len =
     zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
-  CHECK(Fail, len > 0);
+  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
   buf[len] = '\0';
 
   // The codec name in zarr metadata must be "lz4" (not "lz4_raw")
@@ -246,11 +246,13 @@ test_zarr_array_json_zstd(void)
 
   int len =
     zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
-  CHECK(Fail, len > 0);
+  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
   buf[len] = '\0';
 
-  CHECK(Fail, strstr(buf, "\"name\":\"zstd\""));
-  CHECK(Fail, strstr(buf, "\"checksum\":false"));
+  CHECK(Fail,
+        strstr(buf,
+               "\"name\":\"zstd\",\"configuration\":"
+               "{\"level\":3,\"checksum\":false}"));
 
   return 0;
 
