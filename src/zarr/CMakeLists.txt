@@ -16,6 +16,14 @@ add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
     LINKS shard_pool_fs platform_io chucky_log
 )
 
+add_src_lib(zarr_group SOURCES zarr_group.c zarr_group.h
+    LINKS zarr_metadata chucky_log
+)
+
+add_src_lib(zarr_array SOURCES zarr_array.c zarr_array.h
+    LINKS zarr_metadata writer chucky_log
+)
+
 add_src_lib(zarr_fs_sink SOURCES zarr_fs_sink.c ../zarr_fs_sink.h
     LINKS zarr_metadata ngff_metadata writer io_queue platform_io lod_plan dimension chucky_log
 )
