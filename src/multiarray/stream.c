@@ -62,9 +62,9 @@ struct multiarray_tile_stream_cpu
   uint32_t* batch_gather[LOD_MAX_LEVELS];
   uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
-  uint64_t* scatter_batch_offsets;
+  uint64_t* scatter_fixed_dims_offsets;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
-  uint64_t* lod_batch_offsets[LOD_MAX_LEVELS];
+  uint64_t* lod_fixed_dims_offsets[LOD_MAX_LEVELS];
 
   // Shared LOD buffers (multiscale only).
   void* linear;
@@ -111,9 +111,9 @@ struct pool_maxima
   uint64_t agg_batch_C_count[LOD_MAX_LEVELS];
   size_t batch_gather_count[LOD_MAX_LEVELS];
   size_t scatter_lut_count;
-  size_t scatter_batch_offsets_count;
+  size_t scatter_fixed_dims_offsets_count;
   size_t morton_lut_count[LOD_MAX_LEVELS];
-  size_t lod_batch_offsets_count[LOD_MAX_LEVELS];
+  size_t lod_fixed_dims_offsets_count[LOD_MAX_LEVELS];
 };
 
 // ---- Per-array init ----
@@ -205,26 +205,28 @@ init_array_descriptor(struct array_descriptor* desc,
       maxima->linear_bytes, desc->layout.epoch_elements * bytes_per_element);
 
     uint64_t total_lod_elements =
-      desc->cl.plan.levels.ends[desc->cl.plan.nlod - 1];
+      desc->cl.plan.level_spans.ends[desc->cl.plan.levels.nlod - 1];
     maxima->lod_values_bytes =
       max_sz(maxima->lod_values_bytes, total_lod_elements * bytes_per_element);
-    maxima->scatter_lut_count =
-      max_sz(maxima->scatter_lut_count, desc->cl.plan.lod_nelem[0]);
-    maxima->scatter_batch_offsets_count =
-      max_sz(maxima->scatter_batch_offsets_count, desc->cl.plan.batch_count);
+    maxima->scatter_lut_count = max_sz(maxima->scatter_lut_count,
+                                       desc->cl.plan.levels.level[0].lod_nelem);
+    maxima->scatter_fixed_dims_offsets_count = max_sz(
+      maxima->scatter_fixed_dims_offsets_count, desc->cl.plan.fixed_dims_count);
 
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-      maxima->morton_lut_count[lv] =
-        max_sz(maxima->morton_lut_count[lv], desc->cl.plan.lod_nelem[lv]);
-      maxima->lod_batch_offsets_count[lv] =
-        max_sz(maxima->lod_batch_offsets_count[lv], desc->cl.plan.batch_count);
+      maxima->morton_lut_count[lv] = max_sz(
+        maxima->morton_lut_count[lv], desc->cl.plan.levels.level[lv].lod_nelem);
+      maxima->lod_fixed_dims_offsets_count[lv] =
+        max_sz(maxima->lod_fixed_dims_offsets_count[lv],
+               desc->cl.plan.fixed_dims_count);
     }
 
     // Append accum: per-array, not shared.
     if (desc->cl.dims.append_downsample) {
       uint64_t append_total = 0;
-      for (int lv = 1; lv < desc->cl.plan.nlod; ++lv)
-        append_total += desc->cl.plan.batch_count * desc->cl.plan.lod_nelem[lv];
+      for (int lv = 1; lv < desc->cl.plan.levels.nlod; ++lv)
+        append_total += desc->cl.plan.fixed_dims_count *
+                        desc->cl.plan.levels.level[lv].lod_nelem;
       if (append_total > 0) {
         desc->append_accum = calloc(append_total, bytes_per_element);
         if (!desc->append_accum)
@@ -283,10 +285,10 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
         (uint32_t*)malloc(mx->morton_lut_count[lv] * sizeof(uint32_t));
       CHECK(Fail, ms->morton_lut[lv]);
     }
-    if (mx->lod_batch_offsets_count[lv] > 0) {
-      ms->lod_batch_offsets[lv] =
-        (uint64_t*)calloc(mx->lod_batch_offsets_count[lv], sizeof(uint64_t));
-      CHECK(Fail, ms->lod_batch_offsets[lv]);
+    if (mx->lod_fixed_dims_offsets_count[lv] > 0) {
+      ms->lod_fixed_dims_offsets[lv] = (uint64_t*)calloc(
+        mx->lod_fixed_dims_offsets_count[lv], sizeof(uint64_t));
+      CHECK(Fail, ms->lod_fixed_dims_offsets[lv]);
     }
   }
   if (mx->batch_covering_count > 0) {
@@ -299,10 +301,10 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
       (uint32_t*)malloc(mx->scatter_lut_count * sizeof(uint32_t));
     CHECK(Fail, ms->scatter_lut);
   }
-  if (mx->scatter_batch_offsets_count > 0) {
-    ms->scatter_batch_offsets =
-      (uint64_t*)calloc(mx->scatter_batch_offsets_count, sizeof(uint64_t));
-    CHECK(Fail, ms->scatter_batch_offsets);
+  if (mx->scatter_fixed_dims_offsets_count > 0) {
+    ms->scatter_fixed_dims_offsets =
+      (uint64_t*)calloc(mx->scatter_fixed_dims_offsets_count, sizeof(uint64_t));
+    CHECK(Fail, ms->scatter_fixed_dims_offsets);
   }
 
   // LOD buffers.
@@ -342,8 +344,8 @@ multiarray_tile_stream_cpu_create(
   ms->n_arrays = n_arrays;
   ms->active = -1;
   ms->luts_computed_for = -1;
-  ms->nthreads = configs[0].max_threads > 0 ? configs[0].max_threads
-                                             : omp_get_max_threads();
+  ms->nthreads =
+    configs[0].max_threads > 0 ? configs[0].max_threads : omp_get_max_threads();
 
   ms->arrays = (struct array_descriptor*)calloc(
     (size_t)n_arrays, sizeof(struct array_descriptor));
@@ -418,11 +420,11 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     free(ms->batch_gather[lv]);
     free(ms->batch_chunk_to_shard_map[lv]);
     free(ms->morton_lut[lv]);
-    free(ms->lod_batch_offsets[lv]);
+    free(ms->lod_fixed_dims_offsets[lv]);
   }
   free(ms->shard_order_sizes);
   free(ms->scatter_lut);
-  free(ms->scatter_batch_offsets);
+  free(ms->scatter_fixed_dims_offsets);
   free(ms->linear);
   free(ms->lod_values);
   free(ms);
@@ -449,13 +451,13 @@ recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
   struct array_descriptor* desc = &ms->arrays[array_index];
   struct lut_targets luts = {
     .scatter_lut = ms->scatter_lut,
-    .scatter_batch_offsets = ms->scatter_batch_offsets,
+    .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
     luts.batch_gather[lv] = ms->batch_gather[lv];
     luts.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
     luts.morton_lut[lv] = ms->morton_lut[lv];
-    luts.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
+    luts.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }
   cpu_pipeline_compute_luts(&desc->cl,
                             &desc->levels,
@@ -504,7 +506,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
     p.levels[lv] = (struct flush_level_view){
       .agg_layout = &desc->agg_layout[lv],
       .batch_active_count = desc->batch_active_count[lv],
-      .chunk_offset = desc->levels.chunk_offset[lv],
+      .chunk_offset = desc->levels.level[lv].chunk_offset,
       .batch_chunk_to_shard_map = ms->batch_chunk_to_shard_map[lv],
       .batch_gather = ms->batch_gather[lv],
       .agg_slot = &ms->agg_slots[lv],
@@ -529,7 +531,7 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
     .linear = ms->linear,
     .lod_values = ms->lod_values,
     .scatter_lut = ms->scatter_lut,
-    .scatter_batch_offsets = ms->scatter_batch_offsets,
+    .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
     .nthreads = ms->nthreads,
@@ -537,7 +539,7 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
     p.morton_lut[lv] = ms->morton_lut[lv];
-    p.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
+    p.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }
   return p;
 }
@@ -605,7 +607,8 @@ clear_lod_values(struct multiarray_tile_stream_cpu* ms,
 {
   if (desc->levels.enable_multiscale && ms->lod_values) {
     size_t lod_bytes =
-      desc->cl.plan.levels.ends[desc->cl.plan.nlod - 1] * bytes_per_element;
+      desc->cl.plan.level_spans.ends[desc->cl.plan.levels.nlod - 1] *
+      bytes_per_element;
     memset(ms->lod_values, 0, lod_bytes);
   }
 }
@@ -807,7 +810,7 @@ drain_append_all(struct multiarray_tile_stream_cpu* ms)
     };
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
       dp.morton_lut[lv] = ms->morton_lut[lv];
-      dp.lod_batch_offsets[lv] = ms->lod_batch_offsets[lv];
+      dp.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
     }
 
     uint32_t drain_mask = 0;

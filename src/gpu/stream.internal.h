@@ -61,10 +61,10 @@ struct lod_state
   CUdeviceptr d_linear; // linear epoch buffer (device)
   CUdeviceptr d_morton; // morton-ordered LOD output (all levels packed)
 
-  CUdeviceptr d_full_shape;    // device copy of shapes[0]
-  CUdeviceptr d_lod_shape;     // device copy of lod_shapes[0]
-  CUdeviceptr d_gather_lut;    // u32, lod_nelem[0] entries
-  CUdeviceptr d_batch_offsets; // u32, batch_count entries
+  CUdeviceptr d_full_shape;         // device copy of shapes[0]
+  CUdeviceptr d_lod_shape;          // device copy of LOD-projected shapes[0]
+  CUdeviceptr d_gather_lut;         // u32, lod_nelem[0] entries
+  CUdeviceptr d_fixed_dims_offsets; // u32, fixed_dims_count entries
 
   CUdeviceptr d_child_shapes[LOD_MAX_LEVELS];
   CUdeviceptr d_parent_shapes[LOD_MAX_LEVELS];
@@ -76,7 +76,8 @@ struct lod_state
 
   // Morton-to-chunk scatter LUTs (precomputed)
   CUdeviceptr d_morton_chunk_lut[LOD_MAX_LEVELS]; // u32, lod_nelem[lv]
-  CUdeviceptr d_morton_batch_chunk_offsets[LOD_MAX_LEVELS]; // u32, batch_count
+  CUdeviceptr
+    d_morton_fixed_dims_chunk_offsets[LOD_MAX_LEVELS]; // u32, fixed_dims_count
 
   CUevent t_start;
   CUevent t_scatter_end;

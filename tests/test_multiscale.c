@@ -471,7 +471,7 @@ test_dim0_multi_epoch_levels(void)
   struct lod_plan plan = { 0 };
   CHECK(Fail, lod_plan_init_from_dims(&plan, dims, rank, LOD_MAX_LEVELS) == 0);
 
-  int nlod = plan.nlod;
+  int nlod = plan.levels.nlod;
   log_info("  nlod=%d total_elements=%zu", nlod, total_elements);
   CHECK(Fail, nlod >= 2); // need at least 2 levels for this test
 
@@ -497,11 +497,11 @@ test_dim0_multi_epoch_levels(void)
     }
     log_info("  level %d: shape=(%lu,%lu,%lu,%lu,%lu) shards=%d",
              lv,
-             (unsigned long)plan.shapes[lv][0],
-             (unsigned long)plan.shapes[lv][1],
-             (unsigned long)plan.shapes[lv][2],
-             (unsigned long)plan.shapes[lv][3],
-             (unsigned long)plan.shapes[lv][4],
+             (unsigned long)plan.levels.level[lv].dim[0].size,
+             (unsigned long)plan.levels.level[lv].dim[1].size,
+             (unsigned long)plan.levels.level[lv].dim[2].size,
+             (unsigned long)plan.levels.level[lv].dim[3].size,
+             (unsigned long)plan.levels.level[lv].dim[4].size,
              num_shards_per_level[lv]);
   }
 

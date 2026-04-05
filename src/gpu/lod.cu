@@ -225,7 +225,7 @@ __global__ void __launch_bounds__(256, 4)
   lod_gather_lut_k(T* __restrict__ dst,
                    const T* __restrict__ src,
                    const uint32_t* __restrict__ src_lut,
-                   const uint32_t* __restrict__ batch_offsets,
+                   const uint32_t* __restrict__ fixed_dims_offsets,
                    uint64_t lod_count,
                    uint64_t total)
 {
@@ -236,7 +236,7 @@ __global__ void __launch_bounds__(256, 4)
       return;
     uint64_t batch = gid / lod_count;
     uint64_t morton_pos = gid % lod_count;
-    dst[gid] = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
+    dst[gid] = src[(uint64_t)fixed_dims_offsets[batch] + src_lut[morton_pos]];
   } else {
     constexpr int T_PER_U32 = sizeof(uint32_t) / sizeof(T);
     constexpr int TILE_U32 =
@@ -260,7 +260,8 @@ __global__ void __launch_bounds__(256, 4)
 
         for (int k = 0; k < T_PER_U32; ++k) {
           if (gid + k < total) {
-            T val = src[(uint64_t)batch_offsets[batch] + src_lut[morton_pos]];
+            T val =
+              src[(uint64_t)fixed_dims_offsets[batch] + src_lut[morton_pos]];
             memcpy((char*)&packed + k * sizeof(T), &val, sizeof(T));
           }
           morton_pos++;
@@ -344,12 +345,13 @@ lod_build_chunk_scatter_lut_k(uint32_t* __restrict__ chunk_lut,
 
 template<typename T>
 __global__ void
-lod_morton_to_chunks_lut_k(T* __restrict__ dst,
-                           const T* __restrict__ src,
-                           const uint32_t* __restrict__ chunk_lut,
-                           const uint32_t* __restrict__ batch_chunk_offsets,
-                           uint64_t lod_count,
-                           uint64_t total)
+lod_morton_to_chunks_lut_k(
+  T* __restrict__ dst,
+  const T* __restrict__ src,
+  const uint32_t* __restrict__ chunk_lut,
+  const uint32_t* __restrict__ fixed_dims_chunk_offsets,
+  uint64_t lod_count,
+  uint64_t total)
 {
   const uint64_t gid = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
   if (gid >= total)
@@ -357,7 +359,8 @@ lod_morton_to_chunks_lut_k(T* __restrict__ dst,
 
   uint64_t batch = gid / lod_count;
   uint64_t morton_pos = gid % lod_count;
-  dst[(uint64_t)batch_chunk_offsets[batch] + chunk_lut[morton_pos]] = src[gid];
+  dst[(uint64_t)fixed_dims_chunk_offsets[batch] + chunk_lut[morton_pos]] =
+    src[gid];
 }
 
 // --- Fill ends kernel (templated on NdimMax) ---
@@ -415,10 +418,10 @@ lod_reduce_k(T* __restrict__ values,
              uint64_t dst_offset,
              uint64_t src_lod_count,
              uint64_t dst_lod_count,
-             uint64_t batch_count)
+             uint64_t fixed_dims_count)
 {
   const uint64_t gid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  const uint64_t total = batch_count * dst_lod_count;
+  const uint64_t total = fixed_dims_count * dst_lod_count;
   if (gid >= total)
     return;
 
@@ -639,19 +642,19 @@ static void
 lod_morton_to_chunks_lut_launch(CUdeviceptr d_chunks,
                                 CUdeviceptr d_morton,
                                 CUdeviceptr d_chunk_lut,
-                                CUdeviceptr d_batch_chunk_offsets,
+                                CUdeviceptr d_fixed_dims_chunk_offsets,
                                 uint64_t lod_count,
-                                uint64_t batch_count,
+                                uint64_t fixed_dims_count,
                                 CUstream stream)
 {
-  const uint64_t total = batch_count * lod_count;
+  const uint64_t total = fixed_dims_count * lod_count;
   const int grid_size = (int)((total + LOD_BLOCK - 1) / LOD_BLOCK);
 
   lod_morton_to_chunks_lut_k<T><<<grid_size, LOD_BLOCK, 0, stream>>>(
     (T*)d_chunks,
     (const T*)d_morton,
     (const uint32_t*)d_chunk_lut,
-    (const uint32_t*)d_batch_chunk_offsets,
+    (const uint32_t*)d_fixed_dims_chunk_offsets,
     lod_count,
     total);
 }
@@ -660,10 +663,10 @@ extern "C" int
 lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
                          CUdeviceptr d_morton,
                          CUdeviceptr d_chunk_lut,
-                         CUdeviceptr d_batch_chunk_offsets,
+                         CUdeviceptr d_fixed_dims_chunk_offsets,
                          enum dtype dtype,
                          uint64_t lod_count,
-                         uint64_t batch_count,
+                         uint64_t fixed_dims_count,
                          CUstream stream)
 {
 #define DISPATCH(D, T)                                                         \
@@ -671,9 +674,9 @@ lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
     lod_morton_to_chunks_lut_launch<T>(d_chunks,                               \
                                        d_morton,                               \
                                        d_chunk_lut,                            \
-                                       d_batch_chunk_offsets,                  \
+                                       d_fixed_dims_chunk_offsets,             \
                                        lod_count,                              \
-                                       batch_count,                            \
+                                       fixed_dims_count,                       \
                                        stream);                                \
     return 0;                                                                  \
   }
@@ -687,12 +690,12 @@ static void
 lod_gather_lut_launch(CUdeviceptr d_dst,
                       CUdeviceptr d_src,
                       CUdeviceptr d_src_lut,
-                      CUdeviceptr d_batch_offsets,
+                      CUdeviceptr d_fixed_dims_offsets,
                       uint64_t lod_count,
-                      uint64_t batch_count,
+                      uint64_t fixed_dims_count,
                       CUstream stream)
 {
-  const uint64_t total = batch_count * lod_count;
+  const uint64_t total = fixed_dims_count * lod_count;
   int grid_size;
 
   if constexpr (sizeof(T) > sizeof(uint32_t)) {
@@ -708,7 +711,7 @@ lod_gather_lut_launch(CUdeviceptr d_dst,
     <<<grid_size, LOD_BLOCK, 0, stream>>>((T*)d_dst,
                                           (const T*)d_src,
                                           (const uint32_t*)d_src_lut,
-                                          (const uint32_t*)d_batch_offsets,
+                                          (const uint32_t*)d_fixed_dims_offsets,
                                           lod_count,
                                           total);
 }
@@ -717,10 +720,10 @@ extern "C" int
 lod_gather_lut(CUdeviceptr d_dst,
                CUdeviceptr d_src,
                CUdeviceptr d_src_lut,
-               CUdeviceptr d_batch_offsets,
+               CUdeviceptr d_fixed_dims_offsets,
                enum dtype dtype,
                uint64_t lod_count,
-               uint64_t batch_count,
+               uint64_t fixed_dims_count,
                CUstream stream)
 {
 #define DISPATCH(D, T)                                                         \
@@ -728,9 +731,9 @@ lod_gather_lut(CUdeviceptr d_dst,
     lod_gather_lut_launch<T>(d_dst,                                            \
                              d_src,                                            \
                              d_src_lut,                                        \
-                             d_batch_offsets,                                  \
+                             d_fixed_dims_offsets,                             \
                              lod_count,                                        \
-                             batch_count,                                      \
+                             fixed_dims_count,                                 \
                              stream);                                          \
     return 0;                                                                  \
   }
@@ -994,10 +997,10 @@ lod_reduce(CUdeviceptr d_values,
            uint64_t dst_offset,
            uint64_t src_lod_count,
            uint64_t dst_lod_count,
-           uint64_t batch_count,
+           uint64_t fixed_dims_count,
            CUstream stream)
 {
-  const uint64_t total = batch_count * dst_lod_count;
+  const uint64_t total = fixed_dims_count * dst_lod_count;
   const int block_size = 256;
   const int grid_size = (int)((total + block_size - 1) / block_size);
 
@@ -1010,7 +1013,7 @@ lod_reduce(CUdeviceptr d_values,
                                              dst_offset,                       \
                                              src_lod_count,                    \
                                              dst_lod_count,                    \
-                                             batch_count);                     \
+                                             fixed_dims_count);                \
     return 0;
 
 #define REDUCE_METHODS(Type, Acc)                                              \

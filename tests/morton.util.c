@@ -20,9 +20,9 @@ static uint64_t
 plan_batch_index(const struct lod_plan* p, const uint64_t* full_coords)
 {
   uint64_t idx = 0, stride = 1;
-  for (int k = p->batch_ndim - 1; k >= 0; --k) {
-    idx += full_coords[p->batch_map[k]] * stride;
-    stride *= p->batch_shape[k];
+  for (int k = p->fixed_dims_ndim - 1; k >= 0; --k) {
+    idx += full_coords[p->fixed_dim_to_dim[k]] * stride;
+    stride *= p->fixed_dims_shape[k];
   }
   return idx;
 }
@@ -33,14 +33,18 @@ plan_extract_lod(const struct lod_plan* p,
                  uint64_t* lod_coords)
 {
   for (int k = 0; k < p->lod_ndim; ++k)
-    lod_coords[k] = full_coords[p->lod_map[k]];
+    lod_coords[k] = full_coords[p->lod_to_dim[k]];
 }
 
 void
 lod_scatter_cpu(const struct lod_plan* p, const float* src, float* dst)
 {
-  const uint64_t* full_shape = p->shapes[0];
-  uint64_t n = lod_span_len(lod_spans_at(&p->levels, 0));
+  uint64_t full_shape[MAX_NDIM];
+  level_dims_get_shape(&p->levels.level[0], p->ndim, full_shape);
+  uint64_t n = lod_span_len(lod_spans_at(&p->level_spans, 0));
+
+  uint64_t lod_shape0[MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, 0, lod_shape0);
 
   uint64_t full_coords[MAX_NDIM];
   uint64_t lod_coords[MAX_NDIM];
@@ -55,8 +59,8 @@ lod_scatter_cpu(const struct lod_plan* p, const float* src, float* dst)
     }
     uint64_t b = plan_batch_index(p, full_coords);
     plan_extract_lod(p, full_coords, lod_coords);
-    uint64_t pos = morton_rank(p->lod_ndim, p->lod_shapes[0], lod_coords, 0);
-    dst[b * p->lod_nelem[0] + pos] = src[i];
+    uint64_t pos = morton_rank(p->lod_ndim, lod_shape0, lod_coords, 0);
+    dst[b * p->levels.level[0].lod_nelem + pos] = src[i];
   }
 }
 
@@ -157,14 +161,14 @@ lod_reduce_cpu(const struct lod_plan* p,
                float* values,
                enum lod_reduce_method method)
 {
-  for (int l = 0; l < p->nlod - 1; ++l) {
+  for (int l = 0; l < p->levels.nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
-    uint64_t src_ds = p->lod_nelem[l];
-    uint64_t dst_ds = p->lod_nelem[l + 1];
-    struct lod_span src_level = lod_spans_at(&p->levels, l);
-    struct lod_span dst_level = lod_spans_at(&p->levels, l + 1);
+    uint64_t src_ds = p->levels.level[l].lod_nelem;
+    uint64_t dst_ds = p->levels.level[l + 1].lod_nelem;
+    struct lod_span src_level = lod_spans_at(&p->level_spans, l);
+    struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < p->batch_count; ++b) {
+    for (uint64_t b = 0; b < p->fixed_dims_count; ++b) {
       uint64_t src_base = src_level.beg + b * src_ds;
       uint64_t dst_base = dst_level.beg + b * dst_ds;
 
@@ -187,7 +191,7 @@ lod_compute(const struct lod_plan* p,
   int ok = 0;
   *out_values = NULL;
 
-  uint64_t total_vals = p->levels.ends[p->nlod - 1];
+  uint64_t total_vals = p->level_spans.ends[p->levels.nlod - 1];
   float* values = (float*)malloc(total_vals * sizeof(float));
   CHECK(Error, values);
   *out_values = values;
@@ -211,8 +215,12 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
                     const uint16_t* src,
                     uint16_t* dst)
 {
-  const uint64_t* full_shape = p->shapes[0];
-  uint64_t n = lod_span_len(lod_spans_at(&p->levels, 0));
+  uint64_t full_shape[MAX_NDIM];
+  level_dims_get_shape(&p->levels.level[0], p->ndim, full_shape);
+  uint64_t n = lod_span_len(lod_spans_at(&p->level_spans, 0));
+
+  uint64_t lod_shape0[MAX_NDIM];
+  lod_plan_fill_lod_shapes(p, 0, lod_shape0);
 
   uint64_t full_coords[MAX_NDIM];
   uint64_t lod_coords[MAX_NDIM];
@@ -226,8 +234,8 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
     }
     uint64_t b = plan_batch_index(p, full_coords);
     plan_extract_lod(p, full_coords, lod_coords);
-    uint64_t pos = morton_rank(p->lod_ndim, p->lod_shapes[0], lod_coords, 0);
-    dst[b * p->lod_nelem[0] + pos] = src[i];
+    uint64_t pos = morton_rank(p->lod_ndim, lod_shape0, lod_coords, 0);
+    dst[b * p->levels.level[0].lod_nelem + pos] = src[i];
   }
 }
 
@@ -328,14 +336,14 @@ lod_reduce_cpu_u16(const struct lod_plan* p,
                    uint16_t* values,
                    enum lod_reduce_method method)
 {
-  for (int l = 0; l < p->nlod - 1; ++l) {
+  for (int l = 0; l < p->levels.nlod - 1; ++l) {
     struct lod_span seg = lod_segment(p, l);
-    uint64_t src_lod = p->lod_nelem[l];
-    uint64_t dst_lod = p->lod_nelem[l + 1];
-    struct lod_span src_level = lod_spans_at(&p->levels, l);
-    struct lod_span dst_level = lod_spans_at(&p->levels, l + 1);
+    uint64_t src_lod = p->levels.level[l].lod_nelem;
+    uint64_t dst_lod = p->levels.level[l + 1].lod_nelem;
+    struct lod_span src_level = lod_spans_at(&p->level_spans, l);
+    struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < p->batch_count; ++b) {
+    for (uint64_t b = 0; b < p->fixed_dims_count; ++b) {
       uint64_t src_base = src_level.beg + b * src_lod;
       uint64_t dst_base = dst_level.beg + b * dst_lod;
 
@@ -358,7 +366,7 @@ lod_compute_u16(const struct lod_plan* p,
   int ok = 0;
   *out_values = NULL;
 
-  uint64_t total_vals = p->levels.ends[p->nlod - 1];
+  uint64_t total_vals = p->level_spans.ends[p->levels.nlod - 1];
   uint16_t* values = (uint16_t*)malloc(total_vals * sizeof(uint16_t));
   CHECK(Error, values);
   *out_values = values;

@@ -42,10 +42,11 @@ struct tile_stream_cpu
   void* lod_values; // morton-ordered LOD buffer (all levels packed)
 
   // Precomputed LOD LUTs (multiscale only)
-  uint32_t* scatter_lut;                       // [lod_nelem[0]] L0 scatter LUT
-  uint64_t* scatter_batch_offsets;             // [batch_count] for L0 gather
-  uint32_t* morton_lut[LOD_MAX_LEVELS];        // [lod_nelem[lv]] per level
-  uint64_t* lod_batch_offsets[LOD_MAX_LEVELS]; // [batch_count] per level
+  uint32_t* scatter_lut;                // [lod_nelem[0]] L0 scatter LUT
+  uint64_t* scatter_fixed_dims_offsets; // [fixed_dims_count] for L0 gather
+  uint32_t* morton_lut[LOD_MAX_LEVELS]; // [lod_nelem[lv]] per level
+  uint64_t*
+    lod_fixed_dims_offsets[LOD_MAX_LEVELS]; // [fixed_dims_count] per level
 
   // Append downsample accumulation state
   void* append_accum;                     // accumulator for levels 1+

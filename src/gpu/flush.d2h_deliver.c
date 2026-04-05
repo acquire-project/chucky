@@ -131,7 +131,7 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
     if (config->shard_alignment > 0)
       actual += config->shard_alignment;
     size_t cap =
-      agg_pool_bytes((uint64_t)active_count * levels->chunk_count[lv],
+      agg_pool_bytes((uint64_t)active_count * levels->level[lv].chunk_count,
                      handoff->max_output_size,
                      lvl->agg_layout.covering_count,
                      lvl->agg_layout.cps_inner,
@@ -172,7 +172,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
     const size_t morton_bytes =
-      lod->plan.levels.ends[lod->plan.nlod - 1] * bytes_per_element;
+      lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] * bytes_per_element;
     const size_t unified_pool_bytes =
       levels->total_chunks * layout->chunk_stride * bytes_per_element;
 

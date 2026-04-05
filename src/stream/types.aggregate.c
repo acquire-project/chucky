@@ -49,8 +49,8 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
     uint32_t pool_epoch = pool_epochs[a];
     for (uint64_t j = 0; j < M_lv; ++j) {
       uint64_t idx = (uint64_t)a * M_lv + j;
-      out_gather[idx] =
-        (uint32_t)(pool_epoch * total_chunks + levels->chunk_offset[lv] + j);
+      out_gather[idx] = (uint32_t)(pool_epoch * total_chunks +
+                                   levels->level[lv].chunk_offset + j);
 
       uint64_t perm_pos =
         ravel(agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);

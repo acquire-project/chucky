@@ -315,7 +315,7 @@ test_d2h_batch_none(void)
     uint32_t batch_count = c.ca.levels[0].batch_active_count;
     uint32_t cps_inner = (uint32_t)al->cps_inner;
     uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
-    uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+    uint64_t chunks_lv = c.cl.levels.level[0].chunk_count;
     // unravel uses column-major (d=0 fastest), so reverse for row-major order.
     const uint64_t slot_shape[3] = { cps_inner, batch_count, num_shards };
 

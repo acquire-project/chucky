@@ -307,7 +307,7 @@ test_compress_agg_batch(void)
   CHECK(Fail, handoff.agg[0]->h_offsets[batch_covering] == expected_total);
 
   // Verify data per epoch
-  uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint64_t chunks_lv = c.cl.levels.level[0].chunk_count;
   uint32_t cps_inner = (uint32_t)al->cps_inner;
   uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
   const uint64_t shard_shape[2] = { num_shards, cps_inner };
@@ -520,7 +520,7 @@ test_compress_agg_zstd_batch(void)
   decomp_buf = (uint8_t*)malloc(chunk_bytes);
   CHECK(Fail, decomp_buf);
 
-  uint64_t chunks_lv = c.cl.levels.chunk_count[0];
+  uint64_t chunks_lv = c.cl.levels.level[0].chunk_count;
   uint32_t cps_inner = (uint32_t)al->cps_inner;
   uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
   const uint64_t shard_shape[2] = { num_shards, cps_inner };
