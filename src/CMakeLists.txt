@@ -54,3 +54,4 @@ add_subdirectory(multiarray)
 
 add_subdirectory(zarr)
 add_subdirectory(ngff)
+add_subdirectory(hcs)

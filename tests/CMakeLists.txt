@@ -118,6 +118,7 @@ add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs lod_plan chucky_log)
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs chucky_log)
+add_test_exe(test_hcs test_hcs.c hcs store_fs chucky_log)
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static zarr_fs_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_s3_sink platform_cmd chucky_log)
