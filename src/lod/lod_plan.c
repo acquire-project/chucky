@@ -416,3 +416,26 @@ dim_extent_compute_shards(struct dim_extent* dims,
   }
   return shard_inner_count;
 }
+
+uint64_t
+dims_compute_shard_geometry(const struct dimension* dims,
+                            uint8_t rank,
+                            uint64_t* shard_counts,
+                            uint64_t* chunks_per_shard)
+{
+  struct dim_extent de[LOD_MAX_NDIM];
+  for (int d = 0; d < rank; ++d) {
+    de[d].size = dims[d].size;
+    de[d].chunk_size = (uint32_t)dims[d].chunk_size;
+  }
+  uint64_t cps[LOD_MAX_NDIM];
+  for (int d = 0; d < rank; ++d)
+    cps[d] = dims[d].chunks_per_shard;
+  uint8_t na = dims_n_append(dims, rank);
+  uint64_t sic = dim_extent_compute_shards(de, rank, na, cps);
+  for (int d = 0; d < rank; ++d) {
+    shard_counts[d] = de[d].shard_count;
+    chunks_per_shard[d] = de[d].chunks_per_shard;
+  }
+  return sic;
+}

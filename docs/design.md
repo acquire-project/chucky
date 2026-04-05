@@ -564,7 +564,8 @@ Each `struct dimension` describes one axis:
 | `name` | Optional label (e.g. `"x"`) |
 | `downsample` | Include in LOD pyramid (0 or 1) |
 | `storage_position` | Position in storage layout; append dimension must be position 0 |
-| `axis_type` | OME-NGFF axis type: `dimension_axis_space`, `_time`, `_channel`, `_other` |
+
+NGFF axis metadata (`struct ngff_axis` in `ngff/ngff_axis.h`) is separate from dimension geometry and provided via the multiscale config's `axes` field.
 
 #### Writer interface
 

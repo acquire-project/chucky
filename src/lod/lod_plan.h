@@ -74,6 +74,15 @@ dim_extent_compute_shards(struct dim_extent* dims,
                           int n_append,
                           const uint64_t* config_cps);
 
+// Compute shard geometry from a dimension array.
+// Fills shard_counts[rank] and chunks_per_shard[rank] from the dimensions.
+// Returns shard_inner_count.
+uint64_t
+dims_compute_shard_geometry(const struct dimension* dims,
+                            uint8_t rank,
+                            uint64_t* shard_counts,
+                            uint64_t* chunks_per_shard);
+
 // Extract sizes from level_dims into a flat array.
 void
 level_dims_get_shape(const struct level_dims* ld, int ndim, uint64_t* out);

@@ -14,31 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- Helper: compute geometry and build zarr_array_config ---
-
-static uint64_t
-compute_array_geometry(const struct dimension* dims,
-                       uint8_t rank,
-                       uint64_t* shard_counts,
-                       uint64_t* chunks_per_shard)
-{
-  struct dim_extent de[MAX_ZARR_RANK];
-  for (int d = 0; d < rank; ++d) {
-    de[d].size = dims[d].size;
-    de[d].chunk_size = (uint32_t)dims[d].chunk_size;
-  }
-  uint64_t cps[MAX_ZARR_RANK];
-  for (int d = 0; d < rank; ++d)
-    cps[d] = dims[d].chunks_per_shard;
-  uint8_t na = dims_n_append(dims, rank);
-  uint64_t shard_inner_count = dim_extent_compute_shards(de, rank, na, cps);
-  for (int d = 0; d < rank; ++d) {
-    shard_counts[d] = de[d].shard_count;
-    chunks_per_shard[d] = de[d].chunks_per_shard;
-  }
-  return shard_inner_count;
-}
-
 // --- Helper: write root + intermediate groups ---
 
 struct fs_intermediate_ctx
@@ -104,7 +79,7 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   // Compute geometry
   uint64_t shard_counts[MAX_ZARR_RANK];
   uint64_t chunks_per_shard[MAX_ZARR_RANK];
-  uint64_t shard_inner_count = compute_array_geometry(
+  uint64_t shard_inner_count = dims_compute_shard_geometry(
     cfg->dimensions, cfg->rank, shard_counts, chunks_per_shard);
 
   zs->pool = zs->store->create_pool(zs->store, shard_inner_count);
@@ -206,7 +181,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   // Compute L0 geometry for pool sizing
   uint64_t shard_counts[MAX_ZARR_RANK];
   uint64_t chunks_per_shard[MAX_ZARR_RANK];
-  uint64_t shard_inner_count = compute_array_geometry(
+  uint64_t shard_inner_count = dims_compute_shard_geometry(
     cfg->dimensions, cfg->rank, shard_counts, chunks_per_shard);
 
   s->pool = s->store->create_pool(s->store, shard_inner_count);
