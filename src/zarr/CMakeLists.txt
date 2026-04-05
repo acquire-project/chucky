@@ -8,6 +8,14 @@ add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
     LINKS crc32c writer platform chucky_log
 )
 
+add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
+    LINKS io_queue platform platform_io writer chucky_log
+)
+
+add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
+    LINKS shard_pool_fs platform_io chucky_log
+)
+
 add_src_lib(zarr_fs_sink SOURCES zarr_fs_sink.c ../zarr_fs_sink.h
     LINKS zarr_metadata ngff_metadata writer io_queue platform_io lod_plan dimension chucky_log
 )
