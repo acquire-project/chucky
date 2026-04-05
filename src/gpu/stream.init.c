@@ -375,7 +375,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     if (batch_count == 0)
       batch_count = 1;
 
-    uint64_t batch_chunks = (uint64_t)batch_count * cl.levels.chunk_count[lv];
+    uint64_t batch_chunks =
+      (uint64_t)batch_count * cl.levels.level[lv].chunk_count;
     uint64_t batch_covering = (uint64_t)batch_count * covering_count;
     size_t batch_agg_bytes = agg_pool_bytes(batch_chunks,
                                             max_output_size,
@@ -423,7 +424,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     const struct lod_plan* plan = &cl.plan;
 
     lod_device += cl.layouts[0].epoch_elements * bytes_per_element;
-    uint64_t total_lod_vals = plan->level_spans.ends[plan->nlod - 1];
+    uint64_t total_lod_vals = plan->level_spans.ends[plan->levels.nlod - 1];
     lod_device += total_lod_vals * bytes_per_element;
 
     lod_device += rank * sizeof(uint64_t);
@@ -431,11 +432,11 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += plan->lod_ndim * sizeof(uint64_t);
 
     if (plan->lod_ndim > 0) {
-      lod_device += plan->lod_nelem[0] * sizeof(uint32_t);
-      lod_device += plan->batch_count * sizeof(uint32_t);
+      lod_device += plan->levels.level[0].lod_nelem * sizeof(uint32_t);
+      lod_device += plan->fixed_dims_count * sizeof(uint32_t);
     }
 
-    for (int l = 0; l < plan->nlod - 1; ++l) {
+    for (int l = 0; l < plan->levels.nlod - 1; ++l) {
       lod_device += plan->lod_ndim * sizeof(uint64_t);
       lod_device += plan->lod_ndim * sizeof(uint64_t);
 
@@ -444,7 +445,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += n_parents * sizeof(uint64_t);
     }
 
-    for (int lv = 1; lv < plan->nlod; ++lv) {
+    for (int lv = 1; lv < plan->levels.nlod; ++lv) {
       lod_device += 2 * rank * sizeof(uint64_t);
       lod_device += 2 * rank * sizeof(int64_t);
     }
@@ -453,11 +454,12 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       size_t accum_bpe =
         dtype_accum_bpe(config->dtype, config->append_reduce_method);
       uint64_t total_elems = 0;
-      for (int lv = 1; lv < plan->nlod; ++lv)
-        total_elems += plan->batch_count * plan->lod_nelem[lv];
+      for (int lv = 1; lv < plan->levels.nlod; ++lv)
+        total_elems +=
+          plan->fixed_dims_count * plan->levels.level[lv].lod_nelem;
       lod_device += total_elems * accum_bpe;
       lod_device += total_elems;
-      lod_device += (uint64_t)plan->nlod * sizeof(uint32_t);
+      lod_device += (uint64_t)plan->levels.nlod * sizeof(uint32_t);
     }
   }
 

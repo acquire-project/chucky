@@ -40,8 +40,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     return NULL;
 
   s->config = *config;
-  s->nthreads = config->max_threads > 0 ? config->max_threads
-                                        : omp_get_max_threads();
+  s->nthreads =
+    config->max_threads > 0 ? config->max_threads : omp_get_max_threads();
   s->shard_sink = sink;
 
   // CPU codec alignment is 1 (no nvcomp alignment needed).
@@ -134,7 +134,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->linear = calloc(s->layout.epoch_elements, bytes_per_element);
     CHECK(Fail, s->linear);
 
-    uint64_t total_lod_elements = s->cl.plan.level_spans.ends[s->cl.plan.nlod - 1];
+    uint64_t total_lod_elements =
+      s->cl.plan.level_spans.ends[s->cl.plan.levels.nlod - 1];
     s->lod_values = calloc(total_lod_elements, bytes_per_element);
     CHECK(Fail, s->lod_values);
 
@@ -144,8 +145,9 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     // fold.
     if (s->cl.dims.append_downsample) {
       uint64_t append_total = 0;
-      for (int lv = 1; lv < s->cl.plan.nlod; ++lv)
-        append_total += s->cl.plan.batch_count * s->cl.plan.lod_nelem[lv];
+      for (int lv = 1; lv < s->cl.plan.levels.nlod; ++lv)
+        append_total +=
+          s->cl.plan.fixed_dims_count * s->cl.plan.levels.level[lv].lod_nelem;
       if (append_total > 0) {
         s->append_accum = calloc(append_total, bytes_per_element);
         CHECK(Fail, s->append_accum);
@@ -156,25 +158,26 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     // Allocate L0 scatter LUT + batch offsets.
     {
       const struct lod_plan* plan = &s->cl.plan;
-      s->scatter_lut = (uint32_t*)malloc(plan->lod_nelem[0] * sizeof(uint32_t));
+      s->scatter_lut =
+        (uint32_t*)malloc(plan->levels.level[0].lod_nelem * sizeof(uint32_t));
       CHECK(Fail, s->scatter_lut);
 
-      s->scatter_batch_offsets =
-        (uint64_t*)calloc(plan->batch_count, sizeof(uint64_t));
-      CHECK(Fail, s->scatter_batch_offsets);
+      s->scatter_fixed_dims_offsets =
+        (uint64_t*)calloc(plan->fixed_dims_count, sizeof(uint64_t));
+      CHECK(Fail, s->scatter_fixed_dims_offsets);
     }
 
     // Allocate morton-to-chunk LUTs and batch offsets for each level.
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       const struct lod_plan* plan = &s->cl.plan;
-      uint64_t lod_count = plan->lod_nelem[lv];
+      uint64_t lod_count = plan->levels.level[lv].lod_nelem;
 
       s->morton_lut[lv] = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
       CHECK(Fail, s->morton_lut[lv]);
 
-      s->lod_batch_offsets[lv] =
-        (uint64_t*)calloc(plan->batch_count, sizeof(uint64_t));
-      CHECK(Fail, s->lod_batch_offsets[lv]);
+      s->lod_fixed_dims_offsets[lv] =
+        (uint64_t*)calloc(plan->fixed_dims_count, sizeof(uint64_t));
+      CHECK(Fail, s->lod_fixed_dims_offsets[lv]);
     }
   }
 
@@ -182,16 +185,20 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   {
     struct lut_targets luts = {
       .scatter_lut = s->scatter_lut,
-      .scatter_batch_offsets = s->scatter_batch_offsets,
+      .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       luts.batch_gather[lv] = s->batch_gather[lv];
       luts.batch_chunk_to_shard_map[lv] = s->batch_chunk_to_shard_map[lv];
       luts.morton_lut[lv] = s->morton_lut[lv];
-      luts.lod_batch_offsets[lv] = s->lod_batch_offsets[lv];
+      luts.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
     }
-    cpu_pipeline_compute_luts(
-      &s->cl, &s->levels, s->batch_active_count, s->agg_layout, s->nthreads, &luts);
+    cpu_pipeline_compute_luts(&s->cl,
+                              &s->levels,
+                              s->batch_active_count,
+                              s->agg_layout,
+                              s->nthreads,
+                              &luts);
   }
 
   // Metrics.
@@ -248,7 +255,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     free(s->batch_gather[lv]);
     free(s->batch_chunk_to_shard_map[lv]);
     free(s->morton_lut[lv]);
-    free(s->lod_batch_offsets[lv]);
+    free(s->lod_fixed_dims_offsets[lv]);
 
     struct cpu_agg_slot* as = &s->agg_slots[lv];
     free(as->data);
@@ -261,7 +268,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s->compressed);
   free(s->comp_sizes);
   free(s->scatter_lut);
-  free(s->scatter_batch_offsets);
+  free(s->scatter_fixed_dims_offsets);
   free(s->linear);
   free(s->lod_values);
   free(s->append_accum);
@@ -356,22 +363,28 @@ compute_memory_info(const struct computed_stream_layouts* cl,
     size_t lod = 0;
     if (cl->levels.enable_multiscale) {
       lod += cl->layouts[0].epoch_elements * bytes_per_element; // linear
-      uint64_t total_lod_elements = cl->plan.level_spans.ends[cl->plan.nlod - 1];
+      uint64_t total_lod_elements =
+        cl->plan.level_spans.ends[cl->plan.levels.nlod - 1];
       lod += total_lod_elements * bytes_per_element; // lod_values
 
       if (cl->dims.append_downsample) {
         uint64_t append_total = 0;
-        for (int lv = 1; lv < cl->plan.nlod; ++lv)
-          append_total += cl->plan.batch_count * cl->plan.lod_nelem[lv];
+        for (int lv = 1; lv < cl->plan.levels.nlod; ++lv)
+          append_total +=
+            cl->plan.fixed_dims_count * cl->plan.levels.level[lv].lod_nelem;
         lod += append_total * bytes_per_element; // append_accum
       }
 
-      lod += cl->plan.lod_nelem[0] * sizeof(uint32_t); // scatter_lut
-      lod += cl->plan.batch_count * sizeof(uint64_t);  // scatter_batch_offsets
+      lod +=
+        cl->plan.levels.level[0].lod_nelem * sizeof(uint32_t); // scatter_lut
+      lod += cl->plan.fixed_dims_count *
+             sizeof(uint64_t); // scatter_fixed_dims_offsets
 
       for (int lv = 0; lv < cl->levels.nlod; ++lv) {
-        lod += cl->plan.lod_nelem[lv] * sizeof(uint32_t); // morton_lut
-        lod += cl->plan.batch_count * sizeof(uint64_t);   // batch_offsets
+        lod +=
+          cl->plan.levels.level[lv].lod_nelem * sizeof(uint32_t); // morton_lut
+        lod +=
+          cl->plan.fixed_dims_count * sizeof(uint64_t); // fixed_dims_offsets
       }
     }
     info->lod_bytes = lod;
@@ -472,7 +485,7 @@ make_flush_params(struct tile_stream_cpu* s)
     p.levels[lv] = (struct flush_level_view){
       .agg_layout = &s->agg_layout[lv],
       .batch_active_count = s->batch_active_count[lv],
-      .chunk_offset = s->levels.chunk_offset[lv],
+      .chunk_offset = s->levels.level[lv].chunk_offset,
       .batch_chunk_to_shard_map = s->batch_chunk_to_shard_map[lv],
       .batch_gather = s->batch_gather[lv],
       .agg_slot = &s->agg_slots[lv],
@@ -496,7 +509,7 @@ make_scatter_params(struct tile_stream_cpu* s)
     .linear = s->linear,
     .lod_values = s->lod_values,
     .scatter_lut = s->scatter_lut,
-    .scatter_batch_offsets = s->scatter_batch_offsets,
+    .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
     .nthreads = s->nthreads,
@@ -504,7 +517,7 @@ make_scatter_params(struct tile_stream_cpu* s)
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     p.morton_lut[lv] = s->morton_lut[lv];
-    p.lod_batch_offsets[lv] = s->lod_batch_offsets[lv];
+    p.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
   }
   return p;
 }
@@ -617,7 +630,8 @@ cpu_append(struct writer* self, struct slice input)
 
       if (s->lod_values) {
         size_t lod_bytes =
-          s->cl.plan.level_spans.ends[s->cl.plan.nlod - 1] * bytes_per_element;
+          s->cl.plan.level_spans.ends[s->cl.plan.levels.nlod - 1] *
+          bytes_per_element;
         memset(s->lod_values, 0, lod_bytes);
       }
 
@@ -695,7 +709,7 @@ cpu_flush(struct writer* self)
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       dp.morton_lut[lv] = s->morton_lut[lv];
-      dp.lod_batch_offsets[lv] = s->lod_batch_offsets[lv];
+      dp.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
     }
 
     uint32_t drain_mask = 0;

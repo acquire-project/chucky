@@ -27,7 +27,7 @@ extern "C"
                  uint64_t dst_offset,
                  uint64_t src_lod_count,
                  uint64_t dst_lod_count,
-                 uint64_t batch_count,
+                 uint64_t fixed_dims_count,
                  CUstream stream);
 
   int lod_build_chunk_scatter_lut(CUdeviceptr d_chunk_lut,
@@ -42,10 +42,10 @@ extern "C"
   int lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
                                CUdeviceptr d_morton,
                                CUdeviceptr d_chunk_lut,
-                               CUdeviceptr d_batch_chunk_offsets,
+                               CUdeviceptr d_fixed_dims_chunk_offsets,
                                enum dtype dtype,
                                uint64_t lod_count,
-                               uint64_t batch_count,
+                               uint64_t fixed_dims_count,
                                CUstream stream);
 
   int lod_build_gather_lut(CUdeviceptr d_src_lut,
@@ -59,10 +59,10 @@ extern "C"
   int lod_gather_lut(CUdeviceptr d_dst,
                      CUdeviceptr d_src,
                      CUdeviceptr d_src_lut,
-                     CUdeviceptr d_batch_offsets,
+                     CUdeviceptr d_fixed_dims_offsets,
                      enum dtype dtype,
                      uint64_t lod_count,
-                     uint64_t batch_count,
+                     uint64_t fixed_dims_count,
                      CUstream stream);
 
   int lod_accum_emit(CUdeviceptr d_dst,

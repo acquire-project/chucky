@@ -98,7 +98,7 @@ compress_agg_init(struct compress_agg_stage* stage,
 
     uint32_t slot_count =
       li->batch_active_count > 0 ? li->batch_active_count : 1;
-    uint64_t chunks_lv = cl->levels.chunk_count[lv];
+    uint64_t chunks_lv = cl->levels.level[lv].chunk_count;
     uint64_t batch_chunks = (uint64_t)slot_count * chunks_lv;
     uint64_t batch_covering =
       (uint64_t)slot_count * li->agg_layout.covering_count;
@@ -144,7 +144,7 @@ compress_agg_init(struct compress_agg_stage* stage,
     struct level_flush_state* lvl = &stage->levels[lv];
     uint32_t batch_count = lvl->batch_active_count;
     uint32_t slot_count = batch_count > 0 ? batch_count : 1;
-    uint64_t chunks_lv = cl->levels.chunk_count[lv];
+    uint64_t chunks_lv = cl->levels.level[lv].chunk_count;
     uint64_t lut_len = (uint64_t)slot_count * chunks_lv;
 
     if (lut_len == 0)
@@ -276,7 +276,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
     }
 
     struct aggregate_slot* agg = &lvl->agg[fc];
-    uint64_t chunks_lv = levels->chunk_count[lv];
+    uint64_t chunks_lv = levels->level[lv].chunk_count;
     uint64_t batch_chunk_count = (uint64_t)active_count * chunks_lv;
     uint64_t batch_covering =
       (uint64_t)active_count * lvl->agg_layout.covering_count;

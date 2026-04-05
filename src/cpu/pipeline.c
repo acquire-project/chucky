@@ -218,7 +218,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                        p->linear,
                        p->lod_values,
                        p->scatter_lut,
-                       p->scatter_batch_offsets,
+                       p->scatter_fixed_dims_offsets,
                        p->dtype,
                        p->nthreads) == 0);
 
@@ -233,17 +233,20 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
   if (p->metrics)
     platform_toc(&clk);
 
-  CHECK(Error,
-        lod_cpu_reduce(
-          &p->cl->plan, p->lod_values, p->dtype, p->reduce_method, p->nthreads) == 0);
+  CHECK(
+    Error,
+    lod_cpu_reduce(
+      &p->cl->plan, p->lod_values, p->dtype, p->reduce_method, p->nthreads) ==
+      0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(&p->metrics->lod_reduce,
-                         ms,
-                         p->cl->plan.level_spans.ends[p->cl->plan.nlod - 1] *
-                           bytes_per_element,
-                         0);
+    accumulate_metric_ms(
+      &p->metrics->lod_reduce,
+      ms,
+      p->cl->plan.level_spans.ends[p->cl->plan.levels.nlod - 1] *
+        bytes_per_element,
+      0);
   }
 
   // Append fold/emit: accumulate levels 1+ across epochs.
@@ -266,7 +269,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                               p->append_reduce_method,
                               p->nthreads) == 0);
 
-    for (int lv = 1; lv < p->cl->plan.nlod; ++lv) {
+    for (int lv = 1; lv < p->cl->plan.levels.nlod; ++lv) {
       p->append_counts[lv]++;
       uint32_t period = 1u << lv;
       if (p->append_counts[lv] >= period) {
@@ -287,8 +290,9 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
     if (p->metrics) {
       float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
       size_t append_bytes = 0;
-      for (int lv = 1; lv < p->cl->plan.nlod; ++lv)
-        append_bytes += p->cl->plan.batch_count * p->cl->plan.lod_nelem[lv] *
+      for (int lv = 1; lv < p->cl->plan.levels.nlod; ++lv)
+        append_bytes += p->cl->plan.fixed_dims_count *
+                        p->cl->plan.levels.level[lv].lod_nelem *
                         bytes_per_element;
       accumulate_metric_ms(
         &p->metrics->lod_append_fold, append_ms, append_bytes, 0);
@@ -310,7 +314,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
                                    lv,
                                    layout,
                                    p->morton_lut[lv],
-                                   p->lod_batch_offsets[lv],
+                                   p->lod_fixed_dims_offsets[lv],
                                    p->dtype,
                                    p->nthreads) == 0);
   }
@@ -363,30 +367,33 @@ cpu_pipeline_compute_luts(
     const struct lod_plan* plan = &cl->plan;
 
     lod_cpu_build_scatter_lut(plan, out->scatter_lut, nthreads);
-    lod_cpu_build_scatter_batch_offsets(plan, out->scatter_batch_offsets, nthreads);
+    lod_cpu_build_scatter_fixed_dims_offsets(
+      plan, out->scatter_fixed_dims_offsets, nthreads);
 
     for (int lv = 0; lv < levels->nlod; ++lv) {
       const struct tile_stream_layout* layout_lv = &cl->layouts[lv];
-      lod_cpu_build_chunk_lut(plan, lv, layout_lv, out->morton_lut[lv], nthreads);
+      lod_cpu_build_chunk_lut(
+        plan, lv, layout_lv, out->morton_lut[lv], nthreads);
 
       // Convert flat batch index → lifted-space chunk pool offset.
       // Decomposes bi into per-dimension coordinates, then maps each
       // coordinate to (chunk_index, within-chunk) in lifted space.
-      for (uint64_t bi = 0; bi < plan->batch_count; ++bi) {
+      for (uint64_t bi = 0; bi < plan->fixed_dims_count; ++bi) {
         uint64_t remainder = bi;
         int64_t offset = 0;
-        for (int k = plan->batch_ndim - 1; k >= 0; --k) {
-          uint64_t coord = remainder % plan->batch_shape[k];
-          remainder /= plan->batch_shape[k];
-          int d = plan->batch_map[k];
+        for (int k = plan->fixed_dims_ndim - 1; k >= 0; --k) {
+          uint64_t coord = remainder % plan->fixed_dims_shape[k];
+          remainder /= plan->fixed_dims_shape[k];
+          int d = plan->fixed_dim_to_dim[k];
           uint64_t cs = layout_lv->lifted_shape[2 * d + 1];
           uint64_t ci = coord / cs;
           uint64_t wi = coord % cs;
           offset += (int64_t)ci * layout_lv->lifted_strides[2 * d];
           offset += (int64_t)wi * layout_lv->lifted_strides[2 * d + 1];
         }
-        out->lod_batch_offsets[lv][bi] =
-          (uint64_t)offset + levels->chunk_offset[lv] * layout_lv->chunk_stride;
+        out->lod_fixed_dims_offsets[lv][bi] =
+          (uint64_t)offset +
+          levels->level[lv].chunk_offset * layout_lv->chunk_stride;
       }
     }
   }
@@ -406,7 +413,7 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
     platform_toc(&append_clk);
 
   uint32_t drain_mask = 0;
-  for (int lv = 1; lv < plan->nlod; ++lv) {
+  for (int lv = 1; lv < plan->levels.nlod; ++lv) {
     if (p->append_counts[lv] > 0) {
       CHECK(Error,
             lod_cpu_append_emit(plan,
@@ -428,7 +435,7 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
                                      lv,
                                      layout_lv,
                                      p->morton_lut[lv],
-                                     p->lod_batch_offsets[lv],
+                                     p->lod_fixed_dims_offsets[lv],
                                      p->dtype,
                                      p->nthreads) == 0);
       drain_mask |= (1u << lv);
@@ -438,9 +445,9 @@ cpu_pipeline_append_drain(const struct append_drain_params* p,
   if (p->metrics) {
     float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
     size_t append_bytes = 0;
-    for (int lv = 1; lv < plan->nlod; ++lv)
-      append_bytes +=
-        plan->batch_count * plan->lod_nelem[lv] * bytes_per_element;
+    for (int lv = 1; lv < plan->levels.nlod; ++lv)
+      append_bytes += plan->fixed_dims_count *
+                      plan->levels.level[lv].lod_nelem * bytes_per_element;
     accumulate_metric_ms(
       &p->metrics->lod_append_fold, append_ms, append_bytes, 0);
   }

@@ -175,9 +175,7 @@ struct zarr_s3_sink
 
   // Geometry
   uint8_t rank;
-  uint64_t chunk_count[MAX_ZARR_RANK];
-  uint64_t chunks_per_shard[MAX_ZARR_RANK];
-  uint64_t shard_count[MAX_ZARR_RANK];
+  struct dim_extent dims[MAX_ZARR_RANK];
   uint64_t shard_inner_count;
 
   // Key prefix: "{prefix}/{array_name}"
@@ -307,9 +305,11 @@ s3_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   // Wait for previous upload on this writer slot to complete
   s3_wait_pending(w);
 
+  uint64_t sc[MAX_ZARR_RANK];
+  for (int d = 0; d < zs->rank; ++d)
+    sc[d] = zs->dims[d].shard_count;
   char suffix[4096];
-  if (zarr_shard_key(
-        suffix, sizeof(suffix), zs->rank, zs->shard_count, shard_index) != 0) {
+  if (zarr_shard_key(suffix, sizeof(suffix), zs->rank, sc, shard_index) != 0) {
     log_error("s3_sink_open: key too long for shard %llu",
               (unsigned long long)shard_index);
     return NULL;
@@ -351,6 +351,9 @@ s3_sink_update_append(struct shard_sink* self,
   for (uint8_t d = 0; d < n_append; ++d)
     zs->dimensions[d].size = append_sizes[d];
 
+  uint64_t cps[MAX_ZARR_RANK];
+  for (int d = 0; d < zs->rank; ++d)
+    cps[d] = zs->dims[d].chunks_per_shard;
   char buf[4096];
   int len = zarr_array_json(buf,
                             sizeof(buf),
@@ -358,7 +361,7 @@ s3_sink_update_append(struct shard_sink* self,
                             zs->dimensions,
                             zs->data_type,
                             zs->fill_value,
-                            zs->chunks_per_shard,
+                            cps,
                             zs->codec);
   if (len < 0) {
     log_error("s3_sink_update_append: failed to generate zarr.json for %s",
@@ -411,20 +414,16 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
 
   // Compute geometry
   {
-    uint64_t shape[HALF_MAX_RANK], cs[HALF_MAX_RANK], cps[HALF_MAX_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
-      shape[d] = cfg->dimensions[d].size;
-      cs[d] = cfg->dimensions[d].chunk_size;
-      cps[d] = cfg->dimensions[d].chunks_per_shard;
+      zs->dims[d].size = cfg->dimensions[d].size;
+      zs->dims[d].chunk_size = (uint32_t)cfg->dimensions[d].chunk_size;
     }
+    uint64_t cps[HALF_MAX_RANK];
+    for (int d = 0; d < cfg->rank; ++d)
+      cps[d] = cfg->dimensions[d].chunks_per_shard;
     const uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
-    struct shard_geometry g;
-    shard_geometry_compute(&g, cfg->rank, na, shape, cs, cps);
-    memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
-    memcpy(
-      zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
-    memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
-    zs->shard_inner_count = g.shard_inner_count;
+    zs->shard_inner_count =
+      dim_extent_compute_shards(zs->dims, cfg->rank, na, cps);
   }
 
   // Build array prefix key
@@ -457,6 +456,9 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
 
   // Write array metadata
   {
+    uint64_t cps[MAX_ZARR_RANK];
+    for (int d = 0; d < cfg->rank; ++d)
+      cps[d] = zs->dims[d].chunks_per_shard;
     char buf[4096];
     int len = zarr_array_json(buf,
                               sizeof(buf),
@@ -464,7 +466,7 @@ zarr_s3_sink_create_with_client(const struct zarr_s3_config* cfg,
                               zs->dimensions,
                               zs->data_type,
                               zs->fill_value,
-                              zs->chunks_per_shard,
+                              cps,
                               zs->codec);
     CHECK(Fail_alloc, len >= 0);
     char key[4096];
@@ -697,7 +699,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   ms->base.update_append = s3_multiscale_update_append;
   ms->base.record_fence = s3_multiscale_record_fence;
   ms->base.wait_fence = s3_multiscale_wait_fence;
-  ms->nlod = plan.nlod;
+  ms->nlod = plan.levels.nlod;
   ms->rank = cfg->rank;
   snprintf(ms->bucket, sizeof(ms->bucket), "%s", cfg->bucket);
   snprintf(ms->group_prefix, sizeof(ms->group_prefix), "%s", group_prefix);
@@ -718,7 +720,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
     CHECK(Fail_ms, ms->s3);
   }
 
-  ms->levels = (struct zarr_s3_sink**)calloc((size_t)plan.nlod,
+  ms->levels = (struct zarr_s3_sink**)calloc((size_t)plan.levels.nlod,
                                              sizeof(struct zarr_s3_sink*));
   CHECK(Fail_s3, ms->levels);
 
@@ -744,16 +746,17 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   }
 
   // Create one zarr_s3_sink per level, all borrowing the shared client
-  for (int lv = 0; lv < plan.nlod; ++lv) {
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
     struct dimension lv_dims[MAX_ZARR_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
       lv_dims[d] = cfg->dimensions[d];
       if (d == 0 && cfg->dimensions[0].size == 0)
         lv_dims[d].size = 0;
       else
-        lv_dims[d].size = plan.levels.shapes[lv][d];
-      lv_dims[d].chunk_size = plan.levels.chunk_sizes[lv][d];
-      lv_dims[d].chunks_per_shard = plan.levels.chunks_per_shard[lv][d];
+        lv_dims[d].size = plan.levels.level[lv].dim[d].size;
+      lv_dims[d].chunk_size = plan.levels.level[lv].dim[d].chunk_size;
+      lv_dims[d].chunks_per_shard =
+        plan.levels.level[lv].dim[d].chunks_per_shard;
     }
 
     char name[8];
@@ -783,7 +786,7 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   return ms;
 
 Fail_levels:
-  for (int i = 0; i < plan.nlod; ++i) {
+  for (int i = 0; i < plan.levels.nlod; ++i) {
     if (ms->levels[i])
       zarr_s3_sink_destroy(ms->levels[i]);
   }

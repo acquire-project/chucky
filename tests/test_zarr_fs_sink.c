@@ -2208,9 +2208,9 @@ Fail:
   return 1;
 }
 
-// --- Test: chunk_size clamped in zarr metadata at coarse LOD levels ---
-// When a downsampled dim's shape < chunk_size, the written chunk_size
-// must reflect the smaller value (issue #44).
+// --- Test: chunk_size constant across LOD levels (partial chunks padded) ---
+// When a downsampled dim's shape < chunk_size, the chunk_size stays the
+// same — the last chunk is just partially filled (issue #44).
 
 static int
 test_multiscale_chunk_clamp_metadata(const char* tmpdir)
@@ -2219,8 +2219,8 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
 
   // dim0: not downsampled (y=32, chunk=8)
   // dim1: downsampled (x=10, chunk=8)
-  //   L0: x=10 -> chunk_size=8 (fits: ceildiv(10,8)=2 chunks)
-  //   L1: x=5  -> chunk_size must be clamped to 5 (5 < 8)
+  //   L0: x=10 -> chunk_size=8, chunk_count=ceildiv(10,8)=2
+  //   L1: x=5  -> chunk_size=8, chunk_count=ceildiv(5,8)=1 (partial)
   struct dimension dims[] = {
     { .size = 32,
       .chunk_size = 8,
@@ -2264,7 +2264,7 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
     free(data);
   }
 
-  // L1 zarr.json: shape=[32,5], chunk_size in dim1 must be clamped to 5
+  // L1 zarr.json: shape=[32,5], chunk_size still [8,8] (partial chunk padded)
   {
     char path[4096];
     snprintf(path, sizeof(path), "%s/1/zarr.json", tmpdir);
@@ -2276,8 +2276,8 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
     data[len < 4095 ? len : 4095] = '\0';
 
     CHECK(Fail2, strstr((char*)data, "\"shape\":[32,5]"));
-    // Inner chunk_shape must be [8,5] (x clamped from 8 to 5)
-    CHECK(Fail2, strstr((char*)data, "\"chunk_shape\":[8,5]"));
+    // Inner chunk_shape stays [8,8] — partial chunk is padded with fill_value
+    CHECK(Fail2, strstr((char*)data, "\"chunk_shape\":[8,8]"));
     free(data);
   }
 

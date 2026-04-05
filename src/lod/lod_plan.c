@@ -158,38 +158,38 @@ lod_plan_init(struct lod_plan* p,
   if (lod_plan_init_shapes(p, ndim, shape, chunk_shape, lod_mask, max_levels))
     return 1;
 
+  int nlod = p->levels.nlod;
+
   // lod_nelem[k] = product of lod-projected shapes at level k.
-  // Child levels are strictly smaller than L0, so if L0 fits in
-  // uint64_t the rest do too.
-  for (int k = 0; k < p->nlod; ++k) {
-    p->lod_nelem[k] = 1;
+  for (int k = 0; k < nlod; ++k) {
+    p->levels.level[k].lod_nelem = 1;
     for (int d = 0; d < p->lod_ndim; ++d)
-      p->lod_nelem[k] *= lod_plan_lod_shape(p, k, d);
+      p->levels.level[k].lod_nelem *= lod_plan_lod_shape(p, k, d);
   }
 
-  p->lod_levels.n = (uint64_t)p->nlod;
-  p->lod_levels.ends = (uint64_t*)malloc(p->nlod * sizeof(uint64_t));
+  p->lod_levels.n = (uint64_t)nlod;
+  p->lod_levels.ends = (uint64_t*)malloc(nlod * sizeof(uint64_t));
   if (!p->lod_levels.ends)
     goto Fail;
-  p->lod_levels.ends[0] = p->lod_nelem[0];
-  for (int k = 1; k < p->nlod; ++k)
-    p->lod_levels.ends[k] = p->lod_levels.ends[k - 1] + p->lod_nelem[k];
+  p->lod_levels.ends[0] = p->levels.level[0].lod_nelem;
+  for (int k = 1; k < nlod; ++k)
+    p->lod_levels.ends[k] =
+      p->lod_levels.ends[k - 1] + p->levels.level[k].lod_nelem;
 
-  p->level_spans.n = (uint64_t)p->nlod;
-  p->level_spans.ends = (uint64_t*)malloc(p->nlod * sizeof(uint64_t));
+  p->level_spans.n = (uint64_t)nlod;
+  p->level_spans.ends = (uint64_t*)malloc(nlod * sizeof(uint64_t));
   if (!p->level_spans.ends)
     goto Fail;
-  for (int k = 0; k < p->nlod; ++k)
-    p->level_spans.ends[k] = p->batch_count * p->lod_levels.ends[k];
+  for (int k = 0; k < nlod; ++k)
+    p->level_spans.ends[k] = p->fixed_dims_count * p->lod_levels.ends[k];
 
   {
-    uint64_t total_ends =
-      p->lod_levels.ends[p->nlod - 1] - p->lod_levels.ends[0];
+    uint64_t total_ends = p->lod_levels.ends[nlod - 1] - p->lod_levels.ends[0];
     if (total_ends > 0) {
       p->ends = (uint64_t*)malloc(total_ends * sizeof(uint64_t));
       if (!p->ends)
         goto Fail;
-      for (int l = 0; l < p->nlod - 1; ++l) {
+      for (int l = 0; l < nlod - 1; ++l) {
         uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
         lod_plan_fill_lod_shapes(p, l, child_lod);
         lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
@@ -217,57 +217,57 @@ lod_plan_init_shapes(struct lod_plan* p,
                      uint32_t lod_mask,
                      int max_levels)
 {
+  if (ndim <= 0 || ndim > LOD_MAX_NDIM)
+    return 1;
   memset(p, 0, sizeof(*p));
   p->ndim = ndim;
   p->lod_mask = lod_mask;
 
   for (int d = 0; d < ndim; ++d) {
     if (lod_mask & (1 << d)) {
-      p->lod_map[p->lod_ndim++] = d;
+      p->lod_to_dim[p->lod_ndim++] = d;
     } else {
-      p->batch_map[p->batch_ndim] = d;
-      p->batch_shape[p->batch_ndim] = shape[d];
-      p->batch_ndim++;
+      p->fixed_dim_to_dim[p->fixed_dims_ndim] = d;
+      p->fixed_dims_shape[p->fixed_dims_ndim] = shape[d];
+      p->fixed_dims_ndim++;
     }
   }
-  p->batch_count = 1;
-  for (int k = 0; k < p->batch_ndim; ++k)
-    p->batch_count *= p->batch_shape[k];
+  p->fixed_dims_count = 1;
+  for (int k = 0; k < p->fixed_dims_ndim; ++k)
+    p->fixed_dims_count *= p->fixed_dims_shape[k];
 
-  memcpy(p->levels.shapes[0], shape, (size_t)ndim * sizeof(uint64_t));
+  level_dims_set_shape(&p->levels.level[0], ndim, shape);
 
   uint64_t lod_chunk[LOD_MAX_NDIM];
   for (int k = 0; k < p->lod_ndim; ++k)
-    lod_chunk[k] = chunk_shape ? chunk_shape[p->lod_map[k]] : 1;
+    lod_chunk[k] = chunk_shape ? chunk_shape[p->lod_to_dim[k]] : 1;
 
-  // Derive lod_shape for current level from shapes + lod_map.
+  // Derive lod_shape for current level from sizes + lod_to_dim.
   uint64_t cur_lod[LOD_MAX_NDIM];
   for (int k = 0; k < p->lod_ndim; ++k)
-    cur_lod[k] = p->levels.shapes[0][p->lod_map[k]];
+    cur_lod[k] = p->levels.level[0].dim[p->lod_to_dim[k]].size;
 
-  p->nlod = 1;
-  while (p->nlod < max_levels &&
+  int nlod = 1;
+  while (nlod < max_levels &&
          !all_chunks_le_one(p->lod_ndim, cur_lod, lod_chunk)) {
     uint64_t next_lod[LOD_MAX_NDIM];
     for (int k = 0; k < p->lod_ndim; ++k)
       next_lod[k] = (cur_lod[k] + 1) / 2;
-    memcpy(p->levels.shapes[p->nlod],
-           p->levels.shapes[p->nlod - 1],
-           (size_t)ndim * sizeof(uint64_t));
+    level_dims_copy_sizes(
+      &p->levels.level[nlod], &p->levels.level[nlod - 1], ndim);
     for (int k = 0; k < p->lod_ndim; ++k)
-      p->levels.shapes[p->nlod][p->lod_map[k]] = next_lod[k];
+      p->levels.level[nlod].dim[p->lod_to_dim[k]].size = next_lod[k];
     memcpy(cur_lod, next_lod, (size_t)p->lod_ndim * sizeof(uint64_t));
-    ++p->nlod;
+    ++nlod;
   }
+  p->levels.nlod = nlod;
 
-  // Clamp chunk_sizes: at coarse levels the array may be smaller than chunk.
-  for (int lv = 0; lv < p->nlod; ++lv) {
+  // chunk_size is constant across all levels (partial chunks are padded).
+  for (int lv = 0; lv < nlod; ++lv) {
     for (int d = 0; d < ndim; ++d) {
       assert(!chunk_shape || chunk_shape[d] <= UINT32_MAX);
-      uint32_t cs = chunk_shape ? (uint32_t)chunk_shape[d] : 1;
-      uint64_t s = p->levels.shapes[lv][d];
-      assert(s <= UINT32_MAX);
-      p->levels.chunk_sizes[lv][d] = (s > 0 && s < cs) ? (uint32_t)s : cs;
+      p->levels.level[lv].dim[d].chunk_size =
+        chunk_shape ? (uint32_t)chunk_shape[d] : 1;
     }
   }
 
@@ -292,27 +292,18 @@ dims_lod_params(const struct dimension* dims,
       *lod_mask |= (1u << d);
 }
 
-// Fill plan->levels.chunks_per_shard from dims[d].chunks_per_shard and the
-// already-computed plan->levels.chunk_sizes and plan->levels.shapes.
-// cps==0 in dims means "all chunks along that dim".
-// Result is clamped to min(config_cps, chunk_count).
 static void
-fill_chunks_per_shard(struct lod_plan* p,
-                      const struct dimension* dims,
-                      uint8_t rank)
+fill_shard_geometry(struct lod_plan* p,
+                    const struct dimension* dims,
+                    uint8_t rank,
+                    uint8_t n_append)
 {
-  for (int lv = 0; lv < p->nlod; ++lv) {
-    for (int d = 0; d < rank; ++d) {
-      uint64_t s = p->levels.shapes[lv][d];
-      uint32_t cs = p->levels.chunk_sizes[lv][d];
-      uint64_t cc = (s == 0) ? 1 : ceildiv(s, cs);
-      uint64_t cps = dims[d].chunks_per_shard;
-      if (cps == 0)
-        cps = cc;
-      uint64_t val = cc < cps ? cc : cps;
-      assert(val <= UINT32_MAX);
-      p->levels.chunks_per_shard[lv][d] = (uint32_t)val;
-    }
+  int nlod = p->levels.nlod;
+  for (int lv = 0; lv < nlod; ++lv) {
+    uint64_t cps[LOD_MAX_NDIM];
+    for (int d = 0; d < rank; ++d)
+      cps[d] = dims[d].chunks_per_shard;
+    dim_extent_compute_shards(p->levels.level[lv].dim, rank, n_append, cps);
   }
 }
 
@@ -329,7 +320,7 @@ lod_plan_init_from_dims(struct lod_plan* p,
   dims_lod_params(dims, rank, na, shape, chunk_shape, &lod_mask);
   if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
     return 1;
-  fill_chunks_per_shard(p, dims, rank);
+  fill_shard_geometry(p, dims, rank, na);
   return 0;
 }
 
@@ -349,8 +340,44 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
     shape[d] = dims[d].chunk_size;
   if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
     return 1;
-  fill_chunks_per_shard(p, dims, rank);
+  fill_shard_geometry(p, dims, rank, n_append);
   return 0;
+}
+
+void
+level_dims_get_shape(const struct level_dims* ld, int ndim, uint64_t* out)
+{
+  for (int d = 0; d < ndim; ++d)
+    out[d] = ld->dim[d].size;
+}
+
+void
+level_dims_set_shape(struct level_dims* ld, int ndim, const uint64_t* shape)
+{
+  for (int d = 0; d < ndim; ++d)
+    ld->dim[d].size = shape[d];
+}
+
+void
+level_dims_copy_sizes(struct level_dims* dst,
+                      const struct level_dims* src,
+                      int ndim)
+{
+  for (int d = 0; d < ndim; ++d)
+    dst->dim[d].size = src->dim[d].size;
+}
+
+uint64_t
+lod_plan_lod_shape(const struct lod_plan* p, int lv, int k)
+{
+  return p->levels.level[lv].dim[p->lod_to_dim[k]].size;
+}
+
+void
+lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst)
+{
+  for (int k = 0; k < p->lod_ndim; ++k)
+    dst[k] = p->levels.level[lv].dim[p->lod_to_dim[k]].size;
 }
 
 void
@@ -364,22 +391,28 @@ lod_plan_free(struct lod_plan* p)
   memset(p, 0, sizeof(*p));
 }
 
-void
-shard_geometry_compute(struct shard_geometry* g,
-                       uint8_t rank,
-                       uint8_t n_append,
-                       const uint64_t* shape,
-                       const uint64_t* chunk_size,
-                       const uint64_t* chunks_per_shard)
+uint64_t
+dim_extent_compute_shards(struct dim_extent* dims,
+                          int ndim,
+                          int n_append,
+                          const uint64_t* config_cps)
 {
-  assert(n_append > 0 && n_append <= rank);
-  g->shard_inner_count = 1;
-  for (int d = 0; d < rank; ++d) {
-    g->chunk_count[d] = (shape[d] == 0) ? 1 : ceildiv(shape[d], chunk_size[d]);
-    uint64_t cps = chunks_per_shard[d];
-    g->chunks_per_shard[d] = (cps == 0) ? g->chunk_count[d] : cps;
-    g->shard_count[d] = ceildiv(g->chunk_count[d], g->chunks_per_shard[d]);
+  uint64_t shard_inner_count = 1;
+  for (int d = 0; d < ndim; ++d) {
+    uint64_t s = dims[d].size;
+    uint32_t cs = dims[d].chunk_size;
+    uint64_t cc = (s == 0) ? 1 : ceildiv(s, cs);
+    dims[d].chunk_count = cc;
+    uint64_t cps = config_cps[d];
+    if (cps == 0)
+      cps = cc;
+    if (s > 0 && cc < cps)
+      cps = cc;
+    assert(cps <= UINT32_MAX);
+    dims[d].chunks_per_shard = (uint32_t)cps;
+    dims[d].shard_count = ceildiv(cc, cps);
     if (d >= n_append)
-      g->shard_inner_count *= g->shard_count[d];
+      shard_inner_count *= dims[d].shard_count;
   }
+  return shard_inner_count;
 }

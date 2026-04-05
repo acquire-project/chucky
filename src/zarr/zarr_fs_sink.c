@@ -201,9 +201,7 @@ struct zarr_fs_sink
 
   // Geometry
   uint8_t rank;
-  uint64_t chunk_count[MAX_ZARR_RANK];
-  uint64_t chunks_per_shard[MAX_ZARR_RANK];
-  uint64_t shard_count[MAX_ZARR_RANK];
+  struct dim_extent dims[MAX_ZARR_RANK];
   uint64_t shard_inner_count; // prod(shard_count[d] for d >= n_append)
 
   // Paths
@@ -254,9 +252,11 @@ zarr_fs_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   struct zarr_shard_writer* w = &zs->writers[inner];
 
   // Build path
+  uint64_t sc[MAX_ZARR_RANK];
+  for (int d = 0; d < zs->rank; ++d)
+    sc[d] = zs->dims[d].shard_count;
   char key[256];
-  if (zarr_shard_key(
-        key, sizeof(key), zs->rank, zs->shard_count, shard_index) != 0) {
+  if (zarr_shard_key(key, sizeof(key), zs->rank, sc, shard_index) != 0) {
     log_error("zarr_fs_sink_open: shard key too long for shard %llu",
               (unsigned long long)shard_index);
     return NULL;
@@ -381,12 +381,15 @@ zarr_fs_sink_update_append(struct shard_sink* self,
   for (uint8_t d = 0; d < n_append; ++d)
     zs->dimensions[d].size = append_sizes[d];
 
+  uint64_t cps[MAX_ZARR_RANK];
+  for (int d = 0; d < zs->rank; ++d)
+    cps[d] = zs->dims[d].chunks_per_shard;
   if (write_array_metadata_file(zs->array_dir,
                                 zs->rank,
                                 zs->dimensions,
                                 zs->data_type,
                                 zs->fill_value,
-                                zs->chunks_per_shard,
+                                cps,
                                 zs->codec)) {
     log_error("zarr_fs_sink_update_append: failed to rewrite zarr.json for %s",
               zs->array_dir);
@@ -431,20 +434,16 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
 
   // Compute geometry
   {
-    uint64_t shape[HALF_MAX_RANK], cs[HALF_MAX_RANK], cps[HALF_MAX_RANK];
     for (int d = 0; d < cfg->rank; ++d) {
-      shape[d] = cfg->dimensions[d].size;
-      cs[d] = cfg->dimensions[d].chunk_size;
-      cps[d] = cfg->dimensions[d].chunks_per_shard;
+      zs->dims[d].size = cfg->dimensions[d].size;
+      zs->dims[d].chunk_size = (uint32_t)cfg->dimensions[d].chunk_size;
     }
+    uint64_t cps[HALF_MAX_RANK];
+    for (int d = 0; d < cfg->rank; ++d)
+      cps[d] = cfg->dimensions[d].chunks_per_shard;
     const uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
-    struct shard_geometry g;
-    shard_geometry_compute(&g, cfg->rank, na, shape, cs, cps);
-    memcpy(zs->chunk_count, g.chunk_count, cfg->rank * sizeof(uint64_t));
-    memcpy(
-      zs->chunks_per_shard, g.chunks_per_shard, cfg->rank * sizeof(uint64_t));
-    memcpy(zs->shard_count, g.shard_count, cfg->rank * sizeof(uint64_t));
-    zs->shard_inner_count = g.shard_inner_count;
+    zs->shard_inner_count =
+      dim_extent_compute_shards(zs->dims, cfg->rank, na, cps);
   }
 
   // Build array directory path
@@ -466,14 +465,16 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
     const uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
     uint64_t total_shards = zs->shard_inner_count;
     for (int d = 1; d < na; ++d)
-      total_shards *= zs->shard_count[d];
+      total_shards *= zs->dims[d].shard_count;
     if (cfg->dimensions[0].size > 0)
-      total_shards *= zs->shard_count[0];
+      total_shards *= zs->dims[0].shard_count;
 
+    uint64_t sc[MAX_ZARR_RANK];
+    for (int d = 0; d < cfg->rank; ++d)
+      sc[d] = zs->dims[d].shard_count;
     for (uint64_t flat = 0; flat < total_shards; ++flat) {
       char key[256];
-      if (zarr_shard_key(key, sizeof(key), zs->rank, zs->shard_count, flat) !=
-          0)
+      if (zarr_shard_key(key, sizeof(key), zs->rank, sc, flat) != 0)
         goto Fail_alloc;
 
       char path[4096];
@@ -499,14 +500,19 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
           zarr_for_each_intermediate(
             cfg->array_name, write_fs_intermediate, &ictx) == 0);
   }
-  CHECK(Fail_alloc,
-        write_array_metadata_file(zs->array_dir,
-                                  zs->rank,
-                                  zs->dimensions,
-                                  zs->data_type,
-                                  zs->fill_value,
-                                  zs->chunks_per_shard,
-                                  zs->codec) == 0);
+  {
+    uint64_t cps[MAX_ZARR_RANK];
+    for (int d = 0; d < cfg->rank; ++d)
+      cps[d] = zs->dims[d].chunks_per_shard;
+    CHECK(Fail_alloc,
+          write_array_metadata_file(zs->array_dir,
+                                    zs->rank,
+                                    zs->dimensions,
+                                    zs->data_type,
+                                    zs->fill_value,
+                                    cps,
+                                    zs->codec) == 0);
+  }
 
   // Allocate writer pool
   zs->num_writers = zs->shard_inner_count;
@@ -711,11 +717,11 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   ms->base.update_append = zarr_multiscale_update_append;
   ms->base.record_fence = zarr_multiscale_record_fence;
   ms->base.wait_fence = zarr_multiscale_wait_fence;
-  ms->nlod = plan.nlod;
+  ms->nlod = plan.levels.nlod;
   ms->rank = cfg->rank;
   snprintf(ms->group_path, sizeof(ms->group_path), "%s", group_path);
 
-  ms->levels = (struct zarr_fs_sink**)calloc((size_t)plan.nlod,
+  ms->levels = (struct zarr_fs_sink**)calloc((size_t)plan.levels.nlod,
                                              sizeof(struct zarr_fs_sink*));
   CHECK(Fail_ms, ms->levels);
 
@@ -733,7 +739,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   }
 
   // Create one zarr_fs_sink per level
-  for (int lv = 0; lv < plan.nlod; ++lv) {
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
     // Build per-level dimensions with downsampled sizes and clamped
     // chunk_size / chunks_per_shard from the plan.
     struct dimension lv_dims[MAX_ZARR_RANK];
@@ -742,9 +748,10 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
       if (d == 0 && cfg->dimensions[0].size == 0)
         lv_dims[d].size = 0;
       else
-        lv_dims[d].size = plan.levels.shapes[lv][d];
-      lv_dims[d].chunk_size = plan.levels.chunk_sizes[lv][d];
-      lv_dims[d].chunks_per_shard = plan.levels.chunks_per_shard[lv][d];
+        lv_dims[d].size = plan.levels.level[lv].dim[d].size;
+      lv_dims[d].chunk_size = plan.levels.level[lv].dim[d].chunk_size;
+      lv_dims[d].chunks_per_shard =
+        plan.levels.level[lv].dim[d].chunks_per_shard;
     }
 
     char name[8];
@@ -772,7 +779,7 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   return ms;
 
 Fail_levels:
-  for (int i = 0; i < plan.nlod; ++i) {
+  for (int i = 0; i < plan.levels.nlod; ++i) {
     if (ms->levels[i])
       zarr_fs_sink_destroy(ms->levels[i]);
   }

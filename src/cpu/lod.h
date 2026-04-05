@@ -32,22 +32,24 @@ extern "C"
   // the given tile_stream_layout (lifted shape/strides for that level).
   // chunk_lut: precomputed via lod_cpu_build_chunk_lut (or NULL to build
   //            internally — legacy path for standalone use).
-  // batch_chunk_offset: offset (in elements) into chunk pool for each batch.
+  // fixed_dims_chunk_offsets: offset (in elements) into chunk pool for each
+  // fixed-dims batch.
   int lod_cpu_morton_to_chunks(const struct lod_plan* p,
                                const void* values,
                                void* chunk_pool,
                                int lv,
                                const struct tile_stream_layout* layout,
                                const uint32_t* chunk_lut,
-                               const uint64_t* batch_chunk_offsets,
+                               const uint64_t* fixed_dims_chunk_offsets,
                                enum dtype dtype,
                                int nthreads);
 
   // Append fold: accumulate inner-reduced data (levels 1+) from the morton
   // buffer into the accumulator. On first call (counts[lv]==0) copies;
   // subsequent calls reduce (mean/min/max).
-  // accum: buffer sized to sum(batch_count * lod_nelem[lv]) for lv=1..nlod-1.
-  // counts[nlod]: per-level fold count (caller increments after this call).
+  // accum: buffer sized to sum(fixed_dims_count * lod_nelem[lv]) for
+  // lv=1..nlod-1. counts[nlod]: per-level fold count (caller increments after
+  // this call).
   int lod_cpu_append_fold(const struct lod_plan* p,
                           const void* morton_values,
                           void* accum,
@@ -74,11 +76,11 @@ extern "C"
                                  uint32_t* lut,
                                  int nthreads);
 
-  // Build per-batch offsets into the linear source for scatter/gather.
-  // offsets must have room for batch_count entries.
-  void lod_cpu_build_scatter_batch_offsets(const struct lod_plan* p,
-                                           uint64_t* offsets,
-                                           int nthreads);
+  // Build per-fixed-dims offsets into the linear source for scatter/gather.
+  // offsets must have room for fixed_dims_count entries.
+  void lod_cpu_build_scatter_fixed_dims_offsets(const struct lod_plan* p,
+                                                uint64_t* offsets,
+                                                int nthreads);
 
   // Gather linear input into morton-ordered LOD L0 buffer using
   // precomputed LUT. Sequential writes, random reads.
@@ -87,7 +89,7 @@ extern "C"
                      const void* src,
                      void* dst,
                      const uint32_t* scatter_lut,
-                     const uint64_t* batch_offsets,
+                     const uint64_t* fixed_dims_offsets,
                      enum dtype dtype,
                      int nthreads);
 

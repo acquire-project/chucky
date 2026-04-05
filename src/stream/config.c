@@ -258,26 +258,29 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
           0);
   int enable_multiscale = out->plan.lod_mask != 0;
   out->levels.enable_multiscale = enable_multiscale;
-  out->levels.nlod = enable_multiscale ? out->plan.nlod : 1;
+  out->levels.nlod = enable_multiscale ? out->plan.levels.nlod : 1;
 
   // --- All level layouts ---
-  for (int lv = 0; lv < out->levels.nlod; ++lv)
+  for (int lv = 0; lv < out->levels.nlod; ++lv) {
+    uint64_t lv_shape[HALF_MAX_RANK];
+    level_dims_get_shape(&out->plan.levels.level[lv], rank, lv_shape);
     CHECK(Fail,
           compute_level_layout(&out->layouts[lv],
                                rank,
                                na,
                                bytes_per_element,
                                dims,
-                               out->plan.levels.shapes[lv],
+                               lv_shape,
                                codec_alignment,
                                storage_order) == 0);
+  }
 
   // --- Level geometry (single loop) ---
   out->levels.total_chunks = 0;
   for (int lv = 0; lv < out->levels.nlod; ++lv) {
-    out->levels.chunk_count[lv] = out->layouts[lv].chunks_per_epoch;
-    out->levels.chunk_offset[lv] = out->levels.total_chunks;
-    out->levels.total_chunks += out->levels.chunk_count[lv];
+    out->levels.level[lv].chunk_count = out->layouts[lv].chunks_per_epoch;
+    out->levels.level[lv].chunk_offset = out->levels.total_chunks;
+    out->levels.total_chunks += out->levels.level[lv].chunk_count;
   }
 
   // --- Epochs per batch (K) ---
@@ -308,11 +311,19 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     array_shape[d] = dims[d].size;
 
   for (int lv = 0; lv < out->levels.nlod; ++lv) {
-    const uint64_t* shape = (lv == 0) ? array_shape : out->plan.levels.shapes[lv];
-    struct shard_geometry geo;
-    shard_geometry_compute(&geo, rank, na, shape, chunk_size, cps);
+    uint64_t lv_shape[HALF_MAX_RANK];
+    if (lv == 0)
+      memcpy(lv_shape, array_shape, rank * sizeof(uint64_t));
+    else
+      level_dims_get_shape(&out->plan.levels.level[lv], rank, lv_shape);
+    struct dim_extent de[HALF_MAX_RANK];
+    for (int d = 0; d < rank; ++d) {
+      de[d].size = lv_shape[d];
+      de[d].chunk_size = (uint32_t)chunk_size[d];
+    }
+    uint64_t shard_inner_count = dim_extent_compute_shards(de, rank, na, cps);
 
-    uint64_t chunks_lv = out->levels.chunk_count[lv];
+    uint64_t chunks_lv = out->levels.level[lv].chunk_count;
 
     uint32_t batch_count = out->epochs_per_batch;
     if (out->dims.append_downsample && lv > 0) {
@@ -324,8 +335,8 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 
     uint64_t so_chunk_count[HALF_MAX_RANK], so_chunks_per_shard[HALF_MAX_RANK];
     for (int j = 0; j < rank; ++j) {
-      so_chunk_count[j] = geo.chunk_count[storage_order[j]];
-      so_chunks_per_shard[j] = geo.chunks_per_shard[storage_order[j]];
+      so_chunk_count[j] = de[storage_order[j]].chunk_count;
+      so_chunks_per_shard[j] = de[storage_order[j]].chunks_per_shard;
     }
 
     CHECK(Fail,
@@ -341,7 +352,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     {
       uint64_t cps_append = 1;
       for (int d = 0; d < na; ++d)
-        cps_append *= geo.chunks_per_shard[d];
+        cps_append *= de[d].chunks_per_shard;
       if (out->dims.append_downsample && lv > 0) {
         uint64_t divisor = 1ull << lv;
         cps_append = (cps_append > divisor) ? cps_append / divisor : 1;
@@ -350,12 +361,12 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     }
     out->per_level[lv].chunks_per_shard_inner = 1;
     for (int d = na; d < rank; ++d)
-      out->per_level[lv].chunks_per_shard_inner *= geo.chunks_per_shard[d];
+      out->per_level[lv].chunks_per_shard_inner *= de[d].chunks_per_shard;
     out->per_level[lv].chunks_per_shard_total =
       out->per_level[lv].chunks_per_shard_append *
       out->per_level[lv].chunks_per_shard_inner;
 
-    out->per_level[lv].shard_inner_count = geo.shard_inner_count;
+    out->per_level[lv].shard_inner_count = shard_inner_count;
   }
 
   return 0;
