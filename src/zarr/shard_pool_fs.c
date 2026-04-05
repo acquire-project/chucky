@@ -327,7 +327,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));
   CHECK(Fail_queue, p->slots);
 
-  size_t page_size = unbuffered ? 4096 : 0; // TODO: query actual page size
+  size_t page_size = unbuffered ? platform_page_size() : 0;
   for (uint64_t i = 0; i < nslots; ++i) {
     struct fs_slot* s = &p->slots[i];
     s->base.write = fs_slot_write;

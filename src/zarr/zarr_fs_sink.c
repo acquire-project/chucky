@@ -2,404 +2,85 @@
 #include "defs.limits.h"
 #include "dimension.h"
 #include "lod/lod_plan.h"
-#include "ngff/ngff_metadata.h"
-#include "platform/platform.h"
-#include "platform/platform_io.h"
+#include "ngff/ngff_multiscale.h"
 #include "util/prelude.h"
-#include "zarr/io_queue.h"
+#include "zarr/shard_pool.h"
+#include "zarr/store.h"
+#include "zarr/store_fs.h"
+#include "zarr/zarr_array.h"
+#include "zarr/zarr_group.h"
 #include "zarr/zarr_metadata.h"
 
-#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
-// --- Writer for a single shard file ---
+// --- Helper: compute geometry and build zarr_array_config ---
 
-struct zarr_shard_writer
+static uint64_t
+compute_array_geometry(const struct dimension* dims,
+                       uint8_t rank,
+                       uint64_t* shard_counts,
+                       uint64_t* chunks_per_shard)
 {
-  struct shard_writer base;
-  platform_fd fd;
-  struct io_queue* queue;
-  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic uint64_t* retired_bytes; // points to zarr_fs_sink.retired_bytes
-  uint64_t* queued_bytes;          // points to zarr_fs_sink.queued_bytes
-  _Atomic int* io_error;           // points to zarr_fs_sink.io_error
-};
-
-struct pwrite_job
-{
-  platform_fd fd;
-  uint64_t offset;
-  size_t nbytes;
-  size_t data_off;                 // byte offset from start of struct to data
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
-  uint8_t data[]; // used when data_off == sizeof(struct pwrite_job)
-};
-
-static void
-pwrite_fn(void* arg)
-{
-  struct pwrite_job* j = (struct pwrite_job*)arg;
-  const void* data = (const char*)j + j->data_off;
-  if (platform_pwrite(j->fd, data, j->nbytes, j->offset) != 0) {
-    log_error("zarr pwrite failed");
-    atomic_store(j->io_error, 1);
+  struct dim_extent de[MAX_ZARR_RANK];
+  for (int d = 0; d < rank; ++d) {
+    de[d].size = dims[d].size;
+    de[d].chunk_size = (uint32_t)dims[d].chunk_size;
   }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
-}
-
-static int
-zarr_shard_write(struct shard_writer* self,
-                 uint64_t offset,
-                 const void* beg,
-                 const void* end)
-{
-  struct zarr_shard_writer* w = (struct zarr_shard_writer*)self;
-  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-
-  if (w->queue) {
-    struct pwrite_job* j;
-    void (*job_free)(void*) = free;
-    if (w->alignment > 0) {
-      // Unbuffered IO: buffer must be page-aligned.
-      size_t hdr = align_up(sizeof(struct pwrite_job), w->alignment);
-      j =
-        (struct pwrite_job*)platform_aligned_alloc(w->alignment, hdr + nbytes);
-      CHECK(Error, j);
-      j->data_off = hdr; // data lives at aligned offset
-      job_free = platform_aligned_free;
-    } else {
-      j = (struct pwrite_job*)malloc(sizeof(struct pwrite_job) + nbytes);
-      CHECK(Error, j);
-      j->data_off = sizeof(struct pwrite_job);
-    }
-    j->fd = w->fd;
-    j->offset = offset;
-    j->nbytes = nbytes;
-    j->retired_bytes = w->retired_bytes;
-    j->io_error = w->io_error;
-    memcpy((char*)j + j->data_off, beg, nbytes);
-    if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
-      job_free(j);
-      goto Error;
-    }
-    *w->queued_bytes += nbytes;
-  } else {
-    CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
+  uint64_t cps[MAX_ZARR_RANK];
+  for (int d = 0; d < rank; ++d)
+    cps[d] = dims[d].chunks_per_shard;
+  uint8_t na = dims_n_append(dims, rank);
+  uint64_t shard_inner_count = dim_extent_compute_shards(de, rank, na, cps);
+  for (int d = 0; d < rank; ++d) {
+    shard_counts[d] = de[d].shard_count;
+    chunks_per_shard[d] = de[d].chunks_per_shard;
   }
-  return 0;
-
-Error:
-  return 1;
+  return shard_inner_count;
 }
 
-// Zero-copy pwrite: data points into pinned memory, NOT owned.
-struct pwrite_ref_job
-{
-  platform_fd fd;
-  uint64_t offset;
-  size_t nbytes;
-  const void* data;                // NOT owned — points into pinned memory
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
-};
-
-static void
-pwrite_ref_fn(void* arg)
-{
-  struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
-  if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0) {
-    log_error("zarr pwrite_ref failed");
-    atomic_store(j->io_error, 1);
-  }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
-}
-
-static int
-zarr_shard_write_direct(struct shard_writer* self,
-                        uint64_t offset,
-                        const void* beg,
-                        const void* end)
-{
-  struct zarr_shard_writer* w = (struct zarr_shard_writer*)self;
-  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (nbytes == 0)
-    return 0;
-
-  if (w->queue) {
-    struct pwrite_ref_job* j =
-      (struct pwrite_ref_job*)malloc(sizeof(struct pwrite_ref_job));
-    CHECK(Error, j);
-    j->fd = w->fd;
-    j->offset = offset;
-    j->nbytes = nbytes;
-    j->data = beg;
-    j->retired_bytes = w->retired_bytes;
-    j->io_error = w->io_error;
-    if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
-      free(j);
-      goto Error;
-    }
-    *w->queued_bytes += nbytes;
-  } else {
-    CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
-  }
-  return 0;
-
-Error:
-  return 1;
-}
-
-struct close_job
-{
-  platform_fd fd;
-};
-
-static void
-close_fn(void* arg)
-{
-  struct close_job* j = (struct close_job*)arg;
-  platform_close(j->fd);
-}
-
-static int
-zarr_shard_finalize(struct shard_writer* self)
-{
-  struct zarr_shard_writer* w = (struct zarr_shard_writer*)self;
-  if (w->fd == PLATFORM_FD_INVALID)
-    return 0;
-
-  if (w->queue) {
-    struct close_job* j = (struct close_job*)malloc(sizeof(struct close_job));
-    CHECK(Error, j);
-    j->fd = w->fd;
-    if (io_queue_post(w->queue, close_fn, j, free)) {
-      free(j);
-      goto Error;
-    }
-  } else {
-    platform_close(w->fd);
-  }
-
-  w->fd = PLATFORM_FD_INVALID;
-  return 0;
-
-Error:
-  return 1;
-}
-
-// --- Zarr sink ---
-
-struct zarr_fs_sink
-{
-  struct shard_sink base;
-  struct io_queue* queue;
-  int unbuffered;
-  uint64_t queued_bytes;          // written by main thread only
-  _Atomic uint64_t retired_bytes; // written by io worker (atomic)
-  _Atomic int io_error;           // set by io worker on write failure
-
-  // Geometry
-  uint8_t rank;
-  struct dim_extent dims[MAX_ZARR_RANK];
-  uint64_t shard_inner_count; // prod(shard_count[d] for d >= n_append)
-
-  // Paths
-  char array_dir[4096]; // "{store_path}/{array_name}"
-
-  // Writer pool: one per inner shard, reused across shard epochs
-  struct zarr_shard_writer* writers;
-  uint64_t num_writers;
-
-  // For metadata updates (stored copy of config)
-  struct dimension dimensions[MAX_ZARR_RANK];
-  enum dtype data_type;
-  double fill_value;
-  struct codec_config codec;
-};
-
-// --- shard_sink fence ---
-
-static struct io_event
-zarr_fs_sink_record_fence(struct shard_sink* self, uint8_t level)
-{
-  (void)level;
-  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
-  return io_queue_record(zs->queue);
-}
-
-static void
-zarr_fs_sink_wait_fence(struct shard_sink* self,
-                        uint8_t level,
-                        struct io_event ev)
-{
-  (void)level;
-  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
-  io_event_wait(zs->queue, ev);
-}
-
-// --- shard_sink open ---
-
-static struct shard_writer*
-zarr_fs_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
-{
-  (void)level;
-  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
-
-  // Map flat shard_index to inner writer index
-  // flat = s0 * shard_inner_count + inner_flat
-  uint64_t inner = shard_index % zs->shard_inner_count;
-  struct zarr_shard_writer* w = &zs->writers[inner];
-
-  // Build path
-  uint64_t sc[MAX_ZARR_RANK];
-  for (int d = 0; d < zs->rank; ++d)
-    sc[d] = zs->dims[d].shard_count;
-  char key[256];
-  if (zarr_shard_key(key, sizeof(key), zs->rank, sc, shard_index) != 0) {
-    log_error("zarr_fs_sink_open: shard key too long for shard %llu",
-              (unsigned long long)shard_index);
-    return NULL;
-  }
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/%s", zs->array_dir, key);
-
-  int flags = zs->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
-  w->fd = platform_open_write(path, flags);
-  if (w->fd == PLATFORM_FD_INVALID) {
-    // Directory may not exist yet (unbounded dim 0) — create and retry
-    char dir[4096];
-    size_t pathlen = strlen(path);
-    memcpy(dir, path, pathlen + 1);
-    char* last_slash = strrchr(dir, '/');
-    if (last_slash) {
-      *last_slash = '\0';
-      if (platform_mkdirp(dir) == 0)
-        w->fd = platform_open_write(path, flags);
-    }
-    if (w->fd == PLATFORM_FD_INVALID) {
-      log_error("zarr_fs_sink_open: open(%s) failed", path);
-      return NULL;
-    }
-  }
-
-  return &w->base;
-}
-
-// --- Metadata writing ---
-
-static int
-write_file(const char* path, const char* data, size_t len)
-{
-  platform_fd fd = platform_open_write(path, 0);
-  if (fd == PLATFORM_FD_INVALID)
-    return -1;
-  int rc = platform_write(fd, data, len);
-  platform_close(fd);
-  return rc;
-}
-
-static int
-write_root_metadata_file(const char* store_path)
-{
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/zarr.json", store_path);
-
-  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-  int len = zarr_root_json(buf, sizeof(buf));
-  if (len < 0)
-    return -1;
-  return write_file(path, buf, (size_t)len);
-}
-
-static int
-write_array_metadata_file(const char* array_dir,
-                          uint8_t rank,
-                          const struct dimension* dimensions,
-                          enum dtype data_type,
-                          double fill_value,
-                          const uint64_t* chunks_per_shard,
-                          struct codec_config codec)
-{
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/zarr.json", array_dir);
-
-  char buf[4096];
-  int len = zarr_array_json(buf,
-                            sizeof(buf),
-                            rank,
-                            dimensions,
-                            data_type,
-                            fill_value,
-                            chunks_per_shard,
-                            codec);
-  if (len < 0)
-    return -1;
-  return write_file(path, buf, (size_t)len);
-}
+// --- Helper: write root + intermediate groups ---
 
 struct fs_intermediate_ctx
 {
-  const char* store_path;
+  struct store* store;
 };
 
 static int
 write_fs_intermediate(const char* partial, void* ctx)
 {
   const struct fs_intermediate_ctx* c = (const struct fs_intermediate_ctx*)ctx;
-  char dir[4096];
-  snprintf(dir, sizeof(dir), "%s/%s", c->store_path, partial);
-  if (platform_mkdirp(dir) != 0)
+  if (c->store->mkdirs(c->store, partial))
     return -1;
-  return write_root_metadata_file(dir);
+  char key[4096];
+  snprintf(key, sizeof(key), "%s/zarr.json", partial);
+  return zarr_write_group(c->store, key, NULL);
 }
-
-// --- Metadata update ---
 
 static int
-zarr_fs_sink_update_append(struct shard_sink* self,
-                           uint8_t level,
-                           uint8_t n_append,
-                           const uint64_t* append_sizes)
+write_root_and_intermediates(struct store* store, const char* array_name)
 {
-  (void)level;
-  struct zarr_fs_sink* zs = (struct zarr_fs_sink*)self;
-  if (n_append == 0 || n_append > zs->rank)
-    return 1;
-
-  // Check if any append dim changed
-  int changed = 0;
-  for (uint8_t d = 0; d < n_append; ++d) {
-    if (zs->dimensions[d].size != append_sizes[d]) {
-      changed = 1;
-      break;
-    }
-  }
-  if (!changed)
-    return 0;
-
-  for (uint8_t d = 0; d < n_append; ++d)
-    zs->dimensions[d].size = append_sizes[d];
-
-  uint64_t cps[MAX_ZARR_RANK];
-  for (int d = 0; d < zs->rank; ++d)
-    cps[d] = zs->dims[d].chunks_per_shard;
-  if (write_array_metadata_file(zs->array_dir,
-                                zs->rank,
-                                zs->dimensions,
-                                zs->data_type,
-                                zs->fill_value,
-                                cps,
-                                zs->codec)) {
-    log_error("zarr_fs_sink_update_append: failed to rewrite zarr.json for %s",
-              zs->array_dir);
-    return 1;
+  CHECK(Fail, zarr_write_group(store, "zarr.json", NULL) == 0);
+  if (array_name) {
+    struct fs_intermediate_ctx ictx = { .store = store };
+    CHECK(Fail,
+          zarr_for_each_intermediate(
+            array_name, write_fs_intermediate, &ictx) == 0);
+    CHECK(Fail, store->mkdirs(store, array_name) == 0);
   }
   return 0;
+Fail:
+  return 1;
 }
 
-// --- Create / Destroy ---
+// --- Single-array sink ---
+
+struct zarr_fs_sink
+{
+  struct store* store;
+  struct shard_pool* pool;
+  struct zarr_array* array;
+};
 
 struct zarr_fs_sink*
 zarr_fs_sink_create(const struct zarr_config* cfg)
@@ -417,127 +98,47 @@ zarr_fs_sink_create(const struct zarr_config* cfg)
   struct zarr_fs_sink* zs = (struct zarr_fs_sink*)calloc(1, sizeof(*zs));
   CHECK(Fail, zs);
 
-  zs->base.open = zarr_fs_sink_open;
-  zs->base.update_append = zarr_fs_sink_update_append;
-  zs->base.record_fence = zarr_fs_sink_record_fence;
-  zs->base.wait_fence = zarr_fs_sink_wait_fence;
-  zs->queue = io_queue_create();
-  CHECK(Fail_alloc, zs->queue);
-  zs->unbuffered = cfg->unbuffered;
-  zs->rank = cfg->rank;
-  zs->data_type = cfg->data_type;
-  zs->fill_value = cfg->fill_value;
-  zs->codec = cfg->codec;
-
-  // Store dimension config for metadata updates
-  for (int d = 0; d < cfg->rank; ++d)
-    zs->dimensions[d] = cfg->dimensions[d];
+  zs->store = store_fs_create(cfg->store_path, cfg->unbuffered);
+  CHECK(Fail_alloc, zs->store);
 
   // Compute geometry
-  {
-    for (int d = 0; d < cfg->rank; ++d) {
-      zs->dims[d].size = cfg->dimensions[d].size;
-      zs->dims[d].chunk_size = (uint32_t)cfg->dimensions[d].chunk_size;
-    }
-    uint64_t cps[HALF_MAX_RANK];
-    for (int d = 0; d < cfg->rank; ++d)
-      cps[d] = cfg->dimensions[d].chunks_per_shard;
-    const uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
-    zs->shard_inner_count =
-      dim_extent_compute_shards(zs->dims, cfg->rank, na, cps);
-  }
+  uint64_t shard_counts[MAX_ZARR_RANK];
+  uint64_t chunks_per_shard[MAX_ZARR_RANK];
+  uint64_t shard_inner_count = compute_array_geometry(
+    cfg->dimensions, cfg->rank, shard_counts, chunks_per_shard);
 
-  // Build array directory path
+  zs->pool = zs->store->create_pool(zs->store, shard_inner_count);
+  CHECK(Fail_store, zs->pool);
+
+  // Write root + intermediate group metadata
   if (cfg->array_name)
-    snprintf(zs->array_dir,
-             sizeof(zs->array_dir),
-             "%s/%s",
-             cfg->store_path,
-             cfg->array_name);
-  else
-    snprintf(zs->array_dir, sizeof(zs->array_dir), "%s", cfg->store_path);
+    CHECK(Fail_pool,
+          write_root_and_intermediates(zs->store, cfg->array_name) == 0);
 
-  // Create directory tree: ensure shard directories exist.
-  // shard_inner_count = prod(shard_count[d] for d >= n_append).
-  // Bounded append dims (1..n_append-1) are included; dim 0 is only
-  // included when bounded. When dim 0 is unbounded (size=0), only
-  // pre-create dirs for shard_epoch=0; further dirs are created on-demand.
-  {
-    const uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
-    uint64_t total_shards = zs->shard_inner_count;
-    for (int d = 1; d < na; ++d)
-      total_shards *= zs->dims[d].shard_count;
-    if (cfg->dimensions[0].size > 0)
-      total_shards *= zs->dims[0].shard_count;
+  // Build array prefix (array_name or "")
+  const char* prefix = cfg->array_name ? cfg->array_name : "";
 
-    uint64_t sc[MAX_ZARR_RANK];
-    for (int d = 0; d < cfg->rank; ++d)
-      sc[d] = zs->dims[d].shard_count;
-    for (uint64_t flat = 0; flat < total_shards; ++flat) {
-      char key[256];
-      if (zarr_shard_key(key, sizeof(key), zs->rank, sc, flat) != 0)
-        goto Fail_alloc;
+  struct zarr_array_config acfg = {
+    .data_type = cfg->data_type,
+    .fill_value = cfg->fill_value,
+    .rank = cfg->rank,
+    .dimensions = cfg->dimensions,
+    .codec = cfg->codec,
+    .shard_counts = shard_counts,
+    .chunks_per_shard = chunks_per_shard,
+    .shard_inner_count = shard_inner_count,
+  };
 
-      char path[4096];
-      snprintf(path, sizeof(path), "%s/%s", zs->array_dir, key);
-
-      // Get the directory portion (everything up to last '/')
-      char* last_slash = strrchr(path, '/');
-      if (last_slash) {
-        *last_slash = '\0';
-        if (platform_mkdirp(path) != 0) {
-          log_error("zarr_fs_sink: platform_mkdirp(%s) failed", path);
-          goto Fail_alloc;
-        }
-      }
-    }
-  }
-
-  // Write metadata
-  if (cfg->array_name) {
-    CHECK(Fail_alloc, write_root_metadata_file(cfg->store_path) == 0);
-    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
-    CHECK(Fail_alloc,
-          zarr_for_each_intermediate(
-            cfg->array_name, write_fs_intermediate, &ictx) == 0);
-  }
-  {
-    uint64_t cps[MAX_ZARR_RANK];
-    for (int d = 0; d < cfg->rank; ++d)
-      cps[d] = zs->dims[d].chunks_per_shard;
-    CHECK(Fail_alloc,
-          write_array_metadata_file(zs->array_dir,
-                                    zs->rank,
-                                    zs->dimensions,
-                                    zs->data_type,
-                                    zs->fill_value,
-                                    cps,
-                                    zs->codec) == 0);
-  }
-
-  // Allocate writer pool
-  zs->num_writers = zs->shard_inner_count;
-  zs->writers = (struct zarr_shard_writer*)calloc(
-    zs->num_writers, sizeof(struct zarr_shard_writer));
-  CHECK(Fail_alloc, zs->writers);
-
-  for (uint64_t i = 0; i < zs->num_writers; ++i) {
-    zs->writers[i].base.write = zarr_shard_write;
-    zs->writers[i].base.write_direct = zarr_shard_write_direct;
-    zs->writers[i].base.finalize = zarr_shard_finalize;
-    zs->writers[i].fd = PLATFORM_FD_INVALID;
-    zs->writers[i].queue = zs->queue;
-    zs->writers[i].alignment = zs->unbuffered ? platform_page_size() : 0;
-    zs->writers[i].retired_bytes = &zs->retired_bytes;
-    zs->writers[i].queued_bytes = &zs->queued_bytes;
-    zs->writers[i].io_error = &zs->io_error;
-  }
+  zs->array = zarr_array_create(zs->store, zs->pool, prefix, &acfg);
+  CHECK(Fail_pool, zs->array);
 
   return zs;
 
+Fail_pool:
+  zs->pool->destroy(zs->pool);
+Fail_store:
+  zs->store->destroy(zs->store);
 Fail_alloc:
-  free(zs->writers);
-  io_queue_destroy(zs->queue);
   free(zs);
 Fail:
   return NULL;
@@ -546,18 +147,14 @@ Fail:
 size_t
 zarr_fs_sink_pending_bytes(struct zarr_fs_sink* s)
 {
-  if (!s || !s->queue)
-    return 0;
-  return (size_t)(s->queued_bytes - atomic_load(&s->retired_bytes));
+  return s ? s->pool->pending_bytes(s->pool) : 0;
 }
 
 void
 zarr_fs_sink_flush(struct zarr_fs_sink* s)
 {
-  if (!s || !s->queue)
-    return;
-  struct io_event ev = io_queue_record(s->queue);
-  io_event_wait(s->queue, ev);
+  if (s)
+    s->pool->flush(s->pool);
 }
 
 void
@@ -565,121 +162,26 @@ zarr_fs_sink_destroy(struct zarr_fs_sink* s)
 {
   if (!s)
     return;
-
-  zarr_fs_sink_flush(s);
-
-  if (s->writers) {
-    for (uint64_t i = 0; i < s->num_writers; ++i) {
-      if (s->writers[i].fd != PLATFORM_FD_INVALID)
-        platform_close(s->writers[i].fd);
-    }
-    free(s->writers);
-  }
-  io_queue_destroy(s->queue);
+  zarr_array_destroy(s->array);
+  s->pool->destroy(s->pool);
+  s->store->destroy(s->store);
   free(s);
 }
 
 struct shard_sink*
 zarr_fs_sink_as_shard_sink(struct zarr_fs_sink* s)
 {
-  return &s->base;
+  return s ? zarr_array_as_shard_sink(s->array) : NULL;
 }
 
 // --- Multiscale sink ---
 
 struct zarr_fs_multiscale_sink
 {
-  struct shard_sink base;
-  struct zarr_fs_sink** levels; // array of nlod zarr_fs_sink*
-  int nlod;
-
-  // For group metadata regeneration
-  char group_path[4096];
-  uint8_t rank;
-  struct ngff_axis axes[MAX_ZARR_RANK];
+  struct store* store;
+  struct shard_pool* pool;
+  struct ngff_multiscale* ms;
 };
-
-static struct io_event
-zarr_multiscale_record_fence(struct shard_sink* self, uint8_t level)
-{
-  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
-  if (level >= ms->nlod)
-    return (struct io_event){ 0 };
-  return io_queue_record(ms->levels[level]->queue);
-}
-
-static void
-zarr_multiscale_wait_fence(struct shard_sink* self,
-                           uint8_t level,
-                           struct io_event ev)
-{
-  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
-  if (level < ms->nlod)
-    io_event_wait(ms->levels[level]->queue, ev);
-}
-
-static struct shard_writer*
-zarr_multiscale_open(struct shard_sink* self,
-                     uint8_t level,
-                     uint64_t shard_index)
-{
-  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
-  CHECK(Fail, level < ms->nlod);
-  return ms->levels[level]->base.open(
-    &ms->levels[level]->base, level, shard_index);
-Fail:
-  return NULL;
-}
-
-// Regenerate OME-NGFF group metadata from live per-level shapes.
-static int
-write_multiscale_group_metadata(const struct zarr_fs_multiscale_sink* ms)
-{
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/zarr.json", ms->group_path);
-
-  const struct dimension* level_ptrs[LOD_MAX_LEVELS];
-  for (int lv = 0; lv < ms->nlod; ++lv)
-    level_ptrs[lv] = ms->levels[lv]->dimensions;
-
-  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-  int len = ngff_multiscale_group_json(
-    buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs, ms->axes);
-  if (len < 0)
-    return -1;
-  return write_file(path, buf, (size_t)len);
-}
-
-static int
-zarr_multiscale_update_append(struct shard_sink* self,
-                              uint8_t level,
-                              uint8_t n_append,
-                              const uint64_t* append_sizes)
-{
-  struct zarr_fs_multiscale_sink* ms = (struct zarr_fs_multiscale_sink*)self;
-  if (level >= ms->nlod)
-    return 1;
-
-  // Skip if dim 0 is unchanged. Only dim 0 can be unbounded (invariant
-  // enforced by dims_n_append), so it is the only append dim whose size
-  // changes at runtime. Bounded append dims (1..n_append-1) keep their
-  // declared size from creation.
-  uint64_t old = ms->levels[level]->dimensions[0].size;
-  if (zarr_fs_sink_update_append(
-        &ms->levels[level]->base, level, n_append, append_sizes))
-    return 1;
-  if (old == append_sizes[0])
-    return 0;
-
-  // Regenerate group metadata
-  if (write_multiscale_group_metadata(ms)) {
-    log_error(
-      "zarr_multiscale_update_append: failed to rewrite group zarr.json for %s",
-      ms->group_path);
-    return 1;
-  }
-  return 0;
-}
 
 struct zarr_fs_multiscale_sink*
 zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
@@ -694,105 +196,50 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
               sizeof("/zarr.json") <
             4096);
 
-  // Build group path: store_path/array_name when array_name is set
-  char group_path[4096];
-  if (cfg->array_name)
-    snprintf(group_path,
-             sizeof(group_path),
-             "%s/%s",
-             cfg->store_path,
-             cfg->array_name);
-  else
-    snprintf(group_path, sizeof(group_path), "%s", cfg->store_path);
+  struct zarr_fs_multiscale_sink* s =
+    (struct zarr_fs_multiscale_sink*)calloc(1, sizeof(*s));
+  CHECK(Fail, s);
 
-  struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(&plan, cfg->dimensions, cfg->rank, max_lev) ==
-          0);
+  s->store = store_fs_create(cfg->store_path, cfg->unbuffered);
+  CHECK(Fail_alloc, s->store);
 
-  struct zarr_fs_multiscale_sink* ms =
-    (struct zarr_fs_multiscale_sink*)calloc(1, sizeof(*ms));
-  CHECK(Fail_plan, ms);
+  // Compute L0 geometry for pool sizing
+  uint64_t shard_counts[MAX_ZARR_RANK];
+  uint64_t chunks_per_shard[MAX_ZARR_RANK];
+  uint64_t shard_inner_count = compute_array_geometry(
+    cfg->dimensions, cfg->rank, shard_counts, chunks_per_shard);
 
-  ms->base.open = zarr_multiscale_open;
-  ms->base.update_append = zarr_multiscale_update_append;
-  ms->base.record_fence = zarr_multiscale_record_fence;
-  ms->base.wait_fence = zarr_multiscale_wait_fence;
-  ms->nlod = plan.levels.nlod;
-  ms->rank = cfg->rank;
-  snprintf(ms->group_path, sizeof(ms->group_path), "%s", group_path);
-  if (cfg->axes)
-    memcpy(ms->axes, cfg->axes, cfg->rank * sizeof(struct ngff_axis));
-  // else: calloc zero-init → ngff_axis_space, NULL unit, scale 0
+  s->pool = s->store->create_pool(s->store, shard_inner_count);
+  CHECK(Fail_store, s->pool);
 
-  ms->levels = (struct zarr_fs_sink**)calloc((size_t)plan.levels.nlod,
-                                             sizeof(struct zarr_fs_sink*));
-  CHECK(Fail_ms, ms->levels);
+  // Build group prefix
+  const char* prefix = cfg->array_name ? cfg->array_name : "";
 
-  // Ensure directories exist before writing metadata
-  if (cfg->array_name) {
-    CHECK(Fail_ms, platform_mkdirp(cfg->store_path) == 0);
-    CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
-    CHECK(Fail_ms, write_root_metadata_file(cfg->store_path) == 0);
-    struct fs_intermediate_ctx ictx = { .store_path = cfg->store_path };
-    CHECK(Fail_ms,
-          zarr_for_each_intermediate(
-            cfg->array_name, write_fs_intermediate, &ictx) == 0);
-  } else {
-    CHECK(Fail_ms, platform_mkdirp(group_path) == 0);
-  }
+  // Write root + intermediate groups
+  CHECK(Fail_pool,
+        write_root_and_intermediates(s->store, cfg->array_name) == 0);
 
-  // Create one zarr_fs_sink per level
-  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
-    // Build per-level dimensions with downsampled sizes and clamped
-    // chunk_size / chunks_per_shard from the plan.
-    struct dimension lv_dims[MAX_ZARR_RANK];
-    for (int d = 0; d < cfg->rank; ++d) {
-      lv_dims[d] = cfg->dimensions[d];
-      if (d == 0 && cfg->dimensions[0].size == 0)
-        lv_dims[d].size = 0;
-      else
-        lv_dims[d].size = plan.levels.level[lv].dim[d].size;
-      lv_dims[d].chunk_size = plan.levels.level[lv].dim[d].chunk_size;
-      lv_dims[d].chunks_per_shard =
-        plan.levels.level[lv].dim[d].chunks_per_shard;
-    }
+  struct ngff_multiscale_config mscfg = {
+    .data_type = cfg->data_type,
+    .fill_value = cfg->fill_value,
+    .rank = cfg->rank,
+    .dimensions = cfg->dimensions,
+    .nlod = cfg->nlod,
+    .codec = cfg->codec,
+    .axes = cfg->axes,
+  };
 
-    char name[8];
-    snprintf(name, sizeof(name), "%d", lv);
+  s->ms = ngff_multiscale_create(s->store, s->pool, prefix, &mscfg);
+  CHECK(Fail_pool, s->ms);
 
-    struct zarr_config zcfg = {
-      .store_path = group_path,
-      .array_name = name,
-      .data_type = cfg->data_type,
-      .fill_value = cfg->fill_value,
-      .rank = cfg->rank,
-      .dimensions = lv_dims,
-      .unbuffered = cfg->unbuffered,
-      .codec = cfg->codec,
-    };
+  return s;
 
-    ms->levels[lv] = zarr_fs_sink_create(&zcfg);
-    CHECK(Fail_levels, ms->levels[lv]);
-  }
-
-  // Write OME-NGFF multiscales group metadata (overwrites group zarr.json)
-  CHECK(Fail_levels, write_multiscale_group_metadata(ms) == 0);
-
-  lod_plan_free(&plan);
-  return ms;
-
-Fail_levels:
-  for (int i = 0; i < plan.levels.nlod; ++i) {
-    if (ms->levels[i])
-      zarr_fs_sink_destroy(ms->levels[i]);
-  }
-  free(ms->levels);
-Fail_ms:
-  free(ms);
-Fail_plan:
-  lod_plan_free(&plan);
+Fail_pool:
+  s->pool->destroy(s->pool);
+Fail_store:
+  s->store->destroy(s->store);
+Fail_alloc:
+  free(s);
 Fail:
   return NULL;
 }
@@ -800,21 +247,14 @@ Fail:
 size_t
 zarr_fs_multiscale_sink_pending_bytes(struct zarr_fs_multiscale_sink* s)
 {
-  if (!s)
-    return 0;
-  size_t total = 0;
-  for (int i = 0; i < s->nlod; ++i)
-    total += zarr_fs_sink_pending_bytes(s->levels[i]);
-  return total;
+  return s ? s->pool->pending_bytes(s->pool) : 0;
 }
 
 void
 zarr_fs_multiscale_sink_flush(struct zarr_fs_multiscale_sink* s)
 {
-  if (!s)
-    return;
-  for (int i = 0; i < s->nlod; ++i)
-    zarr_fs_sink_flush(s->levels[i]);
+  if (s)
+    s->pool->flush(s->pool);
 }
 
 void
@@ -822,14 +262,14 @@ zarr_fs_multiscale_sink_destroy(struct zarr_fs_multiscale_sink* s)
 {
   if (!s)
     return;
-  for (int i = 0; i < s->nlod; ++i)
-    zarr_fs_sink_destroy(s->levels[i]);
-  free(s->levels);
+  ngff_multiscale_destroy(s->ms);
+  s->pool->destroy(s->pool);
+  s->store->destroy(s->store);
   free(s);
 }
 
 struct shard_sink*
 zarr_fs_multiscale_sink_as_shard_sink(struct zarr_fs_multiscale_sink* s)
 {
-  return &s->base;
+  return s ? ngff_multiscale_as_shard_sink(s->ms) : NULL;
 }

@@ -728,10 +728,11 @@ test_metadata_two_append(const char* tmpdir)
     free(data);
   }
 
-  // Check that the shard chunk directory exists
+  // Shard directories are created on-demand at first shard open,
+  // not at sink creation time. Verify the array dir exists instead.
   {
     char path[4096];
-    snprintf(path, sizeof(path), "%s/0/c", tmpdir);
+    snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
     CHECK(Fail2, test_file_exists(path));
   }
 
