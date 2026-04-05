@@ -12,13 +12,26 @@ struct store_s3
   struct store base;
   struct s3_client* client;
   char bucket[256];
+  char prefix[4096]; // "" if no prefix
 };
+
+// Build a full S3 key: "prefix/key" or just "key" if no prefix.
+static void
+s3_full_key(const struct store_s3* s, const char* key, char* out, size_t cap)
+{
+  if (s->prefix[0])
+    snprintf(out, cap, "%s/%s", s->prefix, key);
+  else
+    snprintf(out, cap, "%s", key);
+}
 
 static int
 s3_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
-  return s3_client_put(s->client, s->bucket, key, data, len);
+  char full[4096];
+  s3_full_key(s, key, full, sizeof(full));
+  return s3_client_put(s->client, s->bucket, full, data, len);
 }
 
 static int
@@ -33,7 +46,7 @@ static struct shard_pool*
 s3_create_pool(struct store* self, uint64_t nslots)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
-  return shard_pool_s3_create(s->client, s->bucket, nslots);
+  return shard_pool_s3_create(s->client, s->bucket, s->prefix, nslots);
 }
 
 static void
@@ -73,6 +86,8 @@ store_s3_create(const struct store_s3_config* cfg)
   s->base.create_pool = s3_create_pool;
   s->base.destroy = s3_destroy;
   snprintf(s->bucket, sizeof(s->bucket), "%s", cfg->bucket);
+  if (cfg->prefix)
+    snprintf(s->prefix, sizeof(s->prefix), "%s", cfg->prefix);
 
   return &s->base;
 

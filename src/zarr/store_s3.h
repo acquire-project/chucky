@@ -9,6 +9,7 @@
 struct store_s3_config
 {
   const char* bucket;
+  const char* prefix; // key prefix (e.g. "data/out.zarr"), may be NULL
   const char* region;
   const char* endpoint;
   size_t part_size;

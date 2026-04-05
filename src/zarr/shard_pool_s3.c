@@ -14,6 +14,7 @@ struct shard_pool_s3
   struct shard_pool base;
   struct s3_client* client; // borrowed, not owned
   char bucket[256];
+  char prefix[4096]; // prepended to shard keys
   struct s3_slot* slots;
   uint64_t nslots;
   uint64_t finalize_seq;
@@ -105,10 +106,16 @@ pool_s3_open(struct shard_pool* self, uint64_t slot, const char* key)
   // Wait for previous upload on this slot
   s3_wait_pending(w);
 
-  w->upload = s3_upload_begin(p->client, p->bucket, key);
+  char full_key[4096];
+  if (p->prefix[0])
+    snprintf(full_key, sizeof(full_key), "%s/%s", p->prefix, key);
+  else
+    snprintf(full_key, sizeof(full_key), "%s", key);
+
+  w->upload = s3_upload_begin(p->client, p->bucket, full_key);
   if (!w->upload) {
     log_error(
-      "shard_pool_s3: failed to begin upload for %s/%s", p->bucket, key);
+      "shard_pool_s3: failed to begin upload for %s/%s", p->bucket, full_key);
     goto Fail;
   }
 
@@ -187,6 +194,7 @@ pool_s3_destroy(struct shard_pool* self)
 struct shard_pool*
 shard_pool_s3_create(struct s3_client* client,
                      const char* bucket,
+                     const char* prefix,
                      uint64_t nslots)
 {
   CHECK(Fail, client);
@@ -205,6 +213,8 @@ shard_pool_s3_create(struct s3_client* client,
   p->base.pending_bytes = pool_s3_pending_bytes;
   p->base.destroy = pool_s3_destroy;
   p->client = client;
+  if (prefix)
+    snprintf(p->prefix, sizeof(p->prefix), "%s", prefix);
   p->nslots = nslots;
   snprintf(p->bucket, sizeof(p->bucket), "%s", bucket);
 

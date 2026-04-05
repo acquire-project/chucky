@@ -161,17 +161,9 @@ ngff_multiscale_create(struct store* store,
   ms->base.record_fence = ngff_ms_record_fence;
   ms->base.wait_fence = ngff_ms_wait_fence;
 
-  // Write root group
-  CHECK(Fail_ms, zarr_write_group(store, "zarr.json", NULL) == 0);
-
-  // Write intermediate groups (if prefix has path segments)
-  if (prefix && prefix[0]) {
-    struct ngff_intermediate_ctx ictx = { .store = store };
-    CHECK(Fail_ms,
-          zarr_for_each_intermediate(prefix, ngff_write_intermediate, &ictx) ==
-            0);
+  // Ensure prefix directory exists (parent handles root/intermediate groups)
+  if (prefix && prefix[0])
     CHECK(Fail_ms, store->mkdirs(store, prefix) == 0);
-  }
 
   // Create per-level zarr_arrays
   ms->levels =

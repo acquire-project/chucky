@@ -4,6 +4,7 @@
 #include "util/prelude.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
+#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +77,9 @@ test_multiscale_create(void)
     .nlod = 0, // auto
     .axes = axes,
   };
+
+  // Parent writes root group
+  CHECK(Fail3, zarr_write_group(store, "zarr.json", NULL) == 0);
 
   struct ngff_multiscale* ms = ngff_multiscale_create(store, pool, "ms", &cfg);
   CHECK(Fail3, ms);
