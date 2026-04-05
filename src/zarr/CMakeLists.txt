@@ -24,6 +24,14 @@ add_src_lib(s3_client SOURCES s3_client.c s3_client.h
     LINKS AWS::aws-c-s3 chucky_log
 )
 
+add_src_lib(shard_pool_s3 SOURCES shard_pool_s3.c shard_pool_s3.h
+    LINKS s3_client writer chucky_log
+)
+
+add_src_lib(store_s3 SOURCES store_s3.c store_s3.h
+    LINKS shard_pool_s3 s3_client chucky_log
+)
+
 add_src_lib(zarr_s3_sink SOURCES zarr_s3_sink.c ../zarr_s3_sink.h
     LINKS zarr_metadata ngff_metadata s3_client writer lod_plan dimension chucky_log
 )
