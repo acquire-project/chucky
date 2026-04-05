@@ -3,6 +3,7 @@
 #include "dtype.h"
 #include "zarr/json_writer.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,9 @@ zarr_root_json(char* buf, size_t cap)
   jw_string(&jw, "group");
   jw_key(&jw, "consolidated_metadata");
   jw_null(&jw);
+  jw_key(&jw, "attributes");
+  jw_object_begin(&jw);
+  jw_object_end(&jw);
   jw_object_end(&jw);
 
   if (jw_error(&jw))
@@ -120,6 +124,8 @@ zarr_array_json(char* buf,
     if (codec.id == CODEC_ZSTD) {
       jw_key(&jw, "level");
       jw_int(&jw, codec.level);
+      jw_key(&jw, "checksum");
+      jw_bool(&jw, false);
     }
     if (codec_is_blosc(codec.id)) {
       jw_key(&jw, "cname");
@@ -283,16 +289,18 @@ zarr_multiscale_group_json(char* buf,
     snprintf(lvstr, sizeof(lvstr), "%d", lv);
     jw_string(&jw, lvstr);
 
-    // Precompute per-axis physical scale and downsample factor
+    // Precompute per-axis physical scale and downsample factor.
+    // Use the actual ratio of L0 size to level size so that dimensions
+    // which cannot be downsampled further (e.g. size 1) get factor 1.
+    const struct dimension* lv_dims = level_dims[lv];
     double scale[MAX_ZARR_RANK], translation[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
       double phys = l0[d].ngff.scale > 0 ? l0[d].ngff.scale : 1.0;
       double factor = 1.0;
-      _Static_assert(LOD_MAX_LEVELS <= 32,
-                     "1u << lv overflows for > 32 levels");
-      if (l0[d].downsample) {
-        factor = (double)(1u << lv);
-      }
+      uint64_t l0_size = l0[d].size;
+      uint64_t lv_size = lv_dims[d].size;
+      if (l0_size > 0 && lv_size > 0)
+        factor = (double)l0_size / (double)lv_size;
       scale[d] = phys * factor;
       translation[d] = 0.5 * phys * (factor - 1.0);
     }

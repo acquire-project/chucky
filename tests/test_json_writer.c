@@ -1,3 +1,4 @@
+#include "defs.limits.h"
 #include "util/prelude.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
@@ -206,6 +207,71 @@ Fail:
 }
 
 static int
+test_zarr_root_json(void)
+{
+  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
+  int len = zarr_root_json(buf, sizeof(buf));
+  CHECK(Fail, len > 0);
+
+  const char* expected =
+    "{\"zarr_format\":3,\"node_type\":\"group\","
+    "\"consolidated_metadata\":null,\"attributes\":{}}";
+  CHECK(Fail, (size_t)len == strlen(expected));
+  CHECK(Fail, memcmp(buf, expected, (size_t)len) == 0);
+
+  // Check no duplicate "attributes" key
+  buf[len] = '\0';
+  char* first = strstr(buf, "\"attributes\"");
+  CHECK(Fail, first);
+  CHECK(Fail, !strstr(first + 1, "\"attributes\""));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  return 1;
+}
+
+static int
+test_zarr_multiscale_group_json(void)
+{
+  // 3-dim config (t/y/x) with 2 LOD levels
+  struct dimension l0_dims[3] = {
+    { .size = 0, .chunk_size = 1, .chunks_per_shard = 4, .name = "t" },
+    { .size = 64, .chunk_size = 8, .chunks_per_shard = 4, .name = "y",
+      .downsample = 1 },
+    { .size = 64, .chunk_size = 8, .chunks_per_shard = 4, .name = "x",
+      .downsample = 1 },
+  };
+  struct dimension l1_dims[3] = {
+    { .size = 0, .chunk_size = 1, .chunks_per_shard = 4, .name = "t" },
+    { .size = 32, .chunk_size = 8, .chunks_per_shard = 2, .name = "y",
+      .downsample = 1 },
+    { .size = 32, .chunk_size = 8, .chunks_per_shard = 2, .name = "x",
+      .downsample = 1 },
+  };
+
+  const struct dimension* levels[2] = { l0_dims, l1_dims };
+
+  char buf[4096];
+  int len = zarr_multiscale_group_json(buf, sizeof(buf), 3, 2, levels);
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  CHECK(Fail, strstr(buf, "\"version\":\"0.5\""));
+  CHECK(Fail, strstr(buf, "\"axes\""));
+  CHECK(Fail, strstr(buf, "\"datasets\""));
+  CHECK(Fail, strstr(buf, "\"coordinateTransformations\""));
+  CHECK(Fail, strstr(buf, "\"attributes\":{\"ome\""));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  return 1;
+}
+
+static int
 test_zarr_array_json_lz4(void)
 {
   char buf[4096];
@@ -219,11 +285,40 @@ test_zarr_array_json_lz4(void)
 
   int len =
     zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
-  CHECK(Fail, len > 0);
+  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
   buf[len] = '\0';
 
   // The codec name in zarr metadata must be "lz4" (not "lz4_raw")
   CHECK(Fail, strstr(buf, "\"name\":\"lz4\""));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", (int)sizeof(buf), buf);
+  return 1;
+}
+
+static int
+test_zarr_array_json_zstd(void)
+{
+  char buf[4096];
+  struct dimension dims[3] = {
+    { .size = 0, .chunk_size = 1, .chunks_per_shard = 2, .name = "t" },
+    { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "y" },
+    { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "x" },
+  };
+  uint64_t cps[3] = { 2, 1, 1 };
+  struct codec_config codec = { .id = CODEC_ZSTD, .level = 3 };
+
+  int len =
+    zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
+  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
+  buf[len] = '\0';
+
+  CHECK(Fail,
+        strstr(buf,
+               "\"name\":\"zstd\",\"configuration\":"
+               "{\"level\":3,\"checksum\":false}"));
 
   return 0;
 
@@ -248,7 +343,10 @@ main(void)
     { "array_commas", test_array_commas },
     { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },
+    { "zarr_root_json", test_zarr_root_json },
+    { "zarr_multiscale_group_json", test_zarr_multiscale_group_json },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
+    { "zarr_array_json_zstd", test_zarr_array_json_zstd },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

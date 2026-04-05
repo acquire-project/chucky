@@ -184,7 +184,7 @@ test_pipeline(const char* tmpdir)
 
   // Verify: correct number of shards, all chunks decompress.
   {
-    int shard_count_append = ceildiv(n_epochs, chunks_per_shard_append);
+    int shard_count_append = (int)ceildiv(n_epochs, chunks_per_shard_append);
     int total_valid_chunks = 0;
 
     for (int sa = 0; sa < shard_count_append; ++sa) {
@@ -311,7 +311,7 @@ test_streaming_append(const char* tmpdir)
 
   // Verify all shards
   {
-    int shard_count_append = ceildiv(n_epochs, chunks_per_shard_append);
+    int shard_count_append = (int)ceildiv(n_epochs, chunks_per_shard_append);
     int total_valid_chunks = 0;
 
     for (int sa = 0; sa < shard_count_append; ++sa) {
