@@ -601,21 +601,24 @@ test_multiscale_unit_scale(const char* tmpdir)
       .chunks_per_shard = 4,
       .name = "z",
       .downsample = 1,
-      .storage_position = 0,
-      .ngff = { .unit = "micrometer", .scale = 0.5 } },
+      .storage_position = 0 },
     { .size = 32,
       .chunk_size = 8,
       .chunks_per_shard = 2,
       .name = "y",
-      .storage_position = 1,
-      .ngff = { .unit = "micrometer", .scale = 0.3 } },
+      .storage_position = 1 },
     { .size = 64,
       .chunk_size = 8,
       .chunks_per_shard = 4,
       .name = "x",
       .downsample = 1,
-      .storage_position = 2,
-      .ngff = { .unit = NULL, .scale = 0.0 } }, // NULL unit → omitted
+      .storage_position = 2 },
+  };
+
+  struct ngff_axis axes[] = {
+    { .unit = "micrometer", .scale = 0.5 },
+    { .unit = "micrometer", .scale = 0.3 },
+    { .unit = NULL, .scale = 0.0 }, // NULL unit → omitted
   };
 
   struct zarr_multiscale_config cfg = {
@@ -625,6 +628,7 @@ test_multiscale_unit_scale(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .nlod = 0,
+    .axes = axes,
   };
 
   struct zarr_fs_multiscale_sink* ms = zarr_fs_multiscale_sink_create(&cfg);

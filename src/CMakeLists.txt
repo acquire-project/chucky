@@ -53,3 +53,4 @@ add_subdirectory(cpu)
 add_subdirectory(multiarray)
 
 add_subdirectory(zarr)
+add_subdirectory(ngff)

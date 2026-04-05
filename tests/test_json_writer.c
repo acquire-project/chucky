@@ -1,4 +1,5 @@
 #include "defs.limits.h"
+#include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
@@ -213,9 +214,8 @@ test_zarr_root_json(void)
   int len = zarr_root_json(buf, sizeof(buf));
   CHECK(Fail, len > 0);
 
-  const char* expected =
-    "{\"zarr_format\":3,\"node_type\":\"group\","
-    "\"consolidated_metadata\":null,\"attributes\":{}}";
+  const char* expected = "{\"zarr_format\":3,\"node_type\":\"group\","
+                         "\"consolidated_metadata\":null,\"attributes\":{}}";
   CHECK(Fail, (size_t)len == strlen(expected));
   CHECK(Fail, memcmp(buf, expected, (size_t)len) == 0);
 
@@ -238,23 +238,35 @@ test_zarr_multiscale_group_json(void)
   // 3-dim config (t/y/x) with 2 LOD levels
   struct dimension l0_dims[3] = {
     { .size = 0, .chunk_size = 1, .chunks_per_shard = 4, .name = "t" },
-    { .size = 64, .chunk_size = 8, .chunks_per_shard = 4, .name = "y",
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "y",
       .downsample = 1 },
-    { .size = 64, .chunk_size = 8, .chunks_per_shard = 4, .name = "x",
+    { .size = 64,
+      .chunk_size = 8,
+      .chunks_per_shard = 4,
+      .name = "x",
       .downsample = 1 },
   };
   struct dimension l1_dims[3] = {
     { .size = 0, .chunk_size = 1, .chunks_per_shard = 4, .name = "t" },
-    { .size = 32, .chunk_size = 8, .chunks_per_shard = 2, .name = "y",
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
       .downsample = 1 },
-    { .size = 32, .chunk_size = 8, .chunks_per_shard = 2, .name = "x",
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "x",
       .downsample = 1 },
   };
 
   const struct dimension* levels[2] = { l0_dims, l1_dims };
 
   char buf[4096];
-  int len = zarr_multiscale_group_json(buf, sizeof(buf), 3, 2, levels);
+  int len = ngff_multiscale_group_json(buf, sizeof(buf), 3, 2, levels, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 

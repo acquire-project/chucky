@@ -2,6 +2,7 @@
 #include "defs.limits.h"
 #include "dimension.h"
 #include "lod/lod_plan.h"
+#include "ngff/ngff_metadata.h"
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
@@ -595,6 +596,7 @@ struct zarr_fs_multiscale_sink
   // For group metadata regeneration
   char group_path[4096];
   uint8_t rank;
+  struct ngff_axis axes[MAX_ZARR_RANK];
 };
 
 static struct io_event
@@ -641,8 +643,8 @@ write_multiscale_group_metadata(const struct zarr_fs_multiscale_sink* ms)
     level_ptrs[lv] = ms->levels[lv]->dimensions;
 
   char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-  int len = zarr_multiscale_group_json(
-    buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs);
+  int len = ngff_multiscale_group_json(
+    buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs, ms->axes);
   if (len < 0)
     return -1;
   return write_file(path, buf, (size_t)len);
@@ -720,6 +722,9 @@ zarr_fs_multiscale_sink_create(const struct zarr_multiscale_config* cfg)
   ms->nlod = plan.levels.nlod;
   ms->rank = cfg->rank;
   snprintf(ms->group_path, sizeof(ms->group_path), "%s", group_path);
+  if (cfg->axes)
+    memcpy(ms->axes, cfg->axes, cfg->rank * sizeof(struct ngff_axis));
+  // else: calloc zero-init → ngff_axis_space, NULL unit, scale 0
 
   ms->levels = (struct zarr_fs_sink**)calloc((size_t)plan.levels.nlod,
                                              sizeof(struct zarr_fs_sink*));

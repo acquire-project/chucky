@@ -40,13 +40,3 @@ int
 zarr_for_each_intermediate(const char* array_name,
                            int (*fn)(const char* partial, void* ctx),
                            void* ctx);
-
-// Generate OME-NGFF v0.5 multiscale group JSON into buf.
-// level_dims[lv] points to the rank-length dimension array for level lv.
-// Returns JSON length on success, -1 on error.
-int
-zarr_multiscale_group_json(char* buf,
-                           size_t cap,
-                           uint8_t rank,
-                           int nlod,
-                           const struct dimension* const* level_dims);

@@ -3,6 +3,7 @@
 #include "dimension.h"
 #include "dtype.h"
 #include "lod/lod_plan.h"
+#include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "zarr/s3_client.h"
 #include "zarr/zarr_metadata.h"
@@ -587,6 +588,7 @@ struct zarr_s3_multiscale_sink
   char bucket[256];
   char group_prefix[4096];
   uint8_t rank;
+  struct ngff_axis axes[MAX_ZARR_RANK];
 };
 
 static struct io_event
@@ -628,8 +630,8 @@ put_multiscale_group_metadata(const struct zarr_s3_multiscale_sink* ms)
     level_ptrs[lv] = ms->levels[lv]->dimensions;
 
   char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-  int len = zarr_multiscale_group_json(
-    buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs);
+  int len = ngff_multiscale_group_json(
+    buf, sizeof(buf), ms->rank, ms->nlod, level_ptrs, ms->axes);
   if (len < 0)
     return -1;
 
@@ -703,6 +705,8 @@ zarr_s3_multiscale_sink_create(struct zarr_s3_multiscale_config* cfg)
   ms->rank = cfg->rank;
   snprintf(ms->bucket, sizeof(ms->bucket), "%s", cfg->bucket);
   snprintf(ms->group_prefix, sizeof(ms->group_prefix), "%s", group_prefix);
+  if (cfg->axes)
+    memcpy(ms->axes, cfg->axes, cfg->rank * sizeof(struct ngff_axis));
 
   // Create shared S3 client
   {

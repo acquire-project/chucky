@@ -2,6 +2,7 @@
 
 #include "dimension.h"
 #include "dtype.h"
+#include "ngff/ngff_axis.h"
 #include "types.codec.h"
 #include "writer.h"
 
@@ -55,6 +56,7 @@ struct zarr_multiscale_config
   int nlod;                           // number of levels (0 = auto)
   int unbuffered;                     // use unbuffered IO for shard data
   struct codec_config codec;
+  const struct ngff_axis* axes; // per-dim NGFF axis metadata, NULL = defaults
 };
 
 struct zarr_fs_multiscale_sink;
