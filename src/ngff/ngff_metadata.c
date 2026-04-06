@@ -1,5 +1,6 @@
 #include "ngff/ngff_metadata.h"
 #include "defs.limits.h"
+#include "ngff.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>

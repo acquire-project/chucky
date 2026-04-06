@@ -2,10 +2,11 @@
 #pragma once
 
 #include "dimension.h"
-#include "ngff.h"
 
 #include <stddef.h>
 #include <stdint.h>
+
+struct ngff_axis;
 
 // Generate OME-NGFF v0.5 multiscale group JSON into buf.
 // level_dims[lv] points to the rank-length dimension array for level lv.

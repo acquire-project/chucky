@@ -1,5 +1,6 @@
 #include "dimension.h"
 #include "hcs.h"
+#include "hcs/hcs_metadata.h"
 #include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
