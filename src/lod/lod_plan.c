@@ -72,21 +72,6 @@ morton_rank(int ndim, const uint64_t* shape, const uint64_t* coords, int depth)
   return count;
 }
 
-static void
-coords_morton_next(int ndim, int p, uint64_t* coords)
-{
-  for (int bit = 0; bit < p; ++bit) {
-    for (int d = 0; d < ndim; ++d) {
-      uint64_t mask = 1ull << bit;
-      coords[d] ^= mask;
-      if (coords[d] & mask)
-        return;
-    }
-  }
-  memset(coords, 0, (size_t)ndim * sizeof(uint64_t));
-  coords[0] = 1ull << p;
-}
-
 uint64_t
 lod_span_len(struct lod_span s)
 {
