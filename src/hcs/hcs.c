@@ -93,14 +93,9 @@ hcs_plate_create(struct store* store,
                                          cfg->row_names,
                                          cfg->field_count,
                                          cfg->well_mask);
-    if (alen < 0) {
-      free(attrs);
-      goto Fail_fovs;
-    }
-
     char key[4096];
     snprintf(key, sizeof(key), "%s/zarr.json", cfg->name);
-    int rc = zarr_write_group(store, key, attrs);
+    int rc = alen < 0 ? 1 : zarr_write_group(store, key, attrs);
     free(attrs);
     CHECK(Fail_fovs, rc == 0);
   }
@@ -189,15 +184,14 @@ hcs_plate_destroy(struct hcs_plate* p)
 struct shard_sink*
 hcs_plate_fov_sink(struct hcs_plate* p, int row, int col, int fov)
 {
-  if (!p)
-    return NULL;
-  if (row < 0 || row >= p->rows || col < 0 || col >= p->cols)
-    return NULL;
-  if (fov < 0 || fov >= p->field_count)
-    return NULL;
-  if (!well_active(p, row, col))
-    return NULL;
+  CHECK_SILENT(Bad, p);
+  CHECK_SILENT(Bad, row >= 0 && row < p->rows);
+  CHECK_SILENT(Bad, col >= 0 && col < p->cols);
+  CHECK_SILENT(Bad, fov >= 0 && fov < p->field_count);
+  CHECK_SILENT(Bad, well_active(p, row, col));
 
   int idx = fov_index(p, row, col, fov);
   return ngff_multiscale_as_shard_sink(p->fovs[idx]);
+Bad:
+  return NULL;
 }
