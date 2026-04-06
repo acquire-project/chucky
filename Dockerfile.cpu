@@ -30,10 +30,7 @@ RUN curl -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-am
     && chmod +x /usr/local/bin/minio
 
 # AWS CLI for S3 test bucket setup
-RUN curl -o /tmp/awscli.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
-    && python3 -c "import zipfile; zipfile.ZipFile('/tmp/awscli.zip').extractall('/tmp')" \
-    && /tmp/aws/install \
-    && rm -rf /tmp/aws /tmp/awscli.zip
+RUN uv tool install awscli
 
 # Build AWS C libraries from source (not packaged in Ubuntu 24.04).
 RUN git clone --depth 1 --branch v0.12.6 https://github.com/awslabs/aws-c-common.git      /tmp/b && cmake -S /tmp/b -B /tmp/b/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/aws -DCMAKE_PREFIX_PATH=/opt/aws -DBUILD_TESTING=OFF && cmake --build /tmp/b/build --target install && rm -rf /tmp/b \
