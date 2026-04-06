@@ -30,9 +30,14 @@ jobs:
 
       - name: Run CPU tests
         run: >
-          docker run --rm chucky-cpu
-          ctest --test-dir build --output-on-failure
-          --exclude-regex test-test_zarr_s3_sink
+          docker run --rm
+          -e AWS_ACCESS_KEY_ID=minioadmin
+          -e AWS_SECRET_ACCESS_KEY=minioadmin
+          -e AWS_ENDPOINT_URL=http://localhost:9000
+          chucky-cpu
+          sh -c "minio server /tmp/minio-data --quiet &
+          sleep 1 &&
+          ctest --test-dir build --output-on-failure"
 
   coverage:
     runs-on: ubuntu-latest
@@ -56,8 +61,12 @@ jobs:
 
       - name: Run tests and generate coverage
         run: |
-          docker run --name coverage-run chucky-coverage \
-            cmake --build build --target coverage
+          docker run --name coverage-run \
+            -e AWS_ACCESS_KEY_ID=minioadmin \
+            -e AWS_SECRET_ACCESS_KEY=minioadmin \
+            -e AWS_ENDPOINT_URL=http://localhost:9000 \
+            chucky-coverage \
+            sh -c "minio server /tmp/minio-data --quiet & sleep 1 && cmake --build build --target coverage"
 
       - name: Extract coverage report
         if: always()
