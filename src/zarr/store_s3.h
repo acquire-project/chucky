@@ -1,6 +1,8 @@
 // S3-backed store implementation.
 #pragma once
 
+#include "dimension.h"
+#include "dtype.h"
 #include "zarr/store.h"
 
 #include <stddef.h>
@@ -24,3 +26,16 @@ struct store_s3_config
 // Returns NULL on error.
 struct store*
 store_s3_create(const struct store_s3_config* cfg);
+
+// Fill zero fields with S3 transport defaults (part_size=8MiB,
+// throughput=10Gbps).
+void
+store_s3_config_set_defaults(struct store_s3_config* cfg);
+
+// Validate that shard sizes won't exceed S3 multipart upload limits.
+// Returns 0 on success, non-zero if any shard would need >10000 parts.
+int
+store_s3_validate_part_count(uint8_t rank,
+                             const struct dimension* dimensions,
+                             enum dtype data_type,
+                             size_t part_size);

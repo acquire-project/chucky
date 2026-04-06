@@ -1,4 +1,5 @@
 #include "zarr/store_s3.h"
+#include "defs.limits.h"
 #include "util/prelude.h"
 #include "zarr/s3_client.h"
 #include "zarr/shard_pool_s3.h"
@@ -95,4 +96,55 @@ Fail_alloc:
   free(s);
 Fail:
   return NULL;
+}
+
+void
+store_s3_config_set_defaults(struct store_s3_config* cfg)
+{
+  if (!cfg)
+    return;
+  if (cfg->part_size == 0)
+    cfg->part_size = S3_DEFAULT_PART_SIZE;
+  if (cfg->throughput_gbps == 0.0)
+    cfg->throughput_gbps = S3_DEFAULT_THROUGHPUT_GBPS;
+}
+
+int
+store_s3_validate_part_count(uint8_t rank,
+                             const struct dimension* dimensions,
+                             enum dtype data_type,
+                             size_t part_size)
+{
+  size_t bytes_per_element = dtype_bpe(data_type);
+  if (bytes_per_element == 0)
+    return 1;
+
+  uint64_t shard_elements = 1;
+  uint64_t chunks_per_shard_total = 1;
+  for (int d = 0; d < rank; ++d) {
+    uint64_t cps = dimensions[d].chunks_per_shard;
+    if (cps == 0)
+      cps = dimensions[d].size == 0
+              ? 1
+              : ceildiv(dimensions[d].size, dimensions[d].chunk_size);
+    chunks_per_shard_total *= cps;
+    shard_elements *= dimensions[d].chunk_size * cps;
+  }
+
+  uint64_t shard_data_bytes = shard_elements * bytes_per_element;
+  uint64_t index_bytes = chunks_per_shard_total * 16 + 4;
+  uint64_t max_shard_bytes = shard_data_bytes + index_bytes;
+  uint64_t max_parts = ceildiv(max_shard_bytes, part_size);
+
+  if (max_parts > S3_MAX_PARTS) {
+    log_error("shard too large for S3 multipart upload: "
+              "%llu bytes (%llu parts with %zu-byte parts, limit %d). "
+              "Increase part_size or reduce shard dimensions.",
+              (unsigned long long)max_shard_bytes,
+              (unsigned long long)max_parts,
+              part_size,
+              S3_MAX_PARTS);
+    return 1;
+  }
+  return 0;
 }

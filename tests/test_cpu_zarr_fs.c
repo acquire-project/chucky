@@ -1,12 +1,12 @@
-// Test tile_stream_cpu + zarr_fs_sink integration.
+// Test tile_stream_cpu + zarr store integration.
 // Exercises the write_direct -> io_queue async path that requires fencing.
 
 #include "stream.cpu.h"
 #include "stream/layouts.h"
 #include "test_platform.h"
 #include "test_shard_verify.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
-#include "zarr_fs_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,7 +103,7 @@ verify_shard(const char* path,
 
 // ---- Tests ----
 
-// Full pipeline: tile_stream_cpu -> zarr_fs_sink -> verify on disk.
+// Full pipeline: tile_stream_cpu -> zarr store -> verify on disk.
 // Feeds all data at once (single append call).
 static int
 test_pipeline(const char* tmpdir)
@@ -142,18 +142,17 @@ test_pipeline(const char* tmpdir)
       .storage_position = 2 },
   };
 
-  struct zarr_config zcfg = {
-    .store_path = tmpdir,
-    .array_name = "0",
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-
-  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
-  CHECK(Fail2, zs);
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_ZSTD },
+                            0) == 0);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
@@ -164,7 +163,7 @@ test_pipeline(const char* tmpdir)
   };
 
   struct tile_stream_cpu* s =
-    tile_stream_cpu_create(&config, zarr_fs_sink_as_shard_sink(zs));
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
   CHECK(Fail3, s);
 
   size_t chunk_stride_bytes =
@@ -180,7 +179,7 @@ test_pipeline(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  zarr_fs_sink_flush(zs);
+  test_zarr_sink_flush(&z);
 
   // Verify: correct number of shards, all chunks decompress.
   {
@@ -212,7 +211,7 @@ test_pipeline(const char* tmpdir)
   }
 
   tile_stream_cpu_destroy(s);
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
   free(src);
   log_info("  PASS");
   return 0;
@@ -220,7 +219,7 @@ test_pipeline(const char* tmpdir)
 Fail4:
   tile_stream_cpu_destroy(s);
 Fail3:
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
 Fail2:
   free(src);
 Fail:
@@ -267,18 +266,17 @@ test_streaming_append(const char* tmpdir)
       .storage_position = 2 },
   };
 
-  struct zarr_config zcfg = {
-    .store_path = tmpdir,
-    .array_name = "0",
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-
-  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
-  CHECK(Fail2, zs);
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_ZSTD },
+                            0) == 0);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
@@ -289,7 +287,7 @@ test_streaming_append(const char* tmpdir)
   };
 
   struct tile_stream_cpu* s =
-    tile_stream_cpu_create(&config, zarr_fs_sink_as_shard_sink(zs));
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
   CHECK(Fail3, s);
 
   size_t chunk_stride_bytes =
@@ -307,7 +305,7 @@ test_streaming_append(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  zarr_fs_sink_flush(zs);
+  test_zarr_sink_flush(&z);
 
   // Verify all shards
   {
@@ -339,7 +337,7 @@ test_streaming_append(const char* tmpdir)
   }
 
   tile_stream_cpu_destroy(s);
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
   free(src);
   log_info("  PASS");
   return 0;
@@ -347,7 +345,7 @@ test_streaming_append(const char* tmpdir)
 Fail4:
   tile_stream_cpu_destroy(s);
 Fail3:
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
 Fail2:
   free(src);
 Fail:
@@ -399,18 +397,17 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
       .storage_position = 2 },
   };
 
-  struct zarr_config zcfg = {
-    .store_path = tmpdir,
-    .array_name = "0",
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-
-  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
-  CHECK(Fail2, zs);
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_ZSTD },
+                            0) == 0);
 
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
@@ -422,7 +419,7 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
   };
 
   struct tile_stream_cpu* s =
-    tile_stream_cpu_create(&config, zarr_fs_sink_as_shard_sink(zs));
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
   CHECK(Fail3, s);
 
   const struct tile_stream_layout* lay = tile_stream_cpu_layout(s);
@@ -437,7 +434,7 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
     struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
-  zarr_fs_sink_flush(zs);
+  test_zarr_sink_flush(&z);
 
   // There should be exactly one shard (all epochs + all inner chunks).
   {
@@ -502,14 +499,14 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
   }
 
   tile_stream_cpu_destroy(s);
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
   free(src);
   return 0;
 
 Fail4:
   tile_stream_cpu_destroy(s);
 Fail3:
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&z);
 Fail2:
   free(src);
 Fail:

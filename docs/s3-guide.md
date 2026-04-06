@@ -20,8 +20,8 @@ rejects configurations that could exceed the part-count limit (see
 
 ## Configuration
 
-The S3 transport is configured via `zarr_s3_config`, defined in
-[`zarr_s3_sink.h`](../src/zarr/zarr_s3_sink.h). The transport-specific
+The S3 transport is configured via `store_s3_config`, defined in
+[`store_s3.h`](../src/zarr/store_s3.h). The transport-specific
 fields are:
 
 | Field | Default | Description |
@@ -35,34 +35,43 @@ fields are:
 | `max_backoff_secs` | 20 | Maximum backoff delay in seconds |
 | `timeout_ns` | 0 (infinite) | Timeout per upload wait |
 
-### Defaults and validation
-
-`zarr_s3_sink_create()` fills zero-valued optional fields with their
-defaults and validates the configuration automatically — you do not need
-to call `zarr_s3_config_set_defaults()` or `zarr_s3_config_validate()`
-yourself. If you want to check for errors before creating the sink, you
-can call them explicitly:
+### Usage
 
 ```c
-zarr_s3_config_set_defaults(&cfg);       // fill part_size, throughput_gbps, …
-if (zarr_s3_config_validate(&cfg))       // check required fields + part count
-  return error;
-struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
+#include "zarr/store_s3.h"
+#include "zarr/zarr_array.h"
+#include "zarr/zarr_group.h"
+#include "lod/lod_plan.h"
 
-// Connect to the streaming pipeline:
-struct shard_sink* ss = zarr_s3_sink_as_shard_sink(sink);
+struct store_s3_config scfg = {
+  .bucket = "my-bucket",
+  .prefix = "data/out.zarr",
+  .region = "us-east-1",
+  .endpoint = "https://s3.us-east-1.amazonaws.com",
+};
+store_s3_config_set_defaults(&scfg);  // fill part_size, throughput_gbps
 
+struct store* store = store_s3_create(&scfg);
+
+uint64_t sc[RANK], cps[RANK];
+uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
+struct shard_pool* pool = store->create_pool(store, sic);
+
+zarr_write_group(store, "zarr.json", NULL);  // root group
+struct zarr_array_config acfg = { ... , .shard_counts = sc,
+    .chunks_per_shard = cps, .shard_inner_count = sic };
+struct zarr_array* a = zarr_array_create(store, pool, "0", &acfg);
+
+struct shard_sink* ss = zarr_array_as_shard_sink(a);
 // ... stream data ...
 
-// Drain pending uploads without destroying the sink:
-zarr_s3_sink_flush(sink);
-
-// Tear down (also drains pending uploads):
-zarr_s3_sink_destroy(sink);
+pool->flush(pool);         // drain pending uploads
+zarr_array_destroy(a);
+pool->destroy(pool);       // must destroy before store
+store->destroy(store);
 ```
 
-Multiscale equivalents: `zarr_s3_multiscale_config_set_defaults()`,
-`zarr_s3_multiscale_config_validate()`, `zarr_s3_multiscale_sink_flush()`.
+See `docs/formats.md` for multiscale and HCS examples.
 
 ### Credentials
 
@@ -137,10 +146,10 @@ When a part upload fails after retries:
 2. The upload is **aborted** — the CRT sends an
    [`AbortMultipartUpload`][abort-mpu] request to clean up server-side
    state. The shard object is not created.
-3. The error propagates to the caller via `zarr_s3_sink_has_error()` or
-   the return value of `zarr_s3_sink_destroy()`.
+3. The error propagates to the caller via `pool->has_error(pool)` or
+   the return value of `pool->flush(pool)`.
 
-On normal shutdown, `zarr_s3_sink_destroy()` waits for all finalized
+On normal shutdown, `pool->destroy(pool)` waits for all finalized
 uploads to complete. Any upload still in progress (not yet finalized) is
 aborted.
 
@@ -184,7 +193,7 @@ docker start minio
 ### Configuration for tests
 
 ```c
-struct zarr_s3_config cfg = {
+struct store_s3_config cfg = {
   .bucket   = "test-bucket",
   .endpoint = "http://localhost:9000",
   .region   = "us-east-1",
@@ -202,7 +211,10 @@ The snippet below streams a 3D array (with a streaming time dimension) to S3
 using the GPU pipeline:
 
 ```c
-#include "zarr_s3_sink.h"
+#include "zarr/store_s3.h"
+#include "zarr/zarr_array.h"
+#include "zarr/zarr_group.h"
+#include "lod/lod_plan.h"
 #include "gpu/stream.h"
 #include "dimension.h"
 #include "writer.h"
@@ -220,27 +232,35 @@ struct tile_stream_configuration stream_cfg = {
   .codec      = CODEC_ZSTD,
 };
 
-uint8_t ratios[] = { 0, 1, 1 };  // don't chunk along t, equal y:x
+uint8_t ratios[] = { 0, 1, 1 };
 tile_stream_gpu_advise_chunk_sizes(
-  &stream_cfg, 128 * 1024, ratios, 2ULL << 30);  // 128 KiB target, 2 GB budget
+  &stream_cfg, 128 * 1024, ratios, 2ULL << 30);
 
-// 3. Create the S3 sink (uses the chunk sizes chosen above)
-struct zarr_s3_config s3cfg = {
-  .bucket     = "my-bucket",
-  .prefix     = "experiment-001",
-  .array_name = "0",
-  .region     = "us-east-1",
-  .endpoint   = "http://localhost:9000",
-  .data_type  = dtype_u16,
-  .rank       = 3,
-  .dimensions = dims,
-  .codec      = CODEC_ZSTD,
+// 3. Create S3 store + pool + array
+struct store_s3_config scfg = {
+  .bucket   = "my-bucket",
+  .prefix   = "experiment-001",
+  .region   = "us-east-1",
+  .endpoint = "http://localhost:9000",
 };
+store_s3_config_set_defaults(&scfg);
+struct store* store = store_s3_create(&scfg);
 
-struct zarr_s3_sink* sink = zarr_s3_sink_create(&s3cfg);
+uint64_t sc[3], cps[3];
+uint64_t sic = dims_compute_shard_geometry(dims, 3, sc, cps);
+struct shard_pool* pool = store->create_pool(store, sic);
+
+zarr_write_group(store, "zarr.json", NULL);
+struct zarr_array_config acfg = {
+  .data_type = dtype_u16, .rank = 3, .dimensions = dims,
+  .codec = { .id = CODEC_ZSTD },
+  .shard_counts = sc, .chunks_per_shard = cps, .shard_inner_count = sic,
+};
+struct zarr_array* arr = zarr_array_create(store, pool, "0", &acfg);
 
 // 4. Create the streaming pipeline
-struct tile_stream_gpu* stream = tile_stream_gpu_create(&stream_cfg, zarr_s3_sink_as_shard_sink(sink));
+struct tile_stream_gpu* stream =
+  tile_stream_gpu_create(&stream_cfg, zarr_array_as_shard_sink(arr));
 struct writer* w = tile_stream_gpu_writer(stream);
 
 // 5. Stream frames
@@ -251,9 +271,11 @@ for (int t = 0; t < nframes; ++t) {
 }
 writer_flush(w);
 
-// 6. Tear down
+// 6. Tear down (pool before store)
 tile_stream_gpu_destroy(stream);
-zarr_s3_sink_destroy(sink);
+zarr_array_destroy(arr);
+pool->destroy(pool);
+store->destroy(store);
 ```
 
 <!-- references -->

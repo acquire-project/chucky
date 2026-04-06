@@ -2,11 +2,10 @@
 // Writes zarr stores with various codecs, then runs a Python validation script.
 
 #include "cpu/compress_blosc.h"
-#include "dimension.h"
 #include "stream.cpu.h"
 #include "test_platform.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
-#include "zarr_fs_sink.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +14,8 @@
 #define NT 4
 #define NY 8
 #define NX 12
+
+// --- write_zarr ---
 
 static int
 write_zarr(const char* store_path, struct codec_config codec)
@@ -34,17 +35,10 @@ write_zarr(const char* store_path, struct codec_config codec)
   dims[0].chunks_per_shard = NT; // unbounded dim needs explicit cps
   dims_set_shard_counts(dims, 3, (uint64_t[]){ 0, 1, 1 });
 
-  struct zarr_config zcfg = {
-    .store_path = store_path,
-    .array_name = "0",
-    .data_type = dtype_u16,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = codec,
-  };
-
-  struct zarr_fs_sink* zs = zarr_fs_sink_create(&zcfg);
-  CHECK(Fail_src, zs);
+  struct test_zarr_sink zs = { 0 };
+  CHECK(Fail_src,
+        test_zarr_sink_open(
+          &zs, store_path, "0", dims, 3, dtype_u16, 0, codec, 0) == 0);
 
   struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total * sizeof(uint16_t),
@@ -55,7 +49,7 @@ write_zarr(const char* store_path, struct codec_config codec)
   };
 
   struct tile_stream_cpu* s =
-    tile_stream_cpu_create(&config, zarr_fs_sink_as_shard_sink(zs));
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&zs));
   CHECK(Fail_sink, s);
 
   struct slice input = { .beg = src, .end = src + total };
@@ -64,16 +58,16 @@ write_zarr(const char* store_path, struct codec_config codec)
   r = writer_flush(tile_stream_cpu_writer(s));
   CHECK(Fail_stream, r.error == 0);
 
-  zarr_fs_sink_flush(zs);
+  test_zarr_sink_flush(&zs);
   tile_stream_cpu_destroy(s);
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&zs);
   free(src);
   return 0;
 
 Fail_stream:
   tile_stream_cpu_destroy(s);
 Fail_sink:
-  zarr_fs_sink_destroy(zs);
+  test_zarr_sink_close(&zs);
 Fail_src:
   free(src);
 Fail:

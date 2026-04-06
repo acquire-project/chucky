@@ -1,6 +1,15 @@
+#include "defs.limits.h"
+#include "dimension.h"
+#include "lod/lod_plan.h"
+#include "ngff/ngff_multiscale.h"
 #include "platform/platform_cmd.h"
 #include "util/prelude.h"
-#include "zarr_s3_sink.h"
+#include "zarr/shard_pool.h"
+#include "zarr/store.h"
+#include "zarr/store_s3.h"
+#include "zarr/zarr_array.h"
+#include "zarr/zarr_group.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,6 +150,182 @@ Fail:
   return 1;
 }
 
+// --- S3 store helpers ---
+
+struct s3_test_sink
+{
+  struct store* store;
+  struct shard_pool* pool;
+  struct zarr_array* array;
+};
+
+static int
+s3_test_sink_open(struct s3_test_sink* z,
+                  const char* prefix,
+                  const char* array_name,
+                  const struct dimension* dims,
+                  uint8_t rank,
+                  enum dtype data_type,
+                  double fill_value,
+                  struct codec_config codec)
+{
+  *z = (struct s3_test_sink){ 0 };
+
+  struct store_s3_config scfg = {
+    .bucket = S3_BUCKET,
+    .prefix = prefix,
+    .region = "us-east-1",
+    .endpoint = s3_endpoint(),
+  };
+  store_s3_config_set_defaults(&scfg);
+
+  z->store = store_s3_create(&scfg);
+  CHECK(Fail, z->store);
+  z->store->mkdirs(z->store, ".");
+
+  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
+  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
+
+  z->pool = z->store->create_pool(z->store, sic);
+  CHECK(Fail_store, z->pool);
+
+  // Write root group
+  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+
+  // Write intermediate groups
+  if (array_name && array_name[0]) {
+    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+  }
+
+  struct zarr_array_config acfg = {
+    .data_type = data_type,
+    .fill_value = fill_value,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = codec,
+    .shard_counts = sc,
+    .chunks_per_shard = cps,
+    .shard_inner_count = sic,
+  };
+  z->array =
+    zarr_array_create(z->store, z->pool, array_name ? array_name : "", &acfg);
+  CHECK(Fail_pool, z->array);
+  return 0;
+
+Fail_pool:
+  z->pool->destroy(z->pool);
+  z->pool = NULL;
+Fail_store:
+  z->store->destroy(z->store);
+  z->store = NULL;
+Fail:
+  return 1;
+}
+
+static struct shard_sink*
+s3_test_sink_as_shard_sink(struct s3_test_sink* z)
+{
+  return zarr_array_as_shard_sink(z->array);
+}
+
+static void
+s3_test_sink_flush(struct s3_test_sink* z)
+{
+  if (z->pool)
+    z->pool->flush(z->pool);
+}
+
+static void
+s3_test_sink_close(struct s3_test_sink* z)
+{
+  zarr_array_destroy(z->array);
+  if (z->pool)
+    z->pool->destroy(z->pool);
+  if (z->store)
+    z->store->destroy(z->store);
+  *z = (struct s3_test_sink){ 0 };
+}
+
+// --- S3 multiscale helpers ---
+
+struct s3_test_multiscale
+{
+  struct store* store;
+  struct shard_pool* pool;
+  struct ngff_multiscale* ms;
+};
+
+static int
+s3_test_multiscale_open(struct s3_test_multiscale* z,
+                        const char* prefix,
+                        const char* array_name,
+                        const struct dimension* dims,
+                        uint8_t rank,
+                        enum dtype data_type,
+                        double fill_value,
+                        int nlod)
+{
+  *z = (struct s3_test_multiscale){ 0 };
+
+  struct store_s3_config scfg = {
+    .bucket = S3_BUCKET,
+    .prefix = prefix,
+    .region = "us-east-1",
+    .endpoint = s3_endpoint(),
+  };
+  store_s3_config_set_defaults(&scfg);
+
+  z->store = store_s3_create(&scfg);
+  CHECK(Fail, z->store);
+  z->store->mkdirs(z->store, ".");
+
+  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
+  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
+
+  z->pool = z->store->create_pool(z->store, sic);
+  CHECK(Fail_store, z->pool);
+
+  // Write root group
+  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+
+  // Write intermediate groups for array_name
+  if (array_name && array_name[0]) {
+    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+  }
+
+  struct ngff_multiscale_config mscfg = {
+    .data_type = data_type,
+    .fill_value = fill_value,
+    .rank = rank,
+    .dimensions = dims,
+    .nlod = nlod,
+  };
+  z->ms = ngff_multiscale_create(
+    z->store, z->pool, array_name ? array_name : "", &mscfg);
+  CHECK(Fail_pool, z->ms);
+  return 0;
+
+Fail_pool:
+  z->pool->destroy(z->pool);
+  z->pool = NULL;
+Fail_store:
+  z->store->destroy(z->store);
+  z->store = NULL;
+Fail:
+  return 1;
+}
+
+static void
+s3_test_multiscale_close(struct s3_test_multiscale* z)
+{
+  ngff_multiscale_destroy(z->ms);
+  if (z->pool)
+    z->pool->destroy(z->pool);
+  if (z->store)
+    z->store->destroy(z->store);
+  *z = (struct s3_test_multiscale){ 0 };
+}
+
 // --- Tests ---
 
 static void
@@ -180,21 +365,16 @@ test_metadata(void)
 
   set_s3_creds();
 
-  struct zarr_s3_config cfg = {
-    .bucket = S3_BUCKET,
-    .prefix = "test-meta",
-    .array_name = "0",
-    .region = "us-east-1",
-    .endpoint = s3_endpoint(),
-    .data_type = dtype_u32,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-
-  struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
-  CHECK(Fail, sink);
+  struct s3_test_sink sink;
+  CHECK(Fail,
+        s3_test_sink_open(&sink,
+                          "test-meta",
+                          "0",
+                          dims,
+                          3,
+                          dtype_u32,
+                          0,
+                          (struct codec_config){ .id = CODEC_ZSTD }) == 0);
 
   // Verify root zarr.json (group metadata with "attributes")
   {
@@ -225,14 +405,14 @@ test_metadata(void)
 
   log_info("  array zarr.json OK (%zu bytes)", len);
   free(data);
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_data:
   free(data);
 Fail_sink:
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -253,25 +433,20 @@ test_shard_write(void)
 
   set_s3_creds();
 
-  struct zarr_s3_config cfg = {
-    .bucket = S3_BUCKET,
-    .prefix = "test-shard",
-    .array_name = "0",
-    .region = "us-east-1",
-    .endpoint = s3_endpoint(),
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 1,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
+  struct s3_test_sink sink;
+  CHECK(Fail,
+        s3_test_sink_open(&sink,
+                          "test-shard",
+                          "0",
+                          dims,
+                          1,
+                          dtype_u16,
+                          0,
+                          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
-  struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
-  CHECK(Fail, sink);
+  struct shard_sink* ss = s3_test_sink_as_shard_sink(&sink);
 
-  struct shard_sink* ss = zarr_s3_sink_as_shard_sink(sink);
-
-  // shard_index=0 → key "test-shard/0/c/0"
+  // shard_index=0 -> key "test-shard/0/c/0"
   struct shard_writer* w = ss->open(ss, 0, 0);
   CHECK(Fail_sink, w);
 
@@ -291,14 +466,14 @@ test_shard_write(void)
 
   log_info("  shard 0 OK (%zu bytes)", len);
   free(data);
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_data:
   free(data);
 Fail_sink:
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -309,10 +484,6 @@ test_concurrent_finalize(void)
 {
   log_info("=== test_s3_concurrent_finalize ===");
 
-  // 1D, 8 elements, chunk=2, cps=2, so shard_inner_count=1 (only 1 dim).
-  // Use 2D to get multiple inner shards: 2x4, chunk 1x2, cps 1x2.
-  // shard_count = [2, 1], shard_inner_count = 1.
-  // Instead, use a shape that gives multiple inner shards:
   // 3D: t=0(streaming), y=4, x=4. chunk 1x2x2, cps 1x1x1.
   // shard_count = [0, 2, 2], shard_inner_count = 4.
   struct dimension dims[] = {
@@ -335,22 +506,18 @@ test_concurrent_finalize(void)
 
   set_s3_creds();
 
-  struct zarr_s3_config cfg = {
-    .bucket = S3_BUCKET,
-    .prefix = "test-concurrent",
-    .array_name = "0",
-    .region = "us-east-1",
-    .endpoint = s3_endpoint(),
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
+  struct s3_test_sink sink;
+  CHECK(Fail,
+        s3_test_sink_open(&sink,
+                          "test-concurrent",
+                          "0",
+                          dims,
+                          3,
+                          dtype_u16,
+                          0,
+                          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
-  struct zarr_s3_sink* sink = zarr_s3_sink_create(&cfg);
-  CHECK(Fail, sink);
-  struct shard_sink* ss = zarr_s3_sink_as_shard_sink(sink);
+  struct shard_sink* ss = s3_test_sink_as_shard_sink(&sink);
 
   // Write epoch 0: open all 4 inner shards, write, finalize (async)
   uint16_t data[2] = { 0xAAAA, 0xBBBB };
@@ -378,7 +545,7 @@ test_concurrent_finalize(void)
   ss->wait_fence(ss, 0, fence);
 
   // Flush to drain epoch 1's pending uploads
-  zarr_s3_sink_flush(sink);
+  s3_test_sink_flush(&sink);
 
   // Verify epoch 0 shards arrived
   for (int i = 0; i < 4; ++i) {
@@ -397,12 +564,12 @@ test_concurrent_finalize(void)
   }
 
   log_info("  concurrent finalize + fence OK");
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_sink:
-  zarr_s3_sink_destroy(sink);
+  s3_test_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -435,20 +602,10 @@ test_multiscale_metadata(void)
 
   set_s3_creds();
 
-  struct zarr_s3_multiscale_config cfg = {
-    .bucket = S3_BUCKET,
-    .prefix = "test-multiscale",
-    .region = "us-east-1",
-    .endpoint = s3_endpoint(),
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .nlod = 0, // auto
-  };
-
-  struct zarr_s3_multiscale_sink* ms = zarr_s3_multiscale_sink_create(&cfg);
-  CHECK(Fail, ms);
+  struct s3_test_multiscale ms;
+  CHECK(Fail,
+        s3_test_multiscale_open(
+          &ms, "test-multiscale", "", dims, 3, dtype_u16, 0, 0) == 0);
 
   // Check root zarr.json has multiscales attribute
   {
@@ -456,8 +613,7 @@ test_multiscale_metadata(void)
     CHECK(Fail2, check_group_zarr_json("test-multiscale", &data) == 0);
     int ok = strstr(data, "\"ome\"") && strstr(data, "\"multiscales\"") &&
              strstr(data, "\"version\":\"0.5\"") &&
-             strstr(data, "\"path\":\"0\"") &&
-             strstr(data, "\"path\":\"1\"") &&
+             strstr(data, "\"path\":\"0\"") && strstr(data, "\"path\":\"1\"") &&
              strstr(data, "\"coordinateTransformations\"");
     free(data);
     CHECK(Fail2, ok);
@@ -473,12 +629,12 @@ test_multiscale_metadata(void)
   CHECK(Fail2,
         check_array_json(
           "test-multiscale/1/zarr.json", "\"shape\":[64,32,32]", NULL) == 0);
-  zarr_s3_multiscale_sink_destroy(ms);
+  s3_test_multiscale_close(&ms);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  zarr_s3_multiscale_sink_destroy(ms);
+  s3_test_multiscale_close(&ms);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -513,27 +669,15 @@ test_multiscale_metadata_named(void)
 
   set_s3_creds();
 
-  struct zarr_s3_multiscale_config cfg = {
-    .bucket = S3_BUCKET,
-    .prefix = "test-ms-named",
-    .array_name = "ms",
-    .region = "us-east-1",
-    .endpoint = s3_endpoint(),
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .nlod = 0,
-  };
-
-  struct zarr_s3_multiscale_sink* ms = zarr_s3_multiscale_sink_create(&cfg);
-  CHECK(Fail, ms);
+  struct s3_test_multiscale ms;
+  CHECK(Fail,
+        s3_test_multiscale_open(
+          &ms, "test-ms-named", "ms", dims, 3, dtype_u16, 0, 0) == 0);
 
   // Root zarr.json should be a plain group (attributes:{})
   {
     char* data;
-    CHECK(Fail_sink,
-          check_group_zarr_json("test-ms-named", &data) == 0);
+    CHECK(Fail_sink, check_group_zarr_json("test-ms-named", &data) == 0);
     int ok = strstr(data, "\"attributes\":{}") != NULL;
     free(data);
     CHECK(Fail_sink, ok);
@@ -542,8 +686,7 @@ test_multiscale_metadata_named(void)
   // Sub-group zarr.json should have OME multiscales
   {
     char* data;
-    CHECK(Fail_sink,
-          check_group_zarr_json("test-ms-named/ms", &data) == 0);
+    CHECK(Fail_sink, check_group_zarr_json("test-ms-named/ms", &data) == 0);
     int ok = strstr(data, "\"attributes\":{\"ome\"") != NULL &&
              strstr(data, "\"multiscales\"") != NULL;
     free(data);
@@ -553,12 +696,12 @@ test_multiscale_metadata_named(void)
   // L0 array zarr.json
   CHECK(Fail_sink, s3_exists("test-ms-named/ms/0/zarr.json"));
 
-  zarr_s3_multiscale_sink_destroy(ms);
+  s3_test_multiscale_close(&ms);
   log_info("  PASS");
   return 0;
 
 Fail_sink:
-  zarr_s3_multiscale_sink_destroy(ms);
+  s3_test_multiscale_close(&ms);
 Fail:
   log_error("  FAIL");
   return 1;

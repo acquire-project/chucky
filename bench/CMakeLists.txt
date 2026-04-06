@@ -14,8 +14,14 @@ target_link_libraries(
     PUBLIC
         stream
         stream_cpu
-        zarr_fs_sink
-        zarr_s3_sink
+        zarr_array
+        ngff_multiscale
+        zarr_group
+        zarr_metadata
+        store_fs
+        store_s3
+        lod_plan
+        dimension
         test_data
         CUDA::cuda_driver
     PRIVATE warnings

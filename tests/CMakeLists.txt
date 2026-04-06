@@ -55,6 +55,21 @@ target_link_libraries(test_shard_verify PUBLIC chucky_log Zstd::Zstd)
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
 
+# Shared zarr sink test helpers (store + pool + array/multiscale setup)
+add_test_lib(test_zarr_helpers test_zarr_helpers.c test_zarr_helpers.h)
+target_link_libraries(
+    test_zarr_helpers
+    PUBLIC
+        zarr_array
+        ngff_multiscale
+        zarr_group
+        zarr_metadata
+        store_fs
+        lod_plan
+        dimension
+        chucky_log
+)
+
 # Index operations unit tests (pure CPU)
 add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
 
@@ -86,11 +101,11 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 # CPU stream with n_append > 1 (no CUDA)
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
 
-# CPU stream + zarr_fs_sink integration (exercises async IO fencing)
-add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu zarr_fs_sink writer Zstd::Zstd test_platform test_shard_verify)
+# CPU stream + zarr store integration (exercises async IO fencing)
+add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu test_zarr_helpers writer Zstd::Zstd test_platform test_shard_verify)
 
 # Zarr readback validation via zarr-python (requires uv)
-add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu zarr_fs_sink writer dimension test_platform chucky_log)
+add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu test_zarr_helpers writer test_platform chucky_log)
 target_compile_definitions(
     test_zarr_readback
     PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
@@ -127,8 +142,8 @@ target_compile_definitions(
     PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
-add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static zarr_fs_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
-add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_s3_sink platform_cmd chucky_log)
+add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 lod_plan dimension platform_cmd chucky_log)
 
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 add_gpu_test_exe(test_compress_agg test_compress_agg.c LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_gpu_helpers index_ops_util test_shard_verify)
