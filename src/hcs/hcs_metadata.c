@@ -25,8 +25,6 @@ hcs_plate_attributes_json(char* buf,
 
   jw_key(&jw, "plate");
   jw_object_begin(&jw);
-  jw_key(&jw, "version");
-  jw_string(&jw, "0.5");
   jw_key(&jw, "name");
   jw_string(&jw, plate_name ? plate_name : "plate");
   jw_key(&jw, "field_count");
@@ -114,9 +112,6 @@ hcs_well_attributes_json(char* buf, size_t cap, int field_count)
 
   jw_key(&jw, "well");
   jw_object_begin(&jw);
-  jw_key(&jw, "version");
-  jw_string(&jw, "0.5");
-
   jw_key(&jw, "images");
   jw_array_begin(&jw);
   for (int f = 0; f < field_count; ++f) {

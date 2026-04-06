@@ -4,8 +4,6 @@
 #include "lod/lod_plan.h"
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
-#include "zarr/zarr_group.h"
-#include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,24 +101,6 @@ ngff_ms_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
   (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   ms->pool->wait_fence(ms->pool, ev);
-}
-
-// --- Intermediate group callback ---
-
-struct ngff_intermediate_ctx
-{
-  struct store* store;
-};
-
-static int
-ngff_write_intermediate(const char* partial, void* ctx)
-{
-  struct ngff_intermediate_ctx* c = (struct ngff_intermediate_ctx*)ctx;
-  if (c->store->mkdirs(c->store, partial))
-    return 1;
-  char group_key[4096];
-  snprintf(group_key, sizeof(group_key), "%s/zarr.json", partial);
-  return zarr_write_group(c->store, group_key, NULL);
 }
 
 // --- Public API ---

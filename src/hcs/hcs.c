@@ -47,7 +47,8 @@ hcs_plate_create(struct store* store,
   CHECK(Fail, pool);
   CHECK(Fail, cfg);
   CHECK(Fail, cfg->name);
-  CHECK(Fail, cfg->rows > 0 && cfg->rows <= 26);
+  CHECK(Fail, cfg->rows > 0);
+  CHECK(Fail, cfg->rows <= 26 || cfg->row_names);
   CHECK(Fail, cfg->cols > 0);
   CHECK(Fail, cfg->field_count > 0);
 
@@ -78,24 +79,30 @@ hcs_plate_create(struct store* store,
 
   // Plate group with OME plate attributes
   {
-    char plate_dir[4096];
-    snprintf(plate_dir, sizeof(plate_dir), "%s", cfg->name);
-    CHECK(Fail_fovs, store->mkdirs(store, plate_dir) == 0);
+    CHECK(Fail_fovs, store->mkdirs(store, cfg->name) == 0);
 
-    char attrs[8192];
+    // ~50 bytes per well entry; allocate generously
+    size_t attr_cap = 512 + (size_t)(cfg->rows * cfg->cols) * 80;
+    char* attrs = (char*)malloc(attr_cap);
+    CHECK(Fail_fovs, attrs);
     int alen = hcs_plate_attributes_json(attrs,
-                                         sizeof(attrs),
+                                         attr_cap,
                                          cfg->name,
                                          cfg->rows,
                                          cfg->cols,
                                          cfg->row_names,
                                          cfg->field_count,
                                          cfg->well_mask);
-    CHECK(Fail_fovs, alen > 0);
+    if (alen < 0) {
+      free(attrs);
+      goto Fail_fovs;
+    }
 
     char key[4096];
     snprintf(key, sizeof(key), "%s/zarr.json", cfg->name);
-    CHECK(Fail_fovs, zarr_write_group(store, key, attrs) == 0);
+    int rc = zarr_write_group(store, key, attrs);
+    free(attrs);
+    CHECK(Fail_fovs, rc == 0);
   }
 
   // Row groups, well groups, and FOV multiscale sinks
@@ -163,6 +170,14 @@ Fail_alloc:
   free(p);
 Fail:
   return NULL;
+}
+
+int
+hcs_plate_flush(struct hcs_plate* p)
+{
+  if (!p)
+    return 0;
+  return p->pool->flush(p->pool);
 }
 
 void
