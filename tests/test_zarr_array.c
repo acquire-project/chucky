@@ -290,6 +290,15 @@ test_zarr_array_root(void)
   CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
   CHECK(Fail4, strstr(buf, "\"node_type\":\"array\""));
 
+  // Open a shard with empty prefix — exercises the no-prefix key path
+  struct shard_sink* sink = zarr_array_as_shard_sink(a);
+  struct shard_writer* w = sink->open(sink, 0, 0);
+  CHECK(Fail4, w);
+  uint8_t byte = 0x42;
+  CHECK(Fail4, w->write(w, 0, &byte, &byte + 1) == 0);
+  CHECK(Fail4, w->finalize(w) == 0);
+  CHECK(Fail4, zarr_array_flush(a) == 0);
+
   zarr_array_destroy(a);
   pool->destroy(pool);
   store->destroy(store);

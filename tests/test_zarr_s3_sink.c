@@ -709,16 +709,76 @@ Fail:
 
 // --- Main ---
 
+// --- Test: S3 part count validation (no network needed) ---
+
+static int
+test_s3_validate_part_count(void)
+{
+  log_info("=== test_s3_validate_part_count ===");
+
+  // Small shard: should pass
+  struct dimension small_dims[] = {
+    { .size = 64, .chunk_size = 64, .chunks_per_shard = 1 },
+  };
+  CHECK(Fail,
+        store_s3_validate_part_count(
+          1, small_dims, dtype_u16, 8 * 1024 * 1024) == 0);
+
+  // Huge shard with tiny part size: should fail (too many parts)
+  struct dimension big_dims[] = {
+    { .size = 65536, .chunk_size = 65536, .chunks_per_shard = 1 },
+    { .size = 65536, .chunk_size = 65536, .chunks_per_shard = 1 },
+  };
+  // 65536^2 * 2 bytes = 8 GiB shard, 1 KiB parts → 8M parts > 10000
+  CHECK(Fail, store_s3_validate_part_count(2, big_dims, dtype_u16, 1024) != 0);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: S3 config defaults ---
+
+static int
+test_s3_config_defaults(void)
+{
+  log_info("=== test_s3_config_defaults ===");
+
+  struct store_s3_config cfg = { 0 };
+  store_s3_config_set_defaults(&cfg);
+  CHECK(Fail, cfg.part_size == 8 * 1024 * 1024);
+  CHECK(Fail, cfg.throughput_gbps == 10.0);
+
+  // Already-set values should not be overwritten
+  struct store_s3_config cfg2 = { .part_size = 42, .throughput_gbps = 1.0 };
+  store_s3_config_set_defaults(&cfg2);
+  CHECK(Fail, cfg2.part_size == 42);
+  CHECK(Fail, cfg2.throughput_gbps == 1.0);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
+  // Tests that don't need S3
+  int rc = 0;
+  rc |= test_s3_validate_part_count();
+  rc |= test_s3_config_defaults();
+
+  // Tests that need minio
   if (s3_setup() != 0) {
     log_error("S3 not available — is minio running?");
     log_error("  docker compose up minio");
-    return 1;
+    return rc ? rc : 1;
   }
 
-  int rc = 0;
   rc |= test_metadata();
   rc |= test_shard_write();
   rc |= test_concurrent_finalize();

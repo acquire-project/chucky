@@ -211,6 +211,112 @@ Fail:
   return 1;
 }
 
+// --- Test: well_mask skips inactive wells ---
+
+static int
+test_hcs_well_mask(void)
+{
+  log_info("=== test_hcs_well_mask ===");
+
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Fail, store);
+  store->mkdirs(store, ".");
+
+  struct dimension dims[] = {
+    { .size = 16,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 16,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct shard_pool* pool = store->create_pool(store, 1);
+  CHECK(Fail2, pool);
+
+  // 2x2 plate, only wells (0,0) and (1,1) active
+  int mask[] = { 1, 0, 0, 1 };
+
+  struct hcs_plate_config cfg = {
+    .name = "masked",
+    .rows = 2,
+    .cols = 2,
+    .field_count = 1,
+    .well_mask = mask,
+    .fov = {
+      .data_type = dtype_u8,
+      .rank = 2,
+      .dimensions = dims,
+    },
+  };
+
+  struct hcs_plate* plate = hcs_plate_create(store, pool, &cfg);
+  CHECK(Fail3, plate);
+
+  // Active wells return sinks
+  CHECK(Fail4, hcs_plate_fov_sink(plate, 0, 0, 0) != NULL);
+  CHECK(Fail4, hcs_plate_fov_sink(plate, 1, 1, 0) != NULL);
+
+  // Inactive wells return NULL
+  CHECK(Fail4, hcs_plate_fov_sink(plate, 0, 1, 0) == NULL);
+  CHECK(Fail4, hcs_plate_fov_sink(plate, 1, 0, 0) == NULL);
+
+  // Verify inactive well directory was NOT created
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/masked/A/2/0", tmpdir);
+  CHECK(Fail4, !test_file_exists(path));
+
+  hcs_plate_destroy(plate);
+  pool->destroy(pool);
+  store->destroy(store);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  hcs_plate_destroy(plate);
+Fail3:
+  pool->destroy(pool);
+Fail2:
+  store->destroy(store);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- Test: plate metadata with well_mask ---
+
+static int
+test_plate_metadata_with_mask(void)
+{
+  log_info("=== test_plate_metadata_with_mask ===");
+
+  int mask[] = { 1, 0, 0, 1 };
+  char buf[8192];
+  int len =
+    hcs_plate_attributes_json(buf, sizeof(buf), "p", 2, 2, NULL, 1, mask);
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  // Only wells A/1 and B/2 should be present
+  CHECK(Fail, strstr(buf, "\"path\":\"A/1\""));
+  CHECK(Fail, strstr(buf, "\"path\":\"B/2\""));
+  // Inactive wells should NOT be present
+  CHECK(Fail, !strstr(buf, "\"path\":\"A/2\""));
+  CHECK(Fail, !strstr(buf, "\"path\":\"B/1\""));
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -221,7 +327,9 @@ main(void)
   int err = 0;
   err |= test_plate_metadata();
   err |= test_well_metadata();
+  err |= test_plate_metadata_with_mask();
   err |= test_hcs_plate_create();
+  err |= test_hcs_well_mask();
 
   test_tmpdir_remove(tmpdir);
 
