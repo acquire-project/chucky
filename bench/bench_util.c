@@ -366,10 +366,8 @@ bench_zarr_as_shard_sink(struct bench_zarr_handle* z)
 static void
 bench_zarr_flush(struct bench_zarr_handle* z)
 {
-  if (z->ms)
-    ngff_multiscale_flush(z->ms);
-  else if (z->array)
-    zarr_array_flush(z->array);
+  ngff_multiscale_flush(z->ms);
+  zarr_array_flush(z->array);
 }
 
 static size_t
@@ -377,20 +375,15 @@ bench_zarr_pending_bytes(struct bench_zarr_handle* z)
 {
   if (z->ms)
     return ngff_multiscale_pending_bytes(z->ms);
-  if (z->array)
-    return zarr_array_pending_bytes(z->array);
-  return 0;
+  return zarr_array_pending_bytes(z->array);
 }
 
 static void
 bench_zarr_close(struct bench_zarr_handle* z)
 {
-  if (z->ms)
-    ngff_multiscale_destroy(z->ms);
-  if (z->array)
-    zarr_array_destroy(z->array);
-  if (z->store)
-    store_destroy(z->store);
+  ngff_multiscale_destroy(z->ms);
+  zarr_array_destroy(z->array);
+  store_destroy(z->store);
   *z = (struct bench_zarr_handle){ 0 };
 }
 

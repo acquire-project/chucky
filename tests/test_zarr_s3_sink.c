@@ -215,16 +215,14 @@ s3_test_sink_as_shard_sink(struct s3_test_sink* z)
 static void
 s3_test_sink_flush(struct s3_test_sink* z)
 {
-  if (z->array)
-    zarr_array_flush(z->array);
+  zarr_array_flush(z->array);
 }
 
 static void
 s3_test_sink_close(struct s3_test_sink* z)
 {
   zarr_array_destroy(z->array);
-  if (z->store)
-    store_destroy(z->store);
+  store_destroy(z->store);
   *z = (struct s3_test_sink){ 0 };
 }
 
@@ -291,8 +289,7 @@ static void
 s3_test_multiscale_close(struct s3_test_multiscale* z)
 {
   ngff_multiscale_destroy(z->ms);
-  if (z->store)
-    store_destroy(z->store);
+  store_destroy(z->store);
   *z = (struct s3_test_multiscale){ 0 };
 }
 

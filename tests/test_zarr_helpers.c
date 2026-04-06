@@ -95,8 +95,7 @@ void
 test_zarr_sink_close(struct test_zarr_sink* z)
 {
   zarr_array_destroy(z->array);
-  if (z->store)
-    store_destroy(z->store);
+  store_destroy(z->store);
   *z = (struct test_zarr_sink){ 0 };
 }
 
@@ -160,7 +159,6 @@ void
 test_zarr_multiscale_close(struct test_zarr_multiscale* z)
 {
   ngff_multiscale_destroy(z->ms);
-  if (z->store)
-    store_destroy(z->store);
+  store_destroy(z->store);
   *z = (struct test_zarr_multiscale){ 0 };
 }
