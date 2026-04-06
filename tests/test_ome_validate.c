@@ -5,6 +5,7 @@
 #include "hcs/hcs.h"
 #include "ngff/ngff_axis.h"
 #include "ngff/ngff_multiscale.h"
+#include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
@@ -20,8 +21,7 @@ static char tmpdir[4096];
 static int
 make_tmpdir(void)
 {
-  snprintf(tmpdir, sizeof(tmpdir), "/tmp/test_ome_validate_XXXXXX");
-  CHECK(Fail, mkdtemp(tmpdir));
+  CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   return 0;
 Fail:
   return 1;
@@ -198,13 +198,11 @@ main(void)
   log_info("PASS: all stores validated");
 
   // Cleanup
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  test_tmpdir_remove(tmpdir);
   return 0;
 
 Fail:
   log_error("FAIL");
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  test_tmpdir_remove(tmpdir);
   return 1;
 }

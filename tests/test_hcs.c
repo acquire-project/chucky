@@ -2,12 +2,12 @@
 #include "hcs/hcs.h"
 #include "hcs/hcs_metadata.h"
 #include "ngff/ngff_axis.h"
+#include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 static char tmpdir[4096];
@@ -15,8 +15,7 @@ static char tmpdir[4096];
 static int
 make_tmpdir(void)
 {
-  snprintf(tmpdir, sizeof(tmpdir), "/tmp/test_hcs_XXXXXX");
-  CHECK(Fail, mkdtemp(tmpdir));
+  CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   return 0;
 Fail:
   return 1;
@@ -224,9 +223,7 @@ main(void)
   err |= test_well_metadata();
   err |= test_hcs_plate_create();
 
-  char cmd[4096];
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  test_tmpdir_remove(tmpdir);
 
   return err;
 }

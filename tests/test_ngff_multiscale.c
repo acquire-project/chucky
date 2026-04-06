@@ -1,13 +1,13 @@
 #include "dimension.h"
 #include "ngff/ngff_axis.h"
 #include "ngff/ngff_multiscale.h"
+#include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 #include "zarr/zarr_group.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 static char tmpdir[4096];
@@ -15,8 +15,7 @@ static char tmpdir[4096];
 static int
 make_tmpdir(void)
 {
-  snprintf(tmpdir, sizeof(tmpdir), "/tmp/test_ngff_ms_XXXXXX");
-  CHECK(Fail, mkdtemp(tmpdir));
+  CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   return 0;
 Fail:
   return 1;
@@ -138,9 +137,7 @@ main(void)
   int err = 0;
   err |= test_multiscale_create();
 
-  char cmd[4096];
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  test_tmpdir_remove(tmpdir);
 
   return err;
 }

@@ -1,5 +1,6 @@
 #include "dimension.h"
 #include "lod/lod_plan.h"
+#include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
@@ -7,7 +8,6 @@
 #include "zarr/zarr_array.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 static char tmpdir[4096];
@@ -15,8 +15,7 @@ static char tmpdir[4096];
 static int
 make_tmpdir(void)
 {
-  snprintf(tmpdir, sizeof(tmpdir), "/tmp/test_zarr_array_XXXXXX");
-  CHECK(Fail, mkdtemp(tmpdir));
+  CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   return 0;
 Fail:
   return 1;
@@ -321,9 +320,7 @@ main(void)
   err |= test_zarr_array_update_append();
   err |= test_zarr_array_root();
 
-  char cmd[4096];
-  snprintf(cmd, sizeof(cmd), "rm -rf %s", tmpdir);
-  (void)system(cmd);
+  test_tmpdir_remove(tmpdir);
 
   return err;
 }
