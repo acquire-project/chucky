@@ -120,6 +120,13 @@ add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs 
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs chucky_log)
 add_test_exe(test_hcs test_hcs.c hcs store_fs chucky_log)
 
+# OME-NGFF validation via ome-zarr-models (requires uv)
+add_test_exe(test_ome_validate test_ome_validate.c hcs ngff_multiscale zarr_group store_fs chucky_log)
+target_compile_definitions(
+    test_ome_validate
+    PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static zarr_fs_sink stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_s3_sink platform_cmd chucky_log)
 
