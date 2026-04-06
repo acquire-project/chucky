@@ -172,26 +172,6 @@ Fail:
   return NULL;
 }
 
-int
-hcs_plate_flush(struct hcs_plate* p)
-{
-  if (!p)
-    return 0;
-  return p->pool->flush(p->pool);
-}
-
-int
-hcs_plate_has_error(const struct hcs_plate* p)
-{
-  return p ? p->pool->has_error(p->pool) : 0;
-}
-
-size_t
-hcs_plate_pending_bytes(const struct hcs_plate* p)
-{
-  return p ? p->pool->pending_bytes(p->pool) : 0;
-}
-
 void
 hcs_plate_destroy(struct hcs_plate* p)
 {

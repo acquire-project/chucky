@@ -240,21 +240,3 @@ ngff_multiscale_as_shard_sink(struct ngff_multiscale* ms)
 {
   return ms ? &ms->base : NULL;
 }
-
-int
-ngff_multiscale_flush(struct ngff_multiscale* ms)
-{
-  return ms ? ms->pool->flush(ms->pool) : 0;
-}
-
-int
-ngff_multiscale_has_error(const struct ngff_multiscale* ms)
-{
-  return ms ? ms->pool->has_error(ms->pool) : 0;
-}
-
-size_t
-ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms)
-{
-  return ms ? ms->pool->pending_bytes(ms->pool) : 0;
-}

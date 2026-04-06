@@ -204,12 +204,6 @@ zarr_array_has_error(const struct zarr_array* a)
   return a ? a->pool->has_error(a->pool) : 0;
 }
 
-size_t
-zarr_array_pending_bytes(const struct zarr_array* a)
-{
-  return a ? a->pool->pending_bytes(a->pool) : 0;
-}
-
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a)
 {

@@ -51,9 +51,6 @@ zarr_array_flush(struct zarr_array* a);
 int
 zarr_array_has_error(const struct zarr_array* a);
 
-size_t
-zarr_array_pending_bytes(const struct zarr_array* a);
-
 // Access live dimensions (for parent layers to read after update_append).
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);

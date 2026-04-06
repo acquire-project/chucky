@@ -37,18 +37,6 @@ hcs_plate_create(struct store* store,
 void
 hcs_plate_destroy(struct hcs_plate* p);
 
-// Flush all pending I/O across all FOVs. Returns non-zero on error.
-int
-hcs_plate_flush(struct hcs_plate* p);
-
-// Returns non-zero if any I/O has failed.
-int
-hcs_plate_has_error(const struct hcs_plate* p);
-
-// Returns number of bytes queued but not yet written.
-size_t
-hcs_plate_pending_bytes(const struct hcs_plate* p);
-
 // Get the shard_sink for a specific field of view.
 // row/col are 0-based indices. fov is 0-based within the well.
 // Returns NULL if the well is not active or indices are out of range.

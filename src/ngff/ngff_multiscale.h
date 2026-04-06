@@ -43,12 +43,3 @@ ngff_multiscale_destroy(struct ngff_multiscale* ms);
 
 struct shard_sink*
 ngff_multiscale_as_shard_sink(struct ngff_multiscale* ms);
-
-int
-ngff_multiscale_flush(struct ngff_multiscale* ms);
-
-int
-ngff_multiscale_has_error(const struct ngff_multiscale* ms);
-
-size_t
-ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms);
