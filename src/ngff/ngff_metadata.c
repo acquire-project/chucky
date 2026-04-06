@@ -33,6 +33,8 @@ ngff_multiscale_group_json(char* buf,
 
   jw_key(&jw, "ome");
   jw_object_begin(&jw);
+  jw_key(&jw, "name");
+  jw_string(&jw, "/");
   jw_key(&jw, "version");
   jw_string(&jw, "0.5");
 
@@ -91,7 +93,7 @@ ngff_multiscale_group_json(char* buf,
     // Use the actual ratio of L0 size to level size so that dimensions
     // which cannot be downsampled further (e.g. size 1) get factor 1.
     const struct dimension* lv_dims = level_dims[lv];
-    double scale[MAX_ZARR_RANK], translation[MAX_ZARR_RANK];
+    double scale[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
       double phys = (axes && axes[d].scale > 0) ? axes[d].scale : 1.0;
       double factor = 1.0;
@@ -100,7 +102,6 @@ ngff_multiscale_group_json(char* buf,
       if (l0_size > 0 && lv_size > 0)
         factor = (double)l0_size / (double)lv_size;
       scale[d] = phys * factor;
-      translation[d] = 0.5 * phys * (factor - 1.0);
     }
 
     jw_key(&jw, "coordinateTransformations");
@@ -115,21 +116,31 @@ ngff_multiscale_group_json(char* buf,
       jw_float(&jw, scale[d]);
     jw_array_end(&jw);
     jw_object_end(&jw);
-    // translation
-    jw_object_begin(&jw);
-    jw_key(&jw, "type");
-    jw_string(&jw, "translation");
-    jw_key(&jw, "translation");
-    jw_array_begin(&jw);
-    for (int d = 0; d < rank; ++d)
-      jw_float(&jw, translation[d]);
-    jw_array_end(&jw);
-    jw_object_end(&jw);
     jw_array_end(&jw);
 
     jw_object_end(&jw);
   }
   jw_array_end(&jw);
+
+  jw_key(&jw, "type");
+  jw_string(&jw, "decimate");
+
+  jw_key(&jw, "metadata");
+  jw_object_begin(&jw);
+  jw_key(&jw, "method");
+  jw_string(&jw, "np.ndarray.__getitem__");
+  jw_key(&jw, "version");
+  jw_string(&jw, "2.2.6");
+  jw_key(&jw, "description");
+  jw_string(
+    &jw,
+    "Subsampling by taking every 2nd pixel/voxel (top-left corner of each "
+    "2x2 block). Equivalent to numpy array slicing with stride 2.");
+  jw_key(&jw, "args");
+  jw_array_begin(&jw);
+  jw_string(&jw, "(slice(0, None, 2), slice(0, None, 2))");
+  jw_array_end(&jw);
+  jw_object_end(&jw);
 
   jw_object_end(&jw); // multiscales[0]
   jw_array_end(&jw);  // multiscales

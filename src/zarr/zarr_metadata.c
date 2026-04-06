@@ -177,6 +177,14 @@ zarr_array_json(char* buf,
   jw_key(&jw, "fill_value");
   jw_float(&jw, fill_value);
 
+  jw_key(&jw, "storage_transformers");
+  jw_array_begin(&jw);
+  jw_array_end(&jw);
+
+  jw_key(&jw, "attributes");
+  jw_object_begin(&jw);
+  jw_object_end(&jw);
+
   // dimension_names
   {
     int has_names = 0;
