@@ -76,7 +76,7 @@ A library consumer needs:
 - **`stream.cpu.h`** — CPU pipeline: same interface, no CUDA dependency
 - **`writer.h`** — `struct writer`, `struct slice`, `writer_append()`, `writer_flush()`
 - **`dimension.h`** — `struct dimension` + builder/validation helpers
-- **`dtype.h`** — `enum dtype`, `dtype_bpe()`, `dtype_zarr_string()`
+- **`dtype.h`** — `enum dtype`, `dtype_bpe()`
 - **`types.stream.h`** — `struct tile_stream_configuration`, metrics, status
 - **`types.codec.h`** — `enum compression_codec`
 - **`types.lod.h`** — `enum lod_reduce_method`

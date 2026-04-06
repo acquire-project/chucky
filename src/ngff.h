@@ -58,3 +58,7 @@ ngff_multiscale_as_shard_sink(struct ngff_multiscale* ms);
 // Flush all pending I/O. Returns non-zero on error.
 int
 ngff_multiscale_flush(struct ngff_multiscale* ms);
+
+// Returns number of bytes queued but not yet written.
+size_t
+ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms);

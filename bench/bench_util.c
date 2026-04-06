@@ -375,7 +375,10 @@ bench_zarr_flush(struct bench_zarr_handle* z)
 static size_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z)
 {
-  (void)z;
+  if (z->ms)
+    return ngff_multiscale_pending_bytes(z->ms);
+  if (z->array)
+    return zarr_array_pending_bytes(z->array);
   return 0;
 }
 

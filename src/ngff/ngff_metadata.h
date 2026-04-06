@@ -2,7 +2,7 @@
 #pragma once
 
 #include "dimension.h"
-#include "ngff/ngff_axis.h"
+#include "ngff.h"
 
 #include <stddef.h>
 #include <stdint.h>

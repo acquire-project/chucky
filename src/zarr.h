@@ -44,6 +44,10 @@ zarr_array_flush(struct zarr_array* a);
 int
 zarr_array_has_error(const struct zarr_array* a);
 
+// Returns number of bytes queued but not yet written.
+size_t
+zarr_array_pending_bytes(const struct zarr_array* a);
+
 // Access live dimensions (reflects append-dimension updates).
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);

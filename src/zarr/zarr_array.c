@@ -129,27 +129,17 @@ zarr_array_wait_fence_fn(struct shard_sink* self,
   a->pool->wait_fence(a->pool, ev);
 }
 
-// --- Private API ---
+// --- Core init (geometry already computed) ---
 
-struct zarr_array*
-zarr_array_create_with_pool(struct store* store,
-                            struct shard_pool* pool,
-                            const char* prefix,
-                            const struct zarr_array_config* cfg)
+static struct zarr_array*
+zarr_array_init(struct store* store,
+                struct shard_pool* pool,
+                const char* prefix,
+                const struct zarr_array_config* cfg,
+                const uint64_t* shard_counts,
+                const uint64_t* chunks_per_shard,
+                uint64_t shard_inner_count)
 {
-  CHECK(Fail, store);
-  CHECK(Fail, pool);
-  CHECK(Fail, cfg);
-  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
-  CHECK(Fail, cfg->dimensions);
-
-  // Compute shard geometry from dimensions
-  uint64_t shard_counts[MAX_ZARR_RANK];
-  uint64_t chunks_per_shard[MAX_ZARR_RANK];
-  uint64_t shard_inner_count = dims_compute_shard_geometry(
-    cfg->dimensions, cfg->rank, shard_counts, chunks_per_shard);
-  CHECK(Fail, shard_inner_count > 0);
-
   struct zarr_array* a = (struct zarr_array*)calloc(1, sizeof(*a));
   CHECK(Fail, a);
 
@@ -187,6 +177,31 @@ Fail:
   return NULL;
 }
 
+// --- Private API ---
+
+struct zarr_array*
+zarr_array_create_with_pool(struct store* store,
+                            struct shard_pool* pool,
+                            const char* prefix,
+                            const struct zarr_array_config* cfg)
+{
+  CHECK(Fail, store);
+  CHECK(Fail, pool);
+  CHECK(Fail, cfg);
+  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
+  CHECK(Fail, cfg->dimensions);
+
+  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
+  uint64_t sic =
+    dims_compute_shard_geometry(cfg->dimensions, cfg->rank, sc, cps);
+  CHECK(Fail, sic > 0);
+
+  return zarr_array_init(store, pool, prefix, cfg, sc, cps, sic);
+
+Fail:
+  return NULL;
+}
+
 // --- Public API ---
 
 struct zarr_array*
@@ -199,7 +214,6 @@ zarr_array_create(struct store* store,
   CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
   CHECK(Fail, cfg->dimensions);
 
-  // Compute geometry to determine pool size
   uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
   uint64_t sic =
     dims_compute_shard_geometry(cfg->dimensions, cfg->rank, sc, cps);
@@ -208,7 +222,8 @@ zarr_array_create(struct store* store,
   struct shard_pool* pool = store->create_pool(store, sic);
   CHECK(Fail, pool);
 
-  struct zarr_array* a = zarr_array_create_with_pool(store, pool, prefix, cfg);
+  struct zarr_array* a =
+    zarr_array_init(store, pool, prefix, cfg, sc, cps, sic);
   if (!a) {
     pool->destroy(pool);
     return NULL;
@@ -247,6 +262,12 @@ int
 zarr_array_has_error(const struct zarr_array* a)
 {
   return a ? a->pool->has_error(a->pool) : 0;
+}
+
+size_t
+zarr_array_pending_bytes(const struct zarr_array* a)
+{
+  return a ? a->pool->pending_bytes(a->pool) : 0;
 }
 
 const struct dimension*

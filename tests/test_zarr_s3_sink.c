@@ -171,6 +171,7 @@ s3_test_sink_open(struct s3_test_sink* z,
     .bucket = S3_BUCKET,
     .prefix = prefix,
     .region = "us-east-1",
+    .throughput_gbps = 100,
     .endpoint = s3_endpoint(),
   };
   store_s3_config_set_defaults(&scfg);

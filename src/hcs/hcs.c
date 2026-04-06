@@ -3,6 +3,7 @@
 #include "hcs/hcs_metadata.h"
 #include "lod/lod_plan.h"
 #include "ngff/ngff_multiscale.h"
+#include "stream/dim_info.h"
 #include "util/prelude.h"
 #include "zarr/store.h"
 #include "zarr/zarr_group.h"
@@ -54,13 +55,26 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   CHECK(Fail, cfg->fov.dimensions);
   CHECK(Fail, cfg->fov.rank > 0 && cfg->fov.rank <= MAX_ZARR_RANK);
 
-  // Compute pool size from FOV dimensions
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic =
-    dims_compute_shard_geometry(cfg->fov.dimensions, cfg->fov.rank, sc, cps);
-  CHECK(Fail, sic > 0);
+  // Compute pool size: max shard_inner_count across all LOD levels
+  struct lod_plan plan = { 0 };
+  int max_lev = cfg->fov.nlod > 0 ? cfg->fov.nlod : LOD_MAX_LEVELS;
+  CHECK(Fail,
+        lod_plan_init_from_dims(
+          &plan, cfg->fov.dimensions, cfg->fov.rank, max_lev) == 0);
 
-  struct shard_pool* pool = store->create_pool(store, sic);
+  uint8_t na = dims_n_append(cfg->fov.dimensions, cfg->fov.rank);
+  uint64_t max_sic = 0;
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    uint64_t sic = 1;
+    for (int d = na; d < cfg->fov.rank; ++d)
+      sic *= plan.levels.level[lv].dim[d].shard_count;
+    if (sic > max_sic)
+      max_sic = sic;
+  }
+  lod_plan_free(&plan);
+  CHECK(Fail, max_sic > 0);
+
+  struct shard_pool* pool = store->create_pool(store, max_sic);
   CHECK(Fail, pool);
 
   struct hcs_plate* p = (struct hcs_plate*)calloc(1, sizeof(*p));

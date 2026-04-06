@@ -160,7 +160,6 @@ ngff_multiscale_create_impl(struct store* store,
 
   for (int lv = 0; lv < plan.levels.nlod; ++lv) {
     struct dimension lv_dims[MAX_ZARR_RANK];
-    uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
 
     for (int d = 0; d < cfg->rank; ++d) {
       lv_dims[d] = cfg->dimensions[d];
@@ -172,7 +171,6 @@ ngff_multiscale_create_impl(struct store* store,
       lv_dims[d].chunks_per_shard =
         plan.levels.level[lv].dim[d].chunks_per_shard;
     }
-    (void)na;
 
     char name[8];
     snprintf(name, sizeof(name), "%d", lv);
@@ -301,4 +299,10 @@ int
 ngff_multiscale_flush(struct ngff_multiscale* ms)
 {
   return ms ? ms->pool->flush(ms->pool) : 0;
+}
+
+size_t
+ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms)
+{
+  return ms ? ms->pool->pending_bytes(ms->pool) : 0;
 }
