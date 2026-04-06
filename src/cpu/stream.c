@@ -146,8 +146,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     if (s->cl.dims.append_downsample) {
       uint64_t append_total = 0;
       for (int lv = 1; lv < s->cl.plan.levels.nlod; ++lv)
-        append_total +=
-          s->cl.plan.fixed_dims_count * s->cl.plan.levels.level[lv].lod_nelem;
+        append_total += s->cl.plan.levels.level[lv].fixed_dims_count *
+                        s->cl.plan.levels.level[lv].lod_nelem;
       if (append_total > 0) {
         s->append_accum = calloc(append_total, bytes_per_element);
         CHECK(Fail, s->append_accum);
@@ -370,8 +370,8 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       if (cl->dims.append_downsample) {
         uint64_t append_total = 0;
         for (int lv = 1; lv < cl->plan.levels.nlod; ++lv)
-          append_total +=
-            cl->plan.fixed_dims_count * cl->plan.levels.level[lv].lod_nelem;
+          append_total += cl->plan.levels.level[lv].fixed_dims_count *
+                          cl->plan.levels.level[lv].lod_nelem;
         lod += append_total * bytes_per_element; // append_accum
       }
 
@@ -383,8 +383,8 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       for (int lv = 0; lv < cl->levels.nlod; ++lv) {
         lod +=
           cl->plan.levels.level[lv].lod_nelem * sizeof(uint32_t); // morton_lut
-        lod +=
-          cl->plan.fixed_dims_count * sizeof(uint64_t); // fixed_dims_offsets
+        lod += cl->plan.levels.level[lv].fixed_dims_count *
+               sizeof(uint64_t); // fixed_dims_offsets
       }
     }
     info->lod_bytes = lod;

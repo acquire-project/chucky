@@ -291,7 +291,7 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
       float append_ms = (float)(platform_toc(&append_clk) * 1000.0);
       size_t append_bytes = 0;
       for (int lv = 1; lv < p->cl->plan.levels.nlod; ++lv)
-        append_bytes += p->cl->plan.fixed_dims_count *
+        append_bytes += p->cl->plan.levels.level[lv].fixed_dims_count *
                         p->cl->plan.levels.level[lv].lod_nelem *
                         bytes_per_element;
       accumulate_metric_ms(
