@@ -18,6 +18,7 @@ struct store
 
   // Create a shard writer pool with nslots writer slots.
   // The pool borrows backend resources from the store.
+  // Caller owns the returned pool and must destroy it before the store.
   struct shard_pool* (*create_pool)(struct store* self, uint64_t nslots);
 
   void (*destroy)(struct store* self);

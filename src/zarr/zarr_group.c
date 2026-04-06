@@ -3,7 +3,6 @@
 #include "util/prelude.h"
 #include "zarr/zarr_metadata.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

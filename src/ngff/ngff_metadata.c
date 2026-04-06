@@ -63,9 +63,6 @@ ngff_multiscale_group_json(char* buf,
           case ngff_axis_channel:
             type = "channel";
             break;
-          case ngff_axis_other:
-            type = "custom";
-            break;
           default:
             type = "space";
             break;

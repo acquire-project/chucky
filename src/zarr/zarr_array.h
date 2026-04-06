@@ -30,6 +30,7 @@ struct zarr_array;
 
 // Only writes {prefix}/zarr.json (the array node).
 // Does NOT write root groups or intermediate groups.
+// The caller must ensure the prefix directory exists (via store->mkdirs).
 // prefix may be "" to write at the store root.
 // Returns NULL on error.
 struct zarr_array*
