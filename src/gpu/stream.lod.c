@@ -162,34 +162,22 @@ Fail:
   return 1;
 }
 
+// Upload precomputed CSR reduce LUTs to device.
 static int
-init_reduce_level_arrays(struct lod_state* lod)
+init_csr_reduce_luts(struct lod_state* lod)
 {
   for (int l = 0; l < lod->plan.levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(&lod->plan, l);
-    uint64_t n_parents = lod_span_len(seg);
+    const struct reduce_csr* csr = &lod->plan.reduce[l];
+    if (!csr->starts || !csr->indices)
+      continue;
 
-    CU(Fail,
-       cuMemAlloc(&lod->d_child_shapes[l],
-                  lod->plan.lod_ndim * sizeof(uint64_t)));
-    uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
-    lod_plan_fill_lod_shapes(&lod->plan, l, child_lod);
-    lod_plan_fill_lod_shapes(&lod->plan, l + 1, parent_lod);
+    size_t starts_bytes = (csr->dst_segment_size + 1) * sizeof(uint64_t);
+    CU(Fail, cuMemAlloc(&lod->d_csr_starts[l], starts_bytes));
+    CU(Fail, cuMemcpyHtoD(lod->d_csr_starts[l], csr->starts, starts_bytes));
 
-    CU(Fail,
-       cuMemcpyHtoD(lod->d_child_shapes[l],
-                    child_lod,
-                    lod->plan.lod_ndim * sizeof(uint64_t)));
-
-    CU(Fail,
-       cuMemAlloc(&lod->d_parent_shapes[l],
-                  lod->plan.lod_ndim * sizeof(uint64_t)));
-    CU(Fail,
-       cuMemcpyHtoD(lod->d_parent_shapes[l],
-                    parent_lod,
-                    lod->plan.lod_ndim * sizeof(uint64_t)));
-
-    CU(Fail, cuMemAlloc(&lod->d_level_ends[l], n_parents * sizeof(uint64_t)));
+    size_t indices_bytes = csr->src_lod_count * sizeof(uint64_t);
+    CU(Fail, cuMemAlloc(&lod->d_csr_indices[l], indices_bytes));
+    CU(Fail, cuMemcpyHtoD(lod->d_csr_indices[l], csr->indices, indices_bytes));
   }
 
   return 0;
@@ -239,21 +227,22 @@ build_chunk_scatter_with_temps(struct lod_state* lod,
   uint64_t lod_chunk_sizes[LOD_MAX_NDIM];
   int64_t lod_chunk_strides[2 * LOD_MAX_NDIM];
 
-  for (int li = 0; li < p->lod_ndim; ++li) {
-    int d = p->lod_to_dim[li];
+  const struct level_dims* ld = &p->levels.level[lv];
+  for (int li = 0; li < ld->lod_ndim; ++li) {
+    int d = ld->lod_to_dim[li];
     lod_chunk_sizes[li] = lay->lifted_shape[2 * d + 1];
     lod_chunk_strides[2 * li] = lay->lifted_strides[2 * d];
     lod_chunk_strides[2 * li + 1] = lay->lifted_strides[2 * d + 1];
   }
 
-  CU(Fail, cuMemAlloc(&d_chunk_sizes, p->lod_ndim * sizeof(uint64_t)));
-  CU(Fail, cuMemAlloc(&d_chunk_strides, 2 * p->lod_ndim * sizeof(int64_t)));
+  CU(Fail, cuMemAlloc(&d_chunk_sizes, ld->lod_ndim * sizeof(uint64_t)));
+  CU(Fail, cuMemAlloc(&d_chunk_strides, 2 * ld->lod_ndim * sizeof(int64_t)));
   CU(Fail,
      cuMemcpyHtoD(
-       d_chunk_sizes, lod_chunk_sizes, p->lod_ndim * sizeof(uint64_t)));
+       d_chunk_sizes, lod_chunk_sizes, ld->lod_ndim * sizeof(uint64_t)));
   CU(Fail,
      cuMemcpyHtoD(
-       d_chunk_strides, lod_chunk_strides, 2 * p->lod_ndim * sizeof(int64_t)));
+       d_chunk_strides, lod_chunk_strides, 2 * ld->lod_ndim * sizeof(int64_t)));
 
   CU(Fail,
      cuMemAlloc(&lod->d_morton_chunk_lut[lv], lod_count * sizeof(uint32_t)));
@@ -262,7 +251,7 @@ build_chunk_scatter_with_temps(struct lod_state* lod,
                                     d_lod_shape_lv,
                                     d_chunk_sizes,
                                     d_chunk_strides,
-                                    p->lod_ndim,
+                                    ld->lod_ndim,
                                     lod_shape_lv,
                                     lod_count,
                                     0) == 0);
@@ -284,13 +273,15 @@ build_morton_lut_for_level(struct lod_state* lod,
 {
   struct lod_plan* p = &lod->plan;
 
+  const struct level_dims* ld = &p->levels.level[lv];
+
   // Upload LOD shape to device (temporary for LUT building)
   CUdeviceptr d_lod_shape_lv = 0;
   int free_shape = 0;
   if (lv == 0) {
     d_lod_shape_lv = lod->d_lod_shape;
   } else {
-    const size_t lod_shape_bytes = p->lod_ndim * sizeof(uint64_t);
+    const size_t lod_shape_bytes = ld->lod_ndim * sizeof(uint64_t);
     CU(Fail, cuMemAlloc(&d_lod_shape_lv, lod_shape_bytes));
     free_shape = 1;
     uint64_t lod_shape_buf[LOD_MAX_NDIM];
@@ -304,19 +295,31 @@ build_morton_lut_for_level(struct lod_state* lod,
   if (free_shape)
     cuMemFree(d_lod_shape_lv);
 
-  // Compute fixed_dims_chunk_offsets on host and upload
+  // Compute fixed_dims_chunk_offsets on host and upload.
+  // Derive per-level fixed dims from lod_mask.
   {
+    int fdn = 0;
+    int fd_to_dim[LOD_MAX_NDIM];
+    uint64_t fd_shape[LOD_MAX_NDIM];
+    for (int d = 0; d < p->ndim; ++d) {
+      if (!(ld->lod_mask & (1u << d))) {
+        fd_to_dim[fdn] = d;
+        fd_shape[fdn] = ld->dim[d].size;
+        fdn++;
+      }
+    }
+
     uint32_t* fixed_dims_offsets =
-      (uint32_t*)calloc(p->fixed_dims_count, sizeof(uint32_t));
+      (uint32_t*)calloc(ld->fixed_dims_count, sizeof(uint32_t));
     CHECK(Fail, fixed_dims_offsets);
 
-    for (uint64_t bi = 0; bi < p->fixed_dims_count; ++bi) {
+    for (uint64_t bi = 0; bi < ld->fixed_dims_count; ++bi) {
       uint64_t remainder = bi;
       int64_t offset = 0;
-      for (int k = p->fixed_dims_ndim - 1; k >= 0; --k) {
-        uint64_t coord = remainder % p->fixed_dims_shape[k];
-        remainder /= p->fixed_dims_shape[k];
-        int d = p->fixed_dim_to_dim[k];
+      for (int k = fdn - 1; k >= 0; --k) {
+        uint64_t coord = remainder % fd_shape[k];
+        remainder /= fd_shape[k];
+        int d = fd_to_dim[k];
         uint64_t chunk_idx = coord / lay->lifted_shape[2 * d + 1];
         uint64_t within = coord % lay->lifted_shape[2 * d + 1];
         offset += (int64_t)chunk_idx * lay->lifted_strides[2 * d];
@@ -326,14 +329,14 @@ build_morton_lut_for_level(struct lod_state* lod,
     }
 
     CUresult r1 = cuMemAlloc(&lod->d_morton_fixed_dims_chunk_offsets[lv],
-                             p->fixed_dims_count * sizeof(uint32_t));
+                             ld->fixed_dims_count * sizeof(uint32_t));
     if (r1 != CUDA_SUCCESS) {
       free(fixed_dims_offsets);
       goto Fail;
     }
     CUresult r2 = cuMemcpyHtoD(lod->d_morton_fixed_dims_chunk_offsets[lv],
                                fixed_dims_offsets,
-                               p->fixed_dims_count * sizeof(uint32_t));
+                               ld->fixed_dims_count * sizeof(uint32_t));
     if (r2 != CUDA_SUCCESS) {
       free(fixed_dims_offsets);
       goto Fail;
@@ -387,7 +390,7 @@ lod_state_init(struct lod_state* lod,
 
   CHECK(Fail, upload_plan_shapes(lod, config->rank) == 0);
   CHECK(Fail, init_gather_lut(lod, config) == 0);
-  CHECK(Fail, init_reduce_level_arrays(lod) == 0);
+  CHECK(Fail, init_csr_reduce_luts(lod) == 0);
   CHECK(Fail, init_morton_scatter_luts(lod) == 0);
 
   levels->nlod = lod->plan.levels.nlod;
@@ -433,7 +436,7 @@ lod_state_init_accumulators(struct lod_state* lod,
   lod->append_accum.total_elements = 0;
   for (int lv = 1; lv < p->levels.nlod; ++lv)
     lod->append_accum.total_elements +=
-      p->fixed_dims_count * p->levels.level[lv].lod_nelem;
+      p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
 
   if (lod->append_accum.total_elements == 0)
     return 0;
@@ -448,7 +451,8 @@ lod_state_init_accumulators(struct lod_state* lod,
 
     uint64_t offset = 0;
     for (int lv = 1; lv < p->levels.nlod; ++lv) {
-      uint64_t n = p->fixed_dims_count * p->levels.level[lv].lod_nelem;
+      uint64_t n =
+        p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
       memset(h_level_ids + offset, (uint8_t)lv, n);
       offset += n;
     }
@@ -513,6 +517,8 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_child_shapes[i]));
     CUWARN(cuMemFree(lod->d_parent_shapes[i]));
     CUWARN(cuMemFree(lod->d_level_ends[i]));
+    CUWARN(cuMemFree(lod->d_csr_starts[i]));
+    CUWARN(cuMemFree(lod->d_csr_indices[i]));
   }
   for (int i = 0; i < lod->plan.levels.nlod; ++i) {
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
@@ -577,11 +583,13 @@ run_append_fold_emit(struct lod_state* lod,
 
     if (lod->append_accum.counts[lv] >= period) {
       struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-      uint64_t n_elements = p->fixed_dims_count * p->levels.level[lv].lod_nelem;
+      uint64_t n_elements =
+        p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
 
       uint64_t accum_offset = 0;
       for (int k = 1; k < lv; ++k)
-        accum_offset += p->fixed_dims_count * p->levels.level[k].lod_nelem;
+        accum_offset +=
+          p->levels.level[k].fixed_dims_count * p->levels.level[k].lod_nelem;
 
       size_t accum_bpe = dtype_bpe(dtype);
 
@@ -638,7 +646,7 @@ scatter_morton_to_chunks(struct lod_state* lod,
                                    lod->d_morton_fixed_dims_chunk_offsets[lv],
                                    dtype,
                                    p->levels.level[lv].lod_nelem,
-                                   p->fixed_dims_count,
+                                   p->levels.level[lv].fixed_dims_count,
                                    compute) == 0);
   }
 
@@ -676,37 +684,22 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(lod->t_scatter_end, compute));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(p, l);
-    uint64_t n_parents = lod_span_len(seg);
-
-    uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
-    lod_plan_fill_lod_shapes(p, l, child_lod);
-    lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
-
-    CHECK(Error,
-          lod_fill_ends_gpu(lod->d_level_ends[l],
-                            p->lod_ndim,
-                            lod->d_child_shapes[l],
-                            lod->d_parent_shapes[l],
-                            child_lod,
-                            parent_lod,
-                            n_parents,
-                            compute) == 0);
-
+    const struct reduce_csr* csr = &p->reduce[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
     CHECK(Error,
-          lod_reduce(lod->d_morton,
-                     lod->d_level_ends[l],
-                     dtype,
-                     reduce_method,
-                     src_level.beg,
-                     dst_level.beg,
-                     p->levels.level[l].lod_nelem,
-                     p->levels.level[l + 1].lod_nelem,
-                     p->fixed_dims_count,
-                     compute) == 0);
+          lod_reduce_csr(lod->d_morton,
+                         lod->d_csr_starts[l],
+                         lod->d_csr_indices[l],
+                         dtype,
+                         reduce_method,
+                         src_level.beg,
+                         dst_level.beg,
+                         csr->src_lod_count,
+                         csr->dst_segment_size,
+                         csr->batch_count,
+                         compute) == 0);
   }
 
   CU(Error, cuEventRecord(lod->t_reduce_end, compute));

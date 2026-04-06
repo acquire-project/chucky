@@ -47,6 +47,11 @@ struct level_dims
   uint64_t lod_nelem;    // product of lod-projected sizes
   uint64_t chunk_count;  // total chunks at this level
   uint64_t chunk_offset; // cumulative offset into chunk pool
+  // Per-level LOD projection (dims drop from LOD when they reach chunk_size)
+  uint32_t lod_mask;
+  int lod_ndim;
+  int lod_to_dim[LOD_MAX_NDIM];
+  uint64_t fixed_dims_count; // product of non-LOD dim sizes at this level
 };
 
 // Aggregate level geometry across all LOD levels.
@@ -57,6 +62,17 @@ struct level_geometry
   int enable_multiscale;
   uint64_t total_chunks;
   struct level_dims level[LOD_MAX_LEVELS];
+};
+
+// CSR reduce LUT for one level transition (l -> l+1).
+// Maps destination elements to their source elements.
+struct reduce_csr
+{
+  uint64_t* starts;          // [dst_segment_size + 1]
+  uint64_t* indices;         // [src_lod_count]
+  uint64_t dst_segment_size; // = lod_nelem_dst * prod(dropped_extents)
+  uint64_t src_lod_count;    // = lod_nelem_src
+  uint64_t batch_count;      // = fixed_dims_count at source level
 };
 
 struct lod_plan
@@ -73,10 +89,9 @@ struct lod_plan
   uint64_t fixed_dims_shape[LOD_MAX_NDIM];
   uint64_t fixed_dims_count;
 
-  // Heap-allocated arrays. Populated by init and above (not by init_shapes).
+  // Heap-allocated arrays. Populated by init (not by init_shapes).
   struct lod_spans level_spans;
-  struct lod_spans lod_levels;
-  uint64_t* ends;
+  struct reduce_csr reduce[LOD_MAX_LEVELS]; // [0..nlod-2] used
 };
 
 // Resolve chunks_per_shard and compute chunk_count + shard_count
@@ -120,15 +135,13 @@ morton_rank(int ndim, const uint64_t* shape, const uint64_t* coords, int depth);
 struct lod_span
 lod_spans_at(const struct lod_spans* s, uint64_t i);
 
-// Return the segment within the ends array for the given level.
-struct lod_span
-lod_segment(const struct lod_plan* p, int level);
-
 // Initialize a plan. Returns 0 on success, non-zero on failure.
 // chunk_shape: per-dimension chunk sizes (may be NULL). When provided,
 // levels stop before any LOD dimension would drop below its chunk size.
+// preserve_aspect_ratio: 0 = drop dims independently (default),
+//   1 = stop when any dim reaches chunk_size.
 // Populates everything from init_shapes plus heap-allocated arrays
-// (ends, level_spans, lod_levels).
+// (level_spans, per-level CSR reduce LUTs).
 // Does NOT populate chunks_per_shard (use _from_dims variants for that).
 int
 lod_plan_init(struct lod_plan* p,
@@ -136,7 +149,8 @@ lod_plan_init(struct lod_plan* p,
               const uint64_t* shape,
               const uint64_t* chunk_shape,
               uint32_t lod_mask,
-              int max_levels);
+              int max_levels,
+              int preserve_aspect_ratio);
 
 // Compute only nlod and per-level shapes (no ends/counts/level_spans).
 // Use when you only need the level geometry (e.g. for metadata).
@@ -148,7 +162,8 @@ lod_plan_init_shapes(struct lod_plan* p,
                      const uint64_t* shape,
                      const uint64_t* chunk_shape,
                      uint32_t lod_mask,
-                     int max_levels);
+                     int max_levels,
+                     int preserve_aspect_ratio);
 
 // Compute LOD plan from dimension array. Extracts shapes, chunk shapes,
 // and LOD mask (dims 1+ with downsample=1) from dimensions.
@@ -158,7 +173,8 @@ int
 lod_plan_init_from_dims(struct lod_plan* p,
                         const struct dimension* dims,
                         uint8_t rank,
-                        int max_levels);
+                        int max_levels,
+                        int preserve_aspect_ratio);
 
 // Like _from_dims, but overrides shape[d] = dims[d].chunk_size for
 // d < n_append (epoch-split). Use for the streaming path where append
@@ -169,7 +185,8 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
                               const struct dimension* dims,
                               uint8_t rank,
                               uint8_t n_append,
-                              int max_levels);
+                              int max_levels,
+                              int preserve_aspect_ratio);
 
 void
 lod_plan_free(struct lod_plan* p);

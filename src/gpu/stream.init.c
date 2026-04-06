@@ -437,12 +437,15 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     }
 
     for (int l = 0; l < plan->levels.nlod - 1; ++l) {
-      lod_device += plan->lod_ndim * sizeof(uint64_t);
-      lod_device += plan->lod_ndim * sizeof(uint64_t);
+      // Legacy reduce arrays (child/parent shapes + level_ends)
+      lod_device += plan->levels.level[l].lod_ndim * sizeof(uint64_t);
+      lod_device += plan->levels.level[l].lod_ndim * sizeof(uint64_t);
+      lod_device += plan->levels.level[l + 1].lod_nelem * sizeof(uint64_t);
 
-      struct lod_span seg = lod_segment(plan, l);
-      uint64_t n_parents = lod_span_len(seg);
-      lod_device += n_parents * sizeof(uint64_t);
+      // CSR reduce LUTs
+      const struct reduce_csr* csr = &plan->reduce[l];
+      lod_device += (csr->dst_segment_size + 1) * sizeof(uint64_t);
+      lod_device += csr->src_lod_count * sizeof(uint64_t);
     }
 
     for (int lv = 1; lv < plan->levels.nlod; ++lv) {

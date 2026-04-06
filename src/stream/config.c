@@ -253,9 +253,11 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     max_levels = LOD_MAX_LEVELS;
   else
     max_levels = config->max_nlod;
-  CHECK(Fail,
-        lod_plan_init_from_epoch_dims(&out->plan, dims, rank, na, max_levels) ==
-          0);
+  CHECK(
+    Fail,
+    lod_plan_init_from_epoch_dims(
+      &out->plan, dims, rank, na, max_levels, config->preserve_aspect_ratio) ==
+      0);
   int enable_multiscale = out->plan.lod_mask != 0;
   out->levels.enable_multiscale = enable_multiscale;
   out->levels.nlod = enable_multiscale ? out->plan.levels.nlod : 1;

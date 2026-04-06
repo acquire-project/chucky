@@ -59,7 +59,7 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   int max_lev = cfg->fov.nlod > 0 ? cfg->fov.nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
         lod_plan_init_from_dims(
-          &plan, cfg->fov.dimensions, cfg->fov.rank, max_lev) == 0);
+          &plan, cfg->fov.dimensions, cfg->fov.rank, max_lev, 0) == 0);
 
   uint8_t na = dims_n_append(cfg->fov.dimensions, cfg->fov.rank);
   uint64_t max_sic = 0;

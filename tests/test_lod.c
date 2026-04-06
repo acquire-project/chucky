@@ -2,6 +2,7 @@
 
 #include "morton.util.h"
 
+#include "dtype.h"
 #include "gpu/lod.h"
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
@@ -168,8 +169,8 @@ lod_compute_gpu(const struct lod_plan* p,
   CUdeviceptr d_src = 0, d_values = 0;
   CUdeviceptr d_lod_shape = 0, d_lod_strides = 0;
   CUdeviceptr d_gather_lut = 0, d_batch_offsets = 0;
-  CUdeviceptr d_ends = 0;
-  CUdeviceptr d_child_shape = 0, d_parent_shape = 0;
+  CUdeviceptr d_csr_starts[MAX_LOD] = { 0 };
+  CUdeviceptr d_csr_indices[MAX_LOD] = { 0 };
 
   uint64_t n_elements = lod_span_len(lod_spans_at(&p->level_spans, 0));
   uint64_t total_vals = p->level_spans.ends[p->levels.nlod - 1];
@@ -190,6 +191,21 @@ lod_compute_gpu(const struct lod_plan* p,
                      &d_batch_offsets,
                      stream));
 
+  // Upload CSR reduce LUTs.
+  for (int l = 0; l < p->levels.nlod - 1; ++l) {
+    const struct reduce_csr* csr = &p->reduce[l];
+    if (csr->starts && csr->indices) {
+      CHECK(Fail,
+            upload(&d_csr_starts[l],
+                   csr->starts,
+                   (csr->dst_segment_size + 1) * sizeof(uint64_t)));
+      CHECK(Fail,
+            upload(&d_csr_indices[l],
+                   csr->indices,
+                   csr->src_lod_count * sizeof(uint64_t)));
+    }
+  }
+
   CU(Fail, cuEventRecord(ev_start, stream));
 
   lod_gather_lut(d_values,
@@ -204,50 +220,21 @@ lod_compute_gpu(const struct lod_plan* p,
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(p, l);
-    uint64_t n_parents = lod_span_len(seg);
-
-    cuMemFree(d_child_shape);
-    cuMemFree(d_parent_shape);
-    d_child_shape = 0;
-    d_parent_shape = 0;
-
-    uint64_t child_lod[MAX_NDIM], parent_lod[MAX_NDIM];
-    lod_plan_fill_lod_shapes(p, l, child_lod);
-    lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
-
-    CHECK(Fail,
-          upload(&d_child_shape, child_lod, p->lod_ndim * sizeof(uint64_t)));
-    CHECK(Fail,
-          upload(&d_parent_shape, parent_lod, p->lod_ndim * sizeof(uint64_t)));
-
-    cuMemFree(d_ends);
-    d_ends = 0;
-    CU(Fail, cuMemAlloc(&d_ends, n_parents * sizeof(uint64_t)));
-
-    CHECK(Fail,
-          lod_fill_ends_gpu(d_ends,
-                            p->lod_ndim,
-                            d_child_shape,
-                            d_parent_shape,
-                            child_lod,
-                            parent_lod,
-                            n_parents,
-                            stream) == 0);
-
+    const struct reduce_csr* csr = &p->reduce[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    lod_reduce(d_values,
-               d_ends,
-               dtype_f32,
-               method,
-               src_level.beg,
-               dst_level.beg,
-               p->levels.level[l].lod_nelem,
-               p->levels.level[l + 1].lod_nelem,
-               p->fixed_dims_count,
-               stream);
+    lod_reduce_csr(d_values,
+                   d_csr_starts[l],
+                   d_csr_indices[l],
+                   dtype_f32,
+                   method,
+                   src_level.beg,
+                   dst_level.beg,
+                   csr->src_lod_count,
+                   csr->dst_segment_size,
+                   csr->batch_count,
+                   stream);
   }
 
   CU(Fail, cuEventRecord(ev_done, stream));
@@ -273,9 +260,10 @@ Fail:
   cuMemFree(d_lod_strides);
   cuMemFree(d_gather_lut);
   cuMemFree(d_batch_offsets);
-  cuMemFree(d_ends);
-  cuMemFree(d_child_shape);
-  cuMemFree(d_parent_shape);
+  for (int i = 0; i < MAX_LOD; ++i) {
+    cuMemFree(d_csr_starts[i]);
+    cuMemFree(d_csr_indices[i]);
+  }
   cuEventDestroy(ev_start);
   cuEventDestroy(ev_scatter);
   cuEventDestroy(ev_done);
@@ -307,7 +295,8 @@ test_lod_gpu_method(const char* label,
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (float)(i + 1);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD) == 0);
+  CHECK(Fail,
+        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD, 0) == 0);
   log_info("  lod_mask=0x%x  lod_ndim=%d  fixed_dims_ndim=%d  "
            "fixed_dims_count=%llu  nlod=%d",
            lod_mask,
@@ -375,8 +364,8 @@ lod_compute_gpu_u16(const struct lod_plan* p,
   CUdeviceptr d_src = 0, d_values = 0;
   CUdeviceptr d_lod_shape = 0, d_lod_strides = 0;
   CUdeviceptr d_gather_lut = 0, d_batch_offsets = 0;
-  CUdeviceptr d_ends = 0;
-  CUdeviceptr d_child_shape = 0, d_parent_shape = 0;
+  CUdeviceptr d_csr_starts[MAX_LOD] = { 0 };
+  CUdeviceptr d_csr_indices[MAX_LOD] = { 0 };
 
   uint64_t n_elements = lod_span_len(lod_spans_at(&p->level_spans, 0));
   uint64_t total_vals = p->level_spans.ends[p->levels.nlod - 1];
@@ -397,6 +386,20 @@ lod_compute_gpu_u16(const struct lod_plan* p,
                      &d_batch_offsets,
                      stream));
 
+  for (int l = 0; l < p->levels.nlod - 1; ++l) {
+    const struct reduce_csr* csr = &p->reduce[l];
+    if (csr->starts && csr->indices) {
+      CHECK(Fail,
+            upload(&d_csr_starts[l],
+                   csr->starts,
+                   (csr->dst_segment_size + 1) * sizeof(uint64_t)));
+      CHECK(Fail,
+            upload(&d_csr_indices[l],
+                   csr->indices,
+                   csr->src_lod_count * sizeof(uint64_t)));
+    }
+  }
+
   CU(Fail, cuEventRecord(ev_start, stream));
 
   lod_gather_lut(d_values,
@@ -411,50 +414,21 @@ lod_compute_gpu_u16(const struct lod_plan* p,
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(p, l);
-    uint64_t n_parents = lod_span_len(seg);
-
-    cuMemFree(d_child_shape);
-    cuMemFree(d_parent_shape);
-    d_child_shape = 0;
-    d_parent_shape = 0;
-
-    uint64_t child_lod[MAX_NDIM], parent_lod[MAX_NDIM];
-    lod_plan_fill_lod_shapes(p, l, child_lod);
-    lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
-
-    CHECK(Fail,
-          upload(&d_child_shape, child_lod, p->lod_ndim * sizeof(uint64_t)));
-    CHECK(Fail,
-          upload(&d_parent_shape, parent_lod, p->lod_ndim * sizeof(uint64_t)));
-
-    cuMemFree(d_ends);
-    d_ends = 0;
-    CU(Fail, cuMemAlloc(&d_ends, n_parents * sizeof(uint64_t)));
-
-    CHECK(Fail,
-          lod_fill_ends_gpu(d_ends,
-                            p->lod_ndim,
-                            d_child_shape,
-                            d_parent_shape,
-                            child_lod,
-                            parent_lod,
-                            n_parents,
-                            stream) == 0);
-
+    const struct reduce_csr* csr = &p->reduce[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    lod_reduce(d_values,
-               d_ends,
-               dtype_u16,
-               method,
-               src_level.beg,
-               dst_level.beg,
-               p->levels.level[l].lod_nelem,
-               p->levels.level[l + 1].lod_nelem,
-               p->fixed_dims_count,
-               stream);
+    lod_reduce_csr(d_values,
+                   d_csr_starts[l],
+                   d_csr_indices[l],
+                   dtype_u16,
+                   method,
+                   src_level.beg,
+                   dst_level.beg,
+                   csr->src_lod_count,
+                   csr->dst_segment_size,
+                   csr->batch_count,
+                   stream);
   }
 
   CU(Fail, cuEventRecord(ev_done, stream));
@@ -480,9 +454,10 @@ Fail:
   cuMemFree(d_lod_strides);
   cuMemFree(d_gather_lut);
   cuMemFree(d_batch_offsets);
-  cuMemFree(d_ends);
-  cuMemFree(d_child_shape);
-  cuMemFree(d_parent_shape);
+  for (int i = 0; i < MAX_LOD; ++i) {
+    cuMemFree(d_csr_starts[i]);
+    cuMemFree(d_csr_indices[i]);
+  }
   cuEventDestroy(ev_start);
   cuEventDestroy(ev_scatter);
   cuEventDestroy(ev_done);
@@ -514,7 +489,8 @@ test_lod_gpu_u16_method(const char* label,
   for (uint64_t i = 0; i < n; ++i)
     src[i] = (uint16_t)((i + 1) & 0xFFFF);
 
-  CHECK(Fail, lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD) == 0);
+  CHECK(Fail,
+        lod_plan_init(&plan, ndim, shape, NULL, lod_mask, MAX_LOD, 0) == 0);
   log_info("  lod_mask=0x%x  lod_ndim=%d  fixed_dims_ndim=%d  "
            "fixed_dims_count=%llu  nlod=%d",
            lod_mask,

@@ -102,37 +102,6 @@ lod_spans_at(const struct lod_spans* s, uint64_t i)
   };
 }
 
-static void
-lod_fill_ends(int ndim,
-              const uint64_t* child_shape,
-              const uint64_t* parent_shape,
-              uint64_t n_parents,
-              uint64_t* ends)
-{
-  int p = ceil_log2(max_shape(ndim, parent_shape));
-
-  uint64_t coords[LOD_MAX_NDIM];
-  uint64_t next[LOD_MAX_NDIM];
-  for (uint64_t j = 0; j < n_parents; ++j) {
-    unravel(ndim, parent_shape, j, coords);
-    uint64_t pos = morton_rank(ndim, parent_shape, coords, 0);
-
-    memcpy(next, coords, (size_t)ndim * sizeof(uint64_t));
-    coords_morton_next(ndim, p, next);
-    uint64_t val = morton_rank(ndim, child_shape, next, 1);
-
-    ends[pos] = val;
-  }
-}
-
-struct lod_span
-lod_segment(const struct lod_plan* p, int level)
-{
-  struct lod_span next = lod_spans_at(&p->lod_levels, level + 1);
-  uint64_t base = p->lod_levels.ends[0];
-  return (struct lod_span){ .beg = next.beg - base, .end = next.end - base };
-}
-
 // Are all LOD dims already at 1 chunk or fewer?
 // Stop generating levels when every dim fits in a single chunk.
 static int
@@ -148,60 +117,209 @@ all_chunks_le_one(int lod_ndim,
   return 1;
 }
 
+// Build CSR reduce LUT for the transition from level l to level l+1.
+// The CSR maps each destination element (within one batch) to its source
+// elements. When a dimension drops from LOD at this transition, the dropped
+// dim's coordinate is folded into the destination element index.
+//
+// dst_segment_size = lod_nelem_dst * prod(dropped_extents)
+// src_lod_count    = lod_nelem_src
+// batch_count      = fixed_dims_count at the source level
+static int
+build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
+{
+  const struct level_dims* src_ld = &p->levels.level[l];
+  const struct level_dims* dst_ld = &p->levels.level[l + 1];
+
+  // Identify which dims drop at this transition.
+  // A dim drops if it's in src lod_mask but not in dst lod_mask.
+  uint32_t dropped_mask = src_ld->lod_mask & ~dst_ld->lod_mask;
+
+  // Compute dst_segment_size = lod_nelem_dst * prod(size[d] for dropped dims)
+  uint64_t dropped_product = 1;
+  for (int d = 0; d < p->ndim; ++d)
+    if (dropped_mask & (1u << d))
+      dropped_product *= dst_ld->dim[d].size;
+
+  uint64_t dst_seg = dst_ld->lod_nelem * dropped_product;
+  uint64_t src_count = src_ld->lod_nelem;
+
+  csr->dst_segment_size = dst_seg;
+  csr->src_lod_count = src_count;
+  csr->batch_count = src_ld->fixed_dims_count;
+  csr->starts = NULL;
+  csr->indices = NULL;
+
+  if (src_count == 0 || dst_seg == 0)
+    return 0;
+
+  // Allocate: starts[dst_seg + 1] and indices[src_count].
+  csr->starts = (uint64_t*)calloc(dst_seg + 1, sizeof(uint64_t));
+  csr->indices = (uint64_t*)malloc(src_count * sizeof(uint64_t));
+  if (!csr->starts || !csr->indices) {
+    free(csr->starts);
+    free(csr->indices);
+    csr->starts = NULL;
+    csr->indices = NULL;
+    return 1;
+  }
+
+  // Build src LOD shape for unraveling morton positions.
+  uint64_t src_lod_shape[LOD_MAX_NDIM];
+  for (int k = 0; k < src_ld->lod_ndim; ++k)
+    src_lod_shape[k] = src_ld->dim[src_ld->lod_to_dim[k]].size;
+
+  // Build dst LOD shape for computing morton rank.
+  uint64_t dst_lod_shape[LOD_MAX_NDIM];
+  for (int k = 0; k < dst_ld->lod_ndim; ++k)
+    dst_lod_shape[k] = dst_ld->dim[dst_ld->lod_to_dim[k]].size;
+
+  // Build dropped-dim shape and strides for computing the batch sub-index.
+  int n_dropped = 0;
+  int dropped_dims[LOD_MAX_NDIM]; // full dim indices that dropped
+  uint64_t dropped_shape[LOD_MAX_NDIM];
+  for (int k = 0; k < src_ld->lod_ndim; ++k) {
+    int d = src_ld->lod_to_dim[k];
+    if (dropped_mask & (1u << d)) {
+      dropped_dims[n_dropped] = d;
+      dropped_shape[n_dropped] = dst_ld->dim[d].size;
+      n_dropped++;
+    }
+  }
+
+  // Iterate over all source elements in C-order, compute their morton position
+  // and which destination element they map to.
+  // Phase 1: histogram (count sources per destination).
+  uint64_t* counts = csr->starts + 1;
+  for (uint64_t m = 0; m < src_count; ++m) {
+    // Unravel flat C-order index to coordinates.
+    uint64_t src_coords[LOD_MAX_NDIM];
+    unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
+
+    // Split into surviving LOD coords (halved) and dropped coords.
+    uint64_t dst_lod_coords[LOD_MAX_NDIM];
+    uint64_t drop_coords[LOD_MAX_NDIM];
+    int di = 0, si = 0;
+    for (int k = 0; k < src_ld->lod_ndim; ++k) {
+      int d = src_ld->lod_to_dim[k];
+      if (dropped_mask & (1u << d))
+        drop_coords[di++] = src_coords[k];
+      else
+        dst_lod_coords[si++] = src_coords[k] / 2;
+    }
+
+    uint64_t dst_morton =
+      (dst_ld->lod_ndim > 0)
+        ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
+        : 0;
+    uint64_t drop_idx = 0;
+    for (int j = 0; j < n_dropped; ++j)
+      drop_idx = drop_idx * dropped_shape[j] + drop_coords[j];
+
+    uint64_t dst_elem = drop_idx * dst_ld->lod_nelem + dst_morton;
+    counts[dst_elem]++;
+  }
+
+  // Phase 2: prefix sum to build starts array.
+  csr->starts[0] = 0;
+  for (uint64_t i = 0; i < dst_seg; ++i)
+    csr->starts[i + 1] += csr->starts[i];
+
+  // Phase 3: scatter source morton positions into CSR indices.
+  uint64_t* write_pos = (uint64_t*)malloc(dst_seg * sizeof(uint64_t));
+  if (!write_pos) {
+    free(csr->starts);
+    free(csr->indices);
+    csr->starts = NULL;
+    csr->indices = NULL;
+    return 1;
+  }
+  for (uint64_t i = 0; i < dst_seg; ++i)
+    write_pos[i] = csr->starts[i];
+
+  for (uint64_t m = 0; m < src_count; ++m) {
+    uint64_t src_coords[LOD_MAX_NDIM];
+    unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
+
+    // Source morton position (what the reduce kernel indexes into).
+    uint64_t src_morton =
+      morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
+
+    uint64_t dst_lod_coords[LOD_MAX_NDIM];
+    uint64_t drop_coords[LOD_MAX_NDIM];
+    int di = 0, si = 0;
+    for (int k = 0; k < src_ld->lod_ndim; ++k) {
+      int d = src_ld->lod_to_dim[k];
+      if (dropped_mask & (1u << d))
+        drop_coords[di++] = src_coords[k];
+      else
+        dst_lod_coords[si++] = src_coords[k] / 2;
+    }
+
+    uint64_t dst_morton =
+      (dst_ld->lod_ndim > 0)
+        ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
+        : 0;
+    uint64_t drop_idx = 0;
+    for (int j = 0; j < n_dropped; ++j)
+      drop_idx = drop_idx * dropped_shape[j] + drop_coords[j];
+
+    uint64_t dst_elem = drop_idx * dst_ld->lod_nelem + dst_morton;
+    csr->indices[write_pos[dst_elem]++] = src_morton;
+  }
+
+  free(write_pos);
+  return 0;
+}
+
 int
 lod_plan_init(struct lod_plan* p,
               int ndim,
               const uint64_t* shape,
               const uint64_t* chunk_shape,
               uint32_t lod_mask,
-              int max_levels)
+              int max_levels,
+              int preserve_aspect_ratio)
 {
-  if (lod_plan_init_shapes(p, ndim, shape, chunk_shape, lod_mask, max_levels))
+  if (lod_plan_init_shapes(p,
+                           ndim,
+                           shape,
+                           chunk_shape,
+                           lod_mask,
+                           max_levels,
+                           preserve_aspect_ratio))
     return 1;
 
   int nlod = p->levels.nlod;
 
   // lod_nelem[k] = product of lod-projected shapes at level k.
+  // Uses per-level lod_ndim/lod_to_dim to handle dimension dropping.
   for (int k = 0; k < nlod; ++k) {
-    p->levels.level[k].lod_nelem = 1;
-    for (int d = 0; d < p->lod_ndim; ++d)
-      p->levels.level[k].lod_nelem *= lod_plan_lod_shape(p, k, d);
+    struct level_dims* ld = &p->levels.level[k];
+    ld->lod_nelem = 1;
+    for (int j = 0; j < ld->lod_ndim; ++j)
+      ld->lod_nelem *= ld->dim[ld->lod_to_dim[j]].size;
   }
 
-  p->lod_levels.n = (uint64_t)nlod;
-  p->lod_levels.ends = (uint64_t*)malloc(nlod * sizeof(uint64_t));
-  if (!p->lod_levels.ends)
-    goto Fail;
-  p->lod_levels.ends[0] = p->levels.level[0].lod_nelem;
-  for (int k = 1; k < nlod; ++k)
-    p->lod_levels.ends[k] =
-      p->lod_levels.ends[k - 1] + p->levels.level[k].lod_nelem;
-
+  // level_spans: cumulative total elements per level (fixed_dims * lod
+  // elements). Uses per-level fixed_dims_count to handle dimension dropping.
   p->level_spans.n = (uint64_t)nlod;
   p->level_spans.ends = (uint64_t*)malloc(nlod * sizeof(uint64_t));
   if (!p->level_spans.ends)
     goto Fail;
-  for (int k = 0; k < nlod; ++k)
-    p->level_spans.ends[k] = p->fixed_dims_count * p->lod_levels.ends[k];
-
   {
-    uint64_t total_ends = p->lod_levels.ends[nlod - 1] - p->lod_levels.ends[0];
-    if (total_ends > 0) {
-      p->ends = (uint64_t*)malloc(total_ends * sizeof(uint64_t));
-      if (!p->ends)
-        goto Fail;
-      for (int l = 0; l < nlod - 1; ++l) {
-        uint64_t child_lod[LOD_MAX_NDIM], parent_lod[LOD_MAX_NDIM];
-        lod_plan_fill_lod_shapes(p, l, child_lod);
-        lod_plan_fill_lod_shapes(p, l + 1, parent_lod);
-        struct lod_span seg = lod_segment(p, l);
-        lod_fill_ends(p->lod_ndim,
-                      child_lod,
-                      parent_lod,
-                      lod_span_len(seg),
-                      p->ends + seg.beg);
-      }
+    uint64_t cumul = 0;
+    for (int k = 0; k < nlod; ++k) {
+      cumul +=
+        p->levels.level[k].fixed_dims_count * p->levels.level[k].lod_nelem;
+      p->level_spans.ends[k] = cumul;
     }
+  }
+
+  // Build CSR reduce LUTs for each level transition.
+  for (int l = 0; l < nlod - 1; ++l) {
+    if (build_reduce_csr(&p->reduce[l], p, l))
+      goto Fail;
   }
 
   return 0;
@@ -210,13 +328,39 @@ Fail:
   return 1;
 }
 
+// Compute per-level fixed_dims_count from lod_mask and dim sizes.
+static uint64_t
+level_fixed_dims_count(const struct level_dims* ld, int ndim, uint32_t lod_mask)
+{
+  uint64_t count = 1;
+  for (int d = 0; d < ndim; ++d)
+    if (!(lod_mask & (1u << d)))
+      count *= ld->dim[d].size;
+  return count;
+}
+
+// Is any LOD dim at ≤1 chunk?
+static int
+any_chunks_le_one(int lod_ndim,
+                  const uint64_t* lod_shape,
+                  const uint64_t* lod_chunk)
+{
+  for (int d = 0; d < lod_ndim; ++d) {
+    uint64_t nchunks = ceildiv(lod_shape[d], lod_chunk[d]);
+    if (nchunks <= 1)
+      return 1;
+  }
+  return 0;
+}
+
 int
 lod_plan_init_shapes(struct lod_plan* p,
                      int ndim,
                      const uint64_t* shape,
                      const uint64_t* chunk_shape,
                      uint32_t lod_mask,
-                     int max_levels)
+                     int max_levels,
+                     int preserve_aspect_ratio)
 {
   if (ndim <= 0 || ndim > LOD_MAX_NDIM)
     return 1;
@@ -239,27 +383,81 @@ lod_plan_init_shapes(struct lod_plan* p,
 
   level_dims_set_shape(&p->levels.level[0], ndim, shape);
 
-  uint64_t lod_chunk[LOD_MAX_NDIM];
-  for (int k = 0; k < p->lod_ndim; ++k)
-    lod_chunk[k] = chunk_shape ? chunk_shape[p->lod_to_dim[k]] : 1;
+  // Per-level LOD projection: track which dims are still active (> 1 chunk).
+  // Dims drop from LOD when they reach chunk_size (≤1 chunk).
+  int cur_lod_ndim = p->lod_ndim;
+  int cur_to_dim[LOD_MAX_NDIM];
+  uint64_t cur_shape[LOD_MAX_NDIM];
+  uint64_t cur_chunk[LOD_MAX_NDIM];
+  for (int k = 0; k < cur_lod_ndim; ++k) {
+    cur_to_dim[k] = p->lod_to_dim[k];
+    cur_shape[k] = p->levels.level[0].dim[p->lod_to_dim[k]].size;
+    cur_chunk[k] = chunk_shape ? chunk_shape[p->lod_to_dim[k]] : 1;
+  }
 
-  // Derive lod_shape for current level from sizes + lod_to_dim.
-  uint64_t cur_lod[LOD_MAX_NDIM];
-  for (int k = 0; k < p->lod_ndim; ++k)
-    cur_lod[k] = p->levels.level[0].dim[p->lod_to_dim[k]].size;
+  // Fill L0 per-level info.
+  p->levels.level[0].lod_mask = lod_mask;
+  p->levels.level[0].lod_ndim = cur_lod_ndim;
+  memcpy(p->levels.level[0].lod_to_dim,
+         cur_to_dim,
+         sizeof(int) * (size_t)cur_lod_ndim);
+  p->levels.level[0].fixed_dims_count = p->fixed_dims_count;
 
   int nlod = 1;
-  while (nlod < max_levels &&
-         !all_chunks_le_one(p->lod_ndim, cur_lod, lod_chunk)) {
-    uint64_t next_lod[LOD_MAX_NDIM];
-    for (int k = 0; k < p->lod_ndim; ++k)
-      next_lod[k] = (cur_lod[k] + 1) / 2;
+  while (nlod < max_levels && cur_lod_ndim > 0 &&
+         !all_chunks_le_one(cur_lod_ndim, cur_shape, cur_chunk)) {
+    // Halve active LOD dims with clamping at chunk_size.
+    uint64_t next_shape[LOD_MAX_NDIM];
+    for (int k = 0; k < cur_lod_ndim; ++k) {
+      uint64_t half = (cur_shape[k] + 1) / 2;
+      next_shape[k] = half > cur_chunk[k] ? half : cur_chunk[k];
+    }
+
+    // Write level shapes: copy from previous, then update LOD dims.
     level_dims_copy_sizes(
       &p->levels.level[nlod], &p->levels.level[nlod - 1], ndim);
-    for (int k = 0; k < p->lod_ndim; ++k)
-      p->levels.level[nlod].dim[p->lod_to_dim[k]].size = next_lod[k];
-    memcpy(cur_lod, next_lod, (size_t)p->lod_ndim * sizeof(uint64_t));
+    for (int k = 0; k < cur_lod_ndim; ++k)
+      p->levels.level[nlod].dim[cur_to_dim[k]].size = next_shape[k];
+
+    // Per-level LOD info: the LOD state at this level (pre-drop).
+    uint32_t level_mask = 0;
+    for (int k = 0; k < cur_lod_ndim; ++k)
+      level_mask |= (1u << cur_to_dim[k]);
+    p->levels.level[nlod].lod_mask = level_mask;
+    p->levels.level[nlod].lod_ndim = cur_lod_ndim;
+    memcpy(p->levels.level[nlod].lod_to_dim,
+           cur_to_dim,
+           sizeof(int) * (size_t)cur_lod_ndim);
+    p->levels.level[nlod].fixed_dims_count =
+      level_fixed_dims_count(&p->levels.level[nlod], ndim, level_mask);
+
     ++nlod;
+
+    // preserve_aspect_ratio: stop when any dim reaches ≤1 chunk after halving.
+    // The level where the dim reached chunk_size IS included; no further
+    // levels.
+    if (preserve_aspect_ratio &&
+        any_chunks_le_one(cur_lod_ndim, next_shape, cur_chunk))
+      break;
+
+    // Drop dims that reached ≤1 chunk for subsequent levels.
+    int next_ndim = 0;
+    int next_to_dim[LOD_MAX_NDIM];
+    uint64_t next_chunk[LOD_MAX_NDIM];
+    uint64_t next_active[LOD_MAX_NDIM];
+    for (int k = 0; k < cur_lod_ndim; ++k) {
+      if (ceildiv(next_shape[k], cur_chunk[k]) > 1) {
+        next_to_dim[next_ndim] = cur_to_dim[k];
+        next_chunk[next_ndim] = cur_chunk[k];
+        next_active[next_ndim] = next_shape[k];
+        next_ndim++;
+      }
+    }
+
+    cur_lod_ndim = next_ndim;
+    memcpy(cur_to_dim, next_to_dim, sizeof(int) * (size_t)next_ndim);
+    memcpy(cur_chunk, next_chunk, sizeof(uint64_t) * (size_t)next_ndim);
+    memcpy(cur_shape, next_active, sizeof(uint64_t) * (size_t)next_ndim);
   }
   p->levels.nlod = nlod;
 
@@ -312,14 +510,21 @@ int
 lod_plan_init_from_dims(struct lod_plan* p,
                         const struct dimension* dims,
                         uint8_t rank,
-                        int max_levels)
+                        int max_levels,
+                        int preserve_aspect_ratio)
 {
   uint64_t shape[LOD_MAX_NDIM];
   uint64_t chunk_shape[LOD_MAX_NDIM];
   uint32_t lod_mask;
   uint8_t na = dims_n_append(dims, rank);
   dims_lod_params(dims, rank, na, shape, chunk_shape, &lod_mask);
-  if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
+  if (lod_plan_init(p,
+                    rank,
+                    shape,
+                    chunk_shape,
+                    lod_mask,
+                    max_levels,
+                    preserve_aspect_ratio))
     return 1;
   fill_shard_geometry(p, dims, rank, na);
   return 0;
@@ -330,7 +535,8 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
                               const struct dimension* dims,
                               uint8_t rank,
                               uint8_t n_append,
-                              int max_levels)
+                              int max_levels,
+                              int preserve_aspect_ratio)
 {
   assert(n_append > 0 && n_append <= rank);
   uint64_t shape[LOD_MAX_NDIM];
@@ -339,7 +545,13 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
   dims_lod_params(dims, rank, n_append, shape, chunk_shape, &lod_mask);
   for (int d = 0; d < n_append; ++d)
     shape[d] = dims[d].chunk_size;
-  if (lod_plan_init(p, rank, shape, chunk_shape, lod_mask, max_levels))
+  if (lod_plan_init(p,
+                    rank,
+                    shape,
+                    chunk_shape,
+                    lod_mask,
+                    max_levels,
+                    preserve_aspect_ratio))
     return 1;
   fill_shard_geometry(p, dims, rank, n_append);
   return 0;
@@ -371,14 +583,15 @@ level_dims_copy_sizes(struct level_dims* dst,
 uint64_t
 lod_plan_lod_shape(const struct lod_plan* p, int lv, int k)
 {
-  return p->levels.level[lv].dim[p->lod_to_dim[k]].size;
+  return p->levels.level[lv].dim[p->levels.level[lv].lod_to_dim[k]].size;
 }
 
 void
 lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst)
 {
-  for (int k = 0; k < p->lod_ndim; ++k)
-    dst[k] = p->levels.level[lv].dim[p->lod_to_dim[k]].size;
+  const struct level_dims* ld = &p->levels.level[lv];
+  for (int k = 0; k < ld->lod_ndim; ++k)
+    dst[k] = ld->dim[ld->lod_to_dim[k]].size;
 }
 
 void
@@ -387,8 +600,10 @@ lod_plan_free(struct lod_plan* p)
   if (!p)
     return;
   free(p->level_spans.ends);
-  free(p->lod_levels.ends);
-  free(p->ends);
+  for (int l = 0; l < LOD_MAX_LEVELS; ++l) {
+    free(p->reduce[l].starts);
+    free(p->reduce[l].indices);
+  }
   memset(p, 0, sizeof(*p));
 }
 

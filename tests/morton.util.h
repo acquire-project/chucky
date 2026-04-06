@@ -30,9 +30,10 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
                     const uint16_t* src,
                     uint16_t* dst);
 
-// CPU reference: reduce a single window (u16).
+// CPU reference: reduce a single window (u16) with CSR indirect indexing.
 uint16_t
 reduce_window_u16(const uint16_t* src,
+                  const uint64_t* indices,
                   uint64_t start,
                   uint64_t end,
                   enum lod_reduce_method method);

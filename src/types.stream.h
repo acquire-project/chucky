@@ -44,7 +44,9 @@ struct tile_stream_configuration
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   int max_nlod; // 0 = auto, N>0 = max N total levels (1 = base only)
-  uint8_t epochs_per_batch; // K: 0 = auto (target_batch_chunks), must be pow2
+  int preserve_aspect_ratio; // 0 = drop dims independently (default),
+                             // 1 = stop when any dim reaches chunk_size
+  uint8_t epochs_per_batch;  // K: 0 = auto (target_batch_chunks), must be pow2
   uint32_t
     target_batch_chunks; // minimum chunks per compress batch (default 1024)
   float metadata_update_interval_s;

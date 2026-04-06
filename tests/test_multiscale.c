@@ -469,7 +469,8 @@ test_dim0_multi_epoch_levels(void)
 
   // We need nlod — compute from lod_plan_init_from_dims
   struct lod_plan plan = { 0 };
-  CHECK(Fail, lod_plan_init_from_dims(&plan, dims, rank, LOD_MAX_LEVELS) == 0);
+  CHECK(Fail,
+        lod_plan_init_from_dims(&plan, dims, rank, LOD_MAX_LEVELS, 0) == 0);
 
   int nlod = plan.levels.nlod;
   log_info("  nlod=%d total_elements=%zu", nlod, total_elements);

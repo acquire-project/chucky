@@ -1,3 +1,4 @@
+#include "dtype.h"
 #include "gpu/lod.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
@@ -1036,5 +1037,172 @@ lod_reduce(CUdeviceptr d_values,
 #undef DISPATCH
 #undef REDUCE_METHODS
 #undef LAUNCH_REDUCE
+  return 1;
+}
+
+// --- CSR reduce kernel ---
+
+template<typename T, typename Acc, enum lod_reduce_method Method>
+__global__ void
+lod_reduce_csr_k(T* __restrict__ values,
+                 const uint64_t* __restrict__ starts,
+                 const uint64_t* __restrict__ indices,
+                 uint64_t src_offset,
+                 uint64_t dst_offset,
+                 uint64_t src_segment_size,
+                 uint64_t dst_segment_size,
+                 uint64_t total)
+{
+  const uint64_t gid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  if (gid >= total)
+    return;
+
+  const uint64_t batch = gid / dst_segment_size;
+  const uint64_t element = gid % dst_segment_size;
+
+  const uint64_t src_base = src_offset + batch * src_segment_size;
+  const uint64_t dst_base = dst_offset + batch * dst_segment_size;
+
+  uint64_t start = starts[element];
+  uint64_t end = starts[element + 1];
+#pragma nv_diag_suppress 177, 550
+  uint64_t len = end - start;
+#pragma nv_diag_default 177, 550
+
+  T result;
+
+  if constexpr (Method == lod_reduce_mean) {
+    Acc sum = (Acc)0;
+    for (uint64_t j = start; j < end; ++j)
+      sum += (Acc)values[src_base + indices[j]];
+    result = (T)(sum / (Acc)len);
+  } else if constexpr (Method == lod_reduce_min) {
+    T best = values[src_base + indices[start]];
+    for (uint64_t j = start + 1; j < end; ++j) {
+      T v = values[src_base + indices[j]];
+      if (v < best)
+        best = v;
+    }
+    result = best;
+  } else if constexpr (Method == lod_reduce_max) {
+    T best = values[src_base + indices[start]];
+    for (uint64_t j = start + 1; j < end; ++j) {
+      T v = values[src_base + indices[j]];
+      if (v > best)
+        best = v;
+    }
+    result = best;
+  } else if constexpr (Method == lod_reduce_median) {
+    T buf[16];
+    uint64_t n = (len <= 16) ? len : 16;
+    for (uint64_t j = 0; j < n; ++j)
+      buf[j] = values[src_base + indices[start + j]];
+    for (uint64_t i = 1; i < n; ++i) {
+      T key = buf[i];
+      uint64_t k = i;
+      while (k > 0 && buf[k - 1] > key) {
+        buf[k] = buf[k - 1];
+        --k;
+      }
+      buf[k] = key;
+    }
+    result = buf[n / 2];
+  } else if constexpr (Method == lod_reduce_max_suppressed) {
+    T top1 = values[src_base + indices[start]];
+    T top2 = top1;
+    if (len > 1) {
+      T v = values[src_base + indices[start + 1]];
+      if (v >= top1) {
+        top2 = top1;
+        top1 = v;
+      } else {
+        top2 = v;
+      }
+      for (uint64_t j = start + 2; j < end; ++j) {
+        v = values[src_base + indices[j]];
+        if (v >= top1) {
+          top2 = top1;
+          top1 = v;
+        } else if (v > top2)
+          top2 = v;
+      }
+    }
+    result = top2;
+  } else if constexpr (Method == lod_reduce_min_suppressed) {
+    T bot1 = values[src_base + indices[start]];
+    T bot2 = bot1;
+    if (len > 1) {
+      T v = values[src_base + indices[start + 1]];
+      if (v <= bot1) {
+        bot2 = bot1;
+        bot1 = v;
+      } else {
+        bot2 = v;
+      }
+      for (uint64_t j = start + 2; j < end; ++j) {
+        v = values[src_base + indices[j]];
+        if (v <= bot1) {
+          bot2 = bot1;
+          bot1 = v;
+        } else if (v < bot2)
+          bot2 = v;
+      }
+    }
+    result = bot2;
+  }
+
+  values[dst_base + element] = result;
+}
+
+extern "C" int
+lod_reduce_csr(CUdeviceptr d_values,
+               CUdeviceptr d_starts,
+               CUdeviceptr d_indices,
+               enum dtype dtype,
+               enum lod_reduce_method method,
+               uint64_t src_offset,
+               uint64_t dst_offset,
+               uint64_t src_segment_size,
+               uint64_t dst_segment_size,
+               uint64_t batch_count,
+               CUstream stream)
+{
+  const uint64_t total = batch_count * dst_segment_size;
+  const int block_size = 256;
+  const int grid_size = (int)((total + block_size - 1) / block_size);
+
+#define LAUNCH_CSR(Type, Acc, Method)                                          \
+  case Method:                                                                 \
+    lod_reduce_csr_k<Type, Acc, Method>                                        \
+      <<<grid_size, block_size, 0, stream>>>((Type*)d_values,                  \
+                                             (const uint64_t*)d_starts,        \
+                                             (const uint64_t*)d_indices,       \
+                                             src_offset,                       \
+                                             dst_offset,                       \
+                                             src_segment_size,                 \
+                                             dst_segment_size,                 \
+                                             total);                           \
+    return 0;
+
+#define CSR_METHODS(Type, Acc)                                                 \
+  switch (method) {                                                            \
+    LAUNCH_CSR(Type, Acc, lod_reduce_mean);                                    \
+    LAUNCH_CSR(Type, Acc, lod_reduce_min);                                     \
+    LAUNCH_CSR(Type, Acc, lod_reduce_max);                                     \
+    LAUNCH_CSR(Type, Acc, lod_reduce_median);                                  \
+    LAUNCH_CSR(Type, Acc, lod_reduce_max_suppressed);                          \
+    LAUNCH_CSR(Type, Acc, lod_reduce_min_suppressed);                          \
+  }
+
+#define DISPATCH(D, T)                                                         \
+  case D:                                                                      \
+    CSR_METHODS(T, reduce_acc<T>::type);                                       \
+    break;
+  switch (dtype) {
+    FOR_EACH_DTYPE(DISPATCH)
+  }
+#undef DISPATCH
+#undef CSR_METHODS
+#undef LAUNCH_CSR
   return 1;
 }

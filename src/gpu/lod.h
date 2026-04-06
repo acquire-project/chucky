@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dtype.h"
 #include "types.lod.h"
 #include <cuda.h>
 #include <stdint.h>
@@ -29,6 +30,19 @@ extern "C"
                  uint64_t dst_lod_count,
                  uint64_t fixed_dims_count,
                  CUstream stream);
+
+  // CSR-based reduce: precomputed starts/indices LUT.
+  int lod_reduce_csr(CUdeviceptr d_values,
+                     CUdeviceptr d_starts,
+                     CUdeviceptr d_indices,
+                     enum dtype dtype,
+                     enum lod_reduce_method method,
+                     uint64_t src_offset,
+                     uint64_t dst_offset,
+                     uint64_t src_segment_size,
+                     uint64_t dst_segment_size,
+                     uint64_t batch_count,
+                     CUstream stream);
 
   int lod_build_chunk_scatter_lut(CUdeviceptr d_chunk_lut,
                                   CUdeviceptr d_lod_shape,

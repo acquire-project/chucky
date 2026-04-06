@@ -220,8 +220,8 @@ ngff_multiscale_create_with_pool(struct store* store,
   struct lod_plan plan = { 0 };
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init_from_dims(&plan, cfg->dimensions, cfg->rank, max_lev) ==
-          0);
+        lod_plan_init_from_dims(
+          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
 
   return ngff_multiscale_init(store, pool, prefix, cfg, &plan);
 
@@ -244,8 +244,8 @@ ngff_multiscale_create(struct store* store,
   struct lod_plan plan = { 0 };
   int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
   CHECK(Fail,
-        lod_plan_init_from_dims(&plan, cfg->dimensions, cfg->rank, max_lev) ==
-          0);
+        lod_plan_init_from_dims(
+          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
 
   uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
   uint64_t max_sic = 0;

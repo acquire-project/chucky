@@ -2173,7 +2173,7 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
     free(data);
   }
 
-  // L1 zarr.json: shape=[32,5], chunk_size still [8,8] (partial chunk padded)
+  // L1 zarr.json: shape=[32,8] — clamped at chunk_size (dim can't go below 8)
   {
     char path[4096];
     snprintf(path, sizeof(path), "%s/1/zarr.json", tmpdir);
@@ -2184,8 +2184,8 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
     CHECK(Fail2, read_file_all(path, &data, &len) == 0);
     data[len < 4095 ? len : 4095] = '\0';
 
-    CHECK(Fail2, strstr((char*)data, "\"shape\":[32,5]"));
-    // Inner chunk_shape stays [8,8] — partial chunk is padded with fill_value
+    CHECK(Fail2, strstr((char*)data, "\"shape\":[32,8]"));
+    // Inner chunk_shape stays [8,8]
     CHECK(Fail2, strstr((char*)data, "\"chunk_shape\":[8,8]"));
     free(data);
   }

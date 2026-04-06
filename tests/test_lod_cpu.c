@@ -26,7 +26,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   uint64_t* fixed_dims_offsets = NULL;
 
   struct lod_plan plan;
-  CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8) == 0);
+  CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8, 0) == 0);
   CHECK(Fail, plan.levels.nlod >= 2);
 
   // Fill source with sequential floats.
@@ -114,7 +114,7 @@ test_scatter_reduce_u16(void)
   uint64_t* fixed_dims_offsets = NULL;
 
   struct lod_plan plan;
-  CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8) == 0);
+  CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8, 0) == 0);
 
   uint64_t n = 1;
   for (int d = 0; d < 3; ++d)
@@ -193,7 +193,7 @@ test_f16_rejected(void)
   uint64_t* fixed_dims_offsets = NULL;
   void* values = NULL;
   struct lod_plan plan;
-  CHECK(Fail, lod_plan_init(&plan, 2, shape, chunk_shape, 0x2, 4) == 0);
+  CHECK(Fail, lod_plan_init(&plan, 2, shape, chunk_shape, 0x2, 4, 0) == 0);
   scatter_lut =
     (uint32_t*)malloc(plan.levels.level[0].lod_nelem * sizeof(uint32_t));
   fixed_dims_offsets =
@@ -241,8 +241,8 @@ check_nlod(const char* label,
   log_info("=== %s ===", label);
   struct lod_plan plan;
   CHECK(Fail,
-        lod_plan_init_shapes(&plan, ndim, shape, chunk_shape, lod_mask, 32) ==
-          0);
+        lod_plan_init_shapes(
+          &plan, ndim, shape, chunk_shape, lod_mask, 32, 0) == 0);
   if (plan.levels.nlod != expected_nlod) {
     log_error(
       "  expected nlod=%d, got nlod=%d", expected_nlod, plan.levels.nlod);
@@ -299,7 +299,7 @@ test_level_count_max_levels(void)
   struct lod_plan plan;
   CHECK(Fail,
         lod_plan_init_shapes(
-          &plan, 1, (uint64_t[]){ 256 }, (uint64_t[]){ 1 }, 0x1, 3) == 0);
+          &plan, 1, (uint64_t[]){ 256 }, (uint64_t[]){ 1 }, 0x1, 3, 0) == 0);
   CHECK(Fail, plan.levels.nlod == 3);
   log_info("  PASS");
   return 0;
@@ -324,19 +324,19 @@ test_max_nlod_semantics(void)
   // max_nlod=0 -> auto (use LOD_MAX_LEVELS)
   // With shape=256, chunk=1, auto should give 9 levels (256->128->...->1)
   CHECK(Fail,
-        lod_plan_init_shapes(&plan, 1, shape, chunk, mask, LOD_MAX_LEVELS) ==
+        lod_plan_init_shapes(&plan, 1, shape, chunk, mask, LOD_MAX_LEVELS, 0) ==
           0);
   int auto_nlod = plan.levels.nlod;
   CHECK(Fail, auto_nlod == 9);
   log_info("  zero (auto): nlod=%d", auto_nlod);
 
   // max_nlod=1 -> max_levels=1 -> nlod=1 (base only, no downsampling)
-  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 1) == 0);
+  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 1, 0) == 0);
   CHECK(Fail, plan.levels.nlod == 1);
   log_info("  one (base only): nlod=%d", plan.levels.nlod);
 
   // max_nlod=4 -> max_levels=4 -> nlod capped at 4
-  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 4) == 0);
+  CHECK(Fail, lod_plan_init_shapes(&plan, 1, shape, chunk, mask, 4, 0) == 0);
   CHECK(Fail, plan.levels.nlod == 4);
   CHECK(Fail, plan.levels.nlod < auto_nlod);
   log_info("  positive (cap=4 total levels): nlod=%d", plan.levels.nlod);
@@ -600,7 +600,7 @@ test_chunk_geometry_at_coarse_levels(void)
 
   struct lod_plan plan;
   CHECK(Fail,
-        lod_plan_init_shapes(&plan, 2, shape, chunk, mask, LOD_MAX_LEVELS) ==
+        lod_plan_init_shapes(&plan, 2, shape, chunk, mask, LOD_MAX_LEVELS, 0) ==
           0);
   CHECK(Fail, plan.levels.nlod >= 2);
 
@@ -608,9 +608,9 @@ test_chunk_geometry_at_coarse_levels(void)
   CHECK(Fail, plan.levels.level[0].dim[0].chunk_size == 8);
   CHECK(Fail, plan.levels.level[0].dim[1].chunk_size == 8);
 
-  // L1: shape=(5,5), chunk_size still 8 (not clamped), partial chunk padded
-  CHECK(Fail, plan.levels.level[1].dim[0].size == 5);
-  CHECK(Fail, plan.levels.level[1].dim[1].size == 5);
+  // L1: shape clamped to chunk_size (8,8) — dims can't go below chunk.
+  CHECK(Fail, plan.levels.level[1].dim[0].size == 8);
+  CHECK(Fail, plan.levels.level[1].dim[1].size == 8);
   CHECK(Fail, plan.levels.level[1].dim[0].chunk_size == 8);
   CHECK(Fail, plan.levels.level[1].dim[1].chunk_size == 8);
 
@@ -634,15 +634,16 @@ test_chunk_geometry_at_coarse_levels(void)
   };
 
   struct lod_plan plan2;
-  CHECK(Fail, lod_plan_init_from_dims(&plan2, dims2, 3, LOD_MAX_LEVELS) == 0);
+  CHECK(Fail,
+        lod_plan_init_from_dims(&plan2, dims2, 3, LOD_MAX_LEVELS, 0) == 0);
   CHECK(Fail2, plan2.levels.nlod >= 2);
 
   // L0: chunks_per_shard = L0 config
   CHECK(Fail2, plan2.levels.level[0].dim[1].chunks_per_shard == 2);
   CHECK(Fail2, plan2.levels.level[0].dim[2].chunks_per_shard == 2);
 
-  // L1: shape halved => (5,5) on LOD dims; chunk_size stays 8;
-  // chunk_count = ceildiv(5,8) = 1; chunks_per_shard = min(2,1) = 1
+  // L1: shape clamped to (8,8) on LOD dims; chunk_size stays 8;
+  // chunk_count = ceildiv(8,8) = 1; chunks_per_shard = min(2,1) = 1
   CHECK(Fail2, plan2.levels.level[1].dim[1].chunk_size == 8);
   CHECK(Fail2, plan2.levels.level[1].dim[2].chunk_size == 8);
   CHECK(Fail2, plan2.levels.level[1].dim[1].chunks_per_shard == 1);
@@ -688,7 +689,8 @@ test_from_epoch_dims_clamp(void)
 
   struct lod_plan plan;
   CHECK(Fail,
-        lod_plan_init_from_epoch_dims(&plan, dims, 3, 1, LOD_MAX_LEVELS) == 0);
+        lod_plan_init_from_epoch_dims(&plan, dims, 3, 1, LOD_MAX_LEVELS, 0) ==
+          0);
   CHECK(Fail, plan.levels.nlod >= 2);
 
   // L0: shapes = (1, 10, 6), chunk_sizes = (1, 8, 4)
@@ -698,9 +700,9 @@ test_from_epoch_dims_clamp(void)
   CHECK(Fail, plan.levels.level[0].dim[1].chunk_size == 8);
   CHECK(Fail, plan.levels.level[0].dim[2].chunk_size == 4);
 
-  // L1: shapes = (1, 5, 3), chunk_sizes unchanged (1, 8, 4)
-  CHECK(Fail, plan.levels.level[1].dim[1].size == 5);
-  CHECK(Fail, plan.levels.level[1].dim[2].size == 3);
+  // L1: shapes clamped to (1, 8, 4) — dims can't go below chunk_size.
+  CHECK(Fail, plan.levels.level[1].dim[1].size == 8);
+  CHECK(Fail, plan.levels.level[1].dim[2].size == 4);
   CHECK(Fail, plan.levels.level[1].dim[1].chunk_size == 8); // constant
   CHECK(Fail, plan.levels.level[1].dim[2].chunk_size == 4); // constant
 
@@ -719,6 +721,154 @@ test_from_epoch_dims_clamp(void)
 
 Fail:
   lod_plan_free(&plan);
+  log_error("  FAIL");
+  return 1;
+}
+
+// Verify that no LOD dimension ever goes below its chunk_size at any level.
+static int
+test_clamp_at_chunk_size(void)
+{
+  log_info("=== test_clamp_at_chunk_size ===");
+
+  // 3D: asymmetric shapes where naive halving would go below chunk.
+  // dim0: 100 / chunk 64 -> naive: 100,50,25,12,6,3 (3 < 64 at L5)
+  // dim1: 20 / chunk 16 -> naive: 20,10,5 (5 < 16 at L2)
+  // With clamping: dims stop at chunk_size.
+  uint64_t shape[] = { 100, 20, 8 };
+  uint64_t chunk[] = { 64, 16, 8 };
+  uint32_t mask = 0x7;
+
+  struct lod_plan plan;
+  CHECK(Fail,
+        lod_plan_init_shapes(&plan, 3, shape, chunk, mask, LOD_MAX_LEVELS, 0) ==
+          0);
+
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    for (int d = 0; d < 3; ++d) {
+      if (!((mask >> d) & 1))
+        continue;
+      uint64_t sz = plan.levels.level[lv].dim[d].size;
+      if (sz < chunk[d]) {
+        log_error("  level %d dim %d: size %llu < chunk %llu",
+                  lv,
+                  d,
+                  (unsigned long long)sz,
+                  (unsigned long long)chunk[d]);
+        goto Fail;
+      }
+    }
+  }
+
+  // dim2 starts at 8 == chunk_size(8) -> already at 1 chunk -> nlod > 1
+  // because dim0 still needs more levels.
+  CHECK(Fail, plan.levels.nlod >= 2);
+
+  // At coarsest level, all dims should be at exactly chunk_size.
+  int last = plan.levels.nlod - 1;
+  CHECK(Fail, plan.levels.level[last].dim[0].size == 64);
+  CHECK(Fail, plan.levels.level[last].dim[1].size == 16);
+  CHECK(Fail, plan.levels.level[last].dim[2].size == 8);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Verify per-level LOD masks: dims drop when they reach chunk_size.
+static int
+test_per_level_lod_masks(void)
+{
+  log_info("=== test_per_level_lod_masks ===");
+
+  // 2D: dim0 large, dim1 small. dim1 reaches chunk_size first and drops.
+  // dim0: 256, chunk=64 -> needs several levels
+  // dim1: 80, chunk=64 -> L1: max(40,64)=64 -> at 1 chunk -> drops at L2
+  uint64_t shape[] = { 256, 80 };
+  uint64_t chunk[] = { 64, 64 };
+  uint32_t mask = 0x3;
+
+  struct lod_plan plan;
+  CHECK(Fail,
+        lod_plan_init_shapes(&plan, 2, shape, chunk, mask, LOD_MAX_LEVELS, 0) ==
+          0);
+  CHECK(Fail, plan.levels.nlod >= 3);
+
+  // L0: both dims in LOD
+  CHECK(Fail, plan.levels.level[0].lod_ndim == 2);
+  CHECK(Fail, plan.levels.level[0].lod_mask == 0x3);
+  CHECK(Fail, plan.levels.level[0].fixed_dims_count == 1);
+
+  // L1: both dims still in LOD (dim1 just reached chunk_size, drops AFTER)
+  CHECK(Fail, plan.levels.level[1].lod_ndim == 2);
+  CHECK(Fail, plan.levels.level[1].lod_mask == 0x3);
+  CHECK(Fail, plan.levels.level[1].dim[1].size == 64); // clamped
+
+  // L2: dim1 dropped, only dim0 remains
+  CHECK(Fail, plan.levels.level[2].lod_ndim == 1);
+  CHECK(Fail, plan.levels.level[2].lod_mask == 0x1);
+  CHECK(Fail, plan.levels.level[2].lod_to_dim[0] == 0);
+  // dim1 is now fixed -> fixed_dims_count includes it
+  CHECK(Fail, plan.levels.level[2].fixed_dims_count == 64);
+  CHECK(Fail, plan.levels.level[2].dim[1].size == 64); // stays at chunk_size
+
+  log_info("  nlod=%d", plan.levels.nlod);
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    log_info("  L%d: lod_ndim=%d lod_mask=0x%x fdc=%llu shape=(%llu,%llu)",
+             lv,
+             plan.levels.level[lv].lod_ndim,
+             plan.levels.level[lv].lod_mask,
+             (unsigned long long)plan.levels.level[lv].fixed_dims_count,
+             (unsigned long long)plan.levels.level[lv].dim[0].size,
+             (unsigned long long)plan.levels.level[lv].dim[1].size);
+  }
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// preserve_aspect_ratio=1 stops when ANY dim reaches chunk_size.
+static int
+test_preserve_aspect_ratio(void)
+{
+  log_info("=== test_preserve_aspect_ratio ===");
+
+  // Same setup as test_per_level_lod_masks: dim0=256, dim1=80, chunk=64.
+  // Without preserve_aspect_ratio: dim1 drops at L2, dim0 continues → nlod=3.
+  // With preserve_aspect_ratio: stop at L1 when dim1 reaches chunk_size →
+  // nlod=2.
+  uint64_t shape[] = { 256, 80 };
+  uint64_t chunk[] = { 64, 64 };
+  uint32_t mask = 0x3;
+
+  struct lod_plan plan_drop;
+  CHECK(Fail,
+        lod_plan_init_shapes(
+          &plan_drop, 2, shape, chunk, mask, LOD_MAX_LEVELS, 0) == 0);
+
+  struct lod_plan plan_par;
+  CHECK(Fail,
+        lod_plan_init_shapes(
+          &plan_par, 2, shape, chunk, mask, LOD_MAX_LEVELS, 1) == 0);
+
+  log_info("  drop: nlod=%d  par: nlod=%d",
+           plan_drop.levels.nlod,
+           plan_par.levels.nlod);
+
+  // preserve_aspect_ratio should produce fewer levels
+  CHECK(Fail, plan_par.levels.nlod < plan_drop.levels.nlod);
+  // Specifically: stop at L1 (dim1 has 1 chunk at L1, which triggers early
+  // stop)
+  CHECK(Fail, plan_par.levels.nlod == 2);
+
+  log_info("  PASS");
+  return 0;
+Fail:
   log_error("  FAIL");
   return 1;
 }
@@ -745,5 +895,8 @@ main(int ac, char* av[])
   rc |= test_max_nlod_zero_equals_uncapped();
   rc |= test_chunk_geometry_at_coarse_levels();
   rc |= test_from_epoch_dims_clamp();
+  rc |= test_clamp_at_chunk_size();
+  rc |= test_per_level_lod_masks();
+  rc |= test_preserve_aspect_ratio();
   return rc;
 }

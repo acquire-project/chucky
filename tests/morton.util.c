@@ -162,21 +162,24 @@ lod_reduce_cpu(const struct lod_plan* p,
                enum lod_reduce_method method)
 {
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(p, l);
-    uint64_t src_ds = p->levels.level[l].lod_nelem;
-    uint64_t dst_ds = p->levels.level[l + 1].lod_nelem;
+    const struct reduce_csr* csr = &p->reduce[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < p->fixed_dims_count; ++b) {
-      uint64_t src_base = src_level.beg + b * src_ds;
-      uint64_t dst_base = dst_level.beg + b * dst_ds;
+    for (uint64_t b = 0; b < csr->batch_count; ++b) {
+      float* src = values + src_level.beg + b * csr->src_lod_count;
+      uint64_t dst_base = dst_level.beg + b * csr->dst_segment_size;
 
-      for (uint64_t i = 0; i < dst_ds; ++i) {
-        uint64_t start = (i > 0) ? p->ends[seg.beg + i - 1] : 0;
-        uint64_t end = p->ends[seg.beg + i];
+      for (uint64_t i = 0; i < csr->dst_segment_size; ++i) {
+        // Gather CSR window into a contiguous buffer, then reduce.
+        uint64_t start = csr->starts[i];
+        uint64_t end = csr->starts[i + 1];
+        uint64_t len = end - start;
+        float buf[16];
+        for (uint64_t j = 0; j < len && j < 16; ++j)
+          buf[j] = src[csr->indices[start + j]];
         values[dst_base + i] =
-          reduce_window_f32(values + src_base, start, end, method);
+          reduce_window_f32(buf, 0, len < 16 ? len : 16, method);
       }
     }
   }
@@ -241,6 +244,7 @@ lod_scatter_cpu_u16(const struct lod_plan* p,
 
 uint16_t
 reduce_window_u16(const uint16_t* src,
+                  const uint64_t* indices,
                   uint64_t start,
                   uint64_t end,
                   enum lod_reduce_method method)
@@ -250,28 +254,28 @@ reduce_window_u16(const uint16_t* src,
     case lod_reduce_mean: {
       uint32_t sum = 0;
       for (uint64_t j = start; j < end; ++j)
-        sum += src[j];
+        sum += src[indices[j]];
       return (uint16_t)(sum / (uint32_t)len);
     }
     case lod_reduce_min: {
-      uint16_t best = src[start];
+      uint16_t best = src[indices[start]];
       for (uint64_t j = start + 1; j < end; ++j)
-        if (src[j] < best)
-          best = src[j];
+        if (src[indices[j]] < best)
+          best = src[indices[j]];
       return best;
     }
     case lod_reduce_max: {
-      uint16_t best = src[start];
+      uint16_t best = src[indices[start]];
       for (uint64_t j = start + 1; j < end; ++j)
-        if (src[j] > best)
-          best = src[j];
+        if (src[indices[j]] > best)
+          best = src[indices[j]];
       return best;
     }
     case lod_reduce_median: {
       uint16_t buf[16];
       uint64_t n = (len <= 16) ? len : 16;
       for (uint64_t j = 0; j < n; ++j)
-        buf[j] = src[start + j];
+        buf[j] = src[indices[start + j]];
       for (uint64_t i = 1; i < n; ++i) {
         uint16_t key = buf[i];
         uint64_t k = i;
@@ -284,9 +288,9 @@ reduce_window_u16(const uint16_t* src,
       return buf[n / 2];
     }
     case lod_reduce_max_suppressed: {
-      uint16_t top1 = src[start], top2 = src[start];
+      uint16_t top1 = src[indices[start]], top2 = src[indices[start]];
       if (len > 1) {
-        uint16_t v = src[start + 1];
+        uint16_t v = src[indices[start + 1]];
         if (v >= top1) {
           top2 = top1;
           top1 = v;
@@ -294,7 +298,7 @@ reduce_window_u16(const uint16_t* src,
           top2 = v;
         }
         for (uint64_t j = start + 2; j < end; ++j) {
-          v = src[j];
+          v = src[indices[j]];
           if (v >= top1) {
             top2 = top1;
             top1 = v;
@@ -306,9 +310,9 @@ reduce_window_u16(const uint16_t* src,
       return top2;
     }
     case lod_reduce_min_suppressed: {
-      uint16_t bot1 = src[start], bot2 = src[start];
+      uint16_t bot1 = src[indices[start]], bot2 = src[indices[start]];
       if (len > 1) {
-        uint16_t v = src[start + 1];
+        uint16_t v = src[indices[start + 1]];
         if (v <= bot1) {
           bot2 = bot1;
           bot1 = v;
@@ -316,7 +320,7 @@ reduce_window_u16(const uint16_t* src,
           bot2 = v;
         }
         for (uint64_t j = start + 2; j < end; ++j) {
-          v = src[j];
+          v = src[indices[j]];
           if (v <= bot1) {
             bot2 = bot1;
             bot1 = v;
@@ -337,21 +341,19 @@ lod_reduce_cpu_u16(const struct lod_plan* p,
                    enum lod_reduce_method method)
 {
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    struct lod_span seg = lod_segment(p, l);
-    uint64_t src_lod = p->levels.level[l].lod_nelem;
-    uint64_t dst_lod = p->levels.level[l + 1].lod_nelem;
+    const struct reduce_csr* csr = &p->reduce[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < p->fixed_dims_count; ++b) {
-      uint64_t src_base = src_level.beg + b * src_lod;
-      uint64_t dst_base = dst_level.beg + b * dst_lod;
+    for (uint64_t b = 0; b < csr->batch_count; ++b) {
+      uint16_t* src = values + src_level.beg + b * csr->src_lod_count;
+      uint64_t dst_base = dst_level.beg + b * csr->dst_segment_size;
 
-      for (uint64_t i = 0; i < dst_lod; ++i) {
-        uint64_t start = (i > 0) ? p->ends[seg.beg + i - 1] : 0;
-        uint64_t end = p->ends[seg.beg + i];
+      for (uint64_t i = 0; i < csr->dst_segment_size; ++i) {
+        uint64_t start = csr->starts[i];
+        uint64_t end = csr->starts[i + 1];
         values[dst_base + i] =
-          reduce_window_u16(values + src_base, start, end, method);
+          reduce_window_u16(src, csr->indices, start, end, method);
       }
     }
   }
