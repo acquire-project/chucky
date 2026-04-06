@@ -344,12 +344,14 @@ flush_partial_append(struct tile_stream_gpu* s)
     if (!(active_levels_mask & (1u << lv)))
       continue;
 
-    uint64_t n_elements = p->fixed_dims_count * p->levels.level[lv].lod_nelem;
+    uint64_t n_elements =
+      p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
 
     // Compute offset of this level within the packed accumulator
     uint64_t accum_offset = 0;
     for (int k = 1; k < lv; ++k)
-      accum_offset += p->fixed_dims_count * p->levels.level[k].lod_nelem;
+      accum_offset +=
+        p->levels.level[k].fixed_dims_count * p->levels.level[k].lod_nelem;
 
     size_t accum_bpe = dtype_bpe(dtype);
 
@@ -385,7 +387,7 @@ flush_partial_append(struct tile_stream_gpu* s)
                                    s->lod.d_morton_fixed_dims_chunk_offsets[lv],
                                    dtype,
                                    p->levels.level[lv].lod_nelem,
-                                   p->fixed_dims_count,
+                                   p->levels.level[lv].fixed_dims_count,
                                    s->streams.compute) == 0);
   }
 

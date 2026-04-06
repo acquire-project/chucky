@@ -457,8 +457,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       size_t accum_bpe = dtype_bpe(config->dtype);
       uint64_t total_elems = 0;
       for (int lv = 1; lv < plan->levels.nlod; ++lv)
-        total_elems +=
-          plan->fixed_dims_count * plan->levels.level[lv].lod_nelem;
+        total_elems += plan->levels.level[lv].fixed_dims_count *
+                       plan->levels.level[lv].lod_nelem;
       lod_device += total_elems * accum_bpe;
       lod_device += total_elems;
       lod_device += (uint64_t)plan->levels.nlod * sizeof(uint32_t);

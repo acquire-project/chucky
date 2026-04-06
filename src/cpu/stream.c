@@ -175,8 +175,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       s->morton_lut[lv] = (uint32_t*)malloc(lod_count * sizeof(uint32_t));
       CHECK(Fail, s->morton_lut[lv]);
 
-      s->lod_fixed_dims_offsets[lv] =
-        (uint64_t*)calloc(plan->fixed_dims_count, sizeof(uint64_t));
+      s->lod_fixed_dims_offsets[lv] = (uint64_t*)calloc(
+        plan->levels.level[lv].fixed_dims_count, sizeof(uint64_t));
       CHECK(Fail, s->lod_fixed_dims_offsets[lv]);
     }
   }
