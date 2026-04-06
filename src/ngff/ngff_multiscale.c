@@ -49,7 +49,9 @@ write_ngff_group_metadata(const struct ngff_multiscale* ms)
 // --- shard_sink vtable ---
 
 static struct shard_writer*
-ngff_ms_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
+ngff_multiscale_open(struct shard_sink* self,
+                     uint8_t level,
+                     uint64_t shard_index)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   CHECK(Fail, level < ms->nlod);
@@ -60,10 +62,10 @@ Fail:
 }
 
 static int
-ngff_ms_update_append(struct shard_sink* self,
-                      uint8_t level,
-                      uint8_t n_append,
-                      const uint64_t* append_sizes)
+ngff_multiscale_update_append(struct shard_sink* self,
+                              uint8_t level,
+                              uint8_t n_append,
+                              const uint64_t* append_sizes)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   if (level >= ms->nlod)
@@ -88,7 +90,7 @@ ngff_ms_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-ngff_ms_record_fence(struct shard_sink* self, uint8_t level)
+ngff_multiscale_record_fence_fn(struct shard_sink* self, uint8_t level)
 {
   (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
@@ -96,7 +98,9 @@ ngff_ms_record_fence(struct shard_sink* self, uint8_t level)
 }
 
 static void
-ngff_ms_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+ngff_multiscale_wait_fence_fn(struct shard_sink* self,
+                              uint8_t level,
+                              struct io_event ev)
 {
   (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
@@ -136,10 +140,10 @@ ngff_multiscale_create(struct store* store,
   if (cfg->axes)
     memcpy(ms->axes, cfg->axes, cfg->rank * sizeof(struct ngff_axis));
 
-  ms->base.open = ngff_ms_open;
-  ms->base.update_append = ngff_ms_update_append;
-  ms->base.record_fence = ngff_ms_record_fence;
-  ms->base.wait_fence = ngff_ms_wait_fence;
+  ms->base.open = ngff_multiscale_open;
+  ms->base.update_append = ngff_multiscale_update_append;
+  ms->base.record_fence = ngff_multiscale_record_fence_fn;
+  ms->base.wait_fence = ngff_multiscale_wait_fence_fn;
 
   // Ensure prefix directory exists (parent handles root/intermediate groups)
   if (prefix && prefix[0])
