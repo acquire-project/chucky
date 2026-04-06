@@ -351,7 +351,7 @@ flush_partial_append(struct tile_stream_gpu* s)
     for (int k = 1; k < lv; ++k)
       accum_offset += p->fixed_dims_count * p->levels.level[k].lod_nelem;
 
-    size_t accum_bpe = dtype_accum_bpe(dtype, s->config.append_reduce_method);
+    size_t accum_bpe = dtype_bpe(dtype);
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
     CUdeviceptr morton_lv = s->lod.d_morton + lev.beg * bytes_per_element;

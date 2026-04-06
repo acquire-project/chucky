@@ -1,11 +1,11 @@
 #include "lod/lod_plan.h"
 
 #include "dimension.h"
-#include "stream/dim_info.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -441,9 +441,113 @@ dims_compute_shard_geometry(const struct dimension* dims,
   return sic;
 }
 
-size_t
-dtype_accum_bpe(enum dtype dt, enum lod_reduce_method method)
+// --- Internal dimension utilities ---
+
+uint8_t
+dims_n_append(const struct dimension* dims, uint8_t rank)
 {
-  (void)method;
-  return dtype_bpe(dt);
+  uint8_t max_n = 0;
+  for (uint8_t d = 0; d < rank; ++d) {
+    if (dims[d].chunk_size != 1)
+      break;
+    max_n = d + 1;
+  }
+  if (max_n <= 1)
+    return 1;
+  // Only the rightmost append dim may be accumulator-downsampled.
+  // If a dim in the prefix has downsample, it becomes the rightmost append dim.
+  for (uint8_t d = 0; d < max_n; ++d) {
+    if (dims[d].downsample)
+      return d + 1;
+  }
+  return max_n;
+}
+
+int
+dims_validate(const struct dimension* dims, uint8_t rank)
+{
+  CHECK(Fail, dims);
+  CHECK(Fail, rank > 0 && rank <= HALF_MAX_RANK);
+
+  for (int d = 0; d < rank; ++d) {
+    if (dims[d].chunk_size == 0) {
+      log_error("dims[%d].chunk_size must be > 0", d);
+      goto Fail;
+    }
+  }
+
+  for (int d = 1; d < rank; ++d) {
+    if (dims[d].size == 0) {
+      log_error("dims[%d].size must be > 0 (only dim 0 may be unbounded)", d);
+      goto Fail;
+    }
+  }
+
+  if (dims[0].size == 0 && dims[0].chunks_per_shard == 0) {
+    log_error("dims[0].size=0 (unbounded) requires chunks_per_shard > 0");
+    goto Fail;
+  }
+
+  {
+    uint8_t na = dims_n_append(dims, rank);
+    for (int d = 0; d < na; ++d) {
+      if (dims[d].storage_position != d) {
+        log_error("dims[%d].storage_position must be %d (append dim)", d, d);
+        goto Fail;
+      }
+    }
+    uint32_t seen = 0;
+    for (int d = 0; d < rank; ++d) {
+      uint8_t j = dims[d].storage_position;
+      if (j >= rank || (seen & (1u << j))) {
+        log_error("invalid storage_position permutation at dims[%d]", d);
+        goto Fail;
+      }
+      seen |= (1u << j);
+    }
+  }
+
+  return 0;
+Fail:
+  return 1;
+}
+
+void
+dims_print(const struct dimension* dims, uint8_t rank)
+{
+  fprintf(stderr,
+          "dim  name  %10s  %10s  %8s  %6s  %8s  storage  ds\n",
+          "size",
+          "chunk",
+          "chunks",
+          "cps",
+          "shards");
+  uint8_t na = dims_n_append(dims, rank);
+  uint64_t chunk_elements = 1;
+  uint64_t chunks_per_epoch = 1;
+  for (uint8_t i = 0; i < rank; ++i) {
+    uint64_t tc = ceildiv(dims[i].size, dims[i].chunk_size);
+    uint64_t cps = dims[i].chunks_per_shard ? dims[i].chunks_per_shard : tc;
+    uint64_t sc = ceildiv(tc, cps);
+    fprintf(stderr,
+            "%3d  %-4s  %10llu  %10llu  %8llu  %6llu  %8llu  %7d  %s\n",
+            i,
+            dims[i].name ? dims[i].name : "?",
+            (unsigned long long)dims[i].size,
+            (unsigned long long)dims[i].chunk_size,
+            (unsigned long long)tc,
+            (unsigned long long)cps,
+            (unsigned long long)sc,
+            (int)dims[i].storage_position,
+            dims[i].downsample ? "Y" : ".");
+    chunk_elements *= dims[i].chunk_size;
+    if (i >= na)
+      chunks_per_epoch *= tc;
+  }
+  double epoch_elements = (double)chunks_per_epoch * (double)chunk_elements;
+  fprintf(stderr,
+          "chunk_elements: %llu  chunks/epoch: %llu  epoch_elements: %.3g\n",
+          (unsigned long long)chunk_elements,
+          (unsigned long long)chunks_per_epoch,
+          epoch_elements);
 }

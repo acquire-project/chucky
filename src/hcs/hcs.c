@@ -3,7 +3,6 @@
 #include "hcs/hcs_metadata.h"
 #include "lod/lod_plan.h"
 #include "ngff/ngff_multiscale.h"
-#include "stream/dim_info.h"
 #include "util/prelude.h"
 #include "zarr/store.h"
 #include "zarr/zarr_group.h"

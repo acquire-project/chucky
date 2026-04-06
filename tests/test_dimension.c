@@ -1,4 +1,5 @@
 #include "dimension.h"
+#include "lod/lod_plan.h"
 #include "stream/dim_info.h"
 #include "util/prelude.h"
 

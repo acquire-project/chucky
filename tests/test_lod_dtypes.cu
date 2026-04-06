@@ -168,7 +168,7 @@ test_fold(const char* label,
   int ok = 0;
   const uint64_t N = 64;
   const int nlod = 2;
-  size_t accum_bpe = dtype_accum_bpe(dtype, method);
+  size_t accum_bpe = dtype_bpe(dtype);
 
   CUstream stream = NULL;
   CUdeviceptr d_accum = 0, d_data = 0, d_out = 0;
@@ -366,7 +366,7 @@ test_fold_f16(const char* label, enum lod_reduce_method method, int n_epochs)
   int ok = 0;
   const uint64_t N = 64;
   const int nlod = 2;
-  size_t accum_bpe = dtype_accum_bpe(dtype_f16, method);
+  size_t accum_bpe = dtype_bpe(dtype_f16);
 
   CUstream stream = NULL;
   CUdeviceptr d_accum = 0, d_data = 0, d_out = 0;

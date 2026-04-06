@@ -1,12 +1,23 @@
 #pragma once
 
 #include "defs.limits.h"
-#include "dtype.h"
-#include "types.lod.h"
 
 #include <stdint.h>
 
 struct dimension;
+
+// --- Internal dimension utilities (defined in dimension.c) ---
+
+uint8_t
+dims_n_append(const struct dimension* dims, uint8_t rank);
+
+int
+dims_validate(const struct dimension* dims, uint8_t rank);
+
+void
+dims_print(const struct dimension* dims, uint8_t rank);
+
+// --- LOD types ---
 
 struct lod_span
 {
@@ -170,8 +181,3 @@ lod_plan_lod_shape(const struct lod_plan* p, int lv, int k);
 // Fill dst[0..lod_ndim-1] with projected lod sizes for level lv.
 void
 lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst);
-
-// Accumulator bytes-per-element for append fold/emit (device memory).
-// Always native type — no widening, to avoid doubling the buffer.
-size_t
-dtype_accum_bpe(enum dtype dt, enum lod_reduce_method method);

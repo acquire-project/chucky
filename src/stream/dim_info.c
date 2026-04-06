@@ -1,4 +1,5 @@
 #include "stream/dim_info.h"
+#include "lod/lod_plan.h"
 
 #include "util/prelude.h"
 

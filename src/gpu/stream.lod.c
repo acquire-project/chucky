@@ -4,7 +4,6 @@
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
 #include "lod/lod_plan.h"
-#include "stream/dim_info.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>
@@ -439,8 +438,7 @@ lod_state_init_accumulators(struct lod_state* lod,
   if (lod->append_accum.total_elements == 0)
     return 0;
 
-  size_t accum_bpe =
-    dtype_accum_bpe(config->dtype, config->append_reduce_method);
+  size_t accum_bpe = dtype_bpe(config->dtype);
   size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
   CU(Fail, cuMemAlloc(&lod->append_accum.d_accum, accum_bytes));
 
@@ -585,7 +583,7 @@ run_append_fold_emit(struct lod_state* lod,
       for (int k = 1; k < lv; ++k)
         accum_offset += p->fixed_dims_count * p->levels.level[k].lod_nelem;
 
-      size_t accum_bpe = dtype_accum_bpe(dtype, append_reduce_method);
+      size_t accum_bpe = dtype_bpe(dtype);
 
       CUdeviceptr morton_lv = lod->d_morton + lev.beg * bytes_per_element;
       CUdeviceptr accum_lv =

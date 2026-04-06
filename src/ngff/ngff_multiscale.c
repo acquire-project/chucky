@@ -3,7 +3,6 @@
 #include "dimension.h"
 #include "lod/lod_plan.h"
 #include "ngff/ngff_metadata.h"
-#include "stream/dim_info.h"
 #include "util/prelude.h"
 #include "zarr/zarr_array.h"
 

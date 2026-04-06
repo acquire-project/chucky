@@ -451,8 +451,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     }
 
     if (cl.dims.append_downsample) {
-      size_t accum_bpe =
-        dtype_accum_bpe(config->dtype, config->append_reduce_method);
+      size_t accum_bpe = dtype_bpe(config->dtype);
       uint64_t total_elems = 0;
       for (int lv = 1; lv < plan->levels.nlod; ++lv)
         total_elems +=

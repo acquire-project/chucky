@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dtype.h"
 #include "lod/lod_plan.h"
 #include "stream/layouts.h"
 #include "types.lod.h"

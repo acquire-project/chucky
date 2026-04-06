@@ -3,29 +3,6 @@
 #include "dimension.h"
 #include <stdint.h>
 
-// --- Internal dimension utilities ---
-
-// Compute n_append: the number of leftmost append dimensions.
-// Append dims form the leftmost contiguous prefix of dims where
-// chunk_size == 1. If the rightmost append dim candidate has downsample set,
-// the prefix stops there (only rightmost append dim may be accumulator-
-// downsampled). Always returns at least 1.
-uint8_t
-dims_n_append(const struct dimension* dims, uint8_t rank);
-
-// Validate a dimension array. Returns 0 on success, non-zero on error.
-// Checks: chunk_size > 0, storage_position is a valid permutation with
-// append dims pinned to positions 0..n_append-1, and unbounded dim 0 has
-// chunks_per_shard > 0.
-int
-dims_validate(const struct dimension* dims, uint8_t rank);
-
-// Print a summary table of the dimension configuration.
-void
-dims_print(const struct dimension* dims, uint8_t rank);
-
-// --- Dim slices and partitioning ---
-
 // View into a contiguous range of dimensions (beg/end pointer pair).
 struct dim_slice
 {
