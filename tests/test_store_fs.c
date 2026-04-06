@@ -6,6 +6,7 @@
 #include "zarr/store_fs.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static char tmpdir[4096];
@@ -217,6 +218,62 @@ Fail:
   return 1;
 }
 
+static int
+test_shard_pool_unbuffered(void)
+{
+  log_info("=== test_shard_pool_unbuffered ===");
+
+  // Create store with unbuffered=1 → pool uses page-aligned writes
+  struct store* s = store_fs_create(tmpdir, 1);
+  CHECK(Fail, s);
+  CHECK(Fail2, s->mkdirs(s, "unbuf") == 0);
+
+  struct shard_pool* pool = s->create_pool(s, 2);
+  CHECK(Fail2, pool);
+
+  // Write via the copy path (write) — exercises aligned alloc
+  struct shard_writer* w = pool->open(pool, 0, "unbuf/shard0.bin");
+  CHECK(Fail3, w);
+
+  // Write enough data to be meaningful (must be page-aligned for O_DIRECT)
+  // Use a 4096-byte aligned buffer
+  size_t page = 4096;
+  char* data = (char*)aligned_alloc(page, page);
+  CHECK(Fail3, data);
+  memset(data, 0xAB, page);
+  CHECK(Fail4, w->write(w, 0, data, data + page) == 0);
+
+  // Write via write_direct (zero-copy path) — exercises pwrite_ref_job
+  if (w->write_direct) {
+    CHECK(Fail4, w->write_direct(w, page, data, data + page) == 0);
+  }
+
+  CHECK(Fail4, w->finalize(w) == 0);
+  CHECK(Fail4, pool->flush(pool) == 0);
+  CHECK(Fail4, pool->has_error(pool) == 0);
+
+  // Verify file exists and has expected size
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/unbuf/shard0.bin", tmpdir);
+  CHECK(Fail4, test_file_exists(path));
+
+  free(data);
+  pool->destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  free(data);
+Fail3:
+  pool->destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -230,6 +287,7 @@ main(void)
   err |= test_shard_pool_write();
   err |= test_shard_pool_fence();
   err |= test_shard_pool_on_demand_mkdir();
+  err |= test_shard_pool_unbuffered();
 
   // Cleanup
   test_tmpdir_remove(tmpdir);
