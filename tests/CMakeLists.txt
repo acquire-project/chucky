@@ -65,6 +65,7 @@ target_link_libraries(
         zarr_group
         zarr_metadata
         store_fs
+        store_api
         lod_plan
         dimension
         chucky_log
@@ -131,19 +132,19 @@ add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_dr
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs test_platform chucky_log)
-add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs lod_plan test_platform chucky_log)
-add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs test_platform chucky_log)
-add_test_exe(test_hcs test_hcs.c hcs store_fs test_platform chucky_log)
+add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
+add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
+add_test_exe(test_hcs test_hcs.c hcs store_fs store_api test_platform chucky_log)
 
 # OME-NGFF validation via ome-zarr-models (requires uv)
-add_test_exe(test_ome_validate test_ome_validate.c hcs ngff_multiscale zarr_group store_fs test_platform chucky_log)
+add_test_exe(test_ome_validate test_ome_validate.c hcs ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
 target_compile_definitions(
     test_ome_validate
     PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
-add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 lod_plan dimension platform_cmd chucky_log)
+add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
 
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 add_gpu_test_exe(test_compress_agg test_compress_agg.c LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_gpu_helpers index_ops_util test_shard_verify)

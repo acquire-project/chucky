@@ -3,12 +3,10 @@
 
 #include "dimension.h"
 #include "dtype.h"
-#include "ngff/ngff_axis.h"
-#include "ngff/ngff_multiscale.h"
+#include "ngff.h"
+#include "store.h"
 #include "types.codec.h"
-#include "zarr/shard_pool.h"
-#include "zarr/store.h"
-#include "zarr/zarr_array.h"
+#include "zarr.h"
 
 #include <stdint.h>
 
@@ -17,7 +15,6 @@
 struct test_zarr_sink
 {
   struct store* store;
-  struct shard_pool* pool;
   struct zarr_array* array;
 };
 
@@ -35,9 +32,6 @@ test_zarr_sink_open(struct test_zarr_sink* z,
 struct shard_sink*
 test_zarr_sink_as_shard_sink(struct test_zarr_sink* z);
 
-size_t
-test_zarr_sink_pending_bytes(struct test_zarr_sink* z);
-
 void
 test_zarr_sink_flush(struct test_zarr_sink* z);
 
@@ -49,7 +43,6 @@ test_zarr_sink_close(struct test_zarr_sink* z);
 struct test_zarr_multiscale
 {
   struct store* store;
-  struct shard_pool* pool;
   struct ngff_multiscale* ms;
 };
 

@@ -1,6 +1,7 @@
 #include "lod/lod_plan.h"
 
 #include "dimension.h"
+#include "stream/dim_info.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
@@ -438,4 +439,11 @@ dims_compute_shard_geometry(const struct dimension* dims,
     chunks_per_shard[d] = de[d].chunks_per_shard;
   }
   return sic;
+}
+
+size_t
+dtype_accum_bpe(enum dtype dt, enum lod_reduce_method method)
+{
+  (void)method;
+  return dtype_bpe(dt);
 }

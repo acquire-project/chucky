@@ -1,9 +1,7 @@
 #include "test_zarr_helpers.h"
 #include "defs.limits.h"
-#include "lod/lod_plan.h"
 #include "util/prelude.h"
-#include "zarr/store_fs.h"
-#include "zarr/zarr_group.h"
+#include "zarr/store.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -61,13 +59,7 @@ test_zarr_sink_open(struct test_zarr_sink* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
-  CHECK(Fail_pool, write_root_and_intermediates(z->store, array_name) == 0);
+  CHECK(Fail_store, write_root_and_intermediates(z->store, array_name) == 0);
 
   struct zarr_array_config acfg = {
     .data_type = data_type,
@@ -75,20 +67,13 @@ test_zarr_sink_open(struct test_zarr_sink* z,
     .rank = rank,
     .dimensions = dims,
     .codec = codec,
-    .shard_counts = sc,
-    .chunks_per_shard = cps,
-    .shard_inner_count = sic,
   };
-  z->array =
-    zarr_array_create(z->store, z->pool, array_name ? array_name : "", &acfg);
-  CHECK(Fail_pool, z->array);
+  z->array = zarr_array_create(z->store, array_name ? array_name : "", &acfg);
+  CHECK(Fail_store, z->array);
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -100,27 +85,18 @@ test_zarr_sink_as_shard_sink(struct test_zarr_sink* z)
   return zarr_array_as_shard_sink(z->array);
 }
 
-size_t
-test_zarr_sink_pending_bytes(struct test_zarr_sink* z)
-{
-  return z->pool ? z->pool->pending_bytes(z->pool) : 0;
-}
-
 void
 test_zarr_sink_flush(struct test_zarr_sink* z)
 {
-  if (z->pool)
-    z->pool->flush(z->pool);
+  zarr_array_flush(z->array);
 }
 
 void
 test_zarr_sink_close(struct test_zarr_sink* z)
 {
   zarr_array_destroy(z->array);
-  if (z->pool)
-    z->pool->destroy(z->pool);
   if (z->store)
-    z->store->destroy(z->store);
+    store_destroy(z->store);
   *z = (struct test_zarr_sink){ 0 };
 }
 
@@ -145,13 +121,7 @@ test_zarr_multiscale_open(struct test_zarr_multiscale* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
-  CHECK(Fail_pool, write_root_and_intermediates(z->store, array_name) == 0);
+  CHECK(Fail_store, write_root_and_intermediates(z->store, array_name) == 0);
 
   struct ngff_multiscale_config mscfg = {
     .data_type = data_type,
@@ -162,16 +132,13 @@ test_zarr_multiscale_open(struct test_zarr_multiscale* z,
     .codec = codec,
     .axes = axes,
   };
-  z->ms = ngff_multiscale_create(
-    z->store, z->pool, array_name ? array_name : "", &mscfg);
-  CHECK(Fail_pool, z->ms);
+  z->ms =
+    ngff_multiscale_create(z->store, array_name ? array_name : "", &mscfg);
+  CHECK(Fail_store, z->ms);
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -186,17 +153,14 @@ test_zarr_multiscale_as_shard_sink(struct test_zarr_multiscale* z)
 void
 test_zarr_multiscale_flush(struct test_zarr_multiscale* z)
 {
-  if (z->pool)
-    z->pool->flush(z->pool);
+  ngff_multiscale_flush(z->ms);
 }
 
 void
 test_zarr_multiscale_close(struct test_zarr_multiscale* z)
 {
   ngff_multiscale_destroy(z->ms);
-  if (z->pool)
-    z->pool->destroy(z->pool);
   if (z->store)
-    z->store->destroy(z->store);
+    store_destroy(z->store);
   *z = (struct test_zarr_multiscale){ 0 };
 }

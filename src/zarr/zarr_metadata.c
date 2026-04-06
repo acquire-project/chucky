@@ -7,6 +7,30 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char*
+dtype_zarr_string(enum dtype dt)
+{
+#define CASE(Tag, Type)                                                        \
+  case dtype_##Tag:                                                            \
+    return #Type
+
+  switch (dt) {
+    CASE(u8, uint8);
+    CASE(u16, uint16);
+    CASE(u32, uint32);
+    CASE(u64, uint64);
+    CASE(i8, int8);
+    CASE(i16, int16);
+    CASE(i32, int32);
+    CASE(i64, int64);
+    CASE(f16, float16);
+    CASE(f32, float32);
+    CASE(f64, float64);
+  }
+#undef CASE
+  return "unknown";
+}
+
 int
 zarr_root_json(char* buf, size_t cap)
 {

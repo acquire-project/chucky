@@ -21,8 +21,7 @@ rejects configurations that could exceed the part-count limit (see
 ## Configuration
 
 The S3 transport is configured via `store_s3_config`, defined in
-[`store_s3.h`](../src/zarr/store_s3.h). The transport-specific
-fields are:
+[`store.h`](../src/store.h). The transport-specific fields are:
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -38,10 +37,8 @@ fields are:
 ### Usage
 
 ```c
-#include "zarr/store_s3.h"
-#include "zarr/zarr_array.h"
-#include "zarr/zarr_group.h"
-#include "lod/lod_plan.h"
+#include "store.h"
+#include "zarr.h"
 
 struct store_s3_config scfg = {
   .bucket = "my-bucket",
@@ -53,22 +50,20 @@ store_s3_config_set_defaults(&scfg);  // fill part_size, throughput_gbps
 
 struct store* store = store_s3_create(&scfg);
 
-uint64_t sc[RANK], cps[RANK];
-uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-struct shard_pool* pool = store->create_pool(store, sic);
-
 zarr_write_group(store, "zarr.json", NULL);  // root group
-struct zarr_array_config acfg = { ... , .shard_counts = sc,
-    .chunks_per_shard = cps, .shard_inner_count = sic };
-struct zarr_array* a = zarr_array_create(store, pool, "0", &acfg);
+struct zarr_array_config acfg = {
+    .data_type = dtype_u16,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = codec,
+};
+struct zarr_array* a = zarr_array_create(store, "0", &acfg);
 
 struct shard_sink* ss = zarr_array_as_shard_sink(a);
 // ... stream data ...
 
-pool->flush(pool);         // drain pending uploads
-zarr_array_destroy(a);
-pool->destroy(pool);       // must destroy before store
-store->destroy(store);
+zarr_array_destroy(a);     // flushes pending uploads + destroys pool
+store_destroy(store);
 ```
 
 See `docs/formats.md` for multiscale and HCS examples.
@@ -146,12 +141,12 @@ When a part upload fails after retries:
 2. The upload is **aborted** — the CRT sends an
    [`AbortMultipartUpload`][abort-mpu] request to clean up server-side
    state. The shard object is not created.
-3. The error propagates to the caller via `pool->has_error(pool)` or
-   the return value of `pool->flush(pool)`.
+3. The error propagates to the caller via `zarr_array_has_error(a)` or
+   the return value of `zarr_array_flush(a)`.
 
-On normal shutdown, `pool->destroy(pool)` waits for all finalized
-uploads to complete. Any upload still in progress (not yet finalized) is
-aborted.
+On normal shutdown, `zarr_array_destroy` flushes all pending uploads
+and waits for completion. Any upload still in progress (not yet
+finalized) is aborted.
 
 > **Recommendation:** Even with abort-on-error, keep the lifecycle rule
 > above as a safety net for hard crashes.
@@ -211,11 +206,9 @@ The snippet below streams a 3D array (with a streaming time dimension) to S3
 using the GPU pipeline:
 
 ```c
-#include "zarr/store_s3.h"
-#include "zarr/zarr_array.h"
-#include "zarr/zarr_group.h"
-#include "lod/lod_plan.h"
-#include "gpu/stream.h"
+#include "store.h"
+#include "zarr.h"
+#include "stream.gpu.h"
 #include "dimension.h"
 #include "writer.h"
 
@@ -236,7 +229,7 @@ uint8_t ratios[] = { 0, 1, 1 };
 tile_stream_gpu_advise_chunk_sizes(
   &stream_cfg, 128 * 1024, ratios, 2ULL << 30);
 
-// 3. Create S3 store + pool + array
+// 3. Create S3 store + array
 struct store_s3_config scfg = {
   .bucket   = "my-bucket",
   .prefix   = "experiment-001",
@@ -246,17 +239,12 @@ struct store_s3_config scfg = {
 store_s3_config_set_defaults(&scfg);
 struct store* store = store_s3_create(&scfg);
 
-uint64_t sc[3], cps[3];
-uint64_t sic = dims_compute_shard_geometry(dims, 3, sc, cps);
-struct shard_pool* pool = store->create_pool(store, sic);
-
 zarr_write_group(store, "zarr.json", NULL);
 struct zarr_array_config acfg = {
   .data_type = dtype_u16, .rank = 3, .dimensions = dims,
   .codec = { .id = CODEC_ZSTD },
-  .shard_counts = sc, .chunks_per_shard = cps, .shard_inner_count = sic,
 };
-struct zarr_array* arr = zarr_array_create(store, pool, "0", &acfg);
+struct zarr_array* arr = zarr_array_create(store, "0", &acfg);
 
 // 4. Create the streaming pipeline
 struct tile_stream_gpu* stream =
@@ -271,11 +259,10 @@ for (int t = 0; t < nframes; ++t) {
 }
 writer_flush(w);
 
-// 6. Tear down (pool before store)
+// 6. Tear down
 tile_stream_gpu_destroy(stream);
 zarr_array_destroy(arr);
-pool->destroy(pool);
-store->destroy(store);
+store_destroy(store);
 ```
 
 <!-- references -->

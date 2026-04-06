@@ -1,14 +1,11 @@
 #include "defs.limits.h"
 #include "dimension.h"
-#include "lod/lod_plan.h"
-#include "ngff/ngff_multiscale.h"
+#include "ngff.h"
 #include "platform/platform_cmd.h"
+#include "store.h"
 #include "util/prelude.h"
-#include "zarr/shard_pool.h"
+#include "zarr.h"
 #include "zarr/store.h"
-#include "zarr/store_s3.h"
-#include "zarr/zarr_array.h"
-#include "zarr/zarr_group.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -155,7 +152,6 @@ Fail:
 struct s3_test_sink
 {
   struct store* store;
-  struct shard_pool* pool;
   struct zarr_array* array;
 };
 
@@ -183,18 +179,12 @@ s3_test_sink_open(struct s3_test_sink* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
   // Write root group
-  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
 
   // Write intermediate groups
   if (array_name && array_name[0]) {
-    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
   }
 
   struct zarr_array_config acfg = {
@@ -203,20 +193,13 @@ s3_test_sink_open(struct s3_test_sink* z,
     .rank = rank,
     .dimensions = dims,
     .codec = codec,
-    .shard_counts = sc,
-    .chunks_per_shard = cps,
-    .shard_inner_count = sic,
   };
-  z->array =
-    zarr_array_create(z->store, z->pool, array_name ? array_name : "", &acfg);
-  CHECK(Fail_pool, z->array);
+  z->array = zarr_array_create(z->store, array_name ? array_name : "", &acfg);
+  CHECK(Fail_store, z->array);
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -231,18 +214,16 @@ s3_test_sink_as_shard_sink(struct s3_test_sink* z)
 static void
 s3_test_sink_flush(struct s3_test_sink* z)
 {
-  if (z->pool)
-    z->pool->flush(z->pool);
+  if (z->array)
+    zarr_array_flush(z->array);
 }
 
 static void
 s3_test_sink_close(struct s3_test_sink* z)
 {
   zarr_array_destroy(z->array);
-  if (z->pool)
-    z->pool->destroy(z->pool);
   if (z->store)
-    z->store->destroy(z->store);
+    store_destroy(z->store);
   *z = (struct s3_test_sink){ 0 };
 }
 
@@ -251,7 +232,6 @@ s3_test_sink_close(struct s3_test_sink* z)
 struct s3_test_multiscale
 {
   struct store* store;
-  struct shard_pool* pool;
   struct ngff_multiscale* ms;
 };
 
@@ -279,18 +259,12 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
   // Write root group
-  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
 
   // Write intermediate groups for array_name
   if (array_name && array_name[0]) {
-    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
   }
 
   struct ngff_multiscale_config mscfg = {
@@ -300,16 +274,13 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
     .dimensions = dims,
     .nlod = nlod,
   };
-  z->ms = ngff_multiscale_create(
-    z->store, z->pool, array_name ? array_name : "", &mscfg);
-  CHECK(Fail_pool, z->ms);
+  z->ms =
+    ngff_multiscale_create(z->store, array_name ? array_name : "", &mscfg);
+  CHECK(Fail_store, z->ms);
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -319,10 +290,8 @@ static void
 s3_test_multiscale_close(struct s3_test_multiscale* z)
 {
   ngff_multiscale_destroy(z->ms);
-  if (z->pool)
-    z->pool->destroy(z->pool);
   if (z->store)
-    z->store->destroy(z->store);
+    store_destroy(z->store);
   *z = (struct s3_test_multiscale){ 0 };
 }
 

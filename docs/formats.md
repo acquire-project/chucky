@@ -6,55 +6,55 @@ The format layers compose — each builds on the one below it.
 ## Architecture
 
 ```
-hcs_plate       (src/hcs/)    HCS plate/well/FOV hierarchy
+hcs_plate       (hcs.h)    HCS plate/well/FOV hierarchy
   |
-ngff_multiscale (src/ngff/)   OME-NGFF v0.5 multiscale group
+ngff_multiscale (ngff.h)   OME-NGFF v0.5 multiscale group
   |
-zarr_array      (src/zarr/)   Zarr v3 sharded array
+zarr_array      (zarr.h)   Zarr v3 sharded array
   |
-store + shard_pool (src/zarr/)  Storage backend (FS or S3)
+store           (store.h)  Storage backend (FS or S3)
 ```
 
 Each layer uses the one below. `hcs_plate` creates `ngff_multiscale`
-instances, which create `zarr_array` instances, which use `store` and
-`shard_pool` for I/O.
+instances, which create `zarr_array` instances. Pool and shard geometry
+are managed internally.
 
 ## Quick start
 
 ### Single array on filesystem
 
 ```c
-#include "zarr/store_fs.h"
-#include "zarr/zarr_array.h"
-#include "zarr/zarr_group.h"
+#include "store.h"
+#include "zarr.h"
 
 struct store* store = store_fs_create("/data/out.zarr", 0);
-store->mkdirs(store, ".");
-struct shard_pool* pool = store->create_pool(store, shard_inner_count);
 
-// Write root group + array
-zarr_write_group(store, "zarr.json", NULL);
-struct zarr_array* a = zarr_array_create(store, pool, "0", &cfg);
+struct zarr_array_config cfg = {
+    .data_type = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = codec,
+};
+
+zarr_write_group(store, "zarr.json", NULL);  // root group
+struct zarr_array* a = zarr_array_create(store, "0", &cfg);
 
 // Use the shard_sink interface with the stream
 struct shard_sink* sink = zarr_array_as_shard_sink(a);
 
-// Cleanup (pool must be destroyed before store)
+// Cleanup
 zarr_array_destroy(a);
-pool->destroy(pool);
-store->destroy(store);
+store_destroy(store);
 ```
 
 ### OME-NGFF multiscale
 
 ```c
-#include "ngff/ngff_multiscale.h"
-#include "zarr/store_fs.h"
-#include "zarr/zarr_group.h"
+#include "ngff.h"
+#include "store.h"
+#include "zarr.h"
 
 struct store* store = store_fs_create("/data/out.zarr", 0);
-store->mkdirs(store, ".");
-struct shard_pool* pool = store->create_pool(store, shard_inner_count);
 
 zarr_write_group(store, "zarr.json", NULL);  // root group
 
@@ -66,24 +66,21 @@ struct ngff_multiscale_config cfg = {
 };
 
 struct ngff_multiscale* ms =
-    ngff_multiscale_create(store, pool, "multiscale", &cfg);
+    ngff_multiscale_create(store, "multiscale", &cfg);
 struct shard_sink* sink = ngff_multiscale_as_shard_sink(ms);
 
 // Cleanup
 ngff_multiscale_destroy(ms);
-pool->destroy(pool);
-store->destroy(store);
+store_destroy(store);
 ```
 
 ### HCS plate
 
 ```c
-#include "hcs/hcs.h"
-#include "zarr/store_fs.h"
+#include "hcs.h"
+#include "store.h"
 
 struct store* store = store_fs_create("/data/plate.zarr", 0);
-store->mkdirs(store, ".");
-struct shard_pool* pool = store->create_pool(store, shard_inner_count);
 
 struct hcs_plate_config cfg = {
     .name = "plate",
@@ -98,15 +95,14 @@ struct hcs_plate_config cfg = {
     },
 };
 
-struct hcs_plate* plate = hcs_plate_create(store, pool, &cfg);
+struct hcs_plate* plate = hcs_plate_create(store, &cfg);
 
 // Get shard_sink for well A/1, field 0
 struct shard_sink* sink = hcs_plate_fov_sink(plate, 0, 0, 0);
 
 // Cleanup
 hcs_plate_destroy(plate);
-pool->destroy(pool);
-store->destroy(store);
+store_destroy(store);
 ```
 
 ### S3 backend
@@ -115,7 +111,7 @@ Replace `store_fs_create` with `store_s3_create` — everything else is
 identical:
 
 ```c
-#include "zarr/store_s3.h"
+#include "store.h"
 
 struct store_s3_config s3cfg = {
     .bucket = "my-bucket",
@@ -130,37 +126,23 @@ struct store* store = store_s3_create(&s3cfg);
 
 ### Store
 
-`struct store` (`zarr/store.h`) is the key-value I/O abstraction:
-- `put(key, data, len)` — write a small blob (metadata files)
-- `mkdirs(key)` — ensure directories exist (no-op for S3)
-- `create_pool(nslots)` — create a shard writer pool
-
-Implementations: `store_fs` (filesystem), `store_s3` (AWS S3).
-
-### Shard pool
-
-`struct shard_pool` (`zarr/shard_pool.h`) manages reusable writer slots
-for streaming shard data:
-- `open(slot, key)` — open a writer at the given key
-- `record_fence()` / `wait_fence(ev)` — backpressure
-- `flush()` / `has_error()` / `pending_bytes()`
-
-The pool is created by the store and must be destroyed before the store.
-Multiple format layers (e.g. all levels in a multiscale) can share one pool.
+`struct store` (`store.h`) is an opaque storage backend. Users create one
+via `store_fs_create` or `store_s3_create` and pass it to the format layers.
+Destroy with `store_destroy`.
 
 ### Geometry
 
-`zarr_array` does not compute shard geometry. The caller provides
-pre-computed `shard_counts`, `chunks_per_shard`, and `shard_inner_count`
-in the config. Use `dims_compute_shard_geometry()` from `lod/lod_plan.h`
-to compute these from a dimension array.
+Shard geometry (`shard_counts`, `chunks_per_shard`, `shard_inner_count`)
+is computed internally by `zarr_array_create` from the dimension array.
+Callers only specify `chunk_size` and `chunks_per_shard` on the
+`struct dimension` — the rest is derived.
 
 `ngff_multiscale` computes per-level geometry internally via `lod_plan`.
 `hcs_plate` delegates to `ngff_multiscale`.
 
 ### NGFF axis metadata
 
-`struct ngff_axis` (`ngff/ngff_axis.h`) describes per-dimension metadata:
+`struct ngff_axis` (`ngff.h`) describes per-dimension metadata:
 - `unit` — e.g. `"micrometer"`, `"second"` (NULL omits the field)
 - `scale` — physical pixel scale (0 treated as 1.0)
 - `type` — `ngff_axis_space`, `ngff_axis_time`, or `ngff_axis_channel`
@@ -210,17 +192,11 @@ plate.zarr/
             c/...     L0 shards
 ```
 
-## Headers
+## Public headers
 
 | Header | Purpose |
 |---|---|
-| `zarr/store.h` | Abstract store interface |
-| `zarr/store_fs.h` | Filesystem store |
-| `zarr/store_s3.h` | S3 store |
-| `zarr/shard_pool.h` | Abstract shard pool interface |
-| `zarr/zarr_array.h` | Zarr v3 array format layer |
-| `zarr/zarr_group.h` | Group node write utility |
-| `ngff/ngff_axis.h` | NGFF axis metadata types |
-| `ngff/ngff_multiscale.h` | NGFF multiscale format layer |
-| `hcs/hcs.h` | HCS plate/well/FOV hierarchy |
-| `hcs/hcs_metadata.h` | HCS metadata JSON generation |
+| `store.h` | Store creation (FS, S3) and destruction |
+| `zarr.h` | Zarr v3 array + group write |
+| `ngff.h` | NGFF multiscale + axis types |
+| `hcs.h` | HCS plate/well/FOV hierarchy + metadata |

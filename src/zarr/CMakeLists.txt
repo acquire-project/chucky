@@ -1,7 +1,7 @@
 add_src_lib(json_writer SOURCES json_writer.c json_writer.h)
 
 add_src_lib(zarr_metadata SOURCES zarr_metadata.c zarr_metadata.h
-    LINKS json_writer dimension codec_types chucky_log
+    LINKS json_writer dimension dtype codec_types chucky_log
 )
 
 add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
@@ -21,7 +21,7 @@ add_src_lib(zarr_group SOURCES zarr_group.c zarr_group.h
 )
 
 add_src_lib(zarr_array SOURCES zarr_array.c zarr_array.h
-    LINKS zarr_metadata writer chucky_log
+    LINKS zarr_metadata lod_plan writer chucky_log
 )
 
 add_src_lib(s3_client SOURCES s3_client.c s3_client.h
@@ -33,5 +33,5 @@ add_src_lib(shard_pool_s3 SOURCES shard_pool_s3.c shard_pool_s3.h
 )
 
 add_src_lib(store_s3 SOURCES store_s3.c store_s3.h
-    LINKS shard_pool_s3 s3_client chucky_log
+    LINKS shard_pool_s3 s3_client dtype chucky_log
 )

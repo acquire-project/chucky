@@ -20,6 +20,7 @@ target_link_libraries(
         zarr_metadata
         store_fs
         store_s3
+        store_api
         lod_plan
         dimension
         test_data

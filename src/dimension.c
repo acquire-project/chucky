@@ -1,5 +1,6 @@
 #include "dimension.h"
 #include "defs.limits.h"
+#include "stream/dim_info.h"
 #include "util/prelude.h"
 
 #include <stdio.h>

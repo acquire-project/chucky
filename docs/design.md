@@ -565,7 +565,7 @@ Each `struct dimension` describes one axis:
 | `downsample` | Include in LOD pyramid (0 or 1) |
 | `storage_position` | Position in storage layout; append dimension must be position 0 |
 
-NGFF axis metadata (`struct ngff_axis` in `ngff/ngff_axis.h`) is separate from dimension geometry and provided via the multiscale config's `axes` field.
+NGFF axis metadata (`struct ngff_axis` in `ngff.h`) is separate from dimension geometry and provided via the multiscale config's `axes` field.
 
 #### Writer interface
 

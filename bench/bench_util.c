@@ -4,22 +4,63 @@
 #include "gpu/compress.h"
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
-#include "lod/lod_plan.h"
-#include "ngff/ngff_multiscale.h"
+#include "ngff.h"
+#include "platform/platform.h"
+#include "store.h"
 #include "stream.cpu.h"
+#include "stream/layouts.h"
+#include "util/metric.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/json_writer.h"
-#include "zarr/shard_pool.h"
 #include "zarr/store.h"
-#include "zarr/store_fs.h"
-#include "zarr/store_s3.h"
-#include "zarr/zarr_array.h"
-#include "zarr/zarr_group.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// --- Bench-internal structs (not exposed in bench_util.h) ---
+
+struct discard_shard_writer
+{
+  struct shard_writer base;
+  struct discard_shard_sink* parent;
+};
+
+struct discard_shard_sink
+{
+  struct shard_sink base;
+  struct discard_shard_writer writer;
+  size_t total_bytes;
+  size_t shards_finalized;
+};
+
+#define METER_MAX_WRITERS 32
+
+struct metering_writer
+{
+  struct shard_writer base;
+  struct shard_writer* inner;
+  struct metering_sink* parent;
+  int in_use;
+};
+
+struct metering_sink
+{
+  struct shard_sink base;
+  struct shard_sink* inner;
+  struct metering_writer writers[METER_MAX_WRITERS];
+  size_t total_bytes;
+  struct stream_metric metric;
+  struct platform_clock clock;
+};
+
+struct sink_stats
+{
+  size_t total_bytes;
+  uint64_t total_chunks; // all LOD levels, per epoch
+};
 
 // --- Throughput helpers ---
 
@@ -63,7 +104,7 @@ discard_shard_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return &s->writer.base;
 }
 
-void
+static void
 discard_shard_sink_init(struct discard_shard_sink* s)
 {
   *s = (struct discard_shard_sink){
@@ -143,7 +184,7 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return NULL;
 }
 
-void
+static void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
   *ms = (struct metering_sink){
@@ -167,7 +208,6 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 struct bench_zarr_handle
 {
   struct store* store;
-  struct shard_pool* pool;
   struct zarr_array* array;   // non-NULL for single-array
   struct ngff_multiscale* ms; // non-NULL for multiscale
 };
@@ -199,21 +239,15 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
   // Write root group
-  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
 
   // Write intermediate groups
   if (array_name && array_name[0]) {
-    CHECK(Fail_pool,
+    CHECK(Fail_store,
           zarr_for_each_intermediate(
             array_name, write_intermediate_bench, z->store) == 0);
-    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
   }
 
   if (is_multiscale) {
@@ -225,9 +259,9 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
       .nlod = 0,
       .codec = codec,
     };
-    z->ms = ngff_multiscale_create(
-      z->store, z->pool, array_name ? array_name : "", &mscfg);
-    CHECK(Fail_pool, z->ms);
+    z->ms =
+      ngff_multiscale_create(z->store, array_name ? array_name : "", &mscfg);
+    CHECK(Fail_store, z->ms);
   } else {
     struct zarr_array_config acfg = {
       .data_type = data_type,
@@ -235,21 +269,14 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
       .rank = rank,
       .dimensions = dims,
       .codec = codec,
-      .shard_counts = sc,
-      .chunks_per_shard = cps,
-      .shard_inner_count = sic,
     };
-    z->array =
-      zarr_array_create(z->store, z->pool, array_name ? array_name : "", &acfg);
-    CHECK(Fail_pool, z->array);
+    z->array = zarr_array_create(z->store, array_name ? array_name : "", &acfg);
+    CHECK(Fail_store, z->array);
   }
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -285,21 +312,15 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
   CHECK(Fail, z->store);
   z->store->mkdirs(z->store, ".");
 
-  uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-  uint64_t sic = dims_compute_shard_geometry(dims, rank, sc, cps);
-
-  z->pool = z->store->create_pool(z->store, sic);
-  CHECK(Fail_store, z->pool);
-
   // Write root group
-  CHECK(Fail_pool, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
 
   // Write intermediate groups
   if (array_name && array_name[0]) {
-    CHECK(Fail_pool,
+    CHECK(Fail_store,
           zarr_for_each_intermediate(
             array_name, write_intermediate_bench, z->store) == 0);
-    CHECK(Fail_pool, z->store->mkdirs(z->store, array_name) == 0);
+    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
   }
 
   if (is_multiscale) {
@@ -311,9 +332,9 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
       .nlod = 0,
       .codec = codec,
     };
-    z->ms = ngff_multiscale_create(
-      z->store, z->pool, array_name ? array_name : "", &mscfg);
-    CHECK(Fail_pool, z->ms);
+    z->ms =
+      ngff_multiscale_create(z->store, array_name ? array_name : "", &mscfg);
+    CHECK(Fail_store, z->ms);
   } else {
     struct zarr_array_config acfg = {
       .data_type = data_type,
@@ -321,21 +342,14 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
       .rank = rank,
       .dimensions = dims,
       .codec = codec,
-      .shard_counts = sc,
-      .chunks_per_shard = cps,
-      .shard_inner_count = sic,
     };
-    z->array =
-      zarr_array_create(z->store, z->pool, array_name ? array_name : "", &acfg);
-    CHECK(Fail_pool, z->array);
+    z->array = zarr_array_create(z->store, array_name ? array_name : "", &acfg);
+    CHECK(Fail_store, z->array);
   }
   return 0;
 
-Fail_pool:
-  z->pool->destroy(z->pool);
-  z->pool = NULL;
 Fail_store:
-  z->store->destroy(z->store);
+  store_destroy(z->store);
   z->store = NULL;
 Fail:
   return 1;
@@ -352,15 +366,16 @@ bench_zarr_as_shard_sink(struct bench_zarr_handle* z)
 static void
 bench_zarr_flush(struct bench_zarr_handle* z)
 {
-  if (z->pool)
-    z->pool->flush(z->pool);
+  if (z->ms)
+    ngff_multiscale_flush(z->ms);
+  else if (z->array)
+    zarr_array_flush(z->array);
 }
 
 static size_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z)
 {
-  if (z->pool)
-    return z->pool->pending_bytes(z->pool);
+  (void)z;
   return 0;
 }
 
@@ -371,10 +386,8 @@ bench_zarr_close(struct bench_zarr_handle* z)
     ngff_multiscale_destroy(z->ms);
   if (z->array)
     zarr_array_destroy(z->array);
-  if (z->pool)
-    z->pool->destroy(z->pool);
   if (z->store)
-    z->store->destroy(z->store);
+    store_destroy(z->store);
   *z = (struct bench_zarr_handle){ 0 };
 }
 
@@ -435,7 +448,7 @@ bench_destroy(struct bench_handle* h)
 
 // --- Report + pipeline helpers ---
 
-void
+static void
 print_metric_row(const struct stream_metric* m)
 {
   if (m->count <= 0)
@@ -460,7 +473,7 @@ print_metric_row(const struct stream_metric* m)
   }
 }
 
-void
+static void
 log_bench_header(const struct tile_stream_layout* layout,
                  enum dtype dtype,
                  struct codec_config codec,
@@ -489,7 +502,7 @@ log_bench_header(const struct tile_stream_layout* layout,
                  (codec_batch_size * max_compressed_size) / (1024 * 1024));
 }
 
-void
+static void
 print_bench_report(const struct stream_metrics* metrics,
                    const struct tile_stream_layout* layout,
                    enum dtype dtype,

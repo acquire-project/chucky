@@ -1,11 +1,10 @@
 #include "dimension.h"
-#include "ngff/ngff_axis.h"
-#include "ngff/ngff_multiscale.h"
+#include "ngff.h"
+#include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/store.h"
-#include "zarr/store_fs.h"
-#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -63,11 +62,6 @@ test_multiscale_create(void)
     { .unit = "micrometer", .scale = 0.5 },
   };
 
-  // Compute L0 shard_inner_count for pool sizing
-  // 2 dims, 8 chunks each, 4 cps → 2 shards each → 4 inner shards
-  struct shard_pool* pool = store->create_pool(store, 4);
-  CHECK(Fail2, pool);
-
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,
     .fill_value = 0,
@@ -78,50 +72,47 @@ test_multiscale_create(void)
   };
 
   // Parent writes root group
-  CHECK(Fail3, zarr_write_group(store, "zarr.json", NULL) == 0);
+  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
 
-  struct ngff_multiscale* ms = ngff_multiscale_create(store, pool, "ms", &cfg);
-  CHECK(Fail3, ms);
+  struct ngff_multiscale* ms = ngff_multiscale_create(store, "ms", &cfg);
+  CHECK(Fail2, ms);
 
   // Verify group zarr.json has multiscales attribute
   char path[4096];
   snprintf(path, sizeof(path), "%s/ms/zarr.json", tmpdir);
   char buf[8192];
   size_t len;
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"multiscales\""));
-  CHECK(Fail4, strstr(buf, "\"version\":\"0.5\""));
-  CHECK(Fail4, strstr(buf, "\"unit\":\"micrometer\""));
-  CHECK(Fail4, strstr(buf, "\"scale\":[0.5,0.5]"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"multiscales\""));
+  CHECK(Fail3, strstr(buf, "\"version\":\"0.5\""));
+  CHECK(Fail3, strstr(buf, "\"unit\":\"micrometer\""));
+  CHECK(Fail3, strstr(buf, "\"scale\":[0.5,0.5]"));
 
   // Verify per-level array metadata exists
   snprintf(path, sizeof(path), "%s/ms/0/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"node_type\":\"array\""));
-  CHECK(Fail4, strstr(buf, "\"shape\":[64,64]"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"node_type\":\"array\""));
+  CHECK(Fail3, strstr(buf, "\"shape\":[64,64]"));
 
   // L1: only x is downsampled (y is append dim), so shape=[64,32]
   snprintf(path, sizeof(path), "%s/ms/1/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"shape\":[64,32]"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"shape\":[64,32]"));
 
   // Verify root group exists
   snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"node_type\":\"group\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"node_type\":\"group\""));
 
   ngff_multiscale_destroy(ms);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   log_info("  PASS");
   return 0;
 
-Fail4:
-  ngff_multiscale_destroy(ms);
 Fail3:
-  pool->destroy(pool);
+  ngff_multiscale_destroy(ms);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -153,10 +144,7 @@ test_multiscale_shard_sink(void)
       .storage_position = 1 },
   };
 
-  struct shard_pool* pool = store->create_pool(store, 2);
-  CHECK(Fail2, pool);
-
-  CHECK(Fail3, zarr_write_group(store, "zarr.json", NULL) == 0);
+  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
 
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,
@@ -164,53 +152,49 @@ test_multiscale_shard_sink(void)
     .dimensions = dims,
   };
 
-  struct ngff_multiscale* ms = ngff_multiscale_create(store, pool, "ms", &cfg);
-  CHECK(Fail3, ms);
+  struct ngff_multiscale* ms = ngff_multiscale_create(store, "ms", &cfg);
+  CHECK(Fail2, ms);
 
   struct shard_sink* sink = ngff_multiscale_as_shard_sink(ms);
-  CHECK(Fail4, sink);
+  CHECK(Fail3, sink);
 
   // Open a shard on level 0, write some data, finalize
   struct shard_writer* w = sink->open(sink, 0, 0);
-  CHECK(Fail4, w);
+  CHECK(Fail3, w);
   uint8_t data[32];
   memset(data, 0xAA, sizeof(data));
-  CHECK(Fail4, w->write(w, 0, data, data + sizeof(data)) == 0);
-  CHECK(Fail4, w->finalize(w) == 0);
+  CHECK(Fail3, w->write(w, 0, data, data + sizeof(data)) == 0);
+  CHECK(Fail3, w->finalize(w) == 0);
 
   // update_append: extend dim 0 from 0 to 4
   uint64_t new_sizes[1] = { 4 };
-  CHECK(Fail4, sink->update_append(sink, 0, 1, new_sizes) == 0);
+  CHECK(Fail3, sink->update_append(sink, 0, 1, new_sizes) == 0);
 
   // Verify L0 array zarr.json was updated
   char path[4096];
   snprintf(path, sizeof(path), "%s/ms/0/zarr.json", tmpdir);
   char buf[4096];
   size_t len;
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"shape\":[4,32]"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"shape\":[4,32]"));
 
   // Verify group zarr.json was updated (multiscales metadata)
   snprintf(path, sizeof(path), "%s/ms/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"multiscales\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"multiscales\""));
 
-  // Fence / flush
-  struct io_event ev = sink->record_fence(sink, 0);
-  sink->wait_fence(sink, 0, ev);
+  // Flush pending I/O
+  CHECK(Fail3, ngff_multiscale_flush(ms) == 0);
 
   ngff_multiscale_destroy(ms);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   log_info("  PASS");
   return 0;
 
-Fail4:
-  ngff_multiscale_destroy(ms);
 Fail3:
-  pool->destroy(pool);
+  ngff_multiscale_destroy(ms);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   log_error("  FAIL");
   return 1;

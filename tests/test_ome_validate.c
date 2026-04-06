@@ -2,15 +2,13 @@
 // Writes multiscale and HCS stores, then runs a Python validator.
 
 #include "dimension.h"
-#include "hcs/hcs.h"
-#include "ngff/ngff_axis.h"
-#include "ngff/ngff_multiscale.h"
+#include "hcs.h"
+#include "ngff.h"
+#include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
-#include "zarr/shard_pool.h"
+#include "zarr.h"
 #include "zarr/store.h"
-#include "zarr/store_fs.h"
-#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,11 +62,8 @@ write_multiscale_store(const char* path)
   // Ensure store root exists
   CHECK(Fail2, store->mkdirs(store, ".") == 0);
 
-  struct shard_pool* pool = store->create_pool(store, 4);
-  CHECK(Fail2, pool);
-
   // Write root group
-  CHECK(Fail3, zarr_write_group(store, "zarr.json", NULL) == 0);
+  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
 
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,
@@ -78,18 +73,15 @@ write_multiscale_store(const char* path)
   };
 
   struct ngff_multiscale* ms =
-    ngff_multiscale_create(store, pool, "multiscale", &cfg);
-  CHECK(Fail3, ms);
+    ngff_multiscale_create(store, "multiscale", &cfg);
+  CHECK(Fail2, ms);
 
   ngff_multiscale_destroy(ms);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   return 0;
 
-Fail3:
-  pool->destroy(pool);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   return 1;
 }
@@ -124,9 +116,6 @@ write_hcs_store(const char* path)
 
   CHECK(Fail2, store->mkdirs(store, ".") == 0);
 
-  struct shard_pool* pool = store->create_pool(store, 4);
-  CHECK(Fail2, pool);
-
   struct hcs_plate_config cfg = {
     .name = "plate",
     .rows = 2,
@@ -141,18 +130,15 @@ write_hcs_store(const char* path)
       },
   };
 
-  struct hcs_plate* plate = hcs_plate_create(store, pool, &cfg);
-  CHECK(Fail3, plate);
+  struct hcs_plate* plate = hcs_plate_create(store, &cfg);
+  CHECK(Fail2, plate);
 
   hcs_plate_destroy(plate);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   return 0;
 
-Fail3:
-  pool->destroy(pool);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   return 1;
 }

@@ -4,6 +4,7 @@
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
 #include "lod/lod_plan.h"
+#include "stream/dim_info.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>

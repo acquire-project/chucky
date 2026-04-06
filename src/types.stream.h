@@ -2,6 +2,7 @@
 
 #include "defs.limits.h"
 #include "dimension.h"
+#include "dtype.h"
 #include "types.codec.h"
 #include "types.lod.h"
 

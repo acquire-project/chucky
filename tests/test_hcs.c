@@ -1,11 +1,9 @@
 #include "dimension.h"
-#include "hcs/hcs.h"
-#include "hcs/hcs_metadata.h"
-#include "ngff/ngff_axis.h"
+#include "hcs.h"
+#include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/store.h"
-#include "zarr/store_fs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -121,10 +119,6 @@ test_hcs_plate_create(void)
     { .unit = "micrometer", .scale = 0.5 },
   };
 
-  // Pool sized for L0: 2 shards per dim = 4 inner shards
-  struct shard_pool* pool = store->create_pool(store, 4);
-  CHECK(Fail2, pool);
-
   struct hcs_plate_config cfg = {
     .name = "plate1",
     .rows = 2,
@@ -141,8 +135,8 @@ test_hcs_plate_create(void)
       },
   };
 
-  struct hcs_plate* plate = hcs_plate_create(store, pool, &cfg);
-  CHECK(Fail3, plate);
+  struct hcs_plate* plate = hcs_plate_create(store, &cfg);
+  CHECK(Fail2, plate);
 
   // Verify hierarchy exists
   char path[4096], buf[8192];
@@ -150,62 +144,59 @@ test_hcs_plate_create(void)
 
   // Root group
   snprintf(path, sizeof(path), "%s/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"node_type\":\"group\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"node_type\":\"group\""));
 
   // Plate group with OME attrs
   snprintf(path, sizeof(path), "%s/plate1/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"plate\""));
-  CHECK(Fail4, strstr(buf, "\"name\":\"plate1\""));
-  CHECK(Fail4, strstr(buf, "\"field_count\":1"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"plate\""));
+  CHECK(Fail3, strstr(buf, "\"name\":\"plate1\""));
+  CHECK(Fail3, strstr(buf, "\"field_count\":1"));
 
   // Row group
   snprintf(path, sizeof(path), "%s/plate1/A/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"node_type\":\"group\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"node_type\":\"group\""));
 
   // Well group with OME attrs
   snprintf(path, sizeof(path), "%s/plate1/A/1/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"well\""));
-  CHECK(Fail4, strstr(buf, "\"images\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"well\""));
+  CHECK(Fail3, strstr(buf, "\"images\""));
 
   // FOV multiscale group
   snprintf(path, sizeof(path), "%s/plate1/A/1/0/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"multiscales\""));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"multiscales\""));
 
   // FOV L0 array
   snprintf(path, sizeof(path), "%s/plate1/A/1/0/0/zarr.json", tmpdir);
-  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail4, strstr(buf, "\"node_type\":\"array\""));
-  CHECK(Fail4, strstr(buf, "\"shape\":[32,32]"));
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, strstr(buf, "\"node_type\":\"array\""));
+  CHECK(Fail3, strstr(buf, "\"shape\":[32,32]"));
 
   // Get shard_sink for FOV A/1/0
   struct shard_sink* fov = hcs_plate_fov_sink(plate, 0, 0, 0);
-  CHECK(Fail4, fov);
+  CHECK(Fail3, fov);
 
   // Another FOV
   struct shard_sink* fov_b2 = hcs_plate_fov_sink(plate, 1, 1, 0);
-  CHECK(Fail4, fov_b2);
-  CHECK(Fail4, fov != fov_b2); // different FOVs
+  CHECK(Fail3, fov_b2);
+  CHECK(Fail3, fov != fov_b2); // different FOVs
 
   // Out of range returns NULL
-  CHECK(Fail4, hcs_plate_fov_sink(plate, 5, 0, 0) == NULL);
+  CHECK(Fail3, hcs_plate_fov_sink(plate, 5, 0, 0) == NULL);
 
   hcs_plate_destroy(plate);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   log_info("  PASS");
   return 0;
 
-Fail4:
-  hcs_plate_destroy(plate);
 Fail3:
-  pool->destroy(pool);
+  hcs_plate_destroy(plate);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -237,9 +228,6 @@ test_hcs_well_mask(void)
       .storage_position = 1 },
   };
 
-  struct shard_pool* pool = store->create_pool(store, 1);
-  CHECK(Fail2, pool);
-
   // 2x2 plate, only wells (0,0) and (1,1) active
   int mask[] = { 1, 0, 0, 1 };
 
@@ -256,34 +244,31 @@ test_hcs_well_mask(void)
     },
   };
 
-  struct hcs_plate* plate = hcs_plate_create(store, pool, &cfg);
-  CHECK(Fail3, plate);
+  struct hcs_plate* plate = hcs_plate_create(store, &cfg);
+  CHECK(Fail2, plate);
 
   // Active wells return sinks
-  CHECK(Fail4, hcs_plate_fov_sink(plate, 0, 0, 0) != NULL);
-  CHECK(Fail4, hcs_plate_fov_sink(plate, 1, 1, 0) != NULL);
+  CHECK(Fail3, hcs_plate_fov_sink(plate, 0, 0, 0) != NULL);
+  CHECK(Fail3, hcs_plate_fov_sink(plate, 1, 1, 0) != NULL);
 
   // Inactive wells return NULL
-  CHECK(Fail4, hcs_plate_fov_sink(plate, 0, 1, 0) == NULL);
-  CHECK(Fail4, hcs_plate_fov_sink(plate, 1, 0, 0) == NULL);
+  CHECK(Fail3, hcs_plate_fov_sink(plate, 0, 1, 0) == NULL);
+  CHECK(Fail3, hcs_plate_fov_sink(plate, 1, 0, 0) == NULL);
 
   // Verify inactive well directory was NOT created
   char path[4096];
   snprintf(path, sizeof(path), "%s/masked/A/2/0", tmpdir);
-  CHECK(Fail4, !test_file_exists(path));
+  CHECK(Fail3, !test_file_exists(path));
 
   hcs_plate_destroy(plate);
-  pool->destroy(pool);
-  store->destroy(store);
+  store_destroy(store);
   log_info("  PASS");
   return 0;
 
-Fail4:
-  hcs_plate_destroy(plate);
 Fail3:
-  pool->destroy(pool);
+  hcs_plate_destroy(plate);
 Fail2:
-  store->destroy(store);
+  store_destroy(store);
 Fail:
   log_error("  FAIL");
   return 1;

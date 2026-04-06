@@ -1,4 +1,3 @@
-#include "platform/platform_io.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
