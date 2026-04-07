@@ -296,11 +296,6 @@ build_morton_lut_for_level(struct lod_state* lod,
 
   // Compute fixed_dims_chunk_offsets on host and upload.
   {
-    int fdn;
-    int fd_to_dim[LOD_MAX_NDIM];
-    uint64_t fd_shape[LOD_MAX_NDIM];
-    level_dims_fixed_info(ld, p->ndim, &fdn, fd_to_dim, fd_shape);
-
     uint32_t* fixed_dims_offsets =
       (uint32_t*)calloc(ld->fixed_dims_count, sizeof(uint32_t));
     CHECK(Fail, fixed_dims_offsets);
@@ -308,10 +303,10 @@ build_morton_lut_for_level(struct lod_state* lod,
     for (uint64_t bi = 0; bi < ld->fixed_dims_count; ++bi) {
       uint64_t remainder = bi;
       int64_t offset = 0;
-      for (int k = fdn - 1; k >= 0; --k) {
-        uint64_t coord = remainder % fd_shape[k];
-        remainder /= fd_shape[k];
-        int d = fd_to_dim[k];
+      for (int k = ld->fixed_dims_ndim - 1; k >= 0; --k) {
+        uint64_t coord = remainder % ld->fixed_dims_shape[k];
+        remainder /= ld->fixed_dims_shape[k];
+        int d = ld->fixed_dim_to_dim[k];
         uint64_t chunk_idx = coord / lay->lifted_shape[2 * d + 1];
         uint64_t within = coord % lay->lifted_shape[2 * d + 1];
         offset += (int64_t)chunk_idx * lay->lifted_strides[2 * d];

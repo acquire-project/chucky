@@ -312,15 +312,20 @@ Fail:
   return 1;
 }
 
-// Compute per-level fixed_dims_count from lod_mask and dim sizes.
-static uint64_t
-level_fixed_dims_count(const struct level_dims* ld, int ndim, uint32_t lod_mask)
+// Populate fixed-dims decomposition from lod_mask and dim sizes.
+static void
+level_dims_fill_fixed(struct level_dims* ld, int ndim)
 {
-  uint64_t count = 1;
-  for (int d = 0; d < ndim; ++d)
-    if (!(lod_mask & (1u << d)))
-      count *= ld->dim[d].size;
-  return count;
+  ld->fixed_dims_ndim = 0;
+  ld->fixed_dims_count = 1;
+  for (int d = 0; d < ndim; ++d) {
+    if (!(ld->lod_mask & (1u << d))) {
+      ld->fixed_dim_to_dim[ld->fixed_dims_ndim] = d;
+      ld->fixed_dims_shape[ld->fixed_dims_ndim] = ld->dim[d].size;
+      ld->fixed_dims_ndim++;
+      ld->fixed_dims_count *= ld->dim[d].size;
+    }
+  }
 }
 
 // Is any LOD dim at ≤1 chunk?
@@ -385,7 +390,7 @@ lod_plan_init_shapes(struct lod_plan* p,
   memcpy(p->levels.level[0].lod_to_dim,
          cur_to_dim,
          sizeof(int) * (size_t)cur_lod_ndim);
-  p->levels.level[0].fixed_dims_count = p->fixed_dims_count;
+  level_dims_fill_fixed(&p->levels.level[0], ndim);
 
   int nlod = 1;
   while (nlod < max_levels && cur_lod_ndim > 0 &&
@@ -412,8 +417,7 @@ lod_plan_init_shapes(struct lod_plan* p,
     memcpy(p->levels.level[nlod].lod_to_dim,
            cur_to_dim,
            sizeof(int) * (size_t)cur_lod_ndim);
-    p->levels.level[nlod].fixed_dims_count =
-      level_fixed_dims_count(&p->levels.level[nlod], ndim, level_mask);
+    level_dims_fill_fixed(&p->levels.level[nlod], ndim);
 
     ++nlod;
 
@@ -583,24 +587,6 @@ lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst)
   const struct level_dims* ld = &p->levels.level[lv];
   for (int k = 0; k < ld->lod_ndim; ++k)
     dst[k] = ld->dim[ld->lod_to_dim[k]].size;
-}
-
-void
-level_dims_fixed_info(const struct level_dims* ld,
-                      int ndim,
-                      int* out_ndim,
-                      int* out_dim_to_dim,
-                      uint64_t* out_shape)
-{
-  int n = 0;
-  for (int d = 0; d < ndim; ++d) {
-    if (!(ld->lod_mask & (1u << d))) {
-      out_dim_to_dim[n] = d;
-      out_shape[n] = ld->dim[d].size;
-      n++;
-    }
-  }
-  *out_ndim = n;
 }
 
 void

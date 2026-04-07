@@ -378,18 +378,14 @@ cpu_pipeline_compute_luts(
       // Convert flat batch index → lifted-space chunk pool offset.
       {
         const struct level_dims* ld = &plan->levels.level[lv];
-        int fdn;
-        int fd_to_dim[LOD_MAX_NDIM];
-        uint64_t fd_shape[LOD_MAX_NDIM];
-        level_dims_fixed_info(ld, plan->ndim, &fdn, fd_to_dim, fd_shape);
 
         for (uint64_t bi = 0; bi < ld->fixed_dims_count; ++bi) {
           uint64_t remainder = bi;
           int64_t offset = 0;
-          for (int k = fdn - 1; k >= 0; --k) {
-            uint64_t coord = remainder % fd_shape[k];
-            remainder /= fd_shape[k];
-            int d = fd_to_dim[k];
+          for (int k = ld->fixed_dims_ndim - 1; k >= 0; --k) {
+            uint64_t coord = remainder % ld->fixed_dims_shape[k];
+            remainder /= ld->fixed_dims_shape[k];
+            int d = ld->fixed_dim_to_dim[k];
             uint64_t cs = layout_lv->lifted_shape[2 * d + 1];
             uint64_t ci = coord / cs;
             uint64_t wi = coord % cs;
