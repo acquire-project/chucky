@@ -23,14 +23,14 @@ upload_plan_shapes(struct lod_state* lod, uint8_t rank)
        cuMemcpyHtoD(lod->d_full_shape, full_shape, rank * sizeof(uint64_t)));
   }
 
-  if (lod->plan.lod_ndim > 0) {
+  const struct level_dims* l0 = &lod->plan.levels.level[0];
+  if (l0->lod_ndim > 0) {
     uint64_t lod_shape0[LOD_MAX_NDIM];
     lod_plan_fill_lod_shapes(&lod->plan, 0, lod_shape0);
-    CU(Fail,
-       cuMemAlloc(&lod->d_lod_shape, lod->plan.lod_ndim * sizeof(uint64_t)));
+    CU(Fail, cuMemAlloc(&lod->d_lod_shape, l0->lod_ndim * sizeof(uint64_t)));
     CU(Fail,
        cuMemcpyHtoD(
-         lod->d_lod_shape, lod_shape0, lod->plan.lod_ndim * sizeof(uint64_t)));
+         lod->d_lod_shape, lod_shape0, l0->lod_ndim * sizeof(uint64_t)));
   }
 
   return 0;
@@ -47,6 +47,7 @@ build_gather_lut_with_strides(struct lod_state* lod,
                               uint8_t rank)
 {
   CUdeviceptr d_lod_strides = 0;
+  const struct level_dims* l0 = &p->levels.level[0];
 
   uint64_t full_strides[LOD_MAX_NDIM];
   full_strides[rank - 1] = 1;
@@ -54,31 +55,29 @@ build_gather_lut_with_strides(struct lod_state* lod,
     full_strides[d] = full_strides[d + 1] * shape[d + 1];
 
   uint64_t lod_strides[LOD_MAX_NDIM];
-  int li = p->lod_ndim - 1;
+  int li = l0->lod_ndim - 1;
   for (int d = rank - 1; d >= 0; --d) {
-    if ((p->lod_mask >> d) & 1) {
+    if ((l0->lod_mask >> d) & 1) {
       lod_strides[li] = full_strides[d];
       li--;
     }
   }
 
-  CU(Fail, cuMemAlloc(&d_lod_strides, p->lod_ndim * sizeof(uint64_t)));
+  CU(Fail, cuMemAlloc(&d_lod_strides, l0->lod_ndim * sizeof(uint64_t)));
   CU(Fail,
-     cuMemcpyHtoD(d_lod_strides, lod_strides, p->lod_ndim * sizeof(uint64_t)));
+     cuMemcpyHtoD(d_lod_strides, lod_strides, l0->lod_ndim * sizeof(uint64_t)));
 
   uint64_t lod_shape0[LOD_MAX_NDIM];
   lod_plan_fill_lod_shapes(p, 0, lod_shape0);
 
-  CU(Fail,
-     cuMemAlloc(&lod->d_gather_lut,
-                p->levels.level[0].lod_nelem * sizeof(uint32_t)));
+  CU(Fail, cuMemAlloc(&lod->d_gather_lut, l0->lod_nelem * sizeof(uint32_t)));
   CHECK(Fail,
         lod_build_gather_lut(lod->d_gather_lut,
                              lod->d_lod_shape,
                              d_lod_strides,
-                             p->lod_ndim,
+                             l0->lod_ndim,
                              lod_shape0,
-                             p->levels.level[0].lod_nelem,
+                             l0->lod_nelem,
                              0) == 0);
 
   cuMemFree(d_lod_strides);
@@ -92,7 +91,7 @@ static int
 init_gather_lut(struct lod_state* lod,
                 const struct tile_stream_configuration* config)
 {
-  if (lod->plan.lod_ndim == 0)
+  if (lod->plan.levels.level[0].lod_ndim == 0)
     return 0;
 
   const uint8_t rank = config->rank;
@@ -297,11 +296,6 @@ build_morton_lut_for_level(struct lod_state* lod,
 
   // Compute fixed_dims_chunk_offsets on host and upload.
   {
-    int fdn;
-    int fd_to_dim[LOD_MAX_NDIM];
-    uint64_t fd_shape[LOD_MAX_NDIM];
-    level_dims_fixed_info(ld, p->ndim, &fdn, fd_to_dim, fd_shape);
-
     uint32_t* fixed_dims_offsets =
       (uint32_t*)calloc(ld->fixed_dims_count, sizeof(uint32_t));
     CHECK(Fail, fixed_dims_offsets);
@@ -309,10 +303,10 @@ build_morton_lut_for_level(struct lod_state* lod,
     for (uint64_t bi = 0; bi < ld->fixed_dims_count; ++bi) {
       uint64_t remainder = bi;
       int64_t offset = 0;
-      for (int k = fdn - 1; k >= 0; --k) {
-        uint64_t coord = remainder % fd_shape[k];
-        remainder /= fd_shape[k];
-        int d = fd_to_dim[k];
+      for (int k = ld->fixed_dims_ndim - 1; k >= 0; --k) {
+        uint64_t coord = remainder % ld->fixed_dims_shape[k];
+        remainder /= ld->fixed_dims_shape[k];
+        int d = ld->fixed_dim_to_dim[k];
         uint64_t chunk_idx = coord / lay->lifted_shape[2 * d + 1];
         uint64_t within = coord % lay->lifted_shape[2 * d + 1];
         offset += (int64_t)chunk_idx * lay->lifted_strides[2 * d];
@@ -674,13 +668,15 @@ lod_run_epoch(struct lod_state* lod,
                        lod->d_fixed_dims_offsets,
                        dtype,
                        p->levels.level[0].lod_nelem,
-                       p->fixed_dims_count,
+                       p->levels.level[0].fixed_dims_count,
                        compute) == 0);
 
   CU(Error, cuEventRecord(t->t_scatter_end, compute));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
     const struct reduce_csr* csr = &p->reduce[l];
+    if (!csr->starts || !csr->indices)
+      continue;
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 

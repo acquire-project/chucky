@@ -284,9 +284,9 @@ $r_d$, then
 
 $$\text{morton}(r) = \ldots\, r_0(k)\, r_1(k) \cdots r_{D'-1}(k) \;\ldots\; r_0(0)\, r_1(0) \cdots r_{D'-1}(0)$$
 
-Reducing each run of $2^{D'}$ elements produces the next coarser level, and
-the process repeats on the reduced output. The full pyramid is computed by
-successive reduction of contiguous runs — ideal for GPU parallelism.
+A precomputed CSR (compressed sparse row) LUT maps each destination element at
+the next coarser level to its contributing source elements' morton positions.
+The GPU kernel gathers via the CSR and reduces in parallel.
 
 The complication is that the array shape is rarely a power of two. The morton
 indexing covers a $2^p$-sized bounding box, and many of those indices fall
@@ -323,26 +323,39 @@ bottom row and the right column — blocks are partial. Replicate padding fills
 the missing positions: edge elements are reduced with copies of themselves
 rather than with zeros, avoiding darkening artifacts.
 
-**Hierarchical reduction.** Once elements are in compacted morton order, the
-pyramid is built by successive reduction of the linear buffer. Each level
-reduces contiguous runs, producing a shorter buffer that is itself in compacted
-morton order for the coarser shape ($\lceil s_d / 2 \rceil$ per dimension).
-Continuing the 3×5 example:
+**CSR-based hierarchical reduction.** Once elements are in compacted morton
+order, the pyramid is built by successive reduction via precomputed CSR
+(compressed sparse row) lookup tables. Each level transition $l \to l{+}1$
+has a CSR that maps every destination element to its contributing source
+elements — storing absolute morton-buffer offsets so the GPU kernel simply
+gathers and reduces.
+
+The CSR is precomputed during plan initialization: for every source element,
+halve each LOD coordinate to find the destination coordinate, compute the
+source and destination morton ranks, and record the mapping. A histogram +
+prefix-sum pass produces the `starts[]` array; a scatter pass fills
+`indices[]`. This handles arbitrary non-power-of-two shapes and boundary
+effects without special-case logic in the kernel.
 
 ```
   ┌─────────┬─────────┬─────┬─────┬─────┬────┐
   │ 0 1 2 3 │ 4 5 6 7 │ 8 9 │10 11│12 13│ 14 │ L0 (3×5, 15 elements):
-  └─────────┴─────────┴─────┴─────┴─────┴────┘  |
+  └─────────┴─────────┴─────┴─────┴─────┴────┘  |  CSR maps dst→src
   ┌───────────────────────────────┬──────────┐  ▼
   │ 0         1         2    3    │4      5  │ L1 (2×3, 6 elements):
-  └───────────────────────────────┴──────────┘  |
+  └───────────────────────────────┴──────────┘  |  CSR maps dst→src
   ┌──────────────────────────────────────────┐  ▼
   │ 0                              1         │ L2 (1×2, 2 elements):
   └──────────────────────────────────────────┘
 ```
 
-Run lengths vary at each level due to boundary effects and are precomputed
-from the shape.
+**Per-level dimension dropping.** When chunk sizes differ across dimensions,
+some dimensions reach their chunk size (≤1 chunk) before others. At that
+point the dimension is removed from the LOD projection and becomes a fixed
+(batch) dimension at subsequent levels. Each level has its own `lod_mask`,
+`lod_ndim`, and `fixed_dims_count`. The CSR handles dropping transparently:
+dropped-dim coordinates are halved and folded into the destination's
+fixed-dim index, while the remaining LOD dims continue reducing.
 
 **Morton-to-chunks scatter.** The reduced data at each level is still in
 compacted morton order, but the downstream compress and aggregate stages expect
@@ -451,10 +464,11 @@ its chunk pool slot. When multiscale is enabled, the raw data is instead copied
 linearly for the LOD pipeline, and L0 scatter happens as part of the LOD stage.
 
 **LOD (compute stream).** If multiscale is enabled, each epoch triggers:
-1. *Gather* — reorder elements into compacted morton order
-2. *Reduce* — apply the reduction operator across $2 \times \ldots \times 2$
-   blocks for each level
-3. *Dim0 fold* — accumulate into dim0 reduction buffers
+1. *Gather* — reorder elements into compacted morton order via precomputed LUT
+2. *CSR reduce* — for each level transition, gather source elements via CSR
+   indices and apply the reduction operator, producing the next coarser level
+3. *Append fold* — accumulate into per-level append-dim reduction buffers;
+   emit when $2^l$ epochs have been collected
 4. *Morton-to-chunks* — unravel morton indices and ravel with per-level
    chunk-major strides to scatter reduced data into chunk regions
 
@@ -701,8 +715,9 @@ compress → aggregate → D2H. Larger batches improve GPU occupancy during
 compression.
 
 **Compacted morton order.** A dense reindexing of array elements by
-bit-interleaved coordinates, skipping out-of-bounds entries. Groups
-$2^{D'}$-element reduction blocks into contiguous runs.
+bit-interleaved coordinates, skipping out-of-bounds entries. Used as the
+storage order within each LOD level; reduction across levels uses precomputed
+CSR lookup tables that map between morton positions at adjacent levels.
 
 **Epoch.** The set of chunks sharing the same append-dimension chunk index $t_0$.
 One epoch's worth of data fills $M$ chunk slots in the pool.

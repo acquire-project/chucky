@@ -90,7 +90,7 @@ add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config
 enable_openmp(test_aggregate_cpu)
 
 # CPU LOD test (no CUDA)
-add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu chucky_log)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util chucky_log)
 enable_openmp(test_lod_cpu)
 
 # CPU stream end-to-end test (no CUDA)

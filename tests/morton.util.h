@@ -52,4 +52,11 @@ lod_compute_u16(const struct lod_plan* p,
                 uint16_t** out_values,
                 enum lod_reduce_method method);
 
+// CPU brute-force: reduce WITHOUT using CSR, directly from coordinates.
+// Independent reference for validating CSR construction correctness.
+void
+lod_reduce_bruteforce(const struct lod_plan* p,
+                      float* values,
+                      enum lod_reduce_method method);
+
 #endif // MORTON_UTIL_H

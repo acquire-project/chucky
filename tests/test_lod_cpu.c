@@ -1,6 +1,7 @@
 #include "cpu/compress.h"
 #include "cpu/lod.h"
 #include "lod/lod_plan.h"
+#include "morton.util.h"
 #include "stream/config.h"
 #include "util/prelude.h"
 
@@ -873,6 +874,72 @@ Fail:
   return 1;
 }
 
+// Validate CSR reduce against brute-force (no CSR) reference.
+static int
+test_csr_vs_bruteforce(const char* label,
+                       int ndim,
+                       const uint64_t* shape,
+                       const uint64_t* chunk_shape,
+                       uint32_t lod_mask,
+                       enum lod_reduce_method method)
+{
+  log_info("=== %s ===", label);
+  float* src = NULL;
+  float* csr_values = NULL;
+  float* bf_values = NULL;
+  struct lod_plan plan;
+  CHECK(Fail,
+        lod_plan_init(
+          &plan, ndim, shape, chunk_shape, lod_mask, LOD_MAX_LEVELS, 0) == 0);
+
+  uint64_t n = 1;
+  for (int d = 0; d < ndim; ++d)
+    n *= shape[d];
+  src = (float*)malloc(n * sizeof(float));
+  CHECK(Fail, src);
+  for (uint64_t i = 0; i < n; ++i)
+    src[i] = (float)(i + 1);
+
+  uint64_t total = plan.level_spans.ends[plan.levels.nlod - 1];
+  csr_values = (float*)malloc(total * sizeof(float));
+  bf_values = (float*)malloc(total * sizeof(float));
+  CHECK(Fail, csr_values && bf_values);
+
+  // CSR path.
+  lod_scatter_cpu(&plan, src, csr_values);
+  lod_reduce_cpu(&plan, csr_values, method);
+
+  // Brute-force path (same scatter, independent reduce).
+  lod_scatter_cpu(&plan, src, bf_values);
+  lod_reduce_bruteforce(&plan, bf_values, method);
+
+  // Compare all levels.
+  for (uint64_t i = 0; i < total; ++i) {
+    if (fabsf(csr_values[i] - bf_values[i]) > 1e-5f) {
+      log_error("  FAIL at i=%llu: csr=%f bf=%f",
+                (unsigned long long)i,
+                csr_values[i],
+                bf_values[i]);
+      goto Fail;
+    }
+  }
+
+  free(src);
+  free(csr_values);
+  free(bf_values);
+  lod_plan_free(&plan);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(src);
+  free(csr_values);
+  free(bf_values);
+  lod_plan_free(&plan);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -898,5 +965,33 @@ main(int ac, char* av[])
   rc |= test_clamp_at_chunk_size();
   rc |= test_per_level_lod_masks();
   rc |= test_preserve_aspect_ratio();
+
+  // CSR vs brute-force: staggered drops (3D).
+  rc |= test_csr_vs_bruteforce("bf_3d_stagger_mean",
+                               3,
+                               (uint64_t[]){ 8, 8, 8 },
+                               (uint64_t[]){ 1, 2, 4 },
+                               0x7,
+                               lod_reduce_mean);
+  rc |= test_csr_vs_bruteforce("bf_3d_stagger_min",
+                               3,
+                               (uint64_t[]){ 8, 8, 8 },
+                               (uint64_t[]){ 1, 2, 4 },
+                               0x7,
+                               lod_reduce_min);
+  // CSR vs brute-force: non-multiple shape.
+  rc |= test_csr_vs_bruteforce("bf_2d_nonmult",
+                               2,
+                               (uint64_t[]){ 5, 16 },
+                               (uint64_t[]){ 4, 4 },
+                               0x3,
+                               lod_reduce_mean);
+  // CSR vs brute-force: mixed fixed + LOD with drops.
+  rc |= test_csr_vs_bruteforce("bf_3d_mixed",
+                               3,
+                               (uint64_t[]){ 4, 16, 8 },
+                               (uint64_t[]){ 4, 4, 4 },
+                               0x6,
+                               lod_reduce_mean);
   return rc;
 }

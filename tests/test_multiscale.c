@@ -584,6 +584,128 @@ Fail:
   return 1;
 }
 
+static int
+test_multiscale_dim_dropping(void)
+{
+  log_info("=== test_multiscale_dim_dropping ===");
+
+  // 4D: t(append,ds) + z(LOD,large) + y(LOD,large) + x(LOD,size==chunk →
+  // drops). x has size=chunk=8, so ceildiv(8,8)=1 chunk → drops from LOD. t has
+  // downsample=1 so L1+ emit via append fold (period=2^lv). 8 epochs along t →
+  // L1 emits at epoch 2,4,6,8; L2 at epoch 4,8.
+  struct dimension dims[] = {
+    { .size = 8,
+      .chunk_size = 1,
+      .chunks_per_shard = 4,
+      .name = "t",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "z",
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 32,
+      .chunk_size = 8,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 2 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 3 },
+  };
+  const uint8_t rank = 4;
+  const size_t total_elements = 8 * 32 * 32 * 8;
+
+  struct lod_plan plan = { 0 };
+  CHECK(Fail,
+        lod_plan_init_from_epoch_dims(
+          &plan, dims, rank, 1, LOD_MAX_LEVELS, 0) == 0);
+
+  int nlod = plan.levels.nlod;
+  log_info("  nlod=%d", nlod);
+  CHECK(Fail, nlod >= 2);
+
+  // Log per-level masks to confirm dimension dropping.
+  for (int lv = 0; lv < nlod; ++lv)
+    log_info("  L%d: lod_mask=0x%x lod_ndim=%d fdc=%llu",
+             lv,
+             plan.levels.level[lv].lod_mask,
+             plan.levels.level[lv].lod_ndim,
+             (unsigned long long)plan.levels.level[lv].fixed_dims_count);
+
+  int num_shards_per_level[TEST_SHARD_SINK_MAX_LEVELS];
+  for (int lv = 0; lv < nlod; ++lv)
+    num_shards_per_level[lv] = TEST_SHARD_SINK_MAX_SHARDS;
+
+  lod_plan_free(&plan);
+
+  struct test_shard_sink sink;
+  test_sink_init_multi(&sink, nlod, num_shards_per_level, 256 * 1024);
+
+  {
+    struct tile_stream_gpu* s = NULL;
+    const struct tile_stream_configuration config = {
+      .buffer_capacity_bytes = 4 << 20,
+      .dtype = dtype_u16,
+      .rank = rank,
+      .dimensions = dims,
+      .codec = { .id = CODEC_ZSTD },
+      .reduce_method = lod_reduce_mean,
+      .append_reduce_method = lod_reduce_mean,
+    };
+
+    CHECK(Fail2, (s = tile_stream_gpu_create(&config, &sink.base)) != NULL);
+    xor_pattern_init(dims, rank, 2);
+    int pump_ok =
+      (pump_data(tile_stream_gpu_writer(s), total_elements, fill_xor) == 0);
+    tile_stream_gpu_destroy(s);
+    xor_pattern_free();
+    CHECK(Fail2, pump_ok);
+  }
+
+  // Verify: L0 shards finalized and non-empty.
+  {
+    int l0_finalized = 0;
+    for (int i = 0; i < num_shards_per_level[0]; ++i)
+      if (sink.writers[0][i].finalized && sink.writers[0][i].size > 0)
+        l0_finalized++;
+    log_info("  L0: %d shards finalized", l0_finalized);
+    CHECK(Fail2, l0_finalized > 0);
+  }
+
+  // Verify: L1+ have at least one finalized non-empty shard.
+  for (int lv = 1; lv < nlod; ++lv) {
+    int finalized = 0;
+    size_t total_bytes = 0;
+    for (int i = 0; i < num_shards_per_level[lv]; ++i) {
+      if (sink.writers[lv][i].finalized) {
+        finalized++;
+        total_bytes += sink.writers[lv][i].size;
+      }
+    }
+    log_info("  L%d: %d shards, %zu bytes", lv, finalized, total_bytes);
+    CHECK(Fail2, finalized > 0);
+    CHECK(Fail2, total_bytes > 0);
+  }
+
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  test_sink_free(&sink);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 RUN_GPU_TESTS({ "multiscale_l0_correctness", test_multiscale_l0_correctness },
               { "dim0_l0_correctness", test_dim0_l0_correctness },
-              { "dim0_multi_epoch_levels", test_dim0_multi_epoch_levels }, )
+              { "dim0_multi_epoch_levels", test_dim0_multi_epoch_levels },
+              { "multiscale_dim_dropping", test_multiscale_dim_dropping }, )

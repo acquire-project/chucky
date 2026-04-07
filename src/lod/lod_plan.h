@@ -51,6 +51,10 @@ struct level_dims
   uint32_t lod_mask;
   int lod_ndim;
   int lod_to_dim[LOD_MAX_NDIM];
+  // Per-level fixed-dims decomposition (non-LOD dims, ascending-d order)
+  int fixed_dims_ndim;
+  int fixed_dim_to_dim[LOD_MAX_NDIM];
+  uint64_t fixed_dims_shape[LOD_MAX_NDIM];
   uint64_t fixed_dims_count; // product of non-LOD dim sizes at this level
 };
 
@@ -65,14 +69,15 @@ struct level_geometry
 };
 
 // CSR reduce LUT for one level transition (l -> l+1).
-// Maps destination elements to their source elements.
+// Flattened: batch_count=1, indices contain absolute offsets within the source
+// level. Layout matches the scatter kernel's ascending-d fixed-dim enumeration.
 struct reduce_csr
 {
-  uint64_t* starts;          // [dst_segment_size + 1]
-  uint64_t* indices;         // [src_lod_count]
-  uint64_t dst_segment_size; // = lod_nelem_dst * prod(dropped_extents)
-  uint64_t src_lod_count;    // = lod_nelem_src
-  uint64_t batch_count;      // = fixed_dims_count at source level
+  uint64_t* starts;  // [dst_segment_size + 1]
+  uint64_t* indices; // [src_lod_count], absolute offsets in source level
+  uint64_t dst_segment_size; // = dst fixed_dims_count * dst lod_nelem
+  uint64_t src_lod_count;    // = src fixed_dims_count * src lod_nelem
+  uint64_t batch_count;      // always 1
 };
 
 struct lod_plan
@@ -194,16 +199,6 @@ lod_plan_free(struct lod_plan* p);
 // Get lod size for level lv, lod dimension k.
 uint64_t
 lod_plan_lod_shape(const struct lod_plan* p, int lv, int k);
-
-// Derive per-level fixed-dims decomposition from lod_mask.
-// Fills out_dim_to_dim[0..out_ndim-1] (full dim index for each fixed dim)
-// and out_shape[0..out_ndim-1] (size of each fixed dim at this level).
-void
-level_dims_fixed_info(const struct level_dims* ld,
-                      int ndim,
-                      int* out_ndim,
-                      int* out_dim_to_dim,
-                      uint64_t* out_shape);
 
 // Fill dst[0..lod_ndim-1] with projected lod sizes for level lv.
 void

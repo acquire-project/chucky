@@ -777,6 +777,10 @@ lod_reduce_csr_k(T* __restrict__ values,
 
   uint64_t start = starts[element];
   uint64_t end = starts[element + 1];
+  if (start >= end) {
+    values[dst_base + element] = (T)0;
+    return;
+  }
 #pragma nv_diag_suppress 177, 550
   uint64_t len = end - start;
 #pragma nv_diag_default 177, 550
@@ -880,8 +884,16 @@ lod_reduce_csr(CUdeviceptr d_values,
                CUstream stream)
 {
   const uint64_t total = batch_count * dst_segment_size;
+  if (total == 0)
+    return 0;
   const int block_size = 256;
-  const int grid_size = (int)((total + block_size - 1) / block_size);
+  const uint64_t grid64 = (total + block_size - 1) / block_size;
+  if (grid64 > (uint64_t)INT_MAX) {
+    log_error("lod_reduce_csr: grid_size %llu exceeds INT_MAX",
+              (unsigned long long)grid64);
+    return 1;
+  }
+  const int grid_size = (int)grid64;
 
 #define LAUNCH_CSR(Type, Acc, Method)                                          \
   case Method:                                                                 \

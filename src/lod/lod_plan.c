@@ -103,44 +103,31 @@ all_chunks_le_one(int lod_ndim,
 }
 
 // Build CSR reduce LUT for the transition from level l to level l+1.
-// The CSR maps each destination element (within one batch) to its source
-// elements. When a dimension drops from LOD at this transition, the dropped
-// dim's coordinate is folded into the destination element index.
-//
-// dst_segment_size = lod_nelem_dst * prod(dropped_extents)
-// src_lod_count    = lod_nelem_src
-// batch_count      = fixed_dims_count at the source level
+// Flattened: batch_count=1, dst_segment_size covers the entire destination
+// level (fixed_dims_count * lod_nelem), indices store absolute offsets within
+// the source level. This ensures the CSR output layout matches the scatter
+// kernel's ascending-d enumeration of fixed dims.
 static int
 build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
 {
   const struct level_dims* src_ld = &p->levels.level[l];
   const struct level_dims* dst_ld = &p->levels.level[l + 1];
-
-  // Identify which dims drop at this transition.
-  // A dim drops if it's in src lod_mask but not in dst lod_mask.
   uint32_t dropped_mask = src_ld->lod_mask & ~dst_ld->lod_mask;
 
-  // Compute dst_segment_size = lod_nelem_dst * prod(size[d] for dropped dims)
-  uint64_t dropped_product = 1;
-  for (int d = 0; d < p->ndim; ++d)
-    if (dropped_mask & (1u << d))
-      dropped_product *= dst_ld->dim[d].size;
+  uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+  uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
 
-  uint64_t dst_seg = dst_ld->lod_nelem * dropped_product;
-  uint64_t src_count = src_ld->lod_nelem;
-
-  csr->dst_segment_size = dst_seg;
-  csr->src_lod_count = src_count;
-  csr->batch_count = src_ld->fixed_dims_count;
+  csr->batch_count = 1;
+  csr->dst_segment_size = dst_total;
+  csr->src_lod_count = src_total;
   csr->starts = NULL;
   csr->indices = NULL;
 
-  if (src_count == 0 || dst_seg == 0)
+  if (src_total == 0 || dst_total == 0)
     return 0;
 
-  // Allocate: starts[dst_seg + 1] and indices[src_count].
-  csr->starts = (uint64_t*)calloc(dst_seg + 1, sizeof(uint64_t));
-  csr->indices = (uint64_t*)malloc(src_count * sizeof(uint64_t));
+  csr->starts = (uint64_t*)calloc(dst_total + 1, sizeof(uint64_t));
+  csr->indices = (uint64_t*)malloc(src_total * sizeof(uint64_t));
   if (!csr->starts || !csr->indices) {
     free(csr->starts);
     free(csr->indices);
@@ -149,33 +136,21 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     return 1;
   }
 
-  // Build src LOD shape for unraveling morton positions.
+  // Build src/dst LOD shapes for coordinate math.
   uint64_t src_lod_shape[LOD_MAX_NDIM];
   for (int k = 0; k < src_ld->lod_ndim; ++k)
     src_lod_shape[k] = src_ld->dim[src_ld->lod_to_dim[k]].size;
 
-  // Build dst LOD shape for computing morton rank.
   uint64_t dst_lod_shape[LOD_MAX_NDIM];
   for (int k = 0; k < dst_ld->lod_ndim; ++k)
     dst_lod_shape[k] = dst_ld->dim[dst_ld->lod_to_dim[k]].size;
 
-  // Build dropped-dim shape for computing the batch sub-index.
-  int n_dropped = 0;
-  uint64_t dropped_shape[LOD_MAX_NDIM];
-  for (int k = 0; k < src_ld->lod_ndim; ++k) {
-    int d = src_ld->lod_to_dim[k];
-    if (dropped_mask & (1u << d))
-      dropped_shape[n_dropped++] = dst_ld->dim[d].size;
-  }
-
-  // Scratch: for each source element, store {dst_elem, src_morton}.
-  // Avoids recomputing unravel + morton_rank in a second pass.
   struct src_map
   {
     uint64_t dst_elem;
-    uint64_t src_morton;
+    uint64_t src_elem;
   };
-  struct src_map* map = (struct src_map*)malloc(src_count * sizeof(*map));
+  struct src_map* map = (struct src_map*)malloc(src_total * sizeof(*map));
   if (!map) {
     free(csr->starts);
     free(csr->indices);
@@ -184,48 +159,77 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     return 1;
   }
 
-  // Single pass: compute dst_elem and src_morton for every source element,
-  // build histogram in starts[1..dst_seg].
+  // Enumerate ALL source elements across all batches.
   uint64_t* counts = csr->starts + 1;
-  for (uint64_t m = 0; m < src_count; ++m) {
-    uint64_t src_coords[LOD_MAX_NDIM];
-    unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
+  uint64_t gi = 0;
 
-    uint64_t dst_lod_coords[LOD_MAX_NDIM];
-    uint64_t drop_coords[LOD_MAX_NDIM];
-    int di = 0, si = 0;
-    for (int k = 0; k < src_ld->lod_ndim; ++k) {
-      int d = src_ld->lod_to_dim[k];
-      if (dropped_mask & (1u << d))
-        drop_coords[di++] = src_coords[k];
-      else
-        dst_lod_coords[si++] = src_coords[k] / 2;
+  for (uint64_t src_batch = 0; src_batch < src_ld->fixed_dims_count;
+       ++src_batch) {
+    // Decompose src_batch into per-dim coords (indexed by full dim d).
+    uint64_t fixed_coords[LOD_MAX_NDIM];
+    memset(fixed_coords, 0, sizeof(fixed_coords));
+    {
+      uint64_t rem = src_batch;
+      for (int k = src_ld->fixed_dims_ndim - 1; k >= 0; --k) {
+        fixed_coords[src_ld->fixed_dim_to_dim[k]] =
+          rem % src_ld->fixed_dims_shape[k];
+        rem /= src_ld->fixed_dims_shape[k];
+      }
     }
 
-    uint64_t dst_morton =
-      (dst_ld->lod_ndim > 0)
-        ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
-        : 0;
-    uint64_t drop_idx = 0;
-    for (int j = 0; j < n_dropped; ++j)
-      drop_idx = drop_idx * dropped_shape[j] + drop_coords[j];
+    for (uint64_t src_enum = 0; src_enum < src_ld->lod_nelem; ++src_enum) {
+      uint64_t src_coords[LOD_MAX_NDIM];
+      unravel(src_ld->lod_ndim, src_lod_shape, src_enum, src_coords);
 
-    uint64_t dst_elem = drop_idx * dst_ld->lod_nelem + dst_morton;
-    uint64_t src_morton =
-      morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
+      // Halve LOD coords. Non-dropped → dst LOD, dropped → dst fixed.
+      uint64_t dst_fixed_coords[LOD_MAX_NDIM];
+      memcpy(dst_fixed_coords, fixed_coords, sizeof(dst_fixed_coords));
 
-    map[m].dst_elem = dst_elem;
-    map[m].src_morton = src_morton;
-    counts[dst_elem]++;
+      uint64_t dst_lod_coords[LOD_MAX_NDIM];
+      int si = 0;
+      for (int k = 0; k < src_ld->lod_ndim; ++k) {
+        int d = src_ld->lod_to_dim[k];
+        if (dropped_mask & (1u << d))
+          dst_fixed_coords[d] = src_coords[k] / 2;
+        else
+          dst_lod_coords[si++] = src_coords[k] / 2;
+      }
+
+      uint64_t dst_morton =
+        (dst_ld->lod_ndim > 0)
+          ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
+          : 0;
+
+      // Ravel dst fixed coords in ascending-d order (matches scatter layout).
+      uint64_t dst_bi = 0;
+      {
+        uint64_t rem = 0;
+        for (int k = 0; k < dst_ld->fixed_dims_ndim; ++k) {
+          rem = rem * dst_ld->fixed_dims_shape[k] +
+                dst_fixed_coords[dst_ld->fixed_dim_to_dim[k]];
+        }
+        dst_bi = rem;
+      }
+
+      uint64_t dst_elem = dst_bi * dst_ld->lod_nelem + dst_morton;
+      uint64_t src_morton =
+        morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
+      uint64_t src_elem = src_batch * src_ld->lod_nelem + src_morton;
+
+      map[gi].dst_elem = dst_elem;
+      map[gi].src_elem = src_elem;
+      counts[dst_elem]++;
+      gi++;
+    }
   }
 
-  // Prefix sum to build starts array.
+  // Prefix sum.
   csr->starts[0] = 0;
-  for (uint64_t i = 0; i < dst_seg; ++i)
+  for (uint64_t i = 0; i < dst_total; ++i)
     csr->starts[i + 1] += csr->starts[i];
 
-  // Scatter source morton positions into CSR indices using cached map.
-  uint64_t* write_pos = (uint64_t*)malloc(dst_seg * sizeof(uint64_t));
+  // Scatter into CSR indices.
+  uint64_t* write_pos = (uint64_t*)malloc(dst_total * sizeof(uint64_t));
   if (!write_pos) {
     free(map);
     free(csr->starts);
@@ -234,11 +238,11 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     csr->indices = NULL;
     return 1;
   }
-  for (uint64_t i = 0; i < dst_seg; ++i)
+  for (uint64_t i = 0; i < dst_total; ++i)
     write_pos[i] = csr->starts[i];
 
-  for (uint64_t m = 0; m < src_count; ++m)
-    csr->indices[write_pos[map[m].dst_elem]++] = map[m].src_morton;
+  for (uint64_t i = 0; i < src_total; ++i)
+    csr->indices[write_pos[map[i].dst_elem]++] = map[i].src_elem;
 
   free(write_pos);
   free(map);
@@ -301,15 +305,20 @@ Fail:
   return 1;
 }
 
-// Compute per-level fixed_dims_count from lod_mask and dim sizes.
-static uint64_t
-level_fixed_dims_count(const struct level_dims* ld, int ndim, uint32_t lod_mask)
+// Populate fixed-dims decomposition from lod_mask and dim sizes.
+static void
+level_dims_fill_fixed(struct level_dims* ld, int ndim)
 {
-  uint64_t count = 1;
-  for (int d = 0; d < ndim; ++d)
-    if (!(lod_mask & (1u << d)))
-      count *= ld->dim[d].size;
-  return count;
+  ld->fixed_dims_ndim = 0;
+  ld->fixed_dims_count = 1;
+  for (int d = 0; d < ndim; ++d) {
+    if (!(ld->lod_mask & (1u << d))) {
+      ld->fixed_dim_to_dim[ld->fixed_dims_ndim] = d;
+      ld->fixed_dims_shape[ld->fixed_dims_ndim] = ld->dim[d].size;
+      ld->fixed_dims_ndim++;
+      ld->fixed_dims_count *= ld->dim[d].size;
+    }
+  }
 }
 
 // Is any LOD dim at ≤1 chunk?
@@ -374,7 +383,7 @@ lod_plan_init_shapes(struct lod_plan* p,
   memcpy(p->levels.level[0].lod_to_dim,
          cur_to_dim,
          sizeof(int) * (size_t)cur_lod_ndim);
-  p->levels.level[0].fixed_dims_count = p->fixed_dims_count;
+  level_dims_fill_fixed(&p->levels.level[0], ndim);
 
   int nlod = 1;
   while (nlod < max_levels && cur_lod_ndim > 0 &&
@@ -401,8 +410,7 @@ lod_plan_init_shapes(struct lod_plan* p,
     memcpy(p->levels.level[nlod].lod_to_dim,
            cur_to_dim,
            sizeof(int) * (size_t)cur_lod_ndim);
-    p->levels.level[nlod].fixed_dims_count =
-      level_fixed_dims_count(&p->levels.level[nlod], ndim, level_mask);
+    level_dims_fill_fixed(&p->levels.level[nlod], ndim);
 
     ++nlod;
 
@@ -442,6 +450,13 @@ lod_plan_init_shapes(struct lod_plan* p,
         chunk_shape ? (uint32_t)chunk_shape[d] : 1;
     }
   }
+
+  // Verify plan-level L0 convenience fields match per-level L0 fields.
+  assert(p->lod_mask == p->levels.level[0].lod_mask);
+  assert(p->lod_ndim == p->levels.level[0].lod_ndim);
+  for (int k = 0; k < p->lod_ndim; ++k)
+    assert(p->lod_to_dim[k] == p->levels.level[0].lod_to_dim[k]);
+  assert(p->fixed_dims_count == p->levels.level[0].fixed_dims_count);
 
   return 0;
 }
@@ -565,24 +580,6 @@ lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst)
   const struct level_dims* ld = &p->levels.level[lv];
   for (int k = 0; k < ld->lod_ndim; ++k)
     dst[k] = ld->dim[ld->lod_to_dim[k]].size;
-}
-
-void
-level_dims_fixed_info(const struct level_dims* ld,
-                      int ndim,
-                      int* out_ndim,
-                      int* out_dim_to_dim,
-                      uint64_t* out_shape)
-{
-  int n = 0;
-  for (int d = 0; d < ndim; ++d) {
-    if (!(ld->lod_mask & (1u << d))) {
-      out_dim_to_dim[n] = d;
-      out_shape[n] = ld->dim[d].size;
-      n++;
-    }
-  }
-  *out_ndim = n;
 }
 
 void
