@@ -71,6 +71,9 @@ struct shard_sink
   void (*wait_fence)(struct shard_sink* self,
                      uint8_t level,
                      struct io_event ev);
+
+  // Returns non-zero if any async IO has failed. NULL = no async IO.
+  int (*has_error)(const struct shard_sink* self);
 };
 
 struct writer_result

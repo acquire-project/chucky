@@ -735,6 +735,10 @@ cpu_flush(struct writer* self)
       if (s->shard_sink->wait_fence)
         s->shard_sink->wait_fence(s->shard_sink, (uint8_t)lv, s->io_done[lv]);
 
+      // Fail fast if async IO encountered an error.
+      if (s->shard_sink->has_error && s->shard_sink->has_error(s->shard_sink))
+        return writer_error();
+
       if (s->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&s->shard[lv], s->config.shard_alignment))
           return writer_error();

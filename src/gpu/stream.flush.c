@@ -23,8 +23,9 @@ make_compress_input(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
     .active_levels_mask = fs->active_levels_mask,
     .epochs_per_batch = s->batch.epochs_per_batch,
     .pool_buf = s->pools.buf[fc],
-    .lod_done =
-      (s->levels.enable_multiscale && s->lod.t_end) ? s->lod.t_end : NULL,
+    .lod_done = (s->levels.enable_multiscale && s->lod.timing[fc].t_end)
+                  ? s->lod.timing[fc].t_end
+                  : NULL,
   };
   memcpy(
     in.batch_active_masks, fs->batch_active_masks, n_epochs * sizeof(uint32_t));
@@ -58,6 +59,7 @@ flush_run_epoch_lod(struct tile_stream_gpu* s)
   } else {
     CHECK(Error,
           lod_run_epoch(&s->lod,
+                        s->pools.current,
                         &s->levels,
                         pool_epoch_ptr(s, s->batch.accumulated),
                         s->config.dtype,
@@ -192,8 +194,9 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
     .n_epochs = 1,
     .active_levels_mask = active_mask,
     .epochs_per_batch = s->batch.epochs_per_batch,
-    .lod_done =
-      (s->levels.enable_multiscale && s->lod.t_end) ? s->lod.t_end : NULL,
+    .lod_done = (s->levels.enable_multiscale && s->lod.timing[fc].t_end)
+                  ? s->lod.timing[fc].t_end
+                  : NULL,
   };
   in.batch_active_masks[0] = active_mask;
   in.epoch_events[0] = s->batch.pool_events[epoch_in_batch];
@@ -392,8 +395,8 @@ flush_partial_append(struct tile_stream_gpu* s)
   }
 
   CU(Error, cuEventRecord(s->pools.ready[fc], s->streams.compute));
-  if (s->lod.t_end)
-    CU(Error, cuEventRecord(s->lod.t_end, s->streams.compute));
+  if (s->lod.timing[fc].t_end)
+    CU(Error, cuEventRecord(s->lod.timing[fc].t_end, s->streams.compute));
 
   CU(Error, cuEventRecord(s->batch.pool_events[0], s->streams.compute));
   if (flush_kick_batch(s, fc, 1))

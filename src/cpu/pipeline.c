@@ -156,6 +156,10 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (p->sink->wait_fence)
       p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
 
+    // Fail fast if async IO encountered an error.
+    if (p->sink->has_error && p->sink->has_error(p->sink))
+      return 1;
+
     // Recompute batch LUTs if active_count differs from pre-computed.
     if (active_count != lvl->batch_active_count) {
       // LUT buffers are sized for max(batch_active_count, 1) * M entries.

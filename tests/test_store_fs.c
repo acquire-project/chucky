@@ -1,4 +1,5 @@
 #include "test_platform.h"
+#include "platform/platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
@@ -237,7 +238,7 @@ test_shard_pool_unbuffered(void)
   // Write enough data to be meaningful (must be page-aligned for O_DIRECT)
   // Use a 4096-byte aligned buffer
   size_t page = 4096;
-  char* data = (char*)aligned_alloc(page, page);
+  char* data = (char*)platform_aligned_alloc(page, page);
   CHECK(Fail3, data);
   memset(data, 0xAB, page);
   CHECK(Fail4, w->write(w, 0, data, data + page) == 0);
@@ -256,14 +257,56 @@ test_shard_pool_unbuffered(void)
   snprintf(path, sizeof(path), "%s/unbuf/shard0.bin", tmpdir);
   CHECK(Fail4, test_file_exists(path));
 
-  free(data);
+  platform_aligned_free(data);
   pool->destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
 
 Fail4:
-  free(data);
+  platform_aligned_free(data);
+Fail3:
+  pool->destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_shard_pool_error_propagation(void)
+{
+  log_info("=== test_shard_pool_error_propagation ===");
+
+  // Create unbuffered store — writes must be sector-aligned.
+  struct store* s = store_fs_create(tmpdir, 1);
+  CHECK(Fail, s);
+  CHECK(Fail2, s->mkdirs(s, "errtest") == 0);
+
+  struct shard_pool* pool = s->create_pool(s, 1);
+  CHECK(Fail2, pool);
+
+  struct shard_writer* w = pool->open(pool, 0, "errtest/bad.bin");
+  CHECK(Fail3, w);
+
+  // Write a non-sector-aligned size. With FILE_FLAG_NO_BUFFERING / O_DIRECT,
+  // this will cause the async pwrite to fail.
+  char buf[17];
+  memset(buf, 0xCD, sizeof(buf));
+  CHECK(Fail3, w->write(w, 0, buf, buf + sizeof(buf)) == 0);
+  CHECK(Fail3, w->finalize(w) == 0);
+
+  // Flush waits for all async IO and returns the error flag.
+  int flush_err = pool->flush(pool);
+  CHECK(Fail3, flush_err != 0);
+  CHECK(Fail3, pool->has_error(pool) != 0);
+
+  pool->destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
 Fail3:
   pool->destroy(pool);
 Fail2:
@@ -287,6 +330,7 @@ main(void)
   err |= test_shard_pool_fence();
   err |= test_shard_pool_on_demand_mkdir();
   err |= test_shard_pool_unbuffered();
+  err |= test_shard_pool_error_propagation();
 
   // Cleanup
   test_tmpdir_remove(tmpdir);

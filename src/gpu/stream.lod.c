@@ -405,11 +405,13 @@ lod_state_init_buffers(struct lod_state* lod, enum dtype dtype)
   size_t morton_bytes = total_vals * bytes_per_element;
   CU(Fail, cuMemAlloc(&lod->d_morton, morton_bytes));
 
-  CU(Fail, cuEventCreate(&lod->t_start, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventCreate(&lod->t_scatter_end, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventCreate(&lod->t_reduce_end, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventCreate(&lod->t_append_end, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventCreate(&lod->t_end, CU_EVENT_DEFAULT));
+  for (int fc = 0; fc < 2; ++fc) {
+    CU(Fail, cuEventCreate(&lod->timing[fc].t_start, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&lod->timing[fc].t_scatter_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&lod->timing[fc].t_reduce_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&lod->timing[fc].t_append_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&lod->timing[fc].t_end, CU_EVENT_DEFAULT));
+  }
 
   return 0;
 Fail:
@@ -514,12 +516,14 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_strides));
   }
-  if (lod->t_start) {
-    CUWARN(cuEventDestroy(lod->t_start));
-    CUWARN(cuEventDestroy(lod->t_scatter_end));
-    CUWARN(cuEventDestroy(lod->t_reduce_end));
-    CUWARN(cuEventDestroy(lod->t_append_end));
-    CUWARN(cuEventDestroy(lod->t_end));
+  for (int fc = 0; fc < 2; ++fc) {
+    if (lod->timing[fc].t_start) {
+      CUWARN(cuEventDestroy(lod->timing[fc].t_start));
+      CUWARN(cuEventDestroy(lod->timing[fc].t_scatter_end));
+      CUWARN(cuEventDestroy(lod->timing[fc].t_reduce_end));
+      CUWARN(cuEventDestroy(lod->timing[fc].t_append_end));
+      CUWARN(cuEventDestroy(lod->timing[fc].t_end));
+    }
   }
   lod_plan_free(&lod->plan);
 }
@@ -648,6 +652,7 @@ Error:
 
 int
 lod_run_epoch(struct lod_state* lod,
+              int fc,
               const struct level_geometry* levels,
               void* pool_epoch,
               enum dtype dtype,
@@ -658,8 +663,9 @@ lod_run_epoch(struct lod_state* lod,
               uint32_t* out_active_mask)
 {
   struct lod_plan* p = &lod->plan;
+  struct lod_timing* t = &lod->timing[fc];
 
-  CU(Error, cuEventRecord(lod->t_start, compute));
+  CU(Error, cuEventRecord(t->t_start, compute));
 
   CHECK(Error,
         lod_gather_lut(lod->d_morton,
@@ -671,7 +677,7 @@ lod_run_epoch(struct lod_state* lod,
                        p->fixed_dims_count,
                        compute) == 0);
 
-  CU(Error, cuEventRecord(lod->t_scatter_end, compute));
+  CU(Error, cuEventRecord(t->t_scatter_end, compute));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
     const struct reduce_csr* csr = &p->reduce[l];
@@ -692,7 +698,7 @@ lod_run_epoch(struct lod_state* lod,
                          compute) == 0);
   }
 
-  CU(Error, cuEventRecord(lod->t_reduce_end, compute));
+  CU(Error, cuEventRecord(t->t_reduce_end, compute));
 
   uint32_t active_levels_mask = 1; // L0 always active
   if (dims->append_downsample && lod->append_accum.total_elements > 0) {
@@ -702,13 +708,13 @@ lod_run_epoch(struct lod_state* lod,
             0);
   }
 
-  CU(Error, cuEventRecord(lod->t_append_end, compute));
+  CU(Error, cuEventRecord(t->t_append_end, compute));
 
   CHECK(Error,
         scatter_morton_to_chunks(
           lod, levels, pool_epoch, dtype, active_levels_mask, compute) == 0);
 
-  CU(Error, cuEventRecord(lod->t_end, compute));
+  CU(Error, cuEventRecord(t->t_end, compute));
 
   *out_active_mask = active_levels_mask;
   return 0;

@@ -36,6 +36,7 @@ lod_state_destroy(struct lod_state* lod);
 // epoch. Returns 0 on success, non-zero on error.
 int
 lod_run_epoch(struct lod_state* lod,
+              int fc,
               const struct level_geometry* levels,
               void* pool_epoch,
               enum dtype dtype,

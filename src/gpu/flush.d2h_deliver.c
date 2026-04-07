@@ -168,7 +168,8 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
-  if (levels->enable_multiscale && lod->t_start) {
+  const struct lod_timing* t = &lod->timing[fc];
+  if (levels->enable_multiscale && t->t_start) {
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
     const size_t morton_bytes =
@@ -177,27 +178,27 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       levels->total_chunks * layout->chunk_stride * bytes_per_element;
 
     accumulate_metric_cu(&metrics->lod_gather,
-                         lod->t_start,
-                         lod->t_scatter_end,
+                         t->t_start,
+                         t->t_scatter_end,
                          scatter_bytes,
                          scatter_bytes);
     accumulate_metric_cu(&metrics->lod_reduce,
-                         lod->t_scatter_end,
-                         lod->t_reduce_end,
+                         t->t_scatter_end,
+                         t->t_reduce_end,
                          scatter_bytes,
                          morton_bytes);
     if (dims->append_downsample) {
       size_t accum_bpe = dtype_bpe(config->dtype);
       size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
       accumulate_metric_cu(&metrics->lod_append_fold,
-                           lod->t_reduce_end,
-                           lod->t_append_end,
+                           t->t_reduce_end,
+                           t->t_append_end,
                            accum_bytes,
                            accum_bytes);
     }
     accumulate_metric_cu(&metrics->lod_morton_chunk,
-                         lod->t_append_end,
-                         lod->t_end,
+                         t->t_append_end,
+                         t->t_end,
                          morton_bytes,
                          unified_pool_bytes);
   }
@@ -351,6 +352,10 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
 
   // Wait for IO fences before reusing aggregate slots
   wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
+
+  // Fail fast if async IO encountered an error.
+  if (sink->has_error && sink->has_error(sink))
+    goto Error;
 
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));

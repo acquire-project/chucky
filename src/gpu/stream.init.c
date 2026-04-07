@@ -131,12 +131,14 @@ seed_events(const struct pool_state* pools,
   CU(Fail, cuEventRecord(pools->ready[0], compute));
   CU(Fail, cuEventRecord(pools->ready[1], compute));
 
-  if (lod->t_start) {
-    CU(Fail, cuEventRecord(lod->t_start, compute));
-    CU(Fail, cuEventRecord(lod->t_scatter_end, compute));
-    CU(Fail, cuEventRecord(lod->t_reduce_end, compute));
-    CU(Fail, cuEventRecord(lod->t_append_end, compute));
-    CU(Fail, cuEventRecord(lod->t_end, compute));
+  for (int fc = 0; fc < 2; ++fc) {
+    if (lod->timing[fc].t_start) {
+      CU(Fail, cuEventRecord(lod->timing[fc].t_start, compute));
+      CU(Fail, cuEventRecord(lod->timing[fc].t_scatter_end, compute));
+      CU(Fail, cuEventRecord(lod->timing[fc].t_reduce_end, compute));
+      CU(Fail, cuEventRecord(lod->timing[fc].t_append_end, compute));
+      CU(Fail, cuEventRecord(lod->timing[fc].t_end, compute));
+    }
   }
 
   return 0;

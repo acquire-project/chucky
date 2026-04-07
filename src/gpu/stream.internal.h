@@ -79,11 +79,16 @@ struct lod_state
   CUdeviceptr
     d_morton_fixed_dims_chunk_offsets[LOD_MAX_LEVELS]; // u32, fixed_dims_count
 
-  CUevent t_start;
-  CUevent t_scatter_end;
-  CUevent t_reduce_end;
-  CUevent t_append_end;
-  CUevent t_end;
+  // Per-frame-counter timing events (double-buffered so drain reads the
+  // correct batch's events even when the next batch's LOD has already run).
+  struct lod_timing
+  {
+    CUevent t_start;
+    CUevent t_scatter_end;
+    CUevent t_reduce_end;
+    CUevent t_append_end;
+    CUevent t_end;
+  } timing[2];
 
   // Append-dim LOD accumulation state.
   struct

@@ -839,6 +839,10 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
       if (desc->sink->wait_fence)
         desc->sink->wait_fence(desc->sink, (uint8_t)lv, desc->io_done[lv]);
 
+      // Fail fast if async IO encountered an error.
+      if (desc->sink->has_error && desc->sink->has_error(desc->sink))
+        return 1;
+
       if (desc->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&desc->shard[lv], desc->config.shard_alignment))
           return 1;

@@ -20,6 +20,7 @@ struct zarr_array
   uint64_t shard_counts[MAX_ZARR_RANK];
   uint64_t chunks_per_shard[MAX_ZARR_RANK];
   uint64_t shard_inner_count;
+  uint64_t slot_base; // first pool slot used by this array
 
   // Mutable copy for metadata updates
   struct dimension dimensions[MAX_ZARR_RANK];
@@ -61,7 +62,7 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
 
-  uint64_t slot = shard_index % a->shard_inner_count;
+  uint64_t slot = a->slot_base + shard_index % a->shard_inner_count;
 
   char suffix[256];
   if (zarr_shard_key(
@@ -129,6 +130,13 @@ zarr_array_wait_fence_fn(struct shard_sink* self,
   a->pool->wait_fence(a->pool, ev);
 }
 
+static int
+zarr_array_has_error_fn(const struct shard_sink* self)
+{
+  const struct zarr_array* a = container_of(self, struct zarr_array, base);
+  return a->pool->has_error(a->pool);
+}
+
 // --- Core init (geometry already computed) ---
 
 static struct zarr_array*
@@ -138,7 +146,8 @@ zarr_array_init(struct store* store,
                 const struct zarr_array_config* cfg,
                 const uint64_t* shard_counts,
                 const uint64_t* chunks_per_shard,
-                uint64_t shard_inner_count)
+                uint64_t shard_inner_count,
+                uint64_t slot_base)
 {
   struct zarr_array* a = (struct zarr_array*)calloc(1, sizeof(*a));
   CHECK(Fail, a);
@@ -148,6 +157,7 @@ zarr_array_init(struct store* store,
   a->owns_pool = 0;
   a->rank = cfg->rank;
   a->shard_inner_count = shard_inner_count;
+  a->slot_base = slot_base;
   a->data_type = cfg->data_type;
   a->fill_value = cfg->fill_value;
   a->codec = cfg->codec;
@@ -165,6 +175,7 @@ zarr_array_init(struct store* store,
   a->base.update_append = zarr_array_update_append;
   a->base.record_fence = zarr_array_record_fence_fn;
   a->base.wait_fence = zarr_array_wait_fence_fn;
+  a->base.has_error = zarr_array_has_error_fn;
 
   // Write array zarr.json
   CHECK(Fail_alloc, write_array_metadata(a) == 0);
@@ -182,6 +193,7 @@ Fail:
 struct zarr_array*
 zarr_array_create_with_pool(struct store* store,
                             struct shard_pool* pool,
+                            uint64_t slot_base,
                             const char* prefix,
                             const struct zarr_array_config* cfg)
 {
@@ -196,7 +208,7 @@ zarr_array_create_with_pool(struct store* store,
     dims_compute_shard_geometry(cfg->dimensions, cfg->rank, sc, cps);
   CHECK(Fail, sic > 0);
 
-  return zarr_array_init(store, pool, prefix, cfg, sc, cps, sic);
+  return zarr_array_init(store, pool, prefix, cfg, sc, cps, sic, slot_base);
 
 Fail:
   return NULL;
@@ -223,7 +235,7 @@ zarr_array_create(struct store* store,
   CHECK(Fail, pool);
 
   struct zarr_array* a =
-    zarr_array_init(store, pool, prefix, cfg, sc, cps, sic);
+    zarr_array_init(store, pool, prefix, cfg, sc, cps, sic, 0);
   if (!a) {
     pool->destroy(pool);
     return NULL;

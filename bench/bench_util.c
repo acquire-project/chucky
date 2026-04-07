@@ -184,11 +184,37 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return NULL;
 }
 
+static struct io_event
+metering_record_fence(struct shard_sink* self, uint8_t level)
+{
+  struct metering_sink* ms = (struct metering_sink*)self;
+  return ms->inner->record_fence(ms->inner, level);
+}
+
+static void
+metering_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+{
+  struct metering_sink* ms = (struct metering_sink*)self;
+  ms->inner->wait_fence(ms->inner, level, ev);
+}
+
+static int
+metering_has_error(const struct shard_sink* self)
+{
+  const struct metering_sink* ms = (const struct metering_sink*)self;
+  return ms->inner->has_error(ms->inner);
+}
+
 static void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
   *ms = (struct metering_sink){
-    .base = { .open = metering_open },
+    .base = {
+      .open = metering_open,
+      .record_fence = inner->record_fence ? metering_record_fence : NULL,
+      .wait_fence = inner->wait_fence ? metering_wait_fence : NULL,
+      .has_error = inner->has_error ? metering_has_error : NULL,
+    },
     .inner = inner,
     .metric = { .name = "Sink", .best_ms = 1e30f },
   };
@@ -363,11 +389,13 @@ bench_zarr_as_shard_sink(struct bench_zarr_handle* z)
   return zarr_array_as_shard_sink(z->array);
 }
 
-static void
+static int
 bench_zarr_flush(struct bench_zarr_handle* z)
 {
-  ngff_multiscale_flush(z->ms);
-  zarr_array_flush(z->array);
+  int err = 0;
+  err |= ngff_multiscale_flush(z->ms);
+  err |= zarr_array_flush(z->array);
+  return err;
 }
 
 static size_t
@@ -703,7 +731,7 @@ run_bench(const struct bench_config* cfg)
         print_report("  auto-fit: %zu bytes/chunk",
                      (size_t)(vol * bytes_per_element));
       } else {
-        print_report("  auto-fit: WARNING — no chunk size fits in budget");
+        print_report("  auto-fit: WARNING -- no chunk size fits in budget");
       }
     }
 
@@ -867,7 +895,10 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
-  bench_zarr_flush(&zarr);
+  if (bench_zarr_flush(&zarr)) {
+    log_error("  I/O error detected during flush");
+    goto Fail;
+  }
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
@@ -1401,7 +1432,7 @@ run_bench_two_streams(const struct bench_config* cfg)
           vol *= dims[d].chunk_size;
         print_report("  auto-fit: %zu bytes/chunk", (size_t)(vol * bpe));
       } else {
-        print_report("  auto-fit: WARNING — no chunk size fits in budget");
+        print_report("  auto-fit: WARNING -- no chunk size fits in budget");
       }
     }
     if (!fitted)
@@ -1506,7 +1537,7 @@ run_bench_two_streams(const struct bench_config* cfg)
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
   for (int k = 0; k < 2; ++k)
-    bench_zarr_flush(&zarr[k]);
+    CHECK(Fail, bench_zarr_flush(&zarr[k]) == 0);
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
