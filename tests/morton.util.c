@@ -174,6 +174,10 @@ lod_reduce_cpu(const struct lod_plan* p,
         // Gather CSR window into a contiguous buffer, then reduce.
         uint64_t start = csr->starts[i];
         uint64_t end = csr->starts[i + 1];
+        if (start >= end) {
+          values[dst_base + i] = 0;
+          continue;
+        }
         uint64_t len = end - start;
         float buf[16];
         for (uint64_t j = 0; j < len && j < 16; ++j)
@@ -352,6 +356,10 @@ lod_reduce_cpu_u16(const struct lod_plan* p,
       for (uint64_t i = 0; i < csr->dst_segment_size; ++i) {
         uint64_t start = csr->starts[i];
         uint64_t end = csr->starts[i + 1];
+        if (start >= end) {
+          values[dst_base + i] = 0;
+          continue;
+        }
         values[dst_base + i] =
           reduce_window_u16(src, csr->indices, start, end, method);
       }

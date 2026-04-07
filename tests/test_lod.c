@@ -340,6 +340,65 @@ Fail:
 }
 
 static int
+test_lod_gpu_chunked(const char* label,
+                     int ndim,
+                     const uint64_t* shape,
+                     const uint64_t* chunk_shape,
+                     uint32_t lod_mask,
+                     enum lod_reduce_method method)
+{
+  log_info("=== %s ===", label);
+  int ok = 0;
+  float* src = NULL;
+  float* cpu_values = NULL;
+  float* gpu_values = NULL;
+  struct lod_plan plan = { 0 };
+
+  uint64_t n = 1;
+  for (int d = 0; d < ndim; ++d)
+    n *= shape[d];
+
+  src = (float*)malloc(n * sizeof(float));
+  CHECK(Fail, src);
+  for (uint64_t i = 0; i < n; ++i)
+    src[i] = (float)(i + 1);
+
+  CHECK(Fail,
+        lod_plan_init(&plan, ndim, shape, chunk_shape, lod_mask, MAX_LOD, 0) ==
+          0);
+  log_info("  nlod=%d  dropped_mask at L0->L1: 0x%x",
+           plan.levels.nlod,
+           plan.levels.level[0].lod_mask & ~plan.levels.level[1].lod_mask);
+
+  CHECK(Fail, lod_compute(&plan, src, &cpu_values, method));
+
+  gpu_values = lod_compute_gpu(&plan, src, NULL, method);
+  CHECK(Fail, gpu_values);
+
+  {
+    uint64_t total = plan.level_spans.ends[plan.levels.nlod - 1];
+    for (uint64_t i = 0; i < total; ++i) {
+      if (fabsf(gpu_values[i] - cpu_values[i]) > 1e-5f) {
+        log_error("  FAIL at i=%llu: gpu=%f cpu=%f",
+                  (unsigned long long)i,
+                  gpu_values[i],
+                  cpu_values[i]);
+        goto Fail;
+      }
+    }
+  }
+
+  log_info("  PASS");
+  ok = 1;
+Fail:
+  free(src);
+  free(cpu_values);
+  free(gpu_values);
+  lod_plan_free(&plan);
+  return ok ? 0 : 1;
+}
+
+static int
 test_lod_gpu(const char* label,
              int ndim,
              const uint64_t* shape,
@@ -1035,6 +1094,44 @@ main(void)
     nfail += test_lod_gpu_u16_method(
       "reduce_max_u16_3d_d02", 3, shape, mask, 1, lod_reduce_max);
   }
+
+  // --- Per-level dimension dropping (chunk_shape forces dropped_mask != 0) ---
+  // 2D: shape 16x4, chunk 4x4, mask 0x3.
+  // dim1 reaches chunk_size (4) before dim0 → dim1 drops at some level.
+  nfail += test_lod_gpu_chunked("gpu_drop_2d_mean",
+                                2,
+                                (uint64_t[]){ 16, 4 },
+                                (uint64_t[]){ 4, 4 },
+                                0x3,
+                                lod_reduce_mean);
+  nfail += test_lod_gpu_chunked("gpu_drop_2d_min",
+                                2,
+                                (uint64_t[]){ 16, 4 },
+                                (uint64_t[]){ 4, 4 },
+                                0x3,
+                                lod_reduce_min);
+  // 3D: shape 32x8x4, chunk 4x4x4, mask 0x7.
+  // dim2 drops first (4→4, 1 chunk), dim1 drops next (8→4, 1 chunk).
+  nfail += test_lod_gpu_chunked("gpu_drop_3d_mean",
+                                3,
+                                (uint64_t[]){ 32, 8, 4 },
+                                (uint64_t[]){ 4, 4, 4 },
+                                0x7,
+                                lod_reduce_mean);
+  nfail += test_lod_gpu_chunked("gpu_drop_3d_max",
+                                3,
+                                (uint64_t[]){ 32, 8, 4 },
+                                (uint64_t[]){ 4, 4, 4 },
+                                0x7,
+                                lod_reduce_max);
+  // 2D: asymmetric chunk sizes.
+  // shape 64x16, chunk 8x16, mask 0x3 → dim1 drops immediately.
+  nfail += test_lod_gpu_chunked("gpu_drop_2d_asym",
+                                2,
+                                (uint64_t[]){ 64, 16 },
+                                (uint64_t[]){ 8, 16 },
+                                0x3,
+                                lod_reduce_mean);
 
   // --- Dim0 accumulator tests ---
   nfail += test_accum_fold_u16("accum_mean_u16_4ep", lod_reduce_mean, 4);

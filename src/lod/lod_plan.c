@@ -149,7 +149,7 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     return 1;
   }
 
-  // Build src LOD shape for unraveling morton positions.
+  // Build src LOD shape for enumerating source coordinates.
   uint64_t src_lod_shape[LOD_MAX_NDIM];
   for (int k = 0; k < src_ld->lod_ndim; ++k)
     src_lod_shape[k] = src_ld->dim[src_ld->lod_to_dim[k]].size;
@@ -186,10 +186,13 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
 
   // Single pass: compute dst_elem and src_morton for every source element,
   // build histogram in starts[1..dst_seg].
+  // src_enum is a row-major enumeration index (not a morton rank);
+  // unravel decomposes it into coordinates, then morton_rank converts
+  // those coordinates to their morton position.
   uint64_t* counts = csr->starts + 1;
-  for (uint64_t m = 0; m < src_count; ++m) {
+  for (uint64_t src_enum = 0; src_enum < src_count; ++src_enum) {
     uint64_t src_coords[LOD_MAX_NDIM];
-    unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
+    unravel(src_ld->lod_ndim, src_lod_shape, src_enum, src_coords);
 
     uint64_t dst_lod_coords[LOD_MAX_NDIM];
     uint64_t drop_coords[LOD_MAX_NDIM];
@@ -214,8 +217,8 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     uint64_t src_morton =
       morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
 
-    map[m].dst_elem = dst_elem;
-    map[m].src_morton = src_morton;
+    map[src_enum].dst_elem = dst_elem;
+    map[src_enum].src_morton = src_morton;
     counts[dst_elem]++;
   }
 
@@ -237,8 +240,8 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   for (uint64_t i = 0; i < dst_seg; ++i)
     write_pos[i] = csr->starts[i];
 
-  for (uint64_t m = 0; m < src_count; ++m)
-    csr->indices[write_pos[map[m].dst_elem]++] = map[m].src_morton;
+  for (uint64_t i = 0; i < src_count; ++i)
+    csr->indices[write_pos[map[i].dst_elem]++] = map[i].src_morton;
 
   free(write_pos);
   free(map);
@@ -442,6 +445,13 @@ lod_plan_init_shapes(struct lod_plan* p,
         chunk_shape ? (uint32_t)chunk_shape[d] : 1;
     }
   }
+
+  // Verify plan-level L0 convenience fields match per-level L0 fields.
+  assert(p->lod_mask == p->levels.level[0].lod_mask);
+  assert(p->lod_ndim == p->levels.level[0].lod_ndim);
+  for (int k = 0; k < p->lod_ndim; ++k)
+    assert(p->lod_to_dim[k] == p->levels.level[0].lod_to_dim[k]);
+  assert(p->fixed_dims_count == p->levels.level[0].fixed_dims_count);
 
   return 0;
 }

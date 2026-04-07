@@ -306,6 +306,10 @@ reduce_typed(const lod_plan* p, T* values, lod_reduce_method method, int nt)
       uint64_t dst_base = dst_lv.beg + b * dst_seg;
       uint64_t start = csr->starts[i];
       uint64_t end = csr->starts[i + 1];
+      if (start >= end) {
+        values[dst_base + i] = T{};
+        continue;
+      }
       values[dst_base + i] =
         reduce_window_csr(src, csr->indices, start, end, method);
     }
