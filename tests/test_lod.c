@@ -1132,6 +1132,21 @@ main(void)
                                 (uint64_t[]){ 8, 16 },
                                 0x3,
                                 lod_reduce_mean);
+  // 2D: shape not a multiple of chunk for the dropping dim.
+  // shape 5x16, chunk 4x4 → dim0 drops at L0→L1 with src_size=5.
+  // Without halving drop coords, src_coord=4 would OOB.
+  nfail += test_lod_gpu_chunked("gpu_drop_2d_nonmult",
+                                2,
+                                (uint64_t[]){ 5, 16 },
+                                (uint64_t[]){ 4, 4 },
+                                0x3,
+                                lod_reduce_mean);
+  nfail += test_lod_gpu_chunked("gpu_drop_2d_nonmult_min",
+                                2,
+                                (uint64_t[]){ 5, 16 },
+                                (uint64_t[]){ 4, 4 },
+                                0x3,
+                                lod_reduce_min);
 
   // --- Dim0 accumulator tests ---
   nfail += test_accum_fold_u16("accum_mean_u16_4ep", lod_reduce_mean, 4);

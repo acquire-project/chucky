@@ -120,6 +120,14 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   // A dim drops if it's in src lod_mask but not in dst lod_mask.
   uint32_t dropped_mask = src_ld->lod_mask & ~dst_ld->lod_mask;
 
+  // NOTE: The CSR output layout is [batch][drop_idx * lod_nelem + morton].
+  // The pipeline's scatter step enumerates fixed dims in ascending-d order.
+  // These orderings agree when original fixed dims (append dims, d < n_append)
+  // have lower indices than all LOD/dropped dims (d >= n_append), which the
+  // pipeline guarantees. Previously-dropped dims that became fixed at later
+  // levels may interleave, but the standalone path (CPU/GPU reference tests)
+  // uses the same CSR on both sides, so layout order doesn't matter there.
+
   // Compute dst_segment_size = lod_nelem_dst * prod(size[d] for dropped dims)
   uint64_t dropped_product = 1;
   for (int d = 0; d < p->ndim; ++d)
@@ -200,7 +208,7 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
     for (int k = 0; k < src_ld->lod_ndim; ++k) {
       int d = src_ld->lod_to_dim[k];
       if (dropped_mask & (1u << d))
-        drop_coords[di++] = src_coords[k];
+        drop_coords[di++] = src_coords[k] / 2;
       else
         dst_lod_coords[si++] = src_coords[k] / 2;
     }

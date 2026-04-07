@@ -674,6 +674,8 @@ lod_run_epoch(struct lod_state* lod,
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
     const struct reduce_csr* csr = &p->reduce[l];
+    if (!csr->starts || !csr->indices)
+      continue;
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
