@@ -10,28 +10,9 @@ extern "C"
 {
 #endif
 
-  int lod_fill_ends_gpu(CUdeviceptr d_ends,
-                        int ndim,
-                        CUdeviceptr d_child_shape,
-                        CUdeviceptr d_parent_shape,
-                        const uint64_t* child_shape_host,
-                        const uint64_t* parent_shape_host,
-                        uint64_t n_parents,
-                        CUstream stream);
-
-  // returns 0 on success, non-zero on failure
-  int lod_reduce(CUdeviceptr d_values,
-                 CUdeviceptr d_ends,
-                 enum dtype dtype,
-                 enum lod_reduce_method method,
-                 uint64_t src_offset,
-                 uint64_t dst_offset,
-                 uint64_t src_lod_count,
-                 uint64_t dst_lod_count,
-                 uint64_t fixed_dims_count,
-                 CUstream stream);
-
   // CSR-based reduce: precomputed starts/indices LUT.
+  // d_values is a single flat allocation; src_offset/dst_offset are element
+  // counts into it.
   int lod_reduce_csr(CUdeviceptr d_values,
                      CUdeviceptr d_starts,
                      CUdeviceptr d_indices,

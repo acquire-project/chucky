@@ -80,7 +80,7 @@ test_reduce(const char* label, enum dtype dtype, enum lod_reduce_method method)
   log_info("=== %s ===", label);
   int ok = 0;
   CUstream stream = NULL;
-  CUdeviceptr d_values = 0, d_ends = 0;
+  CUdeviceptr d_values = 0;
 
   T src[8];
   for (int i = 0; i < 8; ++i)
@@ -110,8 +110,10 @@ test_reduce(const char* label, enum dtype dtype, enum lod_reduce_method method)
     }
   }
 
-  // ends[i] = cumulative window boundary: windows [0,4) and [4,8)
-  uint64_t ends[2] = { 4, 8 };
+  // CSR: starts = {0, 4, 8}, indices = {0,1,2,3,4,5,6,7}
+  uint64_t starts[3] = { 0, 4, 8 };
+  uint64_t indices[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+  CUdeviceptr d_starts = 0, d_indices = 0;
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
 
@@ -119,11 +121,14 @@ test_reduce(const char* label, enum dtype dtype, enum lod_reduce_method method)
   CU(Fail, cuMemAlloc(&d_values, 10 * sizeof(T)));
   CU(Fail, cuMemcpyHtoD(d_values, src, 8 * sizeof(T)));
 
-  CHECK(Fail, upload(&d_ends, ends, 2 * sizeof(uint64_t)));
+  CHECK(Fail, upload(&d_starts, starts, 3 * sizeof(uint64_t)));
+  CHECK(Fail, upload(&d_indices, indices, 8 * sizeof(uint64_t)));
 
-  CHECK(Fail,
-        lod_reduce(d_values, d_ends, dtype, method, 0, 8, 8, 2, 1, stream) ==
-          0);
+  CHECK(
+    Fail,
+    lod_reduce_csr(
+      d_values, d_starts, d_indices, dtype, method, 0, 8, 8, 2, 1, stream) ==
+      0);
   CU(Fail, cuStreamSynchronize(stream));
 
   {
@@ -148,7 +153,8 @@ test_reduce(const char* label, enum dtype dtype, enum lod_reduce_method method)
   ok = 1;
 Fail:
   cuMemFree(d_values);
-  cuMemFree(d_ends);
+  cuMemFree(d_starts);
+  cuMemFree(d_indices);
   cuStreamDestroy(stream);
   return ok ? 0 : 1;
 }
@@ -292,7 +298,7 @@ test_reduce_f16(const char* label, enum lod_reduce_method method)
   log_info("=== %s ===", label);
   int ok = 0;
   CUstream stream = NULL;
-  CUdeviceptr d_values = 0, d_ends = 0;
+  CUdeviceptr d_values = 0;
 
   __half src[8];
   for (int i = 0; i < 8; ++i)
@@ -324,16 +330,28 @@ test_reduce_f16(const char* label, enum lod_reduce_method method)
     }
   }
 
-  uint64_t ends[2] = { 4, 8 };
+  uint64_t starts[3] = { 0, 4, 8 };
+  uint64_t indices[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+  CUdeviceptr d_starts = 0, d_indices = 0;
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_DEFAULT));
   CU(Fail, cuMemAlloc(&d_values, 10 * sizeof(__half)));
   CU(Fail, cuMemcpyHtoD(d_values, src, 8 * sizeof(__half)));
-  CHECK(Fail, upload(&d_ends, ends, 2 * sizeof(uint64_t)));
+  CHECK(Fail, upload(&d_starts, starts, 3 * sizeof(uint64_t)));
+  CHECK(Fail, upload(&d_indices, indices, 8 * sizeof(uint64_t)));
 
   CHECK(Fail,
-        lod_reduce(
-          d_values, d_ends, dtype_f16, method, 0, 8, 8, 2, 1, stream) == 0);
+        lod_reduce_csr(d_values,
+                       d_starts,
+                       d_indices,
+                       dtype_f16,
+                       method,
+                       0,
+                       8,
+                       8,
+                       2,
+                       1,
+                       stream) == 0);
   CU(Fail, cuStreamSynchronize(stream));
 
   {
@@ -354,7 +372,8 @@ test_reduce_f16(const char* label, enum lod_reduce_method method)
   ok = 1;
 Fail:
   cuMemFree(d_values);
-  cuMemFree(d_ends);
+  cuMemFree(d_starts);
+  cuMemFree(d_indices);
   cuStreamDestroy(stream);
   return ok ? 0 : 1;
 }
