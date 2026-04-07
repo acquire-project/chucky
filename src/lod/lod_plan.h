@@ -195,6 +195,16 @@ lod_plan_free(struct lod_plan* p);
 uint64_t
 lod_plan_lod_shape(const struct lod_plan* p, int lv, int k);
 
+// Derive per-level fixed-dims decomposition from lod_mask.
+// Fills out_dim_to_dim[0..out_ndim-1] (full dim index for each fixed dim)
+// and out_shape[0..out_ndim-1] (size of each fixed dim at this level).
+void
+level_dims_fixed_info(const struct level_dims* ld,
+                      int ndim,
+                      int* out_ndim,
+                      int* out_dim_to_dim,
+                      uint64_t* out_shape);
+
 // Fill dst[0..lod_ndim-1] with projected lod sizes for level lv.
 void
 lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst);

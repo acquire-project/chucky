@@ -296,18 +296,11 @@ build_morton_lut_for_level(struct lod_state* lod,
     cuMemFree(d_lod_shape_lv);
 
   // Compute fixed_dims_chunk_offsets on host and upload.
-  // Derive per-level fixed dims from lod_mask.
   {
-    int fdn = 0;
+    int fdn;
     int fd_to_dim[LOD_MAX_NDIM];
     uint64_t fd_shape[LOD_MAX_NDIM];
-    for (int d = 0; d < p->ndim; ++d) {
-      if (!(ld->lod_mask & (1u << d))) {
-        fd_to_dim[fdn] = d;
-        fd_shape[fdn] = ld->dim[d].size;
-        fdn++;
-      }
-    }
+    level_dims_fixed_info(ld, p->ndim, &fdn, fd_to_dim, fd_shape);
 
     uint32_t* fixed_dims_offsets =
       (uint32_t*)calloc(ld->fixed_dims_count, sizeof(uint32_t));
@@ -514,9 +507,6 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_morton_fixed_dims_chunk_offsets[i]));
   }
   for (int i = 0; i < lod->plan.levels.nlod - 1; ++i) {
-    CUWARN(cuMemFree(lod->d_child_shapes[i]));
-    CUWARN(cuMemFree(lod->d_parent_shapes[i]));
-    CUWARN(cuMemFree(lod->d_level_ends[i]));
     CUWARN(cuMemFree(lod->d_csr_starts[i]));
     CUWARN(cuMemFree(lod->d_csr_indices[i]));
   }

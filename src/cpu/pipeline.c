@@ -376,19 +376,12 @@ cpu_pipeline_compute_luts(
         plan, lv, layout_lv, out->morton_lut[lv], nthreads);
 
       // Convert flat batch index → lifted-space chunk pool offset.
-      // Derive per-level fixed dims from lod_mask.
       {
         const struct level_dims* ld = &plan->levels.level[lv];
-        int fdn = 0;
+        int fdn;
         int fd_to_dim[LOD_MAX_NDIM];
         uint64_t fd_shape[LOD_MAX_NDIM];
-        for (int d = 0; d < plan->ndim; ++d) {
-          if (!(ld->lod_mask & (1u << d))) {
-            fd_to_dim[fdn] = d;
-            fd_shape[fdn] = ld->dim[d].size;
-            fdn++;
-          }
-        }
+        level_dims_fixed_info(ld, plan->ndim, &fdn, fd_to_dim, fd_shape);
 
         for (uint64_t bi = 0; bi < ld->fixed_dims_count; ++bi) {
           uint64_t remainder = bi;

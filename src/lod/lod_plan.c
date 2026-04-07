@@ -159,29 +159,38 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   for (int k = 0; k < dst_ld->lod_ndim; ++k)
     dst_lod_shape[k] = dst_ld->dim[dst_ld->lod_to_dim[k]].size;
 
-  // Build dropped-dim shape and strides for computing the batch sub-index.
+  // Build dropped-dim shape for computing the batch sub-index.
   int n_dropped = 0;
-  int dropped_dims[LOD_MAX_NDIM]; // full dim indices that dropped
   uint64_t dropped_shape[LOD_MAX_NDIM];
   for (int k = 0; k < src_ld->lod_ndim; ++k) {
     int d = src_ld->lod_to_dim[k];
-    if (dropped_mask & (1u << d)) {
-      dropped_dims[n_dropped] = d;
-      dropped_shape[n_dropped] = dst_ld->dim[d].size;
-      n_dropped++;
-    }
+    if (dropped_mask & (1u << d))
+      dropped_shape[n_dropped++] = dst_ld->dim[d].size;
   }
 
-  // Iterate over all source elements in C-order, compute their morton position
-  // and which destination element they map to.
-  // Phase 1: histogram (count sources per destination).
+  // Scratch: for each source element, store {dst_elem, src_morton}.
+  // Avoids recomputing unravel + morton_rank in a second pass.
+  struct src_map
+  {
+    uint64_t dst_elem;
+    uint64_t src_morton;
+  };
+  struct src_map* map = (struct src_map*)malloc(src_count * sizeof(*map));
+  if (!map) {
+    free(csr->starts);
+    free(csr->indices);
+    csr->starts = NULL;
+    csr->indices = NULL;
+    return 1;
+  }
+
+  // Single pass: compute dst_elem and src_morton for every source element,
+  // build histogram in starts[1..dst_seg].
   uint64_t* counts = csr->starts + 1;
   for (uint64_t m = 0; m < src_count; ++m) {
-    // Unravel flat C-order index to coordinates.
     uint64_t src_coords[LOD_MAX_NDIM];
     unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
 
-    // Split into surviving LOD coords (halved) and dropped coords.
     uint64_t dst_lod_coords[LOD_MAX_NDIM];
     uint64_t drop_coords[LOD_MAX_NDIM];
     int di = 0, si = 0;
@@ -202,17 +211,23 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
       drop_idx = drop_idx * dropped_shape[j] + drop_coords[j];
 
     uint64_t dst_elem = drop_idx * dst_ld->lod_nelem + dst_morton;
+    uint64_t src_morton =
+      morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
+
+    map[m].dst_elem = dst_elem;
+    map[m].src_morton = src_morton;
     counts[dst_elem]++;
   }
 
-  // Phase 2: prefix sum to build starts array.
+  // Prefix sum to build starts array.
   csr->starts[0] = 0;
   for (uint64_t i = 0; i < dst_seg; ++i)
     csr->starts[i + 1] += csr->starts[i];
 
-  // Phase 3: scatter source morton positions into CSR indices.
+  // Scatter source morton positions into CSR indices using cached map.
   uint64_t* write_pos = (uint64_t*)malloc(dst_seg * sizeof(uint64_t));
   if (!write_pos) {
+    free(map);
     free(csr->starts);
     free(csr->indices);
     csr->starts = NULL;
@@ -222,38 +237,11 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   for (uint64_t i = 0; i < dst_seg; ++i)
     write_pos[i] = csr->starts[i];
 
-  for (uint64_t m = 0; m < src_count; ++m) {
-    uint64_t src_coords[LOD_MAX_NDIM];
-    unravel(src_ld->lod_ndim, src_lod_shape, m, src_coords);
-
-    // Source morton position (what the reduce kernel indexes into).
-    uint64_t src_morton =
-      morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
-
-    uint64_t dst_lod_coords[LOD_MAX_NDIM];
-    uint64_t drop_coords[LOD_MAX_NDIM];
-    int di = 0, si = 0;
-    for (int k = 0; k < src_ld->lod_ndim; ++k) {
-      int d = src_ld->lod_to_dim[k];
-      if (dropped_mask & (1u << d))
-        drop_coords[di++] = src_coords[k];
-      else
-        dst_lod_coords[si++] = src_coords[k] / 2;
-    }
-
-    uint64_t dst_morton =
-      (dst_ld->lod_ndim > 0)
-        ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
-        : 0;
-    uint64_t drop_idx = 0;
-    for (int j = 0; j < n_dropped; ++j)
-      drop_idx = drop_idx * dropped_shape[j] + drop_coords[j];
-
-    uint64_t dst_elem = drop_idx * dst_ld->lod_nelem + dst_morton;
-    csr->indices[write_pos[dst_elem]++] = src_morton;
-  }
+  for (uint64_t m = 0; m < src_count; ++m)
+    csr->indices[write_pos[map[m].dst_elem]++] = map[m].src_morton;
 
   free(write_pos);
+  free(map);
   return 0;
 }
 
@@ -577,6 +565,24 @@ lod_plan_fill_lod_shapes(const struct lod_plan* p, int lv, uint64_t* dst)
   const struct level_dims* ld = &p->levels.level[lv];
   for (int k = 0; k < ld->lod_ndim; ++k)
     dst[k] = ld->dim[ld->lod_to_dim[k]].size;
+}
+
+void
+level_dims_fixed_info(const struct level_dims* ld,
+                      int ndim,
+                      int* out_ndim,
+                      int* out_dim_to_dim,
+                      uint64_t* out_shape)
+{
+  int n = 0;
+  for (int d = 0; d < ndim; ++d) {
+    if (!(ld->lod_mask & (1u << d))) {
+      out_dim_to_dim[n] = d;
+      out_shape[n] = ld->dim[d].size;
+      n++;
+    }
+  }
+  *out_ndim = n;
 }
 
 void

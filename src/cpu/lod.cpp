@@ -126,7 +126,8 @@ reduce_window(const T* src,
   return T{};
 }
 
-// CSR reduce: source elements accessed via indirect indices array.
+// CSR reduce: gather indirect window into a stack buffer, delegate to
+// reduce_window. Window sizes are typically 2–8 (2^lod_ndim).
 template<typename T>
 static T
 reduce_window_csr(const T* src,
@@ -135,72 +136,12 @@ reduce_window_csr(const T* src,
                   uint64_t end,
                   lod_reduce_method method)
 {
-  using Acc = typename reduce_acc<T>::type;
+  T buf[16];
   uint64_t len = end - start;
-
-  switch (method) {
-    case lod_reduce_mean: {
-      Acc sum = 0;
-      for (uint64_t j = start; j < end; ++j)
-        sum += (Acc)src[indices[j]];
-      return (T)(sum / (Acc)len);
-    }
-    case lod_reduce_min: {
-      T best = src[indices[start]];
-      for (uint64_t j = start + 1; j < end; ++j)
-        if (src[indices[j]] < best)
-          best = src[indices[j]];
-      return best;
-    }
-    case lod_reduce_max: {
-      T best = src[indices[start]];
-      for (uint64_t j = start + 1; j < end; ++j)
-        if (src[indices[j]] > best)
-          best = src[indices[j]];
-      return best;
-    }
-    case lod_reduce_median: {
-      T buf[16];
-      uint64_t n = (len <= 16) ? len : 16;
-      for (uint64_t j = 0; j < n; ++j)
-        buf[j] = src[indices[start + j]];
-      for (uint64_t i = 1; i < n; ++i) {
-        T key = buf[i];
-        uint64_t k = i;
-        while (k > 0 && buf[k - 1] > key) {
-          buf[k] = buf[k - 1];
-          --k;
-        }
-        buf[k] = key;
-      }
-      return buf[n / 2];
-    }
-    case lod_reduce_max_suppressed: {
-      T t1 = src[indices[start]], t2 = src[indices[start]];
-      for (uint64_t j = start + 1; j < end; ++j) {
-        T v = src[indices[j]];
-        if (v >= t1) {
-          t2 = t1;
-          t1 = v;
-        } else if (v > t2)
-          t2 = v;
-      }
-      return t2;
-    }
-    case lod_reduce_min_suppressed: {
-      T b1 = src[indices[start]], b2 = src[indices[start]];
-      for (uint64_t j = start + 1; j < end; ++j) {
-        T v = src[indices[j]];
-        if (v <= b1) {
-          b2 = b1;
-          b1 = v;
-        } else if (v < b2)
-          b2 = v;
-      }
-      return b2;
-    }
-  }
-  return T{};
+  uint64_t n = len < 16 ? len : 16;
+  for (uint64_t j = 0; j < n; ++j)
+    buf[j] = src[indices[start + j]];
+  return reduce_window(buf, 0, n, method);
 }
 
 // ---- Scatter helpers ----
