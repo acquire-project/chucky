@@ -69,14 +69,15 @@ struct level_geometry
 };
 
 // CSR reduce LUT for one level transition (l -> l+1).
-// Maps destination elements to their source elements.
+// Flattened: batch_count=1, indices contain absolute offsets within the source
+// level. Layout matches the scatter kernel's ascending-d fixed-dim enumeration.
 struct reduce_csr
 {
-  uint64_t* starts;          // [dst_segment_size + 1]
-  uint64_t* indices;         // [src_lod_count]
-  uint64_t dst_segment_size; // = lod_nelem_dst * prod(dropped_extents)
-  uint64_t src_lod_count;    // = lod_nelem_src
-  uint64_t batch_count;      // = fixed_dims_count at source level
+  uint64_t* starts;  // [dst_segment_size + 1]
+  uint64_t* indices; // [src_lod_count], absolute offsets in source level
+  uint64_t dst_segment_size; // = dst fixed_dims_count * dst lod_nelem
+  uint64_t src_lod_count;    // = src fixed_dims_count * src lod_nelem
+  uint64_t batch_count;      // always 1
 };
 
 struct lod_plan
