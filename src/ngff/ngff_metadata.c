@@ -1,6 +1,7 @@
 #include "ngff/ngff_metadata.h"
 #include "defs.limits.h"
 #include "ngff.h"
+#include "util/ceildiv.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
@@ -90,19 +91,19 @@ ngff_multiscale_group_json(char* buf,
     snprintf(lvstr, sizeof(lvstr), "%d", lv);
     jw_string(&jw, lvstr);
 
-    // Precompute per-axis physical scale and downsample factor.
-    // Use the actual ratio of L0 size to level size so that dimensions
-    // which cannot be downsampled further (e.g. size 1) get factor 1.
-    const struct dimension* lv_dims = level_dims[lv];
     double scale[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
       double phys = (axes && axes[d].scale > 0) ? axes[d].scale : 1.0;
-      double factor = 1.0;
-      uint64_t l0_size = l0[d].size;
-      uint64_t lv_size = lv_dims[d].size;
-      if (l0_size > 0 && lv_size > 0)
-        factor = (double)l0_size / (double)lv_size;
-      scale[d] = phys * factor;
+      int n_down = 0;
+      if (l0[d].downsample) {
+        for (int k = 0; k < lv; ++k) {
+          uint64_t sz = level_dims[k][d].size;
+          uint64_t cs = level_dims[k][d].chunk_size;
+          if (cs > 0 && sz > 0 && ceildiv(sz, cs) > 1)
+            ++n_down;
+        }
+      }
+      scale[d] = phys * (double)(1 << n_down);
     }
 
     jw_key(&jw, "coordinateTransformations");

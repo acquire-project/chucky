@@ -395,12 +395,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
                  const struct dim_info* dims,
-                 const struct tile_stream_configuration* config,
-                 struct shard_sink* sink,
                  CUstream d2h_stream)
 {
-  (void)config; // used by drain_bulk_d2h, not kick
-  (void)sink;   // IO fences moved to drain (d2h_deliver_drain)
   const int fc = handoff->fc;
 
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));

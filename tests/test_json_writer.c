@@ -284,6 +284,49 @@ Fail:
 }
 
 static int
+test_scale_clamped_dim(void)
+{
+  // y has size 10, chunk_size 8 -> ceildiv(10,8)=2 chunks, but halving
+  // clamps to 8 (chunk_size). The scale factor must be 2x (one downsample),
+  // not 10/8=1.25 (the old L0/Ln ratio).
+  struct dimension l0[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 10, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 64, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+  struct dimension l1[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 8, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 32, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+  struct dimension l2[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 8, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 16, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+
+  const struct dimension* levels[3] = { l0, l1, l2 };
+
+  char buf[8192];
+  int len = ngff_multiscale_group_json(buf, sizeof(buf), 3, 3, levels, NULL);
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  // L0: scale=[1.0, 1.0, 1.0]
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,1.0,1.0]"));
+  // L1: t=1, y=2 (one downsample), x=2 (one downsample)
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,2.0,2.0]"));
+  // L2: t=1, y=2 (still one -- y dropped after L0->L1), x=4 (two downsamples)
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,2.0,4.0]"));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  return 1;
+}
+
+static int
 test_zarr_array_json_lz4(void)
 {
   char buf[4096];
@@ -357,6 +400,7 @@ main(void)
     { "zarr_metadata", test_zarr_metadata },
     { "zarr_root_json", test_zarr_root_json },
     { "zarr_multiscale_group_json", test_zarr_multiscale_group_json },
+    { "scale_clamped_dim", test_scale_clamped_dim },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
     { "zarr_array_json_zstd", test_zarr_array_json_zstd },
   };

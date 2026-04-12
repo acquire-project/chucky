@@ -2033,6 +2033,7 @@ bench_two_streams_main(int ac,
     .shard_counts = shard_counts,
     .io_bw_mbps = io_bw_mbps,
     .io_latency_us = io_latency_us,
+    .backpressure_bytes = backpressure_bytes,
   };
   int ecode = run_bench_two_streams(&cfg);
 

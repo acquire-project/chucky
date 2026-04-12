@@ -5,6 +5,7 @@
 #include "util/prelude.h"
 
 #include <assert.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -161,10 +162,13 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
 
   // Enumerate ALL source elements across all batches.
   uint64_t* counts = csr->starts + 1;
-  uint64_t gi = 0;
+  uint64_t lod_nelem = src_ld->lod_nelem;
 
-  for (uint64_t src_batch = 0; src_batch < src_ld->fixed_dims_count;
-       ++src_batch) {
+#pragma omp parallel for schedule(static)
+  for (uint64_t gi = 0; gi < src_total; ++gi) {
+    uint64_t src_batch = gi / lod_nelem;
+    uint64_t src_enum = gi % lod_nelem;
+
     // Decompose src_batch into per-dim coords (indexed by full dim d).
     uint64_t fixed_coords[LOD_MAX_NDIM];
     memset(fixed_coords, 0, sizeof(fixed_coords));
@@ -177,50 +181,48 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
       }
     }
 
-    for (uint64_t src_enum = 0; src_enum < src_ld->lod_nelem; ++src_enum) {
-      uint64_t src_coords[LOD_MAX_NDIM];
-      unravel(src_ld->lod_ndim, src_lod_shape, src_enum, src_coords);
+    uint64_t src_coords[LOD_MAX_NDIM];
+    unravel(src_ld->lod_ndim, src_lod_shape, src_enum, src_coords);
 
-      // Halve LOD coords. Non-dropped → dst LOD, dropped → dst fixed.
-      uint64_t dst_fixed_coords[LOD_MAX_NDIM];
-      memcpy(dst_fixed_coords, fixed_coords, sizeof(dst_fixed_coords));
+    // Halve LOD coords. Non-dropped → dst LOD, dropped → dst fixed.
+    uint64_t dst_fixed_coords[LOD_MAX_NDIM];
+    memcpy(dst_fixed_coords, fixed_coords, sizeof(dst_fixed_coords));
 
-      uint64_t dst_lod_coords[LOD_MAX_NDIM];
-      int si = 0;
-      for (int k = 0; k < src_ld->lod_ndim; ++k) {
-        int d = src_ld->lod_to_dim[k];
-        if (dropped_mask & (1u << d))
-          dst_fixed_coords[d] = src_coords[k] / 2;
-        else
-          dst_lod_coords[si++] = src_coords[k] / 2;
-      }
-
-      uint64_t dst_morton =
-        (dst_ld->lod_ndim > 0)
-          ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
-          : 0;
-
-      // Ravel dst fixed coords in ascending-d order (matches scatter layout).
-      uint64_t dst_bi = 0;
-      {
-        uint64_t rem = 0;
-        for (int k = 0; k < dst_ld->fixed_dims_ndim; ++k) {
-          rem = rem * dst_ld->fixed_dims_shape[k] +
-                dst_fixed_coords[dst_ld->fixed_dim_to_dim[k]];
-        }
-        dst_bi = rem;
-      }
-
-      uint64_t dst_elem = dst_bi * dst_ld->lod_nelem + dst_morton;
-      uint64_t src_morton =
-        morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
-      uint64_t src_elem = src_batch * src_ld->lod_nelem + src_morton;
-
-      map[gi].dst_elem = dst_elem;
-      map[gi].src_elem = src_elem;
-      counts[dst_elem]++;
-      gi++;
+    uint64_t dst_lod_coords[LOD_MAX_NDIM];
+    int si = 0;
+    for (int k = 0; k < src_ld->lod_ndim; ++k) {
+      int d = src_ld->lod_to_dim[k];
+      if (dropped_mask & (1u << d))
+        dst_fixed_coords[d] = src_coords[k] / 2;
+      else
+        dst_lod_coords[si++] = src_coords[k] / 2;
     }
+
+    uint64_t dst_morton =
+      (dst_ld->lod_ndim > 0)
+        ? morton_rank(dst_ld->lod_ndim, dst_lod_shape, dst_lod_coords, 0)
+        : 0;
+
+    // Ravel dst fixed coords in ascending-d order (matches scatter layout).
+    uint64_t dst_bi = 0;
+    {
+      uint64_t rem = 0;
+      for (int k = 0; k < dst_ld->fixed_dims_ndim; ++k) {
+        rem = rem * dst_ld->fixed_dims_shape[k] +
+              dst_fixed_coords[dst_ld->fixed_dim_to_dim[k]];
+      }
+      dst_bi = rem;
+    }
+
+    uint64_t dst_elem = dst_bi * dst_ld->lod_nelem + dst_morton;
+    uint64_t src_morton =
+      morton_rank(src_ld->lod_ndim, src_lod_shape, src_coords, 0);
+    uint64_t src_elem = src_batch * src_ld->lod_nelem + src_morton;
+
+    map[gi].dst_elem = dst_elem;
+    map[gi].src_elem = src_elem;
+#pragma omp atomic
+    counts[dst_elem]++;
   }
 
   // Prefix sum.
@@ -241,8 +243,13 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   for (uint64_t i = 0; i < dst_total; ++i)
     write_pos[i] = csr->starts[i];
 
-  for (uint64_t i = 0; i < src_total; ++i)
-    csr->indices[write_pos[map[i].dst_elem]++] = map[i].src_elem;
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < src_total; ++i) {
+    uint64_t pos;
+#pragma omp atomic capture
+    pos = write_pos[map[i].dst_elem]++;
+    csr->indices[pos] = map[i].src_elem;
+  }
 
   free(write_pos);
   free(map);

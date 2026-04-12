@@ -3,6 +3,7 @@
 
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
+#include "log/log.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
@@ -170,11 +171,22 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
           pend > s->config.backpressure_bytes) {
         struct platform_clock bp_clk = { 0 };
         platform_toc(&bp_clk);
-        while (shard_sink_pending_bytes(s->shard_sink) >
-               s->config.backpressure_bytes)
+        const double timeout_s = 30.0;
+        int drained = 0;
+        while (platform_toc(&bp_clk) < timeout_s) {
+          if (shard_sink_pending_bytes(s->shard_sink) <=
+              s->config.backpressure_bytes) {
+            drained = 1;
+            break;
+          }
           platform_sleep_ns(100000); // 100 μs
+        }
         float bp_ms = (float)(platform_toc(&bp_clk) * 1000.0);
         accumulate_metric_ms(&s->metrics.backpressure, bp_ms, 0, 0);
+        if (!drained)
+          log_warn("backpressure timeout after %.1fs (pending %zu bytes)",
+                   timeout_s,
+                   shard_sink_pending_bytes(s->shard_sink));
       }
     }
   }
