@@ -279,7 +279,8 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   }
 }
 
-// Issue bulk D2H (phase 2), synchronize, record metrics, deliver to sinks.
+// Wait for IO fences, issue bulk D2H (phase 2), synchronize, record metrics,
+// deliver to sinks.
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
@@ -294,6 +295,14 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
 {
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
+
+  // Wait for IO fences before overwriting h_aggregated with bulk D2H.
+  // Moved from kick so that compress+aggregate can run without blocking.
+  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
+
+  // Fail fast if async IO encountered an error.
+  if (sink->has_error && sink->has_error(sink))
+    goto Error;
 
   // Phase 2: sync on offsets, issue bulk D2H, sync on bulk ready.
   CHECK(Error,
@@ -391,14 +400,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  CUstream d2h_stream)
 {
   (void)config; // used by drain_bulk_d2h, not kick
+  (void)sink;   // IO fences moved to drain (d2h_deliver_drain)
   const int fc = handoff->fc;
-
-  // Wait for IO fences before reusing aggregate slots
-  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
-
-  // Fail fast if async IO encountered an error.
-  if (sink->has_error && sink->has_error(sink))
-    goto Error;
 
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
