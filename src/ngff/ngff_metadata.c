@@ -91,17 +91,12 @@ ngff_multiscale_group_json(char* buf,
     jw_string(&jw, lvstr);
 
     // Precompute per-axis physical scale and downsample factor.
-    // Use the actual ratio of L0 size to level size so that dimensions
-    // which cannot be downsampled further (e.g. size 1) get factor 1.
-    const struct dimension* lv_dims = level_dims[lv];
+    // LOD dims are downsampled 2x at each level, so the physical pixel
+    // spacing is phys * 2^lv regardless of rounding in the actual sizes.
     double scale[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
       double phys = (axes && axes[d].scale > 0) ? axes[d].scale : 1.0;
-      double factor = 1.0;
-      uint64_t l0_size = l0[d].size;
-      uint64_t lv_size = lv_dims[d].size;
-      if (l0_size > 0 && lv_size > 0)
-        factor = (double)l0_size / (double)lv_size;
+      double factor = l0[d].downsample ? (double)(1 << lv) : 1.0;
       scale[d] = phys * factor;
     }
 

@@ -1,4 +1,5 @@
 #include "defs.limits.h"
+#include "ngff.h"
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "zarr/json_writer.h"
@@ -284,6 +285,66 @@ Fail:
 }
 
 static int
+test_multiscale_scale_factors_clamped(void)
+{
+  // Regression: scale factors must use pow(2, level), not L0/Ln ratio.
+  // y has size 10, chunk_size 8: halving gives 10 -> 5 -> 3 -> 2
+  // The L0/Ln ratio would be 10/5=2, 10/3=3.33, 10/2=5 (wrong).
+  // Correct: pow(2,1)=2, pow(2,2)=4, pow(2,3)=8.
+  struct dimension l0[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 10, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 64, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+  struct dimension l1[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 5, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 32, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+  struct dimension l2[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 3, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 16, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+  struct dimension l3[3] = {
+    { .size = 0, .chunk_size = 1, .name = "t" },
+    { .size = 2, .chunk_size = 8, .name = "y", .downsample = 1 },
+    { .size = 8, .chunk_size = 8, .name = "x", .downsample = 1 },
+  };
+
+  struct ngff_axis axes[3] = {
+    { .scale = 0 },
+    { .scale = 0.5 },
+    { .scale = 0.25 },
+  };
+
+  const struct dimension* levels[4] = { l0, l1, l2, l3 };
+  char buf[8192];
+  int len =
+    ngff_multiscale_group_json(buf, sizeof(buf), 3, 4, levels, axes);
+  CHECK(Fail, len > 0);
+  buf[len] = '\0';
+
+  // L0: t scale=1 (no downsample), y scale=0.5*1=0.5, x scale=0.25*1=0.25
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,0.5,0.25]"));
+
+  // L1: t=1, y=0.5*2=1, x=0.25*2=0.5
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,1.0,0.5]"));
+
+  // L2: t=1, y=0.5*4=2, x=0.25*4=1
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,2.0,1.0]"));
+
+  // L3: t=1, y=0.5*8=4, x=0.25*8=2
+  CHECK(Fail, strstr(buf, "\"scale\":[1.0,4.0,2.0]"));
+
+  return 0;
+
+Fail:
+  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  return 1;
+}
+
+static int
 test_zarr_array_json_lz4(void)
 {
   char buf[4096];
@@ -357,6 +418,7 @@ main(void)
     { "zarr_metadata", test_zarr_metadata },
     { "zarr_root_json", test_zarr_root_json },
     { "zarr_multiscale_group_json", test_zarr_multiscale_group_json },
+    { "multiscale_scale_factors_clamped", test_multiscale_scale_factors_clamped },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
     { "zarr_array_json_zstd", test_zarr_array_json_zstd },
   };
