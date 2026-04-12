@@ -144,11 +144,14 @@ struct compress_agg_stage
 struct d2h_deliver_stage
 {
   CUevent t_d2h_start[2];
-  CUevent ready[2];
+  CUevent
+    offsets_ready[2]; // phase 1 (offset D2H) completion; drain syncs on this
+  CUevent ready[2];   // phase 2 (bulk D2H) completion
 
   struct level_flush_state* levels; // borrowed
   int nlod;
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
+  CUstream d2h_stream;            // stashed by kick for drain to use
 };
 
 struct flush_pipeline

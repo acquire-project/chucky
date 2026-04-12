@@ -23,8 +23,10 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&stage->offsets_ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
+    CU(Fail, cuEventRecord(stage->offsets_ready[fc], compute));
     CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
@@ -42,6 +44,7 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     return;
   for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
+    cu_event_destroy(stage->offsets_ready[fc]);
     cu_event_destroy(stage->ready[fc]);
   }
   // levels is borrowed, not destroyed here
@@ -74,22 +77,20 @@ wait_io_fences(const struct d2h_deliver_stage* stage,
   }
 }
 
-// Two-phase D2H: transfer offsets first (small), synchronize, then only
-// actual compressed bytes.
+// Phase 1: D2H offsets only (non-blocking — no host sync).
+// Records offsets_ready[fc] when offsets are on the host.
 static int
-two_phase_d2h(const struct d2h_deliver_stage* stage,
-              const struct flush_handoff* handoff,
-              const struct level_geometry* levels,
-              const struct batch_state* batch,
-              const struct dim_info* dims,
-              const struct tile_stream_configuration* config,
-              CUstream d2h_stream)
+kick_offset_d2h(struct d2h_deliver_stage* stage,
+                const struct flush_handoff* handoff,
+                const struct level_geometry* levels,
+                const struct batch_state* batch,
+                const struct dim_info* dims,
+                CUstream d2h_stream)
 {
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
   const uint32_t level_mask = handoff->active_levels_mask;
 
-  // Phase 1: D2H offsets only
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
       continue;
@@ -113,18 +114,41 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
                          (covering + 1) * sizeof(size_t),
                          d2h_stream));
   }
-  CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+  CU(Error, cuEventRecord(stage->offsets_ready[fc], d2h_stream));
+
+  return 0;
+
+Error:
+  return 1;
+}
+
+// Phase 2: sync on offsets, then D2H only the actual compressed bytes.
+// Called from drain after kick has returned. Uses the stashed d2h_stream.
+static int
+drain_bulk_d2h(struct d2h_deliver_stage* stage,
+               const struct flush_handoff* handoff,
+               const struct level_geometry* levels,
+               const struct batch_state* batch,
+               const struct dim_info* dims,
+               const struct tile_stream_configuration* config)
+{
+  const int fc = handoff->fc;
+  const uint32_t n_epochs = handoff->n_epochs;
+  const uint32_t level_mask = handoff->active_levels_mask;
+  CUstream d2h_stream = stage->d2h_stream;
+
+  // Wait for offset D2H to land on the host.
   {
     struct platform_clock sync_clk = { 0 };
     platform_toc(&sync_clk);
-    CU(Error, cuEventSynchronize(stage->ready[fc]));
+    CU(Error, cuEventSynchronize(stage->offsets_ready[fc]));
     if (stage->metrics) {
       float ms = (float)(platform_toc(&sync_clk) * 1000.0);
       accumulate_metric_ms(&stage->metrics->kick_sync_stall, ms, 0, 0);
     }
   }
 
-  // Phase 2: D2H only actual compressed bytes per level
+  // D2H only actual compressed bytes per level.
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
       continue;
@@ -255,9 +279,9 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   }
 }
 
-// Synchronize D2H, record metrics, deliver to sinks.
+// Issue bulk D2H (phase 2), synchronize, record metrics, deliver to sinks.
 static struct writer_result
-sync_and_deliver(const struct d2h_deliver_stage* stage,
+sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
@@ -271,6 +295,9 @@ sync_and_deliver(const struct d2h_deliver_stage* stage,
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
+  // Phase 2: sync on offsets, issue bulk D2H, sync on bulk ready.
+  CHECK(Error,
+        drain_bulk_d2h(stage, handoff, levels, batch, dims, config) == 0);
   CU(Error, cuEventSynchronize(stage->ready[fc]));
   record_flush_metrics(
     stage, handoff, levels, batch, dims, layout, config, lod, metrics);
@@ -363,6 +390,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  struct shard_sink* sink,
                  CUstream d2h_stream)
 {
+  (void)config; // used by drain_bulk_d2h, not kick
   const int fc = handoff->fc;
 
   // Wait for IO fences before reusing aggregate slots
@@ -375,8 +403,10 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
   CHECK(Error,
-        two_phase_d2h(
-          stage, handoff, levels, batch, dims, config, d2h_stream) == 0);
+        kick_offset_d2h(stage, handoff, levels, batch, dims, d2h_stream) == 0);
+
+  // Stash d2h_stream so drain can issue bulk D2H on the same stream.
+  stage->d2h_stream = d2h_stream;
 
   return 0;
 
