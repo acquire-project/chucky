@@ -79,12 +79,8 @@ struct shard_sink
   size_t (*pending_bytes)(const struct shard_sink* self);
 };
 
-// NULL-tolerant accessor for shard_sink.pending_bytes.
-static inline size_t
-shard_sink_pending_bytes(const struct shard_sink* s)
-{
-  return (s && s->pending_bytes) ? s->pending_bytes(s) : 0;
-}
+size_t
+shard_sink_pending_bytes(const struct shard_sink* s);
 
 struct writer_result
 writer_ok(void);

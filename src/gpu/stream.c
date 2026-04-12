@@ -171,17 +171,22 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
           pend > s->config.backpressure_bytes) {
         struct platform_clock bp_clk = { 0 };
         platform_toc(&bp_clk);
+        int64_t start_ns = bp_clk.last_ns;
         const double timeout_s = 30.0;
         int drained = 0;
-        while (platform_toc(&bp_clk) < timeout_s) {
+        for (;;) {
           if (shard_sink_pending_bytes(s->shard_sink) <=
               s->config.backpressure_bytes) {
             drained = 1;
             break;
           }
+          platform_toc(&bp_clk);
+          if ((bp_clk.last_ns - start_ns) / 1e9 >= timeout_s)
+            break;
           platform_sleep_ns(100000); // 100 μs
         }
-        float bp_ms = (float)(platform_toc(&bp_clk) * 1000.0);
+        platform_toc(&bp_clk);
+        float bp_ms = (float)((bp_clk.last_ns - start_ns) / 1e6);
         accumulate_metric_ms(&s->metrics.backpressure, bp_ms, 0, 0);
         if (!drained)
           log_warn("backpressure timeout after %.1fs (pending %zu bytes)",

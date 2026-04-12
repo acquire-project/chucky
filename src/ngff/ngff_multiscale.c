@@ -122,7 +122,7 @@ ngff_multiscale_pending_bytes_fn(const struct shard_sink* self)
 {
   const struct ngff_multiscale* ms =
     container_of(self, struct ngff_multiscale, base);
-  return ms->pool->pending_bytes(ms->pool);
+  return shard_pool_pending_bytes(ms->pool);
 }
 
 // --- Shared create logic ---

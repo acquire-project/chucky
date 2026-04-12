@@ -141,7 +141,7 @@ static size_t
 zarr_array_pending_bytes_fn(const struct shard_sink* self)
 {
   const struct zarr_array* a = container_of(self, struct zarr_array, base);
-  return a->pool->pending_bytes(a->pool);
+  return shard_pool_pending_bytes(a->pool);
 }
 
 // --- Core init (geometry already computed) ---
