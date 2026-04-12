@@ -47,6 +47,7 @@ struct bench_config
   int json_output;              // print JSON to stdout after run
   uint64_t io_bw_mbps;          // 0 = no bandwidth cap (MiB/s)
   uint64_t io_latency_us;       // 0 = no fixed per-job latency
+  size_t backpressure_bytes;    // 0 = disabled; >0 = stall when pending > N
 };
 
 int

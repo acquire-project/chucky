@@ -162,6 +162,20 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
       size_t pend = shard_sink_pending_bytes(s->shard_sink);
       if (pend > s->metrics.peak_pending_bytes)
         s->metrics.peak_pending_bytes = pend;
+      // Backpressure: if the sink's IO queue exceeds the watermark,
+      // poll here until it drains below the threshold.  This keeps
+      // the stall at the producer boundary instead of deep inside
+      // the flush pipeline.
+      if (s->config.backpressure_bytes > 0 &&
+          pend > s->config.backpressure_bytes) {
+        struct platform_clock bp_clk = { 0 };
+        platform_toc(&bp_clk);
+        while (shard_sink_pending_bytes(s->shard_sink) >
+               s->config.backpressure_bytes)
+          platform_sleep_ns(100000); // 100 μs
+        float bp_ms = (float)(platform_toc(&bp_clk) * 1000.0);
+        accumulate_metric_ms(&s->metrics.backpressure, bp_ms, 0, 0);
+      }
     }
   }
 

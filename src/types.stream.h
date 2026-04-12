@@ -39,9 +39,10 @@ struct stream_metrics
     flush_stall; // flush_drain_pending in drain_kick_and_swap
   struct stream_metric kick_sync_stall; // cuEventSynchronize in two_phase_d2h
   struct stream_metric
-    io_fence_stall;          // wait_io_fences loop in d2h_deliver_kick
-  float max_append_ms;       // longest tile_stream_gpu_append body
-  size_t peak_pending_bytes; // max sink->pending_bytes seen
+    io_fence_stall;                  // wait_io_fences loop in d2h_deliver_kick
+  struct stream_metric backpressure; // wait at epoch boundary for IO to drain
+  float max_append_ms;               // longest tile_stream_gpu_append body
+  size_t peak_pending_bytes;         // max sink->pending_bytes seen
 };
 
 struct tile_stream_configuration
@@ -62,7 +63,9 @@ struct tile_stream_configuration
   float metadata_update_interval_s;
   size_t
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
-  int max_threads;   // 0 = OpenMP default
+  size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
+                             // when sink->pending_bytes exceeds this watermark
+  int max_threads;           // 0 = OpenMP default
 };
 
 struct tile_stream_status

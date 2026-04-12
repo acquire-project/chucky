@@ -783,14 +783,15 @@ print_bench_report(const struct stream_metrics* metrics,
   // if any stall was observed.
   int have_stalls =
     metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
-    metrics->io_fence_stall.count > 0 || metrics->max_append_ms > 0 ||
-    metrics->peak_pending_bytes > 0;
+    metrics->io_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
+    metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0;
   if (have_stalls) {
     print_report("");
     print_report("  --- Stall stats ---");
     print_metric_row(&metrics->flush_stall);
     print_metric_row(&metrics->kick_sync_stall);
     print_metric_row(&metrics->io_fence_stall);
+    print_metric_row(&metrics->backpressure);
     print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
     print_report("  peak pending:    %.2f MiB",
                  (double)metrics->peak_pending_bytes / (1024.0 * 1024.0));
@@ -1022,6 +1023,7 @@ run_bench(const struct bench_config* cfg)
     .target_batch_chunks = 2048,
     .shard_alignment =
       (output_path || cfg->s3_bucket) ? platform_page_size() : 0,
+    .backpressure_bytes = cfg->backpressure_bytes,
   };
 
   uint64_t est_total_chunks = 0;
@@ -1274,6 +1276,10 @@ run_bench(const struct bench_config* cfg)
       jw_float(&jw, (double)m.io_fence_stall.ms);
       jw_key(&jw, "io_fence_count");
       jw_uint(&jw, (uint64_t)m.io_fence_stall.count);
+      jw_key(&jw, "backpressure_ms");
+      jw_float(&jw, (double)m.backpressure.ms);
+      jw_key(&jw, "backpressure_count");
+      jw_uint(&jw, (uint64_t)m.backpressure.count);
       jw_key(&jw, "max_append_ms");
       jw_float(&jw, (double)m.max_append_ms);
       jw_key(&jw, "peak_pending_mib");
@@ -1452,6 +1458,7 @@ bench_stream_main(int ac,
   int json_output = 0;
   uint64_t io_bw_mbps = 0;
   uint64_t io_latency_us = 0;
+  size_t backpressure_bytes = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -1494,6 +1501,8 @@ bench_stream_main(int ac,
       io_bw_mbps = strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--io-latency-us") == 0 && i + 1 < ac) {
       io_latency_us = strtoull(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--backpressure") == 0 && i + 1 < ac) {
+      backpressure_bytes = parse_bytes(av[++i]);
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -1503,7 +1512,8 @@ bench_stream_main(int ac,
               "[--json] [--chunk-bytes N] [--memory-budget N] [-o path] "
               "[--s3-bucket B --s3-region R --s3-endpoint E [--s3-prefix P] "
               "[--s3-throughput-gbps N]] "
-              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N]\n",
+              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
+              "[--backpressure N (bytes, e.g. 256M)]\n",
               av[0]);
       return 1;
     }
@@ -1556,6 +1566,7 @@ bench_stream_main(int ac,
     .json_output = json_output,
     .io_bw_mbps = io_bw_mbps,
     .io_latency_us = io_latency_us,
+    .backpressure_bytes = backpressure_bytes,
   };
   ecode = run_bench(&cfg);
 
@@ -1761,6 +1772,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
     .shard_alignment = output_path ? platform_page_size() : 0,
+    .backpressure_bytes = cfg->backpressure_bytes,
   };
 
   // Memory estimates
@@ -1874,16 +1886,17 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_metric_row(&m[k].d2h);
     print_metric_row(&m[k].sink);
 
-    int have_stalls = m[k].flush_stall.count > 0 ||
-                      m[k].kick_sync_stall.count > 0 ||
-                      m[k].io_fence_stall.count > 0 || m[k].max_append_ms > 0 ||
-                      m[k].peak_pending_bytes > 0;
+    int have_stalls =
+      m[k].flush_stall.count > 0 || m[k].kick_sync_stall.count > 0 ||
+      m[k].io_fence_stall.count > 0 || m[k].backpressure.count > 0 ||
+      m[k].max_append_ms > 0 || m[k].peak_pending_bytes > 0;
     if (have_stalls) {
       print_report("");
       print_report("  --- Stall stats (stream-%d) ---", k);
       print_metric_row(&m[k].flush_stall);
       print_metric_row(&m[k].kick_sync_stall);
       print_metric_row(&m[k].io_fence_stall);
+      print_metric_row(&m[k].backpressure);
       print_report("  max append ms:   %.2f", (double)m[k].max_append_ms);
       print_report("  peak pending:    %.2f MiB",
                    (double)m[k].peak_pending_bytes / (1024.0 * 1024.0));
@@ -1940,6 +1953,7 @@ bench_two_streams_main(int ac,
   const char* output_path = NULL;
   uint64_t io_bw_mbps = 0;
   uint64_t io_latency_us = 0;
+  size_t backpressure_bytes = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -1967,6 +1981,8 @@ bench_two_streams_main(int ac,
       io_bw_mbps = strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--io-latency-us") == 0 && i + 1 < ac) {
       io_latency_us = strtoull(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--backpressure") == 0 && i + 1 < ac) {
+      backpressure_bytes = parse_bytes(av[++i]);
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -1974,7 +1990,8 @@ bench_two_streams_main(int ac,
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--dtype u8|u16|...] [--frames N] "
               "[--chunk-bytes N] [--memory-budget N] [-o path] "
-              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N]\n",
+              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
+              "[--backpressure N]\n",
               av[0]);
       return 1;
     }

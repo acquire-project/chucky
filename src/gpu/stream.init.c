@@ -164,6 +164,7 @@ init_metrics(int enable_multiscale)
     .flush_stall = mk_stream_metric("FlushStall"),
     .kick_sync_stall = mk_stream_metric("KickSync"),
     .io_fence_stall = mk_stream_metric("IOFence"),
+    .backpressure = mk_stream_metric("Backpres"),
   };
 }
 
