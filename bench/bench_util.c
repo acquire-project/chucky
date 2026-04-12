@@ -12,10 +12,12 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 #include "zarr.h"
+#include "zarr/io_queue.h"
 #include "zarr/json_writer.h"
 #include "zarr/store.h"
 #include "zarr/zarr_metadata.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,6 +117,192 @@ discard_shard_sink_init(struct discard_shard_sink* s)
               .finalize = discard_shard_finalize },
     .parent = s,
   };
+}
+
+// --- Throttled shard_sink: synthetic IO pressure for measurement ---
+//
+// Same async shape as shard_pool_fs: owns its own io_queue, worker sleeps
+// proportional to bytes+latency instead of doing real IO. Exercises the
+// record_fence/wait_fence/pending_bytes path so stall timing in the GPU
+// flush pipeline can be measured on machines where the real GPU can't
+// saturate disk IO.
+
+struct throttled_shard_sink;
+
+struct throttled_shard_writer
+{
+  struct shard_writer base;
+  struct throttled_shard_sink* parent;
+};
+
+struct throttled_shard_sink
+{
+  struct shard_sink base;
+  struct throttled_shard_writer writer; // single shared writer
+  struct io_queue* queue;               // owned
+  uint64_t queued_bytes;                // main-thread only
+  _Atomic uint64_t retired_bytes;       // worker, atomic
+  _Atomic uint64_t total_bytes;         // reporting
+  uint64_t latency_ns;                  // fixed per-job cost
+  uint64_t bytes_per_sec;               // 0 = no bandwidth cap
+};
+
+struct throttled_job
+{
+  uint64_t nbytes;
+  uint64_t latency_ns;
+  uint64_t bytes_per_sec;
+  _Atomic uint64_t* retired_bytes;
+  _Atomic uint64_t* total_bytes;
+};
+
+static void
+throttled_fn(void* arg)
+{
+  struct throttled_job* j = (struct throttled_job*)arg;
+  int64_t ns = (int64_t)j->latency_ns;
+  if (j->bytes_per_sec > 0)
+    ns += (int64_t)((j->nbytes * 1000000000ull) / j->bytes_per_sec);
+  if (ns > 0)
+    platform_sleep_ns(ns);
+  atomic_fetch_add(j->retired_bytes, j->nbytes);
+  atomic_fetch_add(j->total_bytes, j->nbytes);
+}
+
+static int
+throttled_post(struct throttled_shard_sink* s, size_t nbytes)
+{
+  struct throttled_job* j = (struct throttled_job*)malloc(sizeof(*j));
+  CHECK(Error, j);
+  j->nbytes = nbytes;
+  j->latency_ns = s->latency_ns;
+  j->bytes_per_sec = s->bytes_per_sec;
+  j->retired_bytes = &s->retired_bytes;
+  j->total_bytes = &s->total_bytes;
+  if (io_queue_post(s->queue, throttled_fn, j, free)) {
+    free(j);
+    goto Error;
+  }
+  s->queued_bytes += nbytes;
+  return 0;
+
+Error:
+  return 1;
+}
+
+static int
+throttled_shard_write(struct shard_writer* self,
+                      uint64_t offset,
+                      const void* beg,
+                      const void* end)
+{
+  (void)offset;
+  struct throttled_shard_writer* w = (struct throttled_shard_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  return throttled_post(w->parent, nbytes);
+}
+
+static int
+throttled_shard_write_direct(struct shard_writer* self,
+                             uint64_t offset,
+                             const void* beg,
+                             const void* end)
+{
+  (void)offset;
+  struct throttled_shard_writer* w = (struct throttled_shard_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  return throttled_post(w->parent, nbytes);
+}
+
+static int
+throttled_shard_finalize(struct shard_writer* self)
+{
+  (void)self;
+  return 0;
+}
+
+static struct shard_writer*
+throttled_shard_open(struct shard_sink* self,
+                     uint8_t level,
+                     uint64_t shard_index)
+{
+  (void)level;
+  (void)shard_index;
+  struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
+  return &s->writer.base;
+}
+
+static struct io_event
+throttled_shard_record_fence(struct shard_sink* self, uint8_t level)
+{
+  (void)level;
+  struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
+  return io_queue_record(s->queue);
+}
+
+static void
+throttled_shard_wait_fence(struct shard_sink* self,
+                           uint8_t level,
+                           struct io_event ev)
+{
+  (void)level;
+  struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
+  io_event_wait(s->queue, ev);
+}
+
+static int
+throttled_shard_has_error(const struct shard_sink* self)
+{
+  (void)self;
+  return 0;
+}
+
+static size_t
+throttled_shard_pending_bytes(const struct shard_sink* self)
+{
+  const struct throttled_shard_sink* s =
+    (const struct throttled_shard_sink*)self;
+  uint64_t retired = atomic_load(&s->retired_bytes);
+  if (s->queued_bytes <= retired)
+    return 0;
+  return (size_t)(s->queued_bytes - retired);
+}
+
+static int
+throttled_shard_sink_init(struct throttled_shard_sink* s,
+                          uint64_t io_bw_mbps,
+                          uint64_t io_latency_us)
+{
+  *s = (struct throttled_shard_sink){ 0 };
+  s->latency_ns = io_latency_us * 1000ull;
+  s->bytes_per_sec = io_bw_mbps * 1024ull * 1024ull;
+  s->queue = io_queue_create();
+  if (!s->queue)
+    return 1;
+
+  s->base.open = throttled_shard_open;
+  s->base.record_fence = throttled_shard_record_fence;
+  s->base.wait_fence = throttled_shard_wait_fence;
+  s->base.has_error = throttled_shard_has_error;
+  s->base.pending_bytes = throttled_shard_pending_bytes;
+
+  s->writer = (struct throttled_shard_writer){
+    .base = { .write = throttled_shard_write,
+              .write_direct = throttled_shard_write_direct,
+              .finalize = throttled_shard_finalize },
+    .parent = s,
+  };
+  return 0;
+}
+
+static void
+throttled_shard_sink_teardown(struct throttled_shard_sink* s)
+{
+  if (s->queue) {
+    io_event_wait(s->queue, io_queue_record(s->queue));
+    io_queue_destroy(s->queue);
+  }
+  *s = (struct throttled_shard_sink){ 0 };
 }
 
 // --- Metering shard_sink wrapper ---
@@ -755,6 +943,8 @@ run_bench(const struct bench_config* cfg)
 
   struct bench_zarr_handle zarr = { 0 };
   struct metering_sink meter = { 0 };
+  struct throttled_shard_sink tss = { 0 };
+  int use_throttled = 0;
   struct shard_sink* sink = &dss.base;
   struct bench_handle h = { .backend = cfg->backend };
 
@@ -788,6 +978,12 @@ run_bench(const struct bench_config* cfg)
                              is_multiscale) == 0);
     metering_sink_init(&meter, bench_zarr_as_shard_sink(&zarr));
     sink = &meter.base;
+  } else if (cfg->io_bw_mbps > 0 || cfg->io_latency_us > 0) {
+    CHECK(Fail,
+          throttled_shard_sink_init(
+            &tss, cfg->io_bw_mbps, cfg->io_latency_us) == 0);
+    sink = &tss.base;
+    use_throttled = 1;
   }
 
   const struct tile_stream_configuration config = {
@@ -913,11 +1109,15 @@ run_bench(const struct bench_config* cfg)
   {
     struct stream_metrics m = bench_get_metrics(&h);
     int has_output = output_path || cfg->s3_bucket;
-    struct sink_stats ss =
-      has_output ? (struct sink_stats){ .total_bytes = meter.total_bytes,
-                                        .total_chunks = est_total_chunks }
-                 : (struct sink_stats){ .total_bytes = dss.total_bytes,
-                                        .total_chunks = est_total_chunks };
+    size_t sink_total_bytes;
+    if (has_output)
+      sink_total_bytes = meter.total_bytes;
+    else if (use_throttled)
+      sink_total_bytes = (size_t)atomic_load(&tss.total_bytes);
+    else
+      sink_total_bytes = dss.total_bytes;
+    struct sink_stats ss = { .total_bytes = sink_total_bytes,
+                             .total_chunks = est_total_chunks };
     print_bench_report(&m,
                        layout,
                        config.dtype,
@@ -1063,6 +1263,8 @@ Cleanup:
   bench_zarr_flush(&zarr);
   bench_destroy(&h);
   bench_zarr_close(&zarr);
+  if (use_throttled)
+    throttled_shard_sink_teardown(&tss);
   return rc;
 }
 
@@ -1202,6 +1404,8 @@ bench_stream_main(int ac,
   size_t memory_budget = 0;
   uint64_t frames = 0;
   int json_output = 0;
+  uint64_t io_bw_mbps = 0;
+  uint64_t io_latency_us = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -1240,6 +1444,10 @@ bench_stream_main(int ac,
       s3_endpoint = av[++i];
     } else if (strcmp(av[i], "--s3-throughput-gbps") == 0 && i + 1 < ac) {
       s3_throughput_gbps = strtod(av[++i], NULL);
+    } else if (strcmp(av[i], "--io-bw-mbps") == 0 && i + 1 < ac) {
+      io_bw_mbps = strtoull(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--io-latency-us") == 0 && i + 1 < ac) {
+      io_latency_us = strtoull(av[++i], NULL, 10);
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -1248,7 +1456,8 @@ bench_stream_main(int ac,
               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
               "[--json] [--chunk-bytes N] [--memory-budget N] [-o path] "
               "[--s3-bucket B --s3-region R --s3-endpoint E [--s3-prefix P] "
-              "[--s3-throughput-gbps N]]\n",
+              "[--s3-throughput-gbps N]] "
+              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N]\n",
               av[0]);
       return 1;
     }
@@ -1299,6 +1508,8 @@ bench_stream_main(int ac,
     .memory_budget = memory_budget,
     .shard_counts = shard_counts,
     .json_output = json_output,
+    .io_bw_mbps = io_bw_mbps,
+    .io_latency_us = io_latency_us,
   };
   ecode = run_bench(&cfg);
 
@@ -1447,10 +1658,13 @@ run_bench_two_streams(const struct bench_config* cfg)
   const size_t total_elements = dim_total_elements(dims, rank);
   const size_t total_bytes = total_elements * bpe;
 
-  // --- Sinks: zarr FS when -o given, discard otherwise ---
+  // --- Sinks: zarr FS when -o given, throttled when flags set, discard else
+  // ---
   struct discard_shard_sink dss[2];
   struct bench_zarr_handle zarr[2] = { { 0 }, { 0 } };
   struct metering_sink meter[2] = { { 0 }, { 0 } };
+  struct throttled_shard_sink tss[2] = { { 0 }, { 0 } };
+  int use_throttled = 0;
   struct shard_sink* sink[2];
 
   if (output_path) {
@@ -1476,6 +1690,14 @@ run_bench_two_streams(const struct bench_config* cfg)
     }
     print_report("  output-0: %s", path0);
     print_report("  output-1: %s", path1);
+  } else if (cfg->io_bw_mbps > 0 || cfg->io_latency_us > 0) {
+    for (int k = 0; k < 2; ++k) {
+      CHECK(Fail,
+            throttled_shard_sink_init(
+              &tss[k], cfg->io_bw_mbps, cfg->io_latency_us) == 0);
+      sink[k] = &tss[k].base;
+    }
+    use_throttled = 1;
   } else {
     discard_shard_sink_init(&dss[0]);
     discard_shard_sink_init(&dss[1]);
@@ -1551,10 +1773,15 @@ run_bench_two_streams(const struct bench_config* cfg)
     tile_stream_gpu_get_metrics(s1),
   };
 
-  size_t sink_bytes[2] = {
-    output_path ? meter[0].total_bytes : dss[0].total_bytes,
-    output_path ? meter[1].total_bytes : dss[1].total_bytes,
-  };
+  size_t sink_bytes[2];
+  for (int k = 0; k < 2; ++k) {
+    if (output_path)
+      sink_bytes[k] = meter[k].total_bytes;
+    else if (use_throttled)
+      sink_bytes[k] = (size_t)atomic_load(&tss[k].total_bytes);
+    else
+      sink_bytes[k] = dss[k].total_bytes;
+  }
 
   const double GIB = 1024.0 * 1024.0 * 1024.0;
   double per_stream_gib = (double)total_bytes / GIB;
@@ -1607,6 +1834,10 @@ run_bench_two_streams(const struct bench_config* cfg)
   tile_stream_gpu_destroy(s0);
   bench_zarr_close(&zarr[0]);
   bench_zarr_close(&zarr[1]);
+  if (use_throttled) {
+    throttled_shard_sink_teardown(&tss[0]);
+    throttled_shard_sink_teardown(&tss[1]);
+  }
   return 0;
 
 Fail:
@@ -1621,6 +1852,10 @@ Fail:
     tile_stream_gpu_destroy(s0);
   bench_zarr_close(&zarr[0]);
   bench_zarr_close(&zarr[1]);
+  if (use_throttled) {
+    throttled_shard_sink_teardown(&tss[0]);
+    throttled_shard_sink_teardown(&tss[1]);
+  }
   return 1;
 }
 
@@ -1642,6 +1877,8 @@ bench_two_streams_main(int ac,
   size_t memory_budget = 0;
   uint64_t frames = 0;
   const char* output_path = NULL;
+  uint64_t io_bw_mbps = 0;
+  uint64_t io_latency_us = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -1665,13 +1902,18 @@ bench_two_streams_main(int ac,
       memory_budget = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
       output_path = av[++i];
+    } else if (strcmp(av[i], "--io-bw-mbps") == 0 && i + 1 < ac) {
+      io_bw_mbps = strtoull(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--io-latency-us") == 0 && i + 1 < ac) {
+      io_latency_us = strtoull(av[++i], NULL, 10);
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
               "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--dtype u8|u16|...] [--frames N] "
-              "[--chunk-bytes N] [--memory-budget N] [-o path]\n",
+              "[--chunk-bytes N] [--memory-budget N] [-o path] "
+              "[--io-bw-mbps N (MiB/s)] [--io-latency-us N]\n",
               av[0]);
       return 1;
     }
@@ -1711,6 +1953,8 @@ bench_two_streams_main(int ac,
       target_chunk_bytes ? target_chunk_bytes : default_chunk_bytes,
     .memory_budget = memory_budget,
     .shard_counts = shard_counts,
+    .io_bw_mbps = io_bw_mbps,
+    .io_latency_us = io_latency_us,
   };
   int ecode = run_bench_two_streams(&cfg);
 
