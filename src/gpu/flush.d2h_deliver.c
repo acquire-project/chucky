@@ -50,6 +50,7 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 // --- Internal helpers ---
 
 // Wait for pending IO fences on aggregate slots before reuse.
+// Accumulates wall time into stage->metrics->io_fence_stall (if non-NULL).
 static void
 wait_io_fences(const struct d2h_deliver_stage* stage,
                int fc,
@@ -58,12 +59,18 @@ wait_io_fences(const struct d2h_deliver_stage* stage,
 {
   if (!sink->wait_fence)
     return;
+  struct platform_clock clk = { 0 };
+  platform_toc(&clk);
   for (int lv = 0; lv < stage->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
       continue;
     struct aggregate_slot* agg = &stage->levels[lv].agg[fc];
     if (agg->io_done.seq > 0)
       sink->wait_fence(sink, (uint8_t)lv, agg->io_done);
+  }
+  if (stage->metrics) {
+    float ms = (float)(platform_toc(&clk) * 1000.0);
+    accumulate_metric_ms(&stage->metrics->io_fence_stall, ms, 0, 0);
   }
 }
 
@@ -107,7 +114,15 @@ two_phase_d2h(const struct d2h_deliver_stage* stage,
                          d2h_stream));
   }
   CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
-  CU(Error, cuEventSynchronize(stage->ready[fc]));
+  {
+    struct platform_clock sync_clk = { 0 };
+    platform_toc(&sync_clk);
+    CU(Error, cuEventSynchronize(stage->ready[fc]));
+    if (stage->metrics) {
+      float ms = (float)(platform_toc(&sync_clk) * 1000.0);
+      accumulate_metric_ms(&stage->metrics->kick_sync_stall, ms, 0, 0);
+    }
+  }
 
   // Phase 2: D2H only actual compressed bytes per level
   for (int lv = 0; lv < levels->nlod; ++lv) {

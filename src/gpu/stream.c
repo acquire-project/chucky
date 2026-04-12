@@ -62,12 +62,11 @@ tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s)
   return s->metrics;
 }
 
+// Body of tile_stream_gpu_append, factored out so the wrapper can wall-clock
+// the whole thing for max_append_ms.
 static struct writer_result
-tile_stream_gpu_append(struct writer* self, struct slice input)
+tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
 {
-  struct tile_stream_gpu* s =
-    container_of(self, struct tile_stream_gpu, writer);
-
   if (s->flushed)
     return writer_finished_at(input.beg, input.end);
 
@@ -159,6 +158,10 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
       struct writer_result fr = flush_accumulate_epoch(s);
       if (fr.error)
         return writer_error_at(src, end);
+      // Sample sink backpressure at epoch boundaries.
+      size_t pend = shard_sink_pending_bytes(s->shard_sink);
+      if (pend > s->metrics.peak_pending_bytes)
+        s->metrics.peak_pending_bytes = pend;
     }
   }
 
@@ -167,6 +170,20 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 
 Error:
   return writer_error_at(src, end);
+}
+
+static struct writer_result
+tile_stream_gpu_append(struct writer* self, struct slice input)
+{
+  struct tile_stream_gpu* s =
+    container_of(self, struct tile_stream_gpu, writer);
+  struct platform_clock clk = { 0 };
+  platform_toc(&clk);
+  struct writer_result r = tile_stream_gpu_append_body(s, input);
+  float ms = (float)(platform_toc(&clk) * 1000.0);
+  if (ms > s->metrics.max_append_ms)
+    s->metrics.max_append_ms = ms;
+  return r;
 }
 
 static struct writer_result

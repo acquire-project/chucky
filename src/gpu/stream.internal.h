@@ -148,6 +148,7 @@ struct d2h_deliver_stage
 
   struct level_flush_state* levels; // borrowed
   int nlod;
+  struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
 struct flush_pipeline

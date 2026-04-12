@@ -6,6 +6,8 @@
 
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
+#include "platform/platform.h"
+#include "util/metric.h"
 #include "util/prelude.h"
 
 #include <string.h>
@@ -87,8 +89,18 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
   const int completed_pool = s->pools.current;
   struct flush_slot_gpu* fs = &s->flush.slot[completed_pool];
 
-  // Wait for any previous flush to finish delivery
+  // Wait for any previous flush to finish delivery.
+  // Measure the stall only when there is actually pending work so that
+  // metrics->flush_stall.count reflects real stalls.
+  int had_pending = s->flush.pending;
+  struct platform_clock stall_clk = { 0 };
+  if (had_pending)
+    platform_toc(&stall_clk);
   struct writer_result r = flush_drain_pending(s);
+  if (had_pending) {
+    float ms = (float)(platform_toc(&stall_clk) * 1000.0);
+    accumulate_metric_ms(&s->metrics.flush_stall, ms, 0, 0);
+  }
   if (r.error)
     return r;
 

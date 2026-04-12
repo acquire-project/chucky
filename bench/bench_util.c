@@ -393,6 +393,13 @@ metering_has_error(const struct shard_sink* self)
   return ms->inner->has_error(ms->inner);
 }
 
+static size_t
+metering_pending_bytes(const struct shard_sink* self)
+{
+  const struct metering_sink* ms = (const struct metering_sink*)self;
+  return ms->inner->pending_bytes(ms->inner);
+}
+
 static void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
@@ -402,6 +409,7 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
       .record_fence = inner->record_fence ? metering_record_fence : NULL,
       .wait_fence = inner->wait_fence ? metering_wait_fence : NULL,
       .has_error = inner->has_error ? metering_has_error : NULL,
+      .pending_bytes = inner->pending_bytes ? metering_pending_bytes : NULL,
     },
     .inner = inner,
     .metric = { .name = "Sink", .best_ms = 1e30f },
@@ -770,6 +778,23 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->aggregate);
   print_metric_row(&metrics->d2h);
   print_metric_row(&metrics->sink);
+
+  // Stall stats — wall-clock time the host is blocked waiting. Emitted only
+  // if any stall was observed.
+  int have_stalls =
+    metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
+    metrics->io_fence_stall.count > 0 || metrics->max_append_ms > 0 ||
+    metrics->peak_pending_bytes > 0;
+  if (have_stalls) {
+    print_report("");
+    print_report("  --- Stall stats ---");
+    print_metric_row(&metrics->flush_stall);
+    print_metric_row(&metrics->kick_sync_stall);
+    print_metric_row(&metrics->io_fence_stall);
+    print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
+    print_report("  peak pending:    %.2f MiB",
+                 (double)metrics->peak_pending_bytes / (1024.0 * 1024.0));
+  }
 
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
@@ -1233,6 +1258,27 @@ run_bench(const struct bench_config* cfg)
         jw_object_end(&jw);
       }
       jw_object_end(&jw); // stages
+
+      // Stall metrics — total wall-clock ms blocked at each sync point.
+      jw_key(&jw, "stalls");
+      jw_object_begin(&jw);
+      jw_key(&jw, "flush_stall_ms");
+      jw_float(&jw, (double)m.flush_stall.ms);
+      jw_key(&jw, "flush_stall_count");
+      jw_uint(&jw, (uint64_t)m.flush_stall.count);
+      jw_key(&jw, "kick_sync_ms");
+      jw_float(&jw, (double)m.kick_sync_stall.ms);
+      jw_key(&jw, "kick_sync_count");
+      jw_uint(&jw, (uint64_t)m.kick_sync_stall.count);
+      jw_key(&jw, "io_fence_ms");
+      jw_float(&jw, (double)m.io_fence_stall.ms);
+      jw_key(&jw, "io_fence_count");
+      jw_uint(&jw, (uint64_t)m.io_fence_stall.count);
+      jw_key(&jw, "max_append_ms");
+      jw_float(&jw, (double)m.max_append_ms);
+      jw_key(&jw, "peak_pending_mib");
+      jw_float(&jw, (double)m.peak_pending_bytes / (1024.0 * 1024.0));
+      jw_object_end(&jw); // stalls
 
       jw_object_end(&jw); // root
       printf("%.*s\n", (int)jw_length(&jw), json_buf);
@@ -1827,6 +1873,21 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_metric_row(&m[k].aggregate);
     print_metric_row(&m[k].d2h);
     print_metric_row(&m[k].sink);
+
+    int have_stalls = m[k].flush_stall.count > 0 ||
+                      m[k].kick_sync_stall.count > 0 ||
+                      m[k].io_fence_stall.count > 0 || m[k].max_append_ms > 0 ||
+                      m[k].peak_pending_bytes > 0;
+    if (have_stalls) {
+      print_report("");
+      print_report("  --- Stall stats (stream-%d) ---", k);
+      print_metric_row(&m[k].flush_stall);
+      print_metric_row(&m[k].kick_sync_stall);
+      print_metric_row(&m[k].io_fence_stall);
+      print_report("  max append ms:   %.2f", (double)m[k].max_append_ms);
+      print_report("  peak pending:    %.2f MiB",
+                   (double)m[k].peak_pending_bytes / (1024.0 * 1024.0));
+    }
   }
 
   print_report("  PASS");

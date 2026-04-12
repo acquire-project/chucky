@@ -32,6 +32,16 @@ struct stream_metrics
   struct stream_metric aggregate;
   struct stream_metric d2h;
   struct stream_metric sink;
+
+  // Stall metrics — wall-clock time the host is blocked at each sync point.
+  // Populated only on the GPU path.
+  struct stream_metric
+    flush_stall; // flush_drain_pending in drain_kick_and_swap
+  struct stream_metric kick_sync_stall; // cuEventSynchronize in two_phase_d2h
+  struct stream_metric
+    io_fence_stall;          // wait_io_fences loop in d2h_deliver_kick
+  float max_append_ms;       // longest tile_stream_gpu_append body
+  size_t peak_pending_bytes; // max sink->pending_bytes seen
 };
 
 struct tile_stream_configuration
