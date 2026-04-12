@@ -300,6 +300,21 @@ pool_fs_destroy(struct shard_pool* self)
   free(p);
 }
 
+static void
+fail_fn(void* arg)
+{
+  _Atomic int* io_error = (_Atomic int*)arg;
+  log_error("shard_pool_fs: injected test failure");
+  atomic_store(io_error, 1);
+}
+
+int
+shard_pool_fs_inject_failing_job(struct shard_pool* self)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  return io_queue_post(p->queue, fail_fn, &p->io_error, NULL);
+}
+
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
 {

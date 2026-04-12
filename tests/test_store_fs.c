@@ -1,7 +1,8 @@
-#include "test_platform.h"
 #include "platform/platform.h"
+#include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
+#include "zarr/shard_pool_fs.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 
@@ -279,38 +280,26 @@ test_shard_pool_error_propagation(void)
 {
   log_info("=== test_shard_pool_error_propagation ===");
 
-  // Create unbuffered store — writes must be sector-aligned.
-  struct store* s = store_fs_create(tmpdir, 1);
-  CHECK(Fail, s);
-  CHECK(Fail2, s->mkdirs(s, "errtest") == 0);
+  // Use a buffered pool — the error path under test is filesystem-independent,
+  // driven by a test-only failing-job injector rather than by O_DIRECT
+  // alignment enforcement (which varies across filesystems).
+  struct shard_pool* pool = shard_pool_fs_create(tmpdir, 1, 0);
+  CHECK(Fail, pool);
 
-  struct shard_pool* pool = s->create_pool(s, 1);
-  CHECK(Fail2, pool);
-
-  struct shard_writer* w = pool->open(pool, 0, "errtest/bad.bin");
-  CHECK(Fail3, w);
-
-  // Write a non-sector-aligned size. With FILE_FLAG_NO_BUFFERING / O_DIRECT,
-  // this will cause the async pwrite to fail.
-  char buf[17];
-  memset(buf, 0xCD, sizeof(buf));
-  CHECK(Fail3, w->write(w, 0, buf, buf + sizeof(buf)) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
+  // Inject a job that deliberately reports a write failure.
+  CHECK(Fail2, shard_pool_fs_inject_failing_job(pool) == 0);
 
   // Flush waits for all async IO and returns the error flag.
   int flush_err = pool->flush(pool);
-  CHECK(Fail3, flush_err != 0);
-  CHECK(Fail3, pool->has_error(pool) != 0);
+  CHECK(Fail2, flush_err != 0);
+  CHECK(Fail2, pool->has_error(pool) != 0);
 
   pool->destroy(pool);
-  s->destroy(s);
   log_info("  PASS");
   return 0;
 
-Fail3:
-  pool->destroy(pool);
 Fail2:
-  s->destroy(s);
+  pool->destroy(pool);
 Fail:
   log_error("  FAIL");
   return 1;
