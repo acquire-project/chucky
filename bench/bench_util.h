@@ -1,7 +1,13 @@
 #pragma once
 
+#include "bench_parse.h"
+#include "bench_report.h"
+#include "bench_zarr.h"
 #include "dimension.h"
 #include "dtype.h"
+#include "sink_discard.h"
+#include "sink_metering.h"
+#include "sink_throttled.h"
 #include "stream.gpu.h"
 #include "test_data.h"
 #include "types.codec.h"
@@ -10,17 +16,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-double
-gb_per_s(double bytes, double ms);
-
-#define print_report(...) fprintf(stderr, __VA_ARGS__), fprintf(stderr, "\n")
-
-enum bench_backend
-{
-  BENCH_GPU,
-  BENCH_CPU,
-};
 
 struct bench_config
 {
