@@ -77,6 +77,16 @@ extern "C"
                            uint64_t n_elements,
                            CUstream stream);
 
+  // Build CSR reduce LUT on GPU for one level transition.
+  // d_starts: [dst_total+1] uint64, d_indices: [src_total] uint64.
+  // Both must be pre-allocated by the caller.
+  struct level_dims;
+  int lod_build_csr_gpu(CUdeviceptr d_starts,
+                        CUdeviceptr d_indices,
+                        const struct level_dims* src,
+                        const struct level_dims* dst,
+                        CUstream stream);
+
 #ifdef __cplusplus
 }
 #endif
