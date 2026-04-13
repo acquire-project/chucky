@@ -69,6 +69,7 @@ orch_ctx_setup(struct orch_ctx* c,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
+                               platform_page_alignment(),
                                &c->cl) == 0);
 
   c->s = (struct tile_stream_gpu*)calloc(1, sizeof(*c->s));

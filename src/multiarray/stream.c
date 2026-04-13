@@ -34,7 +34,7 @@ struct array_descriptor
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct io_event io_done[LOD_MAX_LEVELS];
-  size_t shard_alignment; // resolved at init: always > 0
+  size_t shard_alignment; // from sink; 0 = no alignment
 };
 
 // ---- Main struct ----
@@ -134,10 +134,13 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->config = *config;
   desc->sink = sink;
-  desc->shard_alignment = platform_page_alignment();
+  desc->shard_alignment = shard_sink_required_shard_alignment(sink);
 
-  if (compute_stream_layouts(
-        config, 1, compress_cpu_max_output_size, &desc->cl))
+  if (compute_stream_layouts(config,
+                             1,
+                             compress_cpu_max_output_size,
+                             desc->shard_alignment,
+                             &desc->cl))
     return 1;
 
   desc->layout = desc->cl.layouts[0];

@@ -54,7 +54,7 @@ test_lz4_non_standard_warns(void)
 
   struct computed_stream_layouts cl;
   CHECK(Fail,
-        compute_stream_layouts(&config, 1, stub_max_output_size, &cl) == 0);
+        compute_stream_layouts(&config, 1, stub_max_output_size, 0, &cl) == 0);
   CHECK(Fail, state.saw_lz4_warning);
 
   computed_stream_layouts_free(&cl);

@@ -144,6 +144,13 @@ zarr_array_pending_bytes_fn(const struct shard_sink* self)
   return shard_pool_pending_bytes(a->pool);
 }
 
+static size_t
+zarr_array_required_shard_alignment_fn(const struct shard_sink* self)
+{
+  const struct zarr_array* a = container_of(self, struct zarr_array, base);
+  return shard_pool_required_shard_alignment(a->pool);
+}
+
 // --- Core init (geometry already computed) ---
 
 static struct zarr_array*
@@ -184,6 +191,7 @@ zarr_array_init(struct store* store,
   a->base.wait_fence = zarr_array_wait_fence_fn;
   a->base.has_error = zarr_array_has_error_fn;
   a->base.pending_bytes = zarr_array_pending_bytes_fn;
+  a->base.required_shard_alignment = zarr_array_required_shard_alignment_fn;
 
   // Write array zarr.json
   CHECK(Fail_alloc, write_array_metadata(a) == 0);

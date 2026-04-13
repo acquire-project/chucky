@@ -679,12 +679,14 @@ inner shard index), reused across epochs. This bounds open file
 descriptors regardless of how many shards are written over the stream's
 lifetime.
 
-**Unbuffered I/O.** Shard data is written with `O_DIRECT` (Linux) or
-`FILE_FLAG_NO_BUFFERING` (Windows). Buffers are page-aligned and
+**Unbuffered I/O.** When the sink requires aligned writes (e.g. filesystem
+with `O_DIRECT` / `FILE_FLAG_NO_BUFFERING`), buffers are page-aligned and
 inter-shard padding ensures each write begins on a page boundary.
 This bypasses the kernel page cache — important at sustained multi-GB/s
 write rates where cache pressure would otherwise evict useful
-read-side data.
+read-side data. The alignment requirement is queried from the sink via
+`required_shard_alignment`; sinks that don't need alignment (S3, in-memory)
+return 0 and skip all padding overhead.
 
 **Dynamic metadata.** `update_dim0` regenerates the zarr array metadata
 (`zarr.json`) as the append dimension grows, and for multiscale sinks also

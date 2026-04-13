@@ -9,12 +9,15 @@
 // max_output_size_fn: returns max compressed bytes for a given
 // codec+chunk_bytes
 //   (backend-specific — nvcomp vs CPU lz4/zstd bounds may differ).
+// shard_alignment: required write alignment for the I/O backend (e.g. page
+//   size for O_DIRECT). 0 = no alignment constraint.
 // Returns 0 on success.
 int
 compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t codec_alignment,
                        size_t (*max_output_size_fn)(enum compression_codec,
                                                     size_t chunk_bytes),
+                       size_t shard_alignment,
                        struct computed_stream_layouts* out);
 
 // Free resources owned by computed_stream_layouts.

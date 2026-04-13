@@ -31,8 +31,15 @@ struct shard_pool
   // Returns number of bytes queued but not yet written.
   size_t (*pending_bytes)(const struct shard_pool* self);
 
+  // Required write alignment in bytes (e.g. page size for O_DIRECT).
+  // NULL = no alignment constraint.
+  size_t (*required_shard_alignment)(const struct shard_pool* self);
+
   void (*destroy)(struct shard_pool* self);
 };
 
 size_t
 shard_pool_pending_bytes(const struct shard_pool* p);
+
+size_t
+shard_pool_required_shard_alignment(const struct shard_pool* p);

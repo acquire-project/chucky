@@ -441,8 +441,8 @@ test_stream_lz4_roundtrip(void)
              (unsigned long)chunk_sizes[i]);
   }
 
-  // Total chunk data + index block + CRC <= shard size (alignment may pad)
-  CHECK(Fail, chunk_data_total + index_data_bytes + 4 <= shard_size);
+  // Total chunk data + index block + CRC should equal shard size
+  CHECK(Fail, chunk_data_total + index_data_bytes + 4 == shard_size);
   log_info("  chunk_data_total=%zu  expected_shard_size=%zu",
            chunk_data_total,
            chunk_data_total + index_data_bytes + 4);
@@ -918,12 +918,13 @@ test_shard_index_structure(void)
       for (int i = 0; i < chunks_per_shard_total; ++i)
         chunk_data_sum += tile_nbytes[i];
 
-      if (chunk_data_sum + index_total_bytes > w->size) {
-        log_error("  shard %d: chunk_data_sum=%zu + index=%zu > shard_size=%zu",
-                  si,
-                  chunk_data_sum,
-                  index_total_bytes,
-                  w->size);
+      if (chunk_data_sum + index_total_bytes != w->size) {
+        log_error(
+          "  shard %d: chunk_data_sum=%zu + index=%zu != shard_size=%zu",
+          si,
+          chunk_data_sum,
+          index_total_bytes,
+          w->size);
         errors++;
       }
 
@@ -1020,7 +1021,7 @@ Case2:
     const size_t index_data_bytes2 =
       chunks_per_shard_total2 * 2 * sizeof(uint64_t);
     const size_t index_total_bytes2 = index_data_bytes2 + 4;
-    CHECK(FailB2, sum + index_total_bytes2 <= w->size);
+    CHECK(FailB2, sum + index_total_bytes2 == w->size);
 
     // CRC
     const uint8_t* index_ptr2 = w->buf + w->size - index_total_bytes2;

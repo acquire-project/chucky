@@ -60,6 +60,7 @@ ca_ctx_setup(struct ca_test_ctx* c,
         compute_stream_layouts(&c->config,
                                codec_alignment(c->config.codec.id),
                                codec_max_output_size,
+                               platform_page_alignment(),
                                &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));

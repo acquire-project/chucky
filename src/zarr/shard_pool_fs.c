@@ -278,6 +278,14 @@ pool_fs_pending_bytes(const struct shard_pool* self)
   return p->queued_bytes - atomic_load(&p->retired_bytes);
 }
 
+static size_t
+pool_fs_required_shard_alignment(const struct shard_pool* self)
+{
+  const struct shard_pool_fs* p =
+    container_of(self, struct shard_pool_fs, base);
+  return p->unbuffered ? platform_page_alignment() : 0;
+}
+
 static void
 pool_fs_destroy(struct shard_pool* self)
 {
@@ -331,6 +339,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->base.flush = pool_fs_flush;
   p->base.has_error = pool_fs_has_error;
   p->base.pending_bytes = pool_fs_pending_bytes;
+  p->base.required_shard_alignment = pool_fs_required_shard_alignment;
   p->base.destroy = pool_fs_destroy;
   p->nslots = nslots;
   p->unbuffered = unbuffered;

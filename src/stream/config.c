@@ -2,7 +2,6 @@
 
 #include "dimension.h"
 #include "dtype.h"
-#include "platform/platform.h"
 #include "stream/dim_info.h"
 #include "stream/types.aggregate.h"
 #include "types.stream.h"
@@ -234,6 +233,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t codec_alignment,
                        size_t (*max_output_size_fn)(enum compression_codec,
                                                     size_t chunk_bytes),
+                       size_t shard_alignment,
                        struct computed_stream_layouts* out)
 {
   const uint8_t rank = config->rank;
@@ -355,7 +355,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                    so_chunks_per_shard,
                                    chunks_lv,
                                    out->max_output_size,
-                                   platform_page_alignment()) == 0);
+                                   shard_alignment) == 0);
 
     {
       uint64_t cps_append = 1;

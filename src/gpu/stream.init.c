@@ -187,6 +187,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
+                               shard_sink_required_shard_alignment(sink),
                                &cl) == 0);
 
   // Phase 2: Allocate and initialize tile_stream_gpu.
@@ -196,7 +197,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   out->config = *config;
   out->shard_sink = sink;
-  out->shard_alignment = platform_page_alignment();
+  out->shard_alignment = shard_sink_required_shard_alignment(sink);
   out->levels = cl.levels;
   out->dims = cl.dims;
   tile_stream_gpu_init_writer(out);
@@ -336,8 +337,11 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  if (compute_stream_layouts(
-        config, codec_alignment(config->codec.id), codec_max_output_size, &cl))
+  if (compute_stream_layouts(config,
+                             codec_alignment(config->codec.id),
+                             codec_max_output_size,
+                             platform_page_alignment(),
+                             &cl))
     return 1;
 
   const uint8_t rank = config->rank;
@@ -452,8 +456,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += csr->src_lod_count * sizeof(uint64_t);
     }
 
-    for (int lv = 0; lv < plan->levels.nlod; ++lv) {
-      // Per-level morton scatter LUTs
+    for (int lv = 1; lv < plan->levels.nlod; ++lv) {
+      // Per-level morton scatter LUTs (level 0 already counted above)
       lod_device += plan->levels.level[lv].lod_nelem * sizeof(uint32_t);
       lod_device += plan->levels.level[lv].fixed_dims_count * sizeof(uint32_t);
     }
