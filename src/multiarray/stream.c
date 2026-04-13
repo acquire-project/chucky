@@ -1,6 +1,7 @@
 #include "cpu/pipeline.h"
 #include "dimension.h"
 #include "multiarray.cpu.h"
+#include "platform/platform.h"
 #include "stream/config.h"
 #include "zarr/shard_delivery.h"
 
@@ -33,6 +34,7 @@ struct array_descriptor
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct io_event io_done[LOD_MAX_LEVELS];
+  size_t shard_alignment; // resolved at init: always > 0
 };
 
 // ---- Main struct ----
@@ -132,9 +134,13 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->config = *config;
   desc->sink = sink;
+  desc->shard_alignment = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
 
   if (compute_stream_layouts(
-        config, 1, compress_cpu_max_output_size, &desc->cl))
+        config, 1, compress_cpu_max_output_size, desc->shard_alignment,
+        &desc->cl))
     return 1;
 
   desc->layout = desc->cl.layouts[0];
@@ -498,7 +504,7 @@ make_flush_params(struct multiarray_tile_stream_cpu* ms,
     .levels_geo = &desc->levels,
     .shard_order_sizes_bytes = ms->shard_order_sizes,
     .sink = desc->sink,
-    .shard_alignment_bytes = desc->config.shard_alignment,
+    .shard_alignment_bytes = desc->shard_alignment,
     .nthreads = ms->nthreads,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
   };
@@ -844,7 +850,7 @@ finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
         return 1;
 
       if (desc->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&desc->shard[lv], desc->config.shard_alignment))
+        if (finalize_shards(&desc->shard[lv], desc->shard_alignment))
           return 1;
       }
     }

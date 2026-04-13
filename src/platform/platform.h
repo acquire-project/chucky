@@ -11,6 +11,10 @@ platform_sleep_ns(int64_t ns);
 size_t
 platform_page_size(void);
 
+// Return the OS page size, or 4096 if the OS reports 0.
+size_t
+platform_page_alignment(void);
+
 // Allocate memory with the given alignment. Free with platform_aligned_free.
 void*
 platform_aligned_alloc(size_t alignment, size_t size);

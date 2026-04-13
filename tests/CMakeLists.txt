@@ -91,7 +91,7 @@ add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config
 enable_openmp(test_aggregate_cpu)
 
 # CPU LOD test (no CUDA)
-add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util chucky_log)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util platform chucky_log)
 enable_openmp(test_lod_cpu)
 
 # CPU stream end-to-end test (no CUDA)
@@ -153,7 +153,7 @@ add_gpu_test_exe(test_batch        test_batch.c        LINKS CUDA::cuda_driver C
 add_gpu_test_exe(test_d2h_deliver  test_d2h_deliver.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink test_gpu_helpers index_ops_util)
 add_gpu_test_exe(test_flush_orch  test_flush_orchestration.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_log)
-add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension chucky_log)
+add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension platform chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)
 add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data test_shard_sink)

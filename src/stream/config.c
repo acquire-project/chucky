@@ -156,6 +156,13 @@ validate_config(const struct tile_stream_configuration* config,
     goto Fail;
   }
 
+  if (config->shard_alignment > 0 &&
+      (config->shard_alignment & (config->shard_alignment - 1)) != 0) {
+    log_error("shard_alignment must be 0 or a power of 2 (got %zu)",
+              config->shard_alignment);
+    goto Fail;
+  }
+
   // dim_info_init validates dims and computes the partition.
   CHECK(Fail, dim_info_init(di, config->dimensions, config->rank) == 0);
 
@@ -233,6 +240,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t codec_alignment,
                        size_t (*max_output_size_fn)(enum compression_codec,
                                                     size_t chunk_bytes),
+                       size_t shard_alignment,
                        struct computed_stream_layouts* out)
 {
   const uint8_t rank = config->rank;
@@ -349,7 +357,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                    so_chunks_per_shard,
                                    chunks_lv,
                                    out->max_output_size,
-                                   config->shard_alignment) == 0);
+                                   shard_alignment) == 0);
 
     {
       uint64_t cps_append = 1;

@@ -13,6 +13,13 @@ platform_page_size(void)
   return (size_t)si.dwPageSize;
 }
 
+size_t
+platform_page_alignment(void)
+{
+  size_t ps = platform_page_size();
+  return ps > 0 ? ps : 4096;
+}
+
 void*
 platform_aligned_alloc(size_t alignment, size_t size)
 {

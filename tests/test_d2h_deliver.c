@@ -68,6 +68,9 @@ test_ctx_setup(struct test_ctx* c,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
+                               config->shard_alignment > 0
+                                 ? config->shard_alignment
+                                 : platform_page_alignment(),
                                &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
@@ -79,6 +82,9 @@ test_ctx_setup(struct test_ctx* c,
   CHECK(Fail,
         d2h_deliver_init(
           &c->d2h, c->ca.levels, c->cl.levels.nlod, c->compute) == 0);
+  c->d2h.shard_alignment = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *

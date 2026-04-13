@@ -42,10 +42,14 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->config = *config;
   s->nthreads =
     config->max_threads > 0 ? config->max_threads : omp_get_max_threads();
+  s->shard_alignment = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
   s->shard_sink = sink;
 
   // CPU codec alignment is 1 (no nvcomp alignment needed).
-  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &s->cl))
+  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size,
+                             s->shard_alignment, &s->cl))
     goto Fail;
 
   s->layout = s->cl.layouts[0];
@@ -429,7 +433,10 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &cl))
+  size_t sa = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
+  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, sa, &cl))
     return 1;
 
   compute_memory_info(&cl, dtype_bpe(config->dtype), info);
@@ -482,7 +489,7 @@ make_flush_params(struct tile_stream_cpu* s)
     .levels_geo = &s->levels,
     .shard_order_sizes_bytes = s->shard_order_sizes,
     .sink = s->shard_sink,
-    .shard_alignment_bytes = s->config.shard_alignment,
+    .shard_alignment_bytes = s->shard_alignment,
     .nthreads = s->nthreads,
     .metrics = &s->metrics,
   };
@@ -745,7 +752,7 @@ cpu_flush(struct writer* self)
         return writer_error();
 
       if (s->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&s->shard[lv], s->config.shard_alignment))
+        if (finalize_shards(&s->shard[lv], s->shard_alignment))
           return writer_error();
       }
     }

@@ -167,8 +167,7 @@ drain_bulk_d2h(struct d2h_deliver_stage* stage,
     uint64_t covering = (uint64_t)active_count * lvl->agg_layout.covering_count;
 
     size_t actual = agg->h_offsets[covering];
-    if (config->shard_alignment > 0)
-      actual += config->shard_alignment;
+    actual += stage->shard_alignment;
     size_t cap =
       agg_pool_bytes((uint64_t)active_count * levels->level[lv].chunk_count,
                      handoff->max_output_size,
@@ -337,7 +336,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                                   &ar,
                                   active_count,
                                   sink,
-                                  config->shard_alignment,
+                                  stage->shard_alignment,
                                   &level_bytes))
         goto Error;
       sink_bytes += level_bytes;

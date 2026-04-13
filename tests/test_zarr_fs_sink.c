@@ -1097,7 +1097,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 1,
-    .shard_alignment = platform_page_size(),
+    .shard_alignment = 0,
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -1298,7 +1298,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_ZSTD },
-    .shard_alignment = platform_page_size(),
+    .shard_alignment = 0,
   };
 
   struct tile_stream_gpu* s = NULL;

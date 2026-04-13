@@ -258,7 +258,7 @@ tile_stream_gpu_flush(struct writer* self)
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     if (s->compress_agg.levels[lv].shard.epoch_in_shard > 0) {
       if (finalize_shards(&s->compress_agg.levels[lv].shard,
-                          s->config.shard_alignment))
+                          s->shard_alignment))
         return writer_error();
     }
   }

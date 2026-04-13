@@ -11,6 +11,13 @@ platform_page_size(void)
 }
 
 size_t
+platform_page_alignment(void)
+{
+  size_t ps = platform_page_size();
+  return ps > 0 ? ps : 4096;
+}
+
+size_t
 platform_available_memory(void)
 {
   long pages = sysconf(_SC_AVPHYS_PAGES);

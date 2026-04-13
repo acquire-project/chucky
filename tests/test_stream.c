@@ -396,6 +396,7 @@ test_stream_lz4_roundtrip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 },
+    .shard_alignment = 1,
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -866,6 +867,7 @@ test_shard_index_structure(void)
       .rank = 3,
       .dimensions = dims,
       .codec = { .id = CODEC_ZSTD },
+      .shard_alignment = 1,
     };
 
     struct tile_stream_gpu* s = NULL;
@@ -983,6 +985,7 @@ Case2:
       .rank = 3,
       .dimensions = dims2,
       .codec = { .id = CODEC_ZSTD },
+      .shard_alignment = 1,
     };
 
     struct tile_stream_gpu* s2 = NULL;

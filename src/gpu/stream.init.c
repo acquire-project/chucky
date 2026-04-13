@@ -183,10 +183,14 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   }
 
   // Phase 1: CPU-only layout computation.
+  size_t sa = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
   CHECK(FailPhase1,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
+                               sa,
                                &cl) == 0);
 
   // Phase 2: Allocate and initialize tile_stream_gpu.
@@ -196,6 +200,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   out->config = *config;
   out->shard_sink = sink;
+  out->shard_alignment = sa;
   out->levels = cl.levels;
   out->dims = cl.dims;
   tile_stream_gpu_init_writer(out);
@@ -242,6 +247,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                          out->compress_agg.levels,
                          out->levels.nlod,
                          out->streams.compute) == 0);
+  out->d2h_deliver.shard_alignment = out->shard_alignment;
 
   CHECK(FailPhase2, init_batch_events(&out->batch, out->streams.compute) == 0);
   if (out->levels.enable_multiscale) {
@@ -334,8 +340,12 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
+  size_t est_sa = config->shard_alignment > 0
+    ? config->shard_alignment
+    : platform_page_alignment();
   if (compute_stream_layouts(
-        config, codec_alignment(config->codec.id), codec_max_output_size, &cl))
+        config, codec_alignment(config->codec.id), codec_max_output_size,
+        est_sa, &cl))
     return 1;
 
   const uint8_t rank = config->rank;
@@ -389,7 +399,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                             max_output_size,
                                             covering_count,
                                             cps_inner_lv,
-                                            config->shard_alignment);
+                                            est_sa);
 
     size_t agg_layout_dev =
       2 * (rank - 1) * sizeof(uint64_t) + 2 * (rank - 1) * sizeof(int64_t);

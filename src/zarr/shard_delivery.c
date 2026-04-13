@@ -49,16 +49,10 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
     size_t write_bytes;
     size_t index_offset;
 
-    if (shard_alignment > 0) {
-      write_bytes = align_up(index_total_bytes, shard_alignment);
-      index_buf =
-        (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
-      index_offset = write_bytes - index_total_bytes;
-    } else {
-      write_bytes = index_total_bytes;
-      index_buf = (uint8_t*)malloc(write_bytes);
-      index_offset = 0;
-    }
+    write_bytes = align_up(index_total_bytes, shard_alignment);
+    index_buf =
+      (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
+    index_offset = write_bytes - index_total_bytes;
 
     if (!index_buf) {
       log_error("finalize_shards: index alloc failed for shard %llu",
@@ -79,10 +73,7 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
         err = 1;
       }
 
-      if (shard_alignment > 0)
-        platform_aligned_free(index_buf);
-      else
-        free(index_buf);
+      platform_aligned_free(index_buf);
     }
 
     if (sh->writer->finalize(sh->writer)) {
@@ -146,7 +137,7 @@ deliver_to_shards_batch(uint8_t level,
           (const char*)result->data + result->offsets[j_run_start];
         // Unbuffered IO: round write size up to alignment. The padding
         // region in h_aggregated is safe to read (buffer is oversized).
-        size_t write_bytes = sa > 0 ? align_up(run_bytes, sa) : run_bytes;
+        size_t write_bytes = align_up(run_bytes, sa);
         total_bytes += write_bytes;
         const void* src_end = (const char*)src + write_bytes;
 
@@ -155,7 +146,7 @@ deliver_to_shards_batch(uint8_t level,
         // completion splits a group).
         // FIXME: this logic should be handle by a wrapper that is exposed in
         //        writer.h - something like write_append()
-        int aligned = sa == 0 || ((uintptr_t)src % sa == 0);
+        int aligned = ((uintptr_t)src % sa == 0);
         if (aligned && sh->writer->write_direct) {
           CHECK(Error,
                 sh->writer->write_direct(
@@ -184,7 +175,7 @@ deliver_to_shards_batch(uint8_t level,
         }
       }
 
-      sh->data_cursor += sa > 0 ? align_up(run_bytes, sa) : run_bytes;
+      sh->data_cursor += align_up(run_bytes, sa);
     }
 
     ss->epoch_in_shard += run_len;
