@@ -3,6 +3,7 @@
 
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
+#include "log/log.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
@@ -62,12 +63,11 @@ tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s)
   return s->metrics;
 }
 
+// Body of tile_stream_gpu_append, factored out so the wrapper can wall-clock
+// the whole thing for max_append_ms.
 static struct writer_result
-tile_stream_gpu_append(struct writer* self, struct slice input)
+tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
 {
-  struct tile_stream_gpu* s =
-    container_of(self, struct tile_stream_gpu, writer);
-
   if (s->flushed)
     return writer_finished_at(input.beg, input.end);
 
@@ -159,6 +159,40 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
       struct writer_result fr = flush_accumulate_epoch(s);
       if (fr.error)
         return writer_error_at(src, end);
+      // Sample sink backpressure at epoch boundaries.
+      size_t pend = shard_sink_pending_bytes(s->shard_sink);
+      if (pend > s->metrics.peak_pending_bytes)
+        s->metrics.peak_pending_bytes = pend;
+      // Backpressure: if the sink's IO queue exceeds the watermark,
+      // poll here until it drains below the threshold.  This keeps
+      // the stall at the producer boundary instead of deep inside
+      // the flush pipeline.
+      if (s->config.backpressure_bytes > 0 &&
+          pend > s->config.backpressure_bytes) {
+        struct platform_clock bp_clk = { 0 };
+        platform_toc(&bp_clk);
+        int64_t start_ns = bp_clk.last_ns;
+        const double timeout_s = 30.0;
+        int drained = 0;
+        for (;;) {
+          if (shard_sink_pending_bytes(s->shard_sink) <=
+              s->config.backpressure_bytes) {
+            drained = 1;
+            break;
+          }
+          platform_toc(&bp_clk);
+          if ((bp_clk.last_ns - start_ns) / 1e9 >= timeout_s)
+            break;
+          platform_sleep_ns(100000); // 100 μs
+        }
+        platform_toc(&bp_clk);
+        float bp_ms = (float)((bp_clk.last_ns - start_ns) / 1e6);
+        accumulate_metric_ms(&s->metrics.backpressure, bp_ms, 0, 0);
+        if (!drained)
+          log_warn("backpressure timeout after %.1fs (pending %zu bytes)",
+                   timeout_s,
+                   shard_sink_pending_bytes(s->shard_sink));
+      }
     }
   }
 
@@ -167,6 +201,20 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 
 Error:
   return writer_error_at(src, end);
+}
+
+static struct writer_result
+tile_stream_gpu_append(struct writer* self, struct slice input)
+{
+  struct tile_stream_gpu* s =
+    container_of(self, struct tile_stream_gpu, writer);
+  struct platform_clock clk = { 0 };
+  platform_toc(&clk);
+  struct writer_result r = tile_stream_gpu_append_body(s, input);
+  float ms = (float)(platform_toc(&clk) * 1000.0);
+  if (ms > s->metrics.max_append_ms)
+    s->metrics.max_append_ms = ms;
+  return r;
 }
 
 static struct writer_result

@@ -32,6 +32,16 @@ struct stream_metrics
   struct stream_metric aggregate;
   struct stream_metric d2h;
   struct stream_metric sink;
+
+  // Stall metrics — wall-clock time the host is blocked at each sync point.
+  // Populated only on the GPU path.
+  struct stream_metric
+    flush_stall; // d2h_deliver_drain in drain_kick_and_swap (Phase B)
+  struct stream_metric kick_sync_stall; // cuEventSynchronize in drain_bulk_d2h
+  struct stream_metric io_fence_stall;  // wait_io_fences in d2h_deliver_drain
+  struct stream_metric backpressure; // wait at epoch boundary for IO to drain
+  float max_append_ms;               // longest tile_stream_gpu_append body
+  size_t peak_pending_bytes;         // max sink->pending_bytes seen
 };
 
 struct tile_stream_configuration
@@ -52,7 +62,9 @@ struct tile_stream_configuration
   float metadata_update_interval_s;
   size_t
     shard_alignment; // 0 = no padding; platform_page_size() for unbuffered IO
-  int max_threads;   // 0 = OpenMP default
+  size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
+                             // when sink->pending_bytes exceeds this watermark
+  int max_threads;           // 0 = OpenMP default
 };
 
 struct tile_stream_status

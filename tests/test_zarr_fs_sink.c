@@ -447,7 +447,7 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
   log_info("=== test_multiscale_scale_non_pow2 ===");
 
   // x=6 (non-power-of-2): L0 x=6, L1 x=3, L2 x=2.
-  // Scale factor = L0_size / Lv_size: L1 = 6/3 = 2, L2 = 6/2 = 3.
+  // Scale factor = 1 << n_downsamples: L1 = 2, L2 = 4.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -480,10 +480,10 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
 
     // L0: scale [1,1,1]
     CHECK(Fail2, strstr(data, "\"scale\":[1.0,1.0,1.0]"));
-    // L1: z=1, y=6/3=2, x=6/3=2
+    // L1: z=1, y=2, x=2
     CHECK(Fail2, strstr(data, "\"scale\":[1.0,2.0,2.0]"));
-    // L2: z=1, y=6/2=3, x=6/2=3
-    CHECK(Fail2, strstr(data, "\"scale\":[1.0,3.0,3.0]"));
+    // L2: z=1, y=4, x=4
+    CHECK(Fail2, strstr(data, "\"scale\":[1.0,4.0,4.0]"));
 
     free(data);
   }

@@ -45,6 +45,9 @@ struct bench_config
   size_t memory_budget;         // 0 = auto-detect
   const uint64_t* shard_counts; // per-dim target shard counts (NULL = skip)
   int json_output;              // print JSON to stdout after run
+  uint64_t io_bw_mbps;          // 0 = no bandwidth cap (MiB/s)
+  uint64_t io_latency_us;       // 0 = no fixed per-job latency
+  size_t backpressure_bytes;    // 0 = disabled; >0 = stall when pending > N
 };
 
 int

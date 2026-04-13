@@ -23,8 +23,6 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
                  const struct dim_info* dims,
-                 const struct tile_stream_configuration* config,
-                 struct shard_sink* sink,
                  CUstream d2h_stream);
 
 // Synchronize D2H, record metrics, deliver to sinks.

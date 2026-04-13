@@ -6,6 +6,8 @@
 
 #include "gpu/lod.h"
 #include "gpu/prelude.cuda.h"
+#include "platform/platform.h"
+#include "util/metric.h"
 #include "util/prelude.h"
 
 #include <string.h>
@@ -78,8 +80,11 @@ Error:
   return 1;
 }
 
-// Drain previous flush, kick async pipeline on completed pool,
-// swap to fresh pool, reset batch state.
+// Pipeline the batch boundary: launch compress+aggregate for the new batch
+// on the compress stream, drain the previous batch's bulk D2H + delivery on
+// the d2h stream, then queue the new batch's offset D2H.  This ordering
+// keeps the d2h stream free for the previous batch's bulk transfer before
+// the new batch's aggregate-end wait occupies it.
 static struct writer_result
 drain_kick_and_swap(struct tile_stream_gpu* s)
 {
@@ -87,17 +92,66 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
   const int completed_pool = s->pools.current;
   struct flush_slot_gpu* fs = &s->flush.slot[completed_pool];
 
-  // Wait for any previous flush to finish delivery
-  struct writer_result r = flush_drain_pending(s);
-  if (r.error)
-    return r;
+  // Save the previous pending state so we can drain it after the
+  // compress+aggregate kick but before the d2h kick.
+  struct flush_handoff prev_handoff = s->flush.pending_handoff;
+  int had_pending = s->flush.pending;
+  s->flush.pending = 0;
 
-  // Launch async compress->aggregate->D2H on completed pool
+  // Phase A: kick compress+aggregate for the new batch (compress stream).
+  // This starts GPU work immediately — no host blocking.
   fs->batch_epoch_count = (int)s->batch.accumulated;
-  if (flush_kick_batch(s, completed_pool, s->batch.accumulated))
-    return writer_error();
+  struct compress_agg_input in =
+    make_compress_input(s, completed_pool, s->batch.accumulated);
+  struct flush_handoff new_handoff = { 0 };
+  CHECK(Error,
+        compress_agg_kick(&s->compress_agg,
+                          &in,
+                          &s->levels,
+                          &s->batch,
+                          &s->dims,
+                          s->streams.compress,
+                          &new_handoff) == 0);
 
-  // Swap to fresh pool and zero it for next batch
+  // Phase B: drain the PREVIOUS batch.  This issues bulk D2H on d2h_stream
+  // (unblocked — the new batch's aggregate-end wait hasn't been queued yet).
+  if (had_pending) {
+    struct platform_clock stall_clk = { 0 };
+    platform_toc(&stall_clk);
+    struct writer_result r = d2h_deliver_drain(&s->d2h_deliver,
+                                               &prev_handoff,
+                                               &s->levels,
+                                               &s->batch,
+                                               &s->dims,
+                                               &s->layout,
+                                               &s->config,
+                                               s->shard_sink,
+                                               &s->lod,
+                                               &s->metrics,
+                                               &s->metadata_update_clock);
+    float ms = (float)(platform_toc(&stall_clk) * 1000.0);
+    accumulate_metric_ms(&s->metrics.flush_stall, ms, 0, 0);
+    if (r.error)
+      return r;
+  }
+
+  // Phase C: queue the new batch's offset D2H on d2h_stream (non-blocking).
+  // This goes AFTER the previous drain's bulk D2H on d2h_stream, avoiding
+  // the aggregate-end wait from blocking the prior batch's transfer.
+  CHECK(Error,
+        d2h_deliver_kick(&s->d2h_deliver,
+                         &new_handoff,
+                         &s->levels,
+                         &s->batch,
+                         &s->dims,
+                         s->streams.d2h) == 0);
+
+  // Save handoff for the next drain.
+  s->flush.pending_handoff = new_handoff;
+  s->flush.pending = 1;
+  s->flush.current = completed_pool;
+
+  // Swap to fresh pool and zero it for next batch.
   s->pools.current ^= 1;
   size_t pool_bytes = (uint64_t)K * s->levels.total_chunks *
                       s->layout.chunk_stride * dtype_bpe(s->config.dtype);
@@ -105,16 +159,13 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
      cuMemsetD8Async(
        s->pools.buf[s->pools.current], 0, pool_bytes, s->streams.compute));
 
-  // Reset batch accumulation
+  // Reset batch accumulation.
   s->batch.accumulated = 0;
   s->flush.slot[s->pools.current].active_levels_mask = 0;
   memset(s->flush.slot[s->pools.current].batch_active_masks,
          0,
          sizeof(s->flush.slot[s->pools.current].batch_active_masks));
 
-  // Mark completed pool as pending delivery
-  s->flush.pending = 1;
-  s->flush.current = completed_pool;
   return writer_ok();
 
 Error:
@@ -167,8 +218,6 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
                          &s->levels,
                          &s->batch,
                          &s->dims,
-                         &s->config,
-                         s->shard_sink,
                          s->streams.d2h) == 0);
 
   // Save handoff for drain
@@ -223,8 +272,6 @@ kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
                          &s->levels,
                          &s->batch,
                          &s->dims,
-                         &s->config,
-                         s->shard_sink,
                          s->streams.d2h) == 0);
 
   return d2h_deliver_drain(&s->d2h_deliver,

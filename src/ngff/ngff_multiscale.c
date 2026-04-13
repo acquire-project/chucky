@@ -117,6 +117,14 @@ ngff_multiscale_has_error_fn(const struct shard_sink* self)
   return ms->pool->has_error(ms->pool);
 }
 
+static size_t
+ngff_multiscale_pending_bytes_fn(const struct shard_sink* self)
+{
+  const struct ngff_multiscale* ms =
+    container_of(self, struct ngff_multiscale, base);
+  return shard_pool_pending_bytes(ms->pool);
+}
+
 // --- Shared create logic ---
 
 // Shared init: caller provides a pre-computed LOD plan.
@@ -146,6 +154,7 @@ ngff_multiscale_init(struct store* store,
   ms->base.record_fence = ngff_multiscale_record_fence_fn;
   ms->base.wait_fence = ngff_multiscale_wait_fence_fn;
   ms->base.has_error = ngff_multiscale_has_error_fn;
+  ms->base.pending_bytes = ngff_multiscale_pending_bytes_fn;
 
   // Ensure prefix directory exists (parent handles root/intermediate groups)
   if (prefix && prefix[0])

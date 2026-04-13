@@ -1,4 +1,5 @@
 #include "writer.h"
+#include "zarr/shard_pool.h"
 
 #include "log/log.h"
 #include "platform/platform.h"
@@ -77,4 +78,16 @@ writer_finished_at(const void* beg, const void* end)
   r.rest.beg = beg;
   r.rest.end = end;
   return r;
+}
+
+size_t
+shard_sink_pending_bytes(const struct shard_sink* s)
+{
+  return (s && s->pending_bytes) ? s->pending_bytes(s) : 0;
+}
+
+size_t
+shard_pool_pending_bytes(const struct shard_pool* p)
+{
+  return (p && p->pending_bytes) ? p->pending_bytes(p) : 0;
 }

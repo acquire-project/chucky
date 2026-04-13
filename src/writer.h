@@ -74,7 +74,13 @@ struct shard_sink
 
   // Returns non-zero if any async IO has failed. NULL = no async IO.
   int (*has_error)(const struct shard_sink* self);
+
+  // Returns bytes queued but not yet retired on this sink. NULL = treated as 0.
+  size_t (*pending_bytes)(const struct shard_sink* self);
 };
+
+size_t
+shard_sink_pending_bytes(const struct shard_sink* s);
 
 struct writer_result
 writer_ok(void);

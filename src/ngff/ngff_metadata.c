@@ -1,6 +1,7 @@
 #include "ngff/ngff_metadata.h"
 #include "defs.limits.h"
 #include "ngff.h"
+#include "util/ceildiv.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
@@ -90,14 +91,19 @@ ngff_multiscale_group_json(char* buf,
     snprintf(lvstr, sizeof(lvstr), "%d", lv);
     jw_string(&jw, lvstr);
 
-    // Precompute per-axis physical scale and downsample factor.
-    // LOD dims are downsampled 2x at each level, so the physical pixel
-    // spacing is phys * 2^lv regardless of rounding in the actual sizes.
     double scale[MAX_ZARR_RANK];
     for (int d = 0; d < rank; ++d) {
       double phys = (axes && axes[d].scale > 0) ? axes[d].scale : 1.0;
-      double factor = l0[d].downsample ? (double)(1 << lv) : 1.0;
-      scale[d] = phys * factor;
+      int n_down = 0;
+      if (l0[d].downsample) {
+        for (int k = 0; k < lv; ++k) {
+          uint64_t sz = level_dims[k][d].size;
+          uint64_t cs = level_dims[k][d].chunk_size;
+          if (cs > 0 && sz > 0 && ceildiv(sz, cs) > 1)
+            ++n_down;
+        }
+      }
+      scale[d] = phys * (double)(1 << n_down);
     }
 
     jw_key(&jw, "coordinateTransformations");

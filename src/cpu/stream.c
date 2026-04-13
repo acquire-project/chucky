@@ -207,6 +207,11 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.compress = mk_stream_metric("compress");
   s->metrics.aggregate = mk_stream_metric("aggregate");
   s->metrics.sink = mk_stream_metric("sink");
+  // GPU-only stall metrics: named but never populated on CPU path.
+  s->metrics.flush_stall = mk_stream_metric("flush_stall");
+  s->metrics.kick_sync_stall = mk_stream_metric("kick_sync");
+  s->metrics.io_fence_stall = mk_stream_metric("io_fence");
+  s->metrics.backpressure = mk_stream_metric("backpressure");
   if (s->levels.enable_multiscale) {
     s->metrics.lod_gather = mk_stream_metric("lod_gather");
     s->metrics.lod_reduce = mk_stream_metric("lod_reduce");

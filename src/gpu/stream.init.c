@@ -161,6 +161,10 @@ init_metrics(int enable_multiscale)
     .aggregate = mk_stream_metric("Aggregate"),
     .d2h = mk_stream_metric("D2H"),
     .sink = mk_stream_metric("Sink"),
+    .flush_stall = mk_stream_metric("FlushStall"),
+    .kick_sync_stall = mk_stream_metric("KickSync"),
+    .io_fence_stall = mk_stream_metric("IOFence"),
+    .backpressure = mk_stream_metric("Backpres"),
   };
 }
 
@@ -264,6 +268,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   }
 
   out->metrics = init_metrics(out->levels.enable_multiscale);
+  out->d2h_deliver.metrics = &out->metrics;
 
   // Initialize metadata update timer
   out->metadata_update_clock = (struct platform_clock){ 0 };

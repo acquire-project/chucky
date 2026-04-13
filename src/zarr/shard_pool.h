@@ -33,3 +33,6 @@ struct shard_pool
 
   void (*destroy)(struct shard_pool* self);
 };
+
+size_t
+shard_pool_pending_bytes(const struct shard_pool* p);
