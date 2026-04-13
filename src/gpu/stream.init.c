@@ -450,6 +450,12 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
       lod_device += csr->src_lod_count * sizeof(uint64_t);
     }
 
+    for (int lv = 0; lv < plan->levels.nlod; ++lv) {
+      // Per-level morton scatter LUTs
+      lod_device += plan->levels.level[lv].lod_nelem * sizeof(uint32_t);
+      lod_device += plan->levels.level[lv].fixed_dims_count * sizeof(uint32_t);
+    }
+
     for (int lv = 1; lv < plan->levels.nlod; ++lv) {
       lod_device += 2 * rank * sizeof(uint64_t);
       lod_device += 2 * rank * sizeof(int64_t);
