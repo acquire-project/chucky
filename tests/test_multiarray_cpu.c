@@ -547,7 +547,6 @@ test_cross_validate_single_array(void)
     .rank = 3,
     .dimensions = dims_r,
     .codec = { .id = CODEC_NONE },
-    .shard_alignment = sizeof(void*),
   };
   struct tile_stream_configuration config_m = config_r;
   config_m.dimensions = dims_m;

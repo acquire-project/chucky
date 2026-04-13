@@ -42,12 +42,11 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->config = *config;
   s->nthreads =
     config->max_threads > 0 ? config->max_threads : omp_get_max_threads();
-  s->shard_alignment = resolve_shard_alignment(config->shard_alignment);
+  s->shard_alignment = platform_page_alignment();
   s->shard_sink = sink;
 
   // CPU codec alignment is 1 (no nvcomp alignment needed).
-  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size,
-                             s->shard_alignment, &s->cl))
+  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &s->cl))
     goto Fail;
 
   s->layout = s->cl.layouts[0];
@@ -431,8 +430,7 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  size_t sa = resolve_shard_alignment(config->shard_alignment);
-  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, sa, &cl))
+  if (compute_stream_layouts(config, 1, compress_cpu_max_output_size, &cl))
     return 1;
 
   compute_memory_info(&cl, dtype_bpe(config->dtype), info);

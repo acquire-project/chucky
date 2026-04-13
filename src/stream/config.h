@@ -15,12 +15,7 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t codec_alignment,
                        size_t (*max_output_size_fn)(enum compression_codec,
                                                     size_t chunk_bytes),
-                       size_t shard_alignment,
                        struct computed_stream_layouts* out);
-
-// Resolve shard_alignment: 0 → platform page size (or 4096 fallback).
-size_t
-resolve_shard_alignment(size_t config_value);
 
 // Free resources owned by computed_stream_layouts.
 void

@@ -148,7 +148,6 @@ run_bench(const struct bench_config* cfg)
         .reduce_method = cfg->reduce_method,
         .append_reduce_method = cfg->append_reduce_method,
         .target_batch_chunks = 2048,
-        .shard_alignment = 0,
       };
       int advise_ok;
       if (cfg->backend == BENCH_GPU) {
@@ -242,7 +241,6 @@ run_bench(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
-    .shard_alignment = 0,
     .backpressure_bytes = cfg->backpressure_bytes,
   };
 
@@ -882,7 +880,6 @@ run_bench_two_streams(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .target_batch_chunks = 2048,
-    .shard_alignment = 0,
     .backpressure_bytes = cfg->backpressure_bytes,
   };
 

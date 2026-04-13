@@ -50,8 +50,7 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
     size_t write_bytes;
     size_t index_offset;
     write_bytes = align_up(index_total_bytes, shard_alignment);
-    index_buf =
-      (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
+    index_buf = (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
     index_offset = write_bytes - index_total_bytes;
 
     if (!index_buf) {
@@ -142,6 +141,18 @@ deliver_to_shards_batch(uint8_t level,
         // region in h_aggregated is safe to read (buffer is oversized).
         size_t write_bytes = align_up(run_bytes, sa);
         total_bytes += write_bytes;
+
+        // Zero intra-entry padding for deterministic shard output.
+        // pad_shard_sizes inflates the last entry per shard group; the
+        // aggregate buffer has garbage in those bytes.  Only zero within
+        // each entry's [offset, offset+padded_size) range — do NOT extend
+        // into the align_up region which may overlap the next epoch's data.
+        for (uint64_t j = j_run_start; j < j_run_end; ++j) {
+          size_t data_end = result->offsets[j] + result->chunk_sizes[j];
+          size_t slot_end = result->offsets[j + 1];
+          if (slot_end > data_end)
+            memset((char*)result->data + data_end, 0, slot_end - data_end);
+        }
         const void* src_end = (const char*)src + write_bytes;
 
         // Use write_direct when source pointer is page-aligned (always true

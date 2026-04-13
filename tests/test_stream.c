@@ -396,7 +396,6 @@ test_stream_lz4_roundtrip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 },
-    .shard_alignment = sizeof(void*),
   };
 
   struct tile_stream_gpu* s = NULL;
@@ -867,7 +866,6 @@ test_shard_index_structure(void)
       .rank = 3,
       .dimensions = dims,
       .codec = { .id = CODEC_ZSTD },
-      .shard_alignment = sizeof(void*),
     };
 
     struct tile_stream_gpu* s = NULL;
@@ -921,12 +919,11 @@ test_shard_index_structure(void)
         chunk_data_sum += tile_nbytes[i];
 
       if (chunk_data_sum + index_total_bytes > w->size) {
-        log_error(
-          "  shard %d: chunk_data_sum=%zu + index=%zu > shard_size=%zu",
-          si,
-          chunk_data_sum,
-          index_total_bytes,
-          w->size);
+        log_error("  shard %d: chunk_data_sum=%zu + index=%zu > shard_size=%zu",
+                  si,
+                  chunk_data_sum,
+                  index_total_bytes,
+                  w->size);
         errors++;
       }
 
@@ -985,7 +982,6 @@ Case2:
       .rank = 3,
       .dimensions = dims2,
       .codec = { .id = CODEC_ZSTD },
-      .shard_alignment = sizeof(void*),
     };
 
     struct tile_stream_gpu* s2 = NULL;

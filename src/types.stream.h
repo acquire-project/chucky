@@ -60,8 +60,6 @@ struct tile_stream_configuration
   uint32_t
     target_batch_chunks; // minimum chunks per compress batch (default 1024)
   float metadata_update_interval_s;
-  size_t
-    shard_alignment; // 0 = auto (page-aligned); >0 = explicit alignment
   size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
                              // when sink->pending_bytes exceeds this watermark
   int max_threads;           // 0 = OpenMP default

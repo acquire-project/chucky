@@ -2,7 +2,6 @@
 #include "cpu/lod.h"
 #include "lod/lod_plan.h"
 #include "morton.util.h"
-#include "platform/platform.h"
 #include "stream/config.h"
 #include "util/prelude.h"
 
@@ -379,8 +378,7 @@ test_max_nlod_validation_rejection(void)
 
   struct computed_stream_layouts cl;
   int rc = compute_stream_layouts(
-    &config_too_big, 1, compress_cpu_max_output_size, platform_page_alignment(),
-    &cl);
+    &config_too_big, 1, compress_cpu_max_output_size, &cl);
   CHECK(Fail, rc != 0); // must be rejected
 
   struct tile_stream_configuration config_negative = {
@@ -393,8 +391,7 @@ test_max_nlod_validation_rejection(void)
   };
 
   rc = compute_stream_layouts(
-    &config_negative, 1, compress_cpu_max_output_size,
-    platform_page_alignment(), &cl);
+    &config_negative, 1, compress_cpu_max_output_size, &cl);
   CHECK(Fail, rc != 0); // must be rejected
 
   log_info("  PASS");
@@ -433,8 +430,8 @@ test_max_nlod_one_via_layouts(void)
 
   struct computed_stream_layouts cl;
   CHECK(Fail,
-        compute_stream_layouts(&config, 1, compress_cpu_max_output_size,
-                               platform_page_alignment(), &cl) == 0);
+        compute_stream_layouts(&config, 1, compress_cpu_max_output_size, &cl) ==
+          0);
   CHECK(Fail, cl.levels.nlod == 1); // base level only
   computed_stream_layouts_free(&cl);
 
@@ -476,8 +473,7 @@ test_max_nlod_positive_cap_via_layouts(void)
   struct computed_stream_layouts cl_auto;
   CHECK(Fail,
         compute_stream_layouts(
-          &config_auto, 1, compress_cpu_max_output_size,
-          platform_page_alignment(), &cl_auto) == 0);
+          &config_auto, 1, compress_cpu_max_output_size, &cl_auto) == 0);
   CHECK(Fail, cl_auto.levels.nlod > 3); // auto should produce more than 3
   computed_stream_layouts_free(&cl_auto);
 
@@ -494,8 +490,7 @@ test_max_nlod_positive_cap_via_layouts(void)
   struct computed_stream_layouts cl_cap;
   CHECK(Fail,
         compute_stream_layouts(
-          &config_cap, 1, compress_cpu_max_output_size,
-          platform_page_alignment(), &cl_cap) == 0);
+          &config_cap, 1, compress_cpu_max_output_size, &cl_cap) == 0);
   CHECK(Fail, cl_cap.levels.nlod == 3); // 3 total levels
   computed_stream_layouts_free(&cl_cap);
 
@@ -553,12 +548,11 @@ test_max_nlod_zero_equals_uncapped(void)
   struct computed_stream_layouts cl_auto, cl_uncapped;
   CHECK(Fail,
         compute_stream_layouts(
-          &config_auto, 1, compress_cpu_max_output_size,
-          platform_page_alignment(), &cl_auto) == 0);
+          &config_auto, 1, compress_cpu_max_output_size, &cl_auto) == 0);
   CHECK(Fail,
         compute_stream_layouts(
-          &config_uncapped, 1, compress_cpu_max_output_size,
-          platform_page_alignment(), &cl_uncapped) == 0);
+          &config_uncapped, 1, compress_cpu_max_output_size, &cl_uncapped) ==
+          0);
 
   // Both should produce multiple levels (sanity check the config is
   // interesting)

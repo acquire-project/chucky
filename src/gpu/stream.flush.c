@@ -229,67 +229,6 @@ Error:
   return 1;
 }
 
-// Kick compress->aggregate->D2H->deliver for a single epoch from the
-// super-pool.
-static struct writer_result
-kick_and_deliver_one_epoch(struct tile_stream_gpu* s,
-                           int fc,
-                           uint32_t epoch_in_batch,
-                           uint32_t active_mask)
-{
-  // Build single-epoch input
-  struct compress_agg_input in = {
-    .fc = fc,
-    .n_epochs = 1,
-    .active_levels_mask = active_mask,
-    .epochs_per_batch = s->batch.epochs_per_batch,
-    .lod_done = (s->levels.enable_multiscale && s->lod.timing[fc].t_end)
-                  ? s->lod.timing[fc].t_end
-                  : NULL,
-  };
-  in.batch_active_masks[0] = active_mask;
-  in.epoch_events[0] = s->batch.pool_events[epoch_in_batch];
-
-  // Point pool_buf at the specific epoch
-  const size_t chunk_bytes =
-    s->layout.chunk_stride * dtype_bpe(s->config.dtype);
-  in.pool_buf = s->pools.buf[fc] +
-                (uint64_t)epoch_in_batch * s->levels.total_chunks * chunk_bytes;
-
-  struct flush_handoff handoff = { 0 };
-  CHECK(Error,
-        compress_agg_kick(&s->compress_agg,
-                          &in,
-                          &s->levels,
-                          &s->batch,
-                          &s->dims,
-                          s->streams.compress,
-                          &handoff) == 0);
-
-  CHECK(Error,
-        d2h_deliver_kick(&s->d2h_deliver,
-                         &handoff,
-                         &s->levels,
-                         &s->batch,
-                         &s->dims,
-                         s->streams.d2h) == 0);
-
-  return d2h_deliver_drain(&s->d2h_deliver,
-                           &handoff,
-                           &s->levels,
-                           &s->batch,
-                           &s->dims,
-                           &s->layout,
-                           &s->config,
-                           s->shard_sink,
-                           &s->lod,
-                           &s->metrics,
-                           &s->metadata_update_clock);
-
-Error:
-  return writer_error();
-}
-
 // --- Public interface ---
 
 struct writer_result
@@ -321,46 +260,30 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
   const int fc = s->pools.current;
   struct flush_slot_gpu* fs = &s->flush.slot[fc];
 
-  if (s->batch.accumulated == s->batch.epochs_per_batch) {
-    // Full batch: use the batch pipeline (LUT-accelerated aggregate)
-    fs->batch_epoch_count = (int)s->batch.accumulated;
-    if (flush_kick_batch(s, fc, s->batch.accumulated))
-      return writer_error();
+  // Use the batch pipeline for both full and partial batches.
+  // compress_agg_kick handles n_epochs < epochs_per_batch by recomputing
+  // LUTs, so this path is safe for any accumulated count.
+  fs->batch_epoch_count = (int)s->batch.accumulated;
+  if (flush_kick_batch(s, fc, s->batch.accumulated))
+    return writer_error();
 
-    struct writer_result r = d2h_deliver_drain(&s->d2h_deliver,
-                                               &s->flush.pending_handoff,
-                                               &s->levels,
-                                               &s->batch,
-                                               &s->dims,
-                                               &s->layout,
-                                               &s->config,
-                                               s->shard_sink,
-                                               &s->lod,
-                                               &s->metrics,
-                                               &s->metadata_update_clock);
-    s->batch.accumulated = 0;
-    s->flush.slot[s->pools.current].active_levels_mask = 0;
-    memset(s->flush.slot[s->pools.current].batch_active_masks,
-           0,
-           sizeof(s->flush.slot[s->pools.current].batch_active_masks));
-    return r;
-  }
-
-  // Partial batch: process each epoch individually
-  for (uint32_t e = 0; e < s->batch.accumulated; ++e) {
-    uint32_t mask = fs->batch_active_masks[e];
-    if (!mask)
-      continue;
-
-    struct writer_result r = kick_and_deliver_one_epoch(s, fc, e, mask);
-    if (r.error)
-      return r;
-  }
-
+  struct writer_result r = d2h_deliver_drain(&s->d2h_deliver,
+                                             &s->flush.pending_handoff,
+                                             &s->levels,
+                                             &s->batch,
+                                             &s->dims,
+                                             &s->layout,
+                                             &s->config,
+                                             s->shard_sink,
+                                             &s->lod,
+                                             &s->metrics,
+                                             &s->metadata_update_clock);
   s->batch.accumulated = 0;
-  fs->active_levels_mask = 0;
-  memset(fs->batch_active_masks, 0, sizeof(fs->batch_active_masks));
-  return writer_ok();
+  s->flush.slot[s->pools.current].active_levels_mask = 0;
+  memset(s->flush.slot[s->pools.current].batch_active_masks,
+         0,
+         sizeof(s->flush.slot[s->pools.current].batch_active_masks));
+  return r;
 }
 
 struct writer_result

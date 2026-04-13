@@ -1,6 +1,7 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/stream.flush.h"
+#include "platform/platform.h"
 #include "stream/config.h"
 
 #include "test_gpu_helpers.h"
@@ -64,12 +65,10 @@ orch_ctx_setup(struct orch_ctx* c,
                struct tile_stream_configuration* config,
                struct shard_sink* sink)
 {
-  size_t sa = resolve_shard_alignment(config->shard_alignment);
   CHECK(Fail,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
-                               sa,
                                &c->cl) == 0);
 
   c->s = (struct tile_stream_gpu*)calloc(1, sizeof(*c->s));
@@ -102,7 +101,7 @@ orch_ctx_setup(struct orch_ctx* c,
         d2h_deliver_init(&c->s->d2h_deliver,
                          c->s->compress_agg.levels,
                          c->cl.levels.nlod,
-                         sa,
+                         platform_page_alignment(),
                          c->s->streams.compute) == 0);
 
   // Double-buffered chunk pools

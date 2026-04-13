@@ -565,7 +565,6 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `target_batch_chunks` | > 0 | Target chunk count for auto-$K$ (default 1024) |
 | `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
-| `shard_alignment` | 0 or page size | Inter-shard padding for direct I/O |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |
 
 Each `struct dimension` describes one axis:
@@ -680,11 +679,11 @@ inner shard index), reused across epochs. This bounds open file
 descriptors regardless of how many shards are written over the stream's
 lifetime.
 
-**Unbuffered I/O.** When `shard_alignment > 0`, shard data is written with
-`O_DIRECT` (Linux) or `FILE_FLAG_NO_BUFFERING` (Windows). Buffers are
-page-aligned and inter-shard padding ensures each write begins on a page
-boundary. This bypasses the kernel page cache — important at sustained
-multi-GB/s write rates where cache pressure would otherwise evict useful
+**Unbuffered I/O.** Shard data is written with `O_DIRECT` (Linux) or
+`FILE_FLAG_NO_BUFFERING` (Windows). Buffers are page-aligned and
+inter-shard padding ensures each write begins on a page boundary.
+This bypasses the kernel page cache — important at sustained multi-GB/s
+write rates where cache pressure would otherwise evict useful
 read-side data.
 
 **Dynamic metadata.** `update_dim0` regenerates the zarr array metadata
