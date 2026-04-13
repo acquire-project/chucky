@@ -580,10 +580,11 @@ check_epoch_shard_geometry(const struct dimension* dims,
   memset(&full_plan, 0, sizeof(full_plan));
   memset(&epoch_plan, 0, sizeof(epoch_plan));
 
-  CHECK(Error, lod_plan_init_from_dims(&full_plan, dims, rank, max_levels) == 0);
+  CHECK(Error,
+        lod_plan_init_from_dims(&full_plan, dims, rank, max_levels, 0) == 0);
   CHECK(Error,
         lod_plan_init_from_epoch_dims(
-          &epoch_plan, dims, rank, na, max_levels) == 0);
+          &epoch_plan, dims, rank, na, max_levels, 0) == 0);
   CHECK(Error, full_plan.levels.nlod == epoch_plan.levels.nlod);
 
   for (int lv = 0; lv < full_plan.levels.nlod; ++lv) {
@@ -625,7 +626,7 @@ test_epoch_shard_geometry_1_append(void)
   // Also verify absolute values on the epoch plan.
   struct lod_plan ep;
   memset(&ep, 0, sizeof(ep));
-  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4) == 0);
+  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4, 0) == 0);
   CHECK(Error, ep.levels.level[0].dim[0].chunk_count == 6);
   CHECK(Error, ep.levels.level[0].dim[0].chunks_per_shard == 2);
   CHECK(Error, ep.levels.level[0].dim[0].shard_count == 3);
@@ -677,7 +678,7 @@ test_epoch_shard_geometry_cps_zero(void)
   // Verify: chunk_count=6, cps=6 (all), shard_count=1
   struct lod_plan ep;
   memset(&ep, 0, sizeof(ep));
-  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4) == 0);
+  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4, 0) == 0);
   CHECK(Error, ep.levels.level[0].dim[0].chunk_count == 6);
   CHECK(Error, ep.levels.level[0].dim[0].chunks_per_shard == 6);
   CHECK(Error, ep.levels.level[0].dim[0].shard_count == 1);
