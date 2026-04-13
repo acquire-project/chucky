@@ -40,7 +40,7 @@ make_test_config(struct tile_stream_configuration* config,
   config->dtype = dtype_u16;
   config->buffer_capacity_bytes = 4096;
   config->codec = codec;
-  config->shard_alignment = 1;
+  config->shard_alignment = sizeof(void*);
   config->epochs_per_batch = epochs_per_batch;
   return 0;
 }

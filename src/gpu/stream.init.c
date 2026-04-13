@@ -183,9 +183,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   }
 
   // Phase 1: CPU-only layout computation.
-  size_t sa = config->shard_alignment > 0
-    ? config->shard_alignment
-    : platform_page_alignment();
+  size_t sa = resolve_shard_alignment(config->shard_alignment);
   CHECK(FailPhase1,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
@@ -246,8 +244,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         d2h_deliver_init(&out->d2h_deliver,
                          out->compress_agg.levels,
                          out->levels.nlod,
+                         out->shard_alignment,
                          out->streams.compute) == 0);
-  out->d2h_deliver.shard_alignment = out->shard_alignment;
 
   CHECK(FailPhase2, init_batch_events(&out->batch, out->streams.compute) == 0);
   if (out->levels.enable_multiscale) {
@@ -340,9 +338,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  size_t est_sa = config->shard_alignment > 0
-    ? config->shard_alignment
-    : platform_page_alignment();
+  size_t est_sa = resolve_shard_alignment(config->shard_alignment);
   if (compute_stream_layouts(
         config, codec_alignment(config->codec.id), codec_max_output_size,
         est_sa, &cl))

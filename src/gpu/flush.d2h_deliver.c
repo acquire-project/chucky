@@ -15,11 +15,13 @@ int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  struct level_flush_state* levels,
                  int nlod,
+                 size_t shard_alignment,
                  CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
   stage->levels = levels;
   stage->nlod = nlod;
+  stage->shard_alignment = shard_alignment;
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
@@ -167,6 +169,9 @@ drain_bulk_d2h(struct d2h_deliver_stage* stage,
     uint64_t covering = (uint64_t)active_count * lvl->agg_layout.covering_count;
 
     size_t actual = agg->h_offsets[covering];
+    // Add one alignment unit of slack: deliver_to_shards_batch rounds each
+    // write up with align_up, so the D2H must cover at least that much.
+    // The aggregate buffer was sized with this slack via agg_pool_bytes.
     actual += stage->shard_alignment;
     size_t cap =
       agg_pool_bytes((uint64_t)active_count * levels->level[lv].chunk_count,

@@ -56,13 +56,12 @@ ca_ctx_setup(struct ca_test_ctx* c,
              int n_pool_epochs)
 {
   make_test_config(&c->config, c->dims, codec, epochs_per_batch);
+  size_t sa = resolve_shard_alignment(c->config.shard_alignment);
   CHECK(Fail,
         compute_stream_layouts(&c->config,
                                codec_alignment(c->config.codec.id),
                                codec_max_output_size,
-                               c->config.shard_alignment > 0
-                                 ? c->config.shard_alignment
-                                 : platform_page_alignment(),
+                               sa,
                                &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
@@ -443,7 +442,7 @@ test_compress_agg_zstd_single_epoch(void)
     uint32_t pi =
       cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
     size_t off = handoff.agg[0]->h_offsets[pi];
-    size_t comp_sz = handoff.agg[0]->h_offsets[pi + 1] - off;
+    size_t comp_sz = handoff.agg[0]->h_permuted_sizes[pi];
     CHECK(Fail, comp_sz > 0);
     CHECK(Fail, comp_sz <= handoff.max_output_size);
 

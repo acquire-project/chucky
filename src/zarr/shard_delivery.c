@@ -35,6 +35,7 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
 int
 finalize_shards(struct shard_state* ss, size_t shard_alignment)
 {
+  CHECK(Fail, shard_alignment > 0);
   int err = 0;
 
   for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
@@ -48,7 +49,6 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
     uint8_t* index_buf = NULL;
     size_t write_bytes;
     size_t index_offset;
-
     write_bytes = align_up(index_total_bytes, shard_alignment);
     index_buf =
       (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
@@ -90,6 +90,8 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
   ss->epoch_in_shard = 0;
   ss->shard_epoch++;
   return err;
+Fail:
+  return 1;
 }
 
 int
@@ -101,6 +103,7 @@ deliver_to_shards_batch(uint8_t level,
                         size_t shard_alignment,
                         size_t* out_bytes)
 {
+  CHECK(Error, shard_alignment > 0);
   const uint64_t cps_inner = ss->chunks_per_shard_inner;
   const size_t sa = shard_alignment;
   size_t total_bytes = 0;

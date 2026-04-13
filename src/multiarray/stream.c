@@ -1,7 +1,6 @@
 #include "cpu/pipeline.h"
 #include "dimension.h"
 #include "multiarray.cpu.h"
-#include "platform/platform.h"
 #include "stream/config.h"
 #include "zarr/shard_delivery.h"
 
@@ -134,9 +133,7 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->config = *config;
   desc->sink = sink;
-  desc->shard_alignment = config->shard_alignment > 0
-    ? config->shard_alignment
-    : platform_page_alignment();
+  desc->shard_alignment = resolve_shard_alignment(config->shard_alignment);
 
   if (compute_stream_layouts(
         config, 1, compress_cpu_max_output_size, desc->shard_alignment,

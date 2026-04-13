@@ -2,6 +2,7 @@
 
 #include "dimension.h"
 #include "dtype.h"
+#include "platform/platform.h"
 #include "stream/dim_info.h"
 #include "stream/types.aggregate.h"
 #include "types.stream.h"
@@ -10,6 +11,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+size_t
+resolve_shard_alignment(size_t config_value)
+{
+  return config_value > 0 ? config_value : platform_page_alignment();
+}
 
 static inline uint32_t
 next_pow2_u32(uint32_t v)
@@ -160,6 +167,12 @@ validate_config(const struct tile_stream_configuration* config,
       (config->shard_alignment & (config->shard_alignment - 1)) != 0) {
     log_error("shard_alignment must be 0 or a power of 2 (got %zu)",
               config->shard_alignment);
+    goto Fail;
+  }
+  if (config->shard_alignment > 0 &&
+      config->shard_alignment < sizeof(void*)) {
+    log_error("shard_alignment must be 0 or >= %zu (got %zu)",
+              sizeof(void*), config->shard_alignment);
     goto Fail;
   }
 

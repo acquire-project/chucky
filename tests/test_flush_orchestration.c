@@ -64,13 +64,12 @@ orch_ctx_setup(struct orch_ctx* c,
                struct tile_stream_configuration* config,
                struct shard_sink* sink)
 {
+  size_t sa = resolve_shard_alignment(config->shard_alignment);
   CHECK(Fail,
         compute_stream_layouts(config,
                                codec_alignment(config->codec.id),
                                codec_max_output_size,
-                               config->shard_alignment > 0
-                                 ? config->shard_alignment
-                                 : platform_page_alignment(),
+                               sa,
                                &c->cl) == 0);
 
   c->s = (struct tile_stream_gpu*)calloc(1, sizeof(*c->s));
@@ -103,10 +102,8 @@ orch_ctx_setup(struct orch_ctx* c,
         d2h_deliver_init(&c->s->d2h_deliver,
                          c->s->compress_agg.levels,
                          c->cl.levels.nlod,
+                         sa,
                          c->s->streams.compute) == 0);
-  c->s->d2h_deliver.shard_alignment = config->shard_alignment > 0
-    ? config->shard_alignment
-    : platform_page_alignment();
 
   // Double-buffered chunk pools
   for (int i = 0; i < 2; ++i) {
