@@ -490,13 +490,20 @@ static void
 fill_shard_geometry(struct lod_plan* p,
                     const struct dimension* dims,
                     uint8_t rank,
-                    uint8_t n_append)
+                    uint8_t n_append,
+                    const uint64_t* append_sizes)
 {
   int nlod = p->levels.nlod;
   for (int lv = 0; lv < nlod; ++lv) {
     uint64_t cps[LOD_MAX_NDIM];
     for (int d = 0; d < rank; ++d)
       cps[d] = dims[d].chunks_per_shard;
+    // For append dims, restore original size so shard geometry matches
+    // the full array shape rather than the epoch-truncated shape.
+    if (append_sizes) {
+      for (int d = 0; d < n_append; ++d)
+        p->levels.level[lv].dim[d].size = append_sizes[d];
+    }
     dim_extent_compute_shards(p->levels.level[lv].dim, rank, n_append, cps);
   }
 }
@@ -521,7 +528,7 @@ lod_plan_init_from_dims(struct lod_plan* p,
                     max_levels,
                     preserve_aspect_ratio))
     return 1;
-  fill_shard_geometry(p, dims, rank, na);
+  fill_shard_geometry(p, dims, rank, na, NULL);
   return 0;
 }
 
@@ -538,6 +545,10 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
   uint64_t chunk_shape[LOD_MAX_NDIM];
   uint32_t lod_mask;
   dims_lod_params(dims, rank, n_append, shape, chunk_shape, &lod_mask);
+  // Save original append-dim sizes before epoch truncation.
+  uint64_t orig_append[LOD_MAX_NDIM];
+  for (int d = 0; d < n_append; ++d)
+    orig_append[d] = shape[d];
   for (int d = 0; d < n_append; ++d)
     shape[d] = dims[d].chunk_size;
   if (lod_plan_init(p,
@@ -548,7 +559,7 @@ lod_plan_init_from_epoch_dims(struct lod_plan* p,
                     max_levels,
                     preserve_aspect_ratio))
     return 1;
-  fill_shard_geometry(p, dims, rank, n_append);
+  fill_shard_geometry(p, dims, rank, n_append, orig_append);
   return 0;
 }
 

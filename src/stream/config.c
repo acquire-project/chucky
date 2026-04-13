@@ -316,8 +316,13 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
     uint64_t lv_shape[HALF_MAX_RANK];
     if (lv == 0)
       memcpy(lv_shape, array_shape, rank * sizeof(uint64_t));
-    else
+    else {
       level_dims_get_shape(&out->plan.levels.level[lv], rank, lv_shape);
+      // Append dims use the original array shape, not the epoch-truncated
+      // plan shape, so shard geometry matches the full array.
+      for (int d = 0; d < na; ++d)
+        lv_shape[d] = array_shape[d];
+    }
     struct dim_extent de[HALF_MAX_RANK];
     for (int d = 0; d < rank; ++d) {
       de[d].size = lv_shape[d];
