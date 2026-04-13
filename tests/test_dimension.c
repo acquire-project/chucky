@@ -564,6 +564,132 @@ Error:
   return !ok;
 }
 
+// --- LOD epoch shard geometry tests (issue #72) ---
+
+// Helper: build dims, run both full and epoch plans, compare shard geometry.
+// Returns 0 on success.
+static int
+check_epoch_shard_geometry(const struct dimension* dims,
+                           uint8_t rank,
+                           int max_levels)
+{
+  int ok = 0;
+  uint8_t na = dims_n_append(dims, rank);
+
+  struct lod_plan full_plan, epoch_plan;
+  memset(&full_plan, 0, sizeof(full_plan));
+  memset(&epoch_plan, 0, sizeof(epoch_plan));
+
+  CHECK(Error,
+        lod_plan_init_from_dims(&full_plan, dims, rank, max_levels, 0) == 0);
+  CHECK(Error,
+        lod_plan_init_from_epoch_dims(
+          &epoch_plan, dims, rank, na, max_levels, 0) == 0);
+  CHECK(Error, full_plan.levels.nlod == epoch_plan.levels.nlod);
+
+  for (int lv = 0; lv < full_plan.levels.nlod; ++lv) {
+    for (int d = 0; d < rank; ++d) {
+      CHECK(Error,
+            full_plan.levels.level[lv].dim[d].chunks_per_shard ==
+              epoch_plan.levels.level[lv].dim[d].chunks_per_shard);
+      CHECK(Error,
+            full_plan.levels.level[lv].dim[d].shard_count ==
+              epoch_plan.levels.level[lv].dim[d].shard_count);
+      CHECK(Error,
+            full_plan.levels.level[lv].dim[d].chunk_count ==
+              epoch_plan.levels.level[lv].dim[d].chunk_count);
+    }
+  }
+
+  ok = 1;
+Error:
+  lod_plan_free(&full_plan);
+  lod_plan_free(&epoch_plan);
+  return !ok;
+}
+
+static int
+test_epoch_shard_geometry_1_append(void)
+{
+  // n_append=1: t=30, chunk=5, cps=2 -> chunk_count=6, shard_count=3
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 30, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 32, 32 };
+  dims_set_chunk_sizes(dims, 3, cs);
+  dims[0].chunks_per_shard = 2;
+  dims_set_downsample_by_name(dims, 3, "yx");
+
+  CHECK(Error, check_epoch_shard_geometry(dims, 3, 4) == 0);
+
+  // Also verify absolute values on the epoch plan.
+  struct lod_plan ep;
+  memset(&ep, 0, sizeof(ep));
+  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4, 0) == 0);
+  CHECK(Error, ep.levels.level[0].dim[0].chunk_count == 6);
+  CHECK(Error, ep.levels.level[0].dim[0].chunks_per_shard == 2);
+  CHECK(Error, ep.levels.level[0].dim[0].shard_count == 3);
+
+  ok = 1;
+Error:
+  lod_plan_free(&ep);
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_epoch_shard_geometry_2_append(void)
+{
+  // n_append=2: t,z both with chunk_size=1
+  int ok = 0;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 20, 10, 128, 128 };
+  dims_create(dims, "tzyx", sizes);
+  uint64_t cs[] = { 1, 1, 64, 64 };
+  dims_set_chunk_sizes(dims, 4, cs);
+  dims[0].chunks_per_shard = 4;
+  dims[1].chunks_per_shard = 5;
+  dims_set_downsample_by_name(dims, 4, "yx");
+
+  CHECK(Error, check_epoch_shard_geometry(dims, 4, 4) == 0);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_epoch_shard_geometry_cps_zero(void)
+{
+  // cps=0 means "all chunks in one shard". Verify correct resolution.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 30, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 32, 32 };
+  dims_set_chunk_sizes(dims, 3, cs);
+  dims[0].chunks_per_shard = 0; // all chunks -> 1 shard
+  dims_set_downsample_by_name(dims, 3, "yx");
+
+  CHECK(Error, check_epoch_shard_geometry(dims, 3, 4) == 0);
+
+  // Verify: chunk_count=6, cps=6 (all), shard_count=1
+  struct lod_plan ep;
+  memset(&ep, 0, sizeof(ep));
+  CHECK(Error, lod_plan_init_from_epoch_dims(&ep, dims, 3, 1, 4, 0) == 0);
+  CHECK(Error, ep.levels.level[0].dim[0].chunk_count == 6);
+  CHECK(Error, ep.levels.level[0].dim[0].chunks_per_shard == 6);
+  CHECK(Error, ep.levels.level[0].dim[0].shard_count == 1);
+
+  ok = 1;
+Error:
+  lod_plan_free(&ep);
+  REPORT_TEST(ok);
+  return !ok;
+}
+
 int
 main(void)
 {
@@ -593,6 +719,9 @@ main(void)
       test_dim_info_rejects_unbounded_non_dim0 },
     { "dim_info_final_append_sizes", test_dim_info_final_append_sizes },
     { "dim_info_final_append_sizes_lod", test_dim_info_final_append_sizes_lod },
+    { "epoch_shard_geometry_1_append", test_epoch_shard_geometry_1_append },
+    { "epoch_shard_geometry_2_append", test_epoch_shard_geometry_2_append },
+    { "epoch_shard_geometry_cps_zero", test_epoch_shard_geometry_cps_zero },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

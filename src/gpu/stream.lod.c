@@ -161,22 +161,28 @@ Fail:
   return 1;
 }
 
-// Upload precomputed CSR reduce LUTs to device.
+// Build CSR reduce LUTs directly on GPU.
 static int
 init_csr_reduce_luts(struct lod_state* lod)
 {
   for (int l = 0; l < lod->plan.levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &lod->plan.reduce[l];
-    if (!csr->starts || !csr->indices)
+    const struct level_dims* src_ld = &lod->plan.levels.level[l];
+    const struct level_dims* dst_ld = &lod->plan.levels.level[l + 1];
+
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+
+    if (src_total == 0 || dst_total == 0)
       continue;
 
-    size_t starts_bytes = (csr->dst_segment_size + 1) * sizeof(uint64_t);
-    CU(Fail, cuMemAlloc(&lod->d_csr_starts[l], starts_bytes));
-    CU(Fail, cuMemcpyHtoD(lod->d_csr_starts[l], csr->starts, starts_bytes));
+    CU(Fail,
+       cuMemAlloc(&lod->d_csr_starts[l], (dst_total + 1) * sizeof(uint64_t)));
+    CU(Fail, cuMemAlloc(&lod->d_csr_indices[l], src_total * sizeof(uint64_t)));
 
-    size_t indices_bytes = csr->src_lod_count * sizeof(uint64_t);
-    CU(Fail, cuMemAlloc(&lod->d_csr_indices[l], indices_bytes));
-    CU(Fail, cuMemcpyHtoD(lod->d_csr_indices[l], csr->indices, indices_bytes));
+    CHECK(Fail,
+          lod_build_csr_gpu(
+            lod->d_csr_starts[l], lod->d_csr_indices[l], src_ld, dst_ld, 0) ==
+            0);
   }
 
   return 0;
@@ -674,12 +680,15 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(t->t_scatter_end, compute));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
-    if (!csr->starts || !csr->indices)
+    if (!lod->d_csr_starts[l] || !lod->d_csr_indices[l])
       continue;
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
+    // batch_count=1: the GPU CSR stores absolute element offsets into the
+    // flat level.  Batching happens downstream (compress/aggregate), not here.
     CHECK(Error,
           lod_reduce_csr(lod->d_morton,
                          lod->d_csr_starts[l],
@@ -688,9 +697,9 @@ lod_run_epoch(struct lod_state* lod,
                          reduce_method,
                          src_level.beg,
                          dst_level.beg,
-                         csr->src_lod_count,
-                         csr->dst_segment_size,
-                         csr->batch_count,
+                         src_ld->fixed_dims_count * src_ld->lod_nelem,
+                         dst_ld->fixed_dims_count * dst_ld->lod_nelem,
+                         1,
                          compute) == 0);
   }
 

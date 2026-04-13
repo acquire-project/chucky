@@ -1,5 +1,7 @@
+#include "defs.limits.h"
 #include "dtype.h"
 #include "gpu/lod.h"
+#include "lod/lod_plan.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
@@ -152,6 +154,72 @@ morton_rank_d(int ndim,
     uint64_t suffix = 1;
     for (int d = ndim - 1; d >= 0; --d) {
       uint64_t coord = coords[d];
+      uint64_t node_low = tree_child_low(coord, level, nlod);
+      int bit = (digit >> d) & 1;
+      uint64_t extent_low =
+        clamped_chunk_extent_d(shape[d], node_low * block_size, block_size);
+      if (bit == 1)
+        rank += suffix * extent_low * products[d];
+      uint64_t extent_chosen = clamped_chunk_extent_d(
+        shape[d], (node_low + (uint64_t)bit) * block_size, block_size);
+      suffix *= extent_chosen;
+    }
+  }
+
+  return rank;
+}
+
+// Morton rank without materializing a coordinate array.
+// Each coord is derived on the fly: (linear / lin_stride[r]) % lin_shape[r]
+// then right-shifted by `shift` (0 = identity, 1 = halve for LOD downsample).
+// remap[d] maps morton dim d to the index into lin_stride/lin_shape.
+// If remap is NULL, identity mapping is used.
+template<int NdimMax>
+__device__ static uint64_t
+morton_rank_linear(int ndim,
+                   const uint64_t* shape,
+                   int nlod_init,
+                   uint64_t linear,
+                   const uint64_t* lin_stride,
+                   const uint64_t* lin_shape,
+                   const int* remap,
+                   int shift)
+{
+  int nlod = nlod_init;
+  for (int d = 0; d < ndim; ++d) {
+    int si = remap ? remap[d] : d;
+    uint64_t coord = ((linear / lin_stride[si]) % lin_shape[si]) >> shift;
+    int coord_bits = coord > 0 ? (64 - __clzll(coord)) : 0;
+    if (coord_bits > nlod)
+      nlod = coord_bits;
+  }
+
+  int total_levels = nlod;
+  uint64_t rank = 0;
+  uint64_t products[NdimMax + 1];
+
+  for (int level = 0; level < total_levels; ++level) {
+    uint64_t block_size = 1ull << (total_levels - 1 - level);
+    int digit = 0;
+
+    products[0] = 1;
+    for (int d = 0; d < ndim; ++d) {
+      int si = remap ? remap[d] : d;
+      uint64_t coord = ((linear / lin_stride[si]) % lin_shape[si]) >> shift;
+      uint64_t node_low = tree_child_low(coord, level, nlod);
+      if (level < nlod)
+        digit |= (int)((coord >> (nlod - 1 - level)) & 1) << d;
+      uint64_t extent_low =
+        clamped_chunk_extent_d(shape[d], node_low * block_size, block_size);
+      uint64_t extent_high = clamped_chunk_extent_d(
+        shape[d], (node_low + 1) * block_size, block_size);
+      products[d + 1] = products[d] * (extent_low + extent_high);
+    }
+
+    uint64_t suffix = 1;
+    for (int d = ndim - 1; d >= 0; --d) {
+      int si = remap ? remap[d] : d;
+      uint64_t coord = ((linear / lin_stride[si]) % lin_shape[si]) >> shift;
       uint64_t node_low = tree_child_low(coord, level, nlod);
       int bit = (digit >> d) & 1;
       uint64_t extent_low =
@@ -749,6 +817,380 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
 #undef DISPATCH
 #undef FUSED_METHOD
 #undef LAUNCH_FUSED
+  return 1;
+}
+
+// --- GPU CSR builder ---
+// Build CSR starts/indices arrays on GPU for one level transition.
+// Mirrors the CPU build_reduce_csr logic in lod_plan.c but avoids
+// per-thread coordinate arrays by deriving each coord from a linear
+// index on the fly via div/mod.
+
+#include <cub/device/device_scan.cuh>
+
+struct csr_level_params
+{
+  int src_lod_ndim;
+  uint64_t src_lod_shape[LOD_MAX_NDIM];
+  uint64_t
+    src_lod_stride[LOD_MAX_NDIM]; // stride[k] = prod(src_lod_shape[0..k-1])
+  uint64_t src_lod_nelem;
+  int src_nlod; // max ceil_log2(src_lod_shape[k])
+
+  int src_fixed_ndim;
+  uint64_t src_fixed_shape[LOD_MAX_NDIM];
+  uint64_t src_fixed_stride[LOD_MAX_NDIM]; // stride[k] =
+                                           // prod(src_fixed_shape[k+1..n-1])
+  uint64_t src_fixed_count;
+
+  int dst_lod_ndim;
+  uint64_t dst_lod_shape[LOD_MAX_NDIM];
+  uint64_t dst_lod_nelem;
+  uint64_t dst_fixed_count;
+  int dst_nlod; // max ceil_log2(dst_lod_shape[k])
+
+  int dst_fixed_ndim;
+  uint64_t dst_fixed_shape[LOD_MAX_NDIM];
+
+  // Per dst fixed dim: where the coord comes from.
+  //   is_lod[k]=0 → src fixed dim at src_fixed_src_index[k]
+  //   is_lod[k]=1 → dropped LOD dim at src_lod index dst_fixed_src_index[k]
+  int dst_fixed_src_is_lod[LOD_MAX_NDIM];
+  int dst_fixed_src_index[LOD_MAX_NDIM];
+
+  // Per dst LOD dim: which src LOD dim provides the coord (halved).
+  int dst_lod_src_index[LOD_MAX_NDIM];
+};
+
+// Map each source element to its destination element and histogram.
+// No per-thread coordinate arrays — all coords derived from scalars.
+template<int NdimMax>
+__global__ void
+csr_map_k(uint64_t* __restrict__ d_map,
+          uint64_t* __restrict__ d_counts,
+          const csr_level_params* __restrict__ pp,
+          uint64_t src_total)
+{
+  const uint64_t gi = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gi >= src_total)
+    return;
+
+  const csr_level_params& p = *pp;
+  uint64_t src_batch = gi / p.src_lod_nelem;
+  uint64_t src_enum = gi % p.src_lod_nelem;
+
+  // dst_bi: ravel dst fixed coords without storing a coord vector.
+  uint64_t dst_bi = 0;
+  for (int k = 0; k < p.dst_fixed_ndim; ++k) {
+    uint64_t coord;
+    if (p.dst_fixed_src_is_lod[k]) {
+      int si = p.dst_fixed_src_index[k];
+      coord = ((src_enum / p.src_lod_stride[si]) % p.src_lod_shape[si]) / 2;
+    } else {
+      int si = p.dst_fixed_src_index[k];
+      coord = (src_batch / p.src_fixed_stride[si]) % p.src_fixed_shape[si];
+    }
+    dst_bi = dst_bi * p.dst_fixed_shape[k] + coord;
+  }
+
+  // dst_morton: morton rank of halved non-dropped LOD coords.
+  uint64_t dst_morton = 0;
+  if (p.dst_lod_ndim > 0)
+    dst_morton = morton_rank_linear<NdimMax>(p.dst_lod_ndim,
+                                             p.dst_lod_shape,
+                                             p.dst_nlod,
+                                             src_enum,
+                                             p.src_lod_stride,
+                                             p.src_lod_shape,
+                                             p.dst_lod_src_index,
+                                             1);
+
+  uint64_t dst_elem = dst_bi * p.dst_lod_nelem + dst_morton;
+
+  // src_morton: morton rank of src LOD coords (no remap, no shift).
+  uint64_t src_morton = morton_rank_linear<NdimMax>(p.src_lod_ndim,
+                                                    p.src_lod_shape,
+                                                    p.src_nlod,
+                                                    src_enum,
+                                                    p.src_lod_stride,
+                                                    p.src_lod_shape,
+                                                    nullptr,
+                                                    0);
+  uint64_t src_elem = src_batch * p.src_lod_nelem + src_morton;
+
+  d_map[gi] = dst_elem;
+  d_map[src_total + gi] = src_elem;
+
+  atomicAdd((unsigned long long*)&d_counts[dst_elem], 1ull);
+}
+
+// Scatter source indices into CSR indices array.
+// d_write_pos is initialized as a copy of d_starts, so atomic returns an
+// absolute position into d_indices — no additional offset needed.
+__global__ void
+csr_scatter_k(uint64_t* __restrict__ d_indices,
+              uint64_t* __restrict__ d_write_pos,
+              const uint64_t* __restrict__ d_map,
+              uint64_t src_total)
+{
+  const uint64_t gi = (uint64_t)blockIdx.x * LOD_BLOCK + threadIdx.x;
+  if (gi >= src_total)
+    return;
+
+  uint64_t dst_elem = d_map[gi];
+  uint64_t src_elem = d_map[src_total + gi];
+  uint64_t pos = atomicAdd((unsigned long long*)&d_write_pos[dst_elem], 1ull);
+  d_indices[pos] = src_elem;
+}
+
+template<int NdimMax>
+static int
+lod_build_csr_gpu_launch(CUdeviceptr d_starts,
+                         CUdeviceptr d_indices,
+                         const csr_level_params* p,
+                         CUstream stream)
+{
+  uint64_t src_total = p->src_fixed_count * p->src_lod_nelem;
+  uint64_t dst_total = p->dst_fixed_count * p->dst_lod_nelem;
+
+  if (src_total == 0 || dst_total == 0) {
+    CUresult r =
+      cuMemsetD8Async(d_starts, 0, (dst_total + 1) * sizeof(uint64_t), stream);
+    if (r != CUDA_SUCCESS)
+      return 1;
+    return 0;
+  }
+
+  uint64_t grid64 = (src_total + LOD_BLOCK - 1) / LOD_BLOCK;
+  if (grid64 > (uint64_t)INT_MAX) {
+    log_error("csr: src_total %llu exceeds grid limit",
+              (unsigned long long)src_total);
+    return 1;
+  }
+  if (dst_total > (uint64_t)INT_MAX) {
+    log_error("csr: dst_total %llu exceeds CUB int limit",
+              (unsigned long long)dst_total);
+    return 1;
+  }
+  int grid = (int)grid64;
+
+  CUdeviceptr d_map = 0, d_counts = 0, d_write_pos = 0;
+  CUdeviceptr d_cub_temp = 0, d_params = 0;
+  int ret = 1;
+
+  CUresult r;
+  r = cuMemAlloc(&d_params, sizeof(csr_level_params));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+  r = cuMemcpyHtoD(d_params, p, sizeof(csr_level_params));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+  r = cuMemAlloc(&d_map, 2 * src_total * sizeof(uint64_t));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+  r = cuMemAlloc(&d_counts, dst_total * sizeof(uint64_t));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+  r = cuMemsetD8Async(d_counts, 0, dst_total * sizeof(uint64_t), stream);
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+
+  // Step 1+2: Map + histogram.
+  csr_map_k<NdimMax>
+    <<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_map,
+                                     (uint64_t*)d_counts,
+                                     (const csr_level_params*)d_params,
+                                     src_total);
+
+  // Step 3: Prefix sum on counts → starts.
+  {
+    size_t cub_temp_bytes = 0;
+    cudaError_t ce = cub::DeviceScan::ExclusiveSum(nullptr,
+                                                   cub_temp_bytes,
+                                                   (uint64_t*)d_counts,
+                                                   (uint64_t*)d_starts,
+                                                   (int)dst_total,
+                                                   stream);
+    if (ce != cudaSuccess) {
+      log_error("CUB ExclusiveSum query failed: %d", (int)ce);
+      goto cleanup;
+    }
+    r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
+    if (r != CUDA_SUCCESS)
+      goto cleanup;
+    ce = cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
+                                       cub_temp_bytes,
+                                       (uint64_t*)d_counts,
+                                       (uint64_t*)d_starts,
+                                       (int)dst_total,
+                                       stream);
+    if (ce != cudaSuccess) {
+      log_error("CUB ExclusiveSum exec failed: %d", (int)ce);
+      goto cleanup;
+    }
+  }
+
+  // Sentinel: starts[dst_total] = src_total.  Writes a non-overlapping
+  // element past the prefix-sum output, so no sync needed before this.
+  // Synchronous copy — 8 bytes, safe from stack, negligible at init time.
+  r = cuMemcpyHtoD(
+    d_starts + dst_total * sizeof(uint64_t), &src_total, sizeof(uint64_t));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+
+  // Step 4: Scatter into indices.
+  r = cuMemAlloc(&d_write_pos, dst_total * sizeof(uint64_t));
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+  r = cuMemcpyDtoDAsync(
+    d_write_pos, d_starts, dst_total * sizeof(uint64_t), stream);
+  if (r != CUDA_SUCCESS)
+    goto cleanup;
+
+  csr_scatter_k<<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_indices,
+                                                (uint64_t*)d_write_pos,
+                                                (const uint64_t*)d_map,
+                                                src_total);
+
+  // Single sync: all kernels and copies are stream-ordered.
+  r = cuStreamSynchronize(stream);
+  if (r != CUDA_SUCCESS) {
+    log_error("csr gpu build failed");
+    goto cleanup;
+  }
+
+  ret = 0;
+
+cleanup:
+  if (d_map)
+    cuMemFree(d_map);
+  if (d_counts)
+    cuMemFree(d_counts);
+  if (d_write_pos)
+    cuMemFree(d_write_pos);
+  if (d_cub_temp)
+    cuMemFree(d_cub_temp);
+  if (d_params)
+    cuMemFree(d_params);
+  return ret;
+}
+
+// Helper: find index of `d` in an int array. Returns -1 if not found.
+static int
+find_dim_index(const int* arr, int n, int d)
+{
+  for (int k = 0; k < n; ++k)
+    if (arr[k] == d)
+      return k;
+  return -1;
+}
+
+static int
+ceil_log2_h(uint64_t v)
+{
+  if (v <= 1)
+    return 0;
+  return 64 - __builtin_clzll(v - 1);
+}
+
+extern "C" int
+lod_build_csr_gpu(CUdeviceptr d_starts,
+                  CUdeviceptr d_indices,
+                  const struct level_dims* src,
+                  const struct level_dims* dst,
+                  CUstream stream)
+{
+  uint32_t dropped_mask = src->lod_mask & ~dst->lod_mask;
+
+  csr_level_params p;
+  memset(&p, 0, sizeof(p));
+
+  // Source LOD dims: shape, strides, nlod.
+  p.src_lod_ndim = src->lod_ndim;
+  p.src_lod_nelem = src->lod_nelem;
+  p.src_nlod = 0;
+  {
+    uint64_t stride = 1;
+    for (int k = 0; k < src->lod_ndim; ++k) {
+      uint64_t s = src->dim[src->lod_to_dim[k]].size;
+      p.src_lod_shape[k] = s;
+      p.src_lod_stride[k] = stride;
+      stride *= s;
+      int bits = ceil_log2_h(s);
+      if (bits > p.src_nlod)
+        p.src_nlod = bits;
+    }
+  }
+
+  // Source fixed dims: shape, strides (row-major, highest stride first).
+  p.src_fixed_ndim = src->fixed_dims_ndim;
+  p.src_fixed_count = src->fixed_dims_count;
+  {
+    uint64_t stride = 1;
+    for (int k = src->fixed_dims_ndim - 1; k >= 0; --k) {
+      p.src_fixed_shape[k] = src->fixed_dims_shape[k];
+      p.src_fixed_stride[k] = stride;
+      stride *= src->fixed_dims_shape[k];
+    }
+  }
+
+  // Destination LOD dims: shape, nlod, src index mapping.
+  p.dst_lod_ndim = dst->lod_ndim;
+  p.dst_lod_nelem = dst->lod_nelem;
+  p.dst_fixed_count = dst->fixed_dims_count;
+  p.dst_nlod = 0;
+  for (int k = 0; k < dst->lod_ndim; ++k) {
+    uint64_t s = dst->dim[dst->lod_to_dim[k]].size;
+    p.dst_lod_shape[k] = s;
+    int bits = ceil_log2_h(s);
+    if (bits > p.dst_nlod)
+      p.dst_nlod = bits;
+    int d = dst->lod_to_dim[k];
+    int si = find_dim_index(src->lod_to_dim, src->lod_ndim, d);
+    if (si < 0) {
+      log_error("dst lod dim %d not found in src lod", d);
+      return 1;
+    }
+    p.dst_lod_src_index[k] = si;
+  }
+
+  // Destination fixed dims: shape + source lookup.
+  p.dst_fixed_ndim = dst->fixed_dims_ndim;
+  for (int k = 0; k < dst->fixed_dims_ndim; ++k) {
+    p.dst_fixed_shape[k] = dst->fixed_dims_shape[k];
+    int d = dst->fixed_dim_to_dim[k];
+    if (dropped_mask & (1u << d)) {
+      p.dst_fixed_src_is_lod[k] = 1;
+      int si = find_dim_index(src->lod_to_dim, src->lod_ndim, d);
+      if (si < 0) {
+        log_error("dropped dim %d not found in src lod", d);
+        return 1;
+      }
+      p.dst_fixed_src_index[k] = si;
+    } else {
+      p.dst_fixed_src_is_lod[k] = 0;
+      int si = find_dim_index(src->fixed_dim_to_dim, src->fixed_dims_ndim, d);
+      if (si < 0) {
+        log_error("fixed dim %d not found in src fixed", d);
+        return 1;
+      }
+      p.dst_fixed_src_index[k] = si;
+    }
+  }
+
+  int max_ndim = src->lod_ndim;
+  if (dst->lod_ndim > max_ndim)
+    max_ndim = dst->lod_ndim;
+
+#define DISPATCH_CSR(maxdim)                                                   \
+  if (max_ndim <= maxdim)                                                      \
+    return lod_build_csr_gpu_launch<maxdim>(d_starts, d_indices, &p, stream);
+
+  DISPATCH_CSR(4);
+  DISPATCH_CSR(8);
+  DISPATCH_CSR(16);
+  DISPATCH_CSR(32);
+#undef DISPATCH_CSR
   return 1;
 }
 
