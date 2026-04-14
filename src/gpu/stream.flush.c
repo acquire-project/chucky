@@ -278,6 +278,9 @@ flush_accumulated_sync(struct tile_stream_gpu* s)
                                              &s->lod,
                                              &s->metrics,
                                              &s->metadata_update_clock);
+  if (r.error)
+    return r;
+
   s->batch.accumulated = 0;
   s->flush.slot[s->pools.current].active_levels_mask = 0;
   memset(s->flush.slot[s->pools.current].batch_active_masks,

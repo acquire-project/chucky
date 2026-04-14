@@ -329,6 +329,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
 
 int
 tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
+                                size_t shard_alignment,
                                 struct tile_stream_memory_info* info)
 {
   if (!info)
@@ -340,7 +341,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   if (compute_stream_layouts(config,
                              codec_alignment(config->codec.id),
                              codec_max_output_size,
-                             platform_page_alignment(),
+                             shard_alignment,
                              &cl))
     return 1;
 
@@ -395,7 +396,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                             max_output_size,
                                             covering_count,
                                             cps_inner_lv,
-                                            platform_page_alignment());
+                                            shard_alignment);
 
     size_t agg_layout_dev =
       2 * (rank - 1) * sizeof(uint64_t) + 2 * (rank - 1) * sizeof(int64_t);
@@ -507,7 +508,8 @@ int
 tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
                                    size_t target_chunk_bytes,
                                    const uint8_t* ratios,
-                                   size_t budget_bytes)
+                                   size_t budget_bytes,
+                                   size_t shard_alignment)
 {
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   if (bytes_per_element == 0 || budget_bytes == 0)
@@ -518,7 +520,7 @@ tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
     dims_budget_chunk_bytes(
       config->dimensions, config->rank, target, bytes_per_element, ratios);
     struct tile_stream_memory_info mem;
-    if (tile_stream_gpu_memory_estimate(config, &mem))
+    if (tile_stream_gpu_memory_estimate(config, shard_alignment, &mem))
       return 1;
     if (mem.device_bytes <= budget_bytes)
       return 0;

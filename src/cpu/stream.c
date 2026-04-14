@@ -423,6 +423,7 @@ compute_memory_info(const struct computed_stream_layouts* cl,
 
 int
 tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
+                                size_t shard_alignment,
                                 struct tile_stream_cpu_memory_info* info)
 {
   if (!info)
@@ -431,11 +432,8 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
   memset(info, 0, sizeof(*info));
 
   struct computed_stream_layouts cl;
-  if (compute_stream_layouts(config,
-                             1,
-                             compress_cpu_max_output_size,
-                             platform_page_alignment(),
-                             &cl))
+  if (compute_stream_layouts(
+        config, 1, compress_cpu_max_output_size, shard_alignment, &cl))
     return 1;
 
   compute_memory_info(&cl, dtype_bpe(config->dtype), info);
@@ -447,7 +445,8 @@ int
 tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
                                    size_t target_chunk_bytes,
                                    const uint8_t* ratios,
-                                   size_t budget_bytes)
+                                   size_t budget_bytes,
+                                   size_t shard_alignment)
 {
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   if (bytes_per_element == 0 || budget_bytes == 0)
@@ -458,7 +457,7 @@ tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
     dims_budget_chunk_bytes(
       config->dimensions, config->rank, target, bytes_per_element, ratios);
     struct tile_stream_cpu_memory_info mem;
-    if (tile_stream_cpu_memory_estimate(config, &mem))
+    if (tile_stream_cpu_memory_estimate(config, shard_alignment, &mem))
       return 1;
     if (mem.heap_bytes <= budget_bytes)
       return 0;

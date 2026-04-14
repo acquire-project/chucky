@@ -37,19 +37,24 @@ struct tile_stream_memory_info
 };
 
 // Estimate GPU memory requirements without allocating.
+// shard_alignment: required write alignment for the I/O backend (e.g. page
+//   size for O_DIRECT). 0 = no alignment constraint.
 // Returns 0 on success, non-zero on invalid config.
 int
 tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
+                                size_t shard_alignment,
                                 struct tile_stream_memory_info* info);
 
 // Find the largest power-of-2 chunk size (starting from target_chunk_bytes)
 // that fits within budget_bytes of GPU device memory.
+// shard_alignment: 0 = no alignment constraint.
 // Modifies config->dimensions in place. Returns 0 on success.
 int
 tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
                                    size_t target_chunk_bytes,
                                    const uint8_t* ratios,
-                                   size_t budget_bytes);
+                                   size_t budget_bytes,
+                                   size_t shard_alignment);
 
 // Allocate and initialize a tile_stream_gpu. Returns pointer on success,
 // NULL on failure. Caller must free with tile_stream_gpu_destroy.

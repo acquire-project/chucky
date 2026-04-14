@@ -1018,9 +1018,11 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
       log_error("CUB ExclusiveSum query failed: %d", (int)ce);
       goto cleanup;
     }
-    r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
-    if (r != CUDA_SUCCESS)
-      goto cleanup;
+    if (cub_temp_bytes > 0) {
+      r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
+      if (r != CUDA_SUCCESS)
+        goto cleanup;
+    }
     ce = cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
                                        cub_temp_bytes,
                                        (uint64_t*)d_counts,
@@ -1054,13 +1056,6 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
                                                 (uint64_t*)d_write_pos,
                                                 (const uint64_t*)d_map,
                                                 src_total);
-
-  // Single sync: all kernels and copies are stream-ordered.
-  r = cuStreamSynchronize(stream);
-  if (r != CUDA_SUCCESS) {
-    log_error("csr gpu build failed");
-    goto cleanup;
-  }
 
   ret = 0;
 

@@ -1486,7 +1486,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = bad_dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) != 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) != 0);
     log_info("  storage_position[0]!=0 rejected OK");
   }
 
@@ -1516,7 +1516,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = bad_dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) != 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) != 0);
     log_info("  duplicate values rejected OK");
   }
 
@@ -1546,7 +1546,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = bad_dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) != 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) != 0);
     log_info("  out-of-range rejected OK");
   }
 
@@ -1559,7 +1559,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) != 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) != 0);
     log_info("  all-zero rejected OK");
   }
 
@@ -1589,7 +1589,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = id_dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) == 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) == 0);
     log_info("  explicit identity accepted OK");
   }
 
@@ -1619,7 +1619,7 @@ test_storage_order_validation(const char* tmpdir)
       .rank = 3,
       .dimensions = perm_dims,
     };
-    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, &info) == 0);
+    CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) == 0);
     log_info("  valid {0,2,1} accepted OK");
   }
 

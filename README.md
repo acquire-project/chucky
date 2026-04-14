@@ -200,7 +200,7 @@ The main entry points live in [`src/stream.gpu.h`](src/stream.gpu.h) (GPU) and
 ```c
 // 1. Estimate GPU memory requirements
 struct tile_stream_memory_info info;
-tile_stream_gpu_memory_estimate(&config, &info);
+tile_stream_gpu_memory_estimate(&config, 0, &info);
 
 // 2. Create the stream
 struct tile_stream_gpu* s = tile_stream_gpu_create(&config, sink);

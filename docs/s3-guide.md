@@ -227,7 +227,7 @@ struct tile_stream_configuration stream_cfg = {
 
 uint8_t ratios[] = { 0, 1, 1 };
 tile_stream_gpu_advise_chunk_sizes(
-  &stream_cfg, 128 * 1024, ratios, 2ULL << 30);
+  &stream_cfg, 128 * 1024, ratios, 2ULL << 30, 0);
 
 // 3. Create S3 store + array
 struct store_s3_config scfg = {

@@ -328,7 +328,7 @@ test_two_append_multiscale(void)
 
   // Verify nlod > 1 via memory estimate
   struct tile_stream_cpu_memory_info mem;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, &mem) == 0);
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0);
   CHECK(Fail, mem.nlod > 1);
   log_info("  nlod=%d epochs_per_batch=%u", mem.nlod, mem.epochs_per_batch);
 
@@ -437,7 +437,7 @@ test_two_append_with_append_downsample(void)
 
   // Verify nlod > 1 via memory estimate
   struct tile_stream_cpu_memory_info mem;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, &mem) == 0);
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0);
   CHECK(Fail, mem.nlod > 1);
   log_info("  nlod=%d epochs_per_batch=%u", mem.nlod, mem.epochs_per_batch);
 

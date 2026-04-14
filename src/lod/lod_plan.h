@@ -33,7 +33,8 @@ struct lod_spans
 // Per-dimension array geometry at a single LOD level.
 struct dim_extent
 {
-  uint64_t size;
+  uint64_t size; // fill_shard_geometry patches this to full-array size for
+                 // append dims (d < n_append); epoch-truncated otherwise.
   uint32_t chunk_size;
   uint32_t chunks_per_shard;
   uint64_t chunk_count; // ceildiv(size, chunk_size)

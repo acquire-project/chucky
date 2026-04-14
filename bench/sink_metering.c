@@ -95,6 +95,13 @@ metering_pending_bytes(const struct shard_sink* self)
   return ms->inner->pending_bytes(ms->inner);
 }
 
+static size_t
+metering_required_shard_alignment(const struct shard_sink* self)
+{
+  const struct metering_sink* ms = (const struct metering_sink*)self;
+  return ms->inner->required_shard_alignment(ms->inner);
+}
+
 void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
@@ -105,6 +112,8 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
       .wait_fence = inner->wait_fence ? metering_wait_fence : NULL,
       .has_error = inner->has_error ? metering_has_error : NULL,
       .pending_bytes = inner->pending_bytes ? metering_pending_bytes : NULL,
+      .required_shard_alignment = inner->required_shard_alignment
+        ? metering_required_shard_alignment : NULL,
     },
     .inner = inner,
     .metric = { .name = "Sink", .best_ms = 1e30f },
