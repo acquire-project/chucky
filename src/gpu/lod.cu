@@ -9,6 +9,9 @@
 #include <cuda_fp16.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 // min/max overloads for __half (not provided by CUDA math functions).
 __device__ inline __half
@@ -1090,7 +1093,13 @@ ceil_log2_h(uint64_t v)
 {
   if (v <= 1)
     return 0;
+#ifdef _MSC_VER
+  unsigned long idx;
+  _BitScanReverse64(&idx, v - 1);
+  return (int)(idx + 1);
+#else
   return 64 - __builtin_clzll(v - 1);
+#endif
 }
 
 extern "C" int

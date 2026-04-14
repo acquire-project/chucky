@@ -164,10 +164,15 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   uint64_t* counts = csr->starts + 1;
   uint64_t lod_nelem = src_ld->lod_nelem;
 
+// MSVC's OpenMP front-end rejects inline loop-variable declarations
+// (for (int64_t i = 0; ...)) even with /openmp:llvm; declare before.
+// https://learn.microsoft.com/en-us/cpp/error-messages/compiler-errors-2/compiler-error-c3015
+  {
+    int64_t gi;
 #pragma omp parallel for schedule(static)
-  for (uint64_t gi = 0; gi < src_total; ++gi) {
-    uint64_t src_batch = gi / lod_nelem;
-    uint64_t src_enum = gi % lod_nelem;
+    for (gi = 0; gi < (int64_t)src_total; ++gi) {
+    uint64_t src_batch = (uint64_t)gi / lod_nelem;
+    uint64_t src_enum = (uint64_t)gi % lod_nelem;
 
     // Decompose src_batch into per-dim coords (indexed by full dim d).
     uint64_t fixed_coords[LOD_MAX_NDIM];
@@ -224,6 +229,7 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
 #pragma omp atomic
     counts[dst_elem]++;
   }
+  }
 
   // Prefix sum.
   csr->starts[0] = 0;
@@ -243,12 +249,15 @@ build_reduce_csr(struct reduce_csr* csr, const struct lod_plan* p, int l)
   for (uint64_t i = 0; i < dst_total; ++i)
     write_pos[i] = csr->starts[i];
 
+  {
+    int64_t i;
 #pragma omp parallel for schedule(static)
-  for (uint64_t i = 0; i < src_total; ++i) {
-    uint64_t pos;
+    for (i = 0; i < (int64_t)src_total; ++i) {
+      uint64_t pos;
 #pragma omp atomic capture
-    pos = write_pos[map[i].dst_elem]++;
-    csr->indices[pos] = map[i].src_elem;
+      pos = write_pos[map[i].dst_elem]++;
+      csr->indices[pos] = map[i].src_elem;
+    }
   }
 
   free(write_pos);

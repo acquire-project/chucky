@@ -2,6 +2,12 @@
 
 #include <stddef.h>
 
+#ifdef _WIN32
+#define NULL_DEV "NUL"
+#else
+#define NULL_DEV "/dev/null"
+#endif
+
 // Create a unique temporary directory. Writes the path into buf.
 // Returns 0 on success, -1 on error.
 int

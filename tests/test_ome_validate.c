@@ -148,7 +148,7 @@ Fail:
 int
 main(void)
 {
-  if (system("uv --version > /dev/null 2>&1") != 0) {
+  if (system("uv --version > " NULL_DEV " 2>&1") != 0) {
     log_error("uv not found — install it: https://docs.astral.sh/uv/");
     return 1;
   }
@@ -173,8 +173,8 @@ main(void)
   // Validate: point at the NGFF group (multiscale/) and HCS plate (plate/)
   snprintf(cmd,
            sizeof(cmd),
-           "uv run " SOURCE_DIR
-           "/tests/validate_ome_ngff.py %s:multiscale %s:plate",
+           "uv run \"" SOURCE_DIR
+           "/tests/validate_ome_ngff.py\" \"%s\":multiscale \"%s\":plate",
            ms_path,
            hcs_path);
   log_info("running: %s", cmd);

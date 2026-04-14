@@ -320,7 +320,7 @@ int
 shard_pool_fs_inject_failing_job(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  return io_queue_post(p->queue, fail_fn, &p->io_error, NULL);
+  return io_queue_post(p->queue, fail_fn, (void*)&p->io_error, NULL);
 }
 
 struct shard_pool*
