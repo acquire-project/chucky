@@ -25,10 +25,12 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   void* values = NULL;
   uint32_t* scatter_lut = NULL;
   uint64_t* fixed_dims_offsets = NULL;
+  struct reduce_csr csrs[LOD_MAX_LEVELS] = { 0 };
 
   struct lod_plan plan;
   CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8, 0) == 0);
   CHECK(Fail, plan.levels.nlod >= 2);
+  CHECK(Fail, lod_build_host_csrs(&plan, csrs) == 0);
 
   // Fill source with sequential floats.
   uint64_t n = 1;
@@ -60,7 +62,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
                        omp_get_max_threads()) == 0);
   CHECK(Fail,
         lod_cpu_reduce(
-          &plan, values, dtype_f32, method, omp_get_max_threads()) == 0);
+          &plan, csrs, values, dtype_f32, method, omp_get_max_threads()) == 0);
 
   // Verify L0: all source values should be present in the morton buffer.
   struct lod_span l0 = lod_spans_at(&plan.level_spans, 0);
@@ -85,6 +87,7 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   free(fixed_dims_offsets);
   free(src);
   free(values);
+  lod_free_host_csrs(&plan, csrs);
   lod_plan_free(&plan);
   log_info("  PASS");
   return 0;
@@ -94,6 +97,7 @@ Fail:
   free(fixed_dims_offsets);
   free(src);
   free(values);
+  lod_free_host_csrs(&plan, csrs);
   lod_plan_free(&plan);
   log_error("  FAIL");
   return 1;
@@ -113,9 +117,11 @@ test_scatter_reduce_u16(void)
   void* values = NULL;
   uint32_t* scatter_lut = NULL;
   uint64_t* fixed_dims_offsets = NULL;
+  struct reduce_csr csrs[LOD_MAX_LEVELS] = { 0 };
 
   struct lod_plan plan;
   CHECK(Fail, lod_plan_init(&plan, 3, shape, chunk_shape, lod_mask, 8, 0) == 0);
+  CHECK(Fail, lod_build_host_csrs(&plan, csrs) == 0);
 
   uint64_t n = 1;
   for (int d = 0; d < 3; ++d)
@@ -145,9 +151,12 @@ test_scatter_reduce_u16(void)
                        dtype_u16,
                        omp_get_max_threads()) == 0);
   CHECK(Fail,
-        lod_cpu_reduce(
-          &plan, values, dtype_u16, lod_reduce_min, omp_get_max_threads()) ==
-          0);
+        lod_cpu_reduce(&plan,
+                       csrs,
+                       values,
+                       dtype_u16,
+                       lod_reduce_min,
+                       omp_get_max_threads()) == 0);
 
   // Basic sanity: L1 min values should be <= any L0 value.
   uint16_t* uv = (uint16_t*)values;
@@ -168,6 +177,7 @@ test_scatter_reduce_u16(void)
   free(fixed_dims_offsets);
   free(src);
   free(values);
+  lod_free_host_csrs(&plan, csrs);
   lod_plan_free(&plan);
   log_info("  PASS");
   return 0;
@@ -177,6 +187,7 @@ Fail:
   free(fixed_dims_offsets);
   free(src);
   free(values);
+  lod_free_host_csrs(&plan, csrs);
   lod_plan_free(&plan);
   log_error("  FAIL");
   return 1;

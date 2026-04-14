@@ -172,17 +172,8 @@ init_csr_reduce_luts(struct lod_state* lod)
     uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
     uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
 
-    if (src_total == 0 || dst_total == 0)
-      continue;
-
-    CU(Fail,
-       cuMemAlloc(&lod->d_csr_starts[l], (dst_total + 1) * sizeof(uint64_t)));
-    CU(Fail, cuMemAlloc(&lod->d_csr_indices[l], src_total * sizeof(uint64_t)));
-
-    CHECK(Fail,
-          lod_build_csr_gpu(
-            lod->d_csr_starts[l], lod->d_csr_indices[l], src_ld, dst_ld, 0) ==
-            0);
+    CHECK(Fail, reduce_csr_gpu_alloc(&lod->csrs[l], src_total, dst_total) == 0);
+    CHECK(Fail, reduce_csr_gpu_build(&lod->csrs[l], src_ld, dst_ld, 0) == 0);
   }
 
   return 0;
@@ -509,8 +500,7 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree(lod->d_morton_fixed_dims_chunk_offsets[i]));
   }
   for (int i = 0; i < lod->plan.levels.nlod - 1; ++i) {
-    CUWARN(cuMemFree(lod->d_csr_starts[i]));
-    CUWARN(cuMemFree(lod->d_csr_indices[i]));
+    reduce_csr_gpu_free(&lod->csrs[i]);
   }
   for (int i = 0; i < lod->plan.levels.nlod; ++i) {
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
@@ -680,7 +670,8 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(t->t_scatter_end, compute));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    if (!lod->d_csr_starts[l] || !lod->d_csr_indices[l])
+    const struct reduce_csr_gpu* csr = &lod->csrs[l];
+    if (!csr->starts || !csr->indices)
       continue;
     const struct level_dims* src_ld = &p->levels.level[l];
     const struct level_dims* dst_ld = &p->levels.level[l + 1];
@@ -691,8 +682,8 @@ lod_run_epoch(struct lod_state* lod,
     // flat level.  Batching happens downstream (compress/aggregate), not here.
     CHECK(Error,
           lod_reduce_csr(lod->d_morton,
-                         lod->d_csr_starts[l],
-                         lod->d_csr_indices[l],
+                         csr->starts,
+                         csr->indices,
                          dtype,
                          reduce_method,
                          src_level.beg,

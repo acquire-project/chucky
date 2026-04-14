@@ -237,11 +237,13 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
   if (p->metrics)
     platform_toc(&clk);
 
-  CHECK(
-    Error,
-    lod_cpu_reduce(
-      &p->cl->plan, p->lod_values, p->dtype, p->reduce_method, p->nthreads) ==
-      0);
+  CHECK(Error,
+        lod_cpu_reduce(&p->cl->plan,
+                       p->csrs,
+                       p->lod_values,
+                       p->dtype,
+                       p->reduce_method,
+                       p->nthreads) == 0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);

@@ -287,10 +287,14 @@ gather_typed(const lod_plan* p,
 
 template<typename T>
 static void
-reduce_typed(const lod_plan* p, T* values, lod_reduce_method method, int nt)
+reduce_typed(const lod_plan* p,
+             const reduce_csr* csrs,
+             T* values,
+             lod_reduce_method method,
+             int nt)
 {
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const reduce_csr* csr = &p->reduce[l];
+    const reduce_csr* csr = &csrs[l];
     uint64_t src_seg = csr->src_lod_count;
     uint64_t dst_seg = csr->dst_segment_size;
     lod_span src_lv = lod_spans_at(&p->level_spans, l);
@@ -500,12 +504,13 @@ dim0_emit_typed(T* dst,
 
 extern "C" int
 lod_cpu_reduce(const lod_plan* p,
+               const reduce_csr* csrs,
                void* values,
                enum dtype dtype,
                lod_reduce_method method,
                int nthreads)
 {
-#define DO(T) reduce_typed(p, (T*)values, method, nthreads)
+#define DO(T) reduce_typed(p, csrs, (T*)values, method, nthreads)
   DISPATCH(dtype, DO);
 #undef DO
   return 0;

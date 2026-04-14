@@ -2,6 +2,7 @@
 #define MORTON_UTIL_H
 
 #include "lod/lod_plan.h"
+#include "lod/reduce_csr.h"
 #include "types.lod.h"
 
 #include <stdint.h>
@@ -58,5 +59,15 @@ void
 lod_reduce_bruteforce(const struct lod_plan* p,
                       float* values,
                       enum lod_reduce_method method);
+
+// Allocate and build a reduce_csr for every level transition of p.
+// csrs must have room for p->levels.nlod-1 entries. Returns 0 on success.
+// On failure frees any partially-built entries and returns non-zero.
+int
+lod_build_host_csrs(const struct lod_plan* p, struct reduce_csr* csrs);
+
+// Free CSRs built via lod_build_host_csrs. Safe on a zeroed array.
+void
+lod_free_host_csrs(const struct lod_plan* p, struct reduce_csr* csrs);
 
 #endif // MORTON_UTIL_H

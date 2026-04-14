@@ -1,7 +1,9 @@
 add_src_lib(transpose SOURCES transpose.cu transpose.h LINKS CUDA::cuda_driver)
 add_src_lib(compress  SOURCES compress.cu compress.h   LINKS nvcomp::nvcomp CUDA::cudart_static chucky_log)
 add_src_lib(aggregate SOURCES aggregate.cu aggregate.h LINKS CUDA::cudart_static CUDA::cuda_driver stream_config chucky_log)
-add_src_lib(lod       SOURCES lod.cu lod.h             LINKS CUDA::cudart_static CUDA::cuda_driver chucky_log)
+add_src_lib(lod       SOURCES lod.cu lod.h
+                              reduce_csr_gpu.c reduce_csr_gpu.h
+                      LINKS CUDA::cudart_static CUDA::cuda_driver chucky_log)
 
 add_src_lib(stream
     SOURCES

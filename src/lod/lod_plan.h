@@ -68,17 +68,9 @@ struct level_geometry
   struct level_dims level[LOD_MAX_LEVELS];
 };
 
-// CSR reduce LUT for one level transition (l -> l+1).
-// Flattened: batch_count=1, indices contain absolute offsets within the source
-// level. Layout matches the scatter kernel's ascending-d fixed-dim enumeration.
-struct reduce_csr
-{
-  uint64_t* starts;  // [dst_segment_size + 1]
-  uint64_t* indices; // [src_lod_count], absolute offsets in source level
-  uint64_t dst_segment_size; // = dst fixed_dims_count * dst lod_nelem
-  uint64_t src_lod_count;    // = src fixed_dims_count * src lod_nelem
-  uint64_t batch_count;      // always 1
-};
+// See lod/reduce_csr.h for the CSR reduce LUT type; it lives outside
+// struct lod_plan so CPU and GPU streams can own their own copies with
+// path-appropriate storage (host vs device).
 
 struct lod_plan
 {
@@ -94,9 +86,8 @@ struct lod_plan
   uint64_t fixed_dims_shape[LOD_MAX_NDIM];
   uint64_t fixed_dims_count;
 
-  // Heap-allocated arrays. Populated by init (not by init_shapes).
+  // Heap-allocated. Populated by init (not by init_shapes).
   struct lod_spans level_spans;
-  struct reduce_csr reduce[LOD_MAX_LEVELS]; // [0..nlod-2] used
 };
 
 // Resolve chunks_per_shard and compute chunk_count + shard_count

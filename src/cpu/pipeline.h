@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lod/reduce_csr.h"
 #include "stream/layouts.h"
 #include "types.codec.h"
 #include "types.stream.h"
@@ -64,6 +65,7 @@ struct scatter_epoch_params
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   const struct computed_stream_layouts* cl;
+  const struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs
   void* chunk_pool;
   void* linear;
   void* lod_values;

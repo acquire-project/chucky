@@ -32,6 +32,7 @@ struct array_descriptor
   uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
+  struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
   struct io_event io_done[LOD_MAX_LEVELS];
 };
 
@@ -234,6 +235,24 @@ init_array_descriptor(struct array_descriptor* desc,
       }
       memset(desc->append_counts, 0, sizeof(desc->append_counts));
     }
+
+    // CSR reduce LUTs: per-array, not shared (plans differ per array).
+    int ncsr = desc->cl.plan.levels.nlod - 1;
+    if (ncsr > 0) {
+      desc->csrs = (struct reduce_csr*)calloc(ncsr, sizeof(struct reduce_csr));
+      if (!desc->csrs)
+        return 1;
+      for (int l = 0; l < ncsr; ++l) {
+        const struct level_dims* src_ld = &desc->cl.plan.levels.level[l];
+        const struct level_dims* dst_ld = &desc->cl.plan.levels.level[l + 1];
+        uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+        uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+        if (reduce_csr_alloc(&desc->csrs[l], src_total, dst_total))
+          return 1;
+        if (reduce_csr_build(&desc->csrs[l], &desc->cl.plan, l))
+          return 1;
+      }
+    }
   }
 
   return 0;
@@ -404,6 +423,12 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
         }
       }
       free(desc->append_accum);
+      if (desc->csrs) {
+        int ncsr = desc->cl.plan.levels.nlod - 1;
+        for (int l = 0; l < ncsr; ++l)
+          reduce_csr_free(&desc->csrs[l]);
+        free(desc->csrs);
+      }
       computed_stream_layouts_free(&desc->cl);
     }
     free(ms->arrays);
@@ -527,6 +552,7 @@ make_scatter_params(struct multiarray_tile_stream_cpu* ms,
     .reduce_method = desc->config.reduce_method,
     .append_reduce_method = desc->config.append_reduce_method,
     .cl = &desc->cl,
+    .csrs = desc->csrs,
     .chunk_pool = ms->chunk_pool,
     .linear = ms->linear,
     .lod_values = ms->lod_values,

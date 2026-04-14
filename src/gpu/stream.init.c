@@ -444,10 +444,16 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     }
 
     for (int l = 0; l < plan->levels.nlod - 1; ++l) {
-      // CSR reduce LUTs
-      const struct reduce_csr* csr = &plan->reduce[l];
-      lod_device += (csr->dst_segment_size + 1) * sizeof(uint64_t);
-      lod_device += csr->src_lod_count * sizeof(uint64_t);
+      // CSR reduce LUTs (computed from level_dims; actual alloc happens later
+      // via reduce_csr_gpu_alloc).
+      const struct level_dims* src_ld = &plan->levels.level[l];
+      const struct level_dims* dst_ld = &plan->levels.level[l + 1];
+      uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+      uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+      if (src_total == 0 || dst_total == 0)
+        continue;
+      lod_device += (dst_total + 1) * sizeof(uint64_t);
+      lod_device += src_total * sizeof(uint64_t);
     }
 
     for (int lv = 0; lv < plan->levels.nlod; ++lv) {

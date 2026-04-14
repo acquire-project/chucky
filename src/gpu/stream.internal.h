@@ -3,6 +3,7 @@
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
+#include "gpu/reduce_csr_gpu.h"
 #include "platform/platform.h"
 #include "stream.gpu.h" // public types (includes types.stream.h)
 #include "stream/layouts.h"
@@ -66,9 +67,9 @@ struct lod_state
   CUdeviceptr d_gather_lut;         // u32, lod_nelem[0] entries
   CUdeviceptr d_fixed_dims_offsets; // u32, fixed_dims_count entries
 
-  // CSR reduce LUTs (precomputed, one per level transition)
-  CUdeviceptr d_csr_starts[LOD_MAX_LEVELS];  // u64, [dst_segment_size + 1]
-  CUdeviceptr d_csr_indices[LOD_MAX_LEVELS]; // u64, [src_lod_count]
+  // CSR reduce LUTs (precomputed, one per level transition).
+  // [0..nlod-2] used; higher indices remain zeroed.
+  struct reduce_csr_gpu csrs[LOD_MAX_LEVELS];
 
   // Per-level chunk layouts [0..nlod-1]
   struct tile_stream_layout layouts[LOD_MAX_LEVELS];
