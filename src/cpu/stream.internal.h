@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/pipeline.h"
+#include "lod/reduce_csr.h"
 #include "platform/platform.h"
 #include "stream.cpu.h"
 #include "stream/layouts.h"
@@ -47,6 +48,9 @@ struct tile_stream_cpu
   uint32_t* morton_lut[LOD_MAX_LEVELS]; // [lod_nelem[lv]] per level
   uint64_t*
     lod_fixed_dims_offsets[LOD_MAX_LEVELS]; // [fixed_dims_count] per level
+
+  // CSR reduce LUTs (multiscale only): nlod-1 entries, owned.
+  struct reduce_csr* csrs;
 
   // Append downsample accumulation state
   void* append_accum;                     // accumulator for levels 1+

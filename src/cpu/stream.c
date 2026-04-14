@@ -181,6 +181,24 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
         plan->levels.level[lv].fixed_dims_count, sizeof(uint64_t));
       CHECK(Fail, s->lod_fixed_dims_offsets[lv]);
     }
+
+    // CSR reduce LUTs: one per level transition (nlod-1 total).
+    {
+      const struct lod_plan* plan = &s->cl.plan;
+      int ncsr = plan->levels.nlod - 1;
+      if (ncsr > 0) {
+        s->csrs = (struct reduce_csr*)calloc(ncsr, sizeof(struct reduce_csr));
+        CHECK(Fail, s->csrs);
+        for (int l = 0; l < ncsr; ++l) {
+          const struct level_dims* src_ld = &plan->levels.level[l];
+          const struct level_dims* dst_ld = &plan->levels.level[l + 1];
+          uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+          uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+          CHECK(Fail, reduce_csr_alloc(&s->csrs[l], src_total, dst_total) == 0);
+          CHECK(Fail, reduce_csr_build(&s->csrs[l], plan, l) == 0);
+        }
+      }
+    }
   }
 
   // Fill all LUTs.
@@ -279,6 +297,14 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s->linear);
   free(s->lod_values);
   free(s->append_accum);
+
+  if (s->csrs) {
+    int ncsr = s->cl.plan.levels.nlod - 1;
+    for (int l = 0; l < ncsr; ++l)
+      reduce_csr_free(&s->csrs[l]);
+    free(s->csrs);
+  }
+
   computed_stream_layouts_free(&s->cl);
   free(s);
 }
@@ -393,6 +419,19 @@ compute_memory_info(const struct computed_stream_layouts* cl,
         lod += cl->plan.levels.level[lv].fixed_dims_count *
                sizeof(uint64_t); // fixed_dims_offsets
       }
+
+      // Host CSR reduce LUTs (one per level transition).
+      for (int l = 0; l < cl->plan.levels.nlod - 1; ++l) {
+        const struct level_dims* src_ld = &cl->plan.levels.level[l];
+        const struct level_dims* dst_ld = &cl->plan.levels.level[l + 1];
+        uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+        uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+        if (src_total == 0 || dst_total == 0)
+          continue;
+        lod += (dst_total + 1) * sizeof(uint64_t); // csrs[l].starts
+        lod += src_total * sizeof(uint64_t);       // csrs[l].indices
+      }
+      lod += (size_t)(cl->plan.levels.nlod - 1) * sizeof(struct reduce_csr);
     }
     info->lod_bytes = lod;
   }
@@ -515,6 +554,7 @@ make_scatter_params(struct tile_stream_cpu* s)
     .reduce_method = s->config.reduce_method,
     .append_reduce_method = s->config.append_reduce_method,
     .cl = &s->cl,
+    .csrs = s->csrs,
     .chunk_pool = s->chunk_pool,
     .linear = s->linear,
     .lod_values = s->lod_values,

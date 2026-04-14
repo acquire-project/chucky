@@ -19,7 +19,9 @@ add_src_lib(chucky_log SOURCES log/log.c log/log.h)
 add_src_lib(index_ops  SOURCES util/index.ops.c util/index.ops.h)
 add_src_lib(dtype      SOURCES dtype.c dtype.h)
 add_src_lib(dimension  SOURCES dimension.c dimension.h)
-add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h LINKS index_ops dimension dtype)
+add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h
+                               lod/reduce_csr.c lod/reduce_csr.h
+                       LINKS index_ops dimension dtype)
 enable_openmp(lod_plan)
 add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h)
 

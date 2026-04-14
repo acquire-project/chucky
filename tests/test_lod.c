@@ -191,9 +191,17 @@ lod_compute_gpu(const struct lod_plan* p,
                      &d_batch_offsets,
                      stream));
 
-  // Upload CSR reduce LUTs.
+  // Build host CSRs locally and upload to device. The test's purpose is to
+  // validate the GPU reduce kernel against the host-built CSR reference.
+  struct reduce_csr host_csrs[MAX_LOD] = { 0 };
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    CHECK(Fail, reduce_csr_alloc(&host_csrs[l], src_total, dst_total) == 0);
+    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l) == 0);
+    const struct reduce_csr* csr = &host_csrs[l];
     if (csr->starts && csr->indices) {
       CHECK(Fail,
             upload(&d_csr_starts[l],
@@ -220,7 +228,7 @@ lod_compute_gpu(const struct lod_plan* p,
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct reduce_csr* csr = &host_csrs[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
@@ -263,6 +271,7 @@ Fail:
   for (int i = 0; i < MAX_LOD; ++i) {
     cuMemFree(d_csr_starts[i]);
     cuMemFree(d_csr_indices[i]);
+    reduce_csr_free(&host_csrs[i]);
   }
   cuEventDestroy(ev_start);
   cuEventDestroy(ev_scatter);
@@ -445,8 +454,15 @@ lod_compute_gpu_u16(const struct lod_plan* p,
                      &d_batch_offsets,
                      stream));
 
+  struct reduce_csr host_csrs[MAX_LOD] = { 0 };
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    CHECK(Fail, reduce_csr_alloc(&host_csrs[l], src_total, dst_total) == 0);
+    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l) == 0);
+    const struct reduce_csr* csr = &host_csrs[l];
     if (csr->starts && csr->indices) {
       CHECK(Fail,
             upload(&d_csr_starts[l],
@@ -473,7 +489,7 @@ lod_compute_gpu_u16(const struct lod_plan* p,
   CU(Fail, cuEventRecord(ev_scatter, stream));
 
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct reduce_csr* csr = &host_csrs[l];
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
@@ -516,6 +532,7 @@ Fail:
   for (int i = 0; i < MAX_LOD; ++i) {
     cuMemFree(d_csr_starts[i]);
     cuMemFree(d_csr_indices[i]);
+    reduce_csr_free(&host_csrs[i]);
   }
   cuEventDestroy(ev_start);
   cuEventDestroy(ev_scatter);

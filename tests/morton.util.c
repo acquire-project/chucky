@@ -2,6 +2,7 @@
 
 #include "morton.util.h"
 
+#include "lod/reduce_csr.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
@@ -162,18 +163,30 @@ lod_reduce_cpu(const struct lod_plan* p,
                enum lod_reduce_method method)
 {
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+
+    struct reduce_csr csr = { 0 };
+    if (reduce_csr_alloc(&csr, src_total, dst_total))
+      continue;
+    if (reduce_csr_build(&csr, p, l)) {
+      reduce_csr_free(&csr);
+      continue;
+    }
+
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < csr->batch_count; ++b) {
-      float* src = values + src_level.beg + b * csr->src_lod_count;
-      uint64_t dst_base = dst_level.beg + b * csr->dst_segment_size;
+    for (uint64_t b = 0; b < csr.batch_count; ++b) {
+      float* src = values + src_level.beg + b * csr.src_lod_count;
+      uint64_t dst_base = dst_level.beg + b * csr.dst_segment_size;
 
-      for (uint64_t i = 0; i < csr->dst_segment_size; ++i) {
+      for (uint64_t i = 0; i < csr.dst_segment_size; ++i) {
         // Gather CSR window into a contiguous buffer, then reduce.
-        uint64_t start = csr->starts[i];
-        uint64_t end = csr->starts[i + 1];
+        uint64_t start = csr.starts[i];
+        uint64_t end = csr.starts[i + 1];
         if (start >= end) {
           values[dst_base + i] = 0;
           continue;
@@ -181,11 +194,13 @@ lod_reduce_cpu(const struct lod_plan* p,
         uint64_t len = end - start;
         float buf[16];
         for (uint64_t j = 0; j < len && j < 16; ++j)
-          buf[j] = src[csr->indices[start + j]];
+          buf[j] = src[csr.indices[start + j]];
         values[dst_base + i] =
           reduce_window_f32(buf, 0, len < 16 ? len : 16, method);
       }
     }
+
+    reduce_csr_free(&csr);
   }
 }
 
@@ -345,25 +360,39 @@ lod_reduce_cpu_u16(const struct lod_plan* p,
                    enum lod_reduce_method method)
 {
   for (int l = 0; l < p->levels.nlod - 1; ++l) {
-    const struct reduce_csr* csr = &p->reduce[l];
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+
+    struct reduce_csr csr = { 0 };
+    if (reduce_csr_alloc(&csr, src_total, dst_total))
+      continue;
+    if (reduce_csr_build(&csr, p, l)) {
+      reduce_csr_free(&csr);
+      continue;
+    }
+
     struct lod_span src_level = lod_spans_at(&p->level_spans, l);
     struct lod_span dst_level = lod_spans_at(&p->level_spans, l + 1);
 
-    for (uint64_t b = 0; b < csr->batch_count; ++b) {
-      uint16_t* src = values + src_level.beg + b * csr->src_lod_count;
-      uint64_t dst_base = dst_level.beg + b * csr->dst_segment_size;
+    for (uint64_t b = 0; b < csr.batch_count; ++b) {
+      uint16_t* src = values + src_level.beg + b * csr.src_lod_count;
+      uint64_t dst_base = dst_level.beg + b * csr.dst_segment_size;
 
-      for (uint64_t i = 0; i < csr->dst_segment_size; ++i) {
-        uint64_t start = csr->starts[i];
-        uint64_t end = csr->starts[i + 1];
+      for (uint64_t i = 0; i < csr.dst_segment_size; ++i) {
+        uint64_t start = csr.starts[i];
+        uint64_t end = csr.starts[i + 1];
         if (start >= end) {
           values[dst_base + i] = 0;
           continue;
         }
         values[dst_base + i] =
-          reduce_window_u16(src, csr->indices, start, end, method);
+          reduce_window_u16(src, csr.indices, start, end, method);
       }
     }
+
+    reduce_csr_free(&csr);
   }
 }
 
@@ -536,4 +565,32 @@ lod_reduce_bruteforce(const struct lod_plan* p,
     free(bufs);
     free(counts);
   }
+}
+
+int
+lod_build_host_csrs(const struct lod_plan* p, struct reduce_csr* csrs)
+{
+  int ncsr = p->levels.nlod - 1;
+  for (int l = 0; l < ncsr; ++l) {
+    const struct level_dims* src_ld = &p->levels.level[l];
+    const struct level_dims* dst_ld = &p->levels.level[l + 1];
+    uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    if (reduce_csr_alloc(&csrs[l], src_total, dst_total))
+      goto Fail;
+    if (reduce_csr_build(&csrs[l], p, l))
+      goto Fail;
+  }
+  return 0;
+Fail:
+  lod_free_host_csrs(p, csrs);
+  return 1;
+}
+
+void
+lod_free_host_csrs(const struct lod_plan* p, struct reduce_csr* csrs)
+{
+  int ncsr = p->levels.nlod - 1;
+  for (int l = 0; l < ncsr; ++l)
+    reduce_csr_free(&csrs[l]);
 }

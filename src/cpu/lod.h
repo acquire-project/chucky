@@ -2,6 +2,7 @@
 
 #include "dtype.h"
 #include "lod/lod_plan.h"
+#include "lod/reduce_csr.h"
 #include "stream/layouts.h"
 #include "types.lod.h"
 
@@ -15,7 +16,9 @@ extern "C"
 
   // Reduce across LOD levels in-place.
   // values buffer holds all levels: total = levels.ends[nlod-1] elements.
+  // csrs: array of nlod-1 reduce_csr entries, one per level transition.
   int lod_cpu_reduce(const struct lod_plan* p,
+                     const struct reduce_csr* csrs,
                      void* values,
                      enum dtype dtype,
                      enum lod_reduce_method method,
