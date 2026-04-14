@@ -417,6 +417,19 @@ compute_memory_info(const struct computed_stream_layouts* cl,
         lod += cl->plan.levels.level[lv].fixed_dims_count *
                sizeof(uint64_t); // fixed_dims_offsets
       }
+
+      // Host CSR reduce LUTs (one per level transition).
+      for (int l = 0; l < cl->plan.levels.nlod - 1; ++l) {
+        const struct level_dims* src_ld = &cl->plan.levels.level[l];
+        const struct level_dims* dst_ld = &cl->plan.levels.level[l + 1];
+        uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+        uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+        if (src_total == 0 || dst_total == 0)
+          continue;
+        lod += (dst_total + 1) * sizeof(uint64_t); // csrs[l].starts
+        lod += src_total * sizeof(uint64_t);       // csrs[l].indices
+      }
+      lod += (size_t)(cl->plan.levels.nlod - 1) * sizeof(struct reduce_csr);
     }
     info->lod_bytes = lod;
   }
