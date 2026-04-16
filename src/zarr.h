@@ -32,6 +32,8 @@ zarr_array_create(struct store* store,
                   const char* prefix,
                   const struct zarr_array_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// zarr_array_flush_metadata before destroy if you need to detect failures.
 void
 zarr_array_destroy(struct zarr_array* a);
 
@@ -77,7 +79,9 @@ struct zarr_group;
 struct zarr_group*
 zarr_group_create(struct store* store, const char* key);
 
-// Destroy a group handle. Flushes buffered attributes before teardown.
+// Destroy a group handle. Auto-flushes pending metadata best-effort; ignores
+// flush errors. Call zarr_group_flush_metadata before destroy if you need to
+// detect failures.
 void
 zarr_group_destroy(struct zarr_group* g);
 

@@ -30,6 +30,8 @@ struct hcs_plate;
 struct hcs_plate*
 hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// hcs_plate_flush_metadata before destroy if you need to detect failures.
 void
 hcs_plate_destroy(struct hcs_plate* p);
 

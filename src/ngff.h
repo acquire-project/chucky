@@ -49,6 +49,8 @@ ngff_multiscale_create(struct store* store,
                        const char* prefix,
                        const struct ngff_multiscale_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// ngff_multiscale_flush_metadata before destroy if you need to detect failures.
 void
 ngff_multiscale_destroy(struct ngff_multiscale* ms);
 

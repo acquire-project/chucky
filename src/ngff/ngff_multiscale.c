@@ -371,6 +371,8 @@ int
 ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
 {
   CHECK(Fail, ms);
+  if (!ms->attrs.dirty)
+    return 0;
   return write_ngff_group_metadata(ms);
 Fail:
   return 1;

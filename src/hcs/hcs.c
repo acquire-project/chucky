@@ -72,7 +72,16 @@ plate_row_names_ptr(const struct hcs_plate* p)
 static int
 write_plate_group(struct hcs_plate* p)
 {
-  size_t attr_cap = 512 + (size_t)(p->rows * p->cols) * 80;
+  // Built-in OME plate metadata bound: ~80 bytes per well + skeleton.
+  // Custom extras add their own payload.
+  size_t extras_bytes = 0;
+  for (size_t i = 0; i < p->plate_attrs.count; ++i) {
+    extras_bytes += strlen(p->plate_attrs.items[i].key);
+    extras_bytes += strlen(p->plate_attrs.items[i].json_value);
+    extras_bytes += 16;
+  }
+  size_t attr_cap =
+    512 + (size_t)(p->rows * p->cols) * 80 + extras_bytes;
   char* attrs = (char*)malloc(attr_cap);
   if (!attrs)
     return 1;
@@ -98,15 +107,29 @@ write_plate_group(struct hcs_plate* p)
 static int
 write_well_group(struct hcs_plate* p, int r, int c)
 {
-  char attrs[8192];
   struct attr_set* w = &p->well_attrs[well_idx(p, r, c)];
-  int alen = hcs_well_attributes_json(attrs, sizeof(attrs), p->field_count, w);
-  if (alen < 0)
+  // OME well image list grows ~32 bytes per FOV; custom extras add their own
+  // payload. Heap-allocate to avoid silent truncation on large attrs.
+  size_t extras_bytes = 0;
+  for (size_t i = 0; i < w->count; ++i) {
+    extras_bytes += strlen(w->items[i].key);
+    extras_bytes += strlen(w->items[i].json_value);
+    extras_bytes += 16;
+  }
+  size_t cap = 256 + (size_t)p->field_count * 64 + extras_bytes;
+  char* attrs = (char*)malloc(cap);
+  if (!attrs)
     return 1;
+  int alen = hcs_well_attributes_json(attrs, cap, p->field_count, w);
+  if (alen < 0) {
+    free(attrs);
+    return 1;
+  }
   char rc_ch = plate_row_char(p, r);
   char key[4096];
   snprintf(key, sizeof(key), "%s/%c/%d/zarr.json", p->name, rc_ch, c + 1);
   int rc = zarr_group_write_with_raw_attrs(p->store, key, attrs);
+  free(attrs);
   if (rc == 0)
     w->dirty = 0;
   return rc;
@@ -124,6 +147,13 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   CHECK(Fail, cfg->field_count > 0);
   CHECK(Fail, cfg->fov.dimensions);
   CHECK(Fail, cfg->fov.rank > 0 && cfg->fov.rank <= MAX_ZARR_RANK);
+  // Reserve room for "/<row>/<col>/<fov>/zarr.json" when building child keys.
+  CHECK(Fail, strlen(cfg->name) < 4000);
+  if (cfg->row_names) {
+    size_t rn_len = strlen(cfg->row_names);
+    CHECK(Fail, rn_len >= (size_t)cfg->rows);
+    CHECK(Fail, rn_len < 64); // bounded by hcs_plate.row_names buffer
+  }
 
   // Compute pool size: max shard_inner_count across all LOD levels
   struct lod_plan plan = { 0 };

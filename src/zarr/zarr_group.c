@@ -56,9 +56,20 @@ struct zarr_group
 static int
 zarr_group_write(struct zarr_group* g)
 {
-  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
+  // Group skeleton is ~100 bytes; size for actual attrs to avoid truncation.
+  size_t attr_bytes = 0;
+  for (size_t i = 0; i < g->attrs.count; ++i) {
+    attr_bytes += strlen(g->attrs.items[i].key);
+    attr_bytes += strlen(g->attrs.items[i].json_value);
+    attr_bytes += 16;
+  }
+  size_t cap = 256 + attr_bytes;
+  char* buf = (char*)malloc(cap);
+  if (!buf)
+    return 1;
+
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, buf, cap);
 
   jw_object_begin(&jw);
   jw_key(&jw, "zarr_format");
@@ -73,9 +84,12 @@ zarr_group_write(struct zarr_group* g)
   jw_object_end(&jw);
   jw_object_end(&jw);
 
-  if (jw_error(&jw))
+  if (jw_error(&jw)) {
+    free(buf);
     return 1;
+  }
   int rc = g->store->put(g->store, g->key, buf, jw_length(&jw));
+  free(buf);
   if (rc == 0)
     g->attrs.dirty = 0;
   return rc;
@@ -133,6 +147,8 @@ int
 zarr_group_flush_metadata(struct zarr_group* g)
 {
   CHECK(Fail, g);
+  if (!g->attrs.dirty)
+    return 0;
   return zarr_group_write(g);
 Fail:
   return 1;

@@ -494,6 +494,63 @@ Fail:
   return 1;
 }
 
+static int
+test_group_large_value(void)
+{
+  log_info("=== test_group_large_value ===");
+  CHECK(Fail, mk_subdir("gbig") == 0);
+  struct store* s = store_fs_create(tmpdir, 0);
+  CHECK(Fail, s);
+
+  struct zarr_group* g = zarr_group_create(s, "gbig");
+  CHECK(Fail2, g);
+
+  // Build a large JSON array (~10 KB) of integers, well over the prior
+  // ZARR_GROUP_JSON_MAX_LENGTH (8192) static buffer.
+  const int count = 2000;
+  size_t cap = (size_t)count * 8 + 4;
+  char* v = (char*)malloc(cap);
+  CHECK(Fail3, v);
+  size_t p = 0;
+  v[p++] = '[';
+  for (int i = 0; i < count; ++i) {
+    int n = snprintf(v + p, cap - p, "%s%d", i ? "," : "", i);
+    CHECK(Fail_v, n > 0 && (size_t)n < cap - p);
+    p += (size_t)n;
+  }
+  v[p++] = ']';
+  v[p] = '\0';
+
+  CHECK(Fail_v, zarr_group_set_attribute(g, "huge", v) == 0);
+  CHECK(Fail_v, zarr_group_flush_metadata(g) == 0);
+
+  size_t out_len = 0;
+  char* out = read_file("gbig/zarr.json", &out_len);
+  CHECK(Fail_v, out);
+  CHECK(Fail_out, contains(out, "\"huge\":["));
+  CHECK(Fail_out, contains(out, "[0,1,2,"));
+  CHECK(Fail_out, contains(out, ",1998,1999]"));
+  CHECK(Fail_out, out_len > p);
+
+  free(out);
+  free(v);
+  zarr_group_destroy(g);
+  store_destroy(s);
+  log_info("  PASS");
+  return 0;
+Fail_out:
+  free(out);
+Fail_v:
+  free(v);
+Fail3:
+  zarr_group_destroy(g);
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -512,6 +569,7 @@ main(void)
   err |= test_group_create_set_destroy();
   err |= test_group_multiple_keys();
   err |= test_group_root();
+  err |= test_group_large_value();
 
   test_tmpdir_remove(tmpdir);
   return err;

@@ -345,6 +345,8 @@ int
 zarr_array_flush_metadata(struct zarr_array* a)
 {
   CHECK(Fail, a);
+  if (!a->attrs.dirty)
+    return 0;
   return write_array_metadata(a);
 Fail:
   return 1;
