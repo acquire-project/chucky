@@ -6,6 +6,7 @@
 #include "zarr/shard_pool_fs.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
+#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -351,6 +352,90 @@ Fail:
   return 1;
 }
 
+// Directory exists with unrelated files but no zarr.json → 0.
+static int
+test_has_existing_data_unrelated_files(void)
+{
+  log_info("=== test_has_existing_data_unrelated_files ===");
+
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/has_unrelated", tmpdir);
+  CHECK(Fail, test_mkdir(root) == 0);
+
+  struct store* s = store_fs_create(root, 0);
+  CHECK(Fail, s);
+  const char* data = "not zarr";
+  CHECK(Fail2, s->put(s, "other.txt", data, strlen(data)) == 0);
+  CHECK(Fail2, store_has_existing_data(s) == 0);
+  store_destroy(s);
+
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// After a real zarr_write_group at root → 1.
+static int
+test_has_existing_data_after_write_group(void)
+{
+  log_info("=== test_has_existing_data_after_write_group ===");
+
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/has_group", tmpdir);
+  CHECK(Fail, test_mkdir(root) == 0);
+
+  struct store* s = store_fs_create(root, 0);
+  CHECK(Fail, s);
+  CHECK(Fail2, store_has_existing_data(s) == 0);
+  CHECK(Fail2, zarr_write_group(s, "zarr.json", NULL) == 0);
+  CHECK(Fail2, store_has_existing_data(s) == 1);
+  store_destroy(s);
+
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// Root path is a regular file, not a directory.
+// stat("<file>/zarr.json") fails with ENOTDIR, which fs_has_existing_data
+// maps to 0 (treated as "no zarr data present"). Documented behavior.
+static int
+test_has_existing_data_root_is_file(void)
+{
+  log_info("=== test_has_existing_data_root_is_file ===");
+
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/has_root_is_file", tmpdir);
+  FILE* f = fopen(root, "wb");
+  CHECK(Fail, f);
+  fputs("x", f);
+  fclose(f);
+
+  struct store* s = store_fs_create(root, 0);
+  CHECK(Fail, s);
+  CHECK(Fail2, store_has_existing_data(s) == 0);
+  store_destroy(s);
+
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -367,6 +452,9 @@ main(void)
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_error_propagation();
   err |= test_has_existing_data();
+  err |= test_has_existing_data_unrelated_files();
+  err |= test_has_existing_data_after_write_group();
+  err |= test_has_existing_data_root_is_file();
 
   // Cleanup
   test_tmpdir_remove(tmpdir);
