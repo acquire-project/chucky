@@ -229,7 +229,7 @@ init_array_descriptor(struct array_descriptor* desc,
         maxima->morton_lut_count[lv], desc->cl.plan.levels.level[lv].lod_nelem);
       maxima->lod_fixed_dims_offsets_count[lv] =
         max_sz(maxima->lod_fixed_dims_offsets_count[lv],
-               desc->cl.plan.fixed_dims_count);
+               desc->cl.plan.levels.level[lv].fixed_dims_count);
     }
 
     // Append accum: per-array, not shared.
@@ -579,10 +579,11 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .comp_sizes = ms->comp_sizes,
     .agg_slots = ms->agg_slots,
     .shard_order_sizes = ms->shard_order_sizes,
-    .linear = ms->linear,
-    .lod_values = ms->lod_values,
-    .scatter_lut = ms->scatter_lut,
-    .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
+    .linear = desc->levels.enable_multiscale ? ms->linear : NULL,
+    .lod_values = desc->levels.enable_multiscale ? ms->lod_values : NULL,
+    .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,
+    .scatter_fixed_dims_offsets =
+      desc->levels.enable_multiscale ? ms->scatter_fixed_dims_offsets : NULL,
     .nthreads = ms->nthreads,
     .shard_alignment = desc->shard_alignment,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
