@@ -30,15 +30,27 @@ static const char* level_strings[] = {
 };
 
 static void
+localtime_portable(const time_t* t, struct tm* out)
+{
+#ifdef _WIN32
+  localtime_s(out, t);
+#else
+  localtime_r(t, out);
+#endif
+}
+
+static void
 stderr_sink(const chucky_log_event* ev, void* udata)
 {
   (void)udata;
+  struct tm tm;
+  localtime_portable(&ev->time.tv_sec, &tm);
   char timebuf[16];
-  struct tm* tm = localtime(&ev->time);
-  timebuf[strftime(timebuf, sizeof(timebuf), "%H:%M:%S", tm)] = '\0';
+  strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
   fprintf(stderr,
-          "%s %-5s %s:%d: %s\n",
+          "%s.%03ld %-5s %s:%d: %s\n",
           timebuf,
+          (long)(ev->time.tv_nsec / 1000000L),
           level_strings[ev->level],
           ev->file,
           ev->line,
@@ -77,10 +89,25 @@ chucky_log_add_callback(chucky_log_fn fn,
   return -1;
 }
 
+// Lowest level any active sink will accept. Used for the fast-path early
+// return so we don't format messages no one will read.
+static int
+min_active_threshold(void)
+{
+  int floor = CHUCKY_LOG_FATAL + 1;
+  if (!L.quiet && (int)L.level < floor)
+    floor = (int)L.level;
+  for (int i = 0; i < CHUCKY_LOG_MAX_CALLBACKS; i++) {
+    if (L.callbacks[i].in_use && (int)L.callbacks[i].threshold < floor)
+      floor = (int)L.callbacks[i].threshold;
+  }
+  return floor;
+}
+
 void
 log_log(int level, const char* file, int line, const char* fmt, ...)
 {
-  if (level < (int)L.level)
+  if (level < min_active_threshold())
     return;
 
   char buf[CHUCKY_LOG_MSG_BUFFER];
@@ -94,10 +121,10 @@ log_log(int level, const char* file, int line, const char* fmt, ...)
     .file = file,
     .line = line,
     .level = (chucky_log_level)level,
-    .time = time(NULL),
   };
+  timespec_get(&ev.time, TIME_UTC);
 
-  if (!L.quiet)
+  if (!L.quiet && level >= (int)L.level)
     stderr_sink(&ev, NULL);
 
   for (int i = 0; i < CHUCKY_LOG_MAX_CALLBACKS; i++) {

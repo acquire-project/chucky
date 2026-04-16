@@ -36,18 +36,24 @@ extern "C"
     const char* file;
     int line;
     chucky_log_level level;
-    time_t time;
+    struct timespec time;
   } chucky_log_event;
 
   typedef void (*chucky_log_fn)(const chucky_log_event* ev, void* udata);
 
-  // Drop events below level before they reach any sink.
+  // Gate the default stderr sink. Registered callbacks are unaffected; they
+  // each have their own threshold set at registration.
   void chucky_log_set_level(chucky_log_level level);
 
   // Suppress the default stderr sink. Registered callbacks keep firing.
   void chucky_log_set_quiet(int quiet);
 
-  // Returns 0 on success, non-zero if the callback table is full.
+  // Register fn to receive events at or above threshold, independent of the
+  // global level set by chucky_log_set_level. Returns 0 on success, non-zero
+  // if the callback table is full.
+  //
+  // The callback must not invoke chucky log macros (log_info, etc.) — doing
+  // so will recurse without bound.
   int chucky_log_add_callback(chucky_log_fn fn,
                               void* udata,
                               chucky_log_level threshold);
