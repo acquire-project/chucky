@@ -4,6 +4,7 @@
 #include "lod/lod_plan.h"
 #include "ngff/ngff_multiscale.h"
 #include "util/prelude.h"
+#include "zarr/attr_set.h"
 #include "zarr/store.h"
 #include "zarr/zarr_group.h"
 
@@ -17,10 +18,18 @@ struct hcs_plate
   struct shard_pool* pool; // owned
   int rows, cols, field_count;
   int* well_mask; // rows*cols, owned
+  char name[4096];
+  char row_names[64];
+  int has_row_names;
 
   // fovs[row * cols * field_count + col * field_count + fov]
   struct ngff_multiscale** fovs;
   int nfovs; // total allocated FOV slots
+
+  // Plate-level custom attrs.
+  struct attr_set plate_attrs;
+  // Well-level custom attrs (rows*cols entries; inactive wells empty).
+  struct attr_set* well_attrs;
 };
 
 static int
@@ -39,6 +48,66 @@ static int
 fov_index(const struct hcs_plate* p, int row, int col, int fov)
 {
   return (row * p->cols + col) * p->field_count + fov;
+}
+
+static int
+well_idx(const struct hcs_plate* p, int row, int col)
+{
+  return row * p->cols + col;
+}
+
+static char
+plate_row_char(const struct hcs_plate* p, int r)
+{
+  return p->has_row_names ? p->row_names[r] : (char)('A' + r);
+}
+
+static const char*
+plate_row_names_ptr(const struct hcs_plate* p)
+{
+  return p->has_row_names ? p->row_names : NULL;
+}
+
+static int
+write_plate_group(struct hcs_plate* p)
+{
+  size_t attr_cap = 512 + (size_t)(p->rows * p->cols) * 80;
+  char* attrs = (char*)malloc(attr_cap);
+  if (!attrs)
+    return 1;
+  int alen = hcs_plate_attributes_json(attrs,
+                                       attr_cap,
+                                       p->name,
+                                       p->rows,
+                                       p->cols,
+                                       plate_row_names_ptr(p),
+                                       p->field_count,
+                                       p->well_mask,
+                                       &p->plate_attrs);
+  char key[4096];
+  snprintf(key, sizeof(key), "%s/zarr.json", p->name);
+  int rc = alen < 0 ? 1 : zarr_write_group(p->store, key, attrs);
+  free(attrs);
+  if (rc == 0)
+    p->plate_attrs.dirty = 0;
+  return rc;
+}
+
+static int
+write_well_group(struct hcs_plate* p, int r, int c)
+{
+  char attrs[8192];
+  struct attr_set* w = &p->well_attrs[well_idx(p, r, c)];
+  int alen = hcs_well_attributes_json(attrs, sizeof(attrs), p->field_count, w);
+  if (alen < 0)
+    return 1;
+  char rc_ch = plate_row_char(p, r);
+  char key[4096];
+  snprintf(key, sizeof(key), "%s/%c/%d/zarr.json", p->name, rc_ch, c + 1);
+  int rc = zarr_write_group(p->store, key, attrs);
+  if (rc == 0)
+    w->dirty = 0;
+  return rc;
 }
 
 struct hcs_plate*
@@ -83,6 +152,12 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   p->rows = cfg->rows;
   p->cols = cfg->cols;
   p->field_count = cfg->field_count;
+  snprintf(p->name, sizeof(p->name), "%s", cfg->name);
+  if (cfg->row_names) {
+    p->has_row_names = 1;
+    snprintf(p->row_names, sizeof(p->row_names), "%s", cfg->row_names);
+  }
+  attr_set_init(&p->plate_attrs);
 
   if (cfg->well_mask) {
     size_t mask_size = (size_t)(cfg->rows * cfg->cols) * sizeof(int);
@@ -91,9 +166,15 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     memcpy(p->well_mask, cfg->well_mask, mask_size);
   }
 
+  p->well_attrs = (struct attr_set*)calloc((size_t)(cfg->rows * cfg->cols),
+                                           sizeof(struct attr_set));
+  CHECK(Fail_mask, p->well_attrs);
+  for (int i = 0; i < cfg->rows * cfg->cols; ++i)
+    attr_set_init(&p->well_attrs[i]);
+
   p->nfovs = cfg->rows * cfg->cols * cfg->field_count;
   p->fovs = (struct ngff_multiscale**)calloc((size_t)p->nfovs, sizeof(void*));
-  CHECK(Fail_mask, p->fovs);
+  CHECK(Fail_well_attrs, p->fovs);
 
   // --- Write hierarchy ---
 
@@ -101,27 +182,8 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   CHECK(Fail_fovs, zarr_write_group(store, "zarr.json", NULL) == 0);
 
   // Plate group with OME plate attributes
-  {
-    CHECK(Fail_fovs, store->mkdirs(store, cfg->name) == 0);
-
-    // ~50 bytes per well entry; allocate generously
-    size_t attr_cap = 512 + (size_t)(cfg->rows * cfg->cols) * 80;
-    char* attrs = (char*)malloc(attr_cap);
-    CHECK(Fail_fovs, attrs);
-    int alen = hcs_plate_attributes_json(attrs,
-                                         attr_cap,
-                                         cfg->name,
-                                         cfg->rows,
-                                         cfg->cols,
-                                         cfg->row_names,
-                                         cfg->field_count,
-                                         cfg->well_mask);
-    char key[4096];
-    snprintf(key, sizeof(key), "%s/zarr.json", cfg->name);
-    int rc = alen < 0 ? 1 : zarr_write_group(store, key, attrs);
-    free(attrs);
-    CHECK(Fail_fovs, rc == 0);
-  }
+  CHECK(Fail_fovs, store->mkdirs(store, cfg->name) == 0);
+  CHECK(Fail_fovs, write_plate_group(p) == 0);
 
   // Row groups, well groups, and FOV multiscale sinks
   for (int r = 0; r < cfg->rows; ++r) {
@@ -145,15 +207,7 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
       char well_dir[4096];
       snprintf(well_dir, sizeof(well_dir), "%s/%c/%d", cfg->name, rc, c + 1);
       CHECK(Fail_fovs, store->mkdirs(store, well_dir) == 0);
-      {
-        char attrs[4096];
-        int alen =
-          hcs_well_attributes_json(attrs, sizeof(attrs), cfg->field_count);
-        CHECK(Fail_fovs, alen > 0);
-        char key[4096];
-        snprintf(key, sizeof(key), "%s/%c/%d/zarr.json", cfg->name, rc, c + 1);
-        CHECK(Fail_fovs, zarr_write_group(store, key, attrs) == 0);
-      }
+      CHECK(Fail_fovs, write_well_group(p, r, c) == 0);
 
       // FOV multiscale sinks
       for (int f = 0; f < cfg->field_count; ++f) {
@@ -182,9 +236,14 @@ Fail_fovs:
       ngff_multiscale_destroy(p->fovs[i]);
   }
   free(p->fovs);
+Fail_well_attrs:
+  for (int i = 0; i < cfg->rows * cfg->cols; ++i)
+    attr_set_destroy(&p->well_attrs[i]);
+  free(p->well_attrs);
 Fail_mask:
   free(p->well_mask);
 Fail_alloc:
+  attr_set_destroy(&p->plate_attrs);
   free(p);
 Fail_pool:
   pool->destroy(pool);
@@ -197,12 +256,25 @@ hcs_plate_destroy(struct hcs_plate* p)
 {
   if (!p)
     return;
+  // Flush dirty plate/well group metadata before teardown.
+  if (p->plate_attrs.dirty)
+    write_plate_group(p);
+  for (int r = 0; r < p->rows; ++r)
+    for (int c = 0; c < p->cols; ++c)
+      if (well_active(p, r, c) && p->well_attrs[well_idx(p, r, c)].dirty)
+        write_well_group(p, r, c);
+
+  // FOV multiscales flush their own metadata in their destroy.
   for (int i = 0; i < p->nfovs; ++i) {
     if (p->fovs[i])
       ngff_multiscale_destroy(p->fovs[i]);
   }
   free(p->fovs);
+  for (int i = 0; i < p->rows * p->cols; ++i)
+    attr_set_destroy(&p->well_attrs[i]);
+  free(p->well_attrs);
   free(p->well_mask);
+  attr_set_destroy(&p->plate_attrs);
   struct shard_pool* pool = p->pool;
   free(p);
   if (pool)
@@ -222,4 +294,75 @@ hcs_plate_fov_sink(struct hcs_plate* p, int row, int col, int fov)
   return ngff_multiscale_as_shard_sink(p->fovs[idx]);
 Bad:
   return NULL;
+}
+
+int
+hcs_plate_set_attribute(struct hcs_plate* p,
+                        const char* attr_key,
+                        const char* json_value)
+{
+  CHECK(Fail, p);
+  return attr_set_upsert(&p->plate_attrs, attr_key, json_value);
+Fail:
+  return 1;
+}
+
+int
+hcs_plate_set_well_attribute(struct hcs_plate* p,
+                             int row,
+                             int col,
+                             const char* attr_key,
+                             const char* json_value)
+{
+  CHECK(Fail, p);
+  CHECK(Fail, row >= 0 && row < p->rows);
+  CHECK(Fail, col >= 0 && col < p->cols);
+  CHECK(Fail, well_active(p, row, col));
+  return attr_set_upsert(
+    &p->well_attrs[well_idx(p, row, col)], attr_key, json_value);
+Fail:
+  return 1;
+}
+
+int
+hcs_plate_set_fov_attribute(struct hcs_plate* p,
+                            int row,
+                            int col,
+                            int fov,
+                            const char* attr_key,
+                            const char* json_value)
+{
+  CHECK(Fail, p);
+  CHECK(Fail, row >= 0 && row < p->rows);
+  CHECK(Fail, col >= 0 && col < p->cols);
+  CHECK(Fail, fov >= 0 && fov < p->field_count);
+  CHECK(Fail, well_active(p, row, col));
+  return ngff_multiscale_set_attribute(
+    p->fovs[fov_index(p, row, col, fov)], attr_key, json_value);
+Fail:
+  return 1;
+}
+
+int
+hcs_plate_flush_metadata(struct hcs_plate* p)
+{
+  CHECK(Fail, p);
+  int err = 0;
+  if (p->plate_attrs.dirty)
+    err |= write_plate_group(p);
+  for (int r = 0; r < p->rows; ++r)
+    for (int c = 0; c < p->cols; ++c) {
+      if (!well_active(p, r, c))
+        continue;
+      if (p->well_attrs[well_idx(p, r, c)].dirty)
+        err |= write_well_group(p, r, c);
+      for (int f = 0; f < p->field_count; ++f) {
+        struct ngff_multiscale* ms = p->fovs[fov_index(p, r, c, f)];
+        if (ms)
+          err |= ngff_multiscale_flush_metadata(ms);
+      }
+    }
+  return err;
+Fail:
+  return 1;
 }

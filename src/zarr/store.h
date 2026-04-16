@@ -13,13 +13,6 @@ struct store
   // Used for zarr.json metadata files. Synchronous.
   int (*put)(struct store* self, const char* key, const void* data, size_t len);
 
-  // Read a small blob at key. On success, *out_buf is set to a malloc'd
-  // buffer (caller frees) and *out_len is its length. Returns 0 on success.
-  int (*get)(struct store* self,
-             const char* key,
-             void** out_buf,
-             size_t* out_len);
-
   // Ensure key prefix directories exist (no-op for object stores).
   int (*mkdirs)(struct store* self, const char* key);
 

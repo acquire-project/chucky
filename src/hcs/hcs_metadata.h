@@ -4,13 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct attr_set;
+
 // Generate plate-level OME attributes JSON into buf.
 // This is the "attributes" value for the plate group zarr.json.
-// rows/cols: number of rows/columns in the plate.
-// row_names: single-char per row (e.g. "ABCD"), NULL = A-Z.
-// field_count: number of fields of view per well.
-// Only populates wells that are marked active in the well_mask.
-// well_mask: rows*cols booleans (row-major), NULL = all active.
+// extras: optional custom attributes spliced alongside the ome block.
 // Returns JSON length on success, -1 on error.
 int
 hcs_plate_attributes_json(char* buf,
@@ -20,11 +18,14 @@ hcs_plate_attributes_json(char* buf,
                           int cols,
                           const char* row_names,
                           int field_count,
-                          const int* well_mask);
+                          const int* well_mask,
+                          const struct attr_set* extras);
 
 // Generate well-level OME attributes JSON into buf.
-// This is the "attributes" value for a well group zarr.json.
-// field_count: number of FOVs in this well.
+// extras: optional custom attributes spliced alongside the ome block.
 // Returns JSON length on success, -1 on error.
 int
-hcs_well_attributes_json(char* buf, size_t cap, int field_count);
+hcs_well_attributes_json(char* buf,
+                         size_t cap,
+                         int field_count,
+                         const struct attr_set* extras);

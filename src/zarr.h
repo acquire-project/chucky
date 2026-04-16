@@ -61,14 +61,41 @@ zarr_write_group(struct store* store,
                  const char* key,
                  const char* attributes_json);
 
-// Merge a JSON value into an existing zarr.json's attributes object.
-// key_path: array or group prefix. NULL or "" = store root.
-// attr_key: non-NULL, non-empty attribute name. "ome" is reserved.
-// json_value: well-formed JSON text.
-// Returns 0 on success; non-zero on IO error, missing node, malformed
-// JSON, or reserved key.
+// Attach a custom JSON attribute to the array's zarr.json under
+// attributes.<attr_key>. Value is validated and copied. attr_key must be
+// non-empty and contain no quotes or control chars. Becomes visible on the
+// next metadata rewrite (shape advance, explicit flush, or destroy).
+// Replaces any prior value for the same key. Returns 0 on success.
 int
-zarr_write_attribute(struct store* store,
-                     const char* key_path,
-                     const char* attr_key,
-                     const char* json_value);
+zarr_array_set_attribute(struct zarr_array* a,
+                         const char* attr_key,
+                         const char* json_value);
+
+// Force the array's zarr.json to be rewritten now with current shape and
+// buffered attributes.
+int
+zarr_array_flush_metadata(struct zarr_array* a);
+
+// --- Group handle ---
+
+struct zarr_group;
+
+// Create a zarr v3 group handle. Writes an initial zarr.json (empty
+// attributes) at the given key. key may be "" to write at store root.
+// Returns NULL on error.
+struct zarr_group*
+zarr_group_create(struct store* store, const char* key);
+
+// Destroy a group handle. Flushes buffered attributes before teardown.
+void
+zarr_group_destroy(struct zarr_group* g);
+
+// Buffer a custom attribute on the group. Rewrite on flush or destroy.
+int
+zarr_group_set_attribute(struct zarr_group* g,
+                         const char* attr_key,
+                         const char* json_value);
+
+// Force the group's zarr.json to be rewritten now.
+int
+zarr_group_flush_metadata(struct zarr_group* g);
