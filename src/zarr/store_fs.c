@@ -3,11 +3,9 @@
 #include "util/prelude.h"
 #include "zarr/shard_pool_fs.h"
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 struct store_fs
 {
@@ -53,13 +51,7 @@ fs_has_existing_data(struct store* self)
   struct store_fs* fs = container_of(self, struct store_fs, base);
   char path[4096];
   snprintf(path, sizeof(path), "%s/zarr.json", fs->root);
-
-  struct stat st;
-  if (stat(path, &st) == 0)
-    return 1;
-  if (errno == ENOENT || errno == ENOTDIR)
-    return 0;
-  return -1;
+  return platform_path_exists(path);
 }
 
 static void
