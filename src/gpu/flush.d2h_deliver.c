@@ -131,8 +131,7 @@ drain_bulk_d2h(struct d2h_deliver_stage* stage,
                const struct flush_handoff* handoff,
                const struct level_geometry* levels,
                const struct batch_state* batch,
-               const struct dim_info* dims,
-               const struct tile_stream_configuration* config)
+               const struct dim_info* dims)
 {
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
@@ -311,8 +310,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     goto Error;
 
   // Phase 2: sync on offsets, issue bulk D2H, sync on bulk ready.
-  CHECK(Error,
-        drain_bulk_d2h(stage, handoff, levels, batch, dims, config) == 0);
+  CHECK(Error, drain_bulk_d2h(stage, handoff, levels, batch, dims) == 0);
   CU(Error, cuEventSynchronize(stage->ready[fc]));
   record_flush_metrics(stage,
                        handoff,
