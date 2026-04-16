@@ -100,6 +100,9 @@ add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink
 # CPU multi-array stream test (no CUDA)
 add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu writer test_shard_sink chucky_log)
 
+# GPU multi-array stream test
+add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
+
 # CPU stream with n_append > 1 (no CUDA)
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
 
