@@ -17,8 +17,6 @@
 static struct writer_result
 cpu_append(struct writer* self, struct slice input);
 static struct writer_result
-cpu_flush(struct writer* self);
-static struct writer_result
 cpu_flush_final(struct writer* self);
 
 // ---- Create / Destroy ----
@@ -504,72 +502,49 @@ tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
   return 1;
 }
 
-// ---- Pipeline helpers ----
-// Keep in sync with multiarray/stream.c::make_flush_params.
+// ---- View builder ----
 
-static struct flush_batch_params
-make_flush_params(struct tile_stream_cpu* s)
+static struct cpu_stream_view
+make_view(struct tile_stream_cpu* s)
 {
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  struct flush_batch_params p = {
-    .codec = s->config.codec,
-    .bytes_per_element = bytes_per_element,
-    .chunk_pool = s->chunk_pool,
-    .chunk_stride_bytes = s->layout.chunk_stride * bytes_per_element,
-    .chunk_bytes = s->layout.chunk_elements * bytes_per_element,
-    .compressed = s->compressed,
-    .max_output_size_bytes = s->cl.max_output_size,
-    .comp_sizes = s->comp_sizes,
-    .total_chunks = s->levels.total_chunks,
-    .nlod = s->levels.nlod,
-    .cl = &s->cl,
-    .levels_geo = &s->levels,
-    .shard_order_sizes_bytes = s->shard_order_sizes,
+  struct cpu_stream_view v = {
+    .config = &s->config,
     .sink = s->shard_sink,
-    .shard_alignment_bytes = s->shard_alignment,
-    .nthreads = s->nthreads,
-    .metrics = &s->metrics,
-  };
-  for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    p.levels[lv] = (struct flush_level_view){
-      .agg_layout = &s->agg_layout[lv],
-      .batch_active_count = s->batch_active_count[lv],
-      .chunk_offset = s->levels.level[lv].chunk_offset,
-      .batch_chunk_to_shard_map = s->batch_chunk_to_shard_map[lv],
-      .batch_gather = s->batch_gather[lv],
-      .agg_slot = &s->agg_slots[lv],
-      .shard = &s->shard[lv],
-      .io_done = &s->io_done[lv],
-    };
-  }
-  return p;
-}
-
-// Keep in sync with multiarray/stream.c::make_scatter_params.
-static struct scatter_epoch_params
-make_scatter_params(struct tile_stream_cpu* s)
-{
-  struct scatter_epoch_params p = {
-    .dtype = s->config.dtype,
-    .reduce_method = s->config.reduce_method,
-    .append_reduce_method = s->config.append_reduce_method,
     .cl = &s->cl,
+    .layout = &s->layout,
+    .levels = &s->levels,
+    .cursor_elements = &s->cursor_elements,
+    .max_cursor_elements = s->max_cursor_elements,
+    .batch_accumulated = &s->batch_accumulated,
+    .batch_active_masks = s->batch_active_masks,
+    .pool_fully_covered = s->pool_fully_covered,
+    .shard = s->shard,
+    .agg_layout = s->agg_layout,
+    .batch_active_count = s->batch_active_count,
     .csrs = s->csrs,
-    .chunk_pool = s->chunk_pool,
-    .linear = s->linear,
-    .lod_values = s->lod_values,
-    .scatter_lut = s->scatter_lut,
-    .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
+    .io_done = s->io_done,
+    .chunk_pool = s->chunk_pool,
+    .chunk_pool_bytes = 0,
+    .compressed = s->compressed,
+    .comp_sizes = s->comp_sizes,
+    .agg_slots = s->agg_slots,
+    .shard_order_sizes = s->shard_order_sizes,
+    .linear = s->linear,
+    .lod_values = s->lod_values,
     .nthreads = s->nthreads,
+    .shard_alignment = s->shard_alignment,
     .metrics = &s->metrics,
+    .metadata_update_clock = &s->metadata_update_clock,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    p.morton_lut[lv] = s->morton_lut[lv];
-    p.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
+    v.batch_gather[lv] = s->batch_gather[lv];
+    v.batch_chunk_to_shard_map[lv] = s->batch_chunk_to_shard_map[lv];
+    v.morton_lut[lv] = s->morton_lut[lv];
+    v.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
   }
-  return p;
+  return v;
 }
 
 // ---- Writer callbacks ----
@@ -583,236 +558,8 @@ cpu_append(struct writer* self, struct slice input)
   if (s->flushed)
     return writer_finished_at(input.beg, input.end);
 
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  const uint8_t* src = (const uint8_t*)input.beg;
-  const uint8_t* end = (const uint8_t*)input.end;
-
-  const uint64_t max_cursor = s->max_cursor_elements;
-
-  while (src < end) {
-    if (max_cursor > 0 && s->cursor_elements >= max_cursor) {
-      struct writer_result fr = cpu_flush(&s->writer);
-      if (fr.error)
-        return writer_error_at(src, end);
-      return writer_finished_at(src, end);
-    }
-
-    const uint64_t epoch_remaining =
-      s->layout.epoch_elements -
-      (s->cursor_elements % s->layout.epoch_elements);
-    const uint64_t input_remaining = (uint64_t)(end - src) / bytes_per_element;
-    uint64_t elements =
-      epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
-
-    if (max_cursor > 0) {
-      uint64_t cap = max_cursor - s->cursor_elements;
-      if (elements > cap)
-        elements = cap;
-    }
-
-    const uint64_t bytes = elements * bytes_per_element;
-
-    // Scatter into chunk pool (or LOD buffer for multiscale).
-    {
-      struct platform_clock clk = { 0 };
-      platform_toc(&clk);
-
-      if (s->levels.enable_multiscale) {
-        // Accumulate into linear epoch buffer; LOD scatter happens at
-        // epoch boundary in scatter_epoch().
-        uint64_t epoch_offset = s->cursor_elements % s->layout.epoch_elements;
-        memcpy((char*)s->linear + epoch_offset * bytes_per_element, src, bytes);
-      } else {
-        // Transpose into the current epoch's pool slice.
-        void* epoch_pool =
-          (char*)s->chunk_pool + (uint64_t)s->batch_accumulated *
-                                   s->levels.total_chunks *
-                                   s->layout.chunk_stride * bytes_per_element;
-        CHECK(Error,
-              transpose_cpu(epoch_pool,
-                            src,
-                            bytes,
-                            (uint8_t)bytes_per_element,
-                            s->cursor_elements,
-                            s->layout.lifted_rank,
-                            s->layout.lifted_shape,
-                            s->layout.lifted_strides,
-                            s->nthreads) == 0);
-      }
-
-      float ms = (float)(platform_toc(&clk) * 1000.0);
-      accumulate_metric_ms(&s->metrics.scatter, ms, bytes, 0);
-    }
-
-    s->cursor_elements += elements;
-    src += bytes;
-
-    // Epoch boundary: accumulate into batch, flush when full.
-    if (s->cursor_elements % s->layout.epoch_elements == 0 &&
-        s->cursor_elements > 0) {
-      uint32_t active_mask = 1; // L0 always active
-      if (s->levels.enable_multiscale) {
-        struct scatter_epoch_params sp = make_scatter_params(s);
-        CHECK(Error,
-              cpu_pipeline_scatter_epoch(
-                &sp, s->batch_accumulated, &active_mask) == 0);
-      }
-
-      CHECK(Error, s->batch_accumulated < MAX_BATCH_EPOCHS);
-      s->batch_active_masks[s->batch_accumulated] = active_mask;
-      s->batch_accumulated++;
-
-      if (s->batch_accumulated == s->cl.epochs_per_batch) {
-        struct flush_batch_params fp = make_flush_params(s);
-        CHECK(Error,
-              cpu_pipeline_flush_batch(
-                &fp, s->batch_accumulated, s->batch_active_masks) == 0);
-        s->batch_accumulated = 0;
-
-        // Clear full batch pool for next batch (each epoch's slice
-        // starts zeroed, so no per-epoch clearing is needed).
-        if (!s->pool_fully_covered)
-          memset(s->chunk_pool,
-                 0,
-                 (uint64_t)s->cl.epochs_per_batch * s->levels.total_chunks *
-                   s->layout.chunk_stride * bytes_per_element);
-      }
-
-      if (s->lod_values) {
-        size_t lod_bytes =
-          s->cl.plan.level_spans.ends[s->cl.plan.levels.nlod - 1] *
-          bytes_per_element;
-        memset(s->lod_values, 0, lod_bytes);
-      }
-
-      // Periodic metadata update.
-      if (s->shard_sink->update_append) {
-        struct platform_clock peek = s->metadata_update_clock;
-        float elapsed = platform_toc(&peek);
-        if (elapsed >= s->config.metadata_update_interval_s) {
-          s->metadata_update_clock = peek;
-          const uint8_t na = dim_info_n_append(&s->cl.dims);
-          for (int lv = 0; lv < s->levels.nlod; ++lv) {
-            struct shard_state* ss = &s->shard[lv];
-            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append +
-                                ss->epoch_in_shard;
-            uint64_t append_sizes[HALF_MAX_RANK];
-            dim_info_decompose_append_sizes(
-              &s->cl.dims, total_ac, append_sizes);
-            if (s->shard_sink->update_append(
-                  s->shard_sink, (uint8_t)lv, na, append_sizes))
-              goto Error;
-          }
-        }
-      }
-    }
-  }
-
-  return (struct writer_result){ .error = 0,
-                                 .rest = { .beg = src, .end = end } };
-
-Error:
-  return writer_error_at(src, end);
-}
-
-static struct writer_result
-cpu_flush(struct writer* self)
-{
-  struct tile_stream_cpu* s =
-    container_of(self, struct tile_stream_cpu, writer);
-
-  // Flush partial epoch into the batch.
-  if (s->cursor_elements % s->layout.epoch_elements != 0) {
-    uint32_t active_mask = 1;
-    if (s->levels.enable_multiscale) {
-      struct scatter_epoch_params sp = make_scatter_params(s);
-      if (cpu_pipeline_scatter_epoch(&sp, s->batch_accumulated, &active_mask))
-        return writer_error();
-    }
-    if (s->batch_accumulated >= MAX_BATCH_EPOCHS)
-      return writer_error();
-    s->batch_active_masks[s->batch_accumulated] = active_mask;
-    s->batch_accumulated++;
-  }
-
-  // Flush any accumulated batch (partial or full).
-  if (s->batch_accumulated > 0) {
-    struct flush_batch_params fp = make_flush_params(s);
-    if (cpu_pipeline_flush_batch(
-          &fp, s->batch_accumulated, s->batch_active_masks))
-      return writer_error();
-    s->batch_accumulated = 0;
-  }
-
-  // Drain any partial append accumulators (levels that haven't emitted yet).
-  if (s->cl.dims.append_downsample && s->append_accum) {
-    struct append_drain_params dp = {
-      .cl = &s->cl,
-      .dtype = s->config.dtype,
-      .append_reduce_method = s->config.append_reduce_method,
-      .lod_values = s->lod_values,
-      .append_accum = s->append_accum,
-      .append_counts = s->append_counts,
-      .chunk_pool = s->chunk_pool,
-      .nthreads = s->nthreads,
-      .metrics = &s->metrics,
-    };
-    for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      dp.morton_lut[lv] = s->morton_lut[lv];
-      dp.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
-    }
-
-    uint32_t drain_mask = 0;
-    if (cpu_pipeline_append_drain(&dp, &drain_mask))
-      return writer_error();
-
-    // Compress + aggregate + deliver drained levels (single-epoch batch).
-    if (drain_mask) {
-      s->batch_active_masks[0] = drain_mask;
-      struct flush_batch_params fp = make_flush_params(s);
-      if (cpu_pipeline_flush_batch(&fp, 1, s->batch_active_masks))
-        return writer_error();
-    }
-  }
-
-  // Emit partial shards.
-  {
-    struct platform_clock emit_clk = { 0 };
-    platform_toc(&emit_clk);
-
-    for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      // Wait for pending async IO before finalizing.
-      if (s->shard_sink->wait_fence)
-        s->shard_sink->wait_fence(s->shard_sink, (uint8_t)lv, s->io_done[lv]);
-
-      // Fail fast if async IO encountered an error.
-      if (s->shard_sink->has_error && s->shard_sink->has_error(s->shard_sink))
-        return writer_error();
-
-      if (s->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&s->shard[lv], s->shard_alignment))
-          return writer_error();
-      }
-    }
-
-    float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
-    accumulate_metric_ms(&s->metrics.sink, emit_ms, 0, 0);
-  }
-
-  // Final metadata.
-  if (s->shard_sink->update_append) {
-    const uint8_t na = dim_info_n_append(&s->cl.dims);
-    for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_final_append_sizes(
-        &s->cl.dims, s->cursor_elements, lv, append_sizes);
-      if (s->shard_sink->update_append(
-            s->shard_sink, (uint8_t)lv, na, append_sizes))
-        return writer_error();
-    }
-  }
-
-  return writer_ok();
+  struct cpu_stream_view v = make_view(s);
+  return cpu_stream_append_body(&v, input);
 }
 
 static struct writer_result
@@ -820,7 +567,8 @@ cpu_flush_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  struct writer_result r = cpu_flush(self);
+  struct cpu_stream_view v = make_view(s);
+  struct writer_result r = cpu_stream_flush_body(&v);
   s->flushed = 1;
   return r;
 }

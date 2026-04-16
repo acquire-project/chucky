@@ -1,4 +1,5 @@
 #include "cpu/pipeline.h"
+#include "cpu/stream.body.h"
 #include "dimension.h"
 #include "multiarray.cpu.h"
 #include "platform/platform.h"
@@ -506,75 +507,10 @@ ensure_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
     recompute_luts(ms, array_index);
 }
 
-// ---- Pipeline helpers ----
-// Keep in sync with cpu/stream.c::make_flush_params.
-
-static struct flush_batch_params
-make_flush_params(struct multiarray_tile_stream_cpu* ms,
-                  struct array_descriptor* desc)
-{
-  const size_t bytes_per_element = dtype_bpe(desc->config.dtype);
-  struct flush_batch_params p = {
-    .codec = desc->config.codec,
-    .bytes_per_element = bytes_per_element,
-    .chunk_pool = ms->chunk_pool,
-    .chunk_stride_bytes = desc->layout.chunk_stride * bytes_per_element,
-    .chunk_bytes = desc->layout.chunk_elements * bytes_per_element,
-    .compressed = ms->compressed,
-    .max_output_size_bytes = desc->cl.max_output_size,
-    .comp_sizes = ms->comp_sizes,
-    .total_chunks = desc->levels.total_chunks,
-    .nlod = desc->levels.nlod,
-    .cl = &desc->cl,
-    .levels_geo = &desc->levels,
-    .shard_order_sizes_bytes = ms->shard_order_sizes,
-    .sink = desc->sink,
-    .shard_alignment_bytes = desc->shard_alignment,
-    .nthreads = ms->nthreads,
-    .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
-  };
-  for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    p.levels[lv] = (struct flush_level_view){
-      .agg_layout = &desc->agg_layout[lv],
-      .batch_active_count = desc->batch_active_count[lv],
-      .chunk_offset = desc->levels.level[lv].chunk_offset,
-      .batch_chunk_to_shard_map = ms->batch_chunk_to_shard_map[lv],
-      .batch_gather = ms->batch_gather[lv],
-      .agg_slot = &ms->agg_slots[lv],
-      .shard = &desc->shard[lv],
-      .io_done = &desc->io_done[lv],
-    };
-  }
-  return p;
-}
-
-// Keep in sync with cpu/stream.c::make_scatter_params.
-static struct scatter_epoch_params
-make_scatter_params(struct multiarray_tile_stream_cpu* ms,
-                    struct array_descriptor* desc)
-{
-  struct scatter_epoch_params p = {
-    .dtype = desc->config.dtype,
-    .reduce_method = desc->config.reduce_method,
-    .append_reduce_method = desc->config.append_reduce_method,
-    .cl = &desc->cl,
-    .csrs = desc->csrs,
-    .chunk_pool = ms->chunk_pool,
-    .linear = ms->linear,
-    .lod_values = ms->lod_values,
-    .scatter_lut = ms->scatter_lut,
-    .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
-    .append_accum = desc->append_accum,
-    .append_counts = desc->append_counts,
-    .nthreads = ms->nthreads,
-    .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
-  };
-  for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    p.morton_lut[lv] = ms->morton_lut[lv];
-    p.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
-  }
-  return p;
-}
+// Forward declaration
+static struct cpu_stream_view
+make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
+                     struct array_descriptor* desc);
 
 // ---- Writer: update helpers ----
 
@@ -590,11 +526,11 @@ switch_to_array(struct multiarray_tile_stream_cpu* ms, int array_index)
       return multiarray_writer_not_flushable;
 
     if (departing->batch_accumulated > 0) {
-      struct flush_batch_params fp = make_flush_params(ms, departing);
-      if (cpu_pipeline_flush_batch(
-            &fp, departing->batch_accumulated, departing->batch_active_masks))
+      // Only flush the accumulated batch — NOT the full flush body.
+      // Shard finalization and metadata happen in flush_impl.
+      struct cpu_stream_view v = make_multiarray_view(ms, departing);
+      if (cpu_stream_flush_batch(&v))
         return multiarray_writer_fail;
-      departing->batch_accumulated = 0;
     }
   }
 
@@ -610,39 +546,52 @@ switch_to_array(struct multiarray_tile_stream_cpu* ms, int array_index)
   return 0;
 }
 
-// Flush the current batch if full.  Returns 0 on success.
-static int
-flush_batch_if_full(struct multiarray_tile_stream_cpu* ms,
-                    struct array_descriptor* desc,
-                    size_t bytes_per_element)
+// ---- View builder ----
+
+static struct cpu_stream_view
+make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
+                     struct array_descriptor* desc)
 {
-  if (desc->batch_accumulated != desc->cl.epochs_per_batch)
-    return 0;
-
-  struct flush_batch_params fp = make_flush_params(ms, desc);
-  if (cpu_pipeline_flush_batch(
-        &fp, desc->batch_accumulated, desc->batch_active_masks))
-    return 1;
-  desc->batch_accumulated = 0;
-
-  memset(ms->chunk_pool,
-         0,
-         (uint64_t)desc->cl.epochs_per_batch * desc->levels.total_chunks *
-           desc->layout.chunk_stride * bytes_per_element);
-  return 0;
-}
-
-static void
-clear_lod_values(struct multiarray_tile_stream_cpu* ms,
-                 const struct array_descriptor* desc,
-                 size_t bytes_per_element)
-{
-  if (desc->levels.enable_multiscale && ms->lod_values) {
-    size_t lod_bytes =
-      desc->cl.plan.level_spans.ends[desc->cl.plan.levels.nlod - 1] *
-      bytes_per_element;
-    memset(ms->lod_values, 0, lod_bytes);
+  struct cpu_stream_view v = {
+    .config = &desc->config,
+    .sink = desc->sink,
+    .cl = &desc->cl,
+    .layout = &desc->layout,
+    .levels = &desc->levels,
+    .cursor_elements = &desc->cursor_elements,
+    .max_cursor_elements = desc->max_cursor_elements,
+    .batch_accumulated = &desc->batch_accumulated,
+    .batch_active_masks = desc->batch_active_masks,
+    .pool_fully_covered = 0,
+    .shard = desc->shard,
+    .agg_layout = desc->agg_layout,
+    .batch_active_count = desc->batch_active_count,
+    .csrs = desc->csrs,
+    .append_accum = desc->append_accum,
+    .append_counts = desc->append_counts,
+    .io_done = desc->io_done,
+    .chunk_pool = ms->chunk_pool,
+    .chunk_pool_bytes = ms->chunk_pool_bytes,
+    .compressed = ms->compressed,
+    .comp_sizes = ms->comp_sizes,
+    .agg_slots = ms->agg_slots,
+    .shard_order_sizes = ms->shard_order_sizes,
+    .linear = ms->linear,
+    .lod_values = ms->lod_values,
+    .scatter_lut = ms->scatter_lut,
+    .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
+    .nthreads = ms->nthreads,
+    .shard_alignment = desc->shard_alignment,
+    .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
+    .metadata_update_clock = NULL, // multiarray defers metadata to final flush
+  };
+  for (int lv = 0; lv < desc->levels.nlod; ++lv) {
+    v.batch_gather[lv] = ms->batch_gather[lv];
+    v.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
+    v.morton_lut[lv] = ms->morton_lut[lv];
+    v.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }
+  return v;
 }
 
 // ---- Writer: update ----
@@ -665,235 +614,14 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       return (struct multiarray_writer_result){ .error = err, .rest = data };
   }
 
-  const size_t bytes_per_element = dtype_bpe(desc->config.dtype);
-  const uint8_t* src = (const uint8_t*)data.beg;
-  const uint8_t* end = (const uint8_t*)data.end;
-  const uint64_t max_cursor = desc->max_cursor_elements;
+  struct cpu_stream_view v = make_multiarray_view(ms, desc);
+  struct writer_result r = cpu_stream_append_body(&v, data);
 
-  while (src < end) {
-    // Finished: flush and return unconsumed data.
-    if (max_cursor > 0 && desc->cursor_elements >= max_cursor) {
-      if (desc->batch_accumulated > 0) {
-        struct flush_batch_params fp = make_flush_params(ms, desc);
-        if (cpu_pipeline_flush_batch(
-              &fp, desc->batch_accumulated, desc->batch_active_masks))
-          return multiarray_writer_fail_at(src, end);
-        desc->batch_accumulated = 0;
-      }
-      return (struct multiarray_writer_result){
-        .error = multiarray_writer_finished,
-        .rest = { .beg = src, .end = end },
-      };
-    }
-
-    // How many elements to process this iteration.
-    const uint64_t epoch_remaining =
-      desc->layout.epoch_elements -
-      (desc->cursor_elements % desc->layout.epoch_elements);
-    const uint64_t input_remaining = (uint64_t)(end - src) / bytes_per_element;
-    uint64_t elements =
-      epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
-    if (max_cursor > 0) {
-      uint64_t cap = max_cursor - desc->cursor_elements;
-      if (elements > cap)
-        elements = cap;
-    }
-    const uint64_t bytes = elements * bytes_per_element;
-
-    // Scatter into pool (or LOD linear buffer for multiscale).
-    if (desc->levels.enable_multiscale) {
-      uint64_t epoch_offset =
-        desc->cursor_elements % desc->layout.epoch_elements;
-      memcpy((char*)ms->linear + epoch_offset * bytes_per_element, src, bytes);
-    } else {
-      void* epoch_pool =
-        (char*)ms->chunk_pool + (uint64_t)desc->batch_accumulated *
-                                  desc->levels.total_chunks *
-                                  desc->layout.chunk_stride * bytes_per_element;
-      if (transpose_cpu(epoch_pool,
-                        src,
-                        bytes,
-                        (uint8_t)bytes_per_element,
-                        desc->cursor_elements,
-                        desc->layout.lifted_rank,
-                        desc->layout.lifted_shape,
-                        desc->layout.lifted_strides,
-                        ms->nthreads))
-        return multiarray_writer_fail_at(src, end);
-    }
-
-    desc->cursor_elements += elements;
-    src += bytes;
-
-    // Epoch boundary: scatter LOD, record mask, maybe flush batch.
-    if (desc->cursor_elements % desc->layout.epoch_elements == 0 &&
-        desc->cursor_elements > 0) {
-      uint32_t active_mask = 1;
-      if (desc->levels.enable_multiscale) {
-        struct scatter_epoch_params sp = make_scatter_params(ms, desc);
-        if (cpu_pipeline_scatter_epoch(
-              &sp, desc->batch_accumulated, &active_mask))
-          return multiarray_writer_fail_at(src, end);
-      }
-
-      if (desc->batch_accumulated >= MAX_BATCH_EPOCHS)
-        return multiarray_writer_fail_at(src, end);
-      desc->batch_active_masks[desc->batch_accumulated] = active_mask;
-      desc->batch_accumulated++;
-
-      if (flush_batch_if_full(ms, desc, bytes_per_element))
-        return multiarray_writer_fail_at(src, end);
-      clear_lod_values(ms, desc, bytes_per_element);
-    }
-  }
-
+  // Map writer_result → multiarray_writer_result (error codes are identity)
   return (struct multiarray_writer_result){
-    .error = multiarray_writer_ok,
-    .rest = { .beg = src, .end = end },
+    .error = r.error,
+    .rest = r.rest,
   };
-}
-
-// ---- Writer: flush helpers ----
-
-// Accumulate the active array's partial epoch into the batch.
-static int
-flush_partial_epoch(struct multiarray_tile_stream_cpu* ms)
-{
-  if (ms->active < 0)
-    return 0;
-
-  struct array_descriptor* desc = &ms->arrays[ms->active];
-  if (desc->cursor_elements % desc->layout.epoch_elements == 0)
-    return 0;
-
-  // If batch is full, flush it before adding the partial epoch.
-  if (desc->batch_accumulated >= desc->cl.epochs_per_batch) {
-    struct flush_batch_params fp = make_flush_params(ms, desc);
-    if (cpu_pipeline_flush_batch(
-          &fp, desc->batch_accumulated, desc->batch_active_masks))
-      return 1;
-    desc->batch_accumulated = 0;
-    memset(ms->chunk_pool, 0, ms->chunk_pool_bytes);
-  }
-
-  uint32_t active_mask = 1;
-  if (desc->levels.enable_multiscale) {
-    struct scatter_epoch_params sp = make_scatter_params(ms, desc);
-    if (cpu_pipeline_scatter_epoch(&sp, desc->batch_accumulated, &active_mask))
-      return 1;
-  }
-  if (desc->batch_accumulated >= MAX_BATCH_EPOCHS)
-    return 1;
-  desc->batch_active_masks[desc->batch_accumulated] = active_mask;
-  desc->batch_accumulated++;
-  return 0;
-}
-
-// Flush all pending batches across all arrays.
-// Unlike switch_to_array, we do NOT zero the chunk pool here — the batch
-// data was written while the array was active and is still valid in the pool.
-static int
-flush_all_batches(struct multiarray_tile_stream_cpu* ms)
-{
-  for (int i = 0; i < ms->n_arrays; ++i) {
-    struct array_descriptor* desc = &ms->arrays[i];
-    if (desc->batch_accumulated == 0)
-      continue;
-    if (i != ms->active)
-      ms->active = i;
-    ensure_luts(ms, i);
-    struct flush_batch_params fp = make_flush_params(ms, desc);
-    if (cpu_pipeline_flush_batch(
-          &fp, desc->batch_accumulated, desc->batch_active_masks))
-      return 1;
-    desc->batch_accumulated = 0;
-  }
-  return 0;
-}
-
-// Drain partial append accumulators for all multiscale arrays.
-// NOTE: lod_values is a shared buffer and may contain stale data from a
-// previously active array.  This is harmless because the emit path writes
-// into lod_values before any read, so stale data is overwritten before use.
-static int
-drain_append_all(struct multiarray_tile_stream_cpu* ms)
-{
-  struct stream_metrics* met = ms->metrics_enabled ? &ms->metrics : NULL;
-
-  for (int i = 0; i < ms->n_arrays; ++i) {
-    struct array_descriptor* desc = &ms->arrays[i];
-    if (!desc->cl.dims.append_downsample || !desc->append_accum)
-      continue;
-
-    if (i != ms->active)
-      ms->active = i;
-    ensure_luts(ms, i);
-
-    struct append_drain_params dp = {
-      .cl = &desc->cl,
-      .dtype = desc->config.dtype,
-      .append_reduce_method = desc->config.append_reduce_method,
-      .lod_values = ms->lod_values,
-      .append_accum = desc->append_accum,
-      .append_counts = desc->append_counts,
-      .chunk_pool = ms->chunk_pool,
-      .nthreads = ms->nthreads,
-      .metrics = met,
-    };
-    for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-      dp.morton_lut[lv] = ms->morton_lut[lv];
-      dp.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
-    }
-
-    uint32_t drain_mask = 0;
-    if (cpu_pipeline_append_drain(&dp, &drain_mask))
-      return 1;
-
-    if (drain_mask) {
-      desc->batch_active_masks[0] = drain_mask;
-      struct flush_batch_params fp = make_flush_params(ms, desc);
-      if (cpu_pipeline_flush_batch(&fp, 1, desc->batch_active_masks))
-        return 1;
-    }
-  }
-  return 0;
-}
-
-// Finalize partial shards and update append metadata for all arrays.
-static int
-finalize_all_shards(struct multiarray_tile_stream_cpu* ms)
-{
-  for (int i = 0; i < ms->n_arrays; ++i) {
-    struct array_descriptor* desc = &ms->arrays[i];
-
-    for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-      // Wait for pending async IO before finalizing.
-      if (desc->sink->wait_fence)
-        desc->sink->wait_fence(desc->sink, (uint8_t)lv, desc->io_done[lv]);
-
-      // Fail fast if async IO encountered an error.
-      if (desc->sink->has_error && desc->sink->has_error(desc->sink))
-        return 1;
-
-      if (desc->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&desc->shard[lv], desc->shard_alignment))
-          return 1;
-      }
-    }
-
-    if (desc->sink->update_append) {
-      const uint8_t na = dim_info_n_append(&desc->cl.dims);
-      for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-        uint64_t append_sizes[HALF_MAX_RANK];
-        dim_info_final_append_sizes(
-          &desc->cl.dims, desc->cursor_elements, lv, append_sizes);
-        if (desc->sink->update_append(
-              desc->sink, (uint8_t)lv, na, append_sizes))
-          return 1;
-      }
-    }
-  }
-  return 0;
 }
 
 // ---- Writer: flush ----
@@ -904,14 +632,21 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_cpu* ms =
     container_of(self, struct multiarray_tile_stream_cpu, writer);
 
-  if (flush_partial_epoch(ms))
-    goto Error;
-  if (flush_all_batches(ms))
-    goto Error;
-  if (drain_append_all(ms))
-    goto Error;
-  if (finalize_all_shards(ms))
-    goto Error;
+  for (int a = 0; a < ms->n_arrays; ++a) {
+    struct array_descriptor* desc = &ms->arrays[a];
+    if (desc->cursor_elements == 0 && desc->batch_accumulated == 0)
+      continue;
+
+    // Ensure LUTs are computed for this array (shared LUTs may be stale).
+    if (a != ms->active)
+      ms->active = a;
+    ensure_luts(ms, a);
+
+    struct cpu_stream_view v = make_multiarray_view(ms, desc);
+    struct writer_result r = cpu_stream_flush_body(&v);
+    if (r.error)
+      goto Error;
+  }
 
   return (struct multiarray_writer_result){
     .error = multiarray_writer_ok,
