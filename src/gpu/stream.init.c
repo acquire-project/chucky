@@ -53,18 +53,18 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
     return;
 
   // Ensure all GPU work completes before tearing down events/memory.
-  sync(s->streams.h2d);
-  sync(s->streams.compute);
-  sync(s->streams.compress);
-  sync(s->streams.d2h);
+  sync(s->engine.streams.h2d);
+  sync(s->engine.streams.compute);
+  sync(s->engine.streams.compress);
+  sync(s->engine.streams.d2h);
 
-  destroy_batch_events(&s->batch);
-  d2h_deliver_destroy(&s->d2h_deliver);
-  compress_agg_destroy(&s->compress_agg, s->levels.nlod);
-  destroy_chunk_pools(&s->pools);
-  lod_state_destroy(&s->lod);
-  ingest_destroy(&s->stage);
-  destroy_cuda_streams_and_events(&s->streams, &s->pools);
+  destroy_batch_events(&s->engine.batch);
+  d2h_deliver_destroy(&s->engine.d2h_deliver);
+  compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
+  destroy_chunk_pools(&s->engine.pools);
+  lod_state_destroy(&s->engine.lod);
+  ingest_destroy(&s->engine.stage);
+  destroy_cuda_streams_and_events(&s->engine.streams, &s->engine.pools);
   free(s);
 }
 
@@ -195,87 +195,98 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
 
-  out->config = *config;
-  out->shard_sink = sink;
-  out->shard_alignment = shard_sink_required_shard_alignment(sink);
-  out->levels = cl.levels;
-  out->dims = cl.dims;
+  out->ctx.config = *config;
+  out->ctx.sink = sink;
+  out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
+  out->ctx.levels = cl.levels;
+  out->ctx.dims = cl.dims;
   tile_stream_gpu_init_writer(out);
 
-  out->config.buffer_capacity_bytes =
+  out->ctx.config.buffer_capacity_bytes =
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
 
   // Copy L0 layout (host fields; d_* still NULL).
-  out->layout = cl.layouts[0];
+  out->ctx.layout = cl.layouts[0];
 
   // Move LOD plan and level layouts (always, including L0).
-  out->lod.plan = cl.plan;
+  out->engine.lod.plan = cl.plan;
   cl.plan = (struct lod_plan){ 0 }; // ownership transferred
   for (int lv = 0; lv < cl.levels.nlod; ++lv)
-    out->lod.layouts[lv] = cl.layouts[lv];
+    out->engine.lod.layouts[lv] = cl.layouts[lv];
 
   // Copy batch info.
   CHECK(FailPhase2, (cl.epochs_per_batch & (cl.epochs_per_batch - 1)) == 0);
-  out->batch.epochs_per_batch = cl.epochs_per_batch;
-  out->batch.accumulated = 0;
+  out->engine.batch.epochs_per_batch = cl.epochs_per_batch;
+  out->engine.batch.accumulated = 0;
 
   // GPU allocation and init.
   CHECK(FailPhase2,
-        init_cuda_streams_and_events(&out->streams, &out->pools) == 0);
+        init_cuda_streams_and_events(&out->engine.streams,
+                                     &out->engine.pools) == 0);
   CHECK(FailPhase2,
-        ingest_init(&out->stage,
-                    out->config.buffer_capacity_bytes,
-                    out->streams.compute) == 0);
-  CHECK(FailPhase2, lod_state_init(&out->lod, &out->levels, &out->config) == 0);
+        ingest_init(&out->engine.stage,
+                    out->ctx.config.buffer_capacity_bytes,
+                    out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
-        init_chunk_pools(&out->pools,
-                         &out->levels,
-                         out->layout.chunk_stride,
+        lod_state_init(&out->engine.lod, &out->ctx.levels, &out->ctx.config) ==
+          0);
+  CHECK(FailPhase2,
+        init_chunk_pools(&out->engine.pools,
+                         &out->ctx.levels,
+                         out->ctx.layout.chunk_stride,
                          dtype_bpe(config->dtype),
-                         out->batch.epochs_per_batch,
-                         out->streams.compute) == 0);
+                         out->engine.batch.epochs_per_batch,
+                         out->engine.streams.compute) == 0);
 
   // Initialize the two pipeline stages.
   CHECK(FailPhase2,
-        compress_agg_init(
-          &out->compress_agg, &cl, config, out->streams.compute) == 0);
+        compress_agg_init(&out->engine.compress_agg,
+                          &cl,
+                          config,
+                          out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
-        d2h_deliver_init(&out->d2h_deliver,
-                         out->compress_agg.levels,
-                         out->levels.nlod,
-                         out->shard_alignment,
-                         out->streams.compute) == 0);
+        d2h_deliver_init(&out->engine.d2h_deliver,
+                         out->engine.compress_agg.levels,
+                         out->ctx.levels.nlod,
+                         out->ctx.shard_alignment,
+                         out->engine.streams.compute) == 0);
 
-  CHECK(FailPhase2, init_batch_events(&out->batch, out->streams.compute) == 0);
-  if (out->levels.enable_multiscale) {
+  CHECK(FailPhase2,
+        init_batch_events(&out->engine.batch, out->engine.streams.compute) ==
+          0);
+  if (out->ctx.levels.enable_multiscale) {
     CHECK(FailPhase2,
-          lod_state_init_buffers(&out->lod, out->config.dtype) == 0);
-    if (out->dims.append_downsample)
+          lod_state_init_buffers(&out->engine.lod, out->ctx.config.dtype) == 0);
+    if (out->ctx.dims.append_downsample)
       CHECK(FailPhase2,
-            lod_state_init_accumulators(&out->lod, &out->config) == 0);
+            lod_state_init_accumulators(&out->engine.lod, &out->ctx.config) ==
+              0);
   }
   CHECK(FailPhase2,
-        seed_events(&out->pools, &out->lod, out->streams.compute) == 0);
+        seed_events(&out->engine.pools,
+                    &out->engine.lod,
+                    out->engine.streams.compute) == 0);
 
-  CU(FailPhase2, cuStreamSynchronize(out->streams.compute));
+  CU(FailPhase2, cuStreamSynchronize(out->engine.streams.compute));
 
   // Precompute max_cursor_elements so append doesn't recompute each call.
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = dim_info_n_append(&out->dims);
+    const uint8_t na = dim_info_n_append(&out->ctx.dims);
     if (dims[0].size > 0) {
-      out->max_cursor_elements = out->layout.epoch_elements;
+      out->ctx.max_cursor_elements = out->ctx.layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        out->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        out->ctx.max_cursor_elements *=
+          ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
 
-  out->metrics = init_metrics(out->levels.enable_multiscale);
-  out->d2h_deliver.metrics = &out->metrics;
+  out->engine.metrics = init_metrics(out->ctx.levels.enable_multiscale);
+  out->engine.d2h_deliver.metrics = &out->engine.metrics;
 
   // Initialize metadata update timer
-  out->metadata_update_clock = (struct platform_clock){ 0 };
-  platform_toc(&out->metadata_update_clock);
+  out->engine.metadata_update_clock = (struct platform_clock){ 0 };
+  platform_toc(&out->engine.metadata_update_clock);
 
   computed_stream_layouts_free(&cl);
   return out;
@@ -293,7 +304,7 @@ FailPhase1:
 const struct tile_stream_layout*
 tile_stream_gpu_layout(const struct tile_stream_gpu* s)
 {
-  return &s->layout;
+  return &s->ctx.layout;
 }
 
 struct writer*
@@ -305,23 +316,23 @@ tile_stream_gpu_writer(struct tile_stream_gpu* s)
 uint64_t
 tile_stream_gpu_cursor(const struct tile_stream_gpu* s)
 {
-  return s->cursor_elements;
+  return s->ctx.cursor_elements;
 }
 
 struct tile_stream_status
 tile_stream_gpu_status(const struct tile_stream_gpu* s)
 {
   return (struct tile_stream_status){
-    .nlod = s->levels.nlod,
-    .append_downsample = s->dims.append_downsample,
-    .epochs_per_batch = s->batch.epochs_per_batch,
-    .max_compressed_size = s->compress_agg.codec.max_output_size,
-    .dtype = s->config.dtype,
-    .codec = s->config.codec,
-    .codec_batch_size = s->compress_agg.codec.batch_size,
-    .batch_accumulated = s->batch.accumulated,
-    .pool_current = s->pools.current,
-    .flush_pending = s->flush.pending,
+    .nlod = s->ctx.levels.nlod,
+    .append_downsample = s->ctx.dims.append_downsample,
+    .epochs_per_batch = s->engine.batch.epochs_per_batch,
+    .max_compressed_size = s->engine.compress_agg.codec.max_output_size,
+    .dtype = s->ctx.config.dtype,
+    .codec = s->ctx.config.codec,
+    .codec_batch_size = s->engine.compress_agg.codec.batch_size,
+    .batch_accumulated = s->engine.batch.accumulated,
+    .pool_current = s->engine.pools.current,
+    .flush_pending = s->engine.flush.pending,
   };
 }
 

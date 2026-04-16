@@ -25,10 +25,10 @@ tile_stream_gpu_flush_final(struct writer* self);
 static inline void*
 current_pool_epoch(struct tile_stream_gpu* s, uint32_t epoch_in_batch)
 {
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  return (char*)s->pools.buf[s->pools.current] +
-         (uint64_t)epoch_in_batch * s->levels.total_chunks *
-           s->layout.chunk_stride * bytes_per_element;
+  const size_t bytes_per_element = dtype_bpe(s->ctx.config.dtype);
+  return (char*)s->engine.pools.buf[s->engine.pools.current] +
+         (uint64_t)epoch_in_batch * s->ctx.levels.total_chunks *
+           s->ctx.layout.chunk_stride * bytes_per_element;
 }
 
 // --- Ingest dispatch ---
@@ -36,31 +36,32 @@ current_pool_epoch(struct tile_stream_gpu* s, uint32_t epoch_in_batch)
 static int
 dispatch_ingest(struct tile_stream_gpu* s)
 {
-  if (s->levels.enable_multiscale) {
-    return ingest_dispatch_multiscale(&s->stage,
-                                      s->lod.d_linear,
-                                      s->layout.epoch_elements,
-                                      &s->cursor_elements,
-                                      dtype_bpe(s->config.dtype),
-                                      s->streams.h2d,
-                                      s->streams.compute);
+  if (s->ctx.levels.enable_multiscale) {
+    return ingest_dispatch_multiscale(&s->engine.stage,
+                                      s->engine.lod.d_linear,
+                                      s->ctx.layout.epoch_elements,
+                                      &s->ctx.cursor_elements,
+                                      dtype_bpe(s->ctx.config.dtype),
+                                      s->engine.streams.h2d,
+                                      s->engine.streams.compute);
   } else {
-    return ingest_dispatch_scatter(&s->stage,
-                                   &s->layout,
-                                   &s->lod.layout_gpu[0],
-                                   current_pool_epoch(s, s->batch.accumulated),
-                                   s->pools.ready[s->pools.current],
-                                   &s->cursor_elements,
-                                   dtype_bpe(s->config.dtype),
-                                   s->streams.h2d,
-                                   s->streams.compute);
+    return ingest_dispatch_scatter(
+      &s->engine.stage,
+      &s->ctx.layout,
+      &s->engine.lod.layout_gpu[0],
+      current_pool_epoch(s, s->engine.batch.accumulated),
+      s->engine.pools.ready[s->engine.pools.current],
+      &s->ctx.cursor_elements,
+      dtype_bpe(s->ctx.config.dtype),
+      s->engine.streams.h2d,
+      s->engine.streams.compute);
   }
 }
 
 struct stream_metrics
 tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s)
 {
-  return s->metrics;
+  return s->engine.metrics;
 }
 
 // Body of tile_stream_gpu_append, factored out so the wrapper can wall-clock
@@ -71,16 +72,17 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
   if (s->flushed)
     return writer_finished_at(input.beg, input.end);
 
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  const size_t buffer_capacity = s->config.buffer_capacity_bytes;
+  const size_t bytes_per_element = dtype_bpe(s->ctx.config.dtype);
+  const size_t buffer_capacity = s->ctx.config.buffer_capacity_bytes;
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
-  const uint64_t max_cursor_elements = s->max_cursor_elements;
+  const uint64_t max_cursor_elements = s->ctx.max_cursor_elements;
 
   while (src < end) {
     // Bounded append dims: check capacity
-    if (max_cursor_elements > 0 && s->cursor_elements >= max_cursor_elements) {
+    if (max_cursor_elements > 0 &&
+        s->ctx.cursor_elements >= max_cursor_elements) {
       struct writer_result fr = tile_stream_gpu_flush(&s->writer);
       if (fr.error)
         return writer_error_at(src, end);
@@ -88,8 +90,8 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
     }
 
     const uint64_t epoch_remaining =
-      s->layout.epoch_elements -
-      (s->cursor_elements % s->layout.epoch_elements);
+      s->ctx.layout.epoch_elements -
+      (s->ctx.cursor_elements % s->ctx.layout.epoch_elements);
     const uint64_t input_remaining = (uint64_t)(end - src) / bytes_per_element;
     uint64_t elements_this_pass =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
@@ -97,7 +99,7 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
     // Bounded append dims: clamp to remaining capacity
     if (max_cursor_elements > 0) {
       const uint64_t remaining_capacity =
-        max_cursor_elements - s->cursor_elements;
+        max_cursor_elements - s->ctx.cursor_elements;
       if (elements_this_pass > remaining_capacity)
         elements_this_pass = remaining_capacity;
     }
@@ -107,22 +109,22 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
     {
       uint64_t written = 0;
       while (written < bytes_this_pass) {
-        const size_t space = buffer_capacity - s->stage.bytes_written;
+        const size_t space = buffer_capacity - s->engine.stage.bytes_written;
         const uint64_t remaining = bytes_this_pass - written;
         const size_t payload = space < remaining ? space : (size_t)remaining;
 
-        if (s->stage.bytes_written == 0) {
-          const int si = s->stage.current;
-          struct staging_slot* ss = &s->stage.slot[si];
+        if (s->engine.stage.bytes_written == 0) {
+          const int si = s->engine.stage.current;
+          struct staging_slot* ss = &s->engine.stage.slot[si];
           CU(Error, cuEventSynchronize(ss->t_h2d_end));
 
-          if (s->cursor_elements > 0) {
-            accumulate_metric_cu(&s->metrics.h2d,
+          if (s->ctx.cursor_elements > 0) {
+            accumulate_metric_cu(&s->engine.metrics.h2d,
                                  ss->t_h2d_start,
                                  ss->t_h2d_end,
                                  ss->dispatched_bytes,
                                  ss->dispatched_bytes);
-            accumulate_metric_cu(&s->metrics.scatter,
+            accumulate_metric_cu(&s->engine.metrics.scatter,
                                  ss->t_scatter_start,
                                  ss->t_scatter_end,
                                  ss->dispatched_bytes,
@@ -133,50 +135,50 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
         {
           struct platform_clock mc = { 0 };
           platform_toc(&mc);
-          memcpy((uint8_t*)s->stage.slot[s->stage.current].h_in +
-                   s->stage.bytes_written,
+          memcpy((uint8_t*)s->engine.stage.slot[s->engine.stage.current].h_in +
+                   s->engine.stage.bytes_written,
                  src + written,
                  payload);
-          accumulate_metric_ms(&s->metrics.memcpy,
+          accumulate_metric_ms(&s->engine.metrics.memcpy,
                                (float)(platform_toc(&mc) * 1000.0),
                                payload,
                                payload);
         }
-        s->stage.bytes_written += payload;
+        s->engine.stage.bytes_written += payload;
         written += payload;
 
-        if (s->stage.bytes_written == buffer_capacity ||
+        if (s->engine.stage.bytes_written == buffer_capacity ||
             written == bytes_this_pass) {
           CHECK(Error, dispatch_ingest(s) == 0);
-          s->stage.bytes_written = 0;
+          s->engine.stage.bytes_written = 0;
         }
       }
     }
     src += bytes_this_pass;
 
-    if (s->cursor_elements % s->layout.epoch_elements == 0 &&
-        s->cursor_elements > 0) {
+    if (s->ctx.cursor_elements % s->ctx.layout.epoch_elements == 0 &&
+        s->ctx.cursor_elements > 0) {
       struct writer_result fr = flush_accumulate_epoch(s);
       if (fr.error)
         return writer_error_at(src, end);
       // Sample sink backpressure at epoch boundaries.
-      size_t pend = shard_sink_pending_bytes(s->shard_sink);
-      if (pend > s->metrics.peak_pending_bytes)
-        s->metrics.peak_pending_bytes = pend;
+      size_t pend = shard_sink_pending_bytes(s->ctx.sink);
+      if (pend > s->engine.metrics.peak_pending_bytes)
+        s->engine.metrics.peak_pending_bytes = pend;
       // Backpressure: if the sink's IO queue exceeds the watermark,
       // poll here until it drains below the threshold.  This keeps
       // the stall at the producer boundary instead of deep inside
       // the flush pipeline.
-      if (s->config.backpressure_bytes > 0 &&
-          pend > s->config.backpressure_bytes) {
+      if (s->ctx.config.backpressure_bytes > 0 &&
+          pend > s->ctx.config.backpressure_bytes) {
         struct platform_clock bp_clk = { 0 };
         platform_toc(&bp_clk);
         int64_t start_ns = bp_clk.last_ns;
         const double timeout_s = 30.0;
         int drained = 0;
         for (;;) {
-          if (shard_sink_pending_bytes(s->shard_sink) <=
-              s->config.backpressure_bytes) {
+          if (shard_sink_pending_bytes(s->ctx.sink) <=
+              s->ctx.config.backpressure_bytes) {
             drained = 1;
             break;
           }
@@ -187,11 +189,11 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
         }
         platform_toc(&bp_clk);
         float bp_ms = (float)((bp_clk.last_ns - start_ns) / 1e6);
-        accumulate_metric_ms(&s->metrics.backpressure, bp_ms, 0, 0);
+        accumulate_metric_ms(&s->engine.metrics.backpressure, bp_ms, 0, 0);
         if (!drained)
           log_warn("backpressure timeout after %.1fs (pending %zu bytes)",
                    timeout_s,
-                   shard_sink_pending_bytes(s->shard_sink));
+                   shard_sink_pending_bytes(s->ctx.sink));
       }
     }
   }
@@ -212,8 +214,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   platform_toc(&clk);
   struct writer_result r = tile_stream_gpu_append_body(s, input);
   float ms = (float)(platform_toc(&clk) * 1000.0);
-  if (ms > s->metrics.max_append_ms)
-    s->metrics.max_append_ms = ms;
+  if (ms > s->engine.metrics.max_append_ms)
+    s->engine.metrics.max_append_ms = ms;
   return r;
 }
 
@@ -223,10 +225,10 @@ tile_stream_gpu_flush(struct writer* self)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
-  if (s->stage.bytes_written > 0) {
+  if (s->engine.stage.bytes_written > 0) {
     if (dispatch_ingest(s))
       return writer_error();
-    s->stage.bytes_written = 0;
+    s->engine.stage.bytes_written = 0;
   }
 
   struct writer_result r = flush_drain_pending(s);
@@ -234,14 +236,14 @@ tile_stream_gpu_flush(struct writer* self)
     return r;
 
   // Flush any partial epoch first (sub-epoch data)
-  if (s->cursor_elements % s->layout.epoch_elements != 0) {
+  if (s->ctx.cursor_elements % s->ctx.layout.epoch_elements != 0) {
     // run_lod + record pool event + increment epochs_accumulated
     if (flush_run_epoch_lod(s))
       return writer_error();
     CU(Error,
-       cuEventRecord(s->batch.pool_events[s->batch.accumulated],
-                     s->streams.compute));
-    s->batch.accumulated++;
+       cuEventRecord(s->engine.batch.pool_events[s->engine.batch.accumulated],
+                     s->engine.streams.compute));
+    s->engine.batch.accumulated++;
   }
 
   // Flush any accumulated epochs (partial batch)
@@ -255,23 +257,23 @@ tile_stream_gpu_flush(struct writer* self)
     return r;
 
   // Emit partial shards for all levels
-  for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    if (s->compress_agg.levels[lv].shard.epoch_in_shard > 0) {
-      if (finalize_shards(&s->compress_agg.levels[lv].shard,
-                          s->shard_alignment))
+  for (int lv = 0; lv < s->ctx.levels.nlod; ++lv) {
+    if (s->engine.compress_agg.levels[lv].shard.epoch_in_shard > 0) {
+      if (finalize_shards(&s->engine.compress_agg.levels[lv].shard,
+                          s->ctx.shard_alignment))
         return writer_error();
     }
   }
 
   // Final metadata update using pre-emit chunk counts.
-  if (s->shard_sink->update_append) {
-    const uint8_t na = dim_info_n_append(&s->dims);
-    for (int lv = 0; lv < s->levels.nlod; ++lv) {
+  if (s->ctx.sink->update_append) {
+    const uint8_t na = dim_info_n_append(&s->ctx.dims);
+    for (int lv = 0; lv < s->ctx.levels.nlod; ++lv) {
       uint64_t append_sizes[HALF_MAX_RANK];
       dim_info_final_append_sizes(
-        &s->dims, s->cursor_elements, lv, append_sizes);
-      if (s->shard_sink->update_append(
-            s->shard_sink, (uint8_t)lv, na, append_sizes))
+        &s->ctx.dims, s->ctx.cursor_elements, lv, append_sizes);
+      if (s->ctx.sink->update_append(
+            s->ctx.sink, (uint8_t)lv, na, append_sizes))
         return writer_error();
     }
   }

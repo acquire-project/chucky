@@ -18,20 +18,22 @@
 static struct compress_agg_input
 make_compress_input(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
 {
-  struct flush_slot_gpu* fs = &s->flush.slot[fc];
+  struct flush_slot_gpu* fs = &s->engine.flush.slot[fc];
   struct compress_agg_input in = {
     .fc = fc,
     .n_epochs = n_epochs,
     .active_levels_mask = fs->active_levels_mask,
-    .epochs_per_batch = s->batch.epochs_per_batch,
-    .pool_buf = s->pools.buf[fc],
-    .lod_done = (s->levels.enable_multiscale && s->lod.timing[fc].t_end)
-                  ? s->lod.timing[fc].t_end
-                  : NULL,
+    .epochs_per_batch = s->engine.batch.epochs_per_batch,
+    .pool_buf = s->engine.pools.buf[fc],
+    .lod_done =
+      (s->ctx.levels.enable_multiscale && s->engine.lod.timing[fc].t_end)
+        ? s->engine.lod.timing[fc].t_end
+        : NULL,
   };
   memcpy(
     in.batch_active_masks, fs->batch_active_masks, n_epochs * sizeof(uint32_t));
-  memcpy(in.epoch_events, s->batch.pool_events, n_epochs * sizeof(CUevent));
+  memcpy(
+    in.epoch_events, s->engine.batch.pool_events, n_epochs * sizeof(CUevent));
   return in;
 }
 
@@ -41,10 +43,10 @@ make_compress_input(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
 static inline void*
 pool_epoch_ptr(struct tile_stream_gpu* s, uint32_t epoch_in_batch)
 {
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  return (char*)s->pools.buf[s->pools.current] +
-         (uint64_t)epoch_in_batch * s->levels.total_chunks *
-           s->layout.chunk_stride * bytes_per_element;
+  const size_t bytes_per_element = dtype_bpe(s->ctx.config.dtype);
+  return (char*)s->engine.pools.buf[s->engine.pools.current] +
+         (uint64_t)epoch_in_batch * s->ctx.levels.total_chunks *
+           s->ctx.layout.chunk_stride * bytes_per_element;
 }
 
 // Run LOD pipeline for the current epoch, or handle non-multiscale case.
@@ -52,27 +54,27 @@ pool_epoch_ptr(struct tile_stream_gpu* s, uint32_t epoch_in_batch)
 int
 flush_run_epoch_lod(struct tile_stream_gpu* s)
 {
-  struct flush_slot_gpu* fs = &s->flush.slot[s->pools.current];
+  struct flush_slot_gpu* fs = &s->engine.flush.slot[s->engine.pools.current];
   uint32_t active_mask;
 
-  if (!s->levels.enable_multiscale || !s->lod.d_linear) {
+  if (!s->ctx.levels.enable_multiscale || !s->engine.lod.d_linear) {
     // Non-multiscale: all levels (just L0) are active
     active_mask = 1;
   } else {
     CHECK(Error,
-          lod_run_epoch(&s->lod,
-                        s->pools.current,
-                        &s->levels,
-                        pool_epoch_ptr(s, s->batch.accumulated),
-                        s->config.dtype,
-                        s->config.reduce_method,
-                        s->config.append_reduce_method,
-                        &s->dims,
-                        s->streams.compute,
+          lod_run_epoch(&s->engine.lod,
+                        s->engine.pools.current,
+                        &s->ctx.levels,
+                        pool_epoch_ptr(s, s->engine.batch.accumulated),
+                        s->ctx.config.dtype,
+                        s->ctx.config.reduce_method,
+                        s->ctx.config.append_reduce_method,
+                        &s->ctx.dims,
+                        s->engine.streams.compute,
                         &active_mask) == 0);
   }
 
-  fs->batch_active_masks[s->batch.accumulated] = active_mask;
+  fs->batch_active_masks[s->engine.batch.accumulated] = active_mask;
   fs->active_levels_mask |= active_mask;
   return 0;
 
@@ -88,29 +90,29 @@ Error:
 static struct writer_result
 drain_kick_and_swap(struct tile_stream_gpu* s)
 {
-  const uint32_t K = s->batch.epochs_per_batch;
-  const int completed_pool = s->pools.current;
-  struct flush_slot_gpu* fs = &s->flush.slot[completed_pool];
+  const uint32_t K = s->engine.batch.epochs_per_batch;
+  const int completed_pool = s->engine.pools.current;
+  struct flush_slot_gpu* fs = &s->engine.flush.slot[completed_pool];
 
   // Save the previous pending state so we can drain it after the
   // compress+aggregate kick but before the d2h kick.
-  struct flush_handoff prev_handoff = s->flush.pending_handoff;
-  int had_pending = s->flush.pending;
-  s->flush.pending = 0;
+  struct flush_handoff prev_handoff = s->engine.flush.pending_handoff;
+  int had_pending = s->engine.flush.pending;
+  s->engine.flush.pending = 0;
 
   // Phase A: kick compress+aggregate for the new batch (compress stream).
   // This starts GPU work immediately — no host blocking.
-  fs->batch_epoch_count = (int)s->batch.accumulated;
+  fs->batch_epoch_count = (int)s->engine.batch.accumulated;
   struct compress_agg_input in =
-    make_compress_input(s, completed_pool, s->batch.accumulated);
+    make_compress_input(s, completed_pool, s->engine.batch.accumulated);
   struct flush_handoff new_handoff = { 0 };
   CHECK(Error,
-        compress_agg_kick(&s->compress_agg,
+        compress_agg_kick(&s->engine.compress_agg,
                           &in,
-                          &s->levels,
-                          &s->batch,
-                          &s->dims,
-                          s->streams.compress,
+                          &s->ctx.levels,
+                          &s->engine.batch,
+                          &s->ctx.dims,
+                          s->engine.streams.compress,
                           &new_handoff) == 0);
 
   // Phase B: drain the PREVIOUS batch.  This issues bulk D2H on d2h_stream
@@ -118,19 +120,20 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
   if (had_pending) {
     struct platform_clock stall_clk = { 0 };
     platform_toc(&stall_clk);
-    struct writer_result r = d2h_deliver_drain(&s->d2h_deliver,
-                                               &prev_handoff,
-                                               &s->levels,
-                                               &s->batch,
-                                               &s->dims,
-                                               &s->layout,
-                                               &s->config,
-                                               s->shard_sink,
-                                               &s->lod,
-                                               &s->metrics,
-                                               &s->metadata_update_clock);
+    struct writer_result r =
+      d2h_deliver_drain(&s->engine.d2h_deliver,
+                        &prev_handoff,
+                        &s->ctx.levels,
+                        &s->engine.batch,
+                        &s->ctx.dims,
+                        &s->ctx.layout,
+                        &s->ctx.config,
+                        s->ctx.sink,
+                        &s->engine.lod,
+                        &s->engine.metrics,
+                        &s->engine.metadata_update_clock);
     float ms = (float)(platform_toc(&stall_clk) * 1000.0);
-    accumulate_metric_ms(&s->metrics.flush_stall, ms, 0, 0);
+    accumulate_metric_ms(&s->engine.metrics.flush_stall, ms, 0, 0);
     if (r.error)
       return r;
   }
@@ -139,32 +142,36 @@ drain_kick_and_swap(struct tile_stream_gpu* s)
   // This goes AFTER the previous drain's bulk D2H on d2h_stream, avoiding
   // the aggregate-end wait from blocking the prior batch's transfer.
   CHECK(Error,
-        d2h_deliver_kick(&s->d2h_deliver,
+        d2h_deliver_kick(&s->engine.d2h_deliver,
                          &new_handoff,
-                         &s->levels,
-                         &s->batch,
-                         &s->dims,
-                         s->streams.d2h) == 0);
+                         &s->ctx.levels,
+                         &s->engine.batch,
+                         &s->ctx.dims,
+                         s->engine.streams.d2h) == 0);
 
   // Save handoff for the next drain.
-  s->flush.pending_handoff = new_handoff;
-  s->flush.pending = 1;
-  s->flush.current = completed_pool;
+  s->engine.flush.pending_handoff = new_handoff;
+  s->engine.flush.pending = 1;
+  s->engine.flush.current = completed_pool;
 
   // Swap to fresh pool and zero it for next batch.
-  s->pools.current ^= 1;
-  size_t pool_bytes = (uint64_t)K * s->levels.total_chunks *
-                      s->layout.chunk_stride * dtype_bpe(s->config.dtype);
+  s->engine.pools.current ^= 1;
+  size_t pool_bytes = (uint64_t)K * s->ctx.levels.total_chunks *
+                      s->ctx.layout.chunk_stride *
+                      dtype_bpe(s->ctx.config.dtype);
   CU(Error,
-     cuMemsetD8Async(
-       s->pools.buf[s->pools.current], 0, pool_bytes, s->streams.compute));
+     cuMemsetD8Async(s->engine.pools.buf[s->engine.pools.current],
+                     0,
+                     pool_bytes,
+                     s->engine.streams.compute));
 
   // Reset batch accumulation.
-  s->batch.accumulated = 0;
-  s->flush.slot[s->pools.current].active_levels_mask = 0;
-  memset(s->flush.slot[s->pools.current].batch_active_masks,
-         0,
-         sizeof(s->flush.slot[s->pools.current].batch_active_masks));
+  s->engine.batch.accumulated = 0;
+  s->engine.flush.slot[s->engine.pools.current].active_levels_mask = 0;
+  memset(
+    s->engine.flush.slot[s->engine.pools.current].batch_active_masks,
+    0,
+    sizeof(s->engine.flush.slot[s->engine.pools.current].batch_active_masks));
 
   return writer_ok();
 
@@ -181,11 +188,11 @@ flush_accumulate_epoch(struct tile_stream_gpu* s)
     return writer_error();
 
   CU(Error,
-     cuEventRecord(s->batch.pool_events[s->batch.accumulated],
-                   s->streams.compute));
-  s->batch.accumulated++;
+     cuEventRecord(s->engine.batch.pool_events[s->engine.batch.accumulated],
+                   s->engine.streams.compute));
+  s->engine.batch.accumulated++;
 
-  if (s->batch.accumulated < s->batch.epochs_per_batch)
+  if (s->engine.batch.accumulated < s->engine.batch.epochs_per_batch)
     return writer_ok();
 
   return drain_kick_and_swap(s);
@@ -204,24 +211,24 @@ flush_kick_batch(struct tile_stream_gpu* s, int fc, uint32_t n_epochs)
   struct flush_handoff handoff = { 0 };
 
   CHECK(Error,
-        compress_agg_kick(&s->compress_agg,
+        compress_agg_kick(&s->engine.compress_agg,
                           &in,
-                          &s->levels,
-                          &s->batch,
-                          &s->dims,
-                          s->streams.compress,
+                          &s->ctx.levels,
+                          &s->engine.batch,
+                          &s->ctx.dims,
+                          s->engine.streams.compress,
                           &handoff) == 0);
 
   CHECK(Error,
-        d2h_deliver_kick(&s->d2h_deliver,
+        d2h_deliver_kick(&s->engine.d2h_deliver,
                          &handoff,
-                         &s->levels,
-                         &s->batch,
-                         &s->dims,
-                         s->streams.d2h) == 0);
+                         &s->ctx.levels,
+                         &s->engine.batch,
+                         &s->ctx.dims,
+                         s->engine.streams.d2h) == 0);
 
   // Save handoff for drain
-  s->flush.pending_handoff = handoff;
+  s->engine.flush.pending_handoff = handoff;
 
   return 0;
 
@@ -234,83 +241,84 @@ Error:
 struct writer_result
 flush_drain_pending(struct tile_stream_gpu* s)
 {
-  if (!s->flush.pending)
+  if (!s->engine.flush.pending)
     return writer_ok();
 
-  s->flush.pending = 0;
-  return d2h_deliver_drain(&s->d2h_deliver,
-                           &s->flush.pending_handoff,
-                           &s->levels,
-                           &s->batch,
-                           &s->dims,
-                           &s->layout,
-                           &s->config,
-                           s->shard_sink,
-                           &s->lod,
-                           &s->metrics,
-                           &s->metadata_update_clock);
+  s->engine.flush.pending = 0;
+  return d2h_deliver_drain(&s->engine.d2h_deliver,
+                           &s->engine.flush.pending_handoff,
+                           &s->ctx.levels,
+                           &s->engine.batch,
+                           &s->ctx.dims,
+                           &s->ctx.layout,
+                           &s->ctx.config,
+                           s->ctx.sink,
+                           &s->engine.lod,
+                           &s->engine.metrics,
+                           &s->engine.metadata_update_clock);
 }
 
 struct writer_result
 flush_accumulated_sync(struct tile_stream_gpu* s)
 {
-  if (s->batch.accumulated == 0)
+  if (s->engine.batch.accumulated == 0)
     return writer_ok();
 
-  const int fc = s->pools.current;
-  struct flush_slot_gpu* fs = &s->flush.slot[fc];
+  const int fc = s->engine.pools.current;
+  struct flush_slot_gpu* fs = &s->engine.flush.slot[fc];
 
   // Use the batch pipeline for both full and partial batches.
   // compress_agg_kick handles n_epochs < epochs_per_batch by recomputing
   // LUTs, so this path is safe for any accumulated count.
-  fs->batch_epoch_count = (int)s->batch.accumulated;
-  if (flush_kick_batch(s, fc, s->batch.accumulated))
+  fs->batch_epoch_count = (int)s->engine.batch.accumulated;
+  if (flush_kick_batch(s, fc, s->engine.batch.accumulated))
     return writer_error();
 
-  struct writer_result r = d2h_deliver_drain(&s->d2h_deliver,
-                                             &s->flush.pending_handoff,
-                                             &s->levels,
-                                             &s->batch,
-                                             &s->dims,
-                                             &s->layout,
-                                             &s->config,
-                                             s->shard_sink,
-                                             &s->lod,
-                                             &s->metrics,
-                                             &s->metadata_update_clock);
+  struct writer_result r = d2h_deliver_drain(&s->engine.d2h_deliver,
+                                             &s->engine.flush.pending_handoff,
+                                             &s->ctx.levels,
+                                             &s->engine.batch,
+                                             &s->ctx.dims,
+                                             &s->ctx.layout,
+                                             &s->ctx.config,
+                                             s->ctx.sink,
+                                             &s->engine.lod,
+                                             &s->engine.metrics,
+                                             &s->engine.metadata_update_clock);
   if (r.error)
     return r;
 
-  s->batch.accumulated = 0;
-  s->flush.slot[s->pools.current].active_levels_mask = 0;
-  memset(s->flush.slot[s->pools.current].batch_active_masks,
-         0,
-         sizeof(s->flush.slot[s->pools.current].batch_active_masks));
+  s->engine.batch.accumulated = 0;
+  s->engine.flush.slot[s->engine.pools.current].active_levels_mask = 0;
+  memset(
+    s->engine.flush.slot[s->engine.pools.current].batch_active_masks,
+    0,
+    sizeof(s->engine.flush.slot[s->engine.pools.current].batch_active_masks));
   return r;
 }
 
 struct writer_result
 flush_partial_append(struct tile_stream_gpu* s)
 {
-  if (!s->dims.append_downsample || !s->levels.enable_multiscale)
+  if (!s->ctx.dims.append_downsample || !s->ctx.levels.enable_multiscale)
     return writer_ok();
 
-  const struct lod_plan* p = &s->lod.plan;
-  const size_t bytes_per_element = dtype_bpe(s->config.dtype);
-  const enum dtype dtype = s->config.dtype;
+  const struct lod_plan* p = &s->engine.lod.plan;
+  const size_t bytes_per_element = dtype_bpe(s->ctx.config.dtype);
+  const enum dtype dtype = s->ctx.config.dtype;
 
   // Check if any level has pending data
   uint32_t active_levels_mask = 0;
   for (int lv = 1; lv < p->levels.nlod; ++lv) {
-    if (s->lod.append_accum.counts[lv] > 0)
+    if (s->engine.lod.append_accum.counts[lv] > 0)
       active_levels_mask |= (1u << lv);
   }
 
   if (!active_levels_mask)
     return writer_ok();
 
-  const int fc = s->pools.current;
-  struct flush_slot_gpu* fs = &s->flush.slot[fc];
+  const int fc = s->engine.pools.current;
+  struct flush_slot_gpu* fs = &s->engine.flush.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
   fs->batch_epoch_count = 1; // partial append flush is always 1 epoch
@@ -332,59 +340,66 @@ flush_partial_append(struct tile_stream_gpu* s)
     size_t accum_bpe = dtype_bpe(dtype);
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr morton_lv = s->lod.d_morton + lev.beg * bytes_per_element;
+    CUdeviceptr morton_lv =
+      s->engine.lod.d_morton + lev.beg * bytes_per_element;
     CUdeviceptr accum_lv =
-      s->lod.append_accum.d_accum + accum_offset * accum_bpe;
+      s->engine.lod.append_accum.d_accum + accum_offset * accum_bpe;
 
     // Emit with actual count (not period) -- mean divides by actual count
     CHECK(Error,
           lod_accum_emit(morton_lv,
                          accum_lv,
                          dtype,
-                         s->config.append_reduce_method,
+                         s->ctx.config.append_reduce_method,
                          n_elements,
-                         s->lod.append_accum.counts[lv],
-                         s->streams.compute) == 0);
+                         s->engine.lod.append_accum.counts[lv],
+                         s->engine.streams.compute) == 0);
 
-    s->lod.append_accum.counts[lv] = 0;
+    s->engine.lod.append_accum.counts[lv] = 0;
 
     // Zero and scatter to chunk pool (epoch 0 in current pool)
-    CUdeviceptr dst = s->pools.buf[s->pools.current] +
-                      s->levels.level[lv].chunk_offset *
-                        s->layout.chunk_stride * bytes_per_element;
-    size_t lv_pool_bytes = s->levels.level[lv].chunk_count *
-                           s->layout.chunk_stride * bytes_per_element;
-    CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, s->streams.compute));
+    CUdeviceptr dst = s->engine.pools.buf[s->engine.pools.current] +
+                      s->ctx.levels.level[lv].chunk_offset *
+                        s->ctx.layout.chunk_stride * bytes_per_element;
+    size_t lv_pool_bytes = s->ctx.levels.level[lv].chunk_count *
+                           s->ctx.layout.chunk_stride * bytes_per_element;
+    CU(Error,
+       cuMemsetD8Async(dst, 0, lv_pool_bytes, s->engine.streams.compute));
 
     CHECK(Error,
-          lod_morton_to_chunks_lut(dst,
-                                   morton_lv,
-                                   s->lod.d_morton_chunk_lut[lv],
-                                   s->lod.d_morton_fixed_dims_chunk_offsets[lv],
-                                   dtype,
-                                   p->levels.level[lv].lod_nelem,
-                                   p->levels.level[lv].fixed_dims_count,
-                                   s->streams.compute) == 0);
+          lod_morton_to_chunks_lut(
+            dst,
+            morton_lv,
+            s->engine.lod.d_morton_chunk_lut[lv],
+            s->engine.lod.d_morton_fixed_dims_chunk_offsets[lv],
+            dtype,
+            p->levels.level[lv].lod_nelem,
+            p->levels.level[lv].fixed_dims_count,
+            s->engine.streams.compute) == 0);
   }
 
-  CU(Error, cuEventRecord(s->pools.ready[fc], s->streams.compute));
-  if (s->lod.timing[fc].t_end)
-    CU(Error, cuEventRecord(s->lod.timing[fc].t_end, s->streams.compute));
+  CU(Error,
+     cuEventRecord(s->engine.pools.ready[fc], s->engine.streams.compute));
+  if (s->engine.lod.timing[fc].t_end)
+    CU(
+      Error,
+      cuEventRecord(s->engine.lod.timing[fc].t_end, s->engine.streams.compute));
 
-  CU(Error, cuEventRecord(s->batch.pool_events[0], s->streams.compute));
+  CU(Error,
+     cuEventRecord(s->engine.batch.pool_events[0], s->engine.streams.compute));
   if (flush_kick_batch(s, fc, 1))
     return writer_error();
-  return d2h_deliver_drain(&s->d2h_deliver,
-                           &s->flush.pending_handoff,
-                           &s->levels,
-                           &s->batch,
-                           &s->dims,
-                           &s->layout,
-                           &s->config,
-                           s->shard_sink,
-                           &s->lod,
-                           &s->metrics,
-                           &s->metadata_update_clock);
+  return d2h_deliver_drain(&s->engine.d2h_deliver,
+                           &s->engine.flush.pending_handoff,
+                           &s->ctx.levels,
+                           &s->engine.batch,
+                           &s->ctx.dims,
+                           &s->ctx.layout,
+                           &s->ctx.config,
+                           s->ctx.sink,
+                           &s->engine.lod,
+                           &s->engine.metrics,
+                           &s->engine.metadata_update_clock);
 
 Error:
   return writer_error();
