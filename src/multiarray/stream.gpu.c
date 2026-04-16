@@ -131,6 +131,9 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   desc->flush_pending_handoff = e->flush.pending_handoff;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     desc->shard[lv] = e->compress_agg.levels[lv].shard;
+    desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
+    desc->batch_active_count[lv] =
+      e->compress_agg.levels[lv].batch_active_count;
   }
 }
 
@@ -159,6 +162,14 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   desc->ctx.layout = desc->cl.layouts[0];
   desc->ctx.levels = desc->cl.levels;
   desc->ctx.dims = desc->cl.dims;
+
+  // LOD/multiscale not yet supported in GPU multiarray — per-array LOD plan
+  // swap is needed but not implemented. Reject rather than silently dropping
+  // LOD levels.
+  if (desc->ctx.levels.enable_multiscale) {
+    log_error("GPU multiarray does not yet support multiscale arrays");
+    return 1;
+  }
 
   const uint32_t K = desc->cl.epochs_per_batch;
   const size_t bpe = dtype_bpe(config->dtype);
@@ -375,8 +386,12 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   ms->active = array_index;
   bind_context(e, &ms->arrays[array_index]);
 
-  // Zero both pools for the incoming array (stream_flush_body may have
-  // swapped pools via drain_kick_and_swap, leaving stale data in either).
+  // Zero both pools for the incoming array. This is the correctness-critical
+  // zero: it ensures no stale data from the departing array leaks into the
+  // incoming array's scatter. (flush_accumulate_epoch's sync path also zeros
+  // the per-array portion of the current pool as an optimization for the
+  // common batch-boundary case, but that only covers one pool and only the
+  // per-array size — this full zero covers both pools at the max size.)
   for (int i = 0; i < 2; ++i)
     CU(Fail,
        cuMemsetD8Async(e->pools.buf[i], 0, e->pool_bytes, e->streams.compute));
@@ -582,6 +597,15 @@ multiarray_tile_stream_gpu_create(
             0);
 
   ms->max_nlod = mx.max_nlod;
+
+  // Validate: all arrays must use the same codec (shared codec instance).
+  for (int a = 1; a < n_arrays; ++a) {
+    if (ms->arrays[a].ctx.config.codec.id !=
+        ms->arrays[0].ctx.config.codec.id) {
+      log_error("GPU multiarray: all arrays must use the same codec");
+      goto Fail;
+    }
+  }
 
   // Phase 2: upload per-array aggregate layouts to GPU
   for (int a = 0; a < n_arrays; ++a) {

@@ -533,6 +533,8 @@ make_view(struct tile_stream_cpu* s)
     .shard_order_sizes = s->shard_order_sizes,
     .linear = s->linear,
     .lod_values = s->lod_values,
+    .scatter_lut = s->scatter_lut,
+    .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
     .nthreads = s->nthreads,
     .shard_alignment = s->shard_alignment,
     .metrics = &s->metrics,

@@ -74,11 +74,33 @@ make_scatter_params(struct cpu_stream_view* v)
   return p;
 }
 
+// ---- Debug validation ----
+
+#ifndef NDEBUG
+#include <assert.h>
+static void
+validate_view(const struct cpu_stream_view* v)
+{
+  assert(v->config && v->sink && v->cl && v->layout && v->levels);
+  assert(v->cursor_elements && v->batch_accumulated && v->batch_active_masks);
+  assert(v->shard && v->agg_layout && v->batch_active_count && v->io_done);
+  assert(v->chunk_pool);
+  if (v->levels->enable_multiscale) {
+    assert(v->linear && v->lod_values);
+    assert(v->scatter_lut && v->scatter_fixed_dims_offsets);
+    assert(v->csrs);
+  }
+}
+#else
+#define validate_view(v) ((void)0)
+#endif
+
 // ---- Shared append body ----
 
 struct writer_result
 cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
 {
+  validate_view(v);
   const size_t bpe = dtype_bpe(v->config->dtype);
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
