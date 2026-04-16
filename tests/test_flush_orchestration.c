@@ -208,7 +208,7 @@ test_accumulate_one_epoch(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
 
   // Accumulate epoch
-  struct writer_result r = flush_accumulate_epoch(c.s);
+  struct writer_result r = flush_accumulate_epoch(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
 
   // Verify: mid-batch, no flush triggered
@@ -256,11 +256,11 @@ test_full_batch_auto_flush(void)
 
   // Fill and accumulate 2 epochs
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, c.s->engine.batch.accumulated == 1);
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // After full batch: drain_kick_and_swap fired
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
@@ -306,14 +306,14 @@ test_drain_delivers_data(void)
 
   // Fill and accumulate 2 epochs (full batch → auto-kick)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, c.s->engine.flush.pending == 1);
 
   // Drain the pending batch
-  struct writer_result r = flush_drain_pending(c.s);
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.flush.pending == 0);
 
@@ -357,11 +357,11 @@ test_accumulated_sync_partial(void)
 
   // Fill and accumulate 1 epoch (partial batch)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, c.s->engine.batch.accumulated == 1);
 
   // Sync flush: processes the partial batch (per-epoch path)
-  struct writer_result r = flush_accumulated_sync(c.s);
+  struct writer_result r = flush_accumulated_sync(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
 
   // Batch drained
@@ -406,9 +406,9 @@ test_two_batch_cycle(void)
 
   // --- Batch 1: epochs 0,1 on pool 0 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // Batch 1 kicked, pool swapped to 1
   CHECK(Fail, c.s->engine.pools.current == 1);
@@ -418,9 +418,9 @@ test_two_batch_cycle(void)
 
   // --- Batch 2: epochs 2,3 on pool 1 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch2) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // Batch 2 auto-drained batch 1 (pending was set), then kicked batch 2
   CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
@@ -433,7 +433,7 @@ test_two_batch_cycle(void)
   CHECK(Fail, sink.finalize_count >= 1);
 
   // Drain batch 2
-  struct writer_result r = flush_drain_pending(c.s);
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.flush.pending == 0);
 

@@ -158,7 +158,7 @@ tile_stream_gpu_append_body(struct tile_stream_gpu* s, struct slice input)
 
     if (s->ctx.cursor_elements % s->ctx.layout.epoch_elements == 0 &&
         s->ctx.cursor_elements > 0) {
-      struct writer_result fr = flush_accumulate_epoch(s);
+      struct writer_result fr = flush_accumulate_epoch(&s->engine, &s->ctx);
       if (fr.error)
         return writer_error_at(src, end);
       // Sample sink backpressure at epoch boundaries.
@@ -231,14 +231,14 @@ tile_stream_gpu_flush(struct writer* self)
     s->engine.stage.bytes_written = 0;
   }
 
-  struct writer_result r = flush_drain_pending(s);
+  struct writer_result r = flush_drain_pending(&s->engine, &s->ctx);
   if (r.error)
     return r;
 
   // Flush any partial epoch first (sub-epoch data)
   if (s->ctx.cursor_elements % s->ctx.layout.epoch_elements != 0) {
     // run_lod + record pool event + increment epochs_accumulated
-    if (flush_run_epoch_lod(s))
+    if (flush_run_epoch_lod(&s->engine, &s->ctx))
       return writer_error();
     CU(Error,
        cuEventRecord(s->engine.batch.pool_events[s->engine.batch.accumulated],
@@ -247,12 +247,12 @@ tile_stream_gpu_flush(struct writer* self)
   }
 
   // Flush any accumulated epochs (partial batch)
-  r = flush_accumulated_sync(s);
+  r = flush_accumulated_sync(&s->engine, &s->ctx);
   if (r.error)
     return r;
 
   // Drain any partial append accumulators
-  r = flush_partial_append(s);
+  r = flush_partial_append(&s->engine, &s->ctx);
   if (r.error)
     return r;
 
