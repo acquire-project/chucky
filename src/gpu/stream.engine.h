@@ -190,6 +190,7 @@ struct stream_context
 // mutable pipeline state (batch accumulation, flush slots, shard tracking).
 struct stream_engine
 {
+  int sync_flush; // 1 = synchronous batch flush (multiarray); 0 = pipelined
   struct gpu_streams streams;
   struct pool_state pools;
   size_t pool_bytes;

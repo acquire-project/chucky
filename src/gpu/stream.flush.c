@@ -193,6 +193,26 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   if (e->batch.accumulated < e->batch.epochs_per_batch)
     return writer_ok();
 
+  if (e->sync_flush) {
+    // Synchronous path: flush the full batch immediately (no pool swap).
+    // Used by multiarray where double-buffered pipeline state doesn't
+    // compose across array switches.
+    struct writer_result r = flush_accumulated_sync(e, ctx);
+    // Zero pool for next batch.
+    if (!r.error) {
+      size_t bpe = dtype_bpe(ctx->config.dtype);
+      size_t pool_bytes = (uint64_t)e->batch.epochs_per_batch *
+                          ctx->levels.total_chunks * ctx->layout.chunk_stride *
+                          bpe;
+      CU(SyncError,
+         cuMemsetD8Async(
+           e->pools.buf[e->pools.current], 0, pool_bytes, e->streams.compute));
+    }
+    return r;
+  SyncError:
+    return writer_error();
+  }
+
   return drain_kick_and_swap(e, ctx);
 
 Error:
