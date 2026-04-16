@@ -3,9 +3,11 @@
 #include "util/prelude.h"
 #include "zarr/shard_pool_fs.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 struct store_fs
 {
@@ -45,6 +47,21 @@ fs_create_pool(struct store* self, uint64_t nslots)
   return shard_pool_fs_create(fs->root, nslots, fs->unbuffered);
 }
 
+static int
+fs_has_existing_data(struct store* self)
+{
+  struct store_fs* fs = container_of(self, struct store_fs, base);
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/zarr.json", fs->root);
+
+  struct stat st;
+  if (stat(path, &st) == 0)
+    return 1;
+  if (errno == ENOENT || errno == ENOTDIR)
+    return 0;
+  return -1;
+}
+
 static void
 fs_destroy(struct store* self)
 {
@@ -62,6 +79,7 @@ store_fs_create(const char* root, int unbuffered)
   fs->base.put = fs_put;
   fs->base.mkdirs = fs_mkdirs;
   fs->base.create_pool = fs_create_pool;
+  fs->base.has_existing_data = fs_has_existing_data;
   fs->base.destroy = fs_destroy;
   fs->unbuffered = unbuffered;
   snprintf(fs->root, sizeof(fs->root), "%s", root);

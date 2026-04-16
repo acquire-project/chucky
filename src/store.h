@@ -52,6 +52,12 @@ store_s3_validate_part_count(uint8_t rank,
                              enum dtype data_type,
                              size_t part_size);
 
+// Coarse overwrite-guard. Returns 1 if the store root already contains zarr
+// data (zarr.json at root), 0 if empty, -1 on IO error. O(1) — one stat / HEAD.
+// Does NOT enumerate shards.
+int
+store_has_existing_data(struct store* s);
+
 // Destroy a store created by store_fs_create or store_s3_create.
 void
 store_destroy(struct store* s);

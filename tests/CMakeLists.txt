@@ -135,7 +135,7 @@ add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_dr
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
-add_test_exe(test_store_fs    test_store_fs.c    store_fs test_platform chucky_log)
+add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api test_platform chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
 add_test_exe(test_hcs test_hcs.c hcs store_fs store_api test_platform chucky_log)
