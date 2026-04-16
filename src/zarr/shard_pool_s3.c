@@ -2,6 +2,7 @@
 #include "util/prelude.h"
 #include "zarr/s3_client.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

@@ -15,9 +15,7 @@ endfunction()
 
 # --- Shared libraries (no CUDA dependency) ---
 
-add_src_lib(chucky_log SOURCES log/log.c log/log.h
-                               log/chucky_log.c chucky_log.h
-)
+add_src_lib(chucky_log SOURCES log/log.c log/log.h chucky_log.h)
 add_src_lib(index_ops  SOURCES util/index.ops.c util/index.ops.h)
 add_src_lib(dtype      SOURCES dtype.c dtype.h)
 add_src_lib(dimension  SOURCES dimension.c dimension.h)
