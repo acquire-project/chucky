@@ -23,6 +23,11 @@ struct array_descriptor_gpu
   struct stream_context ctx;
   struct computed_stream_layouts cl; // owned, freed on destroy
 
+  // Per-array LOD state (owns plan, layouts[], layout_gpu[], CSRs, append
+  // accumulator device memory, and LOD LUTs — but NOT d_linear/d_morton/timing,
+  // which are shared and owned by the engine).
+  struct lod_state array_lod;
+
   // Mutable per-array state (saved/restored via bind/unbind)
   uint32_t batch_accumulated;
   int pools_current;
@@ -47,6 +52,9 @@ struct pool_maxima
   uint32_t epochs_per_batch;
   int max_nlod;
   size_t max_output_size;
+  size_t lod_linear_bytes; // max across arrays
+  size_t lod_morton_bytes; // max across arrays
+  int any_multiscale;      // 1 if any array uses multiscale
 
   struct
   {
@@ -102,6 +110,10 @@ max_u32(uint32_t a, uint32_t b)
 static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
+  // Set batch K from the array's own config, not the engine max.
+  // Shared buffers are sized to max K, but each array should fill/flush at
+  // its own K so that batch_active_count and active_count agree.
+  e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
   e->batch.accumulated = desc->batch_accumulated;
   e->pools.current = desc->pools_current;
   for (int i = 0; i < 2; ++i)
@@ -117,6 +129,17 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   }
   e->d2h_deliver.nlod = desc->ctx.levels.nlod;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
+
+  // Load per-array LOD state into engine.lod, preserving the engine-owned
+  // shared fields (d_linear, d_morton, timing).
+  CUdeviceptr saved_d_linear = e->lod.d_linear;
+  CUdeviceptr saved_d_morton = e->lod.d_morton;
+  struct lod_timing saved_timing[2];
+  memcpy(saved_timing, e->lod.timing, sizeof(saved_timing));
+  e->lod = desc->array_lod;
+  e->lod.d_linear = saved_d_linear;
+  e->lod.d_morton = saved_d_morton;
+  memcpy(e->lod.timing, saved_timing, sizeof(saved_timing));
 }
 
 static void
@@ -134,6 +157,16 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
     desc->batch_active_count[lv] =
       e->compress_agg.levels[lv].batch_active_count;
+  }
+
+  // Save per-array LOD mutable state. counts[] and total_elements track
+  // running append-accumulator state across epochs.
+  if (desc->ctx.levels.enable_multiscale) {
+    memcpy(desc->array_lod.append_accum.counts,
+           e->lod.append_accum.counts,
+           sizeof(desc->array_lod.append_accum.counts));
+    desc->array_lod.append_accum.total_elements =
+      e->lod.append_accum.total_elements;
   }
 }
 
@@ -163,12 +196,23 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   desc->ctx.levels = desc->cl.levels;
   desc->ctx.dims = desc->cl.dims;
 
-  // LOD/multiscale not yet supported in GPU multiarray — per-array LOD plan
-  // swap is needed but not implemented. Reject rather than silently dropping
-  // LOD levels.
-  if (desc->ctx.levels.enable_multiscale) {
-    log_error("GPU multiarray does not yet support multiscale arrays");
+  // Initialize per-array LOD state: transfer plan from cl, copy layouts,
+  // upload level layouts + LUTs + CSRs. Does NOT allocate d_linear/d_morton
+  // or timing events — those are engine-owned shared resources.
+  desc->array_lod.plan = desc->cl.plan;
+  desc->cl.plan = (struct lod_plan){ 0 }; // ownership transferred
+  for (int lv = 0; lv < desc->cl.levels.nlod; ++lv)
+    desc->array_lod.layouts[lv] = desc->cl.layouts[lv];
+
+  if (lod_state_init(&desc->array_lod, &desc->ctx.levels, &desc->ctx.config))
     return 1;
+
+  // Alias L0 layout GPU pointers from array_lod into ctx (for scatter).
+  desc->ctx.layout_gpu = desc->array_lod.layout_gpu[0];
+
+  if (desc->ctx.levels.enable_multiscale && desc->ctx.dims.append_downsample) {
+    if (lod_state_init_accumulators(&desc->array_lod, &desc->ctx.config))
+      return 1;
   }
 
   const uint32_t K = desc->cl.epochs_per_batch;
@@ -206,6 +250,17 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
 
   if (desc->ctx.levels.nlod > mx->max_nlod)
     mx->max_nlod = desc->ctx.levels.nlod;
+
+  // LOD buffer sizes (for engine's shared d_linear / d_morton).
+  if (desc->ctx.levels.enable_multiscale) {
+    mx->any_multiscale = 1;
+    size_t linear_bytes = desc->ctx.layout.epoch_elements * bpe;
+    mx->lod_linear_bytes = max_sz(mx->lod_linear_bytes, linear_bytes);
+    uint64_t total_vals = desc->array_lod.plan.level_spans
+                            .ends[desc->array_lod.plan.levels.nlod - 1];
+    size_t morton_bytes = total_vals * bpe;
+    mx->lod_morton_bytes = max_sz(mx->lod_morton_bytes, morton_bytes);
+  }
 
   // Per-level aggregate + shard state
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
@@ -254,8 +309,10 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
     }
     aggregate_layout_destroy(&desc->agg_layout[lv]);
   }
-  cu_mem_free((CUdeviceptr)desc->ctx.layout_gpu.d_lifted_shape);
-  cu_mem_free((CUdeviceptr)desc->ctx.layout_gpu.d_lifted_strides);
+  // array_lod owns everything except d_linear/d_morton/timing (which stay 0
+  // in the per-array struct). ctx.layout_gpu aliases array_lod.layout_gpu[0]
+  // and is freed via array_lod destroy.
+  lod_state_destroy(&desc->array_lod);
   computed_stream_layouts_free(&desc->cl);
 }
 
@@ -346,6 +403,33 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuEventRecord(e->compress_agg.t_compress_end[fc], e->streams.compute));
     CU(Fail,
        cuEventRecord(e->compress_agg.t_aggregate_end[fc], e->streams.compute));
+  }
+
+  // Shared LOD buffers (sized to max across arrays). Only allocated if any
+  // array uses multiscale. engine.lod.d_linear / d_morton / timing are the
+  // ONLY fields in engine.lod that the engine owns — all other fields are
+  // shallow-copied from the active array's descriptor on bind.
+  if (mx->any_multiscale) {
+    CU(Fail, cuMemAlloc(&e->lod.d_linear, mx->lod_linear_bytes));
+    CU(Fail, cuMemAlloc(&e->lod.d_morton, mx->lod_morton_bytes));
+    for (int fc = 0; fc < 2; ++fc) {
+      CU(Fail, cuEventCreate(&e->lod.timing[fc].t_start, CU_EVENT_DEFAULT));
+      CU(Fail,
+         cuEventCreate(&e->lod.timing[fc].t_scatter_end, CU_EVENT_DEFAULT));
+      CU(Fail,
+         cuEventCreate(&e->lod.timing[fc].t_reduce_end, CU_EVENT_DEFAULT));
+      CU(Fail,
+         cuEventCreate(&e->lod.timing[fc].t_append_end, CU_EVENT_DEFAULT));
+      CU(Fail, cuEventCreate(&e->lod.timing[fc].t_end, CU_EVENT_DEFAULT));
+      CU(Fail, cuEventRecord(e->lod.timing[fc].t_start, e->streams.compute));
+      CU(Fail,
+         cuEventRecord(e->lod.timing[fc].t_scatter_end, e->streams.compute));
+      CU(Fail,
+         cuEventRecord(e->lod.timing[fc].t_reduce_end, e->streams.compute));
+      CU(Fail,
+         cuEventRecord(e->lod.timing[fc].t_append_end, e->streams.compute));
+      CU(Fail, cuEventRecord(e->lod.timing[fc].t_end, e->streams.compute));
+    }
   }
 
   CU(Fail, cuStreamSynchronize(e->streams.compute));
@@ -522,7 +606,18 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     cu_mem_free(lvl->d_batch_perm);
   }
 
-  lod_state_destroy(&e->lod);
+  // Engine owns ONLY d_linear, d_morton, and timing events in e->lod.
+  // Other fields are views shallow-copied from the last bound descriptor —
+  // those were freed by destroy_array_descriptor above.
+  cu_mem_free(e->lod.d_linear);
+  cu_mem_free(e->lod.d_morton);
+  for (int fc = 0; fc < 2; ++fc) {
+    cu_event_destroy(e->lod.timing[fc].t_start);
+    cu_event_destroy(e->lod.timing[fc].t_scatter_end);
+    cu_event_destroy(e->lod.timing[fc].t_reduce_end);
+    cu_event_destroy(e->lod.timing[fc].t_append_end);
+    cu_event_destroy(e->lod.timing[fc].t_end);
+  }
 
   for (int i = 0; i < 2; ++i) {
     cu_mem_free(e->pools.buf[i]);
@@ -614,27 +709,9 @@ multiarray_tile_stream_gpu_create(
       CHECK(Fail, aggregate_layout_upload(&desc->agg_layout[lv]) == 0);
   }
 
-  // Phase 3: upload per-array L0 layout to GPU
-  for (int a = 0; a < n_arrays; ++a) {
-    struct array_descriptor_gpu* desc = &ms->arrays[a];
-    uint64_t lr = desc->ctx.layout.lifted_rank;
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&desc->ctx.layout_gpu.d_lifted_shape,
-                  lr * sizeof(uint64_t)));
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)desc->ctx.layout_gpu.d_lifted_shape,
-                    desc->ctx.layout.lifted_shape,
-                    lr * sizeof(uint64_t)));
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&desc->ctx.layout_gpu.d_lifted_strides,
-                  lr * sizeof(int64_t)));
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)desc->ctx.layout_gpu.d_lifted_strides,
-                    desc->ctx.layout.lifted_strides,
-                    lr * sizeof(int64_t)));
-  }
-
-  // Phase 4: allocate shared GPU resources
+  // Phase 3: allocate shared GPU resources
+  // (Per-array L0 layout_gpu is aliased from array_lod.layout_gpu[0], which
+  // was uploaded during lod_state_init in init_array_descriptor.)
   CHECK(Fail, init_shared_resources(ms, &mx) == 0);
 
   // Use synchronous flush path — the double-buffered pipeline doesn't

@@ -682,6 +682,162 @@ Fail:
   return 1;
 }
 
+// ---- Test: minimal LOD (multiscale) ----
+
+static int
+test_lod_basic(void)
+{
+  log_info("=== test_lod_basic ===");
+
+  // 3D shape 4x8x8, chunk 2x4x4, downsample dims 1,2.
+  struct dimension dims[3];
+  dims_create(dims, "zyx", (uint64_t[]){ 4, 8, 8 });
+  dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 2, 4, 4 });
+  dims_set_shard_counts(dims, 3, (uint64_t[]){ 2, 1, 1 });
+  dims_set_downsample_by_name(dims, 3, "yx");
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .reduce_method = lod_reduce_mean,
+    .append_reduce_method = lod_reduce_mean,
+    .epochs_per_batch = 1,
+  };
+
+  int shards_per_level[] = { 16, 16, 16 };
+  struct test_shard_sink sink;
+  test_sink_init_multi(&sink, 3, shards_per_level, SHARD_CAP);
+
+  struct multiarray_tile_stream_gpu* ms = NULL;
+
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+  ms = multiarray_tile_stream_gpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // epoch_elements = (2*4*4) * (2*2) = 128, 2 epochs = 256.
+  CHECK(Fail,
+        write_fill(w, 0, 256, sizeof(uint16_t), 0x11).error ==
+          multiarray_writer_ok);
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  int l0_count = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+    if (sink.writers[0][i].buf && sink.writers[0][i].size > 0)
+      l0_count++;
+  CHECK(Fail, l0_count > 0);
+
+  int lod_count = 0;
+  for (int lv = 1; lv < 3; ++lv)
+    for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+      if (sink.writers[lv][i].buf && sink.writers[lv][i].size > 0)
+        lod_count++;
+  CHECK(Fail, lod_count > 0);
+
+  log_info("  L0 shards: %d, L1+ shards: %d", l0_count, lod_count);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
+// ---- Test: mixed LOD (one multiscale, one not) ----
+
+static int
+test_mixed_lod(void)
+{
+  log_info("=== test_mixed_lod ===");
+
+  // Array 0: plain 2D 4x4 u16 (no LOD).
+  struct dimension dims0[2];
+  struct tile_stream_configuration config0 = make_2d_config(dims0, dtype_u16);
+
+  // Array 1: 3D 4x8x8, chunk 2x4x4, multiscale on y,x.
+  struct dimension dims1[3];
+  dims_create(dims1, "zyx", (uint64_t[]){ 4, 8, 8 });
+  dims_set_chunk_sizes(dims1, 3, (uint64_t[]){ 2, 4, 4 });
+  dims_set_shard_counts(dims1, 3, (uint64_t[]){ 2, 1, 1 });
+  dims_set_downsample_by_name(dims1, 3, "yx");
+  struct tile_stream_configuration config1 = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims1,
+    .codec = { .id = CODEC_NONE },
+    .reduce_method = lod_reduce_mean,
+    .append_reduce_method = lod_reduce_mean,
+    .epochs_per_batch = 1,
+  };
+
+  struct test_shard_sink sink0;
+  test_sink_init_1(&sink0);
+  int shards_per_level[] = { 16, 16, 16 };
+  struct test_shard_sink sink1;
+  test_sink_init_multi(&sink1, 3, shards_per_level, SHARD_CAP);
+
+  struct tile_stream_configuration configs[] = { config0, config1 };
+  struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // Array 0: 16 u16 elements (2 epochs * 8 elements).
+  CHECK(Fail,
+        write_fill(w, 0, 16, sizeof(uint16_t), 0x11).error ==
+          multiarray_writer_ok);
+
+  // Array 1: 256 u16 elements (2 epochs * 128 elements).
+  CHECK(Fail,
+        write_fill(w, 1, 256, sizeof(uint16_t), 0x22).error ==
+          multiarray_writer_ok);
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  CHECK(Fail, test_sink_shard_count(&sink0) > 0);
+
+  int l0 = 0, lod = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+    if (sink1.writers[0][i].buf && sink1.writers[0][i].size > 0)
+      l0++;
+  for (int lv = 1; lv < 3; ++lv)
+    for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i)
+      if (sink1.writers[lv][i].buf && sink1.writers[lv][i].size > 0)
+        lod++;
+  CHECK(Fail, l0 > 0);
+  CHECK(Fail, lod > 0);
+  log_info("  plain: %d shards, lod L0: %d L1+: %d",
+           test_sink_shard_count(&sink0),
+           l0,
+           lod);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- Test: mixed dtypes (u8 + u16) ----
 
 static int
@@ -767,6 +923,8 @@ main(int ac, char* av[])
   ret |= test_flush_no_data();
   ret |= test_metrics_enabled();
   ret |= test_mixed_dtypes();
+  ret |= test_lod_basic();
+  ret |= test_mixed_lod();
 
   cuCtxDestroy(ctx);
   return ret;

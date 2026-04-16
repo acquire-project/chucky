@@ -696,7 +696,11 @@ lod_run_epoch(struct lod_state* lod,
 
   CU(Error, cuEventRecord(t->t_reduce_end, compute));
 
-  uint32_t active_levels_mask = 1; // L0 always active
+  // Without append downsample, all LOD levels are ready every epoch.
+  // With append downsample, L0 is always active; run_append_fold_emit decides
+  // which higher levels fire this epoch.
+  uint32_t active_levels_mask =
+    dims->append_downsample ? 1u : (uint32_t)((1u << p->levels.nlod) - 1);
   if (dims->append_downsample && lod->append_accum.total_elements > 0) {
     CHECK(Error,
           run_append_fold_emit(
