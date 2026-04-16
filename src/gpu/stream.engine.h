@@ -202,3 +202,17 @@ struct stream_engine
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
+
+// --- Engine operations ---
+
+// Append data to the stream. Handles staging, dispatch, epoch boundaries,
+// batch flush, and backpressure. Used by both single-array and multiarray.
+struct writer_result
+stream_append_body(struct stream_engine* e,
+                   struct stream_context* ctx,
+                   struct slice input);
+
+// Flush the stream: partial epoch, accumulated batch, partial append
+// accumulators, finalize shards, update metadata.
+struct writer_result
+stream_flush_body(struct stream_engine* e, struct stream_context* ctx);

@@ -230,6 +230,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(FailPhase2,
         lod_state_init(&out->engine.lod, &out->ctx.levels, &out->ctx.config) ==
           0);
+  // Alias L0 layout GPU pointers from LOD state into context.
+  out->ctx.layout_gpu = out->engine.lod.layout_gpu[0];
   CHECK(FailPhase2,
         init_chunk_pools(&out->engine.pools,
                          &out->ctx.levels,
