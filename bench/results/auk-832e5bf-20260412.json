@@ -1,0 +1,5153 @@
+{
+  "version": 1,
+  "machine": {
+    "hostname": "auk",
+    "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "commit": "832e5bf",
+    "date": "2026-04-12T08:08:39"
+  },
+  "runs": [
+    {
+      "id": "orca2_single__none__xor__gpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 2.88,
+      "status": "pass",
+      "throughput_in_gibs": 4.32846,
+      "throughput_out_gibs": 4.50453,
+      "compression_fold": 0.999349,
+      "input_gib": 3.51562,
+      "compressed_gib": 3.65863,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 0.812211,
+      "init_s": 0.189075,
+      "flush_s": 0.0699128,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.07235,
+          "best_ms": 0.803106,
+          "in_gibs": 18.1631,
+          "out_gibs": 18.1631
+        },
+        "h2d": {
+          "avg_ms": 4.58766,
+          "best_ms": 2.32976,
+          "in_gibs": 12.2835,
+          "out_gibs": 12.2835
+        },
+        "scatter": {
+          "avg_ms": 1.40814,
+          "best_ms": 0.736928,
+          "in_gibs": 39.9462,
+          "out_gibs": 39.9462
+        },
+        "compress": {
+          "avg_ms": 2.39161,
+          "best_ms": 2.26349,
+          "in_gibs": 117.599,
+          "out_gibs": 117.599
+        },
+        "aggregate": {
+          "avg_ms": 13.8334,
+          "best_ms": 3.06989,
+          "in_gibs": 20.3313,
+          "out_gibs": 20.3313
+        },
+        "d2h": {
+          "avg_ms": 47.3108,
+          "best_ms": 23.846,
+          "in_gibs": 5.94474,
+          "out_gibs": 5.94474
+        },
+        "sink": {
+          "avg_ms": 0.00115028,
+          "best_ms": 7e-05,
+          "in_gibs": 7645.75,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 266.072,
+        "flush_stall_count": 11,
+        "kick_sync_ms": 0.037529,
+        "kick_sync_count": 13,
+        "io_fence_ms": 8.68048,
+        "io_fence_count": 13,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 45.9332,
+        "peak_pending_mib": 288.188
+      }
+    },
+    {
+      "id": "orca2_single__none__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 4.69,
+      "status": "pass",
+      "throughput_in_gibs": 1.12405,
+      "throughput_out_gibs": 1.16977,
+      "compression_fold": 0.999349,
+      "input_gib": 3.51562,
+      "compressed_gib": 3.65863,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 3.12765,
+      "init_s": 0.0029343,
+      "flush_s": 1.784e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.01319,
+          "best_ms": 1.28378,
+          "in_gibs": 7.95694,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 17.2486,
+          "best_ms": 15.0243,
+          "in_gibs": 16.3056,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 17.2451,
+          "best_ms": 15.1273,
+          "in_gibs": 16.309,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 4.62711,
+          "best_ms": 0.000922,
+          "in_gibs": 1.90071,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__gpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 3.53,
+      "status": "pass",
+      "throughput_in_gibs": 2.44272,
+      "throughput_out_gibs": 0.298165,
+      "compression_fold": 8.52021,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.429127,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 1.43922,
+      "init_s": 0.189604,
+      "flush_s": 0.00118993,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.14604,
+          "best_ms": 0.834454,
+          "in_gibs": 17.7377,
+          "out_gibs": 17.7377
+        },
+        "h2d": {
+          "avg_ms": 4.31234,
+          "best_ms": 2.32384,
+          "in_gibs": 13.0677,
+          "out_gibs": 13.0677
+        },
+        "scatter": {
+          "avg_ms": 4.15518,
+          "best_ms": 0.739648,
+          "in_gibs": 13.4855,
+          "out_gibs": 13.4855
+        },
+        "compress": {
+          "avg_ms": 99.7227,
+          "best_ms": 48.6567,
+          "in_gibs": 2.82032,
+          "out_gibs": 0.329179
+        },
+        "aggregate": {
+          "avg_ms": 2.01463,
+          "best_ms": 0.291808,
+          "in_gibs": 16.2941,
+          "out_gibs": 16.2941
+        },
+        "d2h": {
+          "avg_ms": 4.10856,
+          "best_ms": 1.38262,
+          "in_gibs": 7.98983,
+          "out_gibs": 7.98983
+        },
+        "sink": {
+          "avg_ms": 0.000927942,
+          "best_ms": 9e-05,
+          "in_gibs": 1111.66,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 337.763,
+        "flush_stall_count": 11,
+        "kick_sync_ms": 430.705,
+        "kick_sync_count": 13,
+        "io_fence_ms": 0.014787,
+        "io_fence_count": 13,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 115.017,
+        "peak_pending_mib": 35.0625
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 3.29,
+      "status": "pass",
+      "throughput_in_gibs": 2.03466,
+      "throughput_out_gibs": 0.195366,
+      "compression_fold": 10.8312,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.337566,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 1.72787,
+      "init_s": 0.00431605,
+      "flush_s": 9.22e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 5.8405,
+          "best_ms": 1.22894,
+          "in_gibs": 9.55458,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 70.1748,
+          "best_ms": 69.3896,
+          "in_gibs": 4.00785,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 2.10471,
+          "best_ms": 1.61232,
+          "in_gibs": 12.2504,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.307803,
+          "best_ms": 0.00034,
+          "in_gibs": 2.63629,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-lz4__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 3.67,
+      "status": "pass",
+      "throughput_in_gibs": 1.69233,
+      "throughput_out_gibs": 1.09302,
+      "compression_fold": 1.61024,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.27063,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 2.07739,
+      "init_s": 0.00353436,
+      "flush_s": 6.61e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.58386,
+          "best_ms": 1.77751,
+          "in_gibs": 8.47581,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 33.1437,
+          "best_ms": 31.2595,
+          "in_gibs": 8.48578,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 12.1814,
+          "best_ms": 9.63959,
+          "in_gibs": 14.3236,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.83079,
+          "best_ms": 0.001022,
+          "in_gibs": 2.98135,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-zstd__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 2.86,
+      "status": "pass",
+      "throughput_in_gibs": 2.66834,
+      "throughput_out_gibs": 0.0734719,
+      "compression_fold": 37.7705,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.0968018,
+      "total_chunks": 119808,
+      "chunks_per_epoch": 9216,
+      "wall_s": 1.31753,
+      "init_s": 0.00300358,
+      "flush_s": 7.11e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.35085,
+          "best_ms": 2.38267,
+          "in_gibs": 8.78678,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 45.8601,
+          "best_ms": 44.7767,
+          "in_gibs": 6.13278,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.723143,
+          "best_ms": 0.510156,
+          "in_gibs": 10.0439,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0693165,
+          "best_ms": 0.00033,
+          "in_gibs": 3.35701,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__none__xor__gpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 3.33,
+      "status": "pass",
+      "throughput_in_gibs": 3.7352,
+      "throughput_out_gibs": 4.18387,
+      "compression_fold": 0.999892,
+      "input_gib": 3.51562,
+      "compressed_gib": 3.93793,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 0.941216,
+      "init_s": 0.318859,
+      "flush_s": 0.159832,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.30375,
+          "best_ms": 1.39555,
+          "in_gibs": 18.669,
+          "out_gibs": 18.669
+        },
+        "h2d": {
+          "avg_ms": 4.91943,
+          "best_ms": 4.64499,
+          "in_gibs": 12.7047,
+          "out_gibs": 12.7047
+        },
+        "scatter": {
+          "avg_ms": 1.53908,
+          "best_ms": 1.50051,
+          "in_gibs": 40.6087,
+          "out_gibs": 40.6087
+        },
+        "compress": {
+          "avg_ms": 4.75217,
+          "best_ms": 4.5543,
+          "in_gibs": 118.367,
+          "out_gibs": 118.367
+        },
+        "aggregate": {
+          "avg_ms": 28.4075,
+          "best_ms": 6.10208,
+          "in_gibs": 19.8011,
+          "out_gibs": 19.8011
+        },
+        "d2h": {
+          "avg_ms": 88.26,
+          "best_ms": 52.6278,
+          "in_gibs": 6.37321,
+          "out_gibs": 6.37321
+        },
+        "sink": {
+          "avg_ms": 0.000967005,
+          "best_ms": 7e-05,
+          "in_gibs": 18179.9,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 231.164,
+        "flush_stall_count": 5,
+        "kick_sync_ms": 0.037541,
+        "kick_sync_count": 7,
+        "io_fence_ms": 53.861,
+        "io_fence_count": 7,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 62.5706,
+        "peak_pending_mib": 576.062
+      }
+    },
+    {
+      "id": "orca2_single__none__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 4.25,
+      "status": "pass",
+      "throughput_in_gibs": 1.32223,
+      "throughput_out_gibs": 1.48106,
+      "compression_fold": 0.999892,
+      "input_gib": 3.51562,
+      "compressed_gib": 3.93793,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 2.65886,
+      "init_s": 0.00484848,
+      "flush_s": 7.31e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.3588,
+          "best_ms": 1.0784,
+          "in_gibs": 9.69957,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 31.3854,
+          "best_ms": 29.6061,
+          "in_gibs": 17.9224,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 32.9617,
+          "best_ms": 30.827,
+          "in_gibs": 17.0653,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 7.06485,
+          "best_ms": 0.00035,
+          "in_gibs": 2.48838,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__gpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 4.12,
+      "status": "pass",
+      "throughput_in_gibs": 1.94854,
+      "throughput_out_gibs": 0.227118,
+      "compression_fold": 9.60894,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.409775,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 1.80424,
+      "init_s": 0.314027,
+      "flush_s": 0.00972287,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.32154,
+          "best_ms": 0.812864,
+          "in_gibs": 18.569,
+          "out_gibs": 18.569
+        },
+        "h2d": {
+          "avg_ms": 4.78029,
+          "best_ms": 4.64406,
+          "in_gibs": 13.0745,
+          "out_gibs": 13.0745
+        },
+        "scatter": {
+          "avg_ms": 5.65421,
+          "best_ms": 1.49677,
+          "in_gibs": 11.0537,
+          "out_gibs": 11.0537
+        },
+        "compress": {
+          "avg_ms": 233.245,
+          "best_ms": 77.4556,
+          "in_gibs": 2.41162,
+          "out_gibs": 0.250715
+        },
+        "aggregate": {
+          "avg_ms": 1.04043,
+          "best_ms": 0.228288,
+          "in_gibs": 56.2056,
+          "out_gibs": 56.2056
+        },
+        "d2h": {
+          "avg_ms": 11.4418,
+          "best_ms": 1.5335,
+          "in_gibs": 5.11091,
+          "out_gibs": 5.11091
+        },
+        "sink": {
+          "avg_ms": 0.000921518,
+          "best_ms": 9e-05,
+          "in_gibs": 1985.15,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 275.138,
+        "flush_stall_count": 5,
+        "kick_sync_ms": 547.324,
+        "kick_sync_count": 7,
+        "io_fence_ms": 0.0066,
+        "io_fence_count": 7,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 229.55,
+        "peak_pending_mib": 66.918
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 3.35,
+      "status": "pass",
+      "throughput_in_gibs": 1.99654,
+      "throughput_out_gibs": 0.202721,
+      "compression_fold": 11.0305,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.356964,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 1.76086,
+      "init_s": 0.00413415,
+      "flush_s": 7.91e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.85986,
+          "best_ms": 4.39736,
+          "in_gibs": 7.84717,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 127.413,
+          "best_ms": 124.171,
+          "in_gibs": 4.41476,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 4.73386,
+          "best_ms": 3.15837,
+          "in_gibs": 10.7595,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.50972,
+          "best_ms": 0.000431,
+          "in_gibs": 3.1264,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-lz4__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 3.64,
+      "status": "pass",
+      "throughput_in_gibs": 1.72886,
+      "throughput_out_gibs": 1.09396,
+      "compression_fold": 1.77001,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.22456,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 2.0335,
+      "init_s": 0.0036977,
+      "flush_s": 9.42e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.35064,
+          "best_ms": 1.11225,
+          "in_gibs": 9.71203,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 63.6816,
+          "best_ms": 61.2884,
+          "in_gibs": 8.83301,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 18.6009,
+          "best_ms": 17.352,
+          "in_gibs": 17.0817,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 3.53753,
+          "best_ms": 0.000581,
+          "in_gibs": 2.80735,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-zstd__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 2.55,
+      "status": "pass",
+      "throughput_in_gibs": 3.59963,
+      "throughput_out_gibs": 0.0612438,
+      "compression_fold": 65.8286,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.0598145,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 0.976662,
+      "init_s": 0.00301787,
+      "flush_s": 9.42e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.03231,
+          "best_ms": 2.04844,
+          "in_gibs": 10.2245,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 49.8697,
+          "best_ms": 48.9457,
+          "in_gibs": 11.2794,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.57981,
+          "best_ms": 0.460413,
+          "in_gibs": 14.6322,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0689055,
+          "best_ms": 0.00044,
+          "in_gibs": 3.87529,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__none__xor__gpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 3.33,
+      "status": "pass",
+      "throughput_in_gibs": 3.63255,
+      "throughput_out_gibs": 4.0689,
+      "compression_fold": 0.999892,
+      "input_gib": 3.51562,
+      "compressed_gib": 3.93793,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 0.967811,
+      "init_s": 0.316326,
+      "flush_s": 0.166165,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.51095,
+          "best_ms": 0.908533,
+          "in_gibs": 17.5672,
+          "out_gibs": 17.5672
+        },
+        "h2d": {
+          "avg_ms": 4.91827,
+          "best_ms": 4.64467,
+          "in_gibs": 12.7077,
+          "out_gibs": 12.7077
+        },
+        "scatter": {
+          "avg_ms": 1.53193,
+          "best_ms": 1.49827,
+          "in_gibs": 40.7982,
+          "out_gibs": 40.7982
+        },
+        "compress": {
+          "avg_ms": 4.76038,
+          "best_ms": 4.56688,
+          "in_gibs": 118.163,
+          "out_gibs": 118.163
+        },
+        "aggregate": {
+          "avg_ms": 28.1382,
+          "best_ms": 6.11853,
+          "in_gibs": 19.9906,
+          "out_gibs": 19.9906
+        },
+        "d2h": {
+          "avg_ms": 90.1382,
+          "best_ms": 53.5611,
+          "in_gibs": 6.24042,
+          "out_gibs": 6.24042
+        },
+        "sink": {
+          "avg_ms": 0.00100632,
+          "best_ms": 7e-05,
+          "in_gibs": 17469.7,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 232.18,
+        "flush_stall_count": 5,
+        "kick_sync_ms": 0.043411,
+        "kick_sync_count": 7,
+        "io_fence_ms": 46.6504,
+        "io_fence_count": 7,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 63.0625,
+        "peak_pending_mib": 576.062
+      }
+    },
+    {
+      "id": "orca2_single__none__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 4.66,
+      "status": "pass",
+      "throughput_in_gibs": 1.36313,
+      "throughput_out_gibs": 1.74491,
+      "compression_fold": 0.999946,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.50024,
+      "total_chunks": 2304,
+      "chunks_per_epoch": 576,
+      "wall_s": 2.57907,
+      "init_s": 0.00180951,
+      "flush_s": 8.31e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.79903,
+          "best_ms": 1.49918,
+          "in_gibs": 7.90837,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 242.014,
+          "best_ms": 242.014,
+          "in_gibs": 18.5939,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 241.674,
+          "best_ms": 241.674,
+          "in_gibs": 18.6201,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 10.6031,
+          "best_ms": 0.00034,
+          "in_gibs": 3.31583,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__gpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 4.09,
+      "status": "pass",
+      "throughput_in_gibs": 1.9534,
+      "throughput_out_gibs": 0.227684,
+      "compression_fold": 9.60894,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.409775,
+      "total_chunks": 16128,
+      "chunks_per_epoch": 2304,
+      "wall_s": 1.79975,
+      "init_s": 0.324997,
+      "flush_s": 0.000782957,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.37061,
+          "best_ms": 0.835115,
+          "in_gibs": 18.2986,
+          "out_gibs": 18.2986
+        },
+        "h2d": {
+          "avg_ms": 4.78013,
+          "best_ms": 4.64429,
+          "in_gibs": 13.075,
+          "out_gibs": 13.075
+        },
+        "scatter": {
+          "avg_ms": 5.39473,
+          "best_ms": 1.51181,
+          "in_gibs": 11.5854,
+          "out_gibs": 11.5854
+        },
+        "compress": {
+          "avg_ms": 233.875,
+          "best_ms": 78.716,
+          "in_gibs": 2.40513,
+          "out_gibs": 0.250041
+        },
+        "aggregate": {
+          "avg_ms": 1.04085,
+          "best_ms": 0.23152,
+          "in_gibs": 56.1831,
+          "out_gibs": 56.1831
+        },
+        "d2h": {
+          "avg_ms": 11.5691,
+          "best_ms": 1.53606,
+          "in_gibs": 5.05467,
+          "out_gibs": 5.05467
+        },
+        "sink": {
+          "avg_ms": 0.000772996,
+          "best_ms": 9e-05,
+          "in_gibs": 2366.57,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 278.687,
+        "flush_stall_count": 5,
+        "kick_sync_ms": 553.621,
+        "kick_sync_count": 7,
+        "io_fence_ms": 0.007143,
+        "io_fence_count": 7,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 231.118,
+        "peak_pending_mib": 66.918
+      }
+    },
+    {
+      "id": "orca2_single__zstd__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 3.28,
+      "status": "pass",
+      "throughput_in_gibs": 2.33319,
+      "throughput_out_gibs": 0.200974,
+      "compression_fold": 14.86,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.302826,
+      "total_chunks": 2304,
+      "chunks_per_epoch": 576,
+      "wall_s": 1.50679,
+      "init_s": 0.00286643,
+      "flush_s": 6.01e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.12052,
+          "best_ms": 2.08372,
+          "in_gibs": 8.66196,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 765.413,
+          "best_ms": 765.413,
+          "in_gibs": 5.87918,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 18.3027,
+          "best_ms": 18.3027,
+          "in_gibs": 16.5256,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.465682,
+          "best_ms": 0.000451,
+          "in_gibs": 5.08035,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-lz4__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 3.73,
+      "status": "pass",
+      "throughput_in_gibs": 1.87823,
+      "throughput_out_gibs": 1.11422,
+      "compression_fold": 2.15769,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.08557,
+      "total_chunks": 2304,
+      "chunks_per_epoch": 576,
+      "wall_s": 1.87178,
+      "init_s": 0.00210417,
+      "flush_s": 9.42e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.85258,
+          "best_ms": 1.50651,
+          "in_gibs": 9.00065,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 481.982,
+          "best_ms": 481.982,
+          "in_gibs": 9.33644,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 115.67,
+          "best_ms": 115.67,
+          "in_gibs": 18.027,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 4.62325,
+          "best_ms": 0.000381,
+          "in_gibs": 3.52425,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_single__blosc-zstd__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 2.76,
+      "status": "pass",
+      "throughput_in_gibs": 3.67278,
+      "throughput_out_gibs": 0.054725,
+      "compression_fold": 85.905,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.0523834,
+      "total_chunks": 2304,
+      "chunks_per_epoch": 576,
+      "wall_s": 0.957211,
+      "init_s": 0.0026845,
+      "flush_s": 1.022e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.97472,
+          "best_ms": 4.16008,
+          "in_gibs": 8.84303,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 268.311,
+          "best_ms": 268.311,
+          "in_gibs": 16.7716,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 4.12173,
+          "best_ms": 4.12173,
+          "in_gibs": 12.6119,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.165621,
+          "best_ms": 0.000671,
+          "in_gibs": 2.47097,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__gpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 11.64,
+      "status": "pass",
+      "throughput_in_gibs": 3.51759,
+      "throughput_out_gibs": 3.5196,
+      "compression_fold": 0.999431,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75214,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 1.06607,
+      "init_s": 0.14665,
+      "flush_s": 0.0498767,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.48872,
+          "best_ms": 3.07951,
+          "in_gibs": 17.9149,
+          "out_gibs": 17.9149
+        },
+        "h2d": {
+          "avg_ms": 5.42584,
+          "best_ms": 4.64493,
+          "in_gibs": 11.519,
+          "out_gibs": 11.519
+        },
+        "scatter": {
+          "avg_ms": 1.92265,
+          "best_ms": 1.87034,
+          "in_gibs": 32.5072,
+          "out_gibs": 32.5072
+        },
+        "compress": {
+          "avg_ms": 1.59728,
+          "best_ms": 1.49674,
+          "in_gibs": 117.387,
+          "out_gibs": 117.387
+        },
+        "aggregate": {
+          "avg_ms": 5.60251,
+          "best_ms": 2.10586,
+          "in_gibs": 33.4671,
+          "out_gibs": 33.4671
+        },
+        "d2h": {
+          "avg_ms": 45.591,
+          "best_ms": 14.2198,
+          "in_gibs": 4.11265,
+          "out_gibs": 4.11265
+        },
+        "sink": {
+          "avg_ms": 0.00122699,
+          "best_ms": 7e-05,
+          "in_gibs": 12741.7,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 538.184,
+        "flush_stall_count": 19,
+        "kick_sync_ms": 2.20797,
+        "kick_sync_count": 20,
+        "io_fence_ms": 252.363,
+        "io_fence_count": 20,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 270.593,
+        "peak_pending_mib": 384.219
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 13.55,
+      "status": "pass",
+      "throughput_in_gibs": 1.08477,
+      "throughput_out_gibs": 1.08539,
+      "compression_fold": 0.999431,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75214,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 3.45695,
+      "init_s": 0.00304065,
+      "flush_s": 6.32e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 11.1775,
+          "best_ms": 7.41553,
+          "in_gibs": 5.59158,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 11.935,
+          "best_ms": 10.15,
+          "in_gibs": 15.7101,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 12.0554,
+          "best_ms": 10.3944,
+          "in_gibs": 15.5531,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 8.10566,
+          "best_ms": 0.001763,
+          "in_gibs": 1.92876,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__gpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 12.11,
+      "status": "pass",
+      "throughput_in_gibs": 2.45867,
+      "throughput_out_gibs": 0.29851,
+      "compression_fold": 8.23648,
+      "input_gib": 3.75,
+      "compressed_gib": 0.455292,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 1.52522,
+      "init_s": 0.14835,
+      "flush_s": 0.00195637,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.67405,
+          "best_ms": 3.04239,
+          "in_gibs": 17.0112,
+          "out_gibs": 17.0112
+        },
+        "h2d": {
+          "avg_ms": 4.73373,
+          "best_ms": 4.65379,
+          "in_gibs": 13.2031,
+          "out_gibs": 13.2031
+        },
+        "scatter": {
+          "avg_ms": 8.87596,
+          "best_ms": 1.8889,
+          "in_gibs": 7.0415,
+          "out_gibs": 7.0415
+        },
+        "compress": {
+          "avg_ms": 71.5823,
+          "best_ms": 60.2388,
+          "in_gibs": 2.61936,
+          "out_gibs": 0.316528
+        },
+        "aggregate": {
+          "avg_ms": 0.391718,
+          "best_ms": 0.33264,
+          "in_gibs": 57.842,
+          "out_gibs": 57.842
+        },
+        "d2h": {
+          "avg_ms": 4.71889,
+          "best_ms": 1.7248,
+          "in_gibs": 4.80151,
+          "out_gibs": 4.80151
+        },
+        "sink": {
+          "avg_ms": 0.00136105,
+          "best_ms": 7e-05,
+          "in_gibs": 1393.81,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 924.452,
+        "flush_stall_count": 19,
+        "kick_sync_ms": 855.016,
+        "kick_sync_count": 20,
+        "io_fence_ms": 88.4497,
+        "io_fence_count": 20,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 94.0494,
+        "peak_pending_mib": 43.7266
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 12.26,
+      "status": "pass",
+      "throughput_in_gibs": 1.70411,
+      "throughput_out_gibs": 0.156987,
+      "compression_fold": 10.8551,
+      "input_gib": 3.75,
+      "compressed_gib": 0.345459,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 2.20056,
+      "init_s": 0.00326087,
+      "flush_s": 1.082e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.80726,
+          "best_ms": 7.59502,
+          "in_gibs": 6.37283,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 47.2047,
+          "best_ms": 45.6947,
+          "in_gibs": 3.97207,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 1.4651,
+          "best_ms": 1.04637,
+          "in_gibs": 11.7167,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.625186,
+          "best_ms": 0.000951,
+          "in_gibs": 2.30238,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-lz4__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 12.13,
+      "status": "pass",
+      "throughput_in_gibs": 1.79074,
+      "throughput_out_gibs": 1.07129,
+      "compression_fold": 1.67158,
+      "input_gib": 3.75,
+      "compressed_gib": 2.24339,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 2.09411,
+      "init_s": 0.00235844,
+      "flush_s": 7.11e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.98651,
+          "best_ms": 7.26877,
+          "in_gibs": 6.95487,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 21.3,
+          "best_ms": 19.9823,
+          "in_gibs": 8.80283,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 8.07566,
+          "best_ms": 6.391,
+          "in_gibs": 13.8766,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 2.41372,
+          "best_ms": 0.001493,
+          "in_gibs": 3.87265,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-zstd__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 11.81,
+      "status": "pass",
+      "throughput_in_gibs": 2.11849,
+      "throughput_out_gibs": 0.0479797,
+      "compression_fold": 44.1538,
+      "input_gib": 3.75,
+      "compressed_gib": 0.0849304,
+      "total_chunks": 122880,
+      "chunks_per_epoch": 6144,
+      "wall_s": 1.77013,
+      "init_s": 0.00336159,
+      "flush_s": 6.21e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.30238,
+          "best_ms": 7.2364,
+          "in_gibs": 6.71871,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 35.3961,
+          "best_ms": 33.9308,
+          "in_gibs": 5.2972,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.507226,
+          "best_ms": 0.259416,
+          "in_gibs": 8.16147,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.132333,
+          "best_ms": 0.001102,
+          "in_gibs": 2.67413,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__gpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 11.85,
+      "status": "pass",
+      "throughput_in_gibs": 4.10175,
+      "throughput_out_gibs": 4.10208,
+      "compression_fold": 0.999919,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75031,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 0.914244,
+      "init_s": 0.40419,
+      "flush_s": 0.165095,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.30738,
+          "best_ms": 3.0075,
+          "in_gibs": 18.8972,
+          "out_gibs": 18.8972
+        },
+        "h2d": {
+          "avg_ms": 4.81473,
+          "best_ms": 4.64614,
+          "in_gibs": 12.981,
+          "out_gibs": 12.981
+        },
+        "scatter": {
+          "avg_ms": 1.98383,
+          "best_ms": 1.8945,
+          "in_gibs": 31.5047,
+          "out_gibs": 31.5047
+        },
+        "compress": {
+          "avg_ms": 6.40441,
+          "best_ms": 6.10598,
+          "in_gibs": 117.107,
+          "out_gibs": 117.107
+        },
+        "aggregate": {
+          "avg_ms": 44.3888,
+          "best_ms": 11.6974,
+          "in_gibs": 16.8962,
+          "out_gibs": 16.8962
+        },
+        "d2h": {
+          "avg_ms": 112.131,
+          "best_ms": 56.6492,
+          "in_gibs": 6.68861,
+          "out_gibs": 6.68861
+        },
+        "sink": {
+          "avg_ms": 0.00100049,
+          "best_ms": 8e-05,
+          "in_gibs": 23428,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 231.153,
+        "flush_stall_count": 4,
+        "kick_sync_ms": 10.2531,
+        "kick_sync_count": 5,
+        "io_fence_ms": 0.003267,
+        "io_fence_count": 5,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 61.3677,
+        "peak_pending_mib": 768.062
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 12.75,
+      "status": "pass",
+      "throughput_in_gibs": 1.3795,
+      "throughput_out_gibs": 1.37961,
+      "compression_fold": 0.999919,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75031,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 2.71838,
+      "init_s": 0.00224042,
+      "flush_s": 6.92e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.52709,
+          "best_ms": 7.50453,
+          "in_gibs": 6.56024,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 40.8906,
+          "best_ms": 38.5793,
+          "in_gibs": 18.3416,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 42.409,
+          "best_ms": 40.8737,
+          "in_gibs": 17.6849,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 9.083,
+          "best_ms": 0.000271,
+          "in_gibs": 2.58058,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__gpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 12.35,
+      "status": "pass",
+      "throughput_in_gibs": 2.4183,
+      "throughput_out_gibs": 0.280443,
+      "compression_fold": 8.62316,
+      "input_gib": 3.75,
+      "compressed_gib": 0.434875,
+      "total_chunks": 30720,
+      "chunks_per_epoch": 1536,
+      "wall_s": 1.55068,
+      "init_s": 0.237183,
+      "flush_s": 0.00643851,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.39134,
+          "best_ms": 2.82666,
+          "in_gibs": 18.4293,
+          "out_gibs": 18.4293
+        },
+        "h2d": {
+          "avg_ms": 4.7225,
+          "best_ms": 4.65165,
+          "in_gibs": 13.2345,
+          "out_gibs": 13.2345
+        },
+        "scatter": {
+          "avg_ms": 9.14927,
+          "best_ms": 1.86448,
+          "in_gibs": 6.83115,
+          "out_gibs": 6.83115
+        },
+        "compress": {
+          "avg_ms": 143.153,
+          "best_ms": 123.555,
+          "in_gibs": 2.61957,
+          "out_gibs": 0.303357
+        },
+        "aggregate": {
+          "avg_ms": 0.706669,
+          "best_ms": 0.53888,
+          "in_gibs": 61.4524,
+          "out_gibs": 61.4524
+        },
+        "d2h": {
+          "avg_ms": 6.09855,
+          "best_ms": 3.28912,
+          "in_gibs": 7.12079,
+          "out_gibs": 7.12079
+        },
+        "sink": {
+          "avg_ms": 0.000950156,
+          "best_ms": 9e-05,
+          "in_gibs": 2860.55,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 393.114,
+        "flush_stall_count": 9,
+        "kick_sync_ms": 482.382,
+        "kick_sync_count": 10,
+        "io_fence_ms": 0.011873,
+        "io_fence_count": 10,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 117.148,
+        "peak_pending_mib": 44.5312
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 11.76,
+      "status": "pass",
+      "throughput_in_gibs": 2.13739,
+      "throughput_out_gibs": 0.186509,
+      "compression_fold": 11.46,
+      "input_gib": 3.75,
+      "compressed_gib": 0.327225,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 1.75447,
+      "init_s": 0.00292999,
+      "flush_s": 8.52e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.87191,
+          "best_ms": 7.43462,
+          "in_gibs": 7.04471,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 167.434,
+          "best_ms": 166.064,
+          "in_gibs": 4.47939,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 6.16215,
+          "best_ms": 4.1393,
+          "in_gibs": 10.6056,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.557934,
+          "best_ms": 0.000321,
+          "in_gibs": 3.66559,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-lz4__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 12.0,
+      "status": "pass",
+      "throughput_in_gibs": 1.93262,
+      "throughput_out_gibs": 1.26092,
+      "compression_fold": 1.5327,
+      "input_gib": 3.75,
+      "compressed_gib": 2.44666,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 1.94037,
+      "init_s": 0.00214168,
+      "flush_s": 7.01e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.76192,
+          "best_ms": 7.32386,
+          "in_gibs": 7.13314,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 95.5654,
+          "best_ms": 91.9441,
+          "in_gibs": 7.84802,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 28.2915,
+          "best_ms": 27.0816,
+          "in_gibs": 17.2928,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 3.13338,
+          "best_ms": 0.000441,
+          "in_gibs": 4.88022,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-zstd__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 11.45,
+      "status": "pass",
+      "throughput_in_gibs": 2.738,
+      "throughput_out_gibs": 0.0615538,
+      "compression_fold": 44.4814,
+      "input_gib": 3.75,
+      "compressed_gib": 0.0843048,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 1.36961,
+      "init_s": 0.00578538,
+      "flush_s": 7.01e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.62588,
+          "best_ms": 7.48852,
+          "in_gibs": 7.24563,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 109.574,
+          "best_ms": 108.861,
+          "in_gibs": 6.84466,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 1.91454,
+          "best_ms": 1.01665,
+          "in_gibs": 8.75899,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.126314,
+          "best_ms": 0.000501,
+          "in_gibs": 4.17138,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__gpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 12.01,
+      "status": "pass",
+      "throughput_in_gibs": 4.10013,
+      "throughput_out_gibs": 4.10046,
+      "compression_fold": 0.999919,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75031,
+      "total_chunks": 15360,
+      "chunks_per_epoch": 1536,
+      "wall_s": 0.914606,
+      "init_s": 0.401678,
+      "flush_s": 0.18114,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.33075,
+          "best_ms": 2.98797,
+          "in_gibs": 18.7646,
+          "out_gibs": 18.7646
+        },
+        "h2d": {
+          "avg_ms": 4.82405,
+          "best_ms": 4.64454,
+          "in_gibs": 12.9559,
+          "out_gibs": 12.9559
+        },
+        "scatter": {
+          "avg_ms": 1.95119,
+          "best_ms": 1.87984,
+          "in_gibs": 32.0318,
+          "out_gibs": 32.0318
+        },
+        "compress": {
+          "avg_ms": 6.38481,
+          "best_ms": 6.09869,
+          "in_gibs": 117.466,
+          "out_gibs": 117.466
+        },
+        "aggregate": {
+          "avg_ms": 44.0964,
+          "best_ms": 11.6996,
+          "in_gibs": 17.0082,
+          "out_gibs": 17.0082
+        },
+        "d2h": {
+          "avg_ms": 112.247,
+          "best_ms": 56.6929,
+          "in_gibs": 6.68169,
+          "out_gibs": 6.68169
+        },
+        "sink": {
+          "avg_ms": 0.000815682,
+          "best_ms": 9e-05,
+          "in_gibs": 28736,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 231.204,
+        "flush_stall_count": 4,
+        "kick_sync_ms": 10.2868,
+        "kick_sync_count": 5,
+        "io_fence_ms": 0.003266,
+        "io_fence_count": 5,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 61.3002,
+        "peak_pending_mib": 768.062
+      }
+    },
+    {
+      "id": "256cube_single__none__xor__cpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 12.77,
+      "status": "pass",
+      "throughput_in_gibs": 1.61223,
+      "throughput_out_gibs": 1.61236,
+      "compression_fold": 0.999919,
+      "input_gib": 3.75,
+      "compressed_gib": 3.75031,
+      "total_chunks": 1920,
+      "chunks_per_epoch": 192,
+      "wall_s": 2.32597,
+      "init_s": 0.00309367,
+      "flush_s": 7.61e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.46887,
+          "best_ms": 7.05154,
+          "in_gibs": 7.37997,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 212.973,
+          "best_ms": 212.973,
+          "in_gibs": 17.6079,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 216.508,
+          "best_ms": 216.508,
+          "in_gibs": 17.3204,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 6.88017,
+          "best_ms": 0.00036,
+          "in_gibs": 3.40681,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__gpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 12.24,
+      "status": "pass",
+      "throughput_in_gibs": 2.42636,
+      "throughput_out_gibs": 0.281377,
+      "compression_fold": 8.62316,
+      "input_gib": 3.75,
+      "compressed_gib": 0.434875,
+      "total_chunks": 30720,
+      "chunks_per_epoch": 1536,
+      "wall_s": 1.54552,
+      "init_s": 0.229954,
+      "flush_s": 0.00606885,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.40803,
+          "best_ms": 2.86739,
+          "in_gibs": 18.3391,
+          "out_gibs": 18.3391
+        },
+        "h2d": {
+          "avg_ms": 4.7387,
+          "best_ms": 4.65232,
+          "in_gibs": 13.1893,
+          "out_gibs": 13.1893
+        },
+        "scatter": {
+          "avg_ms": 8.7763,
+          "best_ms": 1.89754,
+          "in_gibs": 7.12145,
+          "out_gibs": 7.12145
+        },
+        "compress": {
+          "avg_ms": 142.533,
+          "best_ms": 121.315,
+          "in_gibs": 2.63098,
+          "out_gibs": 0.304678
+        },
+        "aggregate": {
+          "avg_ms": 0.704397,
+          "best_ms": 0.538144,
+          "in_gibs": 61.6506,
+          "out_gibs": 61.6506
+        },
+        "d2h": {
+          "avg_ms": 6.15186,
+          "best_ms": 3.29206,
+          "in_gibs": 7.05908,
+          "out_gibs": 7.05908
+        },
+        "sink": {
+          "avg_ms": 0.00117483,
+          "best_ms": 9e-05,
+          "in_gibs": 2313.5,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 394.29,
+        "flush_stall_count": 9,
+        "kick_sync_ms": 486.383,
+        "kick_sync_count": 10,
+        "io_fence_ms": 0.01119,
+        "io_fence_count": 10,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 116.186,
+        "peak_pending_mib": 44.5312
+      }
+    },
+    {
+      "id": "256cube_single__zstd__xor__cpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 11.98,
+      "status": "pass",
+      "throughput_in_gibs": 2.18294,
+      "throughput_out_gibs": 0.180402,
+      "compression_fold": 12.1004,
+      "input_gib": 3.75,
+      "compressed_gib": 0.309906,
+      "total_chunks": 1920,
+      "chunks_per_epoch": 192,
+      "wall_s": 1.71787,
+      "init_s": 0.00381432,
+      "flush_s": 6.81e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.24652,
+          "best_ms": 7.09668,
+          "in_gibs": 6.7593,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 762.732,
+          "best_ms": 762.732,
+          "in_gibs": 4.91654,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 18.8595,
+          "best_ms": 18.8595,
+          "in_gibs": 16.4097,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.677775,
+          "best_ms": 0.000511,
+          "in_gibs": 2.85775,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-lz4__xor__cpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 12.23,
+      "status": "pass",
+      "throughput_in_gibs": 2.01649,
+      "throughput_out_gibs": 1.13721,
+      "compression_fold": 1.7732,
+      "input_gib": 3.75,
+      "compressed_gib": 2.11482,
+      "total_chunks": 1920,
+      "chunks_per_epoch": 192,
+      "wall_s": 1.85967,
+      "init_s": 0.00502873,
+      "flush_s": 9.22e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 8.82369,
+          "best_ms": 7.11902,
+          "in_gibs": 7.0832,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 466.07,
+          "best_ms": 466.07,
+          "in_gibs": 8.04601,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 124.979,
+          "best_ms": 124.979,
+          "in_gibs": 16.9182,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 2.36264,
+          "best_ms": 0.0004,
+          "in_gibs": 5.59443,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_single__blosc-zstd__xor__cpu__u16__2M__fs",
+      "scenario": "256cube_single",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 11.44,
+      "status": "pass",
+      "throughput_in_gibs": 3.1345,
+      "throughput_out_gibs": 0.0474587,
+      "compression_fold": 66.0468,
+      "input_gib": 3.75,
+      "compressed_gib": 0.056778,
+      "total_chunks": 1920,
+      "chunks_per_epoch": 192,
+      "wall_s": 1.19636,
+      "init_s": 0.00260343,
+      "flush_s": 7.91e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.52788,
+          "best_ms": 7.1387,
+          "in_gibs": 6.55969,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 323.445,
+          "best_ms": 323.445,
+          "in_gibs": 11.5939,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 4.46235,
+          "best_ms": 4.46235,
+          "in_gibs": 12.6178,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0705442,
+          "best_ms": 0.000481,
+          "in_gibs": 5.03035,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__gpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 125.49,
+      "status": "pass",
+      "throughput_in_gibs": 3.77104,
+      "throughput_out_gibs": 4.53928,
+      "compression_fold": 1.15292,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.23183,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 0.932271,
+      "init_s": 8.48674,
+      "flush_s": 0.0604125,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.21499,
+          "best_ms": 0.879327,
+          "in_gibs": 17.3573,
+          "out_gibs": 17.3573
+        },
+        "h2d": {
+          "avg_ms": 4.52047,
+          "best_ms": 2.3311,
+          "in_gibs": 12.4661,
+          "out_gibs": 12.4661
+        },
+        "scatter": {
+          "avg_ms": 0.618899,
+          "best_ms": 0.223968,
+          "in_gibs": 91.7287,
+          "out_gibs": 91.7287
+        },
+        "lod_gather": {
+          "avg_ms": 4.69118,
+          "best_ms": 4.48288,
+          "in_gibs": 59.953,
+          "out_gibs": 59.953
+        },
+        "lod_reduce": {
+          "avg_ms": 9.2718,
+          "best_ms": 8.92032,
+          "in_gibs": 30.3339,
+          "out_gibs": 40.4494
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.4996,
+          "best_ms": 0.953056,
+          "in_gibs": 62.5422,
+          "out_gibs": 62.5422
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 8.31024,
+          "best_ms": 4.41482,
+          "in_gibs": 45.1296,
+          "out_gibs": 45.1618
+        },
+        "compress": {
+          "avg_ms": 3.6978,
+          "best_ms": 3.0303,
+          "in_gibs": 101.494,
+          "out_gibs": 81.6954
+        },
+        "aggregate": {
+          "avg_ms": 4.97045,
+          "best_ms": 1.43946,
+          "in_gibs": 60.778,
+          "out_gibs": 60.778
+        },
+        "d2h": {
+          "avg_ms": 44.1456,
+          "best_ms": 7.16422,
+          "in_gibs": 6.84312,
+          "out_gibs": 6.84312
+        },
+        "sink": {
+          "avg_ms": 0.00218619,
+          "best_ms": 7e-05,
+          "in_gibs": 4888.16,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 296.071,
+        "flush_stall_count": 11,
+        "kick_sync_ms": 18.2237,
+        "kick_sync_count": 14,
+        "io_fence_ms": 12.7194,
+        "io_fence_count": 14,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 46.3874,
+        "peak_pending_mib": 396.359
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 126.68,
+      "status": "pass",
+      "throughput_in_gibs": 0.97883,
+      "throughput_out_gibs": 1.17824,
+      "compression_fold": 1.15292,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.23183,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 3.59166,
+      "init_s": 8.2536,
+      "flush_s": 0.000586509,
+      "stages": {
+        "scatter": {
+          "avg_ms": 5.17968,
+          "best_ms": 0.972111,
+          "in_gibs": 10.7736,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 22.2509,
+          "best_ms": 21.0031,
+          "in_gibs": 12.64,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 50.7438,
+          "best_ms": 46.3903,
+          "in_gibs": 7.39082,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 8.47282,
+          "best_ms": 4.81558,
+          "in_gibs": 11.0693,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 28.5296,
+          "best_ms": 22.7423,
+          "in_gibs": 13.1549,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 20.8298,
+          "best_ms": 19.474,
+          "in_gibs": 18.0177,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 8.50789,
+          "best_ms": 0.004949,
+          "in_gibs": 16.5701,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.93354,
+          "best_ms": 0.000702,
+          "in_gibs": 5.52688,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__gpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 137.6,
+      "status": "pass",
+      "throughput_in_gibs": 1.58971,
+      "throughput_out_gibs": 0.266843,
+      "compression_fold": 7.94494,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.590118,
+      "total_chunks": 1229050,
+      "chunks_per_epoch": 49162,
+      "wall_s": 2.21148,
+      "init_s": 4.34195,
+      "flush_s": 4.61e-07,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.82746,
+          "best_ms": 0.846436,
+          "in_gibs": 16.5785,
+          "out_gibs": 16.5785
+        },
+        "h2d": {
+          "avg_ms": 3.53664,
+          "best_ms": 1.16544,
+          "in_gibs": 13.3146,
+          "out_gibs": 13.3146
+        },
+        "scatter": {
+          "avg_ms": 0.440498,
+          "best_ms": 0.093024,
+          "in_gibs": 115.824,
+          "out_gibs": 115.824
+        },
+        "lod_gather": {
+          "avg_ms": 4.54719,
+          "best_ms": 2.26346,
+          "in_gibs": 30.9257,
+          "out_gibs": 30.9257
+        },
+        "lod_reduce": {
+          "avg_ms": 23.6657,
+          "best_ms": 4.4808,
+          "in_gibs": 5.94214,
+          "out_gibs": 7.92306
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.929277,
+          "best_ms": 0.467008,
+          "in_gibs": 50.4475,
+          "out_gibs": 50.4475
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 9.19263,
+          "best_ms": 2.19152,
+          "in_gibs": 20.3973,
+          "out_gibs": 20.4009
+        },
+        "compress": {
+          "avg_ms": 77.4827,
+          "best_ms": 38.7793,
+          "in_gibs": 2.42039,
+          "out_gibs": 0.28393
+        },
+        "aggregate": {
+          "avg_ms": 3.16527,
+          "best_ms": 0.376384,
+          "in_gibs": 6.95033,
+          "out_gibs": 6.95033
+        },
+        "d2h": {
+          "avg_ms": 2.40443,
+          "best_ms": 0.459808,
+          "in_gibs": 9.14963,
+          "out_gibs": 9.14963
+        },
+        "sink": {
+          "avg_ms": 0.00157967,
+          "best_ms": 7e-05,
+          "in_gibs": 574.723,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 1563.46,
+        "flush_stall_count": 24,
+        "kick_sync_ms": 1549.35,
+        "kick_sync_count": 26,
+        "io_fence_ms": 0.030715,
+        "io_fence_count": 26,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 110.92,
+        "peak_pending_mib": 25.2461
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 126.83,
+      "status": "pass",
+      "throughput_in_gibs": 0.996071,
+      "throughput_out_gibs": 0.110259,
+      "compression_fold": 12.5372,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.38916,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 3.52949,
+      "init_s": 8.33102,
+      "flush_s": 7.12e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 4.84431,
+          "best_ms": 0.959848,
+          "in_gibs": 11.5194,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 23.1143,
+          "best_ms": 21.5228,
+          "in_gibs": 12.1678,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 48.1345,
+          "best_ms": 45.6693,
+          "in_gibs": 7.79146,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 8.20354,
+          "best_ms": 4.81381,
+          "in_gibs": 11.4326,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 28.2076,
+          "best_ms": 23.1095,
+          "in_gibs": 13.3051,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 89.4884,
+          "best_ms": 77.0667,
+          "in_gibs": 4.1939,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 1.03479,
+          "best_ms": 0.000631,
+          "in_gibs": 12.4545,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.115544,
+          "best_ms": 0.000761,
+          "in_gibs": 8.50525,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-lz4__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 125.98,
+      "status": "pass",
+      "throughput_in_gibs": 0.973137,
+      "throughput_out_gibs": 0.726958,
+      "compression_fold": 1.85776,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.62626,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 3.61267,
+      "init_s": 8.25406,
+      "flush_s": 7.52e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 5.09838,
+          "best_ms": 0.989314,
+          "in_gibs": 10.9453,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 22.8194,
+          "best_ms": 21.1295,
+          "in_gibs": 12.3251,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 52.6601,
+          "best_ms": 46.0313,
+          "in_gibs": 7.12187,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 8.39772,
+          "best_ms": 4.80643,
+          "in_gibs": 11.1683,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 30.1503,
+          "best_ms": 22.4646,
+          "in_gibs": 12.4478,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 47.0802,
+          "best_ms": 39.6891,
+          "in_gibs": 7.97161,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 5.70007,
+          "best_ms": 0.001242,
+          "in_gibs": 15.3433,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.23201,
+          "best_ms": 0.000751,
+          "in_gibs": 5.38306,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-zstd__xor__cpu__u16__32K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 126.43,
+      "status": "pass",
+      "throughput_in_gibs": 1.15527,
+      "throughput_out_gibs": 0.0354353,
+      "compression_fold": 45.2452,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.107834,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 3.04312,
+      "init_s": 8.27377,
+      "flush_s": 8.32e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 5.47572,
+          "best_ms": 1.00283,
+          "in_gibs": 10.1911,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 22.0998,
+          "best_ms": 21.1561,
+          "in_gibs": 12.7263,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 48.1324,
+          "best_ms": 46.0381,
+          "in_gibs": 7.7918,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 9.34912,
+          "best_ms": 4.81297,
+          "in_gibs": 10.0318,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 28.1984,
+          "best_ms": 22.2661,
+          "in_gibs": 13.3094,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 54.2992,
+          "best_ms": 53.0491,
+          "in_gibs": 6.9118,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.404098,
+          "best_ms": 0.000721,
+          "in_gibs": 8.68672,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0346257,
+          "best_ms": 0.000321,
+          "in_gibs": 7.86432,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__gpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 175.57,
+      "status": "pass",
+      "throughput_in_gibs": 3.78666,
+      "throughput_out_gibs": 4.55809,
+      "compression_fold": 1.15292,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.23183,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 0.928423,
+      "init_s": 8.69292,
+      "flush_s": 0.0567417,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 3.36774,
+          "best_ms": 0.880048,
+          "in_gibs": 16.5701,
+          "out_gibs": 16.5701
+        },
+        "h2d": {
+          "avg_ms": 4.5296,
+          "best_ms": 2.32429,
+          "in_gibs": 12.4409,
+          "out_gibs": 12.4409
+        },
+        "scatter": {
+          "avg_ms": 0.578244,
+          "best_ms": 0.22368,
+          "in_gibs": 98.1779,
+          "out_gibs": 98.1779
+        },
+        "lod_gather": {
+          "avg_ms": 4.68992,
+          "best_ms": 4.48112,
+          "in_gibs": 59.9691,
+          "out_gibs": 59.9691
+        },
+        "lod_reduce": {
+          "avg_ms": 9.27489,
+          "best_ms": 8.91542,
+          "in_gibs": 30.3238,
+          "out_gibs": 40.4358
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.50447,
+          "best_ms": 0.953088,
+          "in_gibs": 62.3395,
+          "out_gibs": 62.3395
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 8.19515,
+          "best_ms": 4.41466,
+          "in_gibs": 45.7634,
+          "out_gibs": 45.796
+        },
+        "compress": {
+          "avg_ms": 3.67792,
+          "best_ms": 3.0295,
+          "in_gibs": 102.043,
+          "out_gibs": 82.137
+        },
+        "aggregate": {
+          "avg_ms": 4.93441,
+          "best_ms": 1.45738,
+          "in_gibs": 61.2218,
+          "out_gibs": 61.2218
+        },
+        "d2h": {
+          "avg_ms": 45.2922,
+          "best_ms": 7.16877,
+          "in_gibs": 6.66989,
+          "out_gibs": 6.66989
+        },
+        "sink": {
+          "avg_ms": 0.0020255,
+          "best_ms": 7e-05,
+          "in_gibs": 5275.97,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 294.751,
+        "flush_stall_count": 11,
+        "kick_sync_ms": 27.8304,
+        "kick_sync_count": 14,
+        "io_fence_ms": 3.64509,
+        "io_fence_count": 14,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 44.9351,
+        "peak_pending_mib": 382.875
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 152.23,
+      "status": "pass",
+      "throughput_in_gibs": 0.724426,
+      "throughput_out_gibs": 0.944777,
+      "compression_fold": 1.14877,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.58498,
+      "total_chunks": 21574,
+      "chunks_per_epoch": 3082,
+      "wall_s": 4.85298,
+      "init_s": 16.1006,
+      "flush_s": 9.12e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.30589,
+          "best_ms": 0.815758,
+          "in_gibs": 9.78096,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 52.1098,
+          "best_ms": 43.4656,
+          "in_gibs": 10.7945,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 110.346,
+          "best_ms": 99.782,
+          "in_gibs": 6.7996,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 18.3755,
+          "best_ms": 9.81799,
+          "in_gibs": 10.2204,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 54.4907,
+          "best_ms": 38.7835,
+          "in_gibs": 13.8086,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 41.7191,
+          "best_ms": 40.7374,
+          "in_gibs": 18.0359,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 17.7035,
+          "best_ms": 0.036548,
+          "in_gibs": 15.2329,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 6.62219,
+          "best_ms": 0.000281,
+          "in_gibs": 2.58346,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__gpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 191.77,
+      "status": "pass",
+      "throughput_in_gibs": 1.57877,
+      "throughput_out_gibs": 0.265007,
+      "compression_fold": 7.94494,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.590118,
+      "total_chunks": 1229050,
+      "chunks_per_epoch": 49162,
+      "wall_s": 2.22681,
+      "init_s": 4.6797,
+      "flush_s": 5.72e-07,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.79047,
+          "best_ms": 0.846715,
+          "in_gibs": 16.7982,
+          "out_gibs": 16.7982
+        },
+        "h2d": {
+          "avg_ms": 3.52925,
+          "best_ms": 1.16576,
+          "in_gibs": 13.3425,
+          "out_gibs": 13.3425
+        },
+        "scatter": {
+          "avg_ms": 0.440498,
+          "best_ms": 0.120032,
+          "in_gibs": 115.824,
+          "out_gibs": 115.824
+        },
+        "lod_gather": {
+          "avg_ms": 4.47797,
+          "best_ms": 2.25699,
+          "in_gibs": 31.4038,
+          "out_gibs": 31.4038
+        },
+        "lod_reduce": {
+          "avg_ms": 23.7868,
+          "best_ms": 4.47357,
+          "in_gibs": 5.91189,
+          "out_gibs": 7.88272
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.94854,
+          "best_ms": 0.467168,
+          "in_gibs": 49.4231,
+          "out_gibs": 49.4231
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 9.20717,
+          "best_ms": 2.19203,
+          "in_gibs": 20.3651,
+          "out_gibs": 20.3687
+        },
+        "compress": {
+          "avg_ms": 78.0547,
+          "best_ms": 38.716,
+          "in_gibs": 2.40265,
+          "out_gibs": 0.281849
+        },
+        "aggregate": {
+          "avg_ms": 3.15949,
+          "best_ms": 0.387776,
+          "in_gibs": 6.96304,
+          "out_gibs": 6.96304
+        },
+        "d2h": {
+          "avg_ms": 2.40264,
+          "best_ms": 0.466688,
+          "in_gibs": 9.15644,
+          "out_gibs": 9.15644
+        },
+        "sink": {
+          "avg_ms": 0.00170888,
+          "best_ms": 7e-05,
+          "in_gibs": 531.27,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 1590.69,
+        "flush_stall_count": 24,
+        "kick_sync_ms": 1579.46,
+        "kick_sync_count": 26,
+        "io_fence_ms": 0.02896,
+        "io_fence_count": 26,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 111.12,
+        "peak_pending_mib": 25.2461
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 153.81,
+      "status": "pass",
+      "throughput_in_gibs": 0.925434,
+      "throughput_out_gibs": 0.108966,
+      "compression_fold": 12.7239,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.413952,
+      "total_chunks": 21574,
+      "chunks_per_epoch": 3082,
+      "wall_s": 3.79889,
+      "init_s": 16.4631,
+      "flush_s": 6.51e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 6.82049,
+          "best_ms": 0.953577,
+          "in_gibs": 9.043,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 45.2198,
+          "best_ms": 40.9208,
+          "in_gibs": 12.4392,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 99.6002,
+          "best_ms": 90.0413,
+          "in_gibs": 7.53317,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 17.5738,
+          "best_ms": 9.83275,
+          "in_gibs": 10.6867,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 52.7342,
+          "best_ms": 38.2223,
+          "in_gibs": 14.2686,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 168.306,
+          "best_ms": 128.573,
+          "in_gibs": 4.47068,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 2.05788,
+          "best_ms": 0.000721,
+          "in_gibs": 11.818,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.178505,
+          "best_ms": 0.000481,
+          "in_gibs": 8.65297,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-lz4__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 159.86,
+      "status": "pass",
+      "throughput_in_gibs": 0.941065,
+      "throughput_out_gibs": 0.665485,
+      "compression_fold": 2.1186,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.48611,
+      "total_chunks": 21574,
+      "chunks_per_epoch": 3082,
+      "wall_s": 3.73579,
+      "init_s": 16.6143,
+      "flush_s": 7.51e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.25664,
+          "best_ms": 0.962804,
+          "in_gibs": 8.49947,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 45.9418,
+          "best_ms": 41.6339,
+          "in_gibs": 12.2438,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 108.897,
+          "best_ms": 105.213,
+          "in_gibs": 6.89007,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 18.0749,
+          "best_ms": 9.94254,
+          "in_gibs": 10.3904,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 51.2349,
+          "best_ms": 38.5865,
+          "in_gibs": 14.6861,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 77.3872,
+          "best_ms": 73.4871,
+          "in_gibs": 9.72307,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 9.99735,
+          "best_ms": 0.002354,
+          "in_gibs": 14.6251,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.76125,
+          "best_ms": 0.000451,
+          "in_gibs": 5.26703,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-zstd__xor__cpu__u16__256K__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 156.58,
+      "status": "pass",
+      "throughput_in_gibs": 1.20605,
+      "throughput_out_gibs": 0.0233057,
+      "compression_fold": 77.5302,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.0679359,
+      "total_chunks": 21574,
+      "chunks_per_epoch": 3082,
+      "wall_s": 2.915,
+      "init_s": 16.8743,
+      "flush_s": 8.22e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 7.0784,
+          "best_ms": 0.95594,
+          "in_gibs": 8.7135,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 48.1067,
+          "best_ms": 41.9659,
+          "in_gibs": 11.6928,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 103.139,
+          "best_ms": 94.36,
+          "in_gibs": 7.27469,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 16.2474,
+          "best_ms": 9.81752,
+          "in_gibs": 11.5591,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 52.1335,
+          "best_ms": 38.5762,
+          "in_gibs": 14.433,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 60.6909,
+          "best_ms": 56.8463,
+          "in_gibs": 12.3979,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.413801,
+          "best_ms": 0.000882,
+          "in_gibs": 9.58471,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0278911,
+          "best_ms": 0.000221,
+          "in_gibs": 9.08863,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__gpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 282.13,
+      "status": "pass",
+      "throughput_in_gibs": 3.94539,
+      "throughput_out_gibs": 4.74916,
+      "compression_fold": 1.15292,
+      "input_gib": 3.51562,
+      "compressed_gib": 4.23183,
+      "total_chunks": 159874,
+      "chunks_per_epoch": 12298,
+      "wall_s": 0.891071,
+      "init_s": 8.6959,
+      "flush_s": 0.0741924,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.98146,
+          "best_ms": 0.858929,
+          "in_gibs": 18.7169,
+          "out_gibs": 18.7169
+        },
+        "h2d": {
+          "avg_ms": 4.51245,
+          "best_ms": 2.32406,
+          "in_gibs": 12.4882,
+          "out_gibs": 12.4882
+        },
+        "scatter": {
+          "avg_ms": 0.359228,
+          "best_ms": 0.176352,
+          "in_gibs": 158.036,
+          "out_gibs": 158.036
+        },
+        "lod_gather": {
+          "avg_ms": 3.75094,
+          "best_ms": 3.48125,
+          "in_gibs": 74.9812,
+          "out_gibs": 74.9812
+        },
+        "lod_reduce": {
+          "avg_ms": 7.36409,
+          "best_ms": 6.85677,
+          "in_gibs": 38.1921,
+          "out_gibs": 50.928
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.28693,
+          "best_ms": 0.78336,
+          "in_gibs": 72.8777,
+          "out_gibs": 72.8777
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 5.85806,
+          "best_ms": 3.41165,
+          "in_gibs": 64.0209,
+          "out_gibs": 64.0665
+        },
+        "compress": {
+          "avg_ms": 2.77205,
+          "best_ms": 2.35437,
+          "in_gibs": 135.389,
+          "out_gibs": 108.978
+        },
+        "aggregate": {
+          "avg_ms": 6.30005,
+          "best_ms": 1.28474,
+          "in_gibs": 47.951,
+          "out_gibs": 47.951
+        },
+        "d2h": {
+          "avg_ms": 45.8446,
+          "best_ms": 7.12461,
+          "in_gibs": 6.58952,
+          "out_gibs": 6.58952
+        },
+        "sink": {
+          "avg_ms": 0.000983334,
+          "best_ms": 7e-05,
+          "in_gibs": 10867.6,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 303.245,
+        "flush_stall_count": 11,
+        "kick_sync_ms": 20.1192,
+        "kick_sync_count": 14,
+        "io_fence_ms": 4.26947,
+        "io_fence_count": 14,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 44.9692,
+        "peak_pending_mib": 382.875
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__none__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 205.38,
+      "status": "pass",
+      "throughput_in_gibs": 0.688151,
+      "throughput_out_gibs": 1.01317,
+      "compression_fold": 1.17427,
+      "input_gib": 3.51562,
+      "compressed_gib": 5.17607,
+      "total_chunks": 3112,
+      "chunks_per_epoch": 778,
+      "wall_s": 5.1088,
+      "init_s": 32.5795,
+      "flush_s": 5.71e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.53573,
+          "best_ms": 0.969896,
+          "in_gibs": 6.46806,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 98.6226,
+          "best_ms": 87.7265,
+          "in_gibs": 11.4071,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 202.609,
+          "best_ms": 196.549,
+          "in_gibs": 7.41547,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 32.3919,
+          "best_ms": 20.0227,
+          "in_gibs": 11.6524,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 104.07,
+          "best_ms": 84.0381,
+          "in_gibs": 14.6011,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 207.852,
+          "best_ms": 104.687,
+          "in_gibs": 18.2766,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 70.3915,
+          "best_ms": 0.368791,
+          "in_gibs": 12.2548,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 9.84,
+          "best_ms": 0.000351,
+          "in_gibs": 3.46068,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__gpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 307.9,
+      "status": "pass",
+      "throughput_in_gibs": 1.5224,
+      "throughput_out_gibs": 0.255544,
+      "compression_fold": 7.94494,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.590118,
+      "total_chunks": 1229050,
+      "chunks_per_epoch": 49162,
+      "wall_s": 2.30927,
+      "init_s": 4.59128,
+      "flush_s": 8.71e-07,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.64565,
+          "best_ms": 0.841596,
+          "in_gibs": 17.7178,
+          "out_gibs": 17.7178
+        },
+        "h2d": {
+          "avg_ms": 3.5266,
+          "best_ms": 1.1656,
+          "in_gibs": 13.3525,
+          "out_gibs": 13.3525
+        },
+        "scatter": {
+          "avg_ms": 0.345283,
+          "best_ms": 0.078816,
+          "in_gibs": 147.764,
+          "out_gibs": 147.764
+        },
+        "lod_gather": {
+          "avg_ms": 4.8512,
+          "best_ms": 1.75494,
+          "in_gibs": 28.9877,
+          "out_gibs": 28.9877
+        },
+        "lod_reduce": {
+          "avg_ms": 25.7814,
+          "best_ms": 3.4384,
+          "in_gibs": 5.45452,
+          "out_gibs": 7.27288
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.81515,
+          "best_ms": 0.377696,
+          "in_gibs": 57.5106,
+          "out_gibs": 57.5106
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 8.77365,
+          "best_ms": 1.70042,
+          "in_gibs": 21.3714,
+          "out_gibs": 21.3752
+        },
+        "compress": {
+          "avg_ms": 82.2805,
+          "best_ms": 33.3501,
+          "in_gibs": 2.27925,
+          "out_gibs": 0.267374
+        },
+        "aggregate": {
+          "avg_ms": 2.609,
+          "best_ms": 0.39472,
+          "in_gibs": 8.43223,
+          "out_gibs": 8.43223
+        },
+        "d2h": {
+          "avg_ms": 2.30178,
+          "best_ms": 0.407456,
+          "in_gibs": 9.55765,
+          "out_gibs": 9.55765
+        },
+        "sink": {
+          "avg_ms": 0.00153822,
+          "best_ms": 7e-05,
+          "in_gibs": 590.212,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 1698.88,
+        "flush_stall_count": 24,
+        "kick_sync_ms": 1686.07,
+        "kick_sync_count": 26,
+        "io_fence_ms": 0.023404,
+        "io_fence_count": 26,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 130.004,
+        "peak_pending_mib": 25.2461
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__zstd__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 218.05,
+      "status": "pass",
+      "throughput_in_gibs": 0.398868,
+      "throughput_out_gibs": 0.0495304,
+      "compression_fold": 13.9227,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.436562,
+      "total_chunks": 3112,
+      "chunks_per_epoch": 778,
+      "wall_s": 8.814,
+      "init_s": 34.4884,
+      "flush_s": 6.01e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 10.7276,
+          "best_ms": 1.01797,
+          "in_gibs": 5.74942,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 152.251,
+          "best_ms": 133.481,
+          "in_gibs": 7.3891,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 456.667,
+          "best_ms": 331.915,
+          "in_gibs": 3.29001,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 38.4301,
+          "best_ms": 27.728,
+          "in_gibs": 9.82149,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 184.256,
+          "best_ms": 147.893,
+          "in_gibs": 8.24684,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 2121.13,
+          "best_ms": 1186.65,
+          "in_gibs": 1.79095,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 7.61113,
+          "best_ms": 0.005511,
+          "in_gibs": 9.55045,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.481167,
+          "best_ms": 0.000491,
+          "in_gibs": 5.96907,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-lz4__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 209.59,
+      "status": "pass",
+      "throughput_in_gibs": 0.542721,
+      "throughput_out_gibs": 0.448742,
+      "compression_fold": 2.09097,
+      "input_gib": 3.51562,
+      "compressed_gib": 2.90685,
+      "total_chunks": 3112,
+      "chunks_per_epoch": 778,
+      "wall_s": 6.47777,
+      "init_s": 32.3855,
+      "flush_s": 6.82e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.50628,
+          "best_ms": 0.986538,
+          "in_gibs": 6.48809,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 97.4258,
+          "best_ms": 87.9316,
+          "in_gibs": 11.5472,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 216.965,
+          "best_ms": 207.779,
+          "in_gibs": 6.92483,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 29.7503,
+          "best_ms": 20.4334,
+          "in_gibs": 12.687,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 100.463,
+          "best_ms": 86.0644,
+          "in_gibs": 15.1252,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 1392.69,
+          "best_ms": 634.231,
+          "in_gibs": 2.7277,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 33.2473,
+          "best_ms": 0.044774,
+          "in_gibs": 14.5697,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 4.72633,
+          "best_ms": 0.000371,
+          "in_gibs": 4.04627,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "orca2_multiscale_dim0__blosc-zstd__xor__cpu__u16__2M__fs",
+      "scenario": "orca2_multiscale_dim0",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 2097152,
+      "chunk_bytes_label": "2M",
+      "sink": "fs",
+      "elapsed_s": 204.52,
+      "status": "pass",
+      "throughput_in_gibs": 0.869337,
+      "throughput_out_gibs": 0.01848,
+      "compression_fold": 81.3304,
+      "input_gib": 3.51562,
+      "compressed_gib": 0.0747337,
+      "total_chunks": 3112,
+      "chunks_per_epoch": 778,
+      "wall_s": 4.04403,
+      "init_s": 32.4826,
+      "flush_s": 1.303e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 9.30957,
+          "best_ms": 0.982621,
+          "in_gibs": 6.62519,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 101.283,
+          "best_ms": 86.1126,
+          "in_gibs": 11.1075,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 211.407,
+          "best_ms": 198.785,
+          "in_gibs": 7.10688,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 30.357,
+          "best_ms": 22.387,
+          "in_gibs": 12.4334,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 94.8296,
+          "best_ms": 82.4243,
+          "in_gibs": 16.0238,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 645.902,
+          "best_ms": 373.085,
+          "in_gibs": 5.88143,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 1.13948,
+          "best_ms": 0.002385,
+          "in_gibs": 10.8635,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.100531,
+          "best_ms": 0.000241,
+          "in_gibs": 4.89073,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__none__xor__gpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 107.56,
+      "status": "pass",
+      "throughput_in_gibs": 4.65695,
+      "throughput_out_gibs": 4.97061,
+      "compression_fold": 1.07139,
+      "input_gib": 3.75,
+      "compressed_gib": 4.00257,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 0.805248,
+      "init_s": 2.56795,
+      "flush_s": 0.0145626,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.55318,
+          "best_ms": 1.63577,
+          "in_gibs": 18.3594,
+          "out_gibs": 18.3594
+        },
+        "h2d": {
+          "avg_ms": 4.34655,
+          "best_ms": 2.32656,
+          "in_gibs": 10.7844,
+          "out_gibs": 10.7844
+        },
+        "scatter": {
+          "avg_ms": 0.307504,
+          "best_ms": 0.173152,
+          "in_gibs": 152.437,
+          "out_gibs": 152.437
+        },
+        "lod_gather": {
+          "avg_ms": 2.10056,
+          "best_ms": 1.99414,
+          "in_gibs": 44.6309,
+          "out_gibs": 44.6309
+        },
+        "lod_reduce": {
+          "avg_ms": 1.8735,
+          "best_ms": 1.77037,
+          "in_gibs": 50.0399,
+          "out_gibs": 57.2234
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.159529,
+          "best_ms": 0.104992,
+          "in_gibs": 84.3627,
+          "out_gibs": 84.3627
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 2.00411,
+          "best_ms": 1.16112,
+          "in_gibs": 53.4941,
+          "out_gibs": 53.4941
+        },
+        "compress": {
+          "avg_ms": 0.948845,
+          "best_ms": 0.66144,
+          "in_gibs": 112.988,
+          "out_gibs": 102.826
+        },
+        "aggregate": {
+          "avg_ms": 1.17557,
+          "best_ms": 0.042912,
+          "in_gibs": 82.9945,
+          "out_gibs": 82.9945
+        },
+        "d2h": {
+          "avg_ms": 13.4969,
+          "best_ms": 0.019296,
+          "in_gibs": 7.22881,
+          "out_gibs": 7.22881
+        },
+        "sink": {
+          "avg_ms": 0.000691691,
+          "best_ms": 7e-05,
+          "in_gibs": 11391,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 333.129,
+        "flush_stall_count": 39,
+        "kick_sync_ms": 7.69283,
+        "kick_sync_count": 41,
+        "io_fence_ms": 1.22839,
+        "io_fence_count": 41,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 23.3219,
+        "peak_pending_mib": 156.164
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__none__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 106.97,
+      "status": "pass",
+      "throughput_in_gibs": 1.08394,
+      "throughput_out_gibs": 1.15695,
+      "compression_fold": 1.07139,
+      "input_gib": 3.75,
+      "compressed_gib": 4.00257,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 3.45959,
+      "init_s": 2.86715,
+      "flush_s": 0.000243025,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.36936,
+          "best_ms": 1.86996,
+          "in_gibs": 13.9122,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 14.7416,
+          "best_ms": 14.3435,
+          "in_gibs": 6.35953,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 12.8534,
+          "best_ms": 11.6488,
+          "in_gibs": 8.34088,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.779797,
+          "best_ms": 0.268242,
+          "in_gibs": 17.2587,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 9.86146,
+          "best_ms": 8.52127,
+          "in_gibs": 10.8714,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 5.99211,
+          "best_ms": 5.73183,
+          "in_gibs": 17.8916,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 2.94572,
+          "best_ms": 0.006682,
+          "in_gibs": 17.4099,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.39017,
+          "best_ms": 0.000521,
+          "in_gibs": 5.66769,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__zstd__xor__gpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 104.97,
+      "status": "pass",
+      "throughput_in_gibs": 2.07004,
+      "throughput_out_gibs": 0.26765,
+      "compression_fold": 8.84441,
+      "input_gib": 3.75,
+      "compressed_gib": 0.484863,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 1.81156,
+      "init_s": 2.4204,
+      "flush_s": 8.82e-07,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.65342,
+          "best_ms": 1.58301,
+          "in_gibs": 17.6658,
+          "out_gibs": 17.6658
+        },
+        "h2d": {
+          "avg_ms": 3.49699,
+          "best_ms": 2.32483,
+          "in_gibs": 13.4044,
+          "out_gibs": 13.4044
+        },
+        "scatter": {
+          "avg_ms": 0.562804,
+          "best_ms": 0.224544,
+          "in_gibs": 83.2884,
+          "out_gibs": 83.2884
+        },
+        "lod_gather": {
+          "avg_ms": 2.17495,
+          "best_ms": 2.07219,
+          "in_gibs": 43.1044,
+          "out_gibs": 43.1044
+        },
+        "lod_reduce": {
+          "avg_ms": 1.97168,
+          "best_ms": 1.81942,
+          "in_gibs": 47.5482,
+          "out_gibs": 54.374
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.23157,
+          "best_ms": 0.111776,
+          "in_gibs": 58.1174,
+          "out_gibs": 58.1174
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 4.32406,
+          "best_ms": 1.19712,
+          "in_gibs": 24.7934,
+          "out_gibs": 24.7934
+        },
+        "compress": {
+          "avg_ms": 42.6438,
+          "best_ms": 8.8215,
+          "in_gibs": 2.51404,
+          "out_gibs": 0.275971
+        },
+        "aggregate": {
+          "avg_ms": 0.225526,
+          "best_ms": 0.031712,
+          "in_gibs": 52.1822,
+          "out_gibs": 52.1822
+        },
+        "d2h": {
+          "avg_ms": 1.22842,
+          "best_ms": 0.01552,
+          "in_gibs": 9.58014,
+          "out_gibs": 9.58014
+        },
+        "sink": {
+          "avg_ms": 0.00087402,
+          "best_ms": 8e-05,
+          "in_gibs": 1092.03,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 1274.78,
+        "flush_stall_count": 39,
+        "kick_sync_ms": 1269.44,
+        "kick_sync_count": 41,
+        "io_fence_ms": 0.030236,
+        "io_fence_count": 41,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 62.479,
+        "peak_pending_mib": 13.4062
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__zstd__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 107.26,
+      "status": "pass",
+      "throughput_in_gibs": 0.975148,
+      "throughput_out_gibs": 0.0959494,
+      "compression_fold": 11.6221,
+      "input_gib": 3.75,
+      "compressed_gib": 0.36898,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 3.84557,
+      "init_s": 2.94033,
+      "flush_s": 8.02e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.54228,
+          "best_ms": 1.50829,
+          "in_gibs": 13.233,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 16.646,
+          "best_ms": 14.6279,
+          "in_gibs": 5.63197,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 16.1839,
+          "best_ms": 11.7428,
+          "in_gibs": 6.62438,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.1468,
+          "best_ms": 0.171682,
+          "in_gibs": 11.7355,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 11.0977,
+          "best_ms": 8.67137,
+          "in_gibs": 9.66042,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 27.527,
+          "best_ms": 26.5231,
+          "in_gibs": 3.89466,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.427671,
+          "best_ms": 0.001012,
+          "in_gibs": 10.9904,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0639085,
+          "best_ms": 0.000481,
+          "in_gibs": 11.3653,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__blosc-lz4__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 105.92,
+      "status": "pass",
+      "throughput_in_gibs": 1.08521,
+      "throughput_out_gibs": 0.720989,
+      "compression_fold": 1.72124,
+      "input_gib": 3.75,
+      "compressed_gib": 2.49142,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 3.45556,
+      "init_s": 2.97458,
+      "flush_s": 1.443e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.45707,
+          "best_ms": 1.85677,
+          "in_gibs": 13.5592,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 15.5608,
+          "best_ms": 14.4561,
+          "in_gibs": 6.02474,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 14.2679,
+          "best_ms": 11.5902,
+          "in_gibs": 7.51394,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.09668,
+          "best_ms": 0.167003,
+          "in_gibs": 12.2718,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 10.1044,
+          "best_ms": 8.67438,
+          "in_gibs": 10.61,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 12.2316,
+          "best_ms": 11.9013,
+          "in_gibs": 8.76486,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 2.08686,
+          "best_ms": 0.001894,
+          "in_gibs": 15.2914,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.62165,
+          "best_ms": 0.000641,
+          "in_gibs": 7.88928,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__blosc-zstd__xor__cpu__u16__32K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 32768,
+      "chunk_bytes_label": "32K",
+      "sink": "fs",
+      "elapsed_s": 105.33,
+      "status": "pass",
+      "throughput_in_gibs": 1.19625,
+      "throughput_out_gibs": 0.0337857,
+      "compression_fold": 40.4898,
+      "input_gib": 3.75,
+      "compressed_gib": 0.105911,
+      "total_chunks": 140520,
+      "chunks_per_epoch": 3513,
+      "wall_s": 3.13479,
+      "init_s": 2.89352,
+      "flush_s": 1.002e-06,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.53983,
+          "best_ms": 1.81143,
+          "in_gibs": 13.2422,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 15.4444,
+          "best_ms": 14.3876,
+          "in_gibs": 6.07018,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 13.1497,
+          "best_ms": 11.5388,
+          "in_gibs": 8.15289,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.871742,
+          "best_ms": 0.206637,
+          "in_gibs": 15.4383,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 10.3759,
+          "best_ms": 8.67925,
+          "in_gibs": 10.3324,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 17.3938,
+          "best_ms": 16.9233,
+          "in_gibs": 6.16358,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.22239,
+          "best_ms": 0.000771,
+          "in_gibs": 5.96976,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0213423,
+          "best_ms": 0.000261,
+          "in_gibs": 9.76869,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__none__xor__gpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 108.1,
+      "status": "pass",
+      "throughput_in_gibs": 4.16978,
+      "throughput_out_gibs": 4.44982,
+      "compression_fold": 1.0725,
+      "input_gib": 3.75,
+      "compressed_gib": 4.00184,
+      "total_chunks": 35160,
+      "chunks_per_epoch": 879,
+      "wall_s": 0.899328,
+      "init_s": 2.73149,
+      "flush_s": 0.0770528,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.70169,
+          "best_ms": 1.57861,
+          "in_gibs": 17.3502,
+          "out_gibs": 17.3502
+        },
+        "h2d": {
+          "avg_ms": 3.78533,
+          "best_ms": 2.32438,
+          "in_gibs": 12.3833,
+          "out_gibs": 12.3833
+        },
+        "scatter": {
+          "avg_ms": 0.355336,
+          "best_ms": 0.220704,
+          "in_gibs": 126.744,
+          "out_gibs": 126.744
+        },
+        "lod_gather": {
+          "avg_ms": 2.69455,
+          "best_ms": 2.58269,
+          "in_gibs": 34.7924,
+          "out_gibs": 34.7924
+        },
+        "lod_reduce": {
+          "avg_ms": 2.44505,
+          "best_ms": 2.30858,
+          "in_gibs": 38.3428,
+          "out_gibs": 43.8845
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.260598,
+          "best_ms": 0.223392,
+          "in_gibs": 51.995,
+          "out_gibs": 51.995
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 1.7506,
+          "best_ms": 1.64534,
+          "in_gibs": 61.2932,
+          "out_gibs": 61.2932
+        },
+        "compress": {
+          "avg_ms": 3.66608,
+          "best_ms": 3.47754,
+          "in_gibs": 117.073,
+          "out_gibs": 109.132
+        },
+        "aggregate": {
+          "avg_ms": 17.5043,
+          "best_ms": 7.35792,
+          "in_gibs": 22.8564,
+          "out_gibs": 22.8564
+        },
+        "d2h": {
+          "avg_ms": 65.3862,
+          "best_ms": 30.4296,
+          "in_gibs": 6.1188,
+          "out_gibs": 6.1188
+        },
+        "sink": {
+          "avg_ms": 0.000531246,
+          "best_ms": 7e-05,
+          "in_gibs": 22026.1,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 282.282,
+        "flush_stall_count": 9,
+        "kick_sync_ms": 5.82626,
+        "kick_sync_count": 10,
+        "io_fence_ms": 0.007536,
+        "io_fence_count": 10,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 35.6276,
+        "peak_pending_mib": 471.465
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__none__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "none",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 107.91,
+      "status": "pass",
+      "throughput_in_gibs": 0.820002,
+      "throughput_out_gibs": 0.875379,
+      "compression_fold": 1.07579,
+      "input_gib": 3.75,
+      "compressed_gib": 4.00325,
+      "total_chunks": 17640,
+      "chunks_per_epoch": 441,
+      "wall_s": 4.57316,
+      "init_s": 3.05442,
+      "flush_s": 6.91e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.67809,
+          "best_ms": 1.58135,
+          "in_gibs": 12.7444,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 17.9371,
+          "best_ms": 14.7074,
+          "in_gibs": 5.22661,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 15.7007,
+          "best_ms": 12.3885,
+          "in_gibs": 6.85742,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.41076,
+          "best_ms": 0.000221,
+          "in_gibs": 9.86418,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 14.0894,
+          "best_ms": 10.6061,
+          "in_gibs": 7.64165,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 50.5592,
+          "best_ms": 46.9763,
+          "in_gibs": 17.036,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 12.7485,
+          "best_ms": 0.042289,
+          "in_gibs": 15.6986,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 4.11692,
+          "best_ms": 0.000381,
+          "in_gibs": 3.05782,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__zstd__xor__gpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "gpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 110.49,
+      "status": "pass",
+      "throughput_in_gibs": 1.62275,
+      "throughput_out_gibs": 0.205035,
+      "compression_fold": 9.05843,
+      "input_gib": 3.75,
+      "compressed_gib": 0.473812,
+      "total_chunks": 35160,
+      "chunks_per_epoch": 879,
+      "wall_s": 2.31089,
+      "init_s": 2.70842,
+      "flush_s": 0.00187207,
+      "stages": {
+        "memcpy": {
+          "avg_ms": 2.78304,
+          "best_ms": 1.63185,
+          "in_gibs": 16.8431,
+          "out_gibs": 16.8431
+        },
+        "h2d": {
+          "avg_ms": 3.60069,
+          "best_ms": 2.3271,
+          "in_gibs": 13.0183,
+          "out_gibs": 13.0183
+        },
+        "scatter": {
+          "avg_ms": 2.58587,
+          "best_ms": 0.20832,
+          "in_gibs": 16.2283,
+          "out_gibs": 16.2283
+        },
+        "lod_gather": {
+          "avg_ms": 9.64733,
+          "best_ms": 2.53142,
+          "in_gibs": 9.71771,
+          "out_gibs": 9.71771
+        },
+        "lod_reduce": {
+          "avg_ms": 2.46401,
+          "best_ms": 2.29888,
+          "in_gibs": 38.0478,
+          "out_gibs": 43.5469
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.315187,
+          "best_ms": 0.224192,
+          "in_gibs": 42.9897,
+          "out_gibs": 42.9897
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 2.84796,
+          "best_ms": 1.64458,
+          "in_gibs": 37.676,
+          "out_gibs": 37.676
+        },
+        "compress": {
+          "avg_ms": 216.338,
+          "best_ms": 180.717,
+          "in_gibs": 1.98393,
+          "out_gibs": 0.218399
+        },
+        "aggregate": {
+          "avg_ms": 0.888438,
+          "best_ms": 0.671744,
+          "in_gibs": 53.181,
+          "out_gibs": 53.181
+        },
+        "d2h": {
+          "avg_ms": 7.14343,
+          "best_ms": 3.58787,
+          "in_gibs": 6.6142,
+          "out_gibs": 6.6142
+        },
+        "sink": {
+          "avg_ms": 0.109538,
+          "best_ms": 9e-05,
+          "in_gibs": 12.6479,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 479.594,
+        "flush_stall_count": 9,
+        "kick_sync_ms": 582.729,
+        "kick_sync_count": 10,
+        "io_fence_ms": 0.01615,
+        "io_fence_count": 10,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 176.254,
+        "peak_pending_mib": 48.4727
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__zstd__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 106.09,
+      "status": "pass",
+      "throughput_in_gibs": 1.02977,
+      "throughput_out_gibs": 0.0965599,
+      "compression_fold": 12.2476,
+      "input_gib": 3.75,
+      "compressed_gib": 0.351631,
+      "total_chunks": 17640,
+      "chunks_per_epoch": 441,
+      "wall_s": 3.64159,
+      "init_s": 2.88159,
+      "flush_s": 9.12e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.35597,
+          "best_ms": 1.8332,
+          "in_gibs": 13.9676,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 17.3542,
+          "best_ms": 14.6208,
+          "in_gibs": 5.40215,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 16.4441,
+          "best_ms": 11.7853,
+          "in_gibs": 6.54739,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.16997,
+          "best_ms": 0.000201,
+          "in_gibs": 11.8943,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 13.262,
+          "best_ms": 10.6218,
+          "in_gibs": 8.1184,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 173.207,
+          "best_ms": 170.599,
+          "in_gibs": 4.97284,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 1.49793,
+          "best_ms": 0.002987,
+          "in_gibs": 11.7092,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.194731,
+          "best_ms": 0.000311,
+          "in_gibs": 5.67839,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__blosc-lz4__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "blosc-lz4",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 106.66,
+      "status": "pass",
+      "throughput_in_gibs": 0.96819,
+      "throughput_out_gibs": 0.58148,
+      "compression_fold": 1.9122,
+      "input_gib": 3.75,
+      "compressed_gib": 2.25219,
+      "total_chunks": 17640,
+      "chunks_per_epoch": 441,
+      "wall_s": 3.87321,
+      "init_s": 3.07439,
+      "flush_s": 9.72e-07,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.50442,
+          "best_ms": 1.87543,
+          "in_gibs": 13.376,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 17.5031,
+          "best_ms": 14.5195,
+          "in_gibs": 5.3562,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 18.435,
+          "best_ms": 11.8812,
+          "in_gibs": 5.8403,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 1.18021,
+          "best_ms": 0.0001,
+          "in_gibs": 11.7911,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 14.3539,
+          "best_ms": 10.5723,
+          "in_gibs": 7.50083,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 90.8984,
+          "best_ms": 86.7129,
+          "in_gibs": 9.47573,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 7.88036,
+          "best_ms": 0.008919,
+          "in_gibs": 14.2847,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 1.31748,
+          "best_ms": 0.000431,
+          "in_gibs": 5.37568,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    },
+    {
+      "id": "256cube_multiscale_dim0__blosc-zstd__xor__cpu__u16__256K__fs",
+      "scenario": "256cube_multiscale_dim0",
+      "codec": "blosc-zstd",
+      "fill": "xor",
+      "backend": "cpu",
+      "dtype": "u16",
+      "chunk_bytes": 262144,
+      "chunk_bytes_label": "256K",
+      "sink": "fs",
+      "elapsed_s": 105.2,
+      "status": "pass",
+      "throughput_in_gibs": 1.35164,
+      "throughput_out_gibs": 0.0220901,
+      "compression_fold": 70.2701,
+      "input_gib": 3.75,
+      "compressed_gib": 0.0612869,
+      "total_chunks": 17640,
+      "chunks_per_epoch": 441,
+      "wall_s": 2.77441,
+      "init_s": 2.92373,
+      "flush_s": 0.000103991,
+      "stages": {
+        "scatter": {
+          "avg_ms": 3.39566,
+          "best_ms": 1.9025,
+          "in_gibs": 13.8044,
+          "out_gibs": 0.0
+        },
+        "lod_gather": {
+          "avg_ms": 15.0887,
+          "best_ms": 14.5004,
+          "in_gibs": 6.21325,
+          "out_gibs": 0.0
+        },
+        "lod_reduce": {
+          "avg_ms": 12.7874,
+          "best_ms": 12.0396,
+          "in_gibs": 8.41967,
+          "out_gibs": 0.0
+        },
+        "lod_append_fold": {
+          "avg_ms": 0.936008,
+          "best_ms": 0.000301,
+          "in_gibs": 14.8674,
+          "out_gibs": 0.0
+        },
+        "lod_morton_chunk": {
+          "avg_ms": 12.699,
+          "best_ms": 10.7274,
+          "in_gibs": 8.47828,
+          "out_gibs": 0.0
+        },
+        "compress": {
+          "avg_ms": 69.2614,
+          "best_ms": 68.5846,
+          "in_gibs": 12.4359,
+          "out_gibs": 0.0
+        },
+        "aggregate": {
+          "avg_ms": 0.312296,
+          "best_ms": 0.001754,
+          "in_gibs": 9.66206,
+          "out_gibs": 0.0
+        },
+        "sink": {
+          "avg_ms": 0.0330763,
+          "best_ms": 0.000371,
+          "in_gibs": 5.82671,
+          "out_gibs": 0.0
+        }
+      },
+      "stalls": {
+        "flush_stall_ms": 0.0,
+        "flush_stall_count": 0,
+        "kick_sync_ms": 0.0,
+        "kick_sync_count": 0,
+        "io_fence_ms": 0.0,
+        "io_fence_count": 0,
+        "backpressure_ms": 0.0,
+        "backpressure_count": 0,
+        "max_append_ms": 0.0,
+        "peak_pending_mib": 0.0
+      }
+    }
+  ]
+}
