@@ -72,7 +72,11 @@ test_multiscale_create(void)
   };
 
   // Parent writes root group
-  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(store, "");
+    CHECK(Fail2, g);
+    zarr_group_destroy(g);
+  }
 
   struct ngff_multiscale* ms = ngff_multiscale_create(store, "ms", &cfg);
   CHECK(Fail2, ms);
@@ -144,7 +148,11 @@ test_multiscale_shard_sink(void)
       .storage_position = 1 },
   };
 
-  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(store, "");
+    CHECK(Fail2, g);
+    zarr_group_destroy(g);
+  }
 
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,

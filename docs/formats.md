@@ -36,7 +36,8 @@ struct zarr_array_config cfg = {
     .codec = codec,
 };
 
-zarr_write_group(store, "zarr.json", NULL);  // root group
+struct zarr_group* root = zarr_group_create(store, "");  // root group
+zarr_group_destroy(root);
 struct zarr_array* a = zarr_array_create(store, "0", &cfg);
 
 // Use the shard_sink interface with the stream
@@ -56,7 +57,8 @@ store_destroy(store);
 
 struct store* store = store_fs_create("/data/out.zarr", 0);
 
-zarr_write_group(store, "zarr.json", NULL);  // root group
+struct zarr_group* root = zarr_group_create(store, "");  // root group
+zarr_group_destroy(root);
 
 struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,

@@ -16,21 +16,14 @@ static const char group_prefix[] =
 static const char group_suffix[] = "}";
 
 int
-zarr_write_group(struct store* store,
-                 const char* key,
-                 const char* attributes_json)
+zarr_group_write_with_raw_attrs(struct store* store,
+                                const char* key,
+                                const char* attributes_json)
 {
   CHECK(Fail, store);
   CHECK(Fail, key);
+  CHECK(Fail, attributes_json);
 
-  if (!attributes_json) {
-    char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-    int len = zarr_root_json(buf, sizeof(buf));
-    CHECK(Fail, len >= 0);
-    return store->put(store, key, buf, (size_t)len);
-  }
-
-  // Dynamically allocate for large attributes (e.g. HCS plate metadata).
   size_t attr_len = strlen(attributes_json);
   size_t total = sizeof(group_prefix) - 1 + attr_len + sizeof(group_suffix);
   char* buf = (char*)malloc(total);

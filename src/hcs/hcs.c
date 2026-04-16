@@ -4,6 +4,7 @@
 #include "lod/lod_plan.h"
 #include "ngff/ngff_multiscale.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/attr_set.h"
 #include "zarr/store.h"
 #include "zarr/zarr_group.h"
@@ -86,7 +87,8 @@ write_plate_group(struct hcs_plate* p)
                                        &p->plate_attrs);
   char key[4096];
   snprintf(key, sizeof(key), "%s/zarr.json", p->name);
-  int rc = alen < 0 ? 1 : zarr_write_group(p->store, key, attrs);
+  int rc =
+    alen < 0 ? 1 : zarr_group_write_with_raw_attrs(p->store, key, attrs);
   free(attrs);
   if (rc == 0)
     p->plate_attrs.dirty = 0;
@@ -104,7 +106,7 @@ write_well_group(struct hcs_plate* p, int r, int c)
   char rc_ch = plate_row_char(p, r);
   char key[4096];
   snprintf(key, sizeof(key), "%s/%c/%d/zarr.json", p->name, rc_ch, c + 1);
-  int rc = zarr_write_group(p->store, key, attrs);
+  int rc = zarr_group_write_with_raw_attrs(p->store, key, attrs);
   if (rc == 0)
     w->dirty = 0;
   return rc;
@@ -179,7 +181,11 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   // --- Write hierarchy ---
 
   // Root group
-  CHECK(Fail_fovs, zarr_write_group(store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(store, "");
+    CHECK(Fail_fovs, g);
+    zarr_group_destroy(g);
+  }
 
   // Plate group with OME plate attributes
   CHECK(Fail_fovs, store->mkdirs(store, cfg->name) == 0);
@@ -194,9 +200,9 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     snprintf(row_dir, sizeof(row_dir), "%s/%c", cfg->name, rc);
     CHECK(Fail_fovs, store->mkdirs(store, row_dir) == 0);
     {
-      char key[4096];
-      snprintf(key, sizeof(key), "%s/%c/zarr.json", cfg->name, rc);
-      CHECK(Fail_fovs, zarr_write_group(store, key, NULL) == 0);
+      struct zarr_group* g = zarr_group_create(store, row_dir);
+      CHECK(Fail_fovs, g);
+      zarr_group_destroy(g);
     }
 
     for (int c = 0; c < cfg->cols; ++c) {

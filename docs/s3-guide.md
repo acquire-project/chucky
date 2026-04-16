@@ -50,7 +50,8 @@ store_s3_config_set_defaults(&scfg);  // fill part_size, throughput_gbps
 
 struct store* store = store_s3_create(&scfg);
 
-zarr_write_group(store, "zarr.json", NULL);  // root group
+struct zarr_group* root = zarr_group_create(store, "");  // root group
+zarr_group_destroy(root);
 struct zarr_array_config acfg = {
     .data_type = dtype_u16,
     .rank = rank,
@@ -239,7 +240,8 @@ struct store_s3_config scfg = {
 store_s3_config_set_defaults(&scfg);
 struct store* store = store_s3_create(&scfg);
 
-zarr_write_group(store, "zarr.json", NULL);
+struct zarr_group* root = zarr_group_create(store, "");
+zarr_group_destroy(root);
 struct zarr_array_config acfg = {
   .data_type = dtype_u16, .rank = 3, .dimensions = dims,
   .codec = { .id = CODEC_ZSTD },

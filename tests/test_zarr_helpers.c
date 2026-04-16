@@ -1,6 +1,7 @@
 #include "test_zarr_helpers.h"
 #include "defs.limits.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/store.h"
 #include "zarr/zarr_metadata.h"
 
@@ -19,15 +20,19 @@ write_intermediate(const char* partial, void* ctx)
 {
   struct intermediate_ctx* c = (struct intermediate_ctx*)ctx;
   c->store->mkdirs(c->store, partial);
-  char key[4096];
-  snprintf(key, sizeof(key), "%s/zarr.json", partial);
-  return zarr_write_group(c->store, key, NULL);
+  struct zarr_group* g = zarr_group_create(c->store, partial);
+  if (!g)
+    return 1;
+  zarr_group_destroy(g);
+  return 0;
 }
 
 static int
 write_root_and_intermediates(struct store* store, const char* array_name)
 {
-  CHECK(Fail, zarr_write_group(store, "zarr.json", NULL) == 0);
+  struct zarr_group* root = zarr_group_create(store, "");
+  CHECK(Fail, root);
+  zarr_group_destroy(root);
   if (array_name && array_name[0]) {
     struct intermediate_ctx ictx = { .store = store };
     CHECK(Fail,

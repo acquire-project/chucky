@@ -23,7 +23,7 @@ struct zarr_array;
 
 // Create a zarr v3 array.
 // Writes {prefix}/zarr.json. Does NOT write root or intermediate groups.
-// The caller must ensure the prefix directory exists (via zarr_write_group
+// The caller must ensure the prefix directory exists (via zarr_group_create
 // or the higher-level ngff/hcs layers).
 // prefix may be "" to write at the store root.
 // Returns NULL on error.
@@ -51,15 +51,6 @@ zarr_array_pending_bytes(const struct zarr_array* a);
 // Access live dimensions (reflects append-dimension updates).
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);
-
-// Write a zarr v3 group zarr.json at the given key.
-// attributes_json: raw JSON string for the "attributes" field.
-//   If NULL, writes an empty attributes object.
-// Returns 0 on success, non-zero on error.
-int
-zarr_write_group(struct store* store,
-                 const char* key,
-                 const char* attributes_json);
 
 // Attach a custom JSON attribute to the array's zarr.json under
 // attributes.<attr_key>. Value is validated and copied. attr_key must be
