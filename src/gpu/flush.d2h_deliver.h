@@ -38,5 +38,6 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct tile_stream_configuration* config,
                   struct shard_sink* sink,
                   const struct lod_state* lod,
+                  const struct lod_shared_state* lod_shared,
                   struct stream_metrics* metrics,
                   struct platform_clock* metadata_update_clock);

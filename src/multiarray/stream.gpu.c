@@ -130,16 +130,10 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->d2h_deliver.nlod = desc->ctx.levels.nlod;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
 
-  // Load per-array LOD state into engine.lod, preserving the engine-owned
-  // shared fields (d_linear, d_morton, timing).
-  CUdeviceptr saved_d_linear = e->lod.d_linear;
-  CUdeviceptr saved_d_morton = e->lod.d_morton;
-  struct lod_timing saved_timing[2];
-  memcpy(saved_timing, e->lod.timing, sizeof(saved_timing));
+  // Per-array LOD state is now a single struct assignment.  Shared LOD
+  // resources (d_linear, d_morton, timing) live in e->lod_shared and are
+  // untouched by bind/unbind — the type system enforces this.
   e->lod = desc->array_lod;
-  e->lod.d_linear = saved_d_linear;
-  e->lod.d_morton = saved_d_morton;
-  memcpy(e->lod.timing, saved_timing, sizeof(saved_timing));
 }
 
 static void
@@ -392,6 +386,7 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                          ms->max_nlod,
                          0,
                          e->streams.compute) == 0);
+  e->d2h_deliver.metrics = &e->metrics;
 
   CU(Fail, cuEventRecord(e->pools.ready[0], e->streams.compute));
   CU(Fail, cuEventRecord(e->pools.ready[1], e->streams.compute));
@@ -406,30 +401,15 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   }
 
   // Shared LOD buffers (sized to max across arrays). Only allocated if any
-  // array uses multiscale. engine.lod.d_linear / d_morton / timing are the
-  // ONLY fields in engine.lod that the engine owns — all other fields are
-  // shallow-copied from the active array's descriptor on bind.
+  // array uses multiscale.  The struct lod_shared_state / lod_state split
+  // keeps engine-owned resources separate from per-array state, so bind/unbind
+  // never touches these fields.
   if (mx->any_multiscale) {
-    CU(Fail, cuMemAlloc(&e->lod.d_linear, mx->lod_linear_bytes));
-    CU(Fail, cuMemAlloc(&e->lod.d_morton, mx->lod_morton_bytes));
-    for (int fc = 0; fc < 2; ++fc) {
-      CU(Fail, cuEventCreate(&e->lod.timing[fc].t_start, CU_EVENT_DEFAULT));
-      CU(Fail,
-         cuEventCreate(&e->lod.timing[fc].t_scatter_end, CU_EVENT_DEFAULT));
-      CU(Fail,
-         cuEventCreate(&e->lod.timing[fc].t_reduce_end, CU_EVENT_DEFAULT));
-      CU(Fail,
-         cuEventCreate(&e->lod.timing[fc].t_append_end, CU_EVENT_DEFAULT));
-      CU(Fail, cuEventCreate(&e->lod.timing[fc].t_end, CU_EVENT_DEFAULT));
-      CU(Fail, cuEventRecord(e->lod.timing[fc].t_start, e->streams.compute));
-      CU(Fail,
-         cuEventRecord(e->lod.timing[fc].t_scatter_end, e->streams.compute));
-      CU(Fail,
-         cuEventRecord(e->lod.timing[fc].t_reduce_end, e->streams.compute));
-      CU(Fail,
-         cuEventRecord(e->lod.timing[fc].t_append_end, e->streams.compute));
-      CU(Fail, cuEventRecord(e->lod.timing[fc].t_end, e->streams.compute));
-    }
+    CHECK(Fail,
+          lod_shared_state_init(&e->lod_shared,
+                                mx->lod_linear_bytes,
+                                mx->lod_morton_bytes,
+                                e->streams.compute) == 0);
   }
 
   CU(Fail, cuStreamSynchronize(e->streams.compute));
@@ -606,18 +586,10 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     cu_mem_free(lvl->d_batch_perm);
   }
 
-  // Engine owns ONLY d_linear, d_morton, and timing events in e->lod.
-  // Other fields are views shallow-copied from the last bound descriptor —
-  // those were freed by destroy_array_descriptor above.
-  cu_mem_free(e->lod.d_linear);
-  cu_mem_free(e->lod.d_morton);
-  for (int fc = 0; fc < 2; ++fc) {
-    cu_event_destroy(e->lod.timing[fc].t_start);
-    cu_event_destroy(e->lod.timing[fc].t_scatter_end);
-    cu_event_destroy(e->lod.timing[fc].t_reduce_end);
-    cu_event_destroy(e->lod.timing[fc].t_append_end);
-    cu_event_destroy(e->lod.timing[fc].t_end);
-  }
+  // The per-array fields of e->lod are views of the last-bound descriptor
+  // (freed above by destroy_array_descriptor).  Engine-owned shared LOD
+  // resources live in e->lod_shared.
+  lod_shared_state_destroy(&e->lod_shared);
 
   for (int i = 0; i < 2; ++i) {
     cu_mem_free(e->pools.buf[i]);
@@ -634,28 +606,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   free(ms);
 }
 
-static struct stream_metrics
-init_metrics(void)
-{
-  return (struct stream_metrics){
-    .memcpy = mk_stream_metric("Memcpy"),
-    .h2d = mk_stream_metric("H2D"),
-    .scatter = mk_stream_metric("Scatter"),
-    .lod_gather = mk_stream_metric("LOD Gather"),
-    .lod_reduce = mk_stream_metric("LOD Reduce"),
-    .lod_append_fold = mk_stream_metric("Append Fold"),
-    .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
-    .compress = mk_stream_metric("Compress"),
-    .aggregate = mk_stream_metric("Aggregate"),
-    .d2h = mk_stream_metric("D2H"),
-    .sink = mk_stream_metric("Sink"),
-    .flush_stall = mk_stream_metric("FlushStall"),
-    .kick_sync_stall = mk_stream_metric("KickSync"),
-    .io_fence_stall = mk_stream_metric("IOFence"),
-    .backpressure = mk_stream_metric("Backpres"),
-  };
-}
-
 struct multiarray_tile_stream_gpu*
 multiarray_tile_stream_gpu_create(
   int n_arrays,
@@ -663,7 +613,10 @@ multiarray_tile_stream_gpu_create(
   struct shard_sink* sinks[],
   int enable_metrics)
 {
-  (void)enable_metrics; // metrics always collected via engine
+  // enable_metrics is ignored: CUDA events are recorded for stream sync
+  // regardless, so metrics collection has no meaningful opt-out on the GPU
+  // path. See multiarray.gpu.h.
+  (void)enable_metrics;
 
   if (n_arrays <= 0)
     return NULL;
@@ -718,7 +671,17 @@ multiarray_tile_stream_gpu_create(
   // compose across array switches.
   ms->engine.sync_flush = 1;
 
-  ms->engine.metrics = init_metrics();
+  // Label scatter as "Copy" only when every array uses multiscale (matches
+  // single-array GPU).  When any array is non-multiscale, the scatter kernel
+  // runs directly into the chunk pool, so keep the generic label.
+  int all_multiscale = 1;
+  for (int a = 0; a < n_arrays; ++a) {
+    if (!ms->arrays[a].ctx.levels.enable_multiscale) {
+      all_multiscale = 0;
+      break;
+    }
+  }
+  ms->engine.metrics = stream_engine_init_metrics(all_multiscale);
   ms->engine.metadata_update_clock = (struct platform_clock){ 0 };
   platform_toc(&ms->engine.metadata_update_clock);
 

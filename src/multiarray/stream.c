@@ -37,6 +37,7 @@ struct array_descriptor
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
   struct io_event io_done[LOD_MAX_LEVELS];
   size_t shard_alignment; // from sink; 0 = no alignment
+  int pool_fully_covered; // 1 if scatter overwrites every pool position
 };
 
 // ---- Main struct ----
@@ -147,6 +148,8 @@ init_array_descriptor(struct array_descriptor* desc,
 
   desc->layout = desc->cl.layouts[0];
   desc->levels = desc->cl.levels;
+  desc->pool_fully_covered =
+    (desc->layout.chunk_stride == desc->layout.chunk_elements);
 
   const uint32_t K = desc->cl.epochs_per_batch;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
@@ -562,7 +565,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .max_cursor_elements = desc->max_cursor_elements,
     .batch_accumulated = &desc->batch_accumulated,
     .batch_active_masks = desc->batch_active_masks,
-    .pool_fully_covered = 0,
+    .pool_fully_covered = desc->pool_fully_covered,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
     .batch_active_count = desc->batch_active_count,

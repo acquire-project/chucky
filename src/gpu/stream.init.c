@@ -63,6 +63,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
   destroy_chunk_pools(&s->engine.pools);
   lod_state_destroy(&s->engine.lod);
+  lod_shared_state_destroy(&s->engine.lod_shared);
   ingest_destroy(&s->engine.stage);
   destroy_cuda_streams_and_events(&s->engine.streams, &s->engine.pools);
   free(s);
@@ -124,48 +125,13 @@ Fail:
 }
 
 static int
-seed_events(const struct pool_state* pools,
-            const struct lod_state* lod,
-            CUstream compute)
+seed_events(const struct pool_state* pools, CUstream compute)
 {
   CU(Fail, cuEventRecord(pools->ready[0], compute));
   CU(Fail, cuEventRecord(pools->ready[1], compute));
-
-  for (int fc = 0; fc < 2; ++fc) {
-    if (lod->timing[fc].t_start) {
-      CU(Fail, cuEventRecord(lod->timing[fc].t_start, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_scatter_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_reduce_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_append_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_end, compute));
-    }
-  }
-
   return 0;
 Fail:
   return 1;
-}
-
-static struct stream_metrics
-init_metrics(int enable_multiscale)
-{
-  return (struct stream_metrics){
-    .memcpy = mk_stream_metric("Memcpy"),
-    .h2d = mk_stream_metric("H2D"),
-    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
-    .lod_gather = mk_stream_metric("LOD Gather"),
-    .lod_reduce = mk_stream_metric("LOD Reduce"),
-    .lod_append_fold = mk_stream_metric("Append Fold"),
-    .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
-    .compress = mk_stream_metric("Compress"),
-    .aggregate = mk_stream_metric("Aggregate"),
-    .d2h = mk_stream_metric("D2H"),
-    .sink = mk_stream_metric("Sink"),
-    .flush_stall = mk_stream_metric("FlushStall"),
-    .kick_sync_stall = mk_stream_metric("KickSync"),
-    .io_fence_stall = mk_stream_metric("IOFence"),
-    .backpressure = mk_stream_metric("Backpres"),
-  };
 }
 
 struct tile_stream_gpu*
@@ -257,17 +223,24 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         init_batch_events(&out->engine.batch, out->engine.streams.compute) ==
           0);
   if (out->ctx.levels.enable_multiscale) {
+    const size_t bpe = dtype_bpe(out->ctx.config.dtype);
+    const size_t linear_bytes = out->engine.lod.layouts[0].epoch_elements * bpe;
+    const uint64_t morton_total_vals =
+      out->engine.lod.plan.level_spans
+        .ends[out->engine.lod.plan.levels.nlod - 1];
+    const size_t morton_bytes = morton_total_vals * bpe;
     CHECK(FailPhase2,
-          lod_state_init_buffers(&out->engine.lod, out->ctx.config.dtype) == 0);
+          lod_shared_state_init(&out->engine.lod_shared,
+                                linear_bytes,
+                                morton_bytes,
+                                out->engine.streams.compute) == 0);
     if (out->ctx.dims.append_downsample)
       CHECK(FailPhase2,
             lod_state_init_accumulators(&out->engine.lod, &out->ctx.config) ==
               0);
   }
   CHECK(FailPhase2,
-        seed_events(&out->engine.pools,
-                    &out->engine.lod,
-                    out->engine.streams.compute) == 0);
+        seed_events(&out->engine.pools, out->engine.streams.compute) == 0);
 
   CU(FailPhase2, cuStreamSynchronize(out->engine.streams.compute));
 
@@ -283,7 +256,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     }
   }
 
-  out->engine.metrics = init_metrics(out->ctx.levels.enable_multiscale);
+  out->engine.metrics =
+    stream_engine_init_metrics(out->ctx.levels.enable_multiscale);
   out->engine.d2h_deliver.metrics = &out->engine.metrics;
 
   // Initialize metadata update timer

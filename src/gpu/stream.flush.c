@@ -28,9 +28,10 @@ make_compress_input(struct stream_engine* e,
     .active_levels_mask = fs->active_levels_mask,
     .epochs_per_batch = e->batch.epochs_per_batch,
     .pool_buf = e->pools.buf[fc],
-    .lod_done = (ctx->levels.enable_multiscale && e->lod.timing[fc].t_end)
-                  ? e->lod.timing[fc].t_end
-                  : NULL,
+    .lod_done =
+      (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
+        ? e->lod_shared.timing[fc].t_end
+        : NULL,
   };
   memcpy(
     in.batch_active_masks, fs->batch_active_masks, n_epochs * sizeof(uint32_t));
@@ -40,18 +41,6 @@ make_compress_input(struct stream_engine* e,
 
 // --- Epoch accumulation ---
 
-// Return pointer to the current epoch's chunk region within the super-pool.
-static inline void*
-pool_epoch_ptr(struct stream_engine* e,
-               struct stream_context* ctx,
-               uint32_t epoch_in_batch)
-{
-  const size_t bytes_per_element = dtype_bpe(ctx->config.dtype);
-  return (char*)e->pools.buf[e->pools.current] +
-         (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
-           ctx->layout.chunk_stride * bytes_per_element;
-}
-
 // Run LOD pipeline for the current epoch, or handle non-multiscale case.
 // Updates flush slot batch_active_masks and active_levels_mask.
 int
@@ -60,15 +49,16 @@ flush_run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
   struct flush_slot_gpu* fs = &e->flush.slot[e->pools.current];
   uint32_t active_mask;
 
-  if (!ctx->levels.enable_multiscale || !e->lod.d_linear) {
+  if (!ctx->levels.enable_multiscale || !e->lod_shared.d_linear) {
     // Non-multiscale: all levels (just L0) are active
     active_mask = 1;
   } else {
     CHECK(Error,
           lod_run_epoch(&e->lod,
+                        &e->lod_shared,
                         e->pools.current,
                         &ctx->levels,
-                        pool_epoch_ptr(e, ctx, e->batch.accumulated),
+                        stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
                         ctx->config.dtype,
                         ctx->config.reduce_method,
                         ctx->config.append_reduce_method,
@@ -132,6 +122,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
                                                &ctx->config,
                                                ctx->sink,
                                                &e->lod,
+                                               &e->lod_shared,
                                                &e->metrics,
                                                &e->metadata_update_clock);
     float ms = (float)(platform_toc(&stall_clk) * 1000.0);
@@ -275,6 +266,7 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
                            &ctx->config,
                            ctx->sink,
                            &e->lod,
+                           &e->lod_shared,
                            &e->metrics,
                            &e->metadata_update_clock);
 }
@@ -301,6 +293,7 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
                                              &ctx->config,
                                              ctx->sink,
                                              &e->lod,
+                                             &e->lod_shared,
                                              &e->metrics,
                                              &e->metadata_update_clock);
   if (r.error)
@@ -355,7 +348,8 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
     size_t accum_bpe = dtype_bpe(dtype);
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr morton_lv = e->lod.d_morton + lev.beg * bytes_per_element;
+    CUdeviceptr morton_lv =
+      e->lod_shared.d_morton + lev.beg * bytes_per_element;
     CUdeviceptr accum_lv =
       e->lod.append_accum.d_accum + accum_offset * accum_bpe;
 
@@ -389,8 +383,9 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
   }
 
   CU(Error, cuEventRecord(e->pools.ready[fc], e->streams.compute));
-  if (e->lod.timing[fc].t_end)
-    CU(Error, cuEventRecord(e->lod.timing[fc].t_end, e->streams.compute));
+  if (e->lod_shared.timing[fc].t_end)
+    CU(Error,
+       cuEventRecord(e->lod_shared.timing[fc].t_end, e->streams.compute));
 
   CU(Error, cuEventRecord(e->batch.pool_events[0], e->streams.compute));
   if (flush_kick_batch(e, ctx, fc, 1))
@@ -404,6 +399,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
                            &ctx->config,
                            ctx->sink,
                            &e->lod,
+                           &e->lod_shared,
                            &e->metrics,
                            &e->metadata_update_clock);
 

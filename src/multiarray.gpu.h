@@ -6,11 +6,14 @@
 struct multiarray_tile_stream_gpu;
 struct stream_metrics;
 
-// Create a GPU multiarray stream.  Pass enable_metrics != 0 to collect timing.
-// GPU resources (pools, staging, codec) are shared across all arrays and sized
-// to the maximum requirement, so memory usage is constant with respect to
-// n_arrays.  Only one array may be active at a time; switching requires an
-// epoch boundary.
+// Create a GPU multiarray stream.  GPU resources (pools, staging, codec) are
+// shared across all arrays and sized to the maximum requirement, so memory
+// usage is constant with respect to n_arrays.  Only one array may be active
+// at a time; switching requires an epoch boundary.
+//
+// enable_metrics is currently ignored on the GPU path: metrics are always
+// collected (CUDA events are required for stream synchronization regardless).
+// Accepted for API symmetry with the CPU multiarray constructor.
 struct multiarray_tile_stream_gpu*
 multiarray_tile_stream_gpu_create(
   int n_arrays,

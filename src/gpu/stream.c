@@ -5,6 +5,7 @@
 #include "gpu/prelude.cuda.h"
 #include "log/log.h"
 #include "platform/platform.h"
+#include "stream/config.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
@@ -18,10 +19,32 @@ tile_stream_gpu_flush_final(struct writer* self);
 
 // --- Shared helpers (engine + context) ---
 
-static inline void*
-engine_pool_epoch(struct stream_engine* e,
-                  struct stream_context* ctx,
-                  uint32_t epoch_in_batch)
+struct stream_metrics
+stream_engine_init_metrics(int enable_multiscale)
+{
+  return (struct stream_metrics){
+    .memcpy = mk_stream_metric("Memcpy"),
+    .h2d = mk_stream_metric("H2D"),
+    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
+    .lod_gather = mk_stream_metric("LOD Gather"),
+    .lod_reduce = mk_stream_metric("LOD Reduce"),
+    .lod_append_fold = mk_stream_metric("Append Fold"),
+    .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
+    .compress = mk_stream_metric("Compress"),
+    .aggregate = mk_stream_metric("Aggregate"),
+    .d2h = mk_stream_metric("D2H"),
+    .sink = mk_stream_metric("Sink"),
+    .flush_stall = mk_stream_metric("FlushStall"),
+    .kick_sync_stall = mk_stream_metric("KickSync"),
+    .io_fence_stall = mk_stream_metric("IOFence"),
+    .backpressure = mk_stream_metric("Backpres"),
+  };
+}
+
+void*
+stream_engine_pool_epoch(struct stream_engine* e,
+                         struct stream_context* ctx,
+                         uint32_t epoch_in_batch)
 {
   const size_t bpe = dtype_bpe(ctx->config.dtype);
   return (char*)e->pools.buf[e->pools.current] +
@@ -34,7 +57,7 @@ engine_dispatch_ingest(struct stream_engine* e, struct stream_context* ctx)
 {
   if (ctx->levels.enable_multiscale) {
     return ingest_dispatch_multiscale(&e->stage,
-                                      e->lod.d_linear,
+                                      e->lod_shared.d_linear,
                                       ctx->layout.epoch_elements,
                                       &ctx->cursor_elements,
                                       dtype_bpe(ctx->config.dtype),
@@ -45,7 +68,7 @@ engine_dispatch_ingest(struct stream_engine* e, struct stream_context* ctx)
       &e->stage,
       &ctx->layout,
       &ctx->layout_gpu,
-      engine_pool_epoch(e, ctx, e->batch.accumulated),
+      stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
       e->pools.ready[e->pools.current],
       &ctx->cursor_elements,
       dtype_bpe(ctx->config.dtype),

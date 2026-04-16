@@ -57,12 +57,31 @@ struct level_flush_state
   uint32_t batch_active_count; // K_l = K / 2^l for this level
 };
 
+// Per-frame-counter timing events (double-buffered).
+struct lod_timing
+{
+  CUevent t_start;
+  CUevent t_scatter_end;
+  CUevent t_reduce_end;
+  CUevent t_append_end;
+  CUevent t_end;
+};
+
+// Engine-owned LOD resources shared across all arrays in a multiarray stream
+// (sized to the max requirement).  For a single-array stream these are still
+// owned by the engine and sized for that one array.
+struct lod_shared_state
+{
+  CUdeviceptr d_linear;        // linear epoch buffer (device)
+  CUdeviceptr d_morton;        // morton-ordered LOD output (all levels packed)
+  struct lod_timing timing[2]; // double-buffered pipeline timing
+};
+
+// Per-array LOD state.  In multiarray, one instance per array; the active
+// array's state is copied into the engine on bind.
 struct lod_state
 {
   struct lod_plan plan;
-
-  CUdeviceptr d_linear; // linear epoch buffer (device)
-  CUdeviceptr d_morton; // morton-ordered LOD output (all levels packed)
 
   CUdeviceptr d_full_shape;         // device copy of shapes[0]
   CUdeviceptr d_lod_shape;          // device copy of LOD-projected shapes[0]
@@ -79,16 +98,6 @@ struct lod_state
   // Morton-to-chunk scatter LUTs (precomputed)
   CUdeviceptr d_morton_chunk_lut[LOD_MAX_LEVELS];
   CUdeviceptr d_morton_fixed_dims_chunk_offsets[LOD_MAX_LEVELS];
-
-  // Per-frame-counter timing events (double-buffered).
-  struct lod_timing
-  {
-    CUevent t_start;
-    CUevent t_scatter_end;
-    CUevent t_reduce_end;
-    CUevent t_append_end;
-    CUevent t_end;
-  } timing[2];
 
   // Append-dim LOD accumulation state.
   struct
@@ -199,12 +208,25 @@ struct stream_engine
   struct flush_pipeline flush;
   struct compress_agg_stage compress_agg;
   struct d2h_deliver_stage d2h_deliver;
-  struct lod_state lod;
+  struct lod_shared_state lod_shared; // engine-owned shared LOD resources
+  struct lod_state lod;               // per-array; overwritten on array switch
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
 
 // --- Engine operations ---
+
+// Pointer to the given epoch's chunk region in the current pool.
+void*
+stream_engine_pool_epoch(struct stream_engine* e,
+                         struct stream_context* ctx,
+                         uint32_t epoch_in_batch);
+
+// Build the initial set of metric labels.  Shared by single-array and
+// multiarray GPU constructors; enable_multiscale only affects the label of
+// the scatter/copy stage ("Copy" when multiscale, "Scatter" otherwise).
+struct stream_metrics
+stream_engine_init_metrics(int enable_multiscale);
 
 // Append data to the stream. Handles staging, dispatch, epoch boundaries,
 // batch flush, and backpressure. Used by both single-array and multiarray.

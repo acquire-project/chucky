@@ -206,12 +206,13 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
                      const struct lod_state* lod,
+                     const struct lod_shared_state* lod_shared,
                      struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
-  const struct lod_timing* t = &lod->timing[fc];
+  const struct lod_timing* t = &lod_shared->timing[fc];
   if (levels->enable_multiscale && t->t_start) {
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
@@ -295,6 +296,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct tile_stream_configuration* config,
                  struct shard_sink* sink,
                  const struct lod_state* lod,
+                 const struct lod_shared_state* lod_shared,
                  struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
@@ -312,8 +314,16 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   CHECK(Error,
         drain_bulk_d2h(stage, handoff, levels, batch, dims, config) == 0);
   CU(Error, cuEventSynchronize(stage->ready[fc]));
-  record_flush_metrics(
-    stage, handoff, levels, batch, dims, layout, config, lod, metrics);
+  record_flush_metrics(stage,
+                       handoff,
+                       levels,
+                       batch,
+                       dims,
+                       layout,
+                       config,
+                       lod,
+                       lod_shared,
+                       metrics);
 
   {
     struct platform_clock sink_clock = { 0 };
@@ -427,11 +437,21 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct tile_stream_configuration* config,
                   struct shard_sink* sink,
                   const struct lod_state* lod,
+                  const struct lod_shared_state* lod_shared,
                   struct stream_metrics* metrics,
                   struct platform_clock* metadata_update_clock)
 {
-  struct writer_result r = sync_and_deliver(
-    stage, handoff, levels, batch, dims, layout, config, sink, lod, metrics);
+  struct writer_result r = sync_and_deliver(stage,
+                                            handoff,
+                                            levels,
+                                            batch,
+                                            dims,
+                                            layout,
+                                            config,
+                                            sink,
+                                            lod,
+                                            lod_shared,
+                                            metrics);
   if (!r.error) {
     if (maybe_update_metadata(stage, dims, config, sink, metadata_update_clock))
       return writer_error();
