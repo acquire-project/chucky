@@ -390,6 +390,188 @@ Fail:
   return 1;
 }
 
+// --- s3_client_get (small blocking GET) ---
+
+struct get_ctx
+{
+  struct aws_mutex mutex;
+  struct aws_condition_variable cv;
+  int done;
+  int error_code;
+  int response_status;
+  struct aws_byte_buf body;
+  int body_err;
+};
+
+static int
+on_get_body(struct aws_s3_meta_request* meta_request,
+            const struct aws_byte_cursor* body,
+            uint64_t range_start,
+            void* user_data)
+{
+  (void)meta_request;
+  (void)range_start;
+  struct get_ctx* ctx = (struct get_ctx*)user_data;
+  if (aws_byte_buf_append_dynamic(&ctx->body, body) != AWS_OP_SUCCESS) {
+    ctx->body_err = 1;
+    return AWS_OP_ERR;
+  }
+  return AWS_OP_SUCCESS;
+}
+
+static void
+on_get_finish(struct aws_s3_meta_request* meta_request,
+              const struct aws_s3_meta_request_result* result,
+              void* user_data)
+{
+  (void)meta_request;
+  struct get_ctx* ctx = (struct get_ctx*)user_data;
+  aws_mutex_lock(&ctx->mutex);
+  ctx->error_code = result->error_code;
+  ctx->response_status = result->response_status;
+  ctx->done = 1;
+  aws_condition_variable_notify_one(&ctx->cv);
+  aws_mutex_unlock(&ctx->mutex);
+}
+
+static bool
+is_get_done(void* user_data)
+{
+  struct get_ctx* ctx = (struct get_ctx*)user_data;
+  return ctx->done != 0;
+}
+
+static struct aws_http_message*
+make_get_message(struct aws_allocator* alloc,
+                 struct s3_client* c,
+                 const char* bucket,
+                 const char* key)
+{
+  struct aws_http_message* msg = aws_http_message_new_request(alloc);
+  if (!msg)
+    return NULL;
+
+  aws_http_message_set_request_method(msg, aws_byte_cursor_from_c_str("GET"));
+
+  char path[4096];
+  if (c->has_endpoint) {
+    snprintf(path, sizeof(path), "/%s/%s", bucket, key);
+    aws_http_message_set_request_path(msg, aws_byte_cursor_from_c_str(path));
+
+    const struct aws_byte_cursor* authority =
+      aws_uri_authority(&c->endpoint_uri);
+    aws_http_message_add_header(
+      msg,
+      (struct aws_http_header){ .name = aws_byte_cursor_from_c_str("Host"),
+                                .value = *authority });
+  } else {
+    snprintf(path, sizeof(path), "/%s", key);
+    aws_http_message_set_request_path(msg, aws_byte_cursor_from_c_str(path));
+
+    char host[512];
+    snprintf(host,
+             sizeof(host),
+             "%s.s3.%s.amazonaws.com",
+             bucket,
+             aws_string_c_str(c->region));
+    aws_http_message_add_header(
+      msg,
+      (struct aws_http_header){ .name = aws_byte_cursor_from_c_str("Host"),
+                                .value = aws_byte_cursor_from_c_str(host) });
+  }
+
+  return msg;
+}
+
+int
+s3_client_get(struct s3_client* c,
+              const char* bucket,
+              const char* key,
+              void** out_buf,
+              size_t* out_len)
+{
+  *out_buf = NULL;
+  *out_len = 0;
+
+  struct aws_http_message* msg = make_get_message(c->alloc, c, bucket, key);
+  CHECK(Fail, msg);
+
+  struct get_ctx ctx = {
+    .mutex = AWS_MUTEX_INIT,
+    .cv = AWS_CONDITION_VARIABLE_INIT,
+  };
+  if (aws_byte_buf_init(&ctx.body, c->alloc, 1024) != AWS_OP_SUCCESS)
+    goto Fail_msg;
+
+  struct aws_s3_meta_request_options opts = {
+    .type = AWS_S3_META_REQUEST_TYPE_GET_OBJECT,
+    .message = msg,
+    .body_callback = on_get_body,
+    .finish_callback = on_get_finish,
+    .user_data = &ctx,
+  };
+
+  if (c->has_endpoint)
+    opts.endpoint = &c->endpoint_uri;
+
+  struct aws_s3_meta_request* meta_req =
+    aws_s3_client_make_meta_request(c->client, &opts);
+  CHECK(Fail_body, meta_req);
+
+  aws_mutex_lock(&ctx.mutex);
+  aws_condition_variable_wait_for_pred(
+    &ctx.cv, &ctx.mutex, (int64_t)c->timeout_ns, is_get_done, &ctx);
+  int timed_out = !ctx.done;
+  aws_mutex_unlock(&ctx.mutex);
+
+  if (timed_out) {
+    log_error("s3_client_get(%s/%s): timed out", bucket, key);
+    aws_s3_meta_request_cancel(meta_req);
+    aws_mutex_lock(&ctx.mutex);
+    aws_condition_variable_wait_pred(
+      &ctx.cv, &ctx.mutex, is_get_done, &ctx);
+    aws_mutex_unlock(&ctx.mutex);
+  }
+
+  aws_s3_meta_request_release(meta_req);
+  aws_http_message_release(msg);
+
+  if (timed_out || ctx.body_err) {
+    aws_byte_buf_clean_up(&ctx.body);
+    return 1;
+  }
+
+  if (ctx.error_code != 0) {
+    log_error("s3_client_get(%s/%s): error %d (HTTP %d)",
+              bucket,
+              key,
+              ctx.error_code,
+              ctx.response_status);
+    aws_byte_buf_clean_up(&ctx.body);
+    return 1;
+  }
+
+  // Transfer body to heap buffer (with NUL terminator).
+  char* out = (char*)malloc(ctx.body.len + 1);
+  if (!out) {
+    aws_byte_buf_clean_up(&ctx.body);
+    return 1;
+  }
+  memcpy(out, ctx.body.buffer, ctx.body.len);
+  out[ctx.body.len] = '\0';
+  *out_buf = out;
+  *out_len = ctx.body.len;
+  aws_byte_buf_clean_up(&ctx.body);
+  return 0;
+
+Fail_body:
+  aws_byte_buf_clean_up(&ctx.body);
+Fail_msg:
+  aws_http_message_release(msg);
+Fail:
+  return 1;
+}
+
 // --- s3_upload (streaming PUT with async writes) ---
 
 struct s3_upload

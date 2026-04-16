@@ -60,3 +60,15 @@ int
 zarr_write_group(struct store* store,
                  const char* key,
                  const char* attributes_json);
+
+// Merge a JSON value into an existing zarr.json's attributes object.
+// key_path: array or group prefix. NULL or "" = store root.
+// attr_key: non-NULL, non-empty attribute name. "ome" is reserved.
+// json_value: well-formed JSON text.
+// Returns 0 on success; non-zero on IO error, missing node, malformed
+// JSON, or reserved key.
+int
+zarr_write_attribute(struct store* store,
+                     const char* key_path,
+                     const char* attr_key,
+                     const char* json_value);

@@ -1,5 +1,7 @@
 add_src_lib(json_writer SOURCES json_writer.c json_writer.h)
 
+add_src_lib(json_merge SOURCES json_merge.c json_merge.h LINKS chucky_log)
+
 add_src_lib(zarr_metadata SOURCES zarr_metadata.c zarr_metadata.h
     LINKS json_writer dimension dtype codec_types chucky_log
 )
@@ -18,6 +20,10 @@ add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
 
 add_src_lib(zarr_group SOURCES zarr_group.c zarr_group.h
     LINKS zarr_metadata chucky_log
+)
+
+add_src_lib(zarr_attribute SOURCES zarr_attribute.c
+    LINKS json_merge store_api chucky_log
 )
 
 add_src_lib(zarr_array SOURCES zarr_array.c zarr_array.h

@@ -36,6 +36,15 @@ s3_put(struct store* self, const char* key, const void* data, size_t len)
 }
 
 static int
+s3_get(struct store* self, const char* key, void** out_buf, size_t* out_len)
+{
+  struct store_s3* s = container_of(self, struct store_s3, base);
+  char full[4096];
+  s3_full_key(s, key, full, sizeof(full));
+  return s3_client_get(s->client, s->bucket, full, out_buf, out_len);
+}
+
+static int
 s3_mkdirs(struct store* self, const char* key)
 {
   (void)self;
@@ -83,6 +92,7 @@ store_s3_create(const struct store_s3_config* cfg)
   CHECK(Fail_alloc, s->client);
 
   s->base.put = s3_put;
+  s->base.get = s3_get;
   s->base.mkdirs = s3_mkdirs;
   s->base.create_pool = s3_create_pool;
   s->base.destroy = s3_destroy;

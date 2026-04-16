@@ -35,6 +35,16 @@ s3_client_put(struct s3_client* c,
               const void* data,
               size_t len);
 
+// Blocking GET of a small object (zarr.json metadata). On success, *out_buf
+// is a malloc'd buffer (caller frees) and *out_len is its length.
+// Returns 0 on success, non-zero on error.
+int
+s3_client_get(struct s3_client* c,
+              const char* bucket,
+              const char* key,
+              void** out_buf,
+              size_t* out_len);
+
 // --- Streaming upload for large objects (shards) ---
 
 struct s3_upload;

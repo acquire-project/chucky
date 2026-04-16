@@ -30,6 +30,44 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
 }
 
 static int
+fs_get(struct store* self, const char* key, void** out_buf, size_t* out_len)
+{
+  struct store_fs* fs = container_of(self, struct store_fs, base);
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", fs->root, key);
+
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return 1;
+  if (fseek(f, 0, SEEK_END) != 0) {
+    fclose(f);
+    return 1;
+  }
+  long sz = ftell(f);
+  if (sz < 0) {
+    fclose(f);
+    return 1;
+  }
+  rewind(f);
+
+  char* buf = (char*)malloc((size_t)sz + 1);
+  if (!buf) {
+    fclose(f);
+    return 1;
+  }
+  size_t n = fread(buf, 1, (size_t)sz, f);
+  fclose(f);
+  if (n != (size_t)sz) {
+    free(buf);
+    return 1;
+  }
+  buf[sz] = '\0';
+  *out_buf = buf;
+  *out_len = (size_t)sz;
+  return 0;
+}
+
+static int
 fs_mkdirs(struct store* self, const char* key)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
@@ -60,6 +98,7 @@ store_fs_create(const char* root, int unbuffered)
   CHECK(Fail, fs);
 
   fs->base.put = fs_put;
+  fs->base.get = fs_get;
   fs->base.mkdirs = fs_mkdirs;
   fs->base.create_pool = fs_create_pool;
   fs->base.destroy = fs_destroy;
