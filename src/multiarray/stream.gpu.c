@@ -38,6 +38,7 @@ struct array_descriptor_gpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
+  int flushed; // 1 once flush body has run for this array
 };
 
 // ---- Pool maxima (computed across all arrays) ----
@@ -480,6 +481,17 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       .rest = data,
     };
 
+  struct array_descriptor_gpu* desc = &ms->arrays[array_index];
+
+  // If this array has already been flushed (capacity reached with inline
+  // flush, or explicit flush), further appends are a no-op that report
+  // `finished` with the full input unconsumed.
+  if (desc->flushed)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_finished,
+      .rest = data,
+    };
+
   // Switch arrays if needed
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -487,8 +499,12 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       return (struct multiarray_writer_result){ .error = err, .rest = data };
   }
 
-  struct writer_result r =
-    stream_append_body(&ms->engine, &ms->arrays[array_index].ctx, data);
+  struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+
+  // `stream_append_body` runs a terminal flush inline when the array hits
+  // `max_cursor_elements`; capture that so subsequent flushes become no-ops.
+  if (r.error == multiarray_writer_finished)
+    desc->flushed = 1;
 
   // Map writer_result → multiarray_writer_result (error codes are identity)
   return (struct multiarray_writer_result){
@@ -512,8 +528,15 @@ flush_impl(struct multiarray_writer* self)
   // Flush each array that has data
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
-    if (desc->ctx.cursor_elements == 0 && desc->batch_accumulated == 0)
+    // Already-flushed arrays (either by inline flush on capacity or by a
+    // prior explicit flush) re-entering the body would re-finalize an
+    // already-finalized sink.
+    if (desc->flushed)
       continue;
+    if (desc->ctx.cursor_elements == 0 && desc->batch_accumulated == 0) {
+      desc->flushed = 1;
+      continue;
+    }
 
     ms->active = a;
     bind_context(&ms->engine, desc);
@@ -523,6 +546,7 @@ flush_impl(struct multiarray_writer* self)
       goto Error;
 
     unbind_context(&ms->engine, desc);
+    desc->flushed = 1;
   }
 
   ms->active = -1;

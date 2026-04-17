@@ -38,6 +38,7 @@ struct array_descriptor
   struct io_event io_done[LOD_MAX_LEVELS];
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
+  int flushed;            // 1 once flush body has run for this array
 };
 
 // ---- Main struct ----
@@ -611,6 +612,15 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor* desc = &ms->arrays[array_index];
 
+  // If this array has already been flushed (capacity reached with inline
+  // flush, or explicit flush), further appends are a no-op that report
+  // `finished` with the full input unconsumed.
+  if (desc->flushed)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_finished,
+      .rest = data,
+    };
+
   // Switch arrays if needed.
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -620,6 +630,12 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct cpu_stream_view v = make_multiarray_view(ms, desc);
   struct writer_result r = cpu_stream_append_body(&v, data);
+
+  // `cpu_stream_append_body` runs a terminal flush inline when the array
+  // hits `max_cursor_elements`; capture that so subsequent flushes become
+  // no-ops.
+  if (r.error == multiarray_writer_finished)
+    desc->flushed = 1;
 
   // Map writer_result → multiarray_writer_result (error codes are identity)
   return (struct multiarray_writer_result){
@@ -638,8 +654,15 @@ flush_impl(struct multiarray_writer* self)
 
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
-    if (desc->cursor_elements == 0 && desc->batch_accumulated == 0)
+    // Already-flushed arrays (either by inline flush on capacity or by a
+    // prior explicit flush) re-entering the body would re-finalize an
+    // already-finalized sink — on Windows that deadlocks.
+    if (desc->flushed)
       continue;
+    if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {
+      desc->flushed = 1;
+      continue;
+    }
 
     // Ensure LUTs are computed for this array (shared LUTs may be stale).
     if (a != ms->active)
@@ -650,6 +673,7 @@ flush_impl(struct multiarray_writer* self)
     struct writer_result r = cpu_stream_flush_body(&v);
     if (r.error)
       goto Error;
+    desc->flushed = 1;
   }
 
   return (struct multiarray_writer_result){
