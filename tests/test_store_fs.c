@@ -4,9 +4,9 @@
 #include "util/prelude.h"
 #include "zarr/shard_pool.h"
 #include "zarr/shard_pool_fs.h"
+#include "zarr.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
-#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -379,7 +379,7 @@ Fail:
   return 1;
 }
 
-// After a real zarr_write_group at root → 1.
+// After a real zarr group write at root → 1.
 static int
 test_has_existing_data_after_write_group(void)
 {
@@ -392,7 +392,9 @@ test_has_existing_data_after_write_group(void)
   struct store* s = store_fs_create(root, 0);
   CHECK(Fail, s);
   CHECK(Fail2, store_has_existing_data(s) == 0);
-  CHECK(Fail2, zarr_write_group(s, "zarr.json", NULL) == 0);
+  struct zarr_group* g = zarr_group_create(s, "");
+  CHECK(Fail2, g);
+  zarr_group_destroy(g);
   CHECK(Fail2, store_has_existing_data(s) == 1);
   store_destroy(s);
 
