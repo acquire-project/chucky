@@ -601,6 +601,85 @@ Fail:
   return 1;
 }
 
+// ---- Test: flush is idempotent after writer reaches `finished` ----
+//
+// After `stream_append_body` hits `max_cursor_elements` and runs its inline
+// terminal flush, the writer reports `multiarray_writer_finished`.
+// Subsequent explicit `flush()` calls (and further `update()` calls) must
+// be no-ops — not re-finalize already-finalized shards. A prior bug caused
+// the destructor's follow-up flush to deadlock on Windows against an
+// already-finalized sink.
+static int
+test_flush_idempotent_after_finished(void)
+{
+  log_info("=== test_flush_idempotent_after_finished ===");
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+
+  // 2D 4x4 u8: epoch_elements=8, 2 epochs, max_cursor=16.
+  struct dimension dims[2];
+  struct tile_stream_configuration config = make_2d_config(dims, dtype_u8);
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // Fill exactly max_cursor. Cursor reaches the cap but loop exits
+  // naturally; no inline flush yet.
+  CHECK(Fail, write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
+
+  // Probing one more element drives the writer into the `finished` state
+  // and triggers the inline terminal flush.
+  {
+    uint8_t extra = 0;
+    struct slice sl = { .beg = &extra, .end = &extra + 1 };
+    struct multiarray_writer_result r = w->update(w, 0, sl);
+    CHECK(Fail, r.error == multiarray_writer_finished);
+    CHECK(Fail, r.rest.beg == sl.beg); // nothing consumed
+  }
+  const int finalize_after_inline = sink.finalize_count;
+  const int open_after_inline = sink.open_count;
+  CHECK(Fail, finalize_after_inline > 0);
+
+  // Explicit flush must succeed and must not re-open or re-finalize shards.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count == finalize_after_inline);
+  CHECK(Fail, sink.open_count == open_after_inline);
+
+  // Flush again — still a no-op.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count == finalize_after_inline);
+  CHECK(Fail, sink.open_count == open_after_inline);
+
+  // Further updates still report finished with full input unconsumed, and
+  // do not touch the sink.
+  {
+    uint8_t extra = 0;
+    struct slice sl = { .beg = &extra, .end = &extra + 1 };
+    struct multiarray_writer_result r = w->update(w, 0, sl);
+    CHECK(Fail, r.error == multiarray_writer_finished);
+    CHECK(Fail, r.rest.beg == sl.beg);
+  }
+  CHECK(Fail, sink.finalize_count == finalize_after_inline);
+  CHECK(Fail, sink.open_count == open_after_inline);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- Test: flush with no data written ----
 
 static int
@@ -920,6 +999,7 @@ main(int ac, char* av[])
   ret |= test_content_isolation();
   ret |= test_cross_validate_single_array();
   ret |= test_write_past_max_cursor();
+  ret |= test_flush_idempotent_after_finished();
   ret |= test_flush_no_data();
   ret |= test_metrics_enabled();
   ret |= test_mixed_dtypes();
