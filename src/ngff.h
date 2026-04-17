@@ -49,6 +49,8 @@ ngff_multiscale_create(struct store* store,
                        const char* prefix,
                        const struct ngff_multiscale_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// ngff_multiscale_flush_metadata before destroy if you need to detect failures.
 void
 ngff_multiscale_destroy(struct ngff_multiscale* ms);
 
@@ -66,3 +68,15 @@ ngff_multiscale_has_error(const struct ngff_multiscale* ms);
 // Returns number of bytes queued but not yet written.
 size_t
 ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms);
+
+// Buffer a custom attribute on the multiscale's OME group (sibling of the
+// "ome" block). Validated and copied; rewritten on next metadata write or
+// destroy. Returns 0 on success.
+int
+ngff_multiscale_set_attribute(struct ngff_multiscale* ms,
+                              const char* attr_key,
+                              const char* json_value);
+
+// Force the multiscale's group zarr.json to be rewritten now.
+int
+ngff_multiscale_flush_metadata(struct ngff_multiscale* ms);

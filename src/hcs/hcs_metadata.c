@@ -1,4 +1,5 @@
 #include "hcs/hcs_metadata.h"
+#include "zarr/attr_set.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
@@ -11,7 +12,8 @@ hcs_plate_attributes_json(char* buf,
                           int cols,
                           const char* row_names,
                           int field_count,
-                          const int* well_mask)
+                          const int* well_mask,
+                          const struct attr_set* extras)
 {
   struct json_writer jw;
   jw_init(&jw, buf, cap);
@@ -90,6 +92,7 @@ hcs_plate_attributes_json(char* buf,
 
   jw_object_end(&jw); // plate
   jw_object_end(&jw); // ome
+  attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes root
 
   if (jw_error(&jw))
@@ -98,7 +101,10 @@ hcs_plate_attributes_json(char* buf,
 }
 
 int
-hcs_well_attributes_json(char* buf, size_t cap, int field_count)
+hcs_well_attributes_json(char* buf,
+                         size_t cap,
+                         int field_count,
+                         const struct attr_set* extras)
 {
   struct json_writer jw;
   jw_init(&jw, buf, cap);
@@ -128,6 +134,7 @@ hcs_well_attributes_json(char* buf, size_t cap, int field_count)
 
   jw_object_end(&jw); // well
   jw_object_end(&jw); // ome
+  attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes root
 
   if (jw_error(&jw))

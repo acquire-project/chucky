@@ -1,5 +1,6 @@
 #include "bench_zarr.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/store.h"
 #include "zarr/zarr_metadata.h"
 
@@ -10,9 +11,11 @@ write_intermediate_bench(const char* partial, void* ctx)
 {
   struct store* store = (struct store*)ctx;
   store->mkdirs(store, partial);
-  char key[4096];
-  snprintf(key, sizeof(key), "%s/zarr.json", partial);
-  return zarr_write_group(store, key, NULL);
+  struct zarr_group* g = zarr_group_create(store, partial);
+  if (!g)
+    return 1;
+  zarr_group_destroy(g);
+  return 0;
 }
 
 int
@@ -33,7 +36,11 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
   z->store->mkdirs(z->store, ".");
 
   // Write root group
-  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(z->store, "");
+    CHECK(Fail_store, g);
+    zarr_group_destroy(g);
+  }
 
   // Write intermediate groups
   if (array_name && array_name[0]) {
@@ -106,7 +113,11 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
   z->store->mkdirs(z->store, ".");
 
   // Write root group
-  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(z->store, "");
+    CHECK(Fail_store, g);
+    zarr_group_destroy(g);
+  }
 
   // Write intermediate groups
   if (array_name && array_name[0]) {

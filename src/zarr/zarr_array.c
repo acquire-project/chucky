@@ -2,6 +2,7 @@
 #include "defs.limits.h"
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
+#include "zarr/attr_set.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -27,6 +28,9 @@ struct zarr_array
   enum dtype data_type;
   double fill_value;
   struct codec_config codec;
+
+  // User-supplied custom attributes (buffered until next metadata rewrite).
+  struct attr_set attrs;
 };
 
 // --- Metadata writing ---
@@ -40,18 +44,35 @@ write_array_metadata(struct zarr_array* a)
   else
     snprintf(key, sizeof(key), "zarr.json");
 
-  char buf[4096];
+  // Size the buffer generously to fit custom attributes of arbitrary size.
+  size_t attr_bytes = 0;
+  for (size_t i = 0; i < a->attrs.count; ++i) {
+    attr_bytes += strlen(a->attrs.items[i].key);
+    attr_bytes += strlen(a->attrs.items[i].json_value);
+    attr_bytes += 16; // quotes, colon, comma, slack
+  }
+  size_t cap = 4096 + attr_bytes;
+  char* buf = (char*)malloc(cap);
+  if (!buf)
+    return 1;
   int len = zarr_array_json(buf,
-                            sizeof(buf),
+                            cap,
                             a->rank,
                             a->dimensions,
                             a->data_type,
                             a->fill_value,
                             a->chunks_per_shard,
-                            a->codec);
-  if (len < 0)
+                            a->codec,
+                            &a->attrs);
+  if (len < 0) {
+    free(buf);
     return 1;
-  return a->store->put(a->store, key, buf, (size_t)len);
+  }
+  int rc = a->store->put(a->store, key, buf, (size_t)len);
+  free(buf);
+  if (rc == 0)
+    a->attrs.dirty = 0;
+  return rc;
 }
 
 // --- shard_sink vtable ---
@@ -175,6 +196,7 @@ zarr_array_init(struct store* store,
   a->data_type = cfg->data_type;
   a->fill_value = cfg->fill_value;
   a->codec = cfg->codec;
+  attr_set_init(&a->attrs);
 
   if (prefix)
     snprintf(a->prefix, sizeof(a->prefix), "%s", prefix);
@@ -268,6 +290,10 @@ zarr_array_destroy(struct zarr_array* a)
 {
   if (!a)
     return;
+  // Flush dirty attrs before teardown.
+  if (a->attrs.dirty)
+    write_array_metadata(a);
+  attr_set_destroy(&a->attrs);
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);
   if (pool)
@@ -302,4 +328,26 @@ const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a)
 {
   return a ? a->dimensions : NULL;
+}
+
+int
+zarr_array_set_attribute(struct zarr_array* a,
+                         const char* attr_key,
+                         const char* json_value)
+{
+  CHECK(Fail, a);
+  return attr_set_upsert(&a->attrs, attr_key, json_value);
+Fail:
+  return 1;
+}
+
+int
+zarr_array_flush_metadata(struct zarr_array* a)
+{
+  CHECK(Fail, a);
+  if (!a->attrs.dirty)
+    return 0;
+  return write_array_metadata(a);
+Fail:
+  return 1;
 }

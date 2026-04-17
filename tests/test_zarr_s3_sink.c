@@ -181,7 +181,11 @@ s3_test_sink_open(struct s3_test_sink* z,
   z->store->mkdirs(z->store, ".");
 
   // Write root group
-  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(z->store, "");
+    CHECK(Fail_store, g);
+    zarr_group_destroy(g);
+  }
 
   // Write intermediate groups
   if (array_name && array_name[0]) {
@@ -259,7 +263,11 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
   z->store->mkdirs(z->store, ".");
 
   // Write root group
-  CHECK(Fail_store, zarr_write_group(z->store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(z->store, "");
+    CHECK(Fail_store, g);
+    zarr_group_destroy(g);
+  }
 
   // Write intermediate groups for array_name
   if (array_name && array_name[0]) {

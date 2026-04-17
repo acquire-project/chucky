@@ -7,12 +7,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct attr_set;
+
 // Generate zarr v3 root group JSON into buf.
 // Returns length on success, -1 on error.
 int
 zarr_root_json(char* buf, size_t cap);
 
 // Generate zarr v3 array JSON into buf.
+// extras: optional pre-validated custom attributes to splice into the
+// "attributes" object. NULL means emit an empty object.
 // Returns length on success, -1 on error.
 int
 zarr_array_json(char* buf,
@@ -22,7 +26,8 @@ zarr_array_json(char* buf,
                 enum dtype data_type,
                 double fill_value,
                 const uint64_t* chunks_per_shard,
-                struct codec_config codec);
+                struct codec_config codec,
+                const struct attr_set* extras);
 
 // Compute shard key/path suffix: "c/0/1/2" for a flat shard index.
 // Writes into buf. Returns 0 on success, -1 on error.

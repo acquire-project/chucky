@@ -2,6 +2,7 @@
 #include "defs.limits.h"
 #include "ngff.h"
 #include "util/ceildiv.h"
+#include "zarr/attr_set.h"
 #include "zarr/json_writer.h"
 
 #include <stdio.h>
@@ -12,7 +13,8 @@ ngff_multiscale_group_json(char* buf,
                            uint8_t rank,
                            int nlod,
                            const struct dimension* const* level_dims,
-                           const struct ngff_axis* axes)
+                           const struct ngff_axis* axes,
+                           const struct attr_set* extras)
 {
   struct json_writer jw;
   jw_init(&jw, buf, cap);
@@ -148,6 +150,7 @@ ngff_multiscale_group_json(char* buf,
   jw_array_end(&jw);  // multiscales
 
   jw_object_end(&jw); // ome
+  attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes
   jw_object_end(&jw); // root
 

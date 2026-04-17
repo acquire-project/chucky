@@ -4,6 +4,7 @@
 #include "lod/lod_plan.h"
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
+#include "zarr/attr_set.h"
 #include "zarr/zarr_array.h"
 
 #include <stdio.h>
@@ -21,12 +22,13 @@ struct ngff_multiscale
   uint8_t rank;
   char prefix[4096];
   struct ngff_axis axes[MAX_ZARR_RANK];
+  struct attr_set attrs;
 };
 
 // --- Group metadata ---
 
 static int
-write_ngff_group_metadata(const struct ngff_multiscale* ms)
+write_ngff_group_metadata(struct ngff_multiscale* ms)
 {
   const struct dimension* level_ptrs[LOD_MAX_LEVELS];
   for (int lv = 0; lv < ms->nlod; ++lv)
@@ -34,7 +36,7 @@ write_ngff_group_metadata(const struct ngff_multiscale* ms)
 
   char json[ZARR_GROUP_JSON_MAX_LENGTH];
   int len = ngff_multiscale_group_json(
-    json, sizeof(json), ms->rank, ms->nlod, level_ptrs, ms->axes);
+    json, sizeof(json), ms->rank, ms->nlod, level_ptrs, ms->axes, &ms->attrs);
   if (len < 0)
     return 1;
 
@@ -45,7 +47,10 @@ write_ngff_group_metadata(const struct ngff_multiscale* ms)
     snprintf(key, sizeof(key), "%s/zarr.json", ms->prefix);
   else
     snprintf(key, sizeof(key), "zarr.json");
-  return ms->store->put(ms->store, key, json, (size_t)len);
+  int rc = ms->store->put(ms->store, key, json, (size_t)len);
+  if (rc == 0)
+    ms->attrs.dirty = 0;
+  return rc;
 }
 
 // --- shard_sink vtable ---
@@ -152,6 +157,7 @@ ngff_multiscale_init(struct store* store,
   ms->owns_pool = 0;
   ms->nlod = plan->levels.nlod;
   ms->rank = cfg->rank;
+  attr_set_init(&ms->attrs);
   if (prefix)
     snprintf(ms->prefix, sizeof(ms->prefix), "%s", prefix);
   if (cfg->axes)
@@ -314,9 +320,12 @@ ngff_multiscale_destroy(struct ngff_multiscale* ms)
 {
   if (!ms)
     return;
+  if (ms->attrs.dirty)
+    write_ngff_group_metadata(ms);
   for (int i = 0; i < ms->nlod; ++i)
     zarr_array_destroy(ms->levels[i]);
   free(ms->levels);
+  attr_set_destroy(&ms->attrs);
   struct shard_pool* pool = ms->owns_pool ? ms->pool : NULL;
   free(ms);
   if (pool)
@@ -345,4 +354,26 @@ size_t
 ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms)
 {
   return ms ? ms->pool->pending_bytes(ms->pool) : 0;
+}
+
+int
+ngff_multiscale_set_attribute(struct ngff_multiscale* ms,
+                              const char* attr_key,
+                              const char* json_value)
+{
+  CHECK(Fail, ms);
+  return attr_set_upsert(&ms->attrs, attr_key, json_value);
+Fail:
+  return 1;
+}
+
+int
+ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
+{
+  CHECK(Fail, ms);
+  if (!ms->attrs.dirty)
+    return 0;
+  return write_ngff_group_metadata(ms);
+Fail:
+  return 1;
 }

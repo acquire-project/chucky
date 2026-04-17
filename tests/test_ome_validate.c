@@ -63,7 +63,11 @@ write_multiscale_store(const char* path)
   CHECK(Fail2, store->mkdirs(store, ".") == 0);
 
   // Write root group
-  CHECK(Fail2, zarr_write_group(store, "zarr.json", NULL) == 0);
+  {
+    struct zarr_group* g = zarr_group_create(store, "");
+    CHECK(Fail2, g);
+    zarr_group_destroy(g);
+  }
 
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,
