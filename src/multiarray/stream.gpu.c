@@ -501,12 +501,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
 
-  // `stream_append_body` runs a terminal flush inline when the array hits
-  // `max_cursor_elements`; capture that so subsequent flushes become no-ops.
-  if (r.error == multiarray_writer_finished)
-    desc->flushed = 1;
-
-  // Map writer_result → multiarray_writer_result (error codes are identity)
+  // `writer_finished` here means "stream is at capacity"; finalization
+  // happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,
     .rest = r.rest,
@@ -579,6 +575,11 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
   if (!ms)
     return;
+
+  // Auto-finalize any unflushed arrays so destroy is a safe commit point
+  // for callers that didn't explicitly flush. Errors here are swallowed —
+  // the stream is tearing down, there's no one to report to.
+  (void)flush_impl(&ms->writer);
 
   sync_all(&ms->engine.streams);
 

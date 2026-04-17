@@ -107,12 +107,13 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
   const uint64_t max_cursor = v->max_cursor_elements;
 
   while (src < end) {
-    if (max_cursor > 0 && *v->cursor_elements >= max_cursor) {
-      struct writer_result fr = cpu_stream_flush_body(v);
-      if (fr.error)
-        return writer_error_at(src, end);
+    // Capacity reached: refuse further writes and report `finished` with the
+    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // happens on explicit `writer_flush` or on stream destroy. Keeping the
+    // producer path free of sink finalization means appends never block on
+    // IO the stream's owner hasn't asked for.
+    if (max_cursor > 0 && *v->cursor_elements >= max_cursor)
       return writer_finished_at(src, end);
-    }
 
     const uint64_t epoch_remaining =
       v->layout->epoch_elements -

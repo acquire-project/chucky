@@ -1,5 +1,6 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
+#include "gpu/stream.flush.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
 
@@ -51,6 +52,14 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 {
   if (!s)
     return;
+
+  // Auto-finalize any unwritten data so destroy is a safe commit point for
+  // callers that didn't explicitly flush. Errors here are swallowed — the
+  // stream is tearing down, there's no one to report to.
+  if (!s->flushed) {
+    (void)stream_flush_body(&s->engine, &s->ctx);
+    s->flushed = 1;
+  }
 
   // Ensure all GPU work completes before tearing down events/memory.
   sync(s->engine.streams.h2d);

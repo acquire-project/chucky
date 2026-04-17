@@ -18,6 +18,8 @@ static struct writer_result
 cpu_append(struct writer* self, struct slice input);
 static struct writer_result
 cpu_flush_final(struct writer* self);
+static struct cpu_stream_view
+make_view(struct tile_stream_cpu* s);
 
 // ---- Create / Destroy ----
 
@@ -267,6 +269,15 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
 {
   if (!s)
     return;
+
+  // Auto-finalize any unwritten data so destroy is a safe commit point for
+  // callers that didn't explicitly flush. Errors here are swallowed — the
+  // stream is tearing down, there's no one to report to.
+  if (!s->flushed) {
+    struct cpu_stream_view v = make_view(s);
+    (void)cpu_stream_flush_body(&v);
+    s->flushed = 1;
+  }
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     struct shard_state* ss = &s->shard[lv];
@@ -569,6 +580,11 @@ cpu_flush_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
+  // Re-entering the flush body on an already-finalized stream would
+  // re-finalize already-closed sinks — a deadlock on Windows and wasted
+  // work elsewhere.
+  if (s->flushed)
+    return writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_flush_body(&v);
   s->flushed = 1;

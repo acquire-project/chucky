@@ -92,14 +92,11 @@ stream_append_body(struct stream_engine* e,
   const uint64_t max_cursor_elements = ctx->max_cursor_elements;
 
   while (src < end) {
-    // Bounded append dims: check capacity
-    if (max_cursor_elements > 0 &&
-        ctx->cursor_elements >= max_cursor_elements) {
-      struct writer_result fr = stream_flush_body(e, ctx);
-      if (fr.error)
-        return writer_error_at(src, end);
+    // Capacity reached: refuse further writes and report `finished` with the
+    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // happens on explicit `writer_flush` or on stream destroy.
+    if (max_cursor_elements > 0 && ctx->cursor_elements >= max_cursor_elements)
       return writer_finished_at(src, end);
-    }
 
     const uint64_t epoch_remaining =
       ctx->layout.epoch_elements -
@@ -310,6 +307,9 @@ tile_stream_gpu_flush_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
+  // Mirrors the CPU guard: avoid re-finalizing an already-finalized stream.
+  if (s->flushed)
+    return writer_ok();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
   s->flushed = 1;
   return r;
