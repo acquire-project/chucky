@@ -453,7 +453,7 @@ Error:
 static int
 test_shard_geom_max_concurrent_zero_is_one(void)
 {
-  // max_concurrent_shards=0 is treated as 1 (no inner splitting).
+  // target_concurrent_shards=0 is treated as 1 (no inner splitting).
   int ok = 0;
   struct dimension dims_a[3], dims_b[3];
   uint64_t sizes[] = { 100, 8, 4 };

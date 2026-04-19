@@ -17,10 +17,10 @@ main(int ac, char* av[])
                                   .dims = dims,
                                   .rank = rank,
                                   .chunk_ratios = ratios,
-                                  .default_chunk_bytes = 1 << 18,
+                                  .target_chunk_bytes = 1 << 18,
                                   .min_chunk_bytes = 1 << 14,
                                   .min_shard_bytes = 1ull << 30,
-                                  .max_concurrent_shards = 16,
+                                  .target_concurrent_shards = 16,
                                   .min_append_shards = 4,
                                 });
 }

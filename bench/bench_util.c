@@ -151,7 +151,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
                                                 cfg->chunk_ratios,
                                                 budget,
                                                 cfg->min_shard_bytes,
-                                                cfg->max_concurrent_shards,
+                                                cfg->target_concurrent_shards,
                                                 cfg->min_append_shards,
                                                 0,
                                                 &diag);
@@ -162,7 +162,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
                                                 cfg->chunk_ratios,
                                                 budget,
                                                 cfg->min_shard_bytes,
-                                                cfg->max_concurrent_shards,
+                                                cfg->target_concurrent_shards,
                                                 cfg->min_append_shards,
                                                 0,
                                                 &diag);
@@ -188,7 +188,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       dims_set_shard_geometry(dims,
                               rank,
                               cfg->min_shard_bytes,
-                              cfg->max_concurrent_shards,
+                              cfg->target_concurrent_shards,
                               cfg->min_append_shards,
                               bytes_per_element)) {
     print_report(
@@ -230,7 +230,7 @@ print_advise_failure(const struct advise_layout_diagnostic* diag,
                    (unsigned long long)diag->parts_limit);
       print_report("    at chunk=%s, min_shard_bytes=%s", chunk_buf, shard_buf);
       print_report(
-        "    fix: lower min_shard_bytes, raise max_concurrent_shards, "
+        "    fix: lower min_shard_bytes, raise target_concurrent_shards, "
         "or lower min_chunk_bytes");
       break;
     case ADVISE_MIN_SHARD_TOO_SMALL:
@@ -728,11 +728,11 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .dtype = a.dtype,
     .chunk_ratios = spec.chunk_ratios,
     .target_chunk_bytes =
-      a.target_chunk_bytes ? a.target_chunk_bytes : spec.default_chunk_bytes,
+      a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes,
     .min_chunk_bytes = spec.min_chunk_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
-    .max_concurrent_shards = spec.max_concurrent_shards,
+    .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .json_output = a.json_output,
     .io_bw_mbps = a.io_bw_mbps,
@@ -1098,11 +1098,11 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .dtype = a.dtype,
     .chunk_ratios = spec.chunk_ratios,
     .target_chunk_bytes =
-      a.target_chunk_bytes ? a.target_chunk_bytes : spec.default_chunk_bytes,
+      a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes,
     .min_chunk_bytes = spec.min_chunk_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
-    .max_concurrent_shards = spec.max_concurrent_shards,
+    .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,

@@ -19,10 +19,10 @@ main(int ac, char* av[])
                              .dims = dims,
                              .rank = rank,
                              .chunk_ratios = ratios,
-                             .default_chunk_bytes = 1 << 18,
+                             .target_chunk_bytes = 1 << 18,
                              .min_chunk_bytes = 1 << 12,
                              .min_shard_bytes = 1ull << 30,
-                             .max_concurrent_shards = 20,
+                             .target_concurrent_shards = 20,
                              .min_append_shards = 4,
                            });
 }

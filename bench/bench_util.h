@@ -34,23 +34,24 @@ struct bench_config
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   enum bench_backend backend;
-  enum dtype dtype;               // element type (default dtype_u16)
-  const int* chunk_ratios;        // power-of-2 distribution ratios; see
-                                  // dims_budget_chunk_size for the -1/0/>0
-                                  // conventions
-  size_t target_chunk_bytes;      // 0 = use 1MB default
-  size_t min_chunk_bytes;         // auto-fit floor; 0 = no floor
-  size_t memory_budget;           // 0 = auto-detect
-  size_t min_shard_bytes;         // minimum uncompressed bytes per shard
-  uint32_t max_concurrent_shards; // cap on inner shard product (active files)
-  uint32_t min_append_shards;     // require at least N shards along the outer
-                                  // append dim (0 = no minimum). Forces
-                                  // shard-switching in benchmarks that would
-                                  // otherwise collapse to a single shard.
-  int json_output;                // print JSON to stdout after run
-  uint64_t io_bw_mbps;            // 0 = no bandwidth cap (MiB/s)
-  uint64_t io_latency_us;         // 0 = no fixed per-job latency
-  size_t backpressure_bytes;      // 0 = disabled; >0 = stall when pending > N
+  enum dtype dtype;          // element type (default dtype_u16)
+  const int* chunk_ratios;   // power-of-2 distribution ratios; see
+                             // dims_budget_chunk_size for the -1/0/>0
+                             // conventions
+  size_t target_chunk_bytes; // 0 = use 1MB default
+  size_t min_chunk_bytes;    // auto-fit floor; 0 = no floor
+  size_t memory_budget;      // 0 = auto-detect
+  size_t min_shard_bytes;    // minimum uncompressed bytes per shard
+  uint32_t
+    target_concurrent_shards; // cap on inner shard product (active files)
+  uint32_t min_append_shards; // require at least N shards along the outer
+                              // append dim (0 = no minimum). Forces
+                              // shard-switching in benchmarks that would
+                              // otherwise collapse to a single shard.
+  int json_output;            // print JSON to stdout after run
+  uint64_t io_bw_mbps;        // 0 = no bandwidth cap (MiB/s)
+  uint64_t io_latency_us;     // 0 = no fixed per-job latency
+  size_t backpressure_bytes;  // 0 = disabled; >0 = stall when pending > N
 };
 
 int
@@ -63,12 +64,13 @@ struct bench_spec
   struct dimension* dims;
   uint8_t rank;
   const int* chunk_ratios;
-  size_t default_chunk_bytes;
-  size_t min_chunk_bytes;         // auto-fit floor; bench fails if budget
-                                  // can't meet it (0 = no floor)
-  size_t min_shard_bytes;         // minimum uncompressed bytes per shard
-  uint32_t max_concurrent_shards; // cap on inner shard product (active files)
-  uint32_t min_append_shards;     // 0 = no minimum (see bench_config)
+  size_t target_chunk_bytes;
+  size_t min_chunk_bytes; // auto-fit floor; bench fails if budget
+                          // can't meet it (0 = no floor)
+  size_t min_shard_bytes; // minimum uncompressed bytes per shard
+  uint32_t
+    target_concurrent_shards; // cap on inner shard product (active files)
+  uint32_t min_append_shards; // 0 = no minimum (see bench_config)
 };
 
 // CLI driver: parses --fill, --codec, --reduce, --dtype, --frames, --json,

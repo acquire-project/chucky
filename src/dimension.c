@@ -213,7 +213,7 @@ int
 dims_set_shard_geometry(struct dimension* dims,
                         uint8_t rank,
                         size_t min_shard_bytes,
-                        uint32_t max_concurrent_shards,
+                        uint32_t target_concurrent_shards,
                         uint32_t min_append_shards,
                         size_t bytes_per_element)
 {
@@ -235,7 +235,7 @@ dims_set_shard_geometry(struct dimension* dims,
   }
 
   uint8_t na = dims_n_append(dims, rank);
-  uint32_t M = max_concurrent_shards ? max_concurrent_shards : 1;
+  uint32_t M = target_concurrent_shards ? target_concurrent_shards : 1;
 
   uint64_t n_chunks[HALF_MAX_RANK];
   uint64_t shards[HALF_MAX_RANK];
@@ -247,7 +247,7 @@ dims_set_shard_geometry(struct dimension* dims,
   // Integer-greedy allocation across inner dims: each step increments the
   // inner dim with the largest remaining n_chunks/shards ratio, provided
   // incrementing stays within its chunk count and the running product stays
-  // within max_concurrent_shards. Gives any M_active in [1, M_max] — no
+  // within target_concurrent_shards. Gives any M_active in [1, M_max] — no
   // power-of-2 rounding waste.
   uint64_t prod = 1;
   while (prod < (uint64_t)M) {
@@ -337,7 +337,7 @@ dims_set_layout(struct dimension* dims,
   return dims_set_shard_geometry(dims,
                                  rank,
                                  p->min_shard_bytes,
-                                 p->max_concurrent_shards,
+                                 p->target_concurrent_shards,
                                  p->min_append_shards,
                                  p->bytes_per_element);
 }

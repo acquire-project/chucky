@@ -22,7 +22,7 @@ Given an array's shape and dtype, pick:
 | `min_chunk_bytes` | chunk-size floor; solve fails if budget can't meet this | caller |
 | `target_chunk_bytes` | starting chunk size for the auto-fit loop | caller |
 | `memory_max_bytes` | device / heap memory ceiling | caller, or auto-detected |
-| `max_concurrent_shards` | cap on concurrently-open shards (fs pressure) | caller |
+| `target_concurrent_shards` | preferred number of concurrently-open shards (fs pressure). Soft: the solver aims for this value, but may exceed it when a hard constraint (e.g. `max_parts_per_shard`) requires more inner splitting. A future `max_concurrent_shards` would be the hard ceiling. | caller |
 | `min_shard_bytes` | minimum uncompressed bytes per shard (cadence floor) | caller |
 | `min_append_shards` | minimum number of shards along the outer append dim; 0 = no minimum. Forces shard-switching in benches that would otherwise collapse to a single shard. | caller |
 | `max_parts_per_shard` | backend part-count limit (e.g. S3 multipart = 10000); 0 = unlimited | sink |
@@ -42,17 +42,18 @@ Given an array's shape and dtype, pick:
 
 ### Constraints
 
-Hard:
+Hard (feasibility — solver must satisfy or fail with a specific reason):
 
-1. `chunk_bytes ≥ min_chunk_bytes` and `chunk_bytes ≤ max_bytes_per_part`.
+1. `chunk_bytes ≥ min_chunk_bytes` and `chunk_bytes ≤ max_bytes_per_part` (if nonzero).
 2. `device_bytes ≤ memory_max_bytes`.
-3. `1 ≤ shards[d] ≤ n_chunks[d]` for inner dims, and `concurrent_shards ≤ max_concurrent_shards`.
-4. `cps_append ≥ 1`.
+3. `1 ≤ shards[d] ≤ n_chunks[d]` for inner dims.
+4. `cps_append ≥ 1` and `cps_append ≤ n_chunks[0]` when `n_chunks[0] > 0`.
 5. `chunks_per_shard_total ≤ max_parts_per_shard` (if nonzero).
 
-Preference:
+Soft (preferences — solver optimizes for these but yields to any hard constraint):
 
-- `shard_size_bytes ≥ min_shard_bytes`.
+- `shard_size_bytes ≥ min_shard_bytes` — byte floor on closed shards. Ignored when `min_append_shards > 1` (the caller's shard-switching request wins).
+- `concurrent_shards ≤ target_concurrent_shards` — concurrency target. The greedy fills up to this value; may be exceeded if a hard constraint (H5 in particular) demands more inner splitting to shrink `inner_cps_prod`. Violations are reported in the diagnostic.
 
 ## Why the problem decouples
 
@@ -113,7 +114,7 @@ shards[d] = 1 for d in inner
 
 # Bit-greedy doubling: each step doubles the inner dim with the largest
 # remaining n_chunks[d]/shards[d] ratio, capped at n_chunks[d].
-while concurrent_shards · 2 ≤ max_concurrent_shards:
+while concurrent_shards · 2 ≤ target_concurrent_shards:
     d* = argmax over d in inner where shards[d] · 2 ≤ n_chunks[d]
           of n_chunks[d] / shards[d]
     if no such d*: break
@@ -136,7 +137,7 @@ cps_append = max(cps_floor, cps_cap)   # floor wins if parts cap can't
 # --- Cross-phase check: backend parts limit ---
 if max_parts_per_shard > 0 and chunks_per_shard_total > max_parts_per_shard:
     # Two remedies: shrink chunks (cheapest — lowers append_row_bytes and
-    # relaxes the product), or raise max_concurrent_shards (caller policy).
+    # relaxes the product), or raise target_concurrent_shards (caller policy).
     halve target, restart Phase 1
     # If already at min_chunk_bytes: ERROR with reason
     # ADVISE_PARTS_LIMIT_EXCEEDED.
@@ -149,7 +150,7 @@ Inputs (roughly the `medfmt_single` bench on a machine with plenty of GPU memory
 - Array: `zcyx` with `size = (100, 1, 10240, 15360)`, `dtype = u16` → `bytes_per_element = 2`
 - `chunk_ratios = (1, 0, 4, 4)`, `target_chunk_bytes = 256 KiB`, `min_chunk_bytes = 16 KiB`
 - `memory_max_bytes = 8 GiB`
-- `max_concurrent_shards = 16`, `min_shard_bytes = 1 GiB`
+- `target_concurrent_shards = 16`, `min_shard_bytes = 1 GiB`
 - Filesystem sink: `max_parts_per_shard = 0`, `max_bytes_per_part = 0` (unlimited)
 
 **Phase 1.** Distribute `log2(256 KiB / 2) = 17` bits across `ratios (1, 0, 4, 4)`.
@@ -210,8 +211,8 @@ shard_size_bytes   ≈ 1.83 GiB
 - **`append_row_bytes · 1 > max_bytes_per_part · max_parts_per_shard`** — a
   single append-row already exceeds the backend's total shard capacity. Phase 1
   retry. If chunks are already at `min_chunk_bytes`, error cleanly and ask the
-  caller to raise `max_concurrent_shards` or lower `min_chunk_bytes`.
-- **`max_concurrent_shards = 1`** with a large inner grid — one shard covers
+  caller to raise `target_concurrent_shards` or lower `min_chunk_bytes`.
+- **`target_concurrent_shards = 1`** with a large inner grid — one shard covers
   the whole inner volume. Respects the caller's explicit concurrency policy;
   resulting shards may be large.
 - **A downsample dim gets `chunk_size = 1`** — allowed (the configuration is
@@ -230,7 +231,7 @@ shard_size_bytes   ≈ 1.83 GiB
   distributes bits into `chunk_size[d]` per `chunk_ratios`.
 - `dims_set_shard_geometry` (`src/dimension.h`) — Phase 2 primitive:
   shard geometry given chunks, `min_shard_bytes`, and
-  `max_concurrent_shards`. Returns non-zero if `min_shard_bytes` is smaller
+  `target_concurrent_shards`. Returns non-zero if `min_shard_bytes` is smaller
   than one chunk.
 - `dims_set_layout` (`src/dimension.h`) — convenience wrapper that runs
   both phases from a single `dims_layout_policy` struct.

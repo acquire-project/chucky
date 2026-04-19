@@ -54,7 +54,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 //   before shrinking chunks further. A non-zero config->epochs_per_batch
 //   on entry is treated as user-authoritative and is not reduced.
 // Phase 2: with chunks set, computes shard geometry from min_shard_bytes and
-//   max_concurrent_shards (see dims_set_shard_geometry).
+//   target_concurrent_shards (see dims_set_shard_geometry).
 // Cross-phase: checks that chunks_per_shard_total <= MAX_PARTS_PER_SHARD.
 //   If violated, halves the chunk target and retries. Bails when the target
 //   would drop below min_chunk_bytes.
@@ -73,7 +73,7 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
                               const int* ratios,
                               size_t budget_bytes,
                               size_t min_shard_bytes,
-                              uint32_t max_concurrent_shards,
+                              uint32_t target_concurrent_shards,
                               uint32_t min_append_shards,
                               size_t shard_alignment,
                               struct advise_layout_diagnostic* diag);
