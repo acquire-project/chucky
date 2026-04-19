@@ -112,35 +112,43 @@ loop:
 # --- Phase 2: shards (closed-form given chunks) ---
 shards[d] = 1 for d in inner
 
-# Bit-greedy doubling: each step doubles the inner dim with the largest
-# remaining n_chunks[d]/shards[d] ratio, capped at n_chunks[d].
-while concurrent_shards · 2 ≤ target_concurrent_shards:
-    d* = argmax over d in inner where shards[d] · 2 ≤ n_chunks[d]
+# Phase 2A: fill the concurrency target. Integer-greedy, no pow2 waste.
+while Π shards[d] < target_concurrent_shards:
+    d* = argmax over d in inner where shards[d]+1 ≤ n_chunks[d] and
+          shards[d]+1 keeps Π shards[d] ≤ target_concurrent_shards
           of n_chunks[d] / shards[d]
     if no such d*: break
-    shards[d*] *= 2
+    shards[d*] += 1
 
-# Append cadence: maximize subject to parts cap and byte floor.
-cps_floor = max(1, ceildiv(min_shard_bytes, append_row_bytes))
+# Phase 2B: enforce parts budget. If inner_cps_prod is too big for the parts
+# cap given the cps_append target, keep splitting past the target
+# (target_concurrent_shards is soft — a preference, not a hard cap).
+cps_append_target = ...   # cps_floor if min_shard_bytes > 0,
+                           # floor(n_chunks[0]/min_append_shards) if set,
+                           # else 1.
+while inner_cps_prod · others_prod · cps_append_target > max_parts_per_shard:
+    d* = argmax over d in inner where splitting reduces ceildiv(n_chunks[d],
+          shards[d]+1) < ceildiv(n_chunks[d], shards[d])
+          of current cps[d]
+    if no such d*: break     # can't reduce inner_cps_prod further.
+    shards[d*] += 1
+    refresh cps_append_target (depends on inner_cps_prod in Mode 2)
+
+# If after Phase 2B, inner_cps_prod · others_prod > max_parts_per_shard,
+# the config is infeasible at this chunk size: return error PARTS_LIMIT.
+# Halving chunks doesn't help — it grows n_chunks, not shrinks it.
+
+# Append cadence: maximize within the parts cap that Phase 2B reserved.
 cps_cap   = min(max_parts_per_shard / inner_prod, n_chunks[0] or ∞)
 if min_append_shards > 1 and n_chunks[0] > 0:
     cps_cap = min(cps_cap, floor(n_chunks[0] / min_append_shards))
-cps_append = max(cps_floor, cps_cap)   # floor wins if parts cap can't
-                                        # accommodate it; cross-phase
-                                        # check below then retries.
+cps_append = cps_cap        # min_shard_bytes is soft: may be unmet if Phase 2B
+                             # couldn't reserve enough budget.
 
 # If min_shard_bytes < chunk_bytes at this target, Phase 2 rejects. The outer
 # loop halves `target` and retries; this naturally recovers once chunk_bytes
 # drops below min_shard_bytes. If the loop exhausts `floor`, the solver
 # returns reason = ADVISE_MIN_SHARD_TOO_SMALL.
-
-# --- Cross-phase check: backend parts limit ---
-if max_parts_per_shard > 0 and chunks_per_shard_total > max_parts_per_shard:
-    # Two remedies: shrink chunks (cheapest — lowers append_row_bytes and
-    # relaxes the product), or raise target_concurrent_shards (caller policy).
-    halve target, restart Phase 1
-    # If already at min_chunk_bytes: ERROR with reason
-    # ADVISE_PARTS_LIMIT_EXCEEDED.
 ```
 
 ## Worked example

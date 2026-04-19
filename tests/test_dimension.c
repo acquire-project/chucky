@@ -563,6 +563,58 @@ Error:
   return !ok;
 }
 
+static int
+test_shard_geom_phase_b_splits_past_target(void)
+{
+  // target=2 but inner dims too big: Phase A fills target (y:2 shards), then
+  // Phase B splits y further to fit MAX_PARTS_PER_SHARD, exceeding the target.
+  // target_concurrent_shards is a soft preference, not a hard cap.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 500, 100 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 1, 1 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // chunk_bytes=5. n_chunks=(20,500,100). target=2. min_shard_bytes=5 (≥1
+  // chunk). Phase A: shards=(_,2,1), inner_cps_prod=250*100=25000 >
+  // MAX_PARTS=10000. Phase B: split y to 3 (167*100=16700), 4 (125*100=12500),
+  // 5 (100*100=10000). Π shards = 5 exceeds target=2 — that's the soft
+  // semantics.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 5, 2, 0, 1) == 0);
+  CHECK(Error, dims[1].chunks_per_shard == 100);
+  CHECK(Error, dims[2].chunks_per_shard == 100);
+  // inner_prod=10000; cps_cap=MAX/10000=1; clamped to n_chunks[0]=20 → 1.
+  CHECK(Error, dims[0].chunks_per_shard == 1);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_parts_limit_infeasible(void)
+{
+  // Multi-append where the inner-append dim's n_chunks alone exceeds
+  // MAX_PARTS_PER_SHARD — no amount of inner splitting can help. Returns 2.
+  int ok = 0;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 100, 15000, 8, 8 };
+  dims_create(dims, "tzyx", sizes);
+  uint64_t cs[] = { 1, 1, 8, 8 };
+  dims_set_chunk_sizes(dims, 4, cs);
+
+  // na=2 (t,z have chunk_size=1). others_prod = n_chunks[z] = 15000 alone
+  // exceeds MAX_PARTS=10000 — infeasible regardless of inner (y,x) geometry.
+  CHECK(Error, dims_set_shard_geometry(dims, 4, 0, 1, 0, 1) == 2);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
 // --- dim_info tests ---
 
 static int
@@ -998,6 +1050,10 @@ main(void)
       test_shard_geom_max_concurrent_zero_is_one },
     { "shard_geom_multi_append", test_shard_geom_multi_append },
     { "shard_geom_min_append_shards", test_shard_geom_min_append_shards },
+    { "shard_geom_phase_b_splits_past_target",
+      test_shard_geom_phase_b_splits_past_target },
+    { "shard_geom_parts_limit_infeasible",
+      test_shard_geom_parts_limit_infeasible },
     { "dims_set_storage_order", test_dims_set_storage_order },
     { "dims_set_downsample_by_name", test_dims_set_downsample_by_name },
     { "dims_print", test_dims_print },

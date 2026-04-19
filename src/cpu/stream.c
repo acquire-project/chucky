@@ -556,31 +556,36 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
     if (!fit)
       continue;
 
-    // Phase 2: shard geometry. If min_shard_bytes < chunk_bytes at this
-    // target, shrink chunks and retry.
-    if (dims_set_shard_geometry(config->dimensions,
-                                config->rank,
-                                min_shard_bytes,
-                                target_concurrent_shards,
-                                min_append_shards,
-                                bytes_per_element)) {
+    // Phase 2: shard geometry (parts budget + concurrency target + byte floor).
+    // Return 1 = MIN_SHARD_TOO_SMALL (retryable by shrinking chunks);
+    // return 2 = PARTS_LIMIT infeasible even with inner fully split — halving
+    // chunks only grows inner_cps_prod, so bail immediately.
+    int sg = dims_set_shard_geometry(config->dimensions,
+                                     config->rank,
+                                     min_shard_bytes,
+                                     target_concurrent_shards,
+                                     min_append_shards,
+                                     bytes_per_element);
+    if (sg == 1) {
       last_reason = ADVISE_MIN_SHARD_TOO_SMALL;
       last_cps_total = 0;
       continue;
     }
-
-    // Cross-phase (5): chunks_per_shard_total <= MAX_PARTS_PER_SHARD.
-    uint64_t cps_total = 1;
-    for (uint8_t d = 0; d < config->rank; ++d) {
-      uint64_t cps = config->dimensions[d].chunks_per_shard;
-      if (cps == 0)
-        cps = 1;
-      cps_total *= cps;
-    }
-    if (cps_total > MAX_PARTS_PER_SHARD) {
+    if (sg == 2) {
       last_reason = ADVISE_PARTS_LIMIT_EXCEEDED;
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
       last_cps_total = cps_total;
-      continue;
+      break;
+    }
+    if (sg != 0) {
+      last_reason = ADVISE_INVALID_CONFIG;
+      break;
     }
 
     return 0;

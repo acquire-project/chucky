@@ -329,9 +329,11 @@ static int
 test_advise_parts_limit(void)
 {
   log_info("=== test_advise_parts_limit ===");
-  // Mimics the smallepoch case: ratio={1,0,0} forces inner chunk_size=1, so
-  // every inner row is a chunk. Combined with a big min_shard_bytes, the
-  // resulting chunks_per_shard_total exceeds MAX_PARTS_PER_SHARD.
+  // Same config as the old smallepoch-style case that used to fail with
+  // PARTS_LIMIT_EXCEEDED. Phase B in dims_set_shard_geometry now splits inner
+  // dims past target_concurrent_shards to keep chunks_per_shard_total within
+  // MAX_PARTS_PER_SHARD. Solver should succeed; min_shard_bytes may be met
+  // less than fully (it's soft).
   struct dimension dims[3];
   uint64_t sizes[] = { 1 << 20, 16, 16 };
   dims_create(dims, "tyx", sizes);
@@ -358,9 +360,15 @@ test_advise_parts_limit(void)
                                       1,
                                       0,
                                       0,
-                                      &diag) != 0);
-  CHECK(Fail, diag.reason == ADVISE_PARTS_LIMIT_EXCEEDED);
-  CHECK(Fail, diag.chunks_per_shard_total > diag.parts_limit);
+                                      &diag) == 0);
+  uint64_t cps_total = 1;
+  for (uint8_t d = 0; d < config.rank; ++d) {
+    uint64_t cps = config.dimensions[d].chunks_per_shard;
+    if (cps == 0)
+      cps = 1;
+    cps_total *= cps;
+  }
+  CHECK(Fail, cps_total <= MAX_PARTS_PER_SHARD);
 
   log_info("  PASS");
   return 0;

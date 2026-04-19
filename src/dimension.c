@@ -3,8 +3,8 @@
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
 
+#include <inttypes.h>
 #include <stdio.h>
-
 #include <string.h>
 
 #ifdef _MSC_VER
@@ -236,6 +236,7 @@ dims_set_shard_geometry(struct dimension* dims,
 
   uint8_t na = dims_n_append(dims, rank);
   uint32_t M = target_concurrent_shards ? target_concurrent_shards : 1;
+  const int min_shards_set = min_append_shards > 1;
 
   uint64_t n_chunks[HALF_MAX_RANK];
   uint64_t shards[HALF_MAX_RANK];
@@ -244,11 +245,17 @@ dims_set_shard_geometry(struct dimension* dims,
     shards[d] = 1;
   }
 
-  // Integer-greedy allocation across inner dims: each step increments the
-  // inner dim with the largest remaining n_chunks/shards ratio, provided
-  // incrementing stays within its chunk count and the running product stays
-  // within target_concurrent_shards. Gives any M_active in [1, M_max] — no
-  // power-of-2 rounding waste.
+  // Inner append dims (1..na-1) pass through at their full span — they are
+  // part of the parts-budget product but aren't split here.
+  uint64_t others_prod = 1;
+  for (uint8_t d = 1; d < na; ++d)
+    others_prod *= n_chunks[d] ? n_chunks[d] : 1;
+  if (others_prod < 1)
+    others_prod = 1;
+
+  // Phase A: fill the concurrency target. Integer-greedy (no pow2 waste) —
+  // each step grows the inner dim with the largest remaining n_chunks/shards
+  // ratio, bounded by Π shards ≤ M.
   uint64_t prod = 1;
   while (prod < (uint64_t)M) {
     int best = -1;
@@ -267,58 +274,118 @@ dims_set_shard_geometry(struct dimension* dims,
   }
 
   uint64_t inner_cps_prod = 1;
-  for (uint8_t d = na; d < rank; ++d) {
+  for (uint8_t d = na; d < rank; ++d)
+    inner_cps_prod *= ceildiv(n_chunks[d], shards[d]);
+
+  // cps_append_target: the minimum cps_append that the caller's constraints
+  // require us to leave room for in the parts budget.
+  //   Mode 1 (min_shards_set):  target = floor(n_chunks[0] / min_append_shards)
+  //                             — this is the exact cps_append we'll commit to.
+  //   Mode 2 (min_shard_bytes): target = cps_floor (depends on inner_cps_prod;
+  //                             refreshed inside Phase B as inner shrinks).
+  //   Mode 3 (neither):         target = 1.
+  uint64_t cps_append_target = 1;
+  if (min_shards_set && n_chunks[0] > 0) {
+    cps_append_target = n_chunks[0] / min_append_shards;
+    if (cps_append_target < 1)
+      cps_append_target = 1;
+  } else if (min_shard_bytes > 0) {
+    uint64_t row_bytes = (uint64_t)chunk_bytes * inner_cps_prod * others_prod;
+    if (row_bytes > 0)
+      cps_append_target = ceildiv((uint64_t)min_shard_bytes, row_bytes);
+    if (cps_append_target < 1)
+      cps_append_target = 1;
+    if (n_chunks[0] > 0 && cps_append_target > n_chunks[0])
+      cps_append_target = n_chunks[0];
+  }
+
+  // Phase B: if inner_cps_prod is too big for the parts budget at our target,
+  // keep splitting inner dims (past M — target_concurrent_shards is soft).
+  // Pick the dim with the largest current cps for the biggest per-split drop.
+  // In Mode 2, refresh cps_append_target as inner_cps_prod (and therefore
+  // cps_floor) shrinks — this monotonically grows inner_cps_limit.
+  for (;;) {
+    uint64_t denom = others_prod * cps_append_target;
+    if (denom < 1)
+      denom = 1;
+    uint64_t inner_cps_limit = MAX_PARTS_PER_SHARD / denom;
+    if (inner_cps_limit < 1)
+      inner_cps_limit = 1;
+    if (inner_cps_prod <= inner_cps_limit)
+      break;
+
+    // Pick the dim with the largest current cps (biggest per-split absolute
+    // reduction) — minimizes final Π shards, keeping us close to the target.
+    // Skip dims where ceildiv keeps cps unchanged (integer roundoff stalls).
+    int best = -1;
+    uint64_t best_cps = 0;
+    for (uint8_t d = na; d < rank; ++d) {
+      if (shards[d] + 1 > n_chunks[d])
+        continue;
+      uint64_t cur = ceildiv(n_chunks[d], shards[d]);
+      uint64_t nxt = ceildiv(n_chunks[d], shards[d] + 1);
+      if (nxt >= cur)
+        continue;
+      if (cur > best_cps) {
+        best = d;
+        best_cps = cur;
+      }
+    }
+    if (best < 0)
+      break; // no progress possible — can't reduce inner_cps_prod further.
+    shards[best] += 1;
+    inner_cps_prod = 1;
+    for (uint8_t d = na; d < rank; ++d)
+      inner_cps_prod *= ceildiv(n_chunks[d], shards[d]);
+
+    if (!min_shards_set && min_shard_bytes > 0) {
+      uint64_t row_bytes = (uint64_t)chunk_bytes * inner_cps_prod * others_prod;
+      uint64_t t =
+        row_bytes ? ceildiv((uint64_t)min_shard_bytes, row_bytes) : 1;
+      if (t < 1)
+        t = 1;
+      if (n_chunks[0] > 0 && t > n_chunks[0])
+        t = n_chunks[0];
+      cps_append_target = t;
+    }
+  }
+
+  // Hard failure: if cps_append=1 still exceeds the parts budget after Phase B
+  // exhausted all inner splits, the config is genuinely infeasible.
+  if (inner_cps_prod * others_prod > MAX_PARTS_PER_SHARD) {
+    log_error("cannot satisfy parts budget even at cps_append=1 "
+              "(inner_cps_prod=%" PRIu64 ", others_prod=%" PRIu64
+              ", MAX_PARTS_PER_SHARD=%d)",
+              inner_cps_prod,
+              others_prod,
+              MAX_PARTS_PER_SHARD);
+    return 2;
+  }
+
+  // Commit inner cps and inner-append pass-through.
+  for (uint8_t d = na; d < rank; ++d)
     dims[d].chunks_per_shard = ceildiv(n_chunks[d], shards[d]);
-    inner_cps_prod *= dims[d].chunks_per_shard;
-  }
-
-  // For multi-append configs (na > 1), the outer append dim gets the
-  // byte-target cadence; inner append dims pass through at full span so
-  // the downstream product (config.c:361) evaluates to the intended total.
-  uint64_t others_prod = 1;
-  for (uint8_t d = 1; d < na; ++d) {
+  for (uint8_t d = 1; d < na; ++d)
     dims[d].chunks_per_shard = n_chunks[d] ? n_chunks[d] : 1;
-    others_prod *= dims[d].chunks_per_shard;
-  }
 
-  // Maximize cps_append subject to the byte floor and the backend parts cap.
-  //   - cps_floor = ceildiv(min_shard_bytes, row_bytes) respects the floor.
-  //   - cps_cap   = min(MAX_PARTS_PER_SHARD / inner_prod, n_chunks[0]) caps
-  //     the chunks-per-shard product and the actual dim extent.
-  // If cps_cap < cps_floor the two constraints conflict; we keep the floor
-  // and let advise_layout's cross-phase check signal PARTS_LIMIT_EXCEEDED so
-  // the outer loop retries with smaller chunks.
-  // min_shard_bytes == 0 means "no byte floor": leave dims[0].chunks_per_shard
-  // as the caller set it (0 means full span downstream).
+  // cps_append: maximize within the hard parts cap. min_shard_bytes (soft) is
+  // met when Phase B succeeded in reserving enough budget; if it couldn't,
+  // we silently accept smaller shards rather than violate the parts cap.
   if (min_shard_bytes > 0) {
-    const uint64_t row_bytes =
-      (uint64_t)chunk_bytes * inner_cps_prod * others_prod;
     const uint64_t inner_prod = inner_cps_prod * others_prod;
-    uint64_t cps_floor =
-      row_bytes ? ceildiv((uint64_t)min_shard_bytes, row_bytes) : 1;
-    if (cps_floor < 1)
-      cps_floor = 1;
     uint64_t cps_cap = inner_prod ? (MAX_PARTS_PER_SHARD / inner_prod) : 1;
     if (n_chunks[0] > 0 && cps_cap > n_chunks[0])
       cps_cap = n_chunks[0];
-    // When min_append_shards > 1 the caller has asked for at least N
-    // append-direction shards; clamp cps_cap accordingly and let it override
-    // the byte floor on conflict (the caller's shard-switching ask is hard,
-    // the byte floor is soft).
-    const int min_shards_set = min_append_shards > 1;
     if (min_shards_set && n_chunks[0] > 0) {
       uint64_t cap_for_shards = n_chunks[0] / min_append_shards;
       if (cap_for_shards < 1)
-        cap_for_shards = 1; // can't get N shards; fall back to cps=1.
+        cap_for_shards = 1;
       if (cps_cap > cap_for_shards)
         cps_cap = cap_for_shards;
     }
     if (cps_cap < 1)
       cps_cap = 1;
-    if (min_shards_set)
-      dims[0].chunks_per_shard = cps_cap;
-    else
-      dims[0].chunks_per_shard = cps_cap >= cps_floor ? cps_cap : cps_floor;
+    dims[0].chunks_per_shard = cps_cap;
   }
 
   return 0;

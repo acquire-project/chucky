@@ -73,30 +73,38 @@ dims_set_shard_counts(struct dimension* dims,
                       uint8_t rank,
                       const uint64_t* shard_counts);
 
-// Choose shard geometry from a byte floor and a concurrency bound.
+// Choose shard geometry from a byte floor, concurrency target, and
+// append-shard floor, respecting the backend parts cap as a hard constraint.
 //
-// Policy:
-//   - Inner dims (d >= n_append): integer-greedy allocation of shard count
-//     to dims, bounded so the product <= target_concurrent_shards (no pow2
-//     rounding). Each step increments the inner dim with the largest
-//     remaining n_chunks[d]/shards[d] ratio while staying within
+// Policy (two-phase):
+//   Phase A — fill target_concurrent_shards. Integer-greedy across inner
+//     dims (d >= n_append): each step grows the dim with the largest
+//     remaining n_chunks[d]/shards[d] ratio while Π shards[d] <= target.
+//   Phase B — enforce parts budget. If inner_cps_prod is too big for the
+//     parts cap given the required cps_append, keep splitting inner dims
+//     past the target (target_concurrent_shards is soft). Picks the inner
+//     dim with the largest current cps each step.
+//
+//   Outer append dim (d = 0): chunks_per_shard maximized within
+//     MAX_PARTS_PER_SHARD / (inner_cps_prod · others_prod) and <= n_chunks[0].
+//     When min_append_shards > 1, capped at floor(n_chunks[0] / N) —
+//     authoritative over the byte floor. When min_shard_bytes > 0, Phase B
+//     reserves budget for cps_append >= cps_floor when achievable; if not,
+//     min_shard_bytes silently yields (soft).
+//   Inner append dims (d in 1..na-1): pass through at chunks_per_shard =
 //     n_chunks[d].
-//   - Outer append dim (d = 0): chunks_per_shard is maximized subject to
-//     (a) chunks_per_shard_total <= MAX_PARTS_PER_SHARD (backend parts cap)
-//     and (b) cps <= n_chunks[0] (dim extent). When min_append_shards > 1
-//     it's an authoritative cap (ceildiv(n_chunks[0], cps) >= N); it wins
-//     over the byte floor if they conflict. When unset, min_shard_bytes is
-//     a byte floor: cps >= ceildiv(min_shard_bytes, row_bytes).
-//     Unbounded dim 0 (size == 0) ignores the min_append_shards cap.
-//   - Inner append dims (d in 1..na-1): pass through at chunks_per_shard =
-//     n_chunks[d] so the downstream product (config.c) evaluates correctly.
 //
 // Requires chunk_size to be set first (e.g. via dims_budget_chunk_bytes).
-// target_concurrent_shards of 0 is treated as 1 (no multiplexing).
-// min_append_shards of 0 is treated as 1 (no minimum).
+// target_concurrent_shards of 0 is treated as 1.
+// min_append_shards of 0 or 1 is treated as "no minimum".
 //
-// Returns 0 on success, non-zero if min_shard_bytes < chunk_bytes (floor
-// is meaningless below one chunk).
+// Returns:
+//   0 = success
+//   1 = invalid argument, or min_shard_bytes < chunk_bytes (floor meaningless
+//       below one chunk).
+//   2 = parts budget infeasible even with inner fully split. Caller can retry
+//       with larger chunks, lower target_concurrent_shards, or lower
+//       min_append_shards.
 int
 dims_set_shard_geometry(struct dimension* dims,
                         uint8_t rank,
