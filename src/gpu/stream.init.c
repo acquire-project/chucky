@@ -5,6 +5,7 @@
 
 #include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
+#include "lod/lod_plan.h"
 #include "platform/platform.h"
 #include "stream/config.h"
 #include "util/prelude.h"
@@ -618,6 +619,33 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
       break;
     }
 
+    if (diag) {
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
+      uint8_t na = dims_n_append(config->dimensions, config->rank);
+      uint64_t inner_shards_prod = 1;
+      for (uint8_t d = na; d < config->rank; ++d) {
+        uint64_t size = config->dimensions[d].size;
+        uint64_t cs = config->dimensions[d].chunk_size;
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cs == 0 || cps == 0)
+          continue;
+        uint64_t n_chunks = (size + cs - 1) / cs;
+        inner_shards_prod *= (n_chunks + cps - 1) / cps;
+      }
+      diag->reason = ADVISE_OK;
+      diag->chunk_bytes = last_chunk_bytes;
+      diag->epochs_per_batch = config->epochs_per_batch;
+      diag->device_bytes = last_device_bytes;
+      diag->chunks_per_shard_total = cps_total;
+      diag->actual_concurrent_shards = inner_shards_prod;
+      diag->actual_shard_bytes = last_chunk_bytes * cps_total;
+    }
     return 0;
   }
 

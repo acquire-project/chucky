@@ -103,4 +103,11 @@ struct advise_layout_diagnostic
   size_t budget_bytes;             // caller's budget (echoed)
   uint64_t chunks_per_shard_total; // PARTS_LIMIT_EXCEEDED: observed total
   uint64_t parts_limit;            // PARTS_LIMIT_EXCEEDED: MAX_PARTS_PER_SHARD
+
+  // Soft-constraint status (populated on success; ADVISE_OK). Caller compares
+  // against their requested target/floor to detect when the solver compromised.
+  uint64_t actual_concurrent_shards; // Π shards[d] for inner dims (may exceed
+                                     // target_concurrent_shards — soft)
+  size_t actual_shard_bytes;         // chunk_bytes · chunks_per_shard_total
+                                     // (may be < min_shard_bytes — soft)
 };

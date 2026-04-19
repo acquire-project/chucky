@@ -84,6 +84,20 @@ retry.
    parts limit; `min_shard_bytes` acts as a floor, not a target, so shards end
    up as big as the parts cap (and dim extent) allow.
 
+### Tiebreakers
+
+When multiple dims are equally preferred at a greedy step, the choice is
+deterministic:
+
+- **Phase 1 bit allocation** (chunks): on equal `bits[i]/ratio[i]`, the
+  higher-indexed dim wins (extra bits go to inner/spatial dims, which are
+  typically rightmost).
+- **Phase 2A ratio greedy** (inner shards): on equal
+  `n_chunks[d]/shards[d]`, the lower-indexed dim wins.
+- **Phase 2B largest-cps** (parts-budget split): on equal current
+  `cps[d]`, the lower-indexed dim wins. Dims where incrementing shards
+  does not reduce `cps` (ceildiv roundoff stall) are skipped.
+
 ## Procedure
 
 ```
@@ -250,11 +264,18 @@ shard_size_bytes   ≈ 1.83 GiB
   with auto-fit loop, memory budget, and cross-phase parts check. Halves
   `epochs_per_batch` (K) before shrinking chunks when the memory budget
   binds; halves the chunk target when either K at floor=1 still overshoots
-  or a cross-phase constraint fails; bails below `min_chunk_bytes`. On
-  failure, fills an optional `struct advise_layout_diagnostic` with a
-  reason code (`ADVISE_BUDGET_EXCEEDED`, `ADVISE_PARTS_LIMIT_EXCEEDED`,
-  `ADVISE_MIN_SHARD_TOO_SMALL`, `ADVISE_INVALID_CONFIG`) and the relevant
-  last-iteration context.
+  or a cross-phase constraint fails; bails below `min_chunk_bytes`. Fills
+  an optional `struct advise_layout_diagnostic`:
+  - On **failure**, `reason` is one of `ADVISE_BUDGET_EXCEEDED`,
+    `ADVISE_PARTS_LIMIT_EXCEEDED`, `ADVISE_MIN_SHARD_TOO_SMALL`, or
+    `ADVISE_INVALID_CONFIG`, with last-iteration context.
+  - On **success**, `reason = ADVISE_OK`. `actual_concurrent_shards` and
+    `actual_shard_bytes` let the caller detect soft-constraint
+    compromises: `actual_concurrent_shards > target_concurrent_shards`
+    means Phase B split past the target to fit the parts budget;
+    `actual_shard_bytes < min_shard_bytes` means the floor was not
+    reached (either because the parts cap bound or because
+    `min_append_shards > 1` overrode it).
 - Backend constants (`src/defs.limits.h`) — `MAX_PARTS_PER_SHARD` and
   `MAX_BYTES_PER_PART`, applied uniformly across sinks.
 - `run_bench` in `bench/bench_util.c` — wires these into the benchmark

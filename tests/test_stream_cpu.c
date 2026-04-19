@@ -370,6 +370,14 @@ test_advise_parts_limit(void)
   }
   CHECK(Fail, cps_total <= MAX_PARTS_PER_SHARD);
 
+  // Diagnostic populated on success.
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, diag.actual_concurrent_shards >= 1);
+  CHECK(Fail, diag.actual_shard_bytes == diag.chunk_bytes * cps_total);
+  // The bounded dim 0 (1M rows) caps cps_append below cps_floor — actual shard
+  // is smaller than the 1 GiB min_shard_bytes floor (soft loss).
+  CHECK(Fail, diag.actual_shard_bytes < (1ull << 30));
+
   log_info("  PASS");
   return 0;
 Fail:
