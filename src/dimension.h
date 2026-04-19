@@ -49,22 +49,6 @@ dims_set_chunk_sizes(struct dimension* dims,
                      uint8_t rank,
                      const uint64_t* chunk_sizes);
 
-// Distribute nelem across dims using power-of-2 ratios.
-//
-// ratios[i] > 0  -> participates in the bit budget with this weight.
-// ratios[i] == 0 -> chunk_size = 1 (no bits allocated).
-// ratios[i] == -1-> pin chunk_size at dims[i].size. If dims[i].size == 0
-//                  (unbounded dim 0), treated as weight=1: the dim absorbs
-//                  the remaining bit budget. Only dim 0 may be unbounded.
-//
-// Bit allocation is greedy over budget participants. The remaining element
-// budget for participants is nelem / prod(pinned sizes).
-void
-dims_budget_chunk_size(struct dimension* dims,
-                       uint8_t rank,
-                       uint64_t nelem,
-                       const int* ratios);
-
 // Set chunks_per_shard to achieve target shard counts.
 // shard_counts has rank elements. 0 means "skip" (don't modify).
 // Requires chunk_size to be set first.
@@ -134,9 +118,23 @@ dims_set_layout(struct dimension* dims,
                 const struct dims_layout_policy* p);
 
 // Distribute target_chunk_bytes across dims using power-of-2 ratios.
-// Like dims_budget_chunk_size but accepts a byte target instead of elements.
-// Computes nelem = target_chunk_bytes / bytes_per_element, then delegates.
-void
+//
+// ratios[i] > 0  -> bit-budget participant with this weight.
+// ratios[i] == 0 -> chunk_size = 1 (no bits allocated).
+// ratios[i] == -1-> pin chunk_size at dims[i].size. If dims[i].size == 0
+//                  (unbounded dim 0), treated as weight=1: the dim absorbs
+//                  the remaining bit budget. Only dim 0 may be unbounded.
+//
+// Bit allocation is greedy over participants; remaining element budget is
+// nelem / prod(pinned sizes). Participant chunk_size is clamped to dim size
+// for bounded dims (no clamp for unbounded dim 0).
+//
+// Returns:
+//   0 = success.
+//   1 = invalid input: bytes_per_element == 0, target_chunk_bytes <
+//       bytes_per_element (budget smaller than one element), or pinned dims
+//       alone exceed the budget.
+int
 dims_budget_chunk_bytes(struct dimension* dims,
                         uint8_t rank,
                         size_t target_chunk_bytes,

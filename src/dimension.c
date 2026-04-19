@@ -111,14 +111,24 @@ dims_set_chunk_sizes(struct dimension* dims,
     dims[i].chunk_size = chunk_sizes[i];
 }
 
-void
-dims_budget_chunk_size(struct dimension* dims,
-                       uint8_t rank,
-                       uint64_t nelem,
-                       const int* ratios)
+int
+dims_budget_chunk_bytes(struct dimension* dims,
+                        uint8_t rank,
+                        size_t target_chunk_bytes,
+                        size_t bytes_per_element,
+                        const int* ratios)
 {
-  if (nelem == 0)
-    return;
+  if (bytes_per_element == 0) {
+    log_error("bytes_per_element must be > 0");
+    return 1;
+  }
+  if (target_chunk_bytes < bytes_per_element) {
+    log_error("target_chunk_bytes (%zu) < bytes_per_element (%zu)",
+              target_chunk_bytes,
+              bytes_per_element);
+    return 1;
+  }
+  const uint64_t nelem = target_chunk_bytes / bytes_per_element;
 
   // Classify dims. effective[i]:
   //   >0  : bit-budget participant with this weight
@@ -146,19 +156,25 @@ dims_budget_chunk_size(struct dimension* dims,
     }
   }
 
+  if (pinned_prod > nelem) {
+    log_error("pinned dims product (%" PRIu64
+              " elements) exceeds budget (%" PRIu64 ")",
+              pinned_prod,
+              nelem);
+    return 1;
+  }
+
   // Apply pins.
   for (uint8_t i = 0; i < rank; ++i)
     if (effective[i] == -1)
       dims[i].chunk_size = dims[i].size;
 
   if (!any_participant)
-    return;
+    return 0;
 
-  // Remaining element budget for participants.
-  uint64_t remaining = pinned_prod ? nelem / pinned_prod : nelem;
-  if (remaining < 1)
-    remaining = 1;
-  int total_bits = 63 - clzll(remaining);
+  // Remaining element budget for participants. pinned_prod <= nelem guaranteed.
+  const uint64_t remaining = nelem / pinned_prod;
+  const int total_bits = 63 - clzll(remaining);
 
   // Greedy bit allocation: each bit goes to the most underserved
   // participant (lowest bits[i]/effective[i]). Ties favor higher indices.
@@ -175,25 +191,19 @@ dims_budget_chunk_size(struct dimension* dims,
   }
 
   for (uint8_t i = 0; i < rank; ++i) {
-    if (effective[i] > 0)
-      dims[i].chunk_size = (uint64_t)1 << bits[i];
-    else if (effective[i] == 0)
+    if (effective[i] > 0) {
+      uint64_t cs = (uint64_t)1 << bits[i];
+      // Clamp participants to dim extent (skip unbounded dim 0).
+      if (dims[i].size > 0 && cs > dims[i].size)
+        cs = dims[i].size;
+      dims[i].chunk_size = cs;
+    } else if (effective[i] == 0) {
       dims[i].chunk_size = 1;
+    }
     // effective == -1: already set to size above.
   }
-}
 
-void
-dims_budget_chunk_bytes(struct dimension* dims,
-                        uint8_t rank,
-                        size_t target_chunk_bytes,
-                        size_t bytes_per_element,
-                        const int* ratios)
-{
-  if (bytes_per_element == 0 || target_chunk_bytes < bytes_per_element)
-    return;
-  dims_budget_chunk_size(
-    dims, rank, target_chunk_bytes / bytes_per_element, ratios);
+  return 0;
 }
 
 void
@@ -398,9 +408,12 @@ dims_set_layout(struct dimension* dims,
 {
   if (!dims || !p || rank == 0)
     return 1;
-  if (p->chunk_ratios)
-    dims_budget_chunk_bytes(
+  if (p->chunk_ratios) {
+    int r = dims_budget_chunk_bytes(
       dims, rank, p->target_chunk_bytes, p->bytes_per_element, p->chunk_ratios);
+    if (r)
+      return r;
+  }
   return dims_set_shard_geometry(dims,
                                  rank,
                                  p->min_shard_bytes,

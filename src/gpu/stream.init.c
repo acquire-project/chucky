@@ -541,8 +541,17 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
     // Phase 1: fit chunks + K to memory budget. Start with auto-derived K
     // (or user-supplied K if non-zero); if device_bytes exceeds budget, halve
     // K and retry. User-supplied K is authoritative and isn't reduced.
-    dims_budget_chunk_bytes(
-      config->dimensions, config->rank, target, bytes_per_element, ratios);
+    if (dims_budget_chunk_bytes(config->dimensions,
+                                config->rank,
+                                target,
+                                bytes_per_element,
+                                ratios)) {
+      // Non-recoverable input (e.g. pinned dims exceed target at this step).
+      // Halving target can only make it worse — bail.
+      last_reason = ADVISE_INVALID_CONFIG;
+      last_chunk_bytes = target;
+      break;
+    }
 
     uint64_t chunk_vol = 1;
     for (uint8_t d = 0; d < config->rank; ++d)

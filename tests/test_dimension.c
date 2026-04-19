@@ -82,7 +82,7 @@ test_dims_budget_chunk_size(void)
   // dim 2 (ratio 2): 7 bits -> 128
   // dim 3 (ratio 2): 8 bits -> 256
   int ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 16);
   CHECK(Error, dims[1].chunk_size == 1);
@@ -113,7 +113,7 @@ test_dims_budget_chunk_size_uniform(void)
   // bits_per_part = ceil(12/3) = 4, remainder = 0
   // each dim: 1<<4 = 16
   int ratios[] = { 1, 1, 1 };
-  dims_budget_chunk_size(dims, 3, 1ULL << 12, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 12, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 16);
   CHECK(Error, dims[1].chunk_size == 16);
@@ -132,16 +132,78 @@ test_dims_budget_chunk_size_pin(void)
   // share the bit budget after accounting for pinned dims' element footprint.
   int ok = 0;
   struct dimension dims[3];
-  uint64_t sizes[] = { 1000, 16, 16 };
+  uint64_t sizes[] = { 8192, 16, 16 };
   dims_create(dims, "tyx", sizes);
 
   // nelem = 2^20. Pinned y*x = 256 (2^8), so t gets 2^12 = 4096.
   int ratios[] = { 1, -1, -1 };
-  dims_budget_chunk_size(dims, 3, 1ULL << 20, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 4096);
   CHECK(Error, dims[1].chunk_size == 16);
   CHECK(Error, dims[2].chunk_size == 16);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_clamp_to_size(void)
+{
+  // Participants are clamped to dim extent so chunks never exceed size.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 1000, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  // Pinned y*x = 256, remaining for t = 2^12 = 4096. But size[t]=1000.
+  int ratios[] = { 1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
+
+  // Clamped to dim extent, not 4096.
+  CHECK(Error, dims[0].chunk_size == 1000);
+  CHECK(Error, dims[1].chunk_size == 16);
+  CHECK(Error, dims[2].chunk_size == 16);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_pinned_over_budget(void)
+{
+  // Pinned dims' product alone exceeds the budget → error, not silent.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 1024, 1024 };
+  dims_create(dims, "tyx", sizes);
+
+  // Pinned y*x = 1M elements. Budget = 2^10 = 1024 elements. Infeasible.
+  int ratios[] = { 1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 10, 1, ratios) != 0);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_target_under_bpe(void)
+{
+  // target_chunk_bytes < bytes_per_element → error, not silent.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  int ratios[] = { 1, 1, 1 };
+  // 4 byte target with 8-byte elements.
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 4, 8, ratios) != 0);
 
   ok = 1;
 Error:
@@ -163,7 +225,7 @@ test_dims_budget_chunk_size_pin_unbounded(void)
 
   // nelem = 2^20. y,x pin at 16 (prod=256). Remaining 2^12 all to t.
   int ratios[] = { -1, -1, -1 };
-  dims_budget_chunk_size(dims, 3, 1ULL << 20, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 4096);
   CHECK(Error, dims[1].chunk_size == 16);
@@ -184,7 +246,7 @@ test_dims_set_shard_counts(void)
   dims_create(dims, "tcyx", sizes);
 
   int ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios) == 0);
   // chunk_sizes: 16, 1, 128, 256
   // chunk_counts: ceil(1000/16)=63, ceil(2/1)=2, ceil(2048/128)=16,
   // ceil(2304/256)=9
@@ -233,6 +295,8 @@ Error:
 static int
 test_dims_budget_chunk_bytes(void)
 {
+  // Byte target with bpe scales the effective element budget: 1 MiB at bpe=2
+  // should match 512 KiB at bpe=1.
   int ok = 0;
   struct dimension dims_a[4], dims_b[4];
   uint64_t sizes[] = { 1000, 2, 2048, 2304 };
@@ -240,9 +304,8 @@ test_dims_budget_chunk_bytes(void)
   dims_create(dims_b, "tcyx", sizes);
 
   int ratios[] = { 1, 0, 2, 2 };
-  // 1MB / 2 bytes_per_element = 2^19 elements
-  dims_budget_chunk_bytes(dims_a, 4, 1 << 20, 2, ratios);
-  dims_budget_chunk_size(dims_b, 4, 1ULL << 19, ratios);
+  CHECK(Error, dims_budget_chunk_bytes(dims_a, 4, 1 << 20, 2, ratios) == 0);
+  CHECK(Error, dims_budget_chunk_bytes(dims_b, 4, 1 << 19, 1, ratios) == 0);
 
   for (int i = 0; i < 4; ++i)
     CHECK(Error, dims_a[i].chunk_size == dims_b[i].chunk_size);
@@ -318,7 +381,7 @@ test_dims_print(void)
   dims_create(dims, "tcyx", sizes);
 
   int ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  (void)dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios);
 
   uint64_t shard_counts[] = { 1, 1, 4, 4 };
   dims_set_shard_counts(dims, 4, shard_counts);
@@ -1038,6 +1101,12 @@ main(void)
     { "dims_budget_chunk_size_pin", test_dims_budget_chunk_size_pin },
     { "dims_budget_chunk_size_pin_unbounded",
       test_dims_budget_chunk_size_pin_unbounded },
+    { "dims_budget_chunk_size_clamp_to_size",
+      test_dims_budget_chunk_size_clamp_to_size },
+    { "dims_budget_chunk_size_pinned_over_budget",
+      test_dims_budget_chunk_size_pinned_over_budget },
+    { "dims_budget_chunk_size_target_under_bpe",
+      test_dims_budget_chunk_size_target_under_bpe },
     { "dims_budget_chunk_bytes", test_dims_budget_chunk_bytes },
 
     { "dims_set_shard_counts", test_dims_set_shard_counts },

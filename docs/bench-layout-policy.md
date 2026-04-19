@@ -236,7 +236,9 @@ shard_size_bytes   ≈ 1.83 GiB
 ## Entry points
 
 - `dims_budget_chunk_bytes` (`src/dimension.h`) — Phase 1 primitive:
-  distributes bits into `chunk_size[d]` per `chunk_ratios`.
+  distributes bits into `chunk_size[d]` per `chunk_ratios`. Participants are
+  clamped to dim extent. Returns non-zero on invalid input (`bpe == 0`,
+  `target < bpe`, pinned dims exceed budget).
 - `dims_set_shard_geometry` (`src/dimension.h`) — Phase 2 primitive:
   shard geometry given chunks, `min_shard_bytes`, and
   `target_concurrent_shards`. Returns non-zero if `min_shard_bytes` is smaller

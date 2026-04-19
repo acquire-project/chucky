@@ -182,8 +182,11 @@ resolve_chunk_sizing(const struct bench_config* cfg,
   }
 
   // No budget: apply chunk budget + shard geometry directly.
-  dims_budget_chunk_bytes(
-    dims, rank, target, bytes_per_element, cfg->chunk_ratios);
+  if (dims_budget_chunk_bytes(
+        dims, rank, target, bytes_per_element, cfg->chunk_ratios)) {
+    print_report("  chunk budget: ERROR -- invalid input");
+    return 1;
+  }
   if (cfg->min_shard_bytes > 0 &&
       dims_set_shard_geometry(dims,
                               rank,
