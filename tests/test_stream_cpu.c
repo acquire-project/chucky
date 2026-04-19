@@ -291,6 +291,87 @@ Fail:
 }
 
 static int
+test_advise_chunk_budget_infeasible(void)
+{
+  log_info("=== test_advise_chunk_budget_infeasible ===");
+  // Pinned dims whose element product exceeds the target budget → solver bails
+  // immediately with ADVISE_CHUNK_BUDGET_INFEASIBLE (halving target makes it
+  // worse, not better).
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 512, 512 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  // Pinned y*x = 262144 elements * 2 bytes = 512 KiB. Target = 64 KiB → pinned
+  // dims alone exceed the budget.
+  int ratios[] = { 1, -1, -1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  CHECK(Fail,
+        tile_stream_cpu_advise_layout(
+          &config, 1 << 16, 1 << 16, ratios, 1ull << 30, 0, 0, 0, 0, &diag) !=
+          0);
+  CHECK(Fail, diag.reason == ADVISE_CHUNK_BUDGET_INFEASIBLE);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_min_append_shards_overrides_floor(void)
+{
+  log_info("=== test_advise_min_append_shards_overrides_floor ===");
+  // Both min_append_shards and min_shard_bytes set → diagnostic flag is raised.
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  int ratios[] = { 0, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 4, 0, &diag) ==
+      0);
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, diag.min_append_shards_overrode_min_shard_bytes == 1);
+
+  // Sanity: min_append_shards not set → flag stays 0.
+  struct advise_layout_diagnostic diag2 = { 0 };
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 0, 0, &diag2) ==
+      0);
+  CHECK(Fail, diag2.min_append_shards_overrode_min_shard_bytes == 0);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
 test_advise_min_shard_too_small(void)
 {
   log_info("=== test_advise_min_shard_too_small ===");
@@ -498,6 +579,8 @@ main(int ac, char* av[])
   rc |= test_append_after_flush();
   rc |= test_advise_basic_fit();
   rc |= test_advise_invalid_config();
+  rc |= test_advise_chunk_budget_infeasible();
+  rc |= test_advise_min_append_shards_overrides_floor();
   rc |= test_advise_min_shard_too_small();
   rc |= test_advise_parts_limit();
   rc |= test_advise_halves_k();

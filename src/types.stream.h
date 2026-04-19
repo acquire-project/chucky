@@ -83,10 +83,13 @@ struct tile_stream_status
 enum advise_layout_reason
 {
   ADVISE_OK = 0,
-  ADVISE_INVALID_CONFIG,       // memory_estimate rejected the configuration
+  ADVISE_INVALID_CONFIG,       // memory_estimate or shard-geometry rejected
+                               // the configuration as malformed
   ADVISE_MIN_SHARD_TOO_SMALL,  // min_shard_bytes < chunk_bytes (phase 2)
   ADVISE_BUDGET_EXCEEDED,      // no (chunk, K) combination fits budget
   ADVISE_PARTS_LIMIT_EXCEEDED, // chunks_per_shard_total > MAX_PARTS_PER_SHARD
+  ADVISE_CHUNK_BUDGET_INFEASIBLE, // dims_budget_chunk_bytes rejected input
+                                  // (pinned dims > budget, or target < bpe)
 };
 
 // Optional diagnostic out-param for advise_layout. Caller may pass NULL.
@@ -110,4 +113,8 @@ struct advise_layout_diagnostic
                                      // target_concurrent_shards — soft)
   size_t actual_shard_bytes;         // chunk_bytes · chunks_per_shard_total
                                      // (may be < min_shard_bytes — soft)
+  uint8_t min_append_shards_overrode_min_shard_bytes; // 1 if both knobs were
+                                                      // set (min_append_shards
+                                                      // > 1 wins, floor may be
+                                                      // unmet), else 0
 };

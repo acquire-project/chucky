@@ -266,16 +266,21 @@ shard_size_bytes   ≈ 1.83 GiB
   binds; halves the chunk target when either K at floor=1 still overshoots
   or a cross-phase constraint fails; bails below `min_chunk_bytes`. Fills
   an optional `struct advise_layout_diagnostic`:
-  - On **failure**, `reason` is one of `ADVISE_BUDGET_EXCEEDED`,
-    `ADVISE_PARTS_LIMIT_EXCEEDED`, `ADVISE_MIN_SHARD_TOO_SMALL`, or
-    `ADVISE_INVALID_CONFIG`, with last-iteration context.
+  - On **failure**, `reason` is one of:
+    - `ADVISE_BUDGET_EXCEEDED` — no (chunk, K) pair fit memory budget
+    - `ADVISE_PARTS_LIMIT_EXCEEDED` — parts cap infeasible even after Phase B
+    - `ADVISE_MIN_SHARD_TOO_SMALL` — `min_shard_bytes < chunk_bytes`
+    - `ADVISE_CHUNK_BUDGET_INFEASIBLE` — pinned dims or input rejected the
+      chunk target (not recoverable by halving)
+    - `ADVISE_INVALID_CONFIG` — caller-level config or shard-geometry rejection
   - On **success**, `reason = ADVISE_OK`. `actual_concurrent_shards` and
     `actual_shard_bytes` let the caller detect soft-constraint
     compromises: `actual_concurrent_shards > target_concurrent_shards`
     means Phase B split past the target to fit the parts budget;
     `actual_shard_bytes < min_shard_bytes` means the floor was not
-    reached (either because the parts cap bound or because
-    `min_append_shards > 1` overrode it).
+    reached. `min_append_shards_overrode_min_shard_bytes` is `1` when
+    both knobs were set (caller asked for N append shards *and* a byte
+    floor) — `min_append_shards` wins per the spec, floor may be unmet.
 - Backend constants (`src/defs.limits.h`) — `MAX_PARTS_PER_SHARD` and
   `MAX_BYTES_PER_PART`, applied uniformly across sinks.
 - `run_bench` in `bench/bench_util.c` — wires these into the benchmark

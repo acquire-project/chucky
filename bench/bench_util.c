@@ -247,7 +247,12 @@ print_advise_failure(const struct advise_layout_diagnostic* diag,
     case ADVISE_INVALID_CONFIG:
       print_report(
         "  auto-fit: ERROR -- invalid configuration rejected by memory "
-        "estimate");
+        "estimate or shard geometry");
+      break;
+    case ADVISE_CHUNK_BUDGET_INFEASIBLE:
+      print_report("  auto-fit: ERROR -- chunk budget infeasible at chunk=%s",
+                   chunk_buf);
+      print_report("    fix: raise target_chunk_bytes, or reduce pinned dims");
       break;
     default:
       print_report("  auto-fit: ERROR -- unknown failure (reason=%d)",

@@ -84,11 +84,12 @@ dims_set_shard_counts(struct dimension* dims,
 //
 // Returns:
 //   0 = success
-//   1 = invalid argument, or min_shard_bytes < chunk_bytes (floor meaningless
-//       below one chunk).
+//   1 = min_shard_bytes < chunk_bytes (floor meaningless below one chunk).
+//       Caller can retry with smaller chunks or no floor.
 //   2 = parts budget infeasible even with inner fully split. Caller can retry
 //       with larger chunks, lower target_concurrent_shards, or lower
 //       min_append_shards.
+//   3 = invalid argument (null dims, rank==0, zero chunk_size, zero bpe).
 int
 dims_set_shard_geometry(struct dimension* dims,
                         uint8_t rank,

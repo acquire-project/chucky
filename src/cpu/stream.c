@@ -528,7 +528,7 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
                                 ratios)) {
       // Non-recoverable input (e.g. pinned dims exceed target at this step).
       // Halving target can only make it worse — bail.
-      last_reason = ADVISE_INVALID_CONFIG;
+      last_reason = ADVISE_CHUNK_BUDGET_INFEASIBLE;
       last_chunk_bytes = target;
       break;
     }
@@ -624,6 +624,8 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
       diag->chunks_per_shard_total = cps_total;
       diag->actual_concurrent_shards = inner_shards_prod;
       diag->actual_shard_bytes = last_chunk_bytes * cps_total;
+      diag->min_append_shards_overrode_min_shard_bytes =
+        (min_append_shards > 1 && min_shard_bytes > 0) ? 1 : 0;
     }
     return 0;
   }

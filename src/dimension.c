@@ -228,10 +228,10 @@ dims_set_shard_geometry(struct dimension* dims,
                         size_t bytes_per_element)
 {
   if (!dims || rank == 0 || bytes_per_element == 0)
-    return 1;
+    return 3;
   for (uint8_t d = 0; d < rank; ++d)
     if (dims[d].chunk_size == 0)
-      return 1;
+      return 3;
 
   size_t chunk_bytes = bytes_per_element;
   for (uint8_t d = 0; d < rank; ++d)
