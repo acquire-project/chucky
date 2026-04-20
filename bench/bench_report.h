@@ -41,3 +41,21 @@ print_bench_report(const struct stream_metrics* metrics,
                    float init_s,
                    float flush_s,
                    size_t flush_pending_bytes);
+
+// Emit the pass-case JSON report to stdout. sink_metric may be NULL (no sink
+// block is written in that case).
+void
+print_bench_json_pass(const struct stream_metrics* metrics,
+                      const struct stream_metric* sink_metric,
+                      const struct tile_stream_layout* layout,
+                      enum dtype dtype,
+                      const struct sink_stats* ss,
+                      size_t total_bytes,
+                      size_t total_elements,
+                      float wall_s,
+                      float init_s,
+                      float flush_s);
+
+// Emit a minimal error JSON (`{"status":"error"}`) to stdout.
+void
+print_bench_json_error(void);

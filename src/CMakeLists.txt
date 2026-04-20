@@ -17,6 +17,7 @@ endfunction()
 
 add_src_lib(chucky_log SOURCES log/log.c log/log.h chucky_log.h)
 add_src_lib(index_ops  SOURCES util/index.ops.c util/index.ops.h)
+add_src_lib(format_bytes SOURCES util/format_bytes.c util/format_bytes.h)
 add_src_lib(dtype      SOURCES dtype.c dtype.h)
 add_src_lib(dimension  SOURCES dimension.c dimension.h)
 add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h

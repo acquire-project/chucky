@@ -108,10 +108,12 @@ pool_s3_open(struct shard_pool* self, uint64_t slot, const char* key)
   s3_wait_pending(w);
 
   char full_key[4096];
+  int n;
   if (p->prefix[0])
-    snprintf(full_key, sizeof(full_key), "%s/%s", p->prefix, key);
+    n = snprintf(full_key, sizeof(full_key), "%s/%s", p->prefix, key);
   else
-    snprintf(full_key, sizeof(full_key), "%s", key);
+    n = snprintf(full_key, sizeof(full_key), "%s", key);
+  (void)n;
 
   w->upload = s3_upload_begin(p->client, p->bucket, full_key);
   if (!w->upload) {

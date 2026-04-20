@@ -81,8 +81,8 @@ test_dims_budget_chunk_size(void)
   // dim 1 (ratio 0): 0 bits -> 1
   // dim 2 (ratio 2): 7 bits -> 128
   // dim 3 (ratio 2): 8 bits -> 256
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  int ratios[] = { 1, 0, 2, 2 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 16);
   CHECK(Error, dims[1].chunk_size == 1);
@@ -112,10 +112,122 @@ test_dims_budget_chunk_size_uniform(void)
   // nelem=1<<12, ratios=[1,1,1], sum=3
   // bits_per_part = ceil(12/3) = 4, remainder = 0
   // each dim: 1<<4 = 16
-  uint8_t ratios[] = { 1, 1, 1 };
-  dims_budget_chunk_size(dims, 3, 1ULL << 12, ratios);
+  int ratios[] = { 1, 1, 1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 12, 1, ratios) == 0);
 
   CHECK(Error, dims[0].chunk_size == 16);
+  CHECK(Error, dims[1].chunk_size == 16);
+  CHECK(Error, dims[2].chunk_size == 16);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_pin(void)
+{
+  // ratios[i] == -1 pins chunk_size to dims[i].size. Remaining participants
+  // share the bit budget after accounting for pinned dims' element footprint.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 8192, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  // nelem = 2^20. Pinned y*x = 256 (2^8), so t gets 2^12 = 4096.
+  int ratios[] = { 1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
+
+  CHECK(Error, dims[0].chunk_size == 4096);
+  CHECK(Error, dims[1].chunk_size == 16);
+  CHECK(Error, dims[2].chunk_size == 16);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_clamp_to_size(void)
+{
+  // Participants are clamped to dim extent so chunks never exceed size.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 1000, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  // Pinned y*x = 256, remaining for t = 2^12 = 4096. But size[t]=1000.
+  int ratios[] = { 1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
+
+  // Clamped to dim extent, not 4096.
+  CHECK(Error, dims[0].chunk_size == 1000);
+  CHECK(Error, dims[1].chunk_size == 16);
+  CHECK(Error, dims[2].chunk_size == 16);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_pinned_over_budget(void)
+{
+  // Pinned dims' product alone exceeds the budget → error, not silent.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 1024, 1024 };
+  dims_create(dims, "tyx", sizes);
+
+  // Pinned y*x = 1M elements. Budget = 2^10 = 1024 elements. Infeasible.
+  int ratios[] = { 1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 10, 1, ratios) != 0);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_target_under_bpe(void)
+{
+  // target_chunk_bytes < bytes_per_element → error, not silent.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  int ratios[] = { 1, 1, 1 };
+  // 4 byte target with 8-byte elements.
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 4, 8, ratios) != 0);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_dims_budget_chunk_size_pin_unbounded(void)
+{
+  // -1 on an unbounded dim (size=0) is a graceful fallback: that dim becomes
+  // a weight=1 budget participant instead of pinning (which would be zero).
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 0, 16, 16 }; // t unbounded
+  dims_create(dims, "tyx", sizes);
+  // dims_create sets chunk_size = size, so t starts at 0. We fix it.
+  dims[0].chunk_size = 1;
+
+  // nelem = 2^20. y,x pin at 16 (prod=256). Remaining 2^12 all to t.
+  int ratios[] = { -1, -1, -1 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 3, 1ULL << 20, 1, ratios) == 0);
+
+  CHECK(Error, dims[0].chunk_size == 4096);
   CHECK(Error, dims[1].chunk_size == 16);
   CHECK(Error, dims[2].chunk_size == 16);
 
@@ -133,8 +245,8 @@ test_dims_set_shard_counts(void)
   uint64_t sizes[] = { 1000, 2, 2048, 2304 };
   dims_create(dims, "tcyx", sizes);
 
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  int ratios[] = { 1, 0, 2, 2 };
+  CHECK(Error, dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios) == 0);
   // chunk_sizes: 16, 1, 128, 256
   // chunk_counts: ceil(1000/16)=63, ceil(2/1)=2, ceil(2048/128)=16,
   // ceil(2304/256)=9
@@ -183,16 +295,17 @@ Error:
 static int
 test_dims_budget_chunk_bytes(void)
 {
+  // Byte target with bpe scales the effective element budget: 1 MiB at bpe=2
+  // should match 512 KiB at bpe=1.
   int ok = 0;
   struct dimension dims_a[4], dims_b[4];
   uint64_t sizes[] = { 1000, 2, 2048, 2304 };
   dims_create(dims_a, "tcyx", sizes);
   dims_create(dims_b, "tcyx", sizes);
 
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  // 1MB / 2 bytes_per_element = 2^19 elements
-  dims_budget_chunk_bytes(dims_a, 4, 1 << 20, 2, ratios);
-  dims_budget_chunk_size(dims_b, 4, 1ULL << 19, ratios);
+  int ratios[] = { 1, 0, 2, 2 };
+  CHECK(Error, dims_budget_chunk_bytes(dims_a, 4, 1 << 20, 2, ratios) == 0);
+  CHECK(Error, dims_budget_chunk_bytes(dims_b, 4, 1 << 19, 1, ratios) == 0);
 
   for (int i = 0; i < 4; ++i)
     CHECK(Error, dims_a[i].chunk_size == dims_b[i].chunk_size);
@@ -267,8 +380,8 @@ test_dims_print(void)
   uint64_t sizes[] = { 1000, 2, 2048, 2304 };
   dims_create(dims, "tcyx", sizes);
 
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  dims_budget_chunk_size(dims, 4, 1ULL << 19, ratios);
+  int ratios[] = { 1, 0, 2, 2 };
+  (void)dims_budget_chunk_bytes(dims, 4, 1ULL << 19, 1, ratios);
 
   uint64_t shard_counts[] = { 1, 1, 4, 4 };
   dims_set_shard_counts(dims, 4, shard_counts);
@@ -279,6 +392,288 @@ test_dims_print(void)
   dims_print(dims, 4);
 
   ok = 1;
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+// --- dims_set_shard_geometry tests ---
+
+static int
+test_shard_geom_no_inner_sharding(void)
+{
+  // 3D, na=1, M=1: inner dims stay at cps=n_chunks, cps_0 from byte floor.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 16, 16 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // chunk_bytes = 5*16*16*1 = 1280. row_bytes = 1280 (inner cps=1).
+  // cps_floor = ceildiv(4096, 1280) = 4. cps_cap = min(MAX_PARTS/1,
+  // n_chunks[0]=20) = 20. Maximize policy -> cps_0 = 20.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 4096, 1, 0, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 20);
+  CHECK(Error, dims[1].chunks_per_shard == 1);
+  CHECK(Error, dims[2].chunks_per_shard == 1);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_errors(void)
+{
+  int ok = 0;
+  struct dimension dims[2];
+  uint64_t sizes[] = { 10, 10 };
+  dims_create(dims, "xy", sizes);
+  uint64_t cs[] = { 10, 10 }; // chunk_bytes = 10*10*8 = 800
+  dims_set_chunk_sizes(dims, 2, cs);
+
+  // NULL dims
+  CHECK(Error, dims_set_shard_geometry(NULL, 2, 4096, 1, 0, 8) != 0);
+  // rank=0
+  CHECK(Error, dims_set_shard_geometry(dims, 0, 4096, 1, 0, 8) != 0);
+  // bpe=0
+  CHECK(Error, dims_set_shard_geometry(dims, 2, 4096, 1, 0, 0) != 0);
+  // min_shard_bytes < chunk_bytes (but > 0)
+  CHECK(Error, dims_set_shard_geometry(dims, 2, 100, 1, 0, 8) != 0);
+  // min_shard_bytes = 0 is allowed (no byte floor): dims[0].chunks_per_shard
+  // is not modified. Pre-set 0 (from dims_create) stays 0, meaning full span.
+  CHECK(Error, dims[0].chunks_per_shard == 0);
+  CHECK(Error, dims_set_shard_geometry(dims, 2, 0, 1, 0, 8) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 0);
+
+  // chunk_size == 0 is rejected (undefined ceildiv).
+  dims_create(dims, "xy", sizes);
+  dims[0].chunk_size = 0;
+  CHECK(Error, dims_set_shard_geometry(dims, 2, 4096, 1, 0, 8) != 0);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_splits_inner_greedy(void)
+{
+  // Unbalanced inner n_chunks=(8,4) with M=8. Greedy prefers the larger
+  // n_chunks/shards ratio; ties favor the earlier-visited (lower-index) dim.
+  // Dim 0 uses chunk_size=5 so dims_n_append yields na=1.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 8, 4 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 1, 1 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // chunk_bytes = 5. n_chunks = (20, 8, 4). M=8.
+  // Greedy: shards (1,1,1) -> (1,2,1) -> (1,3,1) -> (1,3,2) -> (1,4,2).
+  // cps[1]=ceil(8/4)=2, cps[2]=ceil(4/2)=2. row_bytes = 5*2*2 = 20.
+  // cps_floor = ceildiv(80, 20) = 4. cps_cap = min(MAX_PARTS/4, 20) = 20.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 80, 8, 0, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 20);
+  CHECK(Error, dims[1].chunks_per_shard == 2);
+  CHECK(Error, dims[2].chunks_per_shard == 2);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_caps_at_n_chunks(void)
+{
+  // M exceeds achievable Π n_chunks: greedy stops at actual ceiling.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 2, 2 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 1, 1 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // chunk_bytes = 5. n_chunks = (20, 2, 2). M=16.
+  // Greedy: d=1 first (tie, lower index wins) -> (_,2,1). Then d=1 can't grow
+  // (shards+1=3 > n_chunks[1]=2), d=2 grows -> (_,2,2). Then neither grows.
+  // cps[1]=1, cps[2]=1; row_bytes=5. cps_floor=ceildiv(40,5)=8. cps_cap =
+  // min(MAX_PARTS/1, n_chunks[0]=20) = 20.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 40, 16, 0, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 20);
+  CHECK(Error, dims[1].chunks_per_shard == 1);
+  CHECK(Error, dims[2].chunks_per_shard == 1);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_max_concurrent_zero_is_one(void)
+{
+  // target_concurrent_shards=0 is treated as 1 (no inner splitting).
+  int ok = 0;
+  struct dimension dims_a[3], dims_b[3];
+  uint64_t sizes[] = { 100, 8, 4 };
+  dims_create(dims_a, "tyx", sizes);
+  dims_create(dims_b, "tyx", sizes);
+  uint64_t cs[] = { 5, 1, 1 };
+  dims_set_chunk_sizes(dims_a, 3, cs);
+  dims_set_chunk_sizes(dims_b, 3, cs);
+
+  CHECK(Error, dims_set_shard_geometry(dims_a, 3, 256, 0, 0, 1) == 0);
+  CHECK(Error, dims_set_shard_geometry(dims_b, 3, 256, 1, 0, 1) == 0);
+  for (int d = 0; d < 3; ++d)
+    CHECK(Error, dims_a[d].chunks_per_shard == dims_b[d].chunks_per_shard);
+  // M=1 means no inner splitting: inner cps = n_chunks. row_bytes = 5*8*4=160.
+  // cps_floor=ceildiv(256,160)=2. cps_cap = min(MAX_PARTS/32, 20) = 20.
+  CHECK(Error, dims_a[0].chunks_per_shard == 20);
+  CHECK(Error, dims_a[1].chunks_per_shard == 8);
+  CHECK(Error, dims_a[2].chunks_per_shard == 4);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_multi_append(void)
+{
+  // na=2: inner append dim (z) passes through at full span (cps = n_chunks[1]),
+  // inner non-append dims get greedy allocation as usual, cps_0 uses the
+  // row_bytes that includes both factors.
+  int ok = 0;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 0, 10, 128, 128 };
+  dims_create(dims, "tzyx", sizes);
+  uint64_t cs[] = { 1, 1, 64, 64 };
+  dims_set_chunk_sizes(dims, 4, cs);
+
+  // bpe=2, chunk_bytes = 1*1*64*64*2 = 8192.
+  // n_chunks = (0, 10, 2, 2). M=1 -> shards stay at 1.
+  // inner_cps: y=2, x=2 -> inner_cps_prod = 4.
+  // others_prod: dims[1].cps = 10 (n_chunks[1]).
+  // row_bytes = 8192 * 4 * 10 = 327680.
+  // cps_floor = ceildiv(2 MiB, 327680) = 7. n_chunks[0]=0 (unbounded) so the
+  // cap is MAX_PARTS/(4*10) = 10000/40 = 250. cps_0 = max(7, 250) = 250.
+  CHECK(Error, dims_set_shard_geometry(dims, 4, 2 << 20, 1, 0, 2) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 250);
+  CHECK(Error, dims[1].chunks_per_shard == 10);
+  CHECK(Error, dims[2].chunks_per_shard == 2);
+  CHECK(Error, dims[3].chunks_per_shard == 2);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_min_append_shards(void)
+{
+  // min_append_shards > 1 clamps cps_append down so that ceildiv(n_chunks[0],
+  // cps) >= min. Forces shard-switching even when the parts cap would allow
+  // packing everything into one outer shard.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 16, 16 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // n_chunks[0] = 20. Without min_append_shards, cps_cap would pick 20
+  // (one shard). With min=4 the cap becomes floor(20/4)=5.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 4096, 1, 4, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 5);
+  // ceildiv(20, 5) = 4 append shards exactly.
+
+  // min=3 → floor(20/3)=6.
+  dims_create(dims, "tyx", sizes);
+  dims_set_chunk_sizes(dims, 3, cs);
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 4096, 1, 3, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 6);
+
+  // min > n_chunks[0]: cap falls to cps=1 (best we can do). min_append_shards
+  // is authoritative, so cps stays at 1 even if the byte floor would pick
+  // higher.
+  dims_create(dims, "tyx", sizes);
+  dims_set_chunk_sizes(dims, 3, cs);
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 4096, 1, 999, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 1);
+
+  // min_append_shards dominates the byte floor. With min=4, cps=5 (4 shards)
+  // even though the 1 GiB floor would want cps much larger.
+  dims_create(dims, "tyx", sizes);
+  dims_set_chunk_sizes(dims, 3, cs);
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 1ull << 30, 1, 4, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 5);
+
+  // min_append_shards = 0 is "no minimum" (same as the baseline test).
+  dims_create(dims, "tyx", sizes);
+  dims_set_chunk_sizes(dims, 3, cs);
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 4096, 1, 0, 1) == 0);
+  CHECK(Error, dims[0].chunks_per_shard == 20);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_phase_b_splits_past_target(void)
+{
+  // target=2 but inner dims too big: Phase A fills target (y:2 shards), then
+  // Phase B splits y further to fit MAX_PARTS_PER_SHARD, exceeding the target.
+  // target_concurrent_shards is a soft preference, not a hard cap.
+  int ok = 0;
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 500, 100 };
+  dims_create(dims, "tyx", sizes);
+  uint64_t cs[] = { 5, 1, 1 };
+  dims_set_chunk_sizes(dims, 3, cs);
+
+  // chunk_bytes=5. n_chunks=(20,500,100). target=2. min_shard_bytes=5 (≥1
+  // chunk). Phase A: shards=(_,2,1), inner_cps_prod=250*100=25000 >
+  // MAX_PARTS=10000. Phase B: split y to 3 (167*100=16700), 4 (125*100=12500),
+  // 5 (100*100=10000). Π shards = 5 exceeds target=2 — that's the soft
+  // semantics.
+  CHECK(Error, dims_set_shard_geometry(dims, 3, 5, 2, 0, 1) == 0);
+  CHECK(Error, dims[1].chunks_per_shard == 100);
+  CHECK(Error, dims[2].chunks_per_shard == 100);
+  // inner_prod=10000; cps_cap=MAX/10000=1; clamped to n_chunks[0]=20 → 1.
+  CHECK(Error, dims[0].chunks_per_shard == 1);
+
+  ok = 1;
+Error:
+  REPORT_TEST(ok);
+  return !ok;
+}
+
+static int
+test_shard_geom_parts_limit_infeasible(void)
+{
+  // Multi-append where the inner-append dim's n_chunks alone exceeds
+  // MAX_PARTS_PER_SHARD — no amount of inner splitting can help. Returns 2.
+  int ok = 0;
+  struct dimension dims[4];
+  uint64_t sizes[] = { 100, 15000, 8, 8 };
+  dims_create(dims, "tzyx", sizes);
+  uint64_t cs[] = { 1, 1, 8, 8 };
+  dims_set_chunk_sizes(dims, 4, cs);
+
+  // na=2 (t,z have chunk_size=1). others_prod = n_chunks[z] = 15000 alone
+  // exceeds MAX_PARTS=10000 — infeasible regardless of inner (y,x) geometry.
+  CHECK(Error, dims_set_shard_geometry(dims, 4, 0, 1, 0, 1) == 2);
+
+  ok = 1;
+Error:
   REPORT_TEST(ok);
   return !ok;
 }
@@ -703,10 +1098,31 @@ main(void)
     { "dims_create_errors", test_dims_create_errors },
     { "dims_budget_chunk_size", test_dims_budget_chunk_size },
     { "dims_budget_chunk_size_uniform", test_dims_budget_chunk_size_uniform },
+    { "dims_budget_chunk_size_pin", test_dims_budget_chunk_size_pin },
+    { "dims_budget_chunk_size_pin_unbounded",
+      test_dims_budget_chunk_size_pin_unbounded },
+    { "dims_budget_chunk_size_clamp_to_size",
+      test_dims_budget_chunk_size_clamp_to_size },
+    { "dims_budget_chunk_size_pinned_over_budget",
+      test_dims_budget_chunk_size_pinned_over_budget },
+    { "dims_budget_chunk_size_target_under_bpe",
+      test_dims_budget_chunk_size_target_under_bpe },
     { "dims_budget_chunk_bytes", test_dims_budget_chunk_bytes },
 
     { "dims_set_shard_counts", test_dims_set_shard_counts },
     { "dims_set_shard_counts_skip_zero", test_dims_set_shard_counts_skip_zero },
+    { "shard_geom_no_inner_sharding", test_shard_geom_no_inner_sharding },
+    { "shard_geom_errors", test_shard_geom_errors },
+    { "shard_geom_splits_inner_greedy", test_shard_geom_splits_inner_greedy },
+    { "shard_geom_caps_at_n_chunks", test_shard_geom_caps_at_n_chunks },
+    { "shard_geom_max_concurrent_zero_is_one",
+      test_shard_geom_max_concurrent_zero_is_one },
+    { "shard_geom_multi_append", test_shard_geom_multi_append },
+    { "shard_geom_min_append_shards", test_shard_geom_min_append_shards },
+    { "shard_geom_phase_b_splits_past_target",
+      test_shard_geom_phase_b_splits_past_target },
+    { "shard_geom_parts_limit_infeasible",
+      test_shard_geom_parts_limit_infeasible },
     { "dims_set_storage_order", test_dims_set_storage_order },
     { "dims_set_downsample_by_name", test_dims_set_downsample_by_name },
     { "dims_print", test_dims_print },

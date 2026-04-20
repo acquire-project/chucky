@@ -49,18 +49,6 @@ dims_set_chunk_sizes(struct dimension* dims,
                      uint8_t rank,
                      const uint64_t* chunk_sizes);
 
-// Distribute nelem across dims using power-of-2 ratios.
-//
-// ratio 0 -> chunk_size = 1 (that dim doesn't contribute to chunk volume).
-// For non-zero ratios: bits_per_part = ceil(log2(nelem) / sum(ratios)).
-// Each dim gets chunk_size = 1 << (ratio[i] * bits_per_part).
-// Remainder bits (may be negative) go to the lowest-indexed non-zero-ratio dim.
-void
-dims_budget_chunk_size(struct dimension* dims,
-                       uint8_t rank,
-                       uint64_t nelem,
-                       const uint8_t* ratios);
-
 // Set chunks_per_shard to achieve target shard counts.
 // shard_counts has rank elements. 0 means "skip" (don't modify).
 // Requires chunk_size to be set first.
@@ -69,12 +57,87 @@ dims_set_shard_counts(struct dimension* dims,
                       uint8_t rank,
                       const uint64_t* shard_counts);
 
+// Choose shard geometry from a byte floor, concurrency target, and
+// append-shard floor, respecting the backend parts cap as a hard constraint.
+//
+// Policy (two-phase):
+//   Phase A — fill target_concurrent_shards. Integer-greedy across inner
+//     dims (d >= n_append): each step grows the dim with the largest
+//     remaining n_chunks[d]/shards[d] ratio while Π shards[d] <= target.
+//   Phase B — enforce parts budget. If inner_cps_prod is too big for the
+//     parts cap given the required cps_append, keep splitting inner dims
+//     past the target (target_concurrent_shards is soft). Picks the inner
+//     dim with the largest current cps each step.
+//
+//   Outer append dim (d = 0): chunks_per_shard maximized within
+//     MAX_PARTS_PER_SHARD / (inner_cps_prod · others_prod) and <= n_chunks[0].
+//     When min_append_shards > 1, capped at floor(n_chunks[0] / N) —
+//     authoritative over the byte floor. When min_shard_bytes > 0, Phase B
+//     reserves budget for cps_append >= cps_floor when achievable; if not,
+//     min_shard_bytes silently yields (soft).
+//   Inner append dims (d in 1..na-1): pass through at chunks_per_shard =
+//     n_chunks[d].
+//
+// Requires chunk_size to be set first (e.g. via dims_budget_chunk_bytes).
+// target_concurrent_shards of 0 is treated as 1.
+// min_append_shards of 0 or 1 is treated as "no minimum".
+//
+// Returns:
+//   0 = success
+//   1 = min_shard_bytes < chunk_bytes (floor meaningless below one chunk).
+//       Caller can retry with smaller chunks or no floor.
+//   2 = parts budget infeasible even with inner fully split. Caller can retry
+//       with larger chunks, lower target_concurrent_shards, or lower
+//       min_append_shards.
+//   3 = invalid argument (null dims, rank==0, zero chunk_size, zero bpe).
+int
+dims_set_shard_geometry(struct dimension* dims,
+                        uint8_t rank,
+                        size_t min_shard_bytes,
+                        uint32_t target_concurrent_shards,
+                        uint32_t min_append_shards,
+                        size_t bytes_per_element);
+
+// Combined chunk + shard layout policy.
+//
+// When chunk_ratios != NULL: runs dims_budget_chunk_bytes first.
+// Always runs dims_set_shard_geometry second. No ordering concerns
+// for callers.
+struct dims_layout_policy
+{
+  size_t bytes_per_element;
+  size_t target_chunk_bytes; // ignored when chunk_ratios == NULL
+  const int* chunk_ratios;   // NULL = leave chunk_size unchanged
+  size_t min_shard_bytes;
+  uint32_t target_concurrent_shards;
+  uint32_t min_append_shards; // 0 = no minimum
+};
+
+int
+dims_set_layout(struct dimension* dims,
+                uint8_t rank,
+                const struct dims_layout_policy* p);
+
 // Distribute target_chunk_bytes across dims using power-of-2 ratios.
-// Like dims_budget_chunk_size but accepts a byte target instead of elements.
-// Computes nelem = target_chunk_bytes / bytes_per_element, then delegates.
-void
+//
+// ratios[i] > 0  -> bit-budget participant with this weight.
+// ratios[i] == 0 -> chunk_size = 1 (no bits allocated).
+// ratios[i] == -1-> pin chunk_size at dims[i].size. If dims[i].size == 0
+//                  (unbounded dim 0), treated as weight=1: the dim absorbs
+//                  the remaining bit budget. Only dim 0 may be unbounded.
+//
+// Bit allocation is greedy over participants; remaining element budget is
+// nelem / prod(pinned sizes). Participant chunk_size is clamped to dim size
+// for bounded dims (no clamp for unbounded dim 0).
+//
+// Returns:
+//   0 = success.
+//   1 = invalid input: bytes_per_element == 0, target_chunk_bytes <
+//       bytes_per_element (budget smaller than one element), or pinned dims
+//       alone exceed the budget.
+int
 dims_budget_chunk_bytes(struct dimension* dims,
                         uint8_t rank,
                         size_t target_chunk_bytes,
                         size_t bytes_per_element,
-                        const uint8_t* ratios);
+                        const int* ratios);

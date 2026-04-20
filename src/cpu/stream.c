@@ -4,6 +4,8 @@
 #include "cpu/compress.h"
 #include "cpu/compress_blosc.h"
 #include "cpu/transpose.h"
+#include "defs.limits.h"
+#include "lod/lod_plan.h"
 #include "platform/platform.h"
 #include "util/metric.h"
 #include "util/prelude.h"
@@ -490,25 +492,162 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
 }
 
 int
-tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
-                                   size_t target_chunk_bytes,
-                                   const uint8_t* ratios,
-                                   size_t budget_bytes,
-                                   size_t shard_alignment)
+tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
+                              size_t target_chunk_bytes,
+                              size_t min_chunk_bytes,
+                              const int* ratios,
+                              size_t budget_bytes,
+                              size_t min_shard_bytes,
+                              uint32_t target_concurrent_shards,
+                              uint32_t min_append_shards,
+                              size_t shard_alignment,
+                              struct advise_layout_diagnostic* diag)
 {
-  const size_t bytes_per_element = dtype_bpe(config->dtype);
-  if (bytes_per_element == 0 || budget_bytes == 0)
-    return 1;
+  if (diag) {
+    memset(diag, 0, sizeof(*diag));
+    diag->budget_bytes = budget_bytes;
+    diag->parts_limit = MAX_PARTS_PER_SHARD;
+  }
 
-  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
-       target >>= 1) {
-    dims_budget_chunk_bytes(
-      config->dimensions, config->rank, target, bytes_per_element, ratios);
-    struct tile_stream_cpu_memory_info mem;
-    if (tile_stream_cpu_memory_estimate(config, shard_alignment, &mem))
-      return 1;
-    if (mem.heap_bytes <= budget_bytes)
-      return 0;
+  const size_t bytes_per_element = dtype_bpe(config->dtype);
+  if (bytes_per_element == 0 || budget_bytes == 0) {
+    if (diag)
+      diag->reason = ADVISE_INVALID_CONFIG;
+    return 1;
+  }
+
+  const uint8_t user_k = config->epochs_per_batch;
+  const size_t floor =
+    min_chunk_bytes > bytes_per_element ? min_chunk_bytes : bytes_per_element;
+  if (diag)
+    diag->floor_chunk_bytes = floor;
+
+  enum advise_layout_reason last_reason = ADVISE_BUDGET_EXCEEDED;
+  size_t last_chunk_bytes = 0;
+  uint32_t last_k = 0;
+  size_t last_heap_bytes = 0;
+  uint64_t last_cps_total = 0;
+
+  for (size_t target = target_chunk_bytes; target >= floor; target >>= 1) {
+    // Phase 1: fit chunks + K to memory budget. Start with auto-derived K
+    // (or user-supplied K if non-zero); if heap_bytes exceeds budget, halve K
+    // and retry. User-supplied K is authoritative and isn't reduced.
+    if (dims_budget_chunk_bytes(config->dimensions,
+                                config->rank,
+                                target,
+                                bytes_per_element,
+                                ratios)) {
+      // Non-recoverable input (e.g. pinned dims exceed target at this step).
+      // Halving target can only make it worse — bail.
+      last_reason = ADVISE_CHUNK_BUDGET_INFEASIBLE;
+      last_chunk_bytes = target;
+      break;
+    }
+
+    uint64_t chunk_vol = 1;
+    for (uint8_t d = 0; d < config->rank; ++d)
+      chunk_vol *= config->dimensions[d].chunk_size;
+    last_chunk_bytes = (size_t)(chunk_vol * bytes_per_element);
+
+    config->epochs_per_batch = user_k;
+    int fit = 0;
+    for (;;) {
+      struct tile_stream_cpu_memory_info mem;
+      if (tile_stream_cpu_memory_estimate(config, shard_alignment, &mem)) {
+        if (diag) {
+          diag->reason = ADVISE_INVALID_CONFIG;
+          diag->chunk_bytes = last_chunk_bytes;
+          diag->epochs_per_batch = config->epochs_per_batch;
+        }
+        return 1;
+      }
+      last_k = mem.epochs_per_batch;
+      last_heap_bytes = mem.heap_bytes;
+      if (mem.heap_bytes <= budget_bytes) {
+        config->epochs_per_batch = (uint8_t)mem.epochs_per_batch;
+        fit = 1;
+        break;
+      }
+      last_reason = ADVISE_BUDGET_EXCEEDED;
+      last_cps_total = 0;
+      if (user_k || mem.epochs_per_batch <= 1)
+        break;
+      config->epochs_per_batch = (uint8_t)(mem.epochs_per_batch / 2);
+    }
+    if (!fit)
+      continue;
+
+    // Phase 2: shard geometry (parts budget + concurrency target + byte floor).
+    // Return 1 = MIN_SHARD_TOO_SMALL (retryable by shrinking chunks);
+    // return 2 = PARTS_LIMIT infeasible even with inner fully split — halving
+    // chunks only grows inner_cps_prod, so bail immediately.
+    int sg = dims_set_shard_geometry(config->dimensions,
+                                     config->rank,
+                                     min_shard_bytes,
+                                     target_concurrent_shards,
+                                     min_append_shards,
+                                     bytes_per_element);
+    if (sg == 1) {
+      last_reason = ADVISE_MIN_SHARD_TOO_SMALL;
+      last_cps_total = 0;
+      continue;
+    }
+    if (sg == 2) {
+      last_reason = ADVISE_PARTS_LIMIT_EXCEEDED;
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
+      last_cps_total = cps_total;
+      break;
+    }
+    if (sg != 0) {
+      last_reason = ADVISE_INVALID_CONFIG;
+      break;
+    }
+
+    if (diag) {
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
+      uint8_t na = dims_n_append(config->dimensions, config->rank);
+      uint64_t inner_shards_prod = 1;
+      for (uint8_t d = na; d < config->rank; ++d) {
+        uint64_t size = config->dimensions[d].size;
+        uint64_t cs = config->dimensions[d].chunk_size;
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cs == 0 || cps == 0)
+          continue;
+        uint64_t n_chunks = (size + cs - 1) / cs;
+        inner_shards_prod *= (n_chunks + cps - 1) / cps;
+      }
+      diag->reason = ADVISE_OK;
+      diag->chunk_bytes = last_chunk_bytes;
+      diag->epochs_per_batch = config->epochs_per_batch;
+      diag->device_bytes = last_heap_bytes;
+      diag->chunks_per_shard_total = cps_total;
+      diag->actual_concurrent_shards = inner_shards_prod;
+      diag->actual_shard_bytes = last_chunk_bytes * cps_total;
+      diag->min_append_shards_overrode_min_shard_bytes =
+        (min_append_shards > 1 && min_shard_bytes > 0) ? 1 : 0;
+    }
+    return 0;
+  }
+
+  config->epochs_per_batch = user_k;
+  if (diag) {
+    diag->reason = last_reason;
+    diag->chunk_bytes = last_chunk_bytes;
+    diag->epochs_per_batch = last_k;
+    diag->device_bytes = last_heap_bytes;
+    diag->chunks_per_shard_total = last_cps_total;
   }
   return 1;
 }

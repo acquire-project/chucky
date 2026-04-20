@@ -74,6 +74,48 @@ jobs:
           --output-on-failure
           -E "(s3)"
 
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: ci
+          create-args: >-
+            cmake ninja sccache uv
+            aws-c-s3 blosc lz4-c zstd snappy zlib
+          init-shell: bash
+          cache-environment: true
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Build
+        shell: bash
+        env:
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: |
+          eval "$(micromamba shell hook --shell bash)"
+          micromamba activate ci
+          cmake --preset cpu-only \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build build
+
+      - name: Test
+        shell: bash
+        run: |
+          eval "$(micromamba shell hook --shell bash)"
+          micromamba activate ci
+          ctest --test-dir build --output-on-failure -E "(s3)"
+
   coverage:
     runs-on: ubuntu-latest
     steps:
@@ -126,7 +168,7 @@ jobs:
           fail_ci_if_error: false
 
   gpu-tests:
-    runs-on: [self-hosted, gpu]
+    runs-on: [self-hosted, Linux, gpu]
     steps:
       - uses: actions/checkout@v4
 

@@ -39,10 +39,12 @@ static int
 write_array_metadata(struct zarr_array* a)
 {
   char key[4096];
+  int n;
   if (a->prefix[0])
-    snprintf(key, sizeof(key), "%s/zarr.json", a->prefix);
+    n = snprintf(key, sizeof(key), "%s/zarr.json", a->prefix);
   else
-    snprintf(key, sizeof(key), "zarr.json");
+    n = snprintf(key, sizeof(key), "zarr.json");
+  (void)n;
 
   // Size the buffer generously to fit custom attributes of arbitrary size.
   size_t attr_bytes = 0;
@@ -52,7 +54,10 @@ write_array_metadata(struct zarr_array* a)
     attr_bytes += 16; // quotes, colon, comma, slack
   }
   size_t cap = 4096 + attr_bytes;
-  char* buf = (char*)malloc(cap);
+  // calloc zeroes tail bytes so a NUL-scan can clamp the write length if
+  // the JSON writer's pos ever overcounts (guards against platform-specific
+  // vsnprintf quirks — see #96).
+  char* buf = (char*)calloc(1, cap);
   if (!buf)
     return 1;
   int len = zarr_array_json(buf,
@@ -68,7 +73,8 @@ write_array_metadata(struct zarr_array* a)
     free(buf);
     return 1;
   }
-  int rc = a->store->put(a->store, key, buf, (size_t)len);
+  size_t write_len = strnlen(buf, (size_t)len);
+  int rc = a->store->put(a->store, key, buf, write_len);
   free(buf);
   if (rc == 0)
     a->attrs.dirty = 0;
@@ -94,10 +100,12 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   }
 
   char key[4096];
+  int n;
   if (a->prefix[0])
-    snprintf(key, sizeof(key), "%s/%s", a->prefix, suffix);
+    n = snprintf(key, sizeof(key), "%s/%s", a->prefix, suffix);
   else
-    snprintf(key, sizeof(key), "%s", suffix);
+    n = snprintf(key, sizeof(key), "%s", suffix);
+  (void)n;
 
   return a->pool->open(a->pool, slot, key);
 }

@@ -213,7 +213,8 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 
   // Build full path
   char path[4096];
-  snprintf(path, sizeof(path), "%s/%s", p->root, key);
+  int n = snprintf(path, sizeof(path), "%s/%s", p->root, key);
+  (void)n;
 
   int flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
   w->fd = platform_open_write(path, flags);

@@ -123,7 +123,7 @@ hcs_well_attributes_json(char* buf,
   for (int f = 0; f < field_count; ++f) {
     jw_object_begin(&jw);
     jw_key(&jw, "path");
-    char path[8];
+    char path[16];
     snprintf(path, sizeof(path), "%d", f);
     jw_string(&jw, path);
     jw_key(&jw, "acquisition");
