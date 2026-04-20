@@ -34,7 +34,10 @@ platform_available_memory(void)
 void*
 platform_aligned_alloc(size_t alignment, size_t size)
 {
-  return aligned_alloc(alignment, size);
+  void* ptr = NULL;
+  if (posix_memalign(&ptr, alignment, size) != 0)
+    return NULL;
+  return ptr;
 }
 
 void
