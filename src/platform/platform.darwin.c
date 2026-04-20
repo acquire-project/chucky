@@ -69,3 +69,9 @@ platform_toc(struct platform_clock* clock)
   clock->last_ns = now;
   return elapsed;
 }
+
+void
+platform_call_once(platform_once* flag, void (*fn)(void))
+{
+  pthread_once(flag, fn);
+}

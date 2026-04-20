@@ -1,5 +1,6 @@
 #include "platform/platform.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
@@ -64,4 +65,10 @@ platform_toc(struct platform_clock* clock)
   float elapsed = (now - clock->last_ns) / 1e9f;
   clock->last_ns = now;
   return elapsed;
+}
+
+void
+platform_call_once(platform_once* flag, void (*fn)(void))
+{
+  pthread_once(flag, fn);
 }
