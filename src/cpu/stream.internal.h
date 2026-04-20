@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/pipeline.h"
+#include "cpu/stream.body.h"
 #include "lod/reduce_csr.h"
 #include "platform/platform.h"
 #include "stream.cpu.h"

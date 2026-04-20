@@ -81,3 +81,14 @@ platform_close(platform_fd fd)
 {
   close(fd);
 }
+
+int
+platform_path_exists(const char* path)
+{
+  struct stat st;
+  if (stat(path, &st) == 0)
+    return 1;
+  if (errno == ENOENT || errno == ENOTDIR)
+    return 0;
+  return -1;
+}

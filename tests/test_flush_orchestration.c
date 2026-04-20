@@ -36,21 +36,21 @@ orch_ctx_destroy(struct orch_ctx* c)
 {
   if (c->s) {
     // Batch events
-    for (uint32_t i = 0; i < c->s->batch.epochs_per_batch; ++i)
-      cu_event_destroy(c->s->batch.pool_events[i]);
+    for (uint32_t i = 0; i < c->s->engine.batch.epochs_per_batch; ++i)
+      cu_event_destroy(c->s->engine.batch.pool_events[i]);
 
-    d2h_deliver_destroy(&c->s->d2h_deliver);
-    compress_agg_destroy(&c->s->compress_agg, c->cl.levels.nlod);
+    d2h_deliver_destroy(&c->s->engine.d2h_deliver);
+    compress_agg_destroy(&c->s->engine.compress_agg, c->cl.levels.nlod);
 
     // Pools
     for (int i = 0; i < 2; ++i) {
-      cu_mem_free(c->s->pools.buf[i]);
-      cu_event_destroy(c->s->pools.ready[i]);
+      cu_mem_free(c->s->engine.pools.buf[i]);
+      cu_event_destroy(c->s->engine.pools.ready[i]);
     }
 
-    cu_stream_destroy(c->s->streams.compute);
-    cu_stream_destroy(c->s->streams.compress);
-    cu_stream_destroy(c->s->streams.d2h);
+    cu_stream_destroy(c->s->engine.streams.compute);
+    cu_stream_destroy(c->s->engine.streams.compress);
+    cu_stream_destroy(c->s->engine.streams.d2h);
 
     free(c->s);
     c->s = NULL;
@@ -75,10 +75,10 @@ orch_ctx_setup(struct orch_ctx* c,
   c->s = (struct tile_stream_gpu*)calloc(1, sizeof(*c->s));
   CHECK(Fail, c->s);
 
-  c->s->config = *config;
-  c->s->shard_sink = sink;
-  c->s->levels = c->cl.levels;
-  c->s->layout = c->cl.layouts[0];
+  c->s->ctx.config = *config;
+  c->s->ctx.sink = sink;
+  c->s->ctx.levels = c->cl.levels;
+  c->s->ctx.layout = c->cl.layouts[0];
 
   const uint32_t K = c->cl.epochs_per_batch;
   const uint64_t total_chunks = c->cl.levels.total_chunks;
@@ -88,58 +88,71 @@ orch_ctx_setup(struct orch_ctx* c,
     (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
 
   // GPU streams
-  CU(Fail, cuStreamCreate(&c->s->streams.compute, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&c->s->streams.compress, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&c->s->streams.d2h, CU_STREAM_NON_BLOCKING));
+  CU(Fail,
+     cuStreamCreate(&c->s->engine.streams.compute, CU_STREAM_NON_BLOCKING));
+  CU(Fail,
+     cuStreamCreate(&c->s->engine.streams.compress, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&c->s->engine.streams.d2h, CU_STREAM_NON_BLOCKING));
 
   // Compress+aggregate stage
   CHECK(Fail,
-        compress_agg_init(
-          &c->s->compress_agg, &c->cl, config, c->s->streams.compute) == 0);
+        compress_agg_init(&c->s->engine.compress_agg,
+                          &c->cl,
+                          config,
+                          c->s->engine.streams.compute) == 0);
 
   // D2H+deliver stage
   CHECK(Fail,
-        d2h_deliver_init(&c->s->d2h_deliver,
-                         c->s->compress_agg.levels,
+        d2h_deliver_init(&c->s->engine.d2h_deliver,
+                         c->s->engine.compress_agg.levels,
                          c->cl.levels.nlod,
                          platform_page_alignment(),
-                         c->s->streams.compute) == 0);
+                         c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools
   for (int i = 0; i < 2; ++i) {
-    CU(Fail, cuMemAlloc(&c->s->pools.buf[i], pool_bytes));
+    CU(Fail, cuMemAlloc(&c->s->engine.pools.buf[i], pool_bytes));
     CU(Fail,
-       cuMemsetD8Async(
-         c->s->pools.buf[i], 0, pool_bytes, c->s->streams.compute));
-    CU(Fail, cuEventCreate(&c->s->pools.ready[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(c->s->pools.ready[i], c->s->streams.compute));
+       cuMemsetD8Async(c->s->engine.pools.buf[i],
+                       0,
+                       pool_bytes,
+                       c->s->engine.streams.compute));
+    CU(Fail, cuEventCreate(&c->s->engine.pools.ready[i], CU_EVENT_DEFAULT));
+    CU(
+      Fail,
+      cuEventRecord(c->s->engine.pools.ready[i], c->s->engine.streams.compute));
   }
-  c->s->pools.current = 0;
+  c->s->engine.pools.current = 0;
 
   // Batch state + pool events
-  c->s->batch.epochs_per_batch = K;
-  c->s->batch.accumulated = 0;
+  c->s->engine.batch.epochs_per_batch = K;
+  c->s->engine.batch.accumulated = 0;
   for (uint32_t i = 0; i < K; ++i) {
-    CU(Fail, cuEventCreate(&c->s->batch.pool_events[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(c->s->batch.pool_events[i], c->s->streams.compute));
+    CU(Fail,
+       cuEventCreate(&c->s->engine.batch.pool_events[i], CU_EVENT_DEFAULT));
+    CU(Fail,
+       cuEventRecord(c->s->engine.batch.pool_events[i],
+                     c->s->engine.streams.compute));
   }
 
   // Flush pipeline state
-  memset(&c->s->flush, 0, sizeof(c->s->flush));
+  memset(&c->s->engine.flush, 0, sizeof(c->s->engine.flush));
 
   // Non-multiscale: zeroed lod
-  memset(&c->s->lod, 0, sizeof(c->s->lod));
+  memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));
 
-  memset(&c->s->metrics, 0, sizeof(c->s->metrics));
-  c->s->metrics.compress = mk_stream_metric("Compress");
-  c->s->metrics.aggregate = mk_stream_metric("Aggregate");
-  c->s->metrics.d2h = mk_stream_metric("D2H");
-  c->s->metrics.sink = mk_stream_metric("Sink");
-  c->s->metrics.lod_gather = mk_stream_metric("LOD Gather");
+  memset(&c->s->engine.metrics, 0, sizeof(c->s->engine.metrics));
+  c->s->engine.metrics.compress = mk_stream_metric("Compress");
+  c->s->engine.metrics.aggregate = mk_stream_metric("Aggregate");
+  c->s->engine.metrics.d2h = mk_stream_metric("D2H");
+  c->s->engine.metrics.sink = mk_stream_metric("Sink");
+  c->s->engine.metrics.lod_gather = mk_stream_metric("LOD Gather");
 
-  memset(&c->s->metadata_update_clock, 0, sizeof(c->s->metadata_update_clock));
+  memset(&c->s->engine.metadata_update_clock,
+         0,
+         sizeof(c->s->engine.metadata_update_clock));
 
-  CU(Fail, cuStreamSynchronize(c->s->streams.compute));
+  CU(Fail, cuStreamSynchronize(c->s->engine.streams.compute));
   return 0;
 
 Fail:
@@ -154,13 +167,13 @@ orch_ctx_fill_epoch(struct orch_ctx* c,
                     const struct tile_stream_configuration* config,
                     uint16_t (*fill_fn)(uint64_t))
 {
-  CU(Fail, cuStreamSynchronize(c->s->streams.compute));
+  CU(Fail, cuStreamSynchronize(c->s->engine.streams.compute));
 
   const uint64_t total_chunks = c->cl.levels.total_chunks;
   const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   CUdeviceptr epoch_ptr =
-    c->s->pools.buf[c->s->pools.current] +
+    c->s->engine.pools.buf[c->s->engine.pools.current] +
     (uint64_t)epoch_in_batch * total_chunks * chunk_stride * bytes_per_element;
   return fill_pool_epoch(
     epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn);
@@ -195,17 +208,17 @@ test_accumulate_one_epoch(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
 
   // Accumulate epoch
-  struct writer_result r = flush_accumulate_epoch(c.s);
+  struct writer_result r = flush_accumulate_epoch(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
 
   // Verify: mid-batch, no flush triggered
-  CHECK(Fail, c.s->batch.accumulated == 1);
-  CHECK(Fail, c.s->pools.current == 0);
-  CHECK(Fail, c.s->flush.pending == 0);
+  CHECK(Fail, c.s->engine.batch.accumulated == 1);
+  CHECK(Fail, c.s->engine.pools.current == 0);
+  CHECK(Fail, c.s->engine.flush.pending == 0);
 
   // Epoch mask recorded
-  CHECK(Fail, c.s->flush.slot[0].batch_active_masks[0] == 0x1);
-  CHECK(Fail, c.s->flush.slot[0].active_levels_mask == 0x1);
+  CHECK(Fail, c.s->engine.flush.slot[0].batch_active_masks[0] == 0x1);
+  CHECK(Fail, c.s->engine.flush.slot[0].active_levels_mask == 0x1);
 
   // Sink not touched
   CHECK(Fail, sink.open_count == 0);
@@ -243,20 +256,20 @@ test_full_batch_auto_flush(void)
 
   // Fill and accumulate 2 epochs
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
-  CHECK(Fail, c.s->batch.accumulated == 1);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, c.s->engine.batch.accumulated == 1);
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // After full batch: drain_kick_and_swap fired
-  CHECK(Fail, c.s->batch.accumulated == 0);
-  CHECK(Fail, c.s->pools.current == 1); // swapped to pool 1
-  CHECK(Fail, c.s->flush.pending == 1); // batch 1 pending delivery
-  CHECK(Fail, c.s->flush.current == 0); // batch 1 was on pool 0
+  CHECK(Fail, c.s->engine.batch.accumulated == 0);
+  CHECK(Fail, c.s->engine.pools.current == 1); // swapped to pool 1
+  CHECK(Fail, c.s->engine.flush.pending == 1); // batch 1 pending delivery
+  CHECK(Fail, c.s->engine.flush.current == 0); // batch 1 was on pool 0
 
   // Fresh pool slot is reset
-  CHECK(Fail, c.s->flush.slot[1].active_levels_mask == 0);
+  CHECK(Fail, c.s->engine.flush.slot[1].active_levels_mask == 0);
 
   // Sink not yet written (D2H kicked but not drained)
   CHECK(Fail, sink.open_count == 0);
@@ -293,16 +306,16 @@ test_drain_delivers_data(void)
 
   // Fill and accumulate 2 epochs (full batch → auto-kick)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
-  CHECK(Fail, c.s->flush.pending == 1);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, c.s->engine.flush.pending == 1);
 
   // Drain the pending batch
-  struct writer_result r = flush_drain_pending(c.s);
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->flush.pending == 0);
+  CHECK(Fail, c.s->engine.flush.pending == 0);
 
   // Data delivered: shard opened and finalized (tps_0=2, 2 epochs → complete)
   CHECK(Fail, sink.open_count >= 1);
@@ -310,7 +323,7 @@ test_drain_delivers_data(void)
   CHECK(Fail, sink.writers[0][0].size > 0);
 
   // Sink metric always recorded (uses platform_toc, not CUDA events)
-  CHECK(Fail, c.s->metrics.sink.count == 1);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 1);
 
   ok = 1;
 
@@ -344,22 +357,22 @@ test_accumulated_sync_partial(void)
 
   // Fill and accumulate 1 epoch (partial batch)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
-  CHECK(Fail, c.s->batch.accumulated == 1);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, c.s->engine.batch.accumulated == 1);
 
   // Sync flush: processes the partial batch (per-epoch path)
-  struct writer_result r = flush_accumulated_sync(c.s);
+  struct writer_result r = flush_accumulated_sync(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
 
   // Batch drained
-  CHECK(Fail, c.s->batch.accumulated == 0);
+  CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
   // Data delivered to sink (1 epoch, shard not finalized since tps_0=2)
   CHECK(Fail, sink.open_count >= 1);
   CHECK(Fail, sink.writers[0][0].size > 0);
 
   // Sink metric recorded (platform_toc, not CUDA events — always fires)
-  CHECK(Fail, c.s->metrics.sink.count == 1);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 1);
 
   ok = 1;
 
@@ -393,42 +406,42 @@ test_two_batch_cycle(void)
 
   // --- Batch 1: epochs 0,1 on pool 0 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // Batch 1 kicked, pool swapped to 1
-  CHECK(Fail, c.s->pools.current == 1);
-  CHECK(Fail, c.s->flush.pending == 1);
-  CHECK(Fail, c.s->flush.current == 0);
-  CHECK(Fail, c.s->batch.accumulated == 0);
+  CHECK(Fail, c.s->engine.pools.current == 1);
+  CHECK(Fail, c.s->engine.flush.pending == 1);
+  CHECK(Fail, c.s->engine.flush.current == 0);
+  CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
   // --- Batch 2: epochs 2,3 on pool 1 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch2) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
-  CHECK(Fail, flush_accumulate_epoch(c.s).error == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
   // Batch 2 auto-drained batch 1 (pending was set), then kicked batch 2
-  CHECK(Fail, c.s->pools.current == 0); // swapped back to pool 0
-  CHECK(Fail, c.s->flush.pending == 1); // batch 2 now pending
-  CHECK(Fail, c.s->flush.current == 1); // batch 2 was on pool 1
-  CHECK(Fail, c.s->batch.accumulated == 0);
+  CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
+  CHECK(Fail, c.s->engine.flush.pending == 1); // batch 2 now pending
+  CHECK(Fail, c.s->engine.flush.current == 1); // batch 2 was on pool 1
+  CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
   // Batch 1 was already drained (by drain_kick_and_swap during batch 2)
   // tps_0=2, so batch 1 (2 epochs) finalized one shard
   CHECK(Fail, sink.finalize_count >= 1);
 
   // Drain batch 2
-  struct writer_result r = flush_drain_pending(c.s);
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->flush.pending == 0);
+  CHECK(Fail, c.s->engine.flush.pending == 0);
 
   // Second shard finalized
   CHECK(Fail, sink.finalize_count >= 2);
 
   // Sink metric: 2 batch drains
-  CHECK(Fail, c.s->metrics.sink.count == 2);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 2);
 
   ok = 1;
 

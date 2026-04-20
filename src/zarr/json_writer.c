@@ -164,6 +164,14 @@ jw_bool(struct json_writer* jw, int val)
   jw->needs_comma = 1;
 }
 
+void
+jw_raw(struct json_writer* jw, const char* text)
+{
+  jw_comma(jw);
+  jw_put(jw, "%s", text);
+  jw->needs_comma = 1;
+}
+
 size_t
 jw_length(const struct json_writer* jw)
 {

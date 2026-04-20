@@ -47,6 +47,15 @@ fs_create_pool(struct store* self, uint64_t nslots)
   return shard_pool_fs_create(fs->root, nslots, fs->unbuffered);
 }
 
+static int
+fs_has_existing_data(struct store* self)
+{
+  struct store_fs* fs = container_of(self, struct store_fs, base);
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/zarr.json", fs->root);
+  return platform_path_exists(path);
+}
+
 static void
 fs_destroy(struct store* self)
 {
@@ -64,6 +73,7 @@ store_fs_create(const char* root, int unbuffered)
   fs->base.put = fs_put;
   fs->base.mkdirs = fs_mkdirs;
   fs->base.create_pool = fs_create_pool;
+  fs->base.has_existing_data = fs_has_existing_data;
   fs->base.destroy = fs_destroy;
   fs->unbuffered = unbuffered;
   snprintf(fs->root, sizeof(fs->root), "%s", root);

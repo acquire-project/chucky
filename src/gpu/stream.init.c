@@ -1,9 +1,12 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
+#include "gpu/stream.flush.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
 
+#include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
+#include "lod/lod_plan.h"
 #include "platform/platform.h"
 #include "stream/config.h"
 #include "util/prelude.h"
@@ -52,19 +55,28 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (!s)
     return;
 
-  // Ensure all GPU work completes before tearing down events/memory.
-  sync(s->streams.h2d);
-  sync(s->streams.compute);
-  sync(s->streams.compress);
-  sync(s->streams.d2h);
+  // Auto-finalize any unwritten data so destroy is a safe commit point for
+  // callers that didn't explicitly flush. Errors here are swallowed — the
+  // stream is tearing down, there's no one to report to.
+  if (!s->flushed) {
+    (void)stream_flush_body(&s->engine, &s->ctx);
+    s->flushed = 1;
+  }
 
-  destroy_batch_events(&s->batch);
-  d2h_deliver_destroy(&s->d2h_deliver);
-  compress_agg_destroy(&s->compress_agg, s->levels.nlod);
-  destroy_chunk_pools(&s->pools);
-  lod_state_destroy(&s->lod);
-  ingest_destroy(&s->stage);
-  destroy_cuda_streams_and_events(&s->streams, &s->pools);
+  // Ensure all GPU work completes before tearing down events/memory.
+  sync(s->engine.streams.h2d);
+  sync(s->engine.streams.compute);
+  sync(s->engine.streams.compress);
+  sync(s->engine.streams.d2h);
+
+  destroy_batch_events(&s->engine.batch);
+  d2h_deliver_destroy(&s->engine.d2h_deliver);
+  compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
+  destroy_chunk_pools(&s->engine.pools);
+  lod_state_destroy(&s->engine.lod);
+  lod_shared_state_destroy(&s->engine.lod_shared);
+  ingest_destroy(&s->engine.stage);
+  destroy_cuda_streams_and_events(&s->engine.streams, &s->engine.pools);
   free(s);
 }
 
@@ -124,48 +136,13 @@ Fail:
 }
 
 static int
-seed_events(const struct pool_state* pools,
-            const struct lod_state* lod,
-            CUstream compute)
+seed_events(const struct pool_state* pools, CUstream compute)
 {
   CU(Fail, cuEventRecord(pools->ready[0], compute));
   CU(Fail, cuEventRecord(pools->ready[1], compute));
-
-  for (int fc = 0; fc < 2; ++fc) {
-    if (lod->timing[fc].t_start) {
-      CU(Fail, cuEventRecord(lod->timing[fc].t_start, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_scatter_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_reduce_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_append_end, compute));
-      CU(Fail, cuEventRecord(lod->timing[fc].t_end, compute));
-    }
-  }
-
   return 0;
 Fail:
   return 1;
-}
-
-static struct stream_metrics
-init_metrics(int enable_multiscale)
-{
-  return (struct stream_metrics){
-    .memcpy = mk_stream_metric("Memcpy"),
-    .h2d = mk_stream_metric("H2D"),
-    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
-    .lod_gather = mk_stream_metric("LOD Gather"),
-    .lod_reduce = mk_stream_metric("LOD Reduce"),
-    .lod_append_fold = mk_stream_metric("Append Fold"),
-    .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
-    .compress = mk_stream_metric("Compress"),
-    .aggregate = mk_stream_metric("Aggregate"),
-    .d2h = mk_stream_metric("D2H"),
-    .sink = mk_stream_metric("Sink"),
-    .flush_stall = mk_stream_metric("FlushStall"),
-    .kick_sync_stall = mk_stream_metric("KickSync"),
-    .io_fence_stall = mk_stream_metric("IOFence"),
-    .backpressure = mk_stream_metric("Backpres"),
-  };
 }
 
 struct tile_stream_gpu*
@@ -195,87 +172,108 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
 
-  out->config = *config;
-  out->shard_sink = sink;
-  out->shard_alignment = shard_sink_required_shard_alignment(sink);
-  out->levels = cl.levels;
-  out->dims = cl.dims;
+  out->ctx.config = *config;
+  out->ctx.sink = sink;
+  out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
+  out->ctx.levels = cl.levels;
+  out->ctx.dims = cl.dims;
   tile_stream_gpu_init_writer(out);
 
-  out->config.buffer_capacity_bytes =
+  out->ctx.config.buffer_capacity_bytes =
     (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
 
   // Copy L0 layout (host fields; d_* still NULL).
-  out->layout = cl.layouts[0];
+  out->ctx.layout = cl.layouts[0];
 
   // Move LOD plan and level layouts (always, including L0).
-  out->lod.plan = cl.plan;
+  out->engine.lod.plan = cl.plan;
   cl.plan = (struct lod_plan){ 0 }; // ownership transferred
   for (int lv = 0; lv < cl.levels.nlod; ++lv)
-    out->lod.layouts[lv] = cl.layouts[lv];
+    out->engine.lod.layouts[lv] = cl.layouts[lv];
 
   // Copy batch info.
   CHECK(FailPhase2, (cl.epochs_per_batch & (cl.epochs_per_batch - 1)) == 0);
-  out->batch.epochs_per_batch = cl.epochs_per_batch;
-  out->batch.accumulated = 0;
+  out->engine.batch.epochs_per_batch = cl.epochs_per_batch;
+  out->engine.batch.accumulated = 0;
 
   // GPU allocation and init.
   CHECK(FailPhase2,
-        init_cuda_streams_and_events(&out->streams, &out->pools) == 0);
+        init_cuda_streams_and_events(&out->engine.streams,
+                                     &out->engine.pools) == 0);
   CHECK(FailPhase2,
-        ingest_init(&out->stage,
-                    out->config.buffer_capacity_bytes,
-                    out->streams.compute) == 0);
-  CHECK(FailPhase2, lod_state_init(&out->lod, &out->levels, &out->config) == 0);
+        ingest_init(&out->engine.stage,
+                    out->ctx.config.buffer_capacity_bytes,
+                    out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
-        init_chunk_pools(&out->pools,
-                         &out->levels,
-                         out->layout.chunk_stride,
+        lod_state_init(&out->engine.lod, &out->ctx.levels, &out->ctx.config) ==
+          0);
+  // Alias L0 layout GPU pointers from LOD state into context.
+  out->ctx.layout_gpu = out->engine.lod.layout_gpu[0];
+  CHECK(FailPhase2,
+        init_chunk_pools(&out->engine.pools,
+                         &out->ctx.levels,
+                         out->ctx.layout.chunk_stride,
                          dtype_bpe(config->dtype),
-                         out->batch.epochs_per_batch,
-                         out->streams.compute) == 0);
+                         out->engine.batch.epochs_per_batch,
+                         out->engine.streams.compute) == 0);
 
   // Initialize the two pipeline stages.
   CHECK(FailPhase2,
-        compress_agg_init(
-          &out->compress_agg, &cl, config, out->streams.compute) == 0);
+        compress_agg_init(&out->engine.compress_agg,
+                          &cl,
+                          config,
+                          out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
-        d2h_deliver_init(&out->d2h_deliver,
-                         out->compress_agg.levels,
-                         out->levels.nlod,
-                         out->shard_alignment,
-                         out->streams.compute) == 0);
+        d2h_deliver_init(&out->engine.d2h_deliver,
+                         out->engine.compress_agg.levels,
+                         out->ctx.levels.nlod,
+                         out->ctx.shard_alignment,
+                         out->engine.streams.compute) == 0);
 
-  CHECK(FailPhase2, init_batch_events(&out->batch, out->streams.compute) == 0);
-  if (out->levels.enable_multiscale) {
+  CHECK(FailPhase2,
+        init_batch_events(&out->engine.batch, out->engine.streams.compute) ==
+          0);
+  if (out->ctx.levels.enable_multiscale) {
+    const size_t bpe = dtype_bpe(out->ctx.config.dtype);
+    const size_t linear_bytes = out->engine.lod.layouts[0].epoch_elements * bpe;
+    const uint64_t morton_total_vals =
+      out->engine.lod.plan.level_spans
+        .ends[out->engine.lod.plan.levels.nlod - 1];
+    const size_t morton_bytes = morton_total_vals * bpe;
     CHECK(FailPhase2,
-          lod_state_init_buffers(&out->lod, out->config.dtype) == 0);
-    if (out->dims.append_downsample)
+          lod_shared_state_init(&out->engine.lod_shared,
+                                linear_bytes,
+                                morton_bytes,
+                                out->engine.streams.compute) == 0);
+    if (out->ctx.dims.append_downsample)
       CHECK(FailPhase2,
-            lod_state_init_accumulators(&out->lod, &out->config) == 0);
+            lod_state_init_accumulators(&out->engine.lod, &out->ctx.config) ==
+              0);
   }
   CHECK(FailPhase2,
-        seed_events(&out->pools, &out->lod, out->streams.compute) == 0);
+        seed_events(&out->engine.pools, out->engine.streams.compute) == 0);
 
-  CU(FailPhase2, cuStreamSynchronize(out->streams.compute));
+  CU(FailPhase2, cuStreamSynchronize(out->engine.streams.compute));
 
   // Precompute max_cursor_elements so append doesn't recompute each call.
   {
     const struct dimension* dims = config->dimensions;
-    const uint8_t na = dim_info_n_append(&out->dims);
+    const uint8_t na = dim_info_n_append(&out->ctx.dims);
     if (dims[0].size > 0) {
-      out->max_cursor_elements = out->layout.epoch_elements;
+      out->ctx.max_cursor_elements = out->ctx.layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        out->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        out->ctx.max_cursor_elements *=
+          ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
 
-  out->metrics = init_metrics(out->levels.enable_multiscale);
-  out->d2h_deliver.metrics = &out->metrics;
+  out->engine.metrics =
+    stream_engine_init_metrics(out->ctx.levels.enable_multiscale);
+  out->engine.d2h_deliver.metrics = &out->engine.metrics;
 
   // Initialize metadata update timer
-  out->metadata_update_clock = (struct platform_clock){ 0 };
-  platform_toc(&out->metadata_update_clock);
+  out->engine.metadata_update_clock = (struct platform_clock){ 0 };
+  platform_toc(&out->engine.metadata_update_clock);
 
   computed_stream_layouts_free(&cl);
   return out;
@@ -293,7 +291,7 @@ FailPhase1:
 const struct tile_stream_layout*
 tile_stream_gpu_layout(const struct tile_stream_gpu* s)
 {
-  return &s->layout;
+  return &s->ctx.layout;
 }
 
 struct writer*
@@ -305,23 +303,23 @@ tile_stream_gpu_writer(struct tile_stream_gpu* s)
 uint64_t
 tile_stream_gpu_cursor(const struct tile_stream_gpu* s)
 {
-  return s->cursor_elements;
+  return s->ctx.cursor_elements;
 }
 
 struct tile_stream_status
 tile_stream_gpu_status(const struct tile_stream_gpu* s)
 {
   return (struct tile_stream_status){
-    .nlod = s->levels.nlod,
-    .append_downsample = s->dims.append_downsample,
-    .epochs_per_batch = s->batch.epochs_per_batch,
-    .max_compressed_size = s->compress_agg.codec.max_output_size,
-    .dtype = s->config.dtype,
-    .codec = s->config.codec,
-    .codec_batch_size = s->compress_agg.codec.batch_size,
-    .batch_accumulated = s->batch.accumulated,
-    .pool_current = s->pools.current,
-    .flush_pending = s->flush.pending,
+    .nlod = s->ctx.levels.nlod,
+    .append_downsample = s->ctx.dims.append_downsample,
+    .epochs_per_batch = s->engine.batch.epochs_per_batch,
+    .max_compressed_size = s->engine.compress_agg.codec.max_output_size,
+    .dtype = s->ctx.config.dtype,
+    .codec = s->ctx.config.codec,
+    .codec_batch_size = s->engine.compress_agg.codec.batch_size,
+    .batch_accumulated = s->engine.batch.accumulated,
+    .pool_current = s->engine.pools.current,
+    .flush_pending = s->engine.flush.pending,
   };
 }
 
@@ -511,25 +509,164 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 }
 
 int
-tile_stream_gpu_advise_chunk_sizes(struct tile_stream_configuration* config,
-                                   size_t target_chunk_bytes,
-                                   const uint8_t* ratios,
-                                   size_t budget_bytes,
-                                   size_t shard_alignment)
+tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
+                              size_t target_chunk_bytes,
+                              size_t min_chunk_bytes,
+                              const int* ratios,
+                              size_t budget_bytes,
+                              size_t min_shard_bytes,
+                              uint32_t target_concurrent_shards,
+                              uint32_t min_append_shards,
+                              size_t shard_alignment,
+                              struct advise_layout_diagnostic* diag)
 {
-  const size_t bytes_per_element = dtype_bpe(config->dtype);
-  if (bytes_per_element == 0 || budget_bytes == 0)
-    return 1;
+  if (diag) {
+    memset(diag, 0, sizeof(*diag));
+    diag->budget_bytes = budget_bytes;
+    diag->parts_limit = MAX_PARTS_PER_SHARD;
+  }
 
-  for (size_t target = target_chunk_bytes; target >= bytes_per_element;
-       target >>= 1) {
-    dims_budget_chunk_bytes(
-      config->dimensions, config->rank, target, bytes_per_element, ratios);
-    struct tile_stream_memory_info mem;
-    if (tile_stream_gpu_memory_estimate(config, shard_alignment, &mem))
-      return 1;
-    if (mem.device_bytes <= budget_bytes)
-      return 0;
+  const size_t bytes_per_element = dtype_bpe(config->dtype);
+  if (bytes_per_element == 0 || budget_bytes == 0) {
+    if (diag)
+      diag->reason = ADVISE_INVALID_CONFIG;
+    return 1;
+  }
+
+  const uint8_t user_k = config->epochs_per_batch;
+  const size_t floor =
+    min_chunk_bytes > bytes_per_element ? min_chunk_bytes : bytes_per_element;
+  if (diag)
+    diag->floor_chunk_bytes = floor;
+
+  // Track last-iteration context so the diagnostic can describe the reason the
+  // solver bailed after exhausting all chunk sizes.
+  enum advise_layout_reason last_reason = ADVISE_BUDGET_EXCEEDED;
+  size_t last_chunk_bytes = 0;
+  uint32_t last_k = 0;
+  size_t last_device_bytes = 0;
+  uint64_t last_cps_total = 0;
+
+  for (size_t target = target_chunk_bytes; target >= floor; target >>= 1) {
+    // Phase 1: fit chunks + K to memory budget. Start with auto-derived K
+    // (or user-supplied K if non-zero); if device_bytes exceeds budget, halve
+    // K and retry. User-supplied K is authoritative and isn't reduced.
+    if (dims_budget_chunk_bytes(config->dimensions,
+                                config->rank,
+                                target,
+                                bytes_per_element,
+                                ratios)) {
+      // Non-recoverable input (e.g. pinned dims exceed target at this step).
+      // Halving target can only make it worse — bail.
+      last_reason = ADVISE_CHUNK_BUDGET_INFEASIBLE;
+      last_chunk_bytes = target;
+      break;
+    }
+
+    uint64_t chunk_vol = 1;
+    for (uint8_t d = 0; d < config->rank; ++d)
+      chunk_vol *= config->dimensions[d].chunk_size;
+    last_chunk_bytes = (size_t)(chunk_vol * bytes_per_element);
+
+    config->epochs_per_batch = user_k;
+    int fit = 0;
+    for (;;) {
+      struct tile_stream_memory_info mem;
+      if (tile_stream_gpu_memory_estimate(config, shard_alignment, &mem)) {
+        if (diag) {
+          diag->reason = ADVISE_INVALID_CONFIG;
+          diag->chunk_bytes = last_chunk_bytes;
+          diag->epochs_per_batch = config->epochs_per_batch;
+        }
+        return 1;
+      }
+      last_k = mem.epochs_per_batch;
+      last_device_bytes = mem.device_bytes;
+      if (mem.device_bytes <= budget_bytes) {
+        config->epochs_per_batch = (uint8_t)mem.epochs_per_batch;
+        fit = 1;
+        break;
+      }
+      last_reason = ADVISE_BUDGET_EXCEEDED;
+      last_cps_total = 0;
+      if (user_k || mem.epochs_per_batch <= 1)
+        break;
+      config->epochs_per_batch = (uint8_t)(mem.epochs_per_batch / 2);
+    }
+    if (!fit)
+      continue;
+
+    // Phase 2: shard geometry (parts budget + concurrency target + byte floor).
+    // Return 1 = MIN_SHARD_TOO_SMALL (retryable by shrinking chunks);
+    // return 2 = PARTS_LIMIT infeasible even with inner fully split — halving
+    // chunks only grows inner_cps_prod, so bail immediately.
+    int sg = dims_set_shard_geometry(config->dimensions,
+                                     config->rank,
+                                     min_shard_bytes,
+                                     target_concurrent_shards,
+                                     min_append_shards,
+                                     bytes_per_element);
+    if (sg == 1) {
+      last_reason = ADVISE_MIN_SHARD_TOO_SMALL;
+      last_cps_total = 0;
+      continue;
+    }
+    if (sg == 2) {
+      last_reason = ADVISE_PARTS_LIMIT_EXCEEDED;
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
+      last_cps_total = cps_total;
+      break;
+    }
+    if (sg != 0) {
+      last_reason = ADVISE_INVALID_CONFIG;
+      break;
+    }
+
+    if (diag) {
+      uint64_t cps_total = 1;
+      for (uint8_t d = 0; d < config->rank; ++d) {
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cps == 0)
+          cps = 1;
+        cps_total *= cps;
+      }
+      uint8_t na = dims_n_append(config->dimensions, config->rank);
+      uint64_t inner_shards_prod = 1;
+      for (uint8_t d = na; d < config->rank; ++d) {
+        uint64_t size = config->dimensions[d].size;
+        uint64_t cs = config->dimensions[d].chunk_size;
+        uint64_t cps = config->dimensions[d].chunks_per_shard;
+        if (cs == 0 || cps == 0)
+          continue;
+        uint64_t n_chunks = (size + cs - 1) / cs;
+        inner_shards_prod *= (n_chunks + cps - 1) / cps;
+      }
+      diag->reason = ADVISE_OK;
+      diag->chunk_bytes = last_chunk_bytes;
+      diag->epochs_per_batch = config->epochs_per_batch;
+      diag->device_bytes = last_device_bytes;
+      diag->chunks_per_shard_total = cps_total;
+      diag->actual_concurrent_shards = inner_shards_prod;
+      diag->actual_shard_bytes = last_chunk_bytes * cps_total;
+      diag->min_append_shards_overrode_min_shard_bytes =
+        (min_append_shards > 1 && min_shard_bytes > 0) ? 1 : 0;
+    }
+    return 0;
+  }
+
+  config->epochs_per_batch = user_k;
+  if (diag) {
+    diag->reason = last_reason;
+    diag->chunk_bytes = last_chunk_bytes;
+    diag->epochs_per_batch = last_k;
+    diag->device_bytes = last_device_bytes;
+    diag->chunks_per_shard_total = last_cps_total;
   }
   return 1;
 }

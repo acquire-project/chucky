@@ -267,7 +267,8 @@ test_zarr_multiscale_group_json(void)
   const struct dimension* levels[2] = { l0_dims, l1_dims };
 
   char buf[4096];
-  int len = ngff_multiscale_group_json(buf, sizeof(buf), 3, 2, levels, NULL);
+  int len =
+    ngff_multiscale_group_json(buf, sizeof(buf), 3, 2, levels, NULL, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 
@@ -309,7 +310,8 @@ test_scale_clamped_dim(void)
   const struct dimension* levels[3] = { l0, l1, l2 };
 
   char buf[8192];
-  int len = ngff_multiscale_group_json(buf, sizeof(buf), 3, 3, levels, NULL);
+  int len =
+    ngff_multiscale_group_json(buf, sizeof(buf), 3, 3, levels, NULL, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 
@@ -340,7 +342,8 @@ test_zarr_array_json_lz4(void)
   struct codec_config codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 };
 
   int len =
-    zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
+    zarr_array_json(
+      buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec, NULL);
   CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
   buf[len] = '\0';
 
@@ -367,7 +370,8 @@ test_zarr_array_json_zstd(void)
   struct codec_config codec = { .id = CODEC_ZSTD, .level = 3 };
 
   int len =
-    zarr_array_json(buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec);
+    zarr_array_json(
+      buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec, NULL);
   CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
   buf[len] = '\0';
 

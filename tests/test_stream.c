@@ -747,7 +747,8 @@ test_stream_unbounded_requires_tps(void)
   return 1;
 }
 
-// Test: bounded dim0 — append more data than capacity, expect auto-flush.
+// Test: bounded dim0 — appending more than capacity reports `finished`
+// with unconsumed data; finalization happens on explicit flush.
 static int
 test_stream_bounded_dim0(void)
 {
@@ -778,13 +779,13 @@ test_stream_bounded_dim0(void)
     src[i] = (uint16_t)i;
 
   struct slice input = { .beg = src, .end = src + total };
-  struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
+  struct writer* w = tile_stream_gpu_writer(s);
+  struct writer_result r = writer_append(w, input);
 
-  // Should get writer_error_finished (auto-flushed at capacity)
+  // Should get writer_error_finished with unconsumed data.
   CHECK(Fail, r.error == writer_error_finished);
   log_info("  got writer_error_finished as expected");
 
-  // rest should point to unconsumed data
   size_t consumed = (size_t)((const uint16_t*)r.rest.beg - src);
   size_t unconsumed =
     (size_t)((const uint16_t*)r.rest.end - (const uint16_t*)r.rest.beg);
@@ -793,7 +794,8 @@ test_stream_bounded_dim0(void)
   CHECK(Fail, consumed == 96);
   CHECK(Fail, unconsumed == 54);
 
-  // Shard data should have been written
+  // Finalize explicitly. After flush the sink should have shard data.
+  CHECK(Fail, writer_flush(w).error == 0);
   CHECK(Fail, mss.writers[0][0].size > 0);
   log_info("  shard bytes=%zu", mss.writers[0][0].size);
 

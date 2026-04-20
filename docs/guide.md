@@ -81,6 +81,7 @@ A library consumer needs:
 - **`types.codec.h`** — `enum compression_codec`
 - **`types.lod.h`** — `enum lod_reduce_method`
 - **`defs.limits.h`** — compile-time limits
+- **`chucky_log.h`** — log level / callback control for routing chucky's log output
 - **`zarr_fs_sink.h`** — filesystem Zarr sink
 - **`zarr_s3_sink.h`** — S3 Zarr sink
 

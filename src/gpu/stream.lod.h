@@ -13,11 +13,26 @@ lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
                const struct tile_stream_configuration* config);
 
-// Allocate d_linear, d_morton, LOD timing events.
-// Must be called AFTER lod_state_init.
-// Returns 0 on success.
+// Allocate the engine-owned shared LOD resources (d_linear, d_morton, timing).
+// linear_bytes / morton_bytes are the buffer sizes (multiarray passes the max
+// across arrays; single-array passes the array's own sizes).
+//
+// The timing events are created AND seeded on `seed_stream` so the first
+// downstream wait completes immediately.  `seed_stream` must be the same
+// compute stream that later runs lod_run_epoch — seeding on an unrelated
+// stream leaves the initial waits unsatisfied.
+//
+// Returns 0 on success; on failure, the struct is left safe to pass to
+// lod_shared_state_destroy.
 int
-lod_state_init_buffers(struct lod_state* lod, enum dtype dtype);
+lod_shared_state_init(struct lod_shared_state* sh,
+                      size_t linear_bytes,
+                      size_t morton_bytes,
+                      CUstream seed_stream);
+
+// Free the engine-owned shared LOD resources.
+void
+lod_shared_state_destroy(struct lod_shared_state* sh);
 
 // Allocate append-dim accumulators, level-ID buffer, and counts.
 // Must be called AFTER lod_state_init.
@@ -36,6 +51,7 @@ lod_state_destroy(struct lod_state* lod);
 // epoch. Returns 0 on success, non-zero on error.
 int
 lod_run_epoch(struct lod_state* lod,
+              struct lod_shared_state* sh,
               int fc,
               const struct level_geometry* levels,
               void* pool_epoch,

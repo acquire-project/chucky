@@ -41,7 +41,8 @@ test_plate_metadata(void)
 
   char buf[8192];
   int len =
-    hcs_plate_attributes_json(buf, sizeof(buf), "myplate", 2, 3, NULL, 2, NULL);
+    hcs_plate_attributes_json(
+      buf, sizeof(buf), "myplate", 2, 3, NULL, 2, NULL, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 
@@ -73,7 +74,7 @@ test_well_metadata(void)
   log_info("=== test_well_metadata ===");
 
   char buf[4096];
-  int len = hcs_well_attributes_json(buf, sizeof(buf), 3);
+  int len = hcs_well_attributes_json(buf, sizeof(buf), 3, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 
@@ -285,7 +286,7 @@ test_plate_metadata_with_mask(void)
   int mask[] = { 1, 0, 0, 1 };
   char buf[8192];
   int len =
-    hcs_plate_attributes_json(buf, sizeof(buf), "p", 2, 2, NULL, 1, mask);
+    hcs_plate_attributes_json(buf, sizeof(buf), "p", 2, 2, NULL, 1, mask, NULL);
   CHECK(Fail, len > 0);
   buf[len] = '\0';
 

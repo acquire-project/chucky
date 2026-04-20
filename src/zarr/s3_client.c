@@ -250,19 +250,20 @@ is_meta_request_done(void* user_data)
   return ctx->done != 0;
 }
 
-// Build an HTTP PUT request message for the given bucket/key.
+// Build an HTTP request message with the given method for the bucket/key.
 static struct aws_http_message*
-make_put_message(struct aws_allocator* alloc,
-                 struct s3_client* c,
-                 const char* bucket,
-                 const char* key,
-                 size_t content_length)
+make_request_message(struct aws_allocator* alloc,
+                     struct s3_client* c,
+                     const char* method,
+                     const char* bucket,
+                     const char* key,
+                     size_t content_length)
 {
   struct aws_http_message* msg = aws_http_message_new_request(alloc);
   if (!msg)
     return NULL;
 
-  aws_http_message_set_request_method(msg, aws_byte_cursor_from_c_str("PUT"));
+  aws_http_message_set_request_method(msg, aws_byte_cursor_from_c_str(method));
 
   // Build path and Host header
   char path[4096];
@@ -318,7 +319,7 @@ s3_client_put(struct s3_client* c,
               size_t len)
 {
   struct aws_http_message* msg =
-    make_put_message(c->alloc, c, bucket, key, len);
+    make_request_message(c->alloc, c, "PUT", bucket, key, len);
   CHECK(Fail, msg);
 
   // Body stream
@@ -390,6 +391,73 @@ Fail:
   return 1;
 }
 
+// --- s3_client_head (blocking HEAD, 1=exists / 0=missing / -1=error) ---
+
+int
+s3_client_head(struct s3_client* c, const char* bucket, const char* key)
+{
+  struct aws_http_message* msg =
+    make_request_message(c->alloc, c, "HEAD", bucket, key, 0);
+  if (!msg)
+    return -1;
+
+  struct blocking_meta_request ctx = {
+    .mutex = AWS_MUTEX_INIT,
+    .cv = AWS_CONDITION_VARIABLE_INIT,
+  };
+
+  struct aws_s3_meta_request_options opts = {
+    .type = AWS_S3_META_REQUEST_TYPE_DEFAULT,
+    .operation_name = aws_byte_cursor_from_c_str("HeadObject"),
+    .message = msg,
+    .finish_callback = on_meta_request_finish,
+    .user_data = &ctx,
+  };
+
+  if (c->has_endpoint)
+    opts.endpoint = &c->endpoint_uri;
+
+  struct aws_s3_meta_request* meta_req =
+    aws_s3_client_make_meta_request(c->client, &opts);
+  if (!meta_req) {
+    aws_http_message_release(msg);
+    return -1;
+  }
+
+  aws_mutex_lock(&ctx.mutex);
+  aws_condition_variable_wait_for_pred(
+    &ctx.cv, &ctx.mutex, (int64_t)c->timeout_ns, is_meta_request_done, &ctx);
+  int timed_out = !ctx.done;
+  aws_mutex_unlock(&ctx.mutex);
+
+  if (timed_out) {
+    log_error("s3_client_head(%s/%s): timed out", bucket, key);
+    aws_s3_meta_request_cancel(meta_req);
+    aws_mutex_lock(&ctx.mutex);
+    aws_condition_variable_wait_pred(
+      &ctx.cv, &ctx.mutex, is_meta_request_done, &ctx);
+    aws_mutex_unlock(&ctx.mutex);
+  }
+
+  aws_s3_meta_request_release(meta_req);
+  aws_http_message_release(msg);
+
+  if (timed_out)
+    return -1;
+
+  if (ctx.error_code == 0)
+    return 1;
+  if (ctx.response_status == 404)
+    return 0;
+
+  log_error("s3_client_head(%s/%s): error %d (HTTP %d)",
+            bucket,
+            key,
+            ctx.error_code,
+            ctx.response_status);
+  return -1;
+}
+
 // --- s3_upload (streaming PUT with async writes) ---
 
 struct s3_upload
@@ -439,7 +507,7 @@ s3_upload_begin(struct s3_client* c, const char* bucket, const char* key)
   u->cv = (struct aws_condition_variable)AWS_CONDITION_VARIABLE_INIT;
 
   // Build PUT message (no Content-Length for streaming upload)
-  u->message = make_put_message(c->alloc, c, bucket, key, 0);
+  u->message = make_request_message(c->alloc, c, "PUT", bucket, key, 0);
   CHECK(Fail_alloc, u->message);
 
   struct aws_s3_meta_request_options opts = {

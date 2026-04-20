@@ -21,5 +21,9 @@ struct store
   // Caller owns the returned pool and must destroy it before the store.
   struct shard_pool* (*create_pool)(struct store* self, uint64_t nslots);
 
+  // Coarse overwrite-guard. Returns 1 if zarr.json exists at the store root,
+  // 0 if absent, -1 on IO error. O(1) — one stat / HEAD.
+  int (*has_existing_data)(struct store* self);
+
   void (*destroy)(struct store* self);
 };

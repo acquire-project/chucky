@@ -35,6 +35,11 @@ s3_client_put(struct s3_client* c,
               const void* data,
               size_t len);
 
+// Blocking HEAD on an object. Returns 1 if it exists, 0 if missing (HTTP 404),
+// -1 on other errors (network / auth / unexpected status).
+int
+s3_client_head(struct s3_client* c, const char* bucket, const char* key);
+
 // --- Streaming upload for large objects (shards) ---
 
 struct s3_upload;
