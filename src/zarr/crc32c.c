@@ -1,9 +1,9 @@
 #include "zarr/crc32c.h"
 
-#include <threads.h>
+#include "platform/platform.h"
 
 static uint32_t crc32c_table[256];
-static once_flag crc32c_once = ONCE_FLAG_INIT;
+static platform_once crc32c_once = PLATFORM_ONCE_INIT;
 
 static void
 crc32c_init(void)
@@ -19,7 +19,7 @@ crc32c_init(void)
 uint32_t
 crc32c(const void* data, size_t len)
 {
-  call_once(&crc32c_once, crc32c_init);
+  platform_call_once(&crc32c_once, crc32c_init);
   uint32_t crc = 0xFFFFFFFF;
   const uint8_t* p = (const uint8_t*)data;
   for (size_t i = 0; i < len; ++i)
