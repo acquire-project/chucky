@@ -43,8 +43,9 @@ write_ngff_group_metadata(struct ngff_multiscale* ms)
   // Write the full group zarr.json (the ngff function generates the complete
   // JSON including zarr_format, node_type, and attributes).
   char key[4096];
+  int n;
   if (ms->prefix[0])
-    snprintf(key, sizeof(key), "%s/zarr.json", ms->prefix);
+    n = snprintf(key, sizeof(key), "%s/zarr.json", ms->prefix);
   else
     snprintf(key, sizeof(key), "zarr.json");
   int rc = ms->store->put(ms->store, key, json, (size_t)len);
@@ -196,14 +197,16 @@ ngff_multiscale_init(struct store* store,
         plan->levels.level[lv].dim[d].chunks_per_shard;
     }
 
-    char name[8];
+    char name[16];
     snprintf(name, sizeof(name), "%d", lv);
 
     char level_prefix[4096];
+    int lp_n;
     if (prefix && prefix[0])
-      snprintf(level_prefix, sizeof(level_prefix), "%s/%s", prefix, name);
+      lp_n = snprintf(level_prefix, sizeof(level_prefix), "%s/%s", prefix, name);
     else
-      snprintf(level_prefix, sizeof(level_prefix), "%s", name);
+      lp_n = snprintf(level_prefix, sizeof(level_prefix), "%s", name);
+    (void)lp_n;
 
     CHECK(Fail_levels, store->mkdirs(store, level_prefix) == 0);
 

@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char tmpdir[4096];
+static char tmpdir[512];
 
 static int
 make_tmpdir(void)
@@ -162,7 +162,7 @@ main(void)
   log_info("tmpdir: %s", tmpdir);
 
   // Write stores
-  char ms_path[4096], hcs_path[4096];
+  char ms_path[1024], hcs_path[1024];
   snprintf(ms_path, sizeof(ms_path), "%s/multiscale.zarr", tmpdir);
   snprintf(hcs_path, sizeof(hcs_path), "%s/hcs.zarr", tmpdir);
 

@@ -89,7 +89,7 @@ ngff_multiscale_group_json(char* buf,
   for (int lv = 0; lv < nlod; ++lv) {
     jw_object_begin(&jw);
     jw_key(&jw, "path");
-    char lvstr[8];
+    char lvstr[16];
     snprintf(lvstr, sizeof(lvstr), "%d", lv);
     jw_string(&jw, lvstr);
 

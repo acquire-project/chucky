@@ -39,10 +39,12 @@ static int
 write_array_metadata(struct zarr_array* a)
 {
   char key[4096];
+  int n;
   if (a->prefix[0])
-    snprintf(key, sizeof(key), "%s/zarr.json", a->prefix);
+    n = snprintf(key, sizeof(key), "%s/zarr.json", a->prefix);
   else
-    snprintf(key, sizeof(key), "zarr.json");
+    n = snprintf(key, sizeof(key), "zarr.json");
+  (void)n;
 
   // Size the buffer generously to fit custom attributes of arbitrary size.
   size_t attr_bytes = 0;
@@ -94,10 +96,12 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   }
 
   char key[4096];
+  int n;
   if (a->prefix[0])
-    snprintf(key, sizeof(key), "%s/%s", a->prefix, suffix);
+    n = snprintf(key, sizeof(key), "%s/%s", a->prefix, suffix);
   else
-    snprintf(key, sizeof(key), "%s", suffix);
+    n = snprintf(key, sizeof(key), "%s", suffix);
+  (void)n;
 
   return a->pool->open(a->pool, slot, key);
 }

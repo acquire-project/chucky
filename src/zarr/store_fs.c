@@ -19,7 +19,8 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
   char path[4096];
-  snprintf(path, sizeof(path), "%s/%s", fs->root, key);
+  int n = snprintf(path, sizeof(path), "%s/%s", fs->root, key);
+  (void)n;
 
   platform_fd fd = platform_open_write(path, 0);
   if (fd == PLATFORM_FD_INVALID)
@@ -34,7 +35,8 @@ fs_mkdirs(struct store* self, const char* key)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
   char path[4096];
-  snprintf(path, sizeof(path), "%s/%s", fs->root, key);
+  int n = snprintf(path, sizeof(path), "%s/%s", fs->root, key);
+  (void)n;
   return platform_mkdirp(path);
 }
 
