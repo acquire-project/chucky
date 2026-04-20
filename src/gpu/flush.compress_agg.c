@@ -245,6 +245,12 @@ compress_agg_kick(struct compress_agg_stage* stage,
   if (in->lod_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
 
+  // Aggregate writes to agg[fc].d_aggregated; ensure the prior D2H at this
+  // fc has finished reading from it before we overwrite. prev_d2h_done is
+  // initialized signaled, so the first kick on each fc no-ops here.
+  if (in->prev_d2h_done)
+    CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
+
   // Compress all epochs as one batch
   {
     CHECK_MUL_OVERFLOW(Error, n_epochs, levels->total_chunks, UINT64_MAX);

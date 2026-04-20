@@ -345,7 +345,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
     .codec_batch_size = s->engine.compress_agg.codec.batch_size,
     .batch_accumulated = s->engine.batch.accumulated,
     .pool_current = s->engine.pools.current,
-    .flush_pending = s->engine.flush.pending,
+    .flush_pending = s->engine.flush.pending[0] || s->engine.flush.pending[1],
   };
 }
 

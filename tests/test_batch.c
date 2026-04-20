@@ -175,7 +175,9 @@ test_batch_multi_cycle(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  // After 2 batches: swapped twice → back to pool 0, batch 2 pending
+  // After 2 batches: swapped twice → back to pool 0, both pending (lazy
+  // delivery: pending[0] = batch 1, pending[1] = batch 2, until either
+  // a 3rd batch reuses fc=0 or the stream is flushed).
   {
     struct tile_stream_status st = tile_stream_gpu_status(s);
     CHECK(Fail2, st.pool_current == 0);
@@ -183,14 +185,11 @@ test_batch_multi_cycle(void)
     CHECK(Fail2, st.flush_pending == 1);
   }
 
-  // Batch 1 drained when batch 2 started; batch 2 still pending
+  // Flush drains both pending batches, finalizing their shards.
   int pre_flush_finalize = css.finalize_count;
-  CHECK(Fail2, pre_flush_finalize >= 1);
-
-  // Flush drains batch 2
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
-  CHECK(Fail2, css.finalize_count > pre_flush_finalize);
+  CHECK(Fail2, css.finalize_count >= pre_flush_finalize + 2);
 
   free(src);
   tile_stream_gpu_destroy(s);

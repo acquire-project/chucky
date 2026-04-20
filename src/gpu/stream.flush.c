@@ -33,6 +33,7 @@ make_compress_input(struct stream_engine* e,
       (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
         ? e->lod_shared.timing[fc].t_end
         : NULL,
+    .prev_d2h_done = e->d2h_deliver.ready[fc],
     .epochs_per_batch = e->batch.epochs_per_batch,
   };
 }
@@ -73,11 +74,45 @@ Error:
   return 1;
 }
 
-// Pipeline the batch boundary: launch compress+aggregate for the new batch
-// on the compress stream, drain the previous batch's bulk D2H + delivery on
-// the d2h stream, then queue the new batch's offset D2H.  This ordering
-// keeps the d2h stream free for the previous batch's bulk transfer before
-// the new batch's aggregate-end wait occupies it.
+// Drain one pending fc slot: host-sync on ready[fc] (near-zero in steady
+// state), run delivery, clear pending. Accumulates flush_stall metric.
+static struct writer_result
+drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
+{
+  if (!e->flush.pending[fc])
+    return writer_ok();
+
+  struct platform_clock stall_clk = { 0 };
+  platform_toc(&stall_clk);
+  struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
+                                             &e->flush.pending_handoff[fc],
+                                             &ctx->levels,
+                                             &e->batch,
+                                             &ctx->dims,
+                                             &ctx->layout,
+                                             &ctx->config,
+                                             ctx->sink,
+                                             &e->lod,
+                                             &e->lod_shared,
+                                             &e->metrics,
+                                             &e->metadata_update_clock);
+  float ms = (float)(platform_toc(&stall_clk) * 1000.0);
+  accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
+
+  e->flush.pending[fc] = 0;
+  return r;
+}
+
+// Pipeline the batch boundary (lazy drain model):
+//   1. Deliver the PRIOR batch at this fc (if any). In steady state that
+//      batch's D2H has long since completed, so the host-sync is near-zero.
+//   2. Kick compress+aggregate for the new batch on this fc.
+//   3. Kick the full D2H (offset + bulk) on the d2h stream — non-blocking.
+//   4. Record the new handoff as pending for this fc; the drain of this
+//      batch will happen when fc is reused (typically 2 rounds later).
+//   5. Swap pools, zero the fresh one, reset batch accumulation.
+// Shard writes stay in batch order because we always deliver the fc we're
+// about to reuse, which holds the oldest undelivered batch.
 static struct writer_result
 drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
@@ -85,14 +120,14 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   const int completed_pool = e->pools.current;
   struct flush_slot_gpu* fs = &e->flush.slot[completed_pool];
 
-  // Save the previous pending state so we can drain it after the
-  // compress+aggregate kick but before the d2h kick.
-  struct flush_handoff prev_handoff = e->flush.pending_handoff;
-  int had_pending = e->flush.pending;
-  e->flush.pending = 0;
+  // Phase 1: deliver the PRIOR batch at fc=completed_pool (if any).
+  {
+    struct writer_result r = drain_fc(e, ctx, completed_pool);
+    if (r.error)
+      return r;
+  }
 
-  // Phase A: kick compress+aggregate for the new batch (compress stream).
-  // This starts GPU work immediately — no host blocking.
+  // Phase 2: kick compress+aggregate for the new batch (compress stream).
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct compress_agg_input in =
     make_compress_input(e, ctx, completed_pool, e->batch.accumulated);
@@ -106,46 +141,22 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
                           e->streams.compress,
                           &new_handoff) == 0);
 
-  // Phase B: drain the PREVIOUS batch.  This issues bulk D2H on d2h_stream
-  // (unblocked — the new batch's aggregate-end wait hasn't been queued yet).
-  if (had_pending) {
-    struct platform_clock stall_clk = { 0 };
-    platform_toc(&stall_clk);
-    struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                               &prev_handoff,
-                                               &ctx->levels,
-                                               &e->batch,
-                                               &ctx->dims,
-                                               &ctx->layout,
-                                               &ctx->config,
-                                               ctx->sink,
-                                               &e->lod,
-                                               &e->lod_shared,
-                                               &e->metrics,
-                                               &e->metadata_update_clock);
-    float ms = (float)(platform_toc(&stall_clk) * 1000.0);
-    accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
-    if (r.error)
-      return r;
-  }
-
-  // Phase C: queue the new batch's offset D2H on d2h_stream (non-blocking).
-  // This goes AFTER the previous drain's bulk D2H on d2h_stream, avoiding
-  // the aggregate-end wait from blocking the prior batch's transfer.
+  // Phase 3: kick the full D2H (offset sync + bulk queue) — non-blocking.
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
                          &new_handoff,
                          &ctx->levels,
                          &e->batch,
                          &ctx->dims,
+                         ctx->sink,
                          e->streams.d2h) == 0);
 
-  // Save handoff for the next drain.
-  e->flush.pending_handoff = new_handoff;
-  e->flush.pending = 1;
-  e->flush.current = completed_pool;
+  // Phase 4: mark this fc pending delivery.
+  e->flush.pending_handoff[completed_pool] = new_handoff;
+  e->flush.pending_seq[completed_pool] = e->flush.next_seq++;
+  e->flush.pending[completed_pool] = 1;
 
-  // Swap to fresh pool and zero it for next batch.
+  // Phase 5: swap to fresh pool and zero it for next batch.
   e->pools.current ^= 1;
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
@@ -211,7 +222,9 @@ Error:
 
 // --- Batch flush pipeline ---
 
-// Kick compress + aggregate + D2H for a batch of n_epochs epochs.
+// Kick compress + aggregate + full D2H for a batch of n_epochs epochs on
+// the given fc. Records the handoff as pending for this fc. Caller must
+// drain pending[fc] before calling again on the same fc.
 int
 flush_kick_batch(struct stream_engine* e,
                  struct stream_context* ctx,
@@ -236,10 +249,13 @@ flush_kick_batch(struct stream_engine* e,
                          &ctx->levels,
                          &e->batch,
                          &ctx->dims,
+                         ctx->sink,
                          e->streams.d2h) == 0);
 
-  // Save handoff for drain
-  e->flush.pending_handoff = handoff;
+  // Save handoff for drain; mark this fc pending.
+  e->flush.pending_handoff[fc] = handoff;
+  e->flush.pending_seq[fc] = e->flush.next_seq++;
+  e->flush.pending[fc] = 1;
 
   return 0;
 
@@ -249,25 +265,27 @@ Error:
 
 // --- Public interface ---
 
+// Drain all pending batches in kick order. Called at stream flush.
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
-  if (!e->flush.pending)
-    return writer_ok();
-
-  e->flush.pending = 0;
-  return d2h_deliver_drain(&e->d2h_deliver,
-                           &e->flush.pending_handoff,
-                           &ctx->levels,
-                           &e->batch,
-                           &ctx->dims,
-                           &ctx->layout,
-                           &ctx->config,
-                           ctx->sink,
-                           &e->lod,
-                           &e->lod_shared,
-                           &e->metrics,
-                           &e->metadata_update_clock);
+  // Up to 2 pending fcs (one per slot); drain oldest first.
+  for (int i = 0; i < 2; ++i) {
+    int pick = -1;
+    uint64_t pick_seq = UINT64_MAX;
+    for (int fc = 0; fc < 2; ++fc) {
+      if (e->flush.pending[fc] && e->flush.pending_seq[fc] < pick_seq) {
+        pick = fc;
+        pick_seq = e->flush.pending_seq[fc];
+      }
+    }
+    if (pick < 0)
+      break;
+    struct writer_result r = drain_fc(e, ctx, pick);
+    if (r.error)
+      return r;
+  }
+  return writer_ok();
 }
 
 struct writer_result
@@ -288,18 +306,7 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
   if (flush_kick_batch(e, ctx, fc, e->batch.accumulated))
     return writer_error();
 
-  struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                             &e->flush.pending_handoff,
-                                             &ctx->levels,
-                                             &e->batch,
-                                             &ctx->dims,
-                                             &ctx->layout,
-                                             &ctx->config,
-                                             ctx->sink,
-                                             &e->lod,
-                                             &e->lod_shared,
-                                             &e->metrics,
-                                             &e->metadata_update_clock);
+  struct writer_result r = drain_fc(e, ctx, fc);
   if (r.error)
     return r;
 
@@ -394,18 +401,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
   CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
   if (flush_kick_batch(e, ctx, fc, 1))
     return writer_error();
-  return d2h_deliver_drain(&e->d2h_deliver,
-                           &e->flush.pending_handoff,
-                           &ctx->levels,
-                           &e->batch,
-                           &ctx->dims,
-                           &ctx->layout,
-                           &ctx->config,
-                           ctx->sink,
-                           &e->lod,
-                           &e->lod_shared,
-                           &e->metrics,
-                           &e->metadata_update_clock);
+  return drain_fc(e, ctx, fc);
 
 Error:
   return writer_error();

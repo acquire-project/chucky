@@ -16,14 +16,17 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 void
 d2h_deliver_destroy(struct d2h_deliver_stage* stage);
 
-// Enqueue D2H transfers (async). Waits on IO fences first.
-// Returns 0 on success.
+// Enqueue the full D2H (offset + bulk) for this batch on the d2h stream,
+// non-blocking. Briefly host-syncs on the offset D2H to size the bulk
+// transfer, and waits on prior sink IO fences for this fc. ready[fc] is
+// recorded after bulk D2H completes. Returns 0 on success.
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
                  const struct dim_info* dims,
+                 struct shard_sink* sink,
                  CUstream d2h_stream);
 
 // Synchronize D2H, record metrics, deliver to sinks.

@@ -124,32 +124,25 @@ Error:
   return 1;
 }
 
-// Phase 2: sync on offsets, then D2H only the actual compressed bytes.
-// Called from drain after kick has returned. Uses the stashed d2h_stream.
+// Phase 2: queue bulk D2H for each active level using the worst-case
+// (cap) size. Skips the offset sync so the host doesn't block waiting for
+// compress+aggregate to finish. For codec=none cap == actual. For
+// compressed codecs this wastes PCIe bandwidth up to (cap-actual) bytes
+// per level per batch, traded for keeping the main thread unblocked.
+// Delivery still uses the true bytes (from h_offsets, which lands via the
+// parallel offset D2H) to split the buffer into per-shard writes.
 static int
-drain_bulk_d2h(struct d2h_deliver_stage* stage,
+queue_bulk_d2h(struct d2h_deliver_stage* stage,
                const struct flush_handoff* handoff,
                const struct level_geometry* levels,
                const struct batch_state* batch,
-               const struct dim_info* dims)
+               const struct dim_info* dims,
+               CUstream d2h_stream)
 {
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
   const uint32_t level_mask = handoff->active_levels_mask;
-  CUstream d2h_stream = stage->d2h_stream;
 
-  // Wait for offset D2H to land on the host.
-  {
-    struct platform_clock sync_clk = { 0 };
-    platform_toc(&sync_clk);
-    CU(Error, cuEventSynchronize(stage->offsets_ready[fc]));
-    if (stage->metrics) {
-      float ms = (float)(platform_toc(&sync_clk) * 1000.0);
-      accumulate_metric_ms(&stage->metrics->kick_sync_stall, ms, 0, 0);
-    }
-  }
-
-  // D2H only actual compressed bytes per level.
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
       continue;
@@ -165,26 +158,20 @@ drain_bulk_d2h(struct d2h_deliver_stage* stage,
     }
 
     struct aggregate_slot* agg = &lvl->agg[fc];
-    uint64_t covering = (uint64_t)active_count * lvl->agg_layout.covering_count;
 
-    size_t actual = agg->h_offsets[covering];
-    // Add one alignment unit of slack: deliver_to_shards_batch rounds each
-    // write up with align_up, so the D2H must cover at least that much.
-    // The aggregate buffer was sized with this slack via agg_pool_bytes.
-    actual += stage->shard_alignment;
+    // Worst-case bytes across the aggregate buffer for this level/batch.
+    // No host sync needed — h_offsets isn't consulted here.
     size_t cap =
       agg_pool_bytes((uint64_t)active_count * levels->level[lv].chunk_count,
                      handoff->max_output_size,
                      lvl->agg_layout.covering_count,
                      lvl->agg_layout.cps_inner,
                      lvl->agg_layout.page_size);
-    if (actual > cap)
-      actual = cap;
 
     CU(
       Error,
       cuMemcpyDtoHAsync(
-        agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, actual, d2h_stream));
+        agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, cap, d2h_stream));
     CU(Error, cuEventRecord(agg->ready, d2h_stream));
   }
 
@@ -283,8 +270,9 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
   }
 }
 
-// Wait for IO fences, issue bulk D2H (phase 2), synchronize, record metrics,
-// deliver to sinks.
+// Sync on ready[fc] (near-zero in steady state because kick queued the D2H
+// long ago), record metrics, deliver to sinks. No bulk D2H here — that was
+// queued in d2h_deliver_kick.
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
@@ -301,16 +289,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
-  // Wait for IO fences before overwriting h_aggregated with bulk D2H.
-  // Moved from kick so that compress+aggregate can run without blocking.
-  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
-
   // Fail fast if async IO encountered an error.
   if (sink->has_error && sink->has_error(sink))
     goto Error;
 
-  // Phase 2: sync on offsets, issue bulk D2H, sync on bulk ready.
-  CHECK(Error, drain_bulk_d2h(stage, handoff, levels, batch, dims) == 0);
   CU(Error, cuEventSynchronize(stage->ready[fc]));
   record_flush_metrics(stage,
                        handoff,
@@ -407,17 +389,27 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct level_geometry* levels,
                  const struct batch_state* batch,
                  const struct dim_info* dims,
+                 struct shard_sink* sink,
                  CUstream d2h_stream)
 {
   const int fc = handoff->fc;
 
+  // Wait on prior sink IO for this fc so we don't overwrite h_aggregated
+  // while the sink is still reading it. Host-blocking if sink is behind;
+  // no-op for async/discard sinks whose fence is already retired.
+  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
+
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
+
+  // Phase 1: queue offset D2H on d2h stream.
   CHECK(Error,
         kick_offset_d2h(stage, handoff, levels, batch, dims, d2h_stream) == 0);
 
-  // Stash d2h_stream so drain can issue bulk D2H on the same stream.
-  stage->d2h_stream = d2h_stream;
+  // Phase 2: sync on offsets (tiny) and queue bulk D2H on the same stream.
+  // ready[fc] is recorded after bulk completes.
+  CHECK(Error,
+        queue_bulk_d2h(stage, handoff, levels, batch, dims, d2h_stream) == 0);
 
   return 0;
 

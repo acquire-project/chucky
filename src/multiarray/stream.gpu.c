@@ -32,9 +32,10 @@ struct array_descriptor_gpu
   uint32_t batch_accumulated;
   int pools_current;
   struct flush_slot_gpu flush_slots[2];
-  int flush_pending;
-  int flush_current;
-  struct flush_handoff flush_pending_handoff;
+  int flush_pending[2];
+  uint64_t flush_pending_seq[2];
+  uint64_t flush_next_seq;
+  struct flush_handoff flush_pending_handoff[2];
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
@@ -117,11 +118,13 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
   e->batch.accumulated = desc->batch_accumulated;
   e->pools.current = desc->pools_current;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < 2; ++i) {
     e->flush.slot[i] = desc->flush_slots[i];
-  e->flush.pending = desc->flush_pending;
-  e->flush.current = desc->flush_current;
-  e->flush.pending_handoff = desc->flush_pending_handoff;
+    e->flush.pending[i] = desc->flush_pending[i];
+    e->flush.pending_seq[i] = desc->flush_pending_seq[i];
+    e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
+  }
+  e->flush.next_seq = desc->flush_next_seq;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     e->compress_agg.levels[lv].shard = desc->shard[lv];
     e->compress_agg.levels[lv].agg_layout = desc->agg_layout[lv];
@@ -142,11 +145,13 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < 2; ++i) {
     desc->flush_slots[i] = e->flush.slot[i];
-  desc->flush_pending = e->flush.pending;
-  desc->flush_current = e->flush.current;
-  desc->flush_pending_handoff = e->flush.pending_handoff;
+    desc->flush_pending[i] = e->flush.pending[i];
+    desc->flush_pending_seq[i] = e->flush.pending_seq[i];
+    desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
+  }
+  desc->flush_next_seq = e->flush.next_seq;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     desc->shard[lv] = e->compress_agg.levels[lv].shard;
     desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;

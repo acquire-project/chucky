@@ -220,7 +220,8 @@ test_accumulate_one_epoch(void)
   // Verify: mid-batch, no flush triggered
   CHECK(Fail, c.s->engine.batch.accumulated == 1);
   CHECK(Fail, c.s->engine.pools.current == 0);
-  CHECK(Fail, c.s->engine.flush.pending == 0);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
+  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
 
   // Epoch mask recorded
   CHECK(Fail, c.s->engine.flush.slot[0].batch_active_masks[0] == 0x1);
@@ -271,8 +272,8 @@ test_full_batch_auto_flush(void)
   // After full batch: drain_kick_and_swap fired
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
   CHECK(Fail, c.s->engine.pools.current == 1); // swapped to pool 1
-  CHECK(Fail, c.s->engine.flush.pending == 1); // batch 1 pending delivery
-  CHECK(Fail, c.s->engine.flush.current == 0); // batch 1 was on pool 0
+  CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 pending at fc=0
+  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
 
   // Fresh pool slot is reset
   CHECK(Fail, c.s->engine.flush.slot[1].active_levels_mask == 0);
@@ -316,12 +317,13 @@ test_drain_delivers_data(void)
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
-  CHECK(Fail, c.s->engine.flush.pending == 1);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
 
   // Drain the pending batch
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->engine.flush.pending == 0);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
+  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
 
   // Data delivered: shard opened and finalized (tps_0=2, 2 epochs → complete)
   CHECK(Fail, sink.open_count >= 1);
@@ -416,10 +418,10 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 1 kicked, pool swapped to 1
+  // Batch 1 kicked, pool swapped to 1, batch 1 pending at fc=0
   CHECK(Fail, c.s->engine.pools.current == 1);
-  CHECK(Fail, c.s->engine.flush.pending == 1);
-  CHECK(Fail, c.s->engine.flush.current == 0);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
+  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
   // --- Batch 2: epochs 2,3 on pool 1 ---
@@ -428,22 +430,20 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 2 auto-drained batch 1 (pending was set), then kicked batch 2
+  // Batch 2 kicked on fc=1. Lazy delivery: batch 1 stays pending at fc=0
+  // until fc=0 is reused (batch 3) or the final flush drains it.
   CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
-  CHECK(Fail, c.s->engine.flush.pending == 1); // batch 2 now pending
-  CHECK(Fail, c.s->engine.flush.current == 1); // batch 2 was on pool 1
+  CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 still pending
+  CHECK(Fail, c.s->engine.flush.pending[1] == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
-  // Batch 1 was already drained (by drain_kick_and_swap during batch 2)
-  // tps_0=2, so batch 1 (2 epochs) finalized one shard
-  CHECK(Fail, sink.finalize_count >= 1);
-
-  // Drain batch 2
+  // Drain both pending batches (in kick order: batch 1 then batch 2)
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->engine.flush.pending == 0);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
+  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
 
-  // Second shard finalized
+  // Both shards finalized (tps_0=2, 2 epochs each → 2 shards)
   CHECK(Fail, sink.finalize_count >= 2);
 
   // Sink metric: 2 batch drains
