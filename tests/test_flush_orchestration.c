@@ -35,9 +35,12 @@ static void
 orch_ctx_destroy(struct orch_ctx* c)
 {
   if (c->s) {
-    // Batch events
-    for (uint32_t i = 0; i < c->s->engine.batch.epochs_per_batch; ++i)
-      cu_event_destroy(c->s->engine.batch.pool_events[i]);
+    cu_event_destroy(c->s->engine.batch.pool_ready);
+
+    for (int fc = 0; fc < 2; ++fc) {
+      free(c->s->engine.flush.slot[fc].batch_active_masks);
+      c->s->engine.flush.slot[fc].batch_active_masks = NULL;
+    }
 
     d2h_deliver_destroy(&c->s->engine.d2h_deliver);
     compress_agg_destroy(&c->s->engine.compress_agg, c->cl.levels.nlod);
@@ -124,19 +127,22 @@ orch_ctx_setup(struct orch_ctx* c,
   }
   c->s->engine.pools.current = 0;
 
-  // Batch state + pool events
+  // Batch state + pool_ready event
   c->s->engine.batch.epochs_per_batch = K;
   c->s->engine.batch.accumulated = 0;
-  for (uint32_t i = 0; i < K; ++i) {
-    CU(Fail,
-       cuEventCreate(&c->s->engine.batch.pool_events[i], CU_EVENT_DEFAULT));
-    CU(Fail,
-       cuEventRecord(c->s->engine.batch.pool_events[i],
-                     c->s->engine.streams.compute));
-  }
+  CU(Fail,
+     cuEventCreate(&c->s->engine.batch.pool_ready, CU_EVENT_DEFAULT));
+  CU(Fail,
+     cuEventRecord(c->s->engine.batch.pool_ready,
+                   c->s->engine.streams.compute));
 
   // Flush pipeline state
   memset(&c->s->engine.flush, 0, sizeof(c->s->engine.flush));
+  for (int fc = 0; fc < 2; ++fc) {
+    c->s->engine.flush.slot[fc].batch_active_masks =
+      (uint32_t*)calloc(K, sizeof(uint32_t));
+    CHECK(Fail, c->s->engine.flush.slot[fc].batch_active_masks);
+  }
 
   // Non-multiscale: zeroed lod
   memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));

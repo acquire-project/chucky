@@ -23,7 +23,8 @@ struct cpu_stream_view
   uint64_t* cursor_elements;
   uint64_t max_cursor_elements;
   uint32_t* batch_accumulated;
-  uint32_t* batch_active_masks; // [MAX_BATCH_EPOCHS]
+  uint32_t* batch_active_masks;  // [K]
+  uint32_t* pool_epochs_scratch; // [K] scratch for LUT recompute
   int pool_fully_covered;
 
   // Per-array shard/LOD state

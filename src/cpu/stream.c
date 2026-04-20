@@ -74,6 +74,12 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->comp_sizes = (size_t*)calloc((uint64_t)K * total_chunks, sizeof(size_t));
   CHECK(Fail, s->comp_sizes);
 
+  // Per-epoch mask + scratch buffers, sized to K.
+  s->batch_active_masks = (uint32_t*)calloc(K, sizeof(uint32_t));
+  CHECK(Fail, s->batch_active_masks);
+  s->pool_epochs_scratch = (uint32_t*)malloc((size_t)K * sizeof(uint32_t));
+  CHECK(Fail, s->pool_epochs_scratch);
+
   // Per-level shard + aggregate state.
   {
     uint64_t max_batch_C = 0;
@@ -303,6 +309,8 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s->chunk_pool);
   free(s->compressed);
   free(s->comp_sizes);
+  free(s->batch_active_masks);
+  free(s->pool_epochs_scratch);
   free(s->scatter_lut);
   free(s->scatter_fixed_dims_offsets);
   free(s->linear);
@@ -516,7 +524,7 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
     return 1;
   }
 
-  const uint8_t user_k = config->epochs_per_batch;
+  const uint32_t user_k = config->epochs_per_batch;
   const size_t floor =
     min_chunk_bytes > bytes_per_element ? min_chunk_bytes : bytes_per_element;
   if (diag)
@@ -564,7 +572,7 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
       last_k = mem.epochs_per_batch;
       last_heap_bytes = mem.heap_bytes;
       if (mem.heap_bytes <= budget_bytes) {
-        config->epochs_per_batch = (uint8_t)mem.epochs_per_batch;
+        config->epochs_per_batch = mem.epochs_per_batch;
         fit = 1;
         break;
       }
@@ -572,7 +580,7 @@ tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
       last_cps_total = 0;
       if (user_k || mem.epochs_per_batch <= 1)
         break;
-      config->epochs_per_batch = (uint8_t)(mem.epochs_per_batch / 2);
+      config->epochs_per_batch = mem.epochs_per_batch / 2;
     }
     if (!fit)
       continue;
@@ -667,6 +675,7 @@ make_view(struct tile_stream_cpu* s)
     .max_cursor_elements = s->max_cursor_elements,
     .batch_accumulated = &s->batch_accumulated,
     .batch_active_masks = s->batch_active_masks,
+    .pool_epochs_scratch = s->pool_epochs_scratch,
     .pool_fully_covered = s->pool_fully_covered,
     .shard = s->shard,
     .agg_layout = s->agg_layout,

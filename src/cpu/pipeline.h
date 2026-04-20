@@ -49,6 +49,7 @@ struct flush_batch_params
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
   int nthreads;                   // resolved at init: always > 0
+  uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
   struct stream_metrics* metrics; // NULL to skip timing
 };
 

@@ -38,9 +38,11 @@ destroy_chunk_pools(struct pool_state* pools)
 static void
 destroy_batch_events(struct batch_state* batch)
 {
-  for (uint32_t i = 0; i < batch->epochs_per_batch; ++i)
-    cu_event_destroy(batch->pool_events[i]);
+  cu_event_destroy(batch->pool_ready);
 }
+
+static void
+destroy_flush_pipeline(struct flush_pipeline* fp);
 
 static void
 sync(CUstream stream)
@@ -70,6 +72,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.d2h);
 
   destroy_batch_events(&s->engine.batch);
+  destroy_flush_pipeline(&s->engine.flush);
   d2h_deliver_destroy(&s->engine.d2h_deliver);
   compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
   destroy_chunk_pools(&s->engine.pools);
@@ -121,18 +124,37 @@ Fail:
   return 1;
 }
 
-// Allocate and seed per-epoch batch pool events.
+// Create and seed the batch pool-ready event.
 static int
 init_batch_events(struct batch_state* batch, CUstream compute)
 {
-  const uint32_t K = batch->epochs_per_batch;
-  for (uint32_t i = 0; i < K; ++i) {
-    CU(Fail, cuEventCreate(&batch->pool_events[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(batch->pool_events[i], compute));
-  }
+  CU(Fail, cuEventCreate(&batch->pool_ready, CU_EVENT_DEFAULT));
+  CU(Fail, cuEventRecord(batch->pool_ready, compute));
   return 0;
 Fail:
   return 1;
+}
+
+// Allocate per-slot batch_active_masks for the flush pipeline. K entries each.
+static int
+init_flush_pipeline(struct flush_pipeline* fp, uint32_t K)
+{
+  for (int fc = 0; fc < 2; ++fc) {
+    fp->slot[fc].batch_active_masks =
+      (uint32_t*)calloc(K, sizeof(uint32_t));
+    if (!fp->slot[fc].batch_active_masks)
+      return 1;
+  }
+  return 0;
+}
+
+static void
+destroy_flush_pipeline(struct flush_pipeline* fp)
+{
+  for (int fc = 0; fc < 2; ++fc) {
+    free(fp->slot[fc].batch_active_masks);
+    fp->slot[fc].batch_active_masks = NULL;
+  }
 }
 
 static int
@@ -192,9 +214,13 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     out->engine.lod.layouts[lv] = cl.layouts[lv];
 
   // Copy batch info.
-  CHECK(FailPhase2, (cl.epochs_per_batch & (cl.epochs_per_batch - 1)) == 0);
+  CHECK(FailPhase2, cl.epochs_per_batch >= 1);
   out->engine.batch.epochs_per_batch = cl.epochs_per_batch;
   out->engine.batch.accumulated = 0;
+
+  // Allocate per-slot batch_active_masks sized to K.
+  CHECK(FailPhase2,
+        init_flush_pipeline(&out->engine.flush, cl.epochs_per_batch) == 0);
 
   // GPU allocation and init.
   CHECK(FailPhase2,
@@ -533,7 +559,7 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
     return 1;
   }
 
-  const uint8_t user_k = config->epochs_per_batch;
+  const uint32_t user_k = config->epochs_per_batch;
   const size_t floor =
     min_chunk_bytes > bytes_per_element ? min_chunk_bytes : bytes_per_element;
   if (diag)
@@ -583,7 +609,7 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
       last_k = mem.epochs_per_batch;
       last_device_bytes = mem.device_bytes;
       if (mem.device_bytes <= budget_bytes) {
-        config->epochs_per_batch = (uint8_t)mem.epochs_per_batch;
+        config->epochs_per_batch = mem.epochs_per_batch;
         fit = 1;
         break;
       }
@@ -591,7 +617,7 @@ tile_stream_gpu_advise_layout(struct tile_stream_configuration* config,
       last_cps_total = 0;
       if (user_k || mem.epochs_per_batch <= 1)
         break;
-      config->epochs_per_batch = (uint8_t)(mem.epochs_per_batch / 2);
+      config->epochs_per_batch = mem.epochs_per_batch / 2;
     }
     if (!fit)
       continue;

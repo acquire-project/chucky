@@ -30,7 +30,7 @@ int
 make_test_config(struct tile_stream_configuration* config,
                  struct dimension* dims,
                  struct codec_config codec,
-                 uint8_t epochs_per_batch)
+                 uint32_t epochs_per_batch)
 {
   make_test_dims_3d(dims);
 

@@ -22,21 +22,19 @@ make_compress_input(struct stream_engine* e,
                     uint32_t n_epochs)
 {
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
-  struct compress_agg_input in = {
+  return (struct compress_agg_input){
     .fc = fc,
     .n_epochs = n_epochs,
     .active_levels_mask = fs->active_levels_mask,
-    .epochs_per_batch = e->batch.epochs_per_batch,
+    .batch_active_masks = fs->batch_active_masks,
     .pool_buf = e->pools.buf[fc],
+    .pool_ready = e->batch.pool_ready,
     .lod_done =
       (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
         ? e->lod_shared.timing[fc].t_end
         : NULL,
+    .epochs_per_batch = e->batch.epochs_per_batch,
   };
-  memcpy(
-    in.batch_active_masks, fs->batch_active_masks, n_epochs * sizeof(uint32_t));
-  memcpy(in.epoch_events, e->batch.pool_events, n_epochs * sizeof(CUevent));
-  return in;
 }
 
 // --- Epoch accumulation ---
@@ -160,7 +158,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   e->flush.slot[e->pools.current].active_levels_mask = 0;
   memset(e->flush.slot[e->pools.current].batch_active_masks,
          0,
-         sizeof(e->flush.slot[e->pools.current].batch_active_masks));
+         (size_t)K * sizeof(uint32_t));
 
   return writer_ok();
 
@@ -176,13 +174,14 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   if (flush_run_epoch_lod(e, ctx))
     return writer_error();
 
-  CU(Error,
-     cuEventRecord(e->batch.pool_events[e->batch.accumulated],
-                   e->streams.compute));
   e->batch.accumulated++;
 
   if (e->batch.accumulated < e->batch.epochs_per_batch)
     return writer_ok();
+
+  // Record pool_ready once after the last epoch's scatter; compute-stream
+  // ordering means this subsumes per-epoch ready signals.
+  CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
 
   if (e->sync_flush) {
     // Synchronous path: flush the full batch immediately (no pool swap).
@@ -281,6 +280,11 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
+
+  // Record pool_ready after all scatter ops for this (possibly partial) batch.
+  if (cuEventRecord(e->batch.pool_ready, e->streams.compute) != CUDA_SUCCESS)
+    return writer_error();
+
   if (flush_kick_batch(e, ctx, fc, e->batch.accumulated))
     return writer_error();
 
@@ -303,7 +307,7 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
   e->flush.slot[e->pools.current].active_levels_mask = 0;
   memset(e->flush.slot[e->pools.current].batch_active_masks,
          0,
-         sizeof(e->flush.slot[e->pools.current].batch_active_masks));
+         (size_t)e->batch.epochs_per_batch * sizeof(uint32_t));
   return r;
 }
 
@@ -387,7 +391,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
     CU(Error,
        cuEventRecord(e->lod_shared.timing[fc].t_end, e->streams.compute));
 
-  CU(Error, cuEventRecord(e->batch.pool_events[0], e->streams.compute));
+  CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
   if (flush_kick_batch(e, ctx, fc, 1))
     return writer_error();
   return d2h_deliver_drain(&e->d2h_deliver,

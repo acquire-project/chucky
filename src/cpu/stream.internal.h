@@ -64,8 +64,9 @@ struct tile_stream_cpu
   int flushed;            // 1 after flush; append after flush is an error
 
   // Batch accumulation state (K = cl.epochs_per_batch).
-  uint32_t batch_accumulated;                    // 0..K-1
-  uint32_t batch_active_masks[MAX_BATCH_EPOCHS]; // per-epoch active level mask
+  uint32_t batch_accumulated;    // 0..K-1
+  uint32_t* batch_active_masks;  // [K] per-epoch active level mask
+  uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
 
   // IO fence state: tracks pending async IO per level so we don't
   // overwrite aggregate buffers before write_direct completes.

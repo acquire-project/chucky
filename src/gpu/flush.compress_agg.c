@@ -77,6 +77,10 @@ compress_agg_init(struct compress_agg_stage* stage,
   // Codec
   CHECK(Fail, codec_init(&stage->codec, config->codec.id, chunk_bytes, M) == 0);
 
+  // Per-level scratch for mask-scan results. Sized at K (max active_count).
+  stage->pool_epochs_scratch = (uint32_t*)malloc((size_t)K * sizeof(uint32_t));
+  CHECK(Fail, stage->pool_epochs_scratch);
+
   CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
   // Compressed buffers + events
   for (int fc = 0; fc < 2; ++fc) {
@@ -155,7 +159,7 @@ compress_agg_init(struct compress_agg_stage* stage,
     CHECK(Fail, h_gather && h_perm);
 
     {
-      uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+      uint32_t* pool_epochs = stage->pool_epochs_scratch;
       for (uint32_t a = 0; a < slot_count; ++a) {
         uint32_t period = 1;
         if (cl->dims.append_downsample && lv > 0)
@@ -208,6 +212,8 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   if (!stage)
     return;
   codec_free(&stage->codec);
+  free(stage->pool_epochs_scratch);
+  stage->pool_epochs_scratch = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(stage->d_compressed[fc]);
     cu_event_destroy(stage->t_compress_start[fc]);
@@ -232,9 +238,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
   const int fc = in->fc;
   const uint32_t n_epochs = in->n_epochs;
 
-  // Wait for all per-epoch pool-ready events
-  for (uint32_t e = 0; e < n_epochs; ++e)
-    CU(Error, cuStreamWaitEvent(compress_stream, in->epoch_events[e], 0));
+  // Pool work is submitted on the compute stream in order; a single batch-level
+  // pool_ready event recorded after the last scatter subsumes all prior ready
+  // signals.
+  CU(Error, cuStreamWaitEvent(compress_stream, in->pool_ready, 0));
   if (in->lod_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
 
@@ -266,7 +273,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
     // Scan masks to determine active_count and pool epochs.
     // level_active_epochs returns 0 for infrequent append-downsampled levels
     // (period > K); in that case we scan masks directly.
-    uint32_t pool_epochs_buf[MAX_BATCH_EPOCHS];
+    uint32_t* pool_epochs_buf = stage->pool_epochs_scratch;
     if (active_count == 0) {
       for (uint32_t e = 0; e < n_epochs; ++e)
         if (in->batch_active_masks[e] & (1u << lv))
@@ -347,13 +354,12 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
 
-  // Fill handoff
+  // Fill handoff (masks pointer is borrowed from the flush slot — lifetime is
+  // safe because the slot isn't reset until after d2h_deliver_drain completes).
   out->fc = fc;
   out->n_epochs = n_epochs;
   out->active_levels_mask = in->active_levels_mask;
-  memcpy(out->batch_active_masks,
-         in->batch_active_masks,
-         n_epochs * sizeof(uint32_t));
+  out->batch_active_masks = in->batch_active_masks;
   out->t_aggregate_end = stage->t_aggregate_end[fc];
   out->t_compress_start = stage->t_compress_start[fc];
   out->t_compress_end = stage->t_compress_end[fc];

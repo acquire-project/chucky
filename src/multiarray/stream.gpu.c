@@ -215,6 +215,16 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   const uint64_t total_chunks = desc->ctx.levels.total_chunks;
   const uint64_t chunk_stride = desc->ctx.layout.chunk_stride;
 
+  // Per-array, per-slot batch_active_masks. Bind/unbind copies the pointer
+  // into the engine's flush slots; the storage lives here for the array's
+  // lifetime.
+  for (int fc = 0; fc < 2; ++fc) {
+    desc->flush_slots[fc].batch_active_masks =
+      (uint32_t*)calloc(K, sizeof(uint32_t));
+    if (!desc->flush_slots[fc].batch_active_masks)
+      return 1;
+  }
+
   // max_cursor
   {
     const struct dimension* dims = config->dimensions;
@@ -295,6 +305,10 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
 {
   if (!desc)
     return;
+  for (int fc = 0; fc < 2; ++fc) {
+    free(desc->flush_slots[fc].batch_active_masks);
+    desc->flush_slots[fc].batch_active_masks = NULL;
+  }
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     struct shard_state* ss = &desc->shard[lv];
     if (ss->shards) {
@@ -339,10 +353,14 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   }
 
   e->batch.epochs_per_batch = mx->epochs_per_batch;
-  for (uint32_t i = 0; i < mx->epochs_per_batch; ++i) {
-    CU(Fail, cuEventCreate(&e->batch.pool_events[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(e->batch.pool_events[i], e->streams.compute));
-  }
+  CU(Fail, cuEventCreate(&e->batch.pool_ready, CU_EVENT_DEFAULT));
+  CU(Fail, cuEventRecord(e->batch.pool_ready, e->streams.compute));
+
+  // Per-slot batch_active_masks live on each array descriptor (bind/unbind
+  // copies them in). Stage scratch is shared and sized to the max K.
+  e->compress_agg.pool_epochs_scratch =
+    (uint32_t*)malloc((size_t)mx->epochs_per_batch * sizeof(uint32_t));
+  CHECK(Fail, e->compress_agg.pool_epochs_scratch);
 
   CHECK(Fail,
         codec_init(&e->compress_agg.codec,
@@ -591,12 +609,13 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   struct stream_engine* e = &ms->engine;
 
-  for (uint32_t i = 0; i < e->batch.epochs_per_batch; ++i)
-    cu_event_destroy(e->batch.pool_events[i]);
+  cu_event_destroy(e->batch.pool_ready);
 
   d2h_deliver_destroy(&e->d2h_deliver);
 
   codec_free(&e->compress_agg.codec);
+  free(e->compress_agg.pool_epochs_scratch);
+  e->compress_agg.pool_epochs_scratch = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(e->compress_agg.d_compressed[fc]);
     cu_event_destroy(e->compress_agg.t_compress_start[fc]);

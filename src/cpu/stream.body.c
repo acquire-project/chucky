@@ -31,6 +31,7 @@ make_flush_params(struct cpu_stream_view* v)
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .nthreads = v->nthreads,
+    .pool_epochs_scratch = v->pool_epochs_scratch,
     .metrics = v->metrics,
   };
   for (int lv = 0; lv < v->levels->nlod; ++lv) {
@@ -174,7 +175,7 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
                 &sp, *v->batch_accumulated, &active_mask) == 0);
       }
 
-      CHECK(Error, *v->batch_accumulated < MAX_BATCH_EPOCHS);
+      CHECK(Error, *v->batch_accumulated < v->cl->epochs_per_batch);
       v->batch_active_masks[*v->batch_accumulated] = active_mask;
       (*v->batch_accumulated)++;
 
@@ -255,7 +256,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       if (cpu_pipeline_scatter_epoch(&sp, *v->batch_accumulated, &active_mask))
         return writer_error();
     }
-    if (*v->batch_accumulated >= MAX_BATCH_EPOCHS)
+    if (*v->batch_accumulated >= v->cl->epochs_per_batch)
       return writer_error();
     v->batch_active_masks[*v->batch_accumulated] = active_mask;
     (*v->batch_accumulated)++;

@@ -11,37 +11,33 @@
 #include <stdlib.h>
 #include <string.h>
 
-static inline uint32_t
-next_pow2_u32(uint32_t v)
-{
-  if (v == 0)
-    return 1;
-  v--;
-  v |= v >> 1;
-  v |= v >> 2;
-  v |= v >> 4;
-  v |= v >> 8;
-  v |= v >> 16;
-  return v + 1;
-}
+// Compute epochs_per_batch (K) from config and uncompressed bytes per epoch.
+// bytes_per_epoch sums chunks_per_epoch * chunk_stride * bpe across LOD levels.
+// User-supplied K is authoritative; otherwise auto-K = ceildiv(target, bpe).
+// Auto-K is clamped to AUTO_K_MAX as a safety backstop against configs with
+// pathologically small bytes_per_epoch (e.g., unit tests with tiny chunks);
+// callers who need more can set epochs_per_batch explicitly.
+// Floors at 1.
+#define AUTO_K_MAX (1u << 16)
 
-// Compute epochs_per_batch (K) from config and total chunks per epoch.
-// Returns K as a power of 2, clamped to MAX_BATCH_EPOCHS.
 static uint32_t
 compute_epochs_per_batch(const struct tile_stream_configuration* config,
-                         uint64_t total_chunks_per_epoch)
+                         size_t bytes_per_epoch)
 {
-  uint32_t K = config->epochs_per_batch;
-  if (K == 0) {
-    uint32_t target = config->target_batch_chunks;
-    if (target == 0)
-      target = 1024;
-    K = (uint32_t)ceildiv(target, total_chunks_per_epoch);
-    K = next_pow2_u32(K);
-  }
-  if (K > MAX_BATCH_EPOCHS)
-    K = MAX_BATCH_EPOCHS;
-  return K;
+  if (config->epochs_per_batch > 0)
+    return config->epochs_per_batch;
+
+  size_t target = config->target_batch_bytes;
+  if (target == 0)
+    target = (size_t)512 << 20; // 512 MiB default
+  if (bytes_per_epoch == 0)
+    return 1;
+  uint64_t K = ceildiv(target, bytes_per_epoch);
+  if (K < 1)
+    K = 1;
+  if (K > AUTO_K_MAX)
+    K = AUTO_K_MAX;
+  return (uint32_t)K;
 }
 
 // Extract forward permutation from dims[d].storage_position.
@@ -280,15 +276,17 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 
   // --- Level geometry (single loop) ---
   out->levels.total_chunks = 0;
+  size_t bytes_per_epoch = 0;
   for (int lv = 0; lv < out->levels.nlod; ++lv) {
     out->levels.level[lv].chunk_count = out->layouts[lv].chunks_per_epoch;
     out->levels.level[lv].chunk_offset = out->levels.total_chunks;
     out->levels.total_chunks += out->levels.level[lv].chunk_count;
+    bytes_per_epoch += (size_t)out->layouts[lv].chunks_per_epoch *
+                       out->layouts[lv].chunk_stride * bytes_per_element;
   }
 
   // --- Epochs per batch (K) ---
-  out->epochs_per_batch =
-    compute_epochs_per_batch(config, out->levels.total_chunks);
+  out->epochs_per_batch = compute_epochs_per_batch(config, bytes_per_epoch);
 
   // --- Codec-derived max_output_size ---
   {

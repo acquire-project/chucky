@@ -25,7 +25,8 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  CUevent epoch_events[2];
+  CUevent pool_ready; // recorded after last fill_epoch call
+  uint32_t* batch_active_masks; // [K] owned scratch for tests
   struct batch_state batch;
   int stage_inited;
 };
@@ -43,8 +44,8 @@ ca_ctx_destroy(struct ca_test_ctx* c)
     compress_agg_destroy(&c->stage, c->cl.levels.nlod);
   computed_stream_layouts_free(&c->cl);
   cu_mem_free(c->d_pool);
-  for (int i = 0; i < 2; ++i)
-    cu_event_destroy(c->epoch_events[i]);
+  cu_event_destroy(c->pool_ready);
+  free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
 }
 
@@ -52,7 +53,7 @@ ca_ctx_destroy(struct ca_test_ctx* c)
 static int
 ca_ctx_setup(struct ca_test_ctx* c,
              struct codec_config codec,
-             uint8_t epochs_per_batch,
+             uint32_t epochs_per_batch,
              int n_pool_epochs)
 {
   make_test_config(&c->config, c->dims, codec, epochs_per_batch);
@@ -73,9 +74,16 @@ ca_ctx_setup(struct ca_test_ctx* c,
                       dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
+  CU(Fail, cuEventCreate(&c->pool_ready, CU_EVENT_DEFAULT));
+
+  c->batch_active_masks =
+    (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
+  CHECK(Fail, c->batch_active_masks);
+
   c->batch = (struct batch_state){
     .epochs_per_batch = c->cl.epochs_per_batch,
     .accumulated = 0,
+    .pool_ready = c->pool_ready,
   };
   return 0;
 
@@ -99,8 +107,9 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
           epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
           0);
 
-  CU(Fail, cuEventCreate(&c->epoch_events[epoch_idx], CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(c->epoch_events[epoch_idx], c->compute));
+  // Re-record pool_ready on the compute stream after every fill so the test
+  // can rely on the latest event signaling batch-level readiness.
+  CU(Fail, cuEventRecord(c->pool_ready, c->compute));
   return 0;
 
 Fail:
@@ -113,18 +122,19 @@ ca_ctx_kick(struct ca_test_ctx* c,
             uint32_t n_epochs,
             struct flush_handoff* handoff)
 {
+  for (uint32_t i = 0; i < n_epochs; ++i)
+    c->batch_active_masks[i] = 0x1;
+
   struct compress_agg_input in = {
     .fc = 0,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
+    .batch_active_masks = c->batch_active_masks,
     .pool_buf = c->d_pool,
-    .epochs_per_batch = c->cl.epochs_per_batch,
+    .pool_ready = c->pool_ready,
     .lod_done = 0,
+    .epochs_per_batch = c->cl.epochs_per_batch,
   };
-  for (uint32_t i = 0; i < n_epochs; ++i) {
-    in.batch_active_masks[i] = 0x1;
-    in.epoch_events[i] = c->epoch_events[i];
-  }
 
   memset(handoff, 0, sizeof(*handoff));
 

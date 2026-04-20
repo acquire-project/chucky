@@ -23,7 +23,7 @@ int
 make_test_config(struct tile_stream_configuration* config,
                  struct dimension* dims,
                  struct codec_config codec,
-                 uint8_t epochs_per_batch);
+                 uint32_t epochs_per_batch);
 
 // Fill one epoch of chunk pool on device.
 // Each chunk t gets all elements set to fill_fn(t).
