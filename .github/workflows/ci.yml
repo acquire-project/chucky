@@ -61,11 +61,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Build
-        shell: micromamba-shell {0}
+        shell: bash
         env:
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
         run: |
+          eval "$(micromamba shell hook --shell bash)"
+          micromamba activate ci
           cmake --preset cpu-only \
             -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -73,11 +75,11 @@ jobs:
           cmake --build build
 
       - name: Test
-        shell: micromamba-shell {0}
-        run: >
-          ctest --test-dir build
-          --output-on-failure
-          -E "(s3)"
+        shell: bash
+        run: |
+          eval "$(micromamba shell hook --shell bash)"
+          micromamba activate ci
+          ctest --test-dir build --output-on-failure -E "(s3)"
 
   coverage:
     runs-on: ubuntu-latest
