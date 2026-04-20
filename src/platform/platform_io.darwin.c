@@ -1,0 +1,100 @@
+#include "platform/platform_io.h"
+
+#include "log/log.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+int
+platform_mkdir(const char* path)
+{
+  if (mkdir(path, 0755) != 0 && errno != EEXIST)
+    return -1;
+  return 0;
+}
+
+int
+platform_mkdirp(const char* path)
+{
+  char tmp[4096];
+  size_t len = strlen(path);
+  if (len == 0 || len >= sizeof(tmp))
+    return -1;
+  memcpy(tmp, path, len + 1);
+
+  for (size_t i = 1; i < len; ++i) {
+    if (tmp[i] == '/') {
+      tmp[i] = '\0';
+      if (platform_mkdir(tmp) != 0)
+        return -1;
+      tmp[i] = '/';
+    }
+  }
+  return platform_mkdir(tmp);
+}
+
+platform_fd
+platform_open_write(const char* path, int flags)
+{
+  int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+  int fd = open(path, oflags, 0644);
+  if (fd < 0)
+    return fd;
+  if (flags & PLATFORM_OPEN_UNBUFFERED) {
+    if (fcntl(fd, F_NOCACHE, 1) != 0) {
+      close(fd);
+      return -1;
+    }
+  }
+  return fd;
+}
+
+int
+platform_pwrite(platform_fd fd, const void* buf, size_t nbytes, uint64_t offset)
+{
+  const char* p = (const char*)buf;
+  size_t remaining = nbytes;
+  while (remaining > 0) {
+    ssize_t n =
+      pwrite(fd, p, remaining, (off_t)(offset + (nbytes - remaining)));
+    if (n < 0)
+      return -1;
+    p += n;
+    remaining -= (size_t)n;
+  }
+  return 0;
+}
+
+int
+platform_write(platform_fd fd, const void* buf, size_t nbytes)
+{
+  const char* p = (const char*)buf;
+  size_t remaining = nbytes;
+  while (remaining > 0) {
+    ssize_t n = write(fd, p, remaining);
+    if (n < 0)
+      return -1;
+    p += n;
+    remaining -= (size_t)n;
+  }
+  return 0;
+}
+
+void
+platform_close(platform_fd fd)
+{
+  close(fd);
+}
+
+int
+platform_path_exists(const char* path)
+{
+  struct stat st;
+  if (stat(path, &st) == 0)
+    return 1;
+  if (errno == ENOENT || errno == ENOTDIR)
+    return 0;
+  return -1;
+}
