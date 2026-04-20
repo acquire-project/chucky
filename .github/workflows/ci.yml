@@ -39,6 +39,41 @@ jobs:
           sleep 1 &&
           ctest --test-dir build --output-on-failure"
 
+  macos-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: ci
+          create-args: >-
+            cmake ninja sccache
+            aws-c-s3 blosc lz4-c zstd llvm-openmp snappy zlib
+          init-shell: bash
+          cache-environment: true
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Build
+        shell: micromamba-shell {0}
+        env:
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: |
+          cmake --preset cpu-only \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Test
+        shell: micromamba-shell {0}
+        run: >
+          ctest --test-dir build
+          --output-on-failure
+          -E "(s3)"
+
   coverage:
     runs-on: ubuntu-latest
     steps:
