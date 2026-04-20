@@ -226,7 +226,7 @@ struct tile_stream_configuration stream_cfg = {
   .codec      = CODEC_ZSTD,
 };
 
-uint8_t ratios[] = { 0, 1, 1 };
+int ratios[] = { 0, 1, 1 };
 tile_stream_gpu_advise_chunk_sizes(
   &stream_cfg, 128 * 1024, ratios, 2ULL << 30, 0);
 

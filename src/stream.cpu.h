@@ -52,13 +52,16 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
                                 size_t shard_alignment,
                                 struct tile_stream_cpu_memory_info* info);
 
-// Find the largest power-of-2 chunk size (starting from target_chunk_bytes)
-// that fits within budget_bytes of CPU heap memory.
-// shard_alignment: 0 = no alignment constraint.
-// Modifies config->dimensions in place. Returns 0 on success.
+// Solve chunk + shard layout for the CPU backend.
+// See tile_stream_gpu_advise_layout for semantics.
 int
-tile_stream_cpu_advise_chunk_sizes(struct tile_stream_configuration* config,
-                                   size_t target_chunk_bytes,
-                                   const uint8_t* ratios,
-                                   size_t budget_bytes,
-                                   size_t shard_alignment);
+tile_stream_cpu_advise_layout(struct tile_stream_configuration* config,
+                              size_t target_chunk_bytes,
+                              size_t min_chunk_bytes,
+                              const int* ratios,
+                              size_t budget_bytes,
+                              size_t min_shard_bytes,
+                              uint32_t target_concurrent_shards,
+                              uint32_t min_append_shards,
+                              size_t shard_alignment,
+                              struct advise_layout_diagnostic* diag);

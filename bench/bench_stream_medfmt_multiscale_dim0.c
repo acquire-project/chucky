@@ -4,14 +4,13 @@
 int
 main(int ac, char* av[])
 {
-  struct dimension dims[5];
-  uint64_t sizes[] = { 1000, 256, 256, 256, 3 };
-  uint8_t rank = dims_create(dims, "tzyxc", sizes);
+  struct dimension dims[4];
+  uint64_t sizes[] = { 100, 1, 10240, 15360 };
+  uint8_t rank = dims_create(dims, "zcyx", sizes);
 
-  dims_set_storage_order(dims, rank, "tczyx");
-  dims_set_downsample_by_name(dims, rank, "tzyx");
+  dims_set_downsample_by_name(dims, rank, "zyx");
 
-  int ratios[] = { 0, 1, 1, 1, 0 };
+  int ratios[] = { 1, 0, 8, 8 };
 
   return bench_stream_main(ac,
                            av,
@@ -21,9 +20,9 @@ main(int ac, char* av[])
                              .rank = rank,
                              .chunk_ratios = ratios,
                              .target_chunk_bytes = 1 << 18,
-                             .min_chunk_bytes = 1 << 14,
+                             .min_chunk_bytes = 1 << 12,
                              .min_shard_bytes = 1ull << 30,
-                             .target_concurrent_shards = 16,
+                             .target_concurrent_shards = 20,
                              .min_append_shards = 4,
                            });
 }

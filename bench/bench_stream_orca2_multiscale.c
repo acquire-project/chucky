@@ -10,9 +10,19 @@ main(int ac, char* av[])
 
   dims_set_downsample_by_name(dims, rank, "yx");
 
-  uint8_t ratios[] = { 1, 0, 2, 2 };
-  uint64_t shard_counts[] = { 2, 1, 2, 2 };
+  int ratios[] = { 1, 0, 2, 2 };
 
-  return bench_stream_main(
-    ac, av, "multiscale", dims, rank, ratios, 1 << 18, shard_counts);
+  return bench_stream_main(ac,
+                           av,
+                           (struct bench_spec){
+                             .label = "multiscale",
+                             .dims = dims,
+                             .rank = rank,
+                             .chunk_ratios = ratios,
+                             .target_chunk_bytes = 1 << 18,
+                             .min_chunk_bytes = 1 << 14,
+                             .min_shard_bytes = 1ull << 30,
+                             .target_concurrent_shards = 16,
+                             .min_append_shards = 4,
+                           });
 }

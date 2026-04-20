@@ -218,6 +218,355 @@ Fail:
   return 1;
 }
 
+// --- tile_stream_cpu_advise_layout tests ---
+
+static int
+test_advise_basic_fit(void)
+{
+  log_info("=== test_advise_basic_fit ===");
+  struct dimension dims[3];
+  uint64_t sizes[] = { 256, 128, 128 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .target_batch_chunks = 64,
+  };
+
+  int ratios[] = { 1, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 0, 0, &diag) ==
+      0);
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, config.epochs_per_batch >= 1);
+  for (int d = 0; d < 3; ++d) {
+    CHECK(Fail, dims[d].chunk_size >= 1);
+    CHECK(Fail, dims[d].chunks_per_shard >= 1);
+  }
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_invalid_config(void)
+{
+  log_info("=== test_advise_invalid_config ===");
+  struct dimension dims[2];
+  uint64_t sizes[] = { 100, 64 };
+  dims_create(dims, "yx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  int ratios[] = { 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  // budget=0 -> INVALID_CONFIG.
+  CHECK(Fail,
+        tile_stream_cpu_advise_layout(
+          &config, 1 << 14, 1024, ratios, 0, 1 << 20, 1, 0, 0, &diag) != 0);
+  CHECK(Fail, diag.reason == ADVISE_INVALID_CONFIG);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_chunk_budget_infeasible(void)
+{
+  log_info("=== test_advise_chunk_budget_infeasible ===");
+  // Pinned dims whose element product exceeds the target budget → solver bails
+  // immediately with ADVISE_CHUNK_BUDGET_INFEASIBLE (halving target makes it
+  // worse, not better).
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 512, 512 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  // Pinned y*x = 262144 elements * 2 bytes = 512 KiB. Target = 64 KiB → pinned
+  // dims alone exceed the budget.
+  int ratios[] = { 1, -1, -1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  CHECK(Fail,
+        tile_stream_cpu_advise_layout(
+          &config, 1 << 16, 1 << 16, ratios, 1ull << 30, 0, 0, 0, 0, &diag) !=
+          0);
+  CHECK(Fail, diag.reason == ADVISE_CHUNK_BUDGET_INFEASIBLE);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_min_append_shards_overrides_floor(void)
+{
+  log_info("=== test_advise_min_append_shards_overrides_floor ===");
+  // Both min_append_shards and min_shard_bytes set → diagnostic flag is raised.
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  int ratios[] = { 0, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 4, 0, &diag) ==
+      0);
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, diag.min_append_shards_overrode_min_shard_bytes == 1);
+
+  // Sanity: min_append_shards not set → flag stays 0.
+  struct advise_layout_diagnostic diag2 = { 0 };
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 0, 0, &diag2) ==
+      0);
+  CHECK(Fail, diag2.min_append_shards_overrode_min_shard_bytes == 0);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_min_shard_too_small(void)
+{
+  log_info("=== test_advise_min_shard_too_small ===");
+  struct dimension dims[3];
+  uint64_t sizes[] = { 100, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .target_batch_chunks = 64,
+  };
+
+  int ratios[] = { 1, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  // target=1 MiB chunks but min_shard=512 B < chunk_bytes ->
+  // MIN_SHARD_TOO_SMALL
+  CHECK(Fail,
+        tile_stream_cpu_advise_layout(
+          &config, 1 << 20, 1 << 20, ratios, 1ull << 30, 512, 1, 0, 0, &diag) !=
+          0);
+  CHECK(Fail, diag.reason == ADVISE_MIN_SHARD_TOO_SMALL);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_parts_limit(void)
+{
+  log_info("=== test_advise_parts_limit ===");
+  // Same config as the old smallepoch-style case that used to fail with
+  // PARTS_LIMIT_EXCEEDED. Phase B in dims_set_shard_geometry now splits inner
+  // dims past target_concurrent_shards to keep chunks_per_shard_total within
+  // MAX_PARTS_PER_SHARD. Solver should succeed; min_shard_bytes may be met
+  // less than fully (it's soft).
+  struct dimension dims[3];
+  uint64_t sizes[] = { 1 << 20, 16, 16 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .target_batch_chunks = 64,
+  };
+
+  int ratios[] = { 1, 0, 0 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  CHECK(Fail,
+        tile_stream_cpu_advise_layout(&config,
+                                      1 << 16,
+                                      1 << 16,
+                                      ratios,
+                                      1ull << 30,
+                                      1ull << 30,
+                                      1,
+                                      0,
+                                      0,
+                                      &diag) == 0);
+  uint64_t cps_total = 1;
+  for (uint8_t d = 0; d < config.rank; ++d) {
+    uint64_t cps = config.dimensions[d].chunks_per_shard;
+    if (cps == 0)
+      cps = 1;
+    cps_total *= cps;
+  }
+  CHECK(Fail, cps_total <= MAX_PARTS_PER_SHARD);
+
+  // Diagnostic populated on success.
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, diag.actual_concurrent_shards >= 1);
+  CHECK(Fail, diag.actual_shard_bytes == diag.chunk_bytes * cps_total);
+  // The bounded dim 0 (1M rows) caps cps_append below cps_floor — actual shard
+  // is smaller than the 1 GiB min_shard_bytes floor (soft loss).
+  CHECK(Fail, diag.actual_shard_bytes < (1ull << 30));
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_halves_k(void)
+{
+  log_info("=== test_advise_halves_k ===");
+  // Pin min_chunk_bytes == target_chunk_bytes so the outer chunk-size loop
+  // has exactly one iteration; K halving is the only adaptation path. Under
+  // a tight budget, advise must choose a K strictly below the auto K.
+  struct dimension dims[3];
+  uint64_t sizes[] = { 1024, 64, 64 };
+  dims_create(dims, "tyx", sizes);
+
+  const size_t target = 1 << 16; // 64 KiB chunk
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .target_batch_chunks = 128,
+  };
+
+  int ratios[] = { 1, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+
+  // Step 1: huge budget -> auto K. Preserves the advised chunk geometry.
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, target, target, ratios, 1ull << 40, 1 << 20, 1, 0, 0, &diag) ==
+      0);
+  const uint32_t auto_k = config.epochs_per_batch;
+  CHECK(Fail, auto_k > 1);
+
+  // Step 2: probe heap for the just-advised geometry at auto K.
+  struct tile_stream_cpu_memory_info mi;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &mi) == 0);
+  const size_t heap_at_auto_k = mi.heap_bytes;
+
+  // Step 3: reset dims and advise again with a tight budget. With
+  // min_chunk==target, the outer loop runs only once — K halving is the only
+  // way to fit.
+  dims_create(dims, "tyx", sizes);
+  config.epochs_per_batch = 0;
+  const size_t tight_budget = heap_at_auto_k / 4;
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, target, target, ratios, tight_budget, 1 << 20, 1, 0, 0, &diag) ==
+      0);
+  CHECK(Fail, diag.reason == ADVISE_OK);
+  CHECK(Fail, config.epochs_per_batch < auto_k);
+  CHECK(Fail, config.epochs_per_batch >= 1);
+
+  // Verify the chosen configuration actually fits within the tight budget.
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &mi) == 0);
+  CHECK(Fail, mi.heap_bytes <= tight_budget);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_advise_user_k_respected(void)
+{
+  log_info("=== test_advise_user_k_respected ===");
+  // Non-zero config.epochs_per_batch on entry is authoritative and isn't
+  // reduced by advise even when the budget is tight.
+  struct dimension dims[3];
+  uint64_t sizes[] = { 256, 128, 128 };
+  dims_create(dims, "tyx", sizes);
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .target_batch_chunks = 4096,
+    .epochs_per_batch = 4, // user-pinned
+  };
+
+  int ratios[] = { 1, 1, 1 };
+  struct advise_layout_diagnostic diag = { 0 };
+  CHECK(
+    Fail,
+    tile_stream_cpu_advise_layout(
+      &config, 1 << 15, 1024, ratios, 1ull << 30, 1 << 20, 1, 0, 0, &diag) ==
+      0);
+  CHECK(Fail, config.epochs_per_batch == 4);
+  CHECK(Fail, diag.reason == ADVISE_OK);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -228,5 +577,13 @@ main(int ac, char* av[])
   rc |= test_basic_pipeline();
   rc |= test_f16_rejected();
   rc |= test_append_after_flush();
+  rc |= test_advise_basic_fit();
+  rc |= test_advise_invalid_config();
+  rc |= test_advise_chunk_budget_infeasible();
+  rc |= test_advise_min_append_shards_overrides_floor();
+  rc |= test_advise_min_shard_too_small();
+  rc |= test_advise_parts_limit();
+  rc |= test_advise_halves_k();
+  rc |= test_advise_user_k_respected();
   return rc;
 }

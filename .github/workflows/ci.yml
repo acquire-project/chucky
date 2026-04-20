@@ -91,7 +91,7 @@ jobs:
           fail_ci_if_error: false
 
   gpu-tests:
-    runs-on: [self-hosted, gpu]
+    runs-on: [self-hosted, Linux, gpu]
     steps:
       - uses: actions/checkout@v4
 
