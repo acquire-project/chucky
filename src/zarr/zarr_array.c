@@ -54,7 +54,10 @@ write_array_metadata(struct zarr_array* a)
     attr_bytes += 16; // quotes, colon, comma, slack
   }
   size_t cap = 4096 + attr_bytes;
-  char* buf = (char*)malloc(cap);
+  // calloc zeroes tail bytes so a NUL-scan can clamp the write length if
+  // the JSON writer's pos ever overcounts (guards against platform-specific
+  // vsnprintf quirks — see #96).
+  char* buf = (char*)calloc(1, cap);
   if (!buf)
     return 1;
   int len = zarr_array_json(buf,
@@ -70,7 +73,8 @@ write_array_metadata(struct zarr_array* a)
     free(buf);
     return 1;
   }
-  int rc = a->store->put(a->store, key, buf, (size_t)len);
+  size_t write_len = strnlen(buf, (size_t)len);
+  int rc = a->store->put(a->store, key, buf, write_len);
   free(buf);
   if (rc == 0)
     a->attrs.dirty = 0;

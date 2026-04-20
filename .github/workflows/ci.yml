@@ -39,6 +39,41 @@ jobs:
           sleep 1 &&
           ctest --test-dir build --output-on-failure"
 
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Configure
+        shell: bash
+        run: >
+          cmake --preset cpu-only
+          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: bash
+        run: cmake --build build
+
+      - name: Test
+        shell: bash
+        run: >
+          ctest --test-dir build
+          --output-on-failure
+          -E "(s3)"
+
   coverage:
     runs-on: ubuntu-latest
     steps:

@@ -211,6 +211,87 @@ Fail:
   return 1;
 }
 
+// --- Test: zarr.json byte purity across repeated update_append (#96) ---
+//
+// Regression for zarr-python UnicodeDecodeError on Windows: after repeated
+// rewrites, zarr.json must contain only the JSON content — no embedded NULs
+// or non-ASCII tail bytes leaked from an uninitialized heap buffer.
+
+static int
+test_zarr_array_json_bytes(void)
+{
+  log_info("=== test_zarr_array_json_bytes ===");
+
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Fail, store);
+  CHECK(Fail2, store->mkdirs(store, "bytes") == 0);
+
+  // Mirror the acquire-zarr reproducer: unbounded t, uint16, no codec.
+  struct dimension dims[3] = {
+    { .size = 0, .chunk_size = 1, .chunks_per_shard = 1, .name = "t" },
+    { .size = 2048, .chunk_size = 2048, .chunks_per_shard = 1, .name = "y" },
+    { .size = 2048, .chunk_size = 2048, .chunks_per_shard = 1, .name = "x" },
+  };
+  struct zarr_array_config cfg = {
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+  };
+
+  struct zarr_array* a = zarr_array_create(store, "bytes", &cfg);
+  CHECK(Fail2, a);
+
+  struct shard_sink* sink = zarr_array_as_shard_sink(a);
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/bytes/zarr.json", tmpdir);
+
+  // 128 appends, rewrites zarr.json each time the shape grows.
+  for (uint64_t t = 1; t <= 128; ++t) {
+    uint64_t new_sizes[1] = { t };
+    CHECK(Fail3, sink->update_append(sink, 0, 1, new_sizes) == 0);
+
+    char buf[8192];
+    size_t n;
+    CHECK(Fail3, read_file(path, buf, sizeof(buf), &n) == 0);
+    CHECK(Fail3, n > 0);
+
+    // No embedded NULs — file must be exactly the JSON content.
+    if (strlen(buf) != n) {
+      log_error("t=%llu: file_size=%zu but strlen=%zu (embedded NUL)",
+                (unsigned long long)t,
+                n,
+                strlen(buf));
+      goto Fail3;
+    }
+    // No bytes >= 0x80 — this config emits pure ASCII; a high byte indicates
+    // uninitialized tail leaking past the real JSON end.
+    for (size_t i = 0; i < n; ++i) {
+      if ((unsigned char)buf[i] >= 0x80) {
+        log_error("t=%llu: byte 0x%02x at offset %zu (non-ASCII tail)",
+                  (unsigned long long)t,
+                  (unsigned char)buf[i],
+                  i);
+        goto Fail3;
+      }
+    }
+  }
+
+  zarr_array_destroy(a);
+  store_destroy(store);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  zarr_array_destroy(a);
+Fail2:
+  store_destroy(store);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 // --- Test: root array (empty prefix) ---
 
 static int
@@ -281,6 +362,7 @@ main(void)
   err |= test_zarr_array_metadata();
   err |= test_zarr_array_shard_write();
   err |= test_zarr_array_update_append();
+  err |= test_zarr_array_json_bytes();
   err |= test_zarr_array_root();
 
   test_tmpdir_remove(tmpdir);

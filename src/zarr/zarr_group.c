@@ -64,7 +64,9 @@ zarr_group_write(struct zarr_group* g)
     attr_bytes += 16;
   }
   size_t cap = 256 + attr_bytes;
-  char* buf = (char*)malloc(cap);
+  // See note in zarr_array.c:write_array_metadata — calloc + strnlen clamp
+  // guards the file against any overcount from jw_length (#96).
+  char* buf = (char*)calloc(1, cap);
   if (!buf)
     return 1;
 
@@ -88,7 +90,8 @@ zarr_group_write(struct zarr_group* g)
     free(buf);
     return 1;
   }
-  int rc = g->store->put(g->store, g->key, buf, jw_length(&jw));
+  size_t write_len = strnlen(buf, jw_length(&jw));
+  int rc = g->store->put(g->store, g->key, buf, write_len);
   free(buf);
   if (rc == 0)
     g->attrs.dirty = 0;
