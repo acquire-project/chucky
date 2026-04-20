@@ -48,27 +48,32 @@ jobs:
         with:
           arch: x64
 
-      - name: Set up vcpkg
-        uses: lukka/run-vcpkg@v11
+      - uses: mamba-org/setup-micromamba@v2
         with:
-          vcpkgJsonGlob: 'vcpkg.json'
+          environment-name: ci
+          create-args: >-
+            cmake ninja sccache uv
+            aws-c-s3 blosc lz4-c zstd snappy zlib
+          init-shell: bash
+          cache-environment: true
 
-      - uses: astral-sh/setup-uv@v5
-
-      - name: Configure
-        shell: bash
-        run: >
-          cmake --preset cpu-only
-          -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-          -DCMAKE_BUILD_TYPE=Release
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Build
-        shell: bash
-        run: cmake --build build
+        shell: micromamba-shell {0}
+        env:
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: |
+          cmake --preset cpu-only \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX/Library" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build build
 
       - name: Test
-        shell: bash
+        shell: micromamba-shell {0}
         run: >
           ctest --test-dir build
           --output-on-failure
