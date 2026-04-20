@@ -1,6 +1,6 @@
 #include "platform/platform.h"
 
-#include <pthread.h>
+#include <mach/mach.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
@@ -21,17 +21,23 @@ platform_page_alignment(void)
 size_t
 platform_available_memory(void)
 {
-  long pages = sysconf(_SC_AVPHYS_PAGES);
-  long page_sz = sysconf(_SC_PAGESIZE);
-  if (pages > 0 && page_sz > 0)
-    return (size_t)pages * (size_t)page_sz;
-  return 0;
+  mach_port_t host = mach_host_self();
+  vm_statistics64_data_t vm;
+  mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+  if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm, &count) !=
+      KERN_SUCCESS)
+    return 0;
+  return ((size_t)vm.free_count + (size_t)vm.inactive_count) *
+         platform_page_size();
 }
 
 void*
 platform_aligned_alloc(size_t alignment, size_t size)
 {
-  return aligned_alloc(alignment, size);
+  void* ptr = NULL;
+  if (posix_memalign(&ptr, alignment, size) != 0)
+    return NULL;
+  return ptr;
 }
 
 void

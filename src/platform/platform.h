@@ -34,3 +34,18 @@ struct platform_clock
 
 float
 platform_toc(struct platform_clock* clock);
+
+// One-time initialization. Thread-safe.
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+typedef INIT_ONCE platform_once;
+#define PLATFORM_ONCE_INIT INIT_ONCE_STATIC_INIT
+#else
+#include <pthread.h>
+typedef pthread_once_t platform_once;
+#define PLATFORM_ONCE_INIT PTHREAD_ONCE_INIT
+#endif
+
+void
+platform_call_once(platform_once* flag, void (*fn)(void));

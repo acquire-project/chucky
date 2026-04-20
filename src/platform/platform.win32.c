@@ -71,3 +71,19 @@ platform_toc(struct platform_clock* clock)
   clock->last_ns = now;
   return elapsed;
 }
+
+static BOOL CALLBACK
+once_callback(PINIT_ONCE once, PVOID param, PVOID* ctx)
+{
+  (void)once;
+  (void)ctx;
+  void (*fn)(void) = (void (*)(void))param;
+  fn();
+  return TRUE;
+}
+
+void
+platform_call_once(platform_once* flag, void (*fn)(void))
+{
+  InitOnceExecuteOnce(flag, once_callback, (PVOID)fn, NULL);
+}
