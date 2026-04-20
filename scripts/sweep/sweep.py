@@ -55,8 +55,10 @@ SCENARIOS = {
     "smallepoch_single": 65536,
     "orca2_multiscale": 200,
     "256cube_multiscale": 40,
+    "medfmt_multiscale": 10,
     "orca2_multiscale_dim0": 200,
     "256cube_multiscale_dim0": 40,
+    "medfmt_multiscale_dim0": 10,
 }
 
 # Chunk-byte labels -> values (ordered small to large)
@@ -169,8 +171,8 @@ def lod_runs() -> list[RunSpec]:
     """Multiscale / LOD sweeps."""
     runs = []
     chunk_labels = ["64K", "256K", "1M"]
-    scenarios = ["orca2_multiscale", "256cube_multiscale",
-                 "orca2_multiscale_dim0", "256cube_multiscale_dim0"]
+    scenarios = ["orca2_multiscale", "256cube_multiscale", "medfmt_multiscale",
+                 "orca2_multiscale_dim0", "256cube_multiscale_dim0", "medfmt_multiscale_dim0"]
     for sc in scenarios:
         for cl in chunk_labels:
             for codec in ["none", "zstd"]:

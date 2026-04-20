@@ -231,9 +231,6 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (ctx->cursor_elements % ctx->layout.epoch_elements != 0) {
     if (flush_run_epoch_lod(e, ctx))
       return writer_error();
-    CU(Error,
-       cuEventRecord(e->batch.pool_events[e->batch.accumulated],
-                     e->streams.compute));
     e->batch.accumulated++;
   }
 
@@ -269,9 +266,6 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   }
 
   return writer_ok();
-
-Error:
-  return writer_error();
 }
 
 // --- Accessor ---

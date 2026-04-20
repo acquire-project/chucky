@@ -28,7 +28,8 @@ struct test_ctx
   CUstream compute;
   CUstream d2h_stream;
   CUdeviceptr d_pool;
-  CUevent epoch_events[2];
+  CUevent pool_ready;
+  uint32_t* batch_active_masks;
   struct batch_state batch;
   struct stream_metrics metrics;
   struct lod_state lod;
@@ -53,8 +54,8 @@ test_ctx_destroy(struct test_ctx* c)
     compress_agg_destroy(&c->ca, c->cl.levels.nlod);
   computed_stream_layouts_free(&c->cl);
   cu_mem_free(c->d_pool);
-  for (int i = 0; i < 2; ++i)
-    cu_event_destroy(c->epoch_events[i]);
+  cu_event_destroy(c->pool_ready);
+  free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
   cu_stream_destroy(c->d2h_stream);
 }
@@ -91,9 +92,16 @@ test_ctx_setup(struct test_ctx* c,
                       c->cl.layouts[0].chunk_stride * dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
+  CU(Fail, cuEventCreate(&c->pool_ready, CU_EVENT_DEFAULT));
+
+  c->batch_active_masks =
+    (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
+  CHECK(Fail, c->batch_active_masks);
+
   c->batch = (struct batch_state){
     .epochs_per_batch = c->cl.epochs_per_batch,
     .accumulated = 0,
+    .pool_ready = c->pool_ready,
   };
 
   memset(&c->metrics, 0, sizeof(c->metrics));
@@ -121,21 +129,22 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                         int fc,
                         uint32_t n_epochs,
                         CUdeviceptr pool_buf,
-                        const CUevent* epoch_events,
+                        CUevent pool_ready,
                         struct flush_handoff* handoff)
 {
+  for (uint32_t i = 0; i < n_epochs; ++i)
+    c->batch_active_masks[i] = 0x1;
+
   struct compress_agg_input in = {
     .fc = fc,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
+    .batch_active_masks = c->batch_active_masks,
     .pool_buf = pool_buf,
-    .epochs_per_batch = c->cl.epochs_per_batch,
+    .pool_ready = pool_ready,
     .lod_done = 0,
+    .epochs_per_batch = c->cl.epochs_per_batch,
   };
-  for (uint32_t i = 0; i < n_epochs; ++i) {
-    in.batch_active_masks[i] = 0x1;
-    in.epoch_events[i] = epoch_events[i];
-  }
 
   memset(handoff, 0, sizeof(*handoff));
 
@@ -148,11 +157,14 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                           c->compute,
                           handoff) == 0);
 
-  CHECK(
-    Fail,
-    d2h_deliver_kick(
-      &c->d2h, handoff, &c->cl.levels, &c->batch, &c->cl.dims, c->d2h_stream) ==
-      0);
+  CHECK(Fail,
+        d2h_deliver_kick(&c->d2h,
+                         handoff,
+                         &c->cl.levels,
+                         &c->batch,
+                         &c->cl.dims,
+                         sink,
+                         c->d2h_stream) == 0);
 
   struct writer_result r = d2h_deliver_drain(&c->d2h,
                                              handoff,
@@ -212,15 +224,14 @@ test_d2h_single_epoch_none(void)
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
 
-  // Create and record epoch event
-  CU(Fail, cuEventCreate(&c.epoch_events[0], CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(c.epoch_events[0], c.compute));
+  // Record pool_ready after the fill
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
 
   // Kick compress_agg + D2H + drain
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) ==
+          &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
           0);
 
   // Verify sink state
@@ -284,16 +295,13 @@ test_d2h_batch_none(void)
                         bytes_per_element,
                         fill_epoch1) == 0);
 
-  for (int i = 0; i < 2; ++i) {
-    CU(Fail, cuEventCreate(&c.epoch_events[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(c.epoch_events[i], c.compute));
-  }
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
 
   // Kick with 2 epochs
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 2, c.d_pool, c.epoch_events, &handoff) ==
+          &c, &config, &sink.base, 0, 2, c.d_pool, c.pool_ready, &handoff) ==
           0);
 
   // tps_0=2, 2 epochs → shard complete
@@ -422,13 +430,12 @@ test_d2h_zstd_single_epoch(void)
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
 
-  CU(Fail, cuEventCreate(&c.epoch_events[0], CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(c.epoch_events[0], c.compute));
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
 
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) ==
+          &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
           0);
 
   CHECK(Fail, sink.writers[0][0].size > 0);
@@ -523,15 +530,14 @@ test_d2h_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
-  CU(Fail, cuEventCreate(&c.epoch_events[0], CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(c.epoch_events[0], c.compute));
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
 
   {
     struct flush_handoff handoff;
     CHECK(
       Fail,
       test_ctx_kick_and_drain(
-        &c, &config, &sink.base, 0, 1, c.d_pool, c.epoch_events, &handoff) ==
+        &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
         0);
   }
 
@@ -544,8 +550,7 @@ test_d2h_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch1) == 0);
-  CU(Fail, cuEventCreate(&c.epoch_events[1], CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(c.epoch_events[1], c.compute));
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
 
   {
     struct flush_handoff handoff;
@@ -556,7 +561,7 @@ test_d2h_double_buffer(void)
                                   1,
                                   1,
                                   c.d_pool + epoch_pool_bytes,
-                                  &c.epoch_events[1],
+                                  c.pool_ready,
                                   &handoff) == 0);
   }
 

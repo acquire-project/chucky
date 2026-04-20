@@ -495,7 +495,7 @@ before touching the same buffer.
 |---|---|---|---|
 | H2D stream | `t_h2d_end` | compute stream | Staging data is on device before scatter |
 | compute stream | `t_scatter_end` | H2D stream | Scatter is done before next H2D overwrites staging |
-| compute stream | `pool_events[k]` | compress stream | All $K$ epochs are scattered before compress starts |
+| compute stream | `pool_ready` | compress stream | All $K$ epochs are scattered before compress starts |
 | compress stream | `t_aggregate_end` | D2H stream | Aggregated data is ready before transfer |
 | D2H stream | `ready` | host | Host can read pinned buffer for shard delivery |
 
@@ -561,8 +561,8 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `dtype` | `enum dtype` | Element type (11 types, 1–8 bytes; see `src/dtype.h`) |
 | `buffer_capacity_bytes` | > 0 | H2D staging buffer size (doubled internally) |
 | `codec` | none / lz4 / zstd | Compression codec |
-| `epochs_per_batch` | 0 or power of 2 | Epochs per batch ($K$); 0 = auto |
-| `target_batch_chunks` | > 0 | Target chunk count for auto-$K$ (default 1024) |
+| `epochs_per_batch` | ≥ 0 | Epochs per batch ($K$); 0 = auto (from `target_batch_bytes`) |
+| `target_batch_bytes` | > 0 | Target uncompressed bytes per batch for auto-$K$ (default 512 MiB) |
 | `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |

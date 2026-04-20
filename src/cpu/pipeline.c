@@ -3,16 +3,18 @@
 #include "cpu/aggregate.h"
 #include "cpu/compress.h"
 #include "cpu/lod.h"
-#include "defs.limits.h"
 #include "platform/platform.h"
 #include "util/metric.h"
 #include "util/prelude.h"
+
+#include <stdlib.h>
 
 // ---- batch LUT computation ----
 
 // Convenience: compute pool_epochs from the standard formula
 // pool_epoch = (a + 1) * period - 1, then delegate to aggregate_batch_luts.
-static void
+// Init-time helper — allocates a small scratch internally.
+static int
 compute_batch_luts(const struct computed_stream_layouts* cl,
                    const struct level_geometry* levels,
                    const struct aggregate_layout* agg,
@@ -21,13 +23,18 @@ compute_batch_luts(const struct computed_stream_layouts* cl,
                    uint32_t* out_gather,
                    uint32_t* out_perm)
 {
-  uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+  uint32_t* pool_epochs =
+    (uint32_t*)malloc((size_t)active_count * sizeof(uint32_t));
+  if (!pool_epochs)
+    return 1;
   for (uint32_t a = 0; a < active_count; ++a) {
     uint32_t period = (cl->dims.append_downsample && lv > 0) ? (1u << lv) : 1;
     pool_epochs[a] = (a + 1) * period - 1;
   }
   aggregate_batch_luts(
     agg, levels, lv, active_count, pool_epochs, out_gather, out_perm);
+  free(pool_epochs);
+  return 0;
 }
 
 // ---- flush_batch helpers ----
@@ -168,7 +175,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
       if (active_count > lut_cap)
         return 1;
 
-      uint32_t pool_epochs[MAX_BATCH_EPOCHS];
+      uint32_t* pool_epochs = p->pool_epochs_scratch;
       uint32_t ai = 0;
       for (uint32_t e = 0; e < n_epochs; ++e)
         if (active_masks[e] & (1u << lv))
@@ -359,13 +366,13 @@ cpu_pipeline_compute_luts(
     uint32_t slot_count = K_l > 0 ? K_l : 1;
 
     if (out->batch_gather[lv] && out->batch_chunk_to_shard_map[lv])
-      compute_batch_luts(cl,
-                         levels,
-                         agg,
-                         lv,
-                         slot_count,
-                         out->batch_gather[lv],
-                         out->batch_chunk_to_shard_map[lv]);
+      (void)compute_batch_luts(cl,
+                               levels,
+                               agg,
+                               lv,
+                               slot_count,
+                               out->batch_gather[lv],
+                               out->batch_chunk_to_shard_map[lv]);
   }
 
   // LOD LUTs (multiscale only).

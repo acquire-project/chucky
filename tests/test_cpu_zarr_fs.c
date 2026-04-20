@@ -415,7 +415,7 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_ZSTD },
-    .epochs_per_batch = (uint8_t)epochs_per_batch,
+    .epochs_per_batch = epochs_per_batch,
   };
 
   struct tile_stream_cpu* s =

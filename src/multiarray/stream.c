@@ -31,7 +31,8 @@ struct array_descriptor
   uint64_t cursor_elements;
   uint64_t max_cursor_elements;
   uint32_t batch_accumulated;
-  uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
+  uint32_t* batch_active_masks;  // [K], heap-allocated
+  uint32_t* pool_epochs_scratch; // [K], heap-allocated
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
@@ -155,6 +156,13 @@ init_array_descriptor(struct array_descriptor* desc,
   const uint32_t K = desc->cl.epochs_per_batch;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   const uint64_t total_chunks = desc->levels.total_chunks;
+
+  desc->batch_active_masks = (uint32_t*)calloc(K, sizeof(uint32_t));
+  if (!desc->batch_active_masks)
+    return 1;
+  desc->pool_epochs_scratch = (uint32_t*)malloc((size_t)K * sizeof(uint32_t));
+  if (!desc->pool_epochs_scratch)
+    return 1;
 
   // max_cursor
   {
@@ -439,6 +447,8 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
         }
       }
       free(desc->append_accum);
+      free(desc->batch_active_masks);
+      free(desc->pool_epochs_scratch);
       if (desc->csrs) {
         int ncsr = desc->cl.plan.levels.nlod - 1;
         for (int l = 0; l < ncsr; ++l)
@@ -571,6 +581,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .max_cursor_elements = desc->max_cursor_elements,
     .batch_accumulated = &desc->batch_accumulated,
     .batch_active_masks = desc->batch_active_masks,
+    .pool_epochs_scratch = desc->pool_epochs_scratch,
     .pool_fully_covered = desc->pool_fully_covered,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,

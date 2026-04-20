@@ -56,9 +56,9 @@ struct tile_stream_configuration
   int max_nlod; // 0 = auto, N>0 = max N total levels (1 = base only)
   int preserve_aspect_ratio; // 0 = drop dims independently (default),
                              // 1 = stop when any dim reaches chunk_size
-  uint8_t epochs_per_batch;  // K: 0 = auto (target_batch_chunks), must be pow2
+  uint32_t epochs_per_batch; // K: 0 = auto (from target_batch_bytes)
   uint32_t
-    target_batch_chunks; // minimum chunks per compress batch (default 1024)
+    target_batch_bytes; // target uncompressed bytes per batch (default 512 MiB)
   float metadata_update_interval_s;
   size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
                              // when sink->pending_bytes exceeds this watermark

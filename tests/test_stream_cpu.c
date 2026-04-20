@@ -234,7 +234,7 @@ test_advise_basic_fit(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
-    .target_batch_chunks = 64,
+    .target_batch_bytes = 8u << 20,
   };
 
   int ratios[] = { 1, 1, 1 };
@@ -385,7 +385,7 @@ test_advise_min_shard_too_small(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
-    .target_batch_chunks = 64,
+    .target_batch_bytes = 8u << 20,
   };
 
   int ratios[] = { 1, 1, 1 };
@@ -425,7 +425,7 @@ test_advise_parts_limit(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
-    .target_batch_chunks = 64,
+    .target_batch_bytes = 8u << 20,
   };
 
   int ratios[] = { 1, 0, 0 };
@@ -484,7 +484,7 @@ test_advise_halves_k(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
-    .target_batch_chunks = 128,
+    .target_batch_bytes = 8u << 20,
   };
 
   int ratios[] = { 1, 1, 1 };
@@ -546,7 +546,7 @@ test_advise_user_k_respected(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
-    .target_batch_chunks = 4096,
+    .target_batch_bytes = 16u << 20,
     .epochs_per_batch = 4, // user-pinned
   };
 

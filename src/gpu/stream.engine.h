@@ -38,10 +38,11 @@ struct staging_state
 };
 
 // Per flush-slot: mutable batch state (masks + epoch count).
+// batch_active_masks is heap-allocated to epochs_per_batch entries.
 struct flush_slot_gpu
 {
   uint32_t active_levels_mask; // union of per-epoch active masks
-  uint32_t batch_active_masks[MAX_BATCH_EPOCHS]; // per-epoch active level masks
+  uint32_t* batch_active_masks; // [K] per-epoch active level masks
   int batch_epoch_count; // number of epochs accumulated in this batch
 };
 
@@ -117,12 +118,14 @@ struct gpu_streams
   CUstream h2d, compute, compress, d2h;
 };
 
-// Batch accumulation: config + mutable counter + per-epoch events
+// Batch accumulation: config + mutable counter + single pool-ready event.
+// All K scatter ops run on the compute stream in order, so a single event
+// recorded after the K-th scatter subsumes all per-epoch ready signals.
 struct batch_state
 {
-  uint32_t epochs_per_batch;             // K (immutable after create)
-  uint32_t accumulated;                  // mutable: 0..K-1
-  CUevent pool_events[MAX_BATCH_EPOCHS]; // per-epoch pool-ready signals
+  uint32_t epochs_per_batch; // K (immutable after create)
+  uint32_t accumulated;      // mutable: 0..K-1
+  CUevent pool_ready;        // recorded on compute after last accumulated epoch
 };
 
 // --- Stage types ---
@@ -132,10 +135,14 @@ struct compress_agg_input
   int fc;
   uint32_t n_epochs;
   uint32_t active_levels_mask;
-  uint32_t batch_active_masks[MAX_BATCH_EPOCHS];
+  const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
   CUdeviceptr pool_buf;
-  CUevent epoch_events[MAX_BATCH_EPOCHS];
+  CUevent pool_ready;    // batch-level (from batch_state.pool_ready)
   CUevent lod_done;
+  CUevent prev_d2h_done; // prior D2H on same fc; compress waits on this so
+                         // aggregate doesn't overwrite agg[fc].d_aggregated
+                         // before the prior D2H has read it. Initialized
+                         // signaled.
   uint32_t epochs_per_batch;
 };
 
@@ -146,6 +153,8 @@ struct compress_agg_stage
   CUevent t_compress_start[2];
   CUevent t_compress_end[2];
   CUevent t_aggregate_end[2];
+
+  uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
 
   struct level_flush_state levels[LOD_MAX_LEVELS];
 };
@@ -161,15 +170,21 @@ struct d2h_deliver_stage
   int nlod;
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
-  CUstream d2h_stream; // set by kick, consumed by drain (always paired)
 };
 
+// Lazy-delivery pipeline: each fc slot can independently hold a kicked-but-
+// not-yet-delivered batch. Delivery of fc=A happens at the start of the
+// drain_kick_and_swap round that is about to reuse fc=A (two rounds after
+// that batch was kicked, in N=2 alternation). Both fcs may hold a pending
+// batch simultaneously; drain order at final flush follows pending_seq.
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
-  int current;
-  int pending;
-  struct flush_handoff pending_handoff;
+  int current;                                 // fc currently being filled
+  int pending[2];                              // per-fc: batch awaiting delivery
+  uint64_t pending_seq[2];                     // monotonic kick seq per pending
+  uint64_t next_seq;                           // next seq to assign on kick
+  struct flush_handoff pending_handoff[2];     // per-fc
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,

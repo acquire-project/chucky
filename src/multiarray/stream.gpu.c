@@ -32,9 +32,10 @@ struct array_descriptor_gpu
   uint32_t batch_accumulated;
   int pools_current;
   struct flush_slot_gpu flush_slots[2];
-  int flush_pending;
-  int flush_current;
-  struct flush_handoff flush_pending_handoff;
+  int flush_pending[2];
+  uint64_t flush_pending_seq[2];
+  uint64_t flush_next_seq;
+  struct flush_handoff flush_pending_handoff[2];
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
@@ -117,11 +118,13 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
   e->batch.accumulated = desc->batch_accumulated;
   e->pools.current = desc->pools_current;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < 2; ++i) {
     e->flush.slot[i] = desc->flush_slots[i];
-  e->flush.pending = desc->flush_pending;
-  e->flush.current = desc->flush_current;
-  e->flush.pending_handoff = desc->flush_pending_handoff;
+    e->flush.pending[i] = desc->flush_pending[i];
+    e->flush.pending_seq[i] = desc->flush_pending_seq[i];
+    e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
+  }
+  e->flush.next_seq = desc->flush_next_seq;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     e->compress_agg.levels[lv].shard = desc->shard[lv];
     e->compress_agg.levels[lv].agg_layout = desc->agg_layout[lv];
@@ -142,11 +145,13 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < 2; ++i) {
     desc->flush_slots[i] = e->flush.slot[i];
-  desc->flush_pending = e->flush.pending;
-  desc->flush_current = e->flush.current;
-  desc->flush_pending_handoff = e->flush.pending_handoff;
+    desc->flush_pending[i] = e->flush.pending[i];
+    desc->flush_pending_seq[i] = e->flush.pending_seq[i];
+    desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
+  }
+  desc->flush_next_seq = e->flush.next_seq;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     desc->shard[lv] = e->compress_agg.levels[lv].shard;
     desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
@@ -214,6 +219,16 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   const size_t bpe = dtype_bpe(config->dtype);
   const uint64_t total_chunks = desc->ctx.levels.total_chunks;
   const uint64_t chunk_stride = desc->ctx.layout.chunk_stride;
+
+  // Per-array, per-slot batch_active_masks. Bind/unbind copies the pointer
+  // into the engine's flush slots; the storage lives here for the array's
+  // lifetime.
+  for (int fc = 0; fc < 2; ++fc) {
+    desc->flush_slots[fc].batch_active_masks =
+      (uint32_t*)calloc(K, sizeof(uint32_t));
+    if (!desc->flush_slots[fc].batch_active_masks)
+      return 1;
+  }
 
   // max_cursor
   {
@@ -295,6 +310,10 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
 {
   if (!desc)
     return;
+  for (int fc = 0; fc < 2; ++fc) {
+    free(desc->flush_slots[fc].batch_active_masks);
+    desc->flush_slots[fc].batch_active_masks = NULL;
+  }
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     struct shard_state* ss = &desc->shard[lv];
     if (ss->shards) {
@@ -339,10 +358,14 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   }
 
   e->batch.epochs_per_batch = mx->epochs_per_batch;
-  for (uint32_t i = 0; i < mx->epochs_per_batch; ++i) {
-    CU(Fail, cuEventCreate(&e->batch.pool_events[i], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(e->batch.pool_events[i], e->streams.compute));
-  }
+  CU(Fail, cuEventCreate(&e->batch.pool_ready, CU_EVENT_DEFAULT));
+  CU(Fail, cuEventRecord(e->batch.pool_ready, e->streams.compute));
+
+  // Per-slot batch_active_masks live on each array descriptor (bind/unbind
+  // copies them in). Stage scratch is shared and sized to the max K.
+  e->compress_agg.pool_epochs_scratch =
+    (uint32_t*)malloc((size_t)mx->epochs_per_batch * sizeof(uint32_t));
+  CHECK(Fail, e->compress_agg.pool_epochs_scratch);
 
   CHECK(Fail,
         codec_init(&e->compress_agg.codec,
@@ -591,12 +614,13 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   struct stream_engine* e = &ms->engine;
 
-  for (uint32_t i = 0; i < e->batch.epochs_per_batch; ++i)
-    cu_event_destroy(e->batch.pool_events[i]);
+  cu_event_destroy(e->batch.pool_ready);
 
   d2h_deliver_destroy(&e->d2h_deliver);
 
   codec_free(&e->compress_agg.codec);
+  free(e->compress_agg.pool_epochs_scratch);
+  e->compress_agg.pool_epochs_scratch = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(e->compress_agg.d_compressed[fc]);
     cu_event_destroy(e->compress_agg.t_compress_start[fc]);

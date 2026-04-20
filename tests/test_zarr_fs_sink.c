@@ -1000,8 +1000,9 @@ test_midstream_metadata_update(const char* tmpdir)
     log_info("  midstream metadata: %s", (char*)data);
 
     int not_zero = strstr((char*)data, "\"shape\":[0,") == NULL;
-    // 5 epochs delivered (epoch 5 still pending), dim0_extent = 5 * 2 = 10
-    int has_shape = strstr((char*)data, "\"shape\":[10,8,12]") != NULL;
+    // Lazy delivery: of 6 epochs kicked, epochs 0-3 delivered (pending[0],
+    // pending[1] hold epochs 4,5). dim0_extent = 4 * chunk_size = 4 * 2 = 8.
+    int has_shape = strstr((char*)data, "\"shape\":[8,8,12]") != NULL;
     int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
     free(data);
 

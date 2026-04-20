@@ -96,7 +96,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
                      enum dtype dtype,
                      double budget_fraction,
                      const char* auto_detect_suffix,
-                     uint8_t* out_epb)
+                     uint32_t* out_epb)
 {
   *out_epb = 0;
   if (!cfg->chunk_ratios)
@@ -140,7 +140,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       .codec = cfg->codec,
       .reduce_method = cfg->reduce_method,
       .append_reduce_method = cfg->append_reduce_method,
-      .target_batch_chunks = 2048,
+      .target_batch_bytes = 512u << 20,
     };
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
@@ -338,7 +338,7 @@ run_bench(const struct bench_config* cfg)
   }
 
   const enum dtype dtype = cfg->dtype ? cfg->dtype : dtype_u16;
-  uint8_t chosen_epochs_per_batch = 0; // 0 = auto; set by advise_layout on fit
+  uint32_t chosen_epochs_per_batch = 0; // 0 = auto; set by advise_layout on fit
 
   if (resolve_chunk_sizing(
         cfg, dtype, 0.8, "(restrict to <80%)", &chosen_epochs_per_batch))
@@ -409,7 +409,7 @@ run_bench(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .epochs_per_batch = chosen_epochs_per_batch,
-    .target_batch_chunks = 2048,
+    .target_batch_bytes = 512u << 20,
     .backpressure_bytes = cfg->backpressure_bytes,
   };
 
@@ -835,7 +835,7 @@ run_bench_two_streams(const struct bench_config* cfg)
 
   const enum dtype dtype = cfg->dtype ? cfg->dtype : dtype_u16;
   const size_t bpe = dtype_bpe(dtype);
-  uint8_t chosen_epochs_per_batch = 0; // 0 = auto; set by advise_layout on fit
+  uint32_t chosen_epochs_per_batch = 0; // 0 = auto; set by advise_layout on fit
 
   if (resolve_chunk_sizing(
         cfg, dtype, 0.4, "(2 streams, ~40% each)", &chosen_epochs_per_batch))
@@ -905,7 +905,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .epochs_per_batch = chosen_epochs_per_batch,
-    .target_batch_chunks = 2048,
+    .target_batch_bytes = 512u << 20,
     .backpressure_bytes = cfg->backpressure_bytes,
   };
 
