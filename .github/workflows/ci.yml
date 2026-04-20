@@ -48,7 +48,7 @@ jobs:
         with:
           environment-name: ci
           create-args: >-
-            cmake ninja sccache
+            cmake ninja sccache uv
             aws-c-s3 blosc lz4-c zstd llvm-openmp snappy zlib
           init-shell: bash
           cache-environment: true
