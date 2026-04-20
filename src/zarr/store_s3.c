@@ -50,6 +50,15 @@ s3_create_pool(struct store* self, uint64_t nslots)
   return shard_pool_s3_create(s->client, s->bucket, s->prefix, nslots);
 }
 
+static int
+s3_has_existing_data(struct store* self)
+{
+  struct store_s3* s = container_of(self, struct store_s3, base);
+  char full[4096];
+  s3_full_key(s, "zarr.json", full, sizeof(full));
+  return s3_client_head(s->client, s->bucket, full);
+}
+
 static void
 s3_destroy(struct store* self)
 {
@@ -85,6 +94,7 @@ store_s3_create(const struct store_s3_config* cfg)
   s->base.put = s3_put;
   s->base.mkdirs = s3_mkdirs;
   s->base.create_pool = s3_create_pool;
+  s->base.has_existing_data = s3_has_existing_data;
   s->base.destroy = s3_destroy;
   snprintf(s->bucket, sizeof(s->bucket), "%s", cfg->bucket);
   if (cfg->prefix)

@@ -46,3 +46,8 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes);
 // Close a file descriptor/handle.
 void
 platform_close(platform_fd fd);
+
+// Returns 1 if path exists, 0 if it does not (ENOENT / path-component-is-file
+// on Windows / not-a-dir), -1 on unexpected IO error.
+int
+platform_path_exists(const char* path);

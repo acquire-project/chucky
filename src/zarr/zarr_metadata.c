@@ -1,6 +1,7 @@
 #include "zarr/zarr_metadata.h"
 #include "defs.limits.h"
 #include "dtype.h"
+#include "zarr/attr_set.h"
 #include "zarr/json_writer.h"
 
 #include <stdbool.h>
@@ -62,7 +63,8 @@ zarr_array_json(char* buf,
                 enum dtype data_type,
                 double fill_value,
                 const uint64_t* chunks_per_shard,
-                struct codec_config codec)
+                struct codec_config codec,
+                const struct attr_set* extras)
 {
   struct json_writer jw;
   jw_init(&jw, buf, cap);
@@ -207,6 +209,7 @@ zarr_array_json(char* buf,
 
   jw_key(&jw, "attributes");
   jw_object_begin(&jw);
+  attr_set_emit(extras, &jw);
   jw_object_end(&jw);
 
   // dimension_names

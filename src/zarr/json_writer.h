@@ -36,6 +36,9 @@ void
 jw_null(struct json_writer* jw);
 void
 jw_bool(struct json_writer* jw, int val);
+// Emit a pre-validated JSON value as-is. Participates in comma gating.
+void
+jw_raw(struct json_writer* jw, const char* text);
 size_t
 jw_length(const struct json_writer* jw);
 int

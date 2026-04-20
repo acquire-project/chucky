@@ -95,3 +95,22 @@ platform_close(platform_fd fd)
 {
   CloseHandle(fd);
 }
+
+int
+platform_path_exists(const char* path)
+{
+  wchar_t wpath[4096];
+  int n = MultiByteToWideChar(
+    CP_UTF8, 0, path, -1, wpath, (int)(sizeof(wpath) / sizeof(wpath[0])));
+  if (n == 0)
+    return -1;
+
+  DWORD attrs = GetFileAttributesW(wpath);
+  if (attrs != INVALID_FILE_ATTRIBUTES)
+    return 1;
+
+  DWORD err = GetLastError();
+  if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+    return 0;
+  return -1;
+}

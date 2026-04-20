@@ -78,3 +78,43 @@ struct tile_stream_status
   int pool_current;
   int flush_pending;
 };
+
+// Why tile_stream_{gpu,cpu}_advise_layout returned non-zero.
+enum advise_layout_reason
+{
+  ADVISE_OK = 0,
+  ADVISE_INVALID_CONFIG,       // memory_estimate or shard-geometry rejected
+                               // the configuration as malformed
+  ADVISE_MIN_SHARD_TOO_SMALL,  // min_shard_bytes < chunk_bytes (phase 2)
+  ADVISE_BUDGET_EXCEEDED,      // no (chunk, K) combination fits budget
+  ADVISE_PARTS_LIMIT_EXCEEDED, // chunks_per_shard_total > MAX_PARTS_PER_SHARD
+  ADVISE_CHUNK_BUDGET_INFEASIBLE, // dims_budget_chunk_bytes rejected input
+                                  // (pinned dims > budget, or target < bpe)
+};
+
+// Optional diagnostic out-param for advise_layout. Caller may pass NULL.
+// On failure, reason is set and the other fields describe the last iteration
+// the solver tried (closest to min_chunk_bytes). Units: bytes unless noted.
+struct advise_layout_diagnostic
+{
+  enum advise_layout_reason reason;
+  size_t floor_chunk_bytes;        // effective floor: max(min_chunk_bytes, bpe)
+  size_t chunk_bytes;              // per-chunk bytes at the failing iteration
+  uint32_t epochs_per_batch;       // K at failure
+  size_t device_bytes;             // BUDGET_EXCEEDED: memory needed at failure
+                                   // (device_bytes on GPU, heap_bytes on CPU)
+  size_t budget_bytes;             // caller's budget (echoed)
+  uint64_t chunks_per_shard_total; // PARTS_LIMIT_EXCEEDED: observed total
+  uint64_t parts_limit;            // PARTS_LIMIT_EXCEEDED: MAX_PARTS_PER_SHARD
+
+  // Soft-constraint status (populated on success; ADVISE_OK). Caller compares
+  // against their requested target/floor to detect when the solver compromised.
+  uint64_t actual_concurrent_shards; // Π shards[d] for inner dims (may exceed
+                                     // target_concurrent_shards — soft)
+  size_t actual_shard_bytes;         // chunk_bytes · chunks_per_shard_total
+                                     // (may be < min_shard_bytes — soft)
+  uint8_t min_append_shards_overrode_min_shard_bytes; // 1 if both knobs were
+                                                      // set (min_append_shards
+                                                      // > 1 wins, floor may be
+                                                      // unmet), else 0
+};

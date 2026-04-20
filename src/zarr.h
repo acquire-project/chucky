@@ -23,7 +23,7 @@ struct zarr_array;
 
 // Create a zarr v3 array.
 // Writes {prefix}/zarr.json. Does NOT write root or intermediate groups.
-// The caller must ensure the prefix directory exists (via zarr_write_group
+// The caller must ensure the prefix directory exists (via zarr_group_create
 // or the higher-level ngff/hcs layers).
 // prefix may be "" to write at the store root.
 // Returns NULL on error.
@@ -32,6 +32,8 @@ zarr_array_create(struct store* store,
                   const char* prefix,
                   const struct zarr_array_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// zarr_array_flush_metadata before destroy if you need to detect failures.
 void
 zarr_array_destroy(struct zarr_array* a);
 
@@ -52,11 +54,43 @@ zarr_array_pending_bytes(const struct zarr_array* a);
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);
 
-// Write a zarr v3 group zarr.json at the given key.
-// attributes_json: raw JSON string for the "attributes" field.
-//   If NULL, writes an empty attributes object.
-// Returns 0 on success, non-zero on error.
+// Attach a custom JSON attribute to the array's zarr.json under
+// attributes.<attr_key>. Value is validated and copied. attr_key must be
+// non-empty and contain no quotes or control chars. Becomes visible on the
+// next metadata rewrite (shape advance, explicit flush, or destroy).
+// Replaces any prior value for the same key. Returns 0 on success.
 int
-zarr_write_group(struct store* store,
-                 const char* key,
-                 const char* attributes_json);
+zarr_array_set_attribute(struct zarr_array* a,
+                         const char* attr_key,
+                         const char* json_value);
+
+// Force the array's zarr.json to be rewritten now with current shape and
+// buffered attributes.
+int
+zarr_array_flush_metadata(struct zarr_array* a);
+
+// --- Group handle ---
+
+struct zarr_group;
+
+// Create a zarr v3 group handle. Writes an initial zarr.json (empty
+// attributes) at the given key. key may be "" to write at store root.
+// Returns NULL on error.
+struct zarr_group*
+zarr_group_create(struct store* store, const char* key);
+
+// Destroy a group handle. Auto-flushes pending metadata best-effort; ignores
+// flush errors. Call zarr_group_flush_metadata before destroy if you need to
+// detect failures.
+void
+zarr_group_destroy(struct zarr_group* g);
+
+// Buffer a custom attribute on the group. Rewrite on flush or destroy.
+int
+zarr_group_set_attribute(struct zarr_group* g,
+                         const char* attr_key,
+                         const char* json_value);
+
+// Force the group's zarr.json to be rewritten now.
+int
+zarr_group_flush_metadata(struct zarr_group* g);

@@ -915,6 +915,90 @@ Fail:
   return 1;
 }
 
+// ---- Test: flush is idempotent after writer reaches `finished` ----
+//
+// Once the writer has reached capacity and been finalized (either by an
+// explicit `flush()` or by the destructor's auto-flush), subsequent `flush()`
+// and `update()` calls must be no-ops — not re-finalize already-finalized
+// shards. A prior bug caused the destructor's follow-up flush to deadlock
+// on Windows against an already-finalized sink.
+static int
+test_flush_idempotent_after_finished(void)
+{
+  log_info("=== test_flush_idempotent_after_finished ===");
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+
+  // 2D 4x4 u8: epoch_elements=8, 2 epochs, max_cursor=16.
+  struct dimension dims[2];
+  struct tile_stream_configuration config = make_2d_config(dims, dtype_u8);
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_cpu* ms =
+    multiarray_tile_stream_cpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
+
+  // Fill exactly max_cursor. Cursor reaches the cap; loop exits naturally.
+  // Batch flushes on epoch boundaries finalize complete shards during the
+  // append; partial shards wait for an explicit flush or destroy.
+  CHECK(Fail, write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
+  const int finalize_after_fill = sink.finalize_count;
+  const int open_after_fill = sink.open_count;
+
+  // Probing one more element finds the stream at capacity; it refuses the
+  // write and reports `finished` with the input untouched.
+  {
+    uint8_t extra = 0;
+    struct slice sl = { .beg = &extra, .end = &extra + 1 };
+    struct multiarray_writer_result r = w->update(w, 0, sl);
+    CHECK(Fail, r.error == multiarray_writer_finished);
+    CHECK(Fail, r.rest.beg == sl.beg); // nothing consumed
+  }
+  CHECK(Fail, sink.finalize_count == finalize_after_fill);
+  CHECK(Fail, sink.open_count == open_after_fill);
+
+  // Explicit flush runs the terminal flush. For this config all shards
+  // already finalized during the append, so no new opens/finalizes occur.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  const int finalize_after_flush = sink.finalize_count;
+  const int open_after_flush = sink.open_count;
+
+  // Second flush — idempotent: no new sink calls.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count == finalize_after_flush);
+  CHECK(Fail, sink.open_count == open_after_flush);
+
+  // Further updates still report finished with full input unconsumed, and
+  // do not touch the sink.
+  {
+    uint8_t extra = 0;
+    struct slice sl = { .beg = &extra, .end = &extra + 1 };
+    struct multiarray_writer_result r = w->update(w, 0, sl);
+    CHECK(Fail, r.error == multiarray_writer_finished);
+    CHECK(Fail, r.rest.beg == sl.beg);
+  }
+  CHECK(Fail, sink.finalize_count == finalize_after_flush);
+  CHECK(Fail, sink.open_count == open_after_flush);
+
+  // Destroy runs another auto-flush, also idempotent.
+  multiarray_tile_stream_cpu_destroy(ms);
+  CHECK(Fail, sink.finalize_count == finalize_after_flush);
+  CHECK(Fail, sink.open_count == open_after_flush);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- Test: metrics enabled ----
 
 static int
@@ -981,6 +1065,7 @@ main(int ac, char* av[])
   rc |= test_mixed_lod();
   rc |= test_write_past_max_cursor();
   rc |= test_flush_no_data();
+  rc |= test_flush_idempotent_after_finished();
   rc |= test_metrics_enabled();
   return rc;
 }

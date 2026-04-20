@@ -1,3 +1,4 @@
+#include "chucky_log.h"
 #include "stream/config.h"
 #include "util/prelude.h"
 
@@ -18,15 +19,12 @@ struct warn_state
 };
 
 static void
-warn_callback(log_Event* ev)
+warn_callback(const chucky_log_event* ev, void* udata)
 {
-  struct warn_state* st = (struct warn_state*)ev->udata;
-  if (ev->level == LOG_WARN) {
-    char buf[256];
-    vsnprintf(buf, sizeof(buf), ev->fmt, ev->ap);
-    if (strstr(buf, "LZ4 raw block format is not interoperable"))
-      st->saw_lz4_warning = 1;
-  }
+  struct warn_state* st = (struct warn_state*)udata;
+  if (ev->level == CHUCKY_LOG_WARN &&
+      strstr(ev->msg, "LZ4 raw block format is not interoperable"))
+    st->saw_lz4_warning = 1;
 }
 
 static int
@@ -35,7 +33,7 @@ test_lz4_non_standard_warns(void)
   log_info("=== test_lz4_non_standard_warns ===");
 
   struct warn_state state = { 0 };
-  log_add_callback(warn_callback, &state, LOG_WARN);
+  chucky_log_add_callback(warn_callback, &state, CHUCKY_LOG_WARN);
 
   struct dimension dims[3];
   uint64_t sizes[] = { 0, 64, 64 };

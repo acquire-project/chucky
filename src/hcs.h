@@ -30,6 +30,8 @@ struct hcs_plate;
 struct hcs_plate*
 hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg);
 
+// Auto-flushes pending metadata best-effort; ignores flush errors. Call
+// hcs_plate_flush_metadata before destroy if you need to detect failures.
 void
 hcs_plate_destroy(struct hcs_plate* p);
 
@@ -38,3 +40,30 @@ hcs_plate_destroy(struct hcs_plate* p);
 // Returns NULL if the well is not active or indices are out of range.
 struct shard_sink*
 hcs_plate_fov_sink(struct hcs_plate* p, int row, int col, int fov);
+
+// Buffer a custom attribute on the plate group.
+int
+hcs_plate_set_attribute(struct hcs_plate* p,
+                        const char* attr_key,
+                        const char* json_value);
+
+// Buffer a custom attribute on a well group.
+int
+hcs_plate_set_well_attribute(struct hcs_plate* p,
+                             int row,
+                             int col,
+                             const char* attr_key,
+                             const char* json_value);
+
+// Buffer a custom attribute on a single FOV's multiscale group.
+int
+hcs_plate_set_fov_attribute(struct hcs_plate* p,
+                            int row,
+                            int col,
+                            int fov,
+                            const char* attr_key,
+                            const char* json_value);
+
+// Force rewrite of all dirty plate/well/FOV group zarr.json files.
+int
+hcs_plate_flush_metadata(struct hcs_plate* p);

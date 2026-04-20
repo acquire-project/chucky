@@ -32,6 +32,7 @@ struct test_ctx
   struct batch_state batch;
   struct stream_metrics metrics;
   struct lod_state lod;
+  struct lod_shared_state lod_shared;
   struct platform_clock metadata_clock;
   int ca_inited;
   int d2h_inited;
@@ -103,6 +104,7 @@ test_ctx_setup(struct test_ctx* c,
   c->metrics.lod_gather = mk_stream_metric("LOD Gather");
 
   memset(&c->lod, 0, sizeof(c->lod));
+  memset(&c->lod_shared, 0, sizeof(c->lod_shared));
   memset(&c->metadata_clock, 0, sizeof(c->metadata_clock));
 
   return 0;
@@ -161,6 +163,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                              config,
                                              sink,
                                              &c->lod,
+                                             &c->lod_shared,
                                              &c->metrics,
                                              &c->metadata_clock);
   CHECK(Fail, r.error == 0);
