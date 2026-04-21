@@ -133,7 +133,7 @@ add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_driver CUDA::cudart_static aggregate index_ops_util)
 
-add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata chucky_log)
+add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group test_platform chucky_log)
 add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api test_platform chucky_log)
@@ -162,6 +162,7 @@ add_gpu_test_exe(test_flush_orch  test_flush_orchestration.c LINKS CUDA::cuda_dr
 add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_log)
 add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension platform chucky_log)
 add_test_exe(test_chucky_log  test_chucky_log.c  chucky_log)
+add_test_exe(test_strbuf      test_strbuf.c      strbuf chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)
 add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data test_shard_sink)

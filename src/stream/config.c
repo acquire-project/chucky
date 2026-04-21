@@ -134,11 +134,12 @@ Fail:
 }
 
 // Validate a tile_stream_configuration.
-// On success, stores the resolved dim partition in *di.
-// Returns 0 on success, non-zero on invalid config.
+// On success, stores the resolved dim partition in *di (slices point into
+// dims). Returns 0 on success, non-zero on invalid config.
 static int
 validate_config(const struct tile_stream_configuration* config,
-                struct dim_info* di)
+                struct dim_info* di,
+                const struct dimension* dims)
 {
   CHECK(Fail, config);
   CHECK(Fail, dtype_bpe(config->dtype) > 0);
@@ -153,12 +154,12 @@ validate_config(const struct tile_stream_configuration* config,
   }
 
   // dim_info_init validates dims and computes the partition.
-  CHECK(Fail, dim_info_init(di, config->dimensions, config->rank) == 0);
+  CHECK(Fail, dim_info_init(di, dims, config->rank) == 0);
 
   {
     uint64_t chunk_elements = 1;
     for (int d = 0; d < config->rank; ++d)
-      chunk_elements *= config->dimensions[d].chunk_size;
+      chunk_elements *= dims[d].chunk_size;
     if (chunk_elements <= 1)
       log_warn("total chunk elements is %llu (chunk_size=1 in all dims?)",
                (unsigned long long)chunk_elements);
@@ -186,7 +187,7 @@ validate_config(const struct tile_stream_configuration* config,
 
   {
     uint8_t na = dim_info_n_append(di);
-    if (resolve_storage_order(config->rank, na, config->dimensions, NULL)) {
+    if (resolve_storage_order(config->rank, na, dims, NULL)) {
       log_error("invalid storage_order permutation");
       goto Fail;
     }
@@ -221,6 +222,7 @@ computed_stream_layouts_free(struct computed_stream_layouts* cl)
 {
   if (!cl)
     return;
+  dims_free_names(cl->dims_owned, cl->rank);
   lod_plan_free(&cl->plan);
 }
 
@@ -234,11 +236,14 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 {
   const uint8_t rank = config->rank;
   const size_t bytes_per_element = dtype_bpe(config->dtype);
-  const struct dimension* dims = config->dimensions;
 
   memset(out, 0, sizeof(*out));
 
-  CHECK(Fail, validate_config(config, &out->dims) == 0);
+  CHECK(Fail, dims_copy(out->dims_owned, config->dimensions, rank) == 0);
+  out->rank = rank;
+  const struct dimension* dims = out->dims_owned;
+
+  CHECK(Fail, validate_config(config, &out->dims, dims) == 0);
   const uint8_t na = dim_info_n_append(&out->dims);
 
   uint8_t storage_order[HALF_MAX_RANK];

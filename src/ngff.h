@@ -22,11 +22,28 @@ enum ngff_axis_type
 struct ngff_axis
 {
   const char* unit; // axis unit (e.g. "micrometer"),
-                    // NULL defaults to "index" in metadata
+                    // NULL defaults to "index" in metadata.
+                    // Copied at ngff_multiscale_create; caller may free after.
   double scale;     // physical pixel scale for coordinateTransformations
                     // (must be non-negative; 0 treated as 1.0)
   enum ngff_axis_type type; // space, time, or channel
 };
+
+// Deep-copy rank axes from src to dst, duplicating unit strings.
+// After success, dst owns its unit strings; free with ngff_axes_free_units.
+// Returns 0 on success. On failure, frees any partial unit allocations and
+// leaves dst zero-initialized for the affected slots.
+int
+ngff_axes_copy(struct ngff_axis* dst,
+               const struct ngff_axis* src,
+               uint8_t rank);
+
+// Free unit strings previously allocated by ngff_axes_copy. Safe on
+// zero-initialized slots (free(NULL)). Does not free the array itself.
+// Only the unit pointer is owned; scale and type are plain scalars and are
+// left untouched.
+void
+ngff_axes_free_units(struct ngff_axis* axes, uint8_t rank);
 
 struct ngff_multiscale_config
 {

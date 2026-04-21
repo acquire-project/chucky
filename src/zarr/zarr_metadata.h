@@ -3,24 +3,23 @@
 #include "dimension.h"
 #include "dtype.h"
 #include "types.codec.h"
+#include "util/strbuf.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 struct attr_set;
 
-// Generate zarr v3 root group JSON into buf.
-// Returns length on success, -1 on error.
+// Append zarr v3 root group JSON to sb. Returns 0 on success.
 int
-zarr_root_json(char* buf, size_t cap);
+zarr_root_json(struct strbuf* sb);
 
-// Generate zarr v3 array JSON into buf.
+// Append zarr v3 array JSON to sb.
 // extras: optional pre-validated custom attributes to splice into the
 // "attributes" object. NULL means emit an empty object.
-// Returns length on success, -1 on error.
+// Returns 0 on success.
 int
-zarr_array_json(char* buf,
-                size_t cap,
+zarr_array_json(struct strbuf* sb,
                 uint8_t rank,
                 const struct dimension* dimensions,
                 enum dtype data_type,

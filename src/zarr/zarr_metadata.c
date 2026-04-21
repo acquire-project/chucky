@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char*
@@ -33,10 +34,10 @@ dtype_zarr_string(enum dtype dt)
 }
 
 int
-zarr_root_json(char* buf, size_t cap)
+zarr_root_json(struct strbuf* sb)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw);
   jw_key(&jw, "zarr_format");
@@ -50,14 +51,11 @@ zarr_root_json(char* buf, size_t cap)
   jw_object_end(&jw);
   jw_object_end(&jw);
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }
 
 int
-zarr_array_json(char* buf,
-                size_t cap,
+zarr_array_json(struct strbuf* sb,
                 uint8_t rank,
                 const struct dimension* dimensions,
                 enum dtype data_type,
@@ -67,7 +65,7 @@ zarr_array_json(char* buf,
                 const struct attr_set* extras)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw);
 
@@ -236,9 +234,7 @@ zarr_array_json(char* buf,
 
   jw_object_end(&jw);
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }
 
 int
@@ -250,7 +246,7 @@ zarr_for_each_intermediate(const char* array_name,
     return 0;
 
   size_t len = strlen(array_name);
-  if (len == 0 || len >= 4096)
+  if (len == 0)
     return -1;
 
   // Reject leading slash, trailing slash, or empty segments (//)
@@ -259,19 +255,25 @@ zarr_for_each_intermediate(const char* array_name,
   if (strstr(array_name, "//"))
     return -1;
 
-  char name[4096];
+  // Mutable scratch copy so we can temporarily NUL-terminate at each slash.
+  char* name = (char*)malloc(len + 1);
+  if (!name)
+    return -1;
   memcpy(name, array_name, len + 1);
 
+  int rc = 0;
   for (size_t i = 0; i < len; ++i) {
     if (name[i] == '/') {
       name[i] = '\0';
-      int rc = fn(name, ctx);
+      rc = fn(name, ctx);
       name[i] = '/';
       if (rc != 0)
-        return rc;
+        break;
     }
   }
-  return 0;
+
+  free(name);
+  return rc;
 }
 
 int

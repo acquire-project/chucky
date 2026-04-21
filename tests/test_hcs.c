@@ -39,30 +39,31 @@ test_plate_metadata(void)
 {
   log_info("=== test_plate_metadata ===");
 
-  char buf[8192];
-  int len =
-    hcs_plate_attributes_json(
-      buf, sizeof(buf), "myplate", 2, 3, NULL, 2, NULL, NULL);
-  CHECK(Fail, len > 0);
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail,
+        hcs_plate_attributes_json(&sb, "myplate", 2, 3, NULL, 2, NULL, NULL) ==
+          0);
 
-  CHECK(Fail, strstr(buf, "\"name\":\"myplate\""));
-  CHECK(Fail, strstr(buf, "\"field_count\":2"));
-  CHECK(Fail, strstr(buf, "\"version\":\"0.5\""));
+  const char* s = strbuf_cstr(&sb);
+  CHECK(Fail, strstr(s, "\"name\":\"myplate\""));
+  CHECK(Fail, strstr(s, "\"field_count\":2"));
+  CHECK(Fail, strstr(s, "\"version\":\"0.5\""));
   // Check rows A, B
-  CHECK(Fail, strstr(buf, "{\"name\":\"A\"}"));
-  CHECK(Fail, strstr(buf, "{\"name\":\"B\"}"));
+  CHECK(Fail, strstr(s, "{\"name\":\"A\"}"));
+  CHECK(Fail, strstr(s, "{\"name\":\"B\"}"));
   // Check columns 1, 2, 3
-  CHECK(Fail, strstr(buf, "{\"name\":\"1\"}"));
-  CHECK(Fail, strstr(buf, "{\"name\":\"3\"}"));
+  CHECK(Fail, strstr(s, "{\"name\":\"1\"}"));
+  CHECK(Fail, strstr(s, "{\"name\":\"3\"}"));
   // Check a well path
-  CHECK(Fail, strstr(buf, "\"path\":\"A/1\""));
-  CHECK(Fail, strstr(buf, "\"path\":\"B/3\""));
+  CHECK(Fail, strstr(s, "\"path\":\"A/1\""));
+  CHECK(Fail, strstr(s, "\"path\":\"B/3\""));
 
+  strbuf_free(&sb);
   log_info("  PASS");
   return 0;
 Fail:
-  log_error("  FAIL: %.*s", len > 0 ? len : 0, buf);
+  log_error("  FAIL: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
@@ -73,20 +74,21 @@ test_well_metadata(void)
 {
   log_info("=== test_well_metadata ===");
 
-  char buf[4096];
-  int len = hcs_well_attributes_json(buf, sizeof(buf), 3, NULL);
-  CHECK(Fail, len > 0);
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail, hcs_well_attributes_json(&sb, 3, NULL) == 0);
 
-  CHECK(Fail, strstr(buf, "\"well\""));
-  CHECK(Fail, strstr(buf, "\"images\""));
-  CHECK(Fail, strstr(buf, "{\"path\":\"0\",\"acquisition\":0}"));
-  CHECK(Fail, strstr(buf, "{\"path\":\"2\",\"acquisition\":0}"));
+  const char* s = strbuf_cstr(&sb);
+  CHECK(Fail, strstr(s, "\"well\""));
+  CHECK(Fail, strstr(s, "\"images\""));
+  CHECK(Fail, strstr(s, "{\"path\":\"0\",\"acquisition\":0}"));
+  CHECK(Fail, strstr(s, "{\"path\":\"2\",\"acquisition\":0}"));
 
+  strbuf_free(&sb);
   log_info("  PASS");
   return 0;
 Fail:
-  log_error("  FAIL: %.*s", len > 0 ? len : 0, buf);
+  log_error("  FAIL: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
@@ -284,22 +286,23 @@ test_plate_metadata_with_mask(void)
   log_info("=== test_plate_metadata_with_mask ===");
 
   int mask[] = { 1, 0, 0, 1 };
-  char buf[8192];
-  int len =
-    hcs_plate_attributes_json(buf, sizeof(buf), "p", 2, 2, NULL, 1, mask, NULL);
-  CHECK(Fail, len > 0);
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail,
+        hcs_plate_attributes_json(&sb, "p", 2, 2, NULL, 1, mask, NULL) == 0);
 
+  const char* s = strbuf_cstr(&sb);
   // Only wells A/1 and B/2 should be present
-  CHECK(Fail, strstr(buf, "\"path\":\"A/1\""));
-  CHECK(Fail, strstr(buf, "\"path\":\"B/2\""));
+  CHECK(Fail, strstr(s, "\"path\":\"A/1\""));
+  CHECK(Fail, strstr(s, "\"path\":\"B/2\""));
   // Inactive wells should NOT be present
-  CHECK(Fail, !strstr(buf, "\"path\":\"A/2\""));
-  CHECK(Fail, !strstr(buf, "\"path\":\"B/1\""));
+  CHECK(Fail, !strstr(s, "\"path\":\"A/2\""));
+  CHECK(Fail, !strstr(s, "\"path\":\"B/1\""));
 
+  strbuf_free(&sb);
   log_info("  PASS");
   return 0;
 Fail:
+  strbuf_free(&sb);
   log_error("  FAIL");
   return 1;
 }

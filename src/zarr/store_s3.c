@@ -1,38 +1,41 @@
 #include "zarr/store_s3.h"
 #include "defs.limits.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/s3_client.h"
 #include "zarr/shard_pool_s3.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 struct store_s3
 {
   struct store base;
   struct s3_client* client;
-  char bucket[256];
-  char prefix[4096]; // "" if no prefix
+  struct strbuf bucket; // owned
+  struct strbuf prefix; // owned; empty if no prefix
 };
 
-// Build a full S3 key: "prefix/key" or just "key" if no prefix.
-static void
-s3_full_key(const struct store_s3* s, const char* key, char* out, size_t cap)
+// Build a full S3 key ("prefix/key" or just "key") into out. Caller frees.
+// Returns 0 on success.
+static int
+s3_full_key(const struct store_s3* s, const char* key, struct strbuf* out)
 {
-  if (s->prefix[0])
-    snprintf(out, cap, "%s/%s", s->prefix, key);
-  else
-    snprintf(out, cap, "%s", key);
+  if (strbuf_len(&s->prefix) > 0)
+    return strbuf_appendf(out, "%s/%s", strbuf_cstr(&s->prefix), key);
+  return strbuf_append_cstr(out, key);
 }
 
 static int
 s3_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
-  char full[4096];
-  s3_full_key(s, key, full, sizeof(full));
-  return s3_client_put(s->client, s->bucket, full, data, len);
+  struct strbuf full = { 0 };
+  int rc = 1;
+  if (s3_full_key(s, key, &full) == 0)
+    rc = s3_client_put(
+      s->client, strbuf_cstr(&s->bucket), strbuf_cstr(&full), data, len);
+  strbuf_free(&full);
+  return rc;
 }
 
 static int
@@ -47,16 +50,26 @@ static struct shard_pool*
 s3_create_pool(struct store* self, uint64_t nslots)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
-  return shard_pool_s3_create(s->client, s->bucket, s->prefix, nslots);
+  return shard_pool_s3_create(
+    s->client, strbuf_cstr(&s->bucket), strbuf_cstr(&s->prefix), nslots);
 }
 
 static int
 s3_has_existing_data(struct store* self)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
-  char full[4096];
-  s3_full_key(s, "zarr.json", full, sizeof(full));
-  return s3_client_head(s->client, s->bucket, full);
+  struct strbuf full = { 0 };
+  int rc = 0;
+  if (s3_full_key(s, "zarr.json", &full)) {
+    // Fail closed: assume data may exist so the caller doesn't silently
+    // overwrite a live dataset on transient OOM.
+    log_error("store_s3: failed to build key for existence check");
+    rc = 1;
+  } else {
+    rc = s3_client_head(s->client, strbuf_cstr(&s->bucket), strbuf_cstr(&full));
+  }
+  strbuf_free(&full);
+  return rc;
 }
 
 static void
@@ -64,6 +77,8 @@ s3_destroy(struct store* self)
 {
   struct store_s3* s = container_of(self, struct store_s3, base);
   s3_client_destroy(s->client);
+  strbuf_free(&s->bucket);
+  strbuf_free(&s->prefix);
   free(s);
 }
 
@@ -96,12 +111,16 @@ store_s3_create(const struct store_s3_config* cfg)
   s->base.create_pool = s3_create_pool;
   s->base.has_existing_data = s3_has_existing_data;
   s->base.destroy = s3_destroy;
-  snprintf(s->bucket, sizeof(s->bucket), "%s", cfg->bucket);
-  if (cfg->prefix)
-    snprintf(s->prefix, sizeof(s->prefix), "%s", cfg->prefix);
+  CHECK(Fail_client, strbuf_set(&s->bucket, cfg->bucket) == 0);
+  if (cfg->prefix && cfg->prefix[0])
+    CHECK(Fail_client, strbuf_set(&s->prefix, cfg->prefix) == 0);
 
   return &s->base;
 
+Fail_client:
+  s3_client_destroy(s->client);
+  strbuf_free(&s->bucket);
+  strbuf_free(&s->prefix);
 Fail_alloc:
   free(s);
 Fail:

@@ -8,8 +8,7 @@
 #include <stdio.h>
 
 int
-ngff_multiscale_group_json(char* buf,
-                           size_t cap,
+ngff_multiscale_group_json(struct strbuf* sb,
                            uint8_t rank,
                            int nlod,
                            const struct dimension* const* level_dims,
@@ -17,7 +16,7 @@ ngff_multiscale_group_json(char* buf,
                            const struct attr_set* extras)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   const struct dimension* l0 = level_dims[0];
 
@@ -154,7 +153,5 @@ ngff_multiscale_group_json(char* buf,
   jw_object_end(&jw); // attributes
   jw_object_end(&jw); // root
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }

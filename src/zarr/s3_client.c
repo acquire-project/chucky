@@ -1,5 +1,6 @@
 #include "zarr/s3_client.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 
 #include <aws/auth/credentials.h>
 #include <aws/common/byte_buf.h>
@@ -266,11 +267,15 @@ make_request_message(struct aws_allocator* alloc,
   aws_http_message_set_request_method(msg, aws_byte_cursor_from_c_str(method));
 
   // Build path and Host header
-  char path[4096];
+  struct strbuf path = { 0 };
+  struct strbuf host = { 0 };
+  char cl[32];
   if (c->has_endpoint) {
     // Path-style: /{bucket}/{key}
-    snprintf(path, sizeof(path), "/%s/%s", bucket, key);
-    aws_http_message_set_request_path(msg, aws_byte_cursor_from_c_str(path));
+    if (strbuf_appendf(&path, "/%s/%s", bucket, key))
+      goto HeaderFail;
+    aws_http_message_set_request_path(
+      msg, aws_byte_cursor_from_c_str(strbuf_cstr(&path)));
 
     const struct aws_byte_cursor* authority =
       aws_uri_authority(&c->endpoint_uri);
@@ -280,24 +285,23 @@ make_request_message(struct aws_allocator* alloc,
                                 .value = *authority });
   } else {
     // Virtual-hosted style: /{key}, Host: {bucket}.s3.{region}.amazonaws.com
-    snprintf(path, sizeof(path), "/%s", key);
-    aws_http_message_set_request_path(msg, aws_byte_cursor_from_c_str(path));
+    if (strbuf_appendf(&path, "/%s", key))
+      goto HeaderFail;
+    aws_http_message_set_request_path(
+      msg, aws_byte_cursor_from_c_str(strbuf_cstr(&path)));
 
-    char host[512];
-    snprintf(host,
-             sizeof(host),
-             "%s.s3.%s.amazonaws.com",
-             bucket,
-             aws_string_c_str(c->region));
+    if (strbuf_appendf(
+          &host, "%s.s3.%s.amazonaws.com", bucket, aws_string_c_str(c->region)))
+      goto HeaderFail;
     aws_http_message_add_header(
       msg,
-      (struct aws_http_header){ .name = aws_byte_cursor_from_c_str("Host"),
-                                .value = aws_byte_cursor_from_c_str(host) });
+      (struct aws_http_header){
+        .name = aws_byte_cursor_from_c_str("Host"),
+        .value = aws_byte_cursor_from_c_str(strbuf_cstr(&host)) });
   }
 
   // Content-Length (only for small puts where we know the size)
   if (content_length > 0) {
-    char cl[32];
     snprintf(cl, sizeof(cl), "%zu", content_length);
     aws_http_message_add_header(
       msg,
@@ -306,7 +310,17 @@ make_request_message(struct aws_allocator* alloc,
                                 .value = aws_byte_cursor_from_c_str(cl) });
   }
 
+  // Headers copy the byte ranges they reference, so it's safe to free these
+  // strbufs now.
+  strbuf_free(&path);
+  strbuf_free(&host);
   return msg;
+
+HeaderFail:
+  strbuf_free(&path);
+  strbuf_free(&host);
+  aws_http_message_release(msg);
+  return NULL;
 }
 
 // --- s3_client_put (small blocking PUT) ---

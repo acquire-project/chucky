@@ -1,13 +1,13 @@
 #include "zarr/zarr_array.h"
 #include "defs.limits.h"
+#include "dimension.h"
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/attr_set.h"
 #include "zarr/zarr_metadata.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 struct zarr_array
 {
@@ -15,7 +15,7 @@ struct zarr_array
   struct store* store;     // borrowed
   struct shard_pool* pool; // borrowed or owned (see owns_pool)
   int owns_pool;
-  char prefix[4096];
+  struct strbuf prefix; // owned
 
   uint8_t rank;
   uint64_t shard_counts[MAX_ZARR_RANK];
@@ -38,46 +38,36 @@ struct zarr_array
 static int
 write_array_metadata(struct zarr_array* a)
 {
-  char key[4096];
-  int n;
-  if (a->prefix[0])
-    n = snprintf(key, sizeof(key), "%s/zarr.json", a->prefix);
-  else
-    n = snprintf(key, sizeof(key), "zarr.json");
-  (void)n;
+  struct strbuf key = { 0 };
+  struct strbuf json = { 0 };
+  int rc = 1;
 
-  // Size the buffer generously to fit custom attributes of arbitrary size.
-  size_t attr_bytes = 0;
-  for (size_t i = 0; i < a->attrs.count; ++i) {
-    attr_bytes += strlen(a->attrs.items[i].key);
-    attr_bytes += strlen(a->attrs.items[i].json_value);
-    attr_bytes += 16; // quotes, colon, comma, slack
+  if (strbuf_len(&a->prefix) > 0) {
+    if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&a->prefix)))
+      goto done;
+  } else {
+    if (strbuf_append_cstr(&key, "zarr.json"))
+      goto done;
   }
-  size_t cap = 4096 + attr_bytes;
-  // calloc zeroes tail bytes so a NUL-scan can clamp the write length if
-  // the JSON writer's pos ever overcounts (guards against platform-specific
-  // vsnprintf quirks — see #96).
-  char* buf = (char*)calloc(1, cap);
-  if (!buf)
-    return 1;
-  int len = zarr_array_json(buf,
-                            cap,
-                            a->rank,
-                            a->dimensions,
-                            a->data_type,
-                            a->fill_value,
-                            a->chunks_per_shard,
-                            a->codec,
-                            &a->attrs);
-  if (len < 0) {
-    free(buf);
-    return 1;
-  }
-  size_t write_len = strnlen(buf, (size_t)len);
-  int rc = a->store->put(a->store, key, buf, write_len);
-  free(buf);
+
+  if (zarr_array_json(&json,
+                      a->rank,
+                      a->dimensions,
+                      a->data_type,
+                      a->fill_value,
+                      a->chunks_per_shard,
+                      a->codec,
+                      &a->attrs))
+    goto done;
+
+  rc = a->store->put(
+    a->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
   if (rc == 0)
     a->attrs.dirty = 0;
+
+done:
+  strbuf_free(&key);
+  strbuf_free(&json);
   return rc;
 }
 
@@ -99,15 +89,17 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     return NULL;
   }
 
-  char key[4096];
-  int n;
-  if (a->prefix[0])
-    n = snprintf(key, sizeof(key), "%s/%s", a->prefix, suffix);
+  struct strbuf key = { 0 };
+  int ok;
+  if (strbuf_len(&a->prefix) > 0)
+    ok = strbuf_appendf(&key, "%s/%s", strbuf_cstr(&a->prefix), suffix) == 0;
   else
-    n = snprintf(key, sizeof(key), "%s", suffix);
-  (void)n;
+    ok = strbuf_append_cstr(&key, suffix) == 0;
 
-  return a->pool->open(a->pool, slot, key);
+  struct shard_writer* w =
+    ok ? a->pool->open(a->pool, slot, strbuf_cstr(&key)) : NULL;
+  strbuf_free(&key);
+  return w;
 }
 
 static int
@@ -135,7 +127,8 @@ zarr_array_update_append(struct shard_sink* self,
     a->dimensions[d].size = append_sizes[d];
 
   if (write_array_metadata(a)) {
-    log_error("zarr_array: failed to rewrite zarr.json for %s", a->prefix);
+    log_error("zarr_array: failed to rewrite zarr.json for %s",
+              strbuf_cstr(&a->prefix));
     return 1;
   }
   return 0;
@@ -206,11 +199,11 @@ zarr_array_init(struct store* store,
   a->codec = cfg->codec;
   attr_set_init(&a->attrs);
 
-  if (prefix)
-    snprintf(a->prefix, sizeof(a->prefix), "%s", prefix);
+  if (prefix && prefix[0])
+    CHECK(Fail_alloc, strbuf_set(&a->prefix, prefix) == 0);
 
+  CHECK(Fail_alloc, dims_copy(a->dimensions, cfg->dimensions, cfg->rank) == 0);
   for (int d = 0; d < cfg->rank; ++d) {
-    a->dimensions[d] = cfg->dimensions[d];
     a->shard_counts[d] = shard_counts[d];
     a->chunks_per_shard[d] = chunks_per_shard[d];
   }
@@ -229,6 +222,8 @@ zarr_array_init(struct store* store,
   return a;
 
 Fail_alloc:
+  dims_free_names(a->dimensions, cfg->rank);
+  strbuf_free(&a->prefix);
   free(a);
 Fail:
   return NULL;
@@ -302,6 +297,8 @@ zarr_array_destroy(struct zarr_array* a)
   if (a->attrs.dirty)
     write_array_metadata(a);
   attr_set_destroy(&a->attrs);
+  dims_free_names(a->dimensions, a->rank);
+  strbuf_free(&a->prefix);
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);
   if (pool)

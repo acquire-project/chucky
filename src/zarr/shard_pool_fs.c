@@ -2,10 +2,10 @@
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/io_queue.h"
 
 #include <stdatomic.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -193,7 +193,7 @@ struct shard_pool_fs
   struct fs_slot* slots;
   uint64_t nslots;
   int unbuffered;
-  char root[4096];
+  struct strbuf root; // owned
   uint64_t queued_bytes;
   _Atomic uint64_t retired_bytes;
   _Atomic int io_error;
@@ -211,33 +211,35 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   if (w->fd != PLATFORM_FD_INVALID)
     fs_slot_finalize(&w->base);
 
-  // Build full path
-  char path[4096];
-  int n = snprintf(path, sizeof(path), "%s/%s", p->root, key);
-  (void)n;
+  struct strbuf path = { 0 };
+  if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
+    goto Fail;
 
   int flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
-  w->fd = platform_open_write(path, flags);
+  w->fd = platform_open_write(strbuf_cstr(&path), flags);
   if (w->fd == PLATFORM_FD_INVALID) {
-    // Directory may not exist yet — create parent and retry
-    char dir[4096];
-    size_t pathlen = strlen(path);
-    memcpy(dir, path, pathlen + 1);
-    char* last_slash = strrchr(dir, '/');
+    // Directory may not exist yet — create parent and retry.
+    const char* path_cstr = strbuf_cstr(&path);
+    const char* last_slash = strrchr(path_cstr, '/');
     if (last_slash) {
-      *last_slash = '\0';
-      if (platform_mkdirp(dir) == 0)
-        w->fd = platform_open_write(path, flags);
+      struct strbuf dir = { 0 };
+      if (strbuf_append(&dir, path_cstr, (size_t)(last_slash - path_cstr)) ==
+            0 &&
+          platform_mkdirp(strbuf_cstr(&dir)) == 0)
+        w->fd = platform_open_write(strbuf_cstr(&path), flags);
+      strbuf_free(&dir);
     }
     if (w->fd == PLATFORM_FD_INVALID) {
-      log_error("shard_pool_fs: open(%s) failed", path);
+      log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&path));
       goto Fail;
     }
   }
 
+  strbuf_free(&path);
   return &w->base;
 
 Fail:
+  strbuf_free(&path);
   return NULL;
 }
 
@@ -307,6 +309,7 @@ pool_fs_destroy(struct shard_pool* self)
   }
 
   free(p->slots);
+  strbuf_free(&p->root);
   free(p);
 }
 
@@ -345,7 +348,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->base.destroy = pool_fs_destroy;
   p->nslots = nslots;
   p->unbuffered = unbuffered;
-  snprintf(p->root, sizeof(p->root), "%s", root);
+  CHECK(Fail_alloc, strbuf_set(&p->root, root) == 0);
 
   p->queue = io_queue_create();
   CHECK(Fail_alloc, p->queue);
@@ -372,6 +375,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
 Fail_queue:
   io_queue_destroy(p->queue);
 Fail_alloc:
+  strbuf_free(&p->root);
   free(p);
 Fail:
   return NULL;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "defs.limits.h"
+#include "dimension.h"
 #include "lod/lod_plan.h"
 #include "stream/dim_info.h"
 #include "stream/types.aggregate.h"
@@ -34,9 +36,16 @@ struct level_layout_info
 // All pre-computed layout data from CPU-only math.
 // Produced by compute_stream_layouts, consumed by the create path
 // and the memory estimate path.
+//
+// Owns dims_owned[]: a deep copy of the caller's config.dimensions (including
+// duplicated name strings) so dim_info slices and later metadata reads don't
+// depend on the caller keeping its dimensions array alive.
 struct computed_stream_layouts
 {
-  struct dim_info dims; // resolved append/inner partition
+  struct dimension dims_owned[HALF_MAX_RANK]; // owned copy of config dims
+  uint8_t rank;
+  struct dim_info
+    dims; // resolved append/inner partition (points into dims_owned)
   struct lod_plan plan; // owned if enable_multiscale
   struct tile_stream_layout layouts[LOD_MAX_LEVELS]; // [0] = L0
   struct level_geometry levels;

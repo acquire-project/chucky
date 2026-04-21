@@ -8,9 +8,6 @@
 #define LOD_MAX_LEVELS 32
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
-// Zarr group metadata
-#define ZARR_GROUP_JSON_MAX_LENGTH 8192
-
 // S3
 #define S3_MAX_PARTS 10000
 #define S3_DEFAULT_PART_SIZE (8 * 1024 * 1024)

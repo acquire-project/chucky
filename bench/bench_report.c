@@ -222,9 +222,9 @@ print_bench_json_pass(const struct stream_metrics* m,
   const double throughput_gib = wall_s > 0 ? input_gib / wall_s : 0.0;
   const double throughput_out_gib = wall_s > 0 ? compressed_gib / wall_s : 0.0;
 
-  char json_buf[8192];
+  struct strbuf json_buf = { 0 };
   struct json_writer jw;
-  jw_init(&jw, json_buf, sizeof(json_buf));
+  jw_init(&jw, &json_buf);
 
   jw_object_begin(&jw);
   jw_key(&jw, "status");
@@ -291,18 +291,20 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_end(&jw);
 
   jw_object_end(&jw);
-  printf("%.*s\n", (int)jw_length(&jw), json_buf);
+  printf("%s\n", strbuf_cstr(&json_buf));
+  strbuf_free(&json_buf);
 }
 
 void
 print_bench_json_error(void)
 {
-  char buf[64];
+  struct strbuf buf = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &buf);
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "error");
   jw_object_end(&jw);
-  printf("%.*s\n", (int)jw_length(&jw), buf);
+  printf("%s\n", strbuf_cstr(&buf));
+  strbuf_free(&buf);
 }

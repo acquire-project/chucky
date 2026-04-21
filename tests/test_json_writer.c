@@ -2,18 +2,20 @@
 #include "ngff.h"
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 static int
 test_simple_object(void)
 {
-  char buf[256];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_object_begin(&jw);
   jw_key(&jw, "name");
@@ -29,21 +31,23 @@ test_simple_object(void)
   const char* expected =
     "{\"name\":\"hello\",\"count\":42,\"enabled\":true,\"nothing\":null}";
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, jw_length(&jw)) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_nested(void)
 {
-  char buf[256];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_object_begin(&jw);
   jw_key(&jw, "a");
@@ -61,56 +65,99 @@ test_nested(void)
 
   const char* expected = "{\"a\":[1,2,3],\"b\":{\"x\":3.14}}";
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, jw_length(&jw)) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_string_escaping(void)
 {
-  char buf[256];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_string(&jw, "hello \"world\"\nnew\tline\\back\x01");
 
   const char* expected = "\"hello \\\"world\\\"\\nnew\\tline\\\\back\\u0001\"";
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, jw_length(&jw)) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
-test_overflow(void)
+test_grows_past_inline(void)
 {
-  char buf[8];
+  // Many writes into a fresh strbuf should succeed (no fixed cap).
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
-  jw_string(&jw, "this is way too long for the buffer");
-  CHECK(Fail, jw_error(&jw));
+  jw_array_begin(&jw);
+  for (int i = 0; i < 1000; ++i)
+    jw_int(&jw, i);
+  jw_array_end(&jw);
+
+  CHECK(Fail, !jw_error(&jw));
+  // 1000 integers comma-separated, plus brackets. Easily past
+  // STRBUF_INLINE_CAP.
+  CHECK(Fail, strbuf_len(&sb) > 2000);
+  CHECK(Fail, strbuf_cstr(&sb)[0] == '[');
+  CHECK(Fail, strbuf_cstr(&sb)[strbuf_len(&sb) - 1] == ']');
+  strbuf_free(&sb);
   return 0;
 
 Fail:
+  strbuf_free(&sb);
+  return 1;
+}
+
+// Verify that jw_error is 0 on a fresh writer and that downstream writes
+// succeed cleanly. Note: actually triggering jw_error in a unit test
+// requires either injecting a strbuf OOM or forcing vsnprintf to fail —
+// neither is portable without a mock allocator. The underlying overflow
+// guard is covered by test_strbuf's test_reserve_overflow_guard; this test
+// just confirms the happy-path error flag stays clean.
+static int
+test_jw_error_clean(void)
+{
+  log_info("=== test_jw_error_clean ===");
+  struct strbuf sb = { 0 };
+  struct json_writer jw;
+  jw_init(&jw, &sb);
+  CHECK(Fail, !jw_error(&jw));
+  jw_object_begin(&jw);
+  jw_key(&jw, "k");
+  jw_string(&jw, "v");
+  jw_object_end(&jw);
+  CHECK(Fail, !jw_error(&jw));
+  CHECK(Fail, strcmp(strbuf_cstr(&sb), "{\"k\":\"v\"}") == 0);
+  strbuf_free(&sb);
+  return 0;
+Fail:
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_array_commas(void)
 {
-  char buf[128];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_array_begin(&jw);
   jw_string(&jw, "a");
@@ -120,41 +167,45 @@ test_array_commas(void)
 
   const char* expected = "[\"a\",\"b\",\"c\"]";
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, jw_length(&jw)) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_uint(void)
 {
-  char buf[64];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_uint(&jw, 18446744073709551615ULL);
 
   const char* expected = "18446744073709551615";
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, jw_length(&jw)) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_zarr_metadata(void)
 {
-  char buf[2048];
+  struct strbuf sb = { 0 };
   struct json_writer jw;
-  jw_init(&jw, buf, sizeof(buf));
+  jw_init(&jw, &sb);
 
   jw_object_begin(&jw);
   jw_key(&jw, "zarr_format");
@@ -188,48 +239,49 @@ test_zarr_metadata(void)
   jw_object_end(&jw);
 
   CHECK(Fail, !jw_error(&jw));
-  CHECK(Fail, jw_length(&jw) > 0);
+  CHECK(Fail, strbuf_len(&sb) > 0);
 
-  // Verify it starts and ends correctly
-  CHECK(Fail, buf[0] == '{');
-  CHECK(Fail, buf[jw_length(&jw) - 1] == '}');
+  const char* s = strbuf_cstr(&sb);
+  CHECK(Fail, s[0] == '{');
+  CHECK(Fail, s[strbuf_len(&sb) - 1] == '}');
 
-  // Spot-check some substrings
-  buf[jw_length(&jw)] = '\0';
-  CHECK(Fail, strstr(buf, "\"zarr_format\":3"));
-  CHECK(Fail, strstr(buf, "\"node_type\":\"array\""));
-  CHECK(Fail, strstr(buf, "\"shape\":[100,200,300]"));
-  CHECK(Fail, strstr(buf, "\"chunk_shape\":[10,20,30]"));
+  CHECK(Fail, strstr(s, "\"zarr_format\":3"));
+  CHECK(Fail, strstr(s, "\"node_type\":\"array\""));
+  CHECK(Fail, strstr(s, "\"shape\":[100,200,300]"));
+  CHECK(Fail, strstr(s, "\"chunk_shape\":[10,20,30]"));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)jw_length(&jw), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_zarr_root_json(void)
 {
-  char buf[ZARR_GROUP_JSON_MAX_LENGTH];
-  int len = zarr_root_json(buf, sizeof(buf));
-  CHECK(Fail, len > 0);
+  struct strbuf sb = { 0 };
+  CHECK(Fail, zarr_root_json(&sb) == 0);
 
   const char* expected = "{\"zarr_format\":3,\"node_type\":\"group\","
                          "\"consolidated_metadata\":null,\"attributes\":{}}";
-  CHECK(Fail, (size_t)len == strlen(expected));
-  CHECK(Fail, memcmp(buf, expected, (size_t)len) == 0);
+  CHECK(Fail, strbuf_len(&sb) == strlen(expected));
+  CHECK(Fail, memcmp(strbuf_cstr(&sb), expected, strbuf_len(&sb)) == 0);
 
   // Check no duplicate "attributes" key
-  buf[len] = '\0';
-  char* first = strstr(buf, "\"attributes\"");
+  const char* s = strbuf_cstr(&sb);
+  const char* first = strstr(s, "\"attributes\"");
   CHECK(Fail, first);
   CHECK(Fail, !strstr(first + 1, "\"attributes\""));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
@@ -266,22 +318,22 @@ test_zarr_multiscale_group_json(void)
 
   const struct dimension* levels[2] = { l0_dims, l1_dims };
 
-  char buf[4096];
-  int len =
-    ngff_multiscale_group_json(buf, sizeof(buf), 3, 2, levels, NULL, NULL);
-  CHECK(Fail, len > 0);
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail, ngff_multiscale_group_json(&sb, 3, 2, levels, NULL, NULL) == 0);
 
-  CHECK(Fail, strstr(buf, "\"version\":\"0.5\""));
-  CHECK(Fail, strstr(buf, "\"axes\""));
-  CHECK(Fail, strstr(buf, "\"datasets\""));
-  CHECK(Fail, strstr(buf, "\"coordinateTransformations\""));
-  CHECK(Fail, strstr(buf, "\"attributes\":{\"ome\""));
+  const char* s = strbuf_cstr(&sb);
+  CHECK(Fail, strstr(s, "\"version\":\"0.5\""));
+  CHECK(Fail, strstr(s, "\"axes\""));
+  CHECK(Fail, strstr(s, "\"datasets\""));
+  CHECK(Fail, strstr(s, "\"coordinateTransformations\""));
+  CHECK(Fail, strstr(s, "\"attributes\":{\"ome\""));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
@@ -309,30 +361,29 @@ test_scale_clamped_dim(void)
 
   const struct dimension* levels[3] = { l0, l1, l2 };
 
-  char buf[8192];
-  int len =
-    ngff_multiscale_group_json(buf, sizeof(buf), 3, 3, levels, NULL, NULL);
-  CHECK(Fail, len > 0);
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail, ngff_multiscale_group_json(&sb, 3, 3, levels, NULL, NULL) == 0);
 
+  const char* s = strbuf_cstr(&sb);
   // L0: scale=[1.0, 1.0, 1.0]
-  CHECK(Fail, strstr(buf, "\"scale\":[1.0,1.0,1.0]"));
+  CHECK(Fail, strstr(s, "\"scale\":[1.0,1.0,1.0]"));
   // L1: t=1, y=2 (one downsample), x=2 (one downsample)
-  CHECK(Fail, strstr(buf, "\"scale\":[1.0,2.0,2.0]"));
+  CHECK(Fail, strstr(s, "\"scale\":[1.0,2.0,2.0]"));
   // L2: t=1, y=2 (still one -- y dropped after L0->L1), x=4 (two downsamples)
-  CHECK(Fail, strstr(buf, "\"scale\":[1.0,2.0,4.0]"));
+  CHECK(Fail, strstr(s, "\"scale\":[1.0,2.0,4.0]"));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", len > 0 ? len : 0, buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_zarr_array_json_lz4(void)
 {
-  char buf[4096];
   struct dimension dims[3] = {
     { .size = 0, .chunk_size = 1, .chunks_per_shard = 2, .name = "t" },
     { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "y" },
@@ -341,26 +392,25 @@ test_zarr_array_json_lz4(void)
   uint64_t cps[3] = { 2, 1, 1 };
   struct codec_config codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 };
 
-  int len =
-    zarr_array_json(
-      buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec, NULL);
-  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail,
+        zarr_array_json(&sb, 3, dims, dtype_u16, 0.0, cps, codec, NULL) == 0);
 
   // The codec name in zarr metadata must be "lz4" (not "lz4_raw")
-  CHECK(Fail, strstr(buf, "\"name\":\"lz4\""));
+  CHECK(Fail, strstr(strbuf_cstr(&sb), "\"name\":\"lz4\""));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)sizeof(buf), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
 static int
 test_zarr_array_json_zstd(void)
 {
-  char buf[4096];
   struct dimension dims[3] = {
     { .size = 0, .chunk_size = 1, .chunks_per_shard = 2, .name = "t" },
     { .size = 64, .chunk_size = 32, .chunks_per_shard = 1, .name = "y" },
@@ -369,21 +419,21 @@ test_zarr_array_json_zstd(void)
   uint64_t cps[3] = { 2, 1, 1 };
   struct codec_config codec = { .id = CODEC_ZSTD, .level = 3 };
 
-  int len =
-    zarr_array_json(
-      buf, sizeof(buf), 3, dims, dtype_u16, 0.0, cps, codec, NULL);
-  CHECK(Fail, len > 0 && (size_t)len < sizeof(buf));
-  buf[len] = '\0';
+  struct strbuf sb = { 0 };
+  CHECK(Fail,
+        zarr_array_json(&sb, 3, dims, dtype_u16, 0.0, cps, codec, NULL) == 0);
 
   CHECK(Fail,
-        strstr(buf,
+        strstr(strbuf_cstr(&sb),
                "\"name\":\"zstd\",\"configuration\":"
                "{\"level\":3,\"checksum\":false}"));
 
+  strbuf_free(&sb);
   return 0;
 
 Fail:
-  log_error("  got: %.*s", (int)sizeof(buf), buf);
+  log_error("  got: %s", strbuf_cstr(&sb));
+  strbuf_free(&sb);
   return 1;
 }
 
@@ -399,7 +449,8 @@ main(void)
     { "simple_object", test_simple_object },
     { "nested", test_nested },
     { "string_escaping", test_string_escaping },
-    { "overflow", test_overflow },
+    { "grows_past_inline", test_grows_past_inline },
+    { "jw_error_clean", test_jw_error_clean },
     { "array_commas", test_array_commas },
     { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },

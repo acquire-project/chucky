@@ -1045,11 +1045,13 @@ main(void)
   nfail +=
     test_lod_gpu("gpu_lod_4d_d13", 4, (uint64_t[]){ 3, 8, 2, 6 }, 0xA, 1);
 
-  // Larger cases for throughput estimation
+  // Larger correctness cases. 1 iter: lod_compute_gpu allocates/frees all
+  // GPU buffers per call, so extra iters here dominate test time without
+  // improving coverage. Throughput benchmarking belongs in bench/.
   nfail +=
-    test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7, 10);
+    test_lod_gpu("gpu_lod_3d_256", 3, (uint64_t[]){ 256, 256, 256 }, 0x7, 1);
   nfail += test_lod_gpu(
-    "gpu_lod_3d_mixed_large", 3, (uint64_t[]){ 64, 256, 256 }, 0x6, 10);
+    "gpu_lod_3d_mixed_large", 3, (uint64_t[]){ 64, 256, 256 }, 0x6, 1);
 
   // u16 tests (exact integer match)
   nfail +=

@@ -1,19 +1,22 @@
 #pragma once
 
+#include "util/strbuf.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
+// JSON writer backed by a caller-owned strbuf. Appends to whatever is
+// already in the buffer; use strbuf_reset beforehand if you want to start
+// fresh. The buffer auto-grows, so there is no truncation mode.
 struct json_writer
 {
-  char* buf;
-  size_t cap;
-  size_t pos;
+  struct strbuf* sb;
   int needs_comma;
   int error;
 };
 
 void
-jw_init(struct json_writer* jw, char* buf, size_t cap);
+jw_init(struct json_writer* jw, struct strbuf* sb);
 void
 jw_object_begin(struct json_writer* jw);
 void
