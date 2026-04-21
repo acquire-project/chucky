@@ -36,7 +36,8 @@ struct array_descriptor
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
-  struct io_event io_done[LOD_MAX_LEVELS];
+  struct io_event io_done[LOD_MAX_LEVELS][2]; // per-slot fences
+  uint8_t agg_current[LOD_MAX_LEVELS];        // next slot to use per level
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
   int flushed;            // 1 once flush body has run for this array
@@ -61,8 +62,8 @@ struct multiarray_tile_stream_cpu
   void* compressed;
   size_t* comp_sizes;
 
-  // Shared aggregate workspace.
-  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS];
+  // Shared aggregate workspace (double-buffered per level).
+  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS][2];
   size_t* shard_order_sizes;
 
   // Shared LUT storage (recomputed on switch).
@@ -297,19 +298,22 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     CHECK(Fail, ms->comp_sizes);
   }
 
-  // Per-level aggregate slots + LUT storage.
+  // Per-level aggregate slots + LUT storage. Double-buffered so a batch's
+  // aggregate overlaps the prior batch's pwrites on the other slot.
   for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    struct cpu_agg_slot* as = &ms->agg_slots[lv];
     uint64_t batch_C = mx->agg_batch_C_count[lv];
-    if (batch_C > 0) {
-      as->offsets = (size_t*)malloc((batch_C + 1) * sizeof(size_t));
-      as->chunk_sizes = (size_t*)calloc(batch_C, sizeof(size_t));
-      CHECK(Fail, as->offsets && as->chunk_sizes);
-    }
-    if (mx->agg_data_bytes[lv] > 0) {
-      as->data = malloc(mx->agg_data_bytes[lv]);
-      as->data_capacity_bytes = mx->agg_data_bytes[lv];
-      CHECK(Fail, as->data);
+    for (int fc = 0; fc < 2; ++fc) {
+      struct cpu_agg_slot* as = &ms->agg_slots[lv][fc];
+      if (batch_C > 0) {
+        as->offsets = (size_t*)malloc((batch_C + 1) * sizeof(size_t));
+        as->chunk_sizes = (size_t*)calloc(batch_C, sizeof(size_t));
+        CHECK(Fail, as->offsets && as->chunk_sizes);
+      }
+      if (mx->agg_data_bytes[lv] > 0) {
+        as->data = malloc(mx->agg_data_bytes[lv]);
+        as->data_capacity_bytes = mx->agg_data_bytes[lv];
+        CHECK(Fail, as->data);
+      }
     }
     if (mx->batch_gather_count[lv] > 0) {
       ms->batch_gather[lv] =
@@ -465,9 +469,11 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   free(ms->comp_sizes);
 
   for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    free(ms->agg_slots[lv].data);
-    free(ms->agg_slots[lv].offsets);
-    free(ms->agg_slots[lv].chunk_sizes);
+    for (int fc = 0; fc < 2; ++fc) {
+      free(ms->agg_slots[lv][fc].data);
+      free(ms->agg_slots[lv][fc].offsets);
+      free(ms->agg_slots[lv][fc].chunk_sizes);
+    }
     free(ms->batch_gather[lv]);
     free(ms->batch_chunk_to_shard_map[lv]);
     free(ms->morton_lut[lv]);
@@ -590,6 +596,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
     .io_done = desc->io_done,
+    .agg_current = desc->agg_current,
     .chunk_pool = ms->chunk_pool,
     .chunk_pool_bytes = ms->chunk_pool_bytes,
     .compressed = ms->compressed,

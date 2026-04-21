@@ -98,14 +98,14 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       if (batch_C > max_batch_C)
         max_batch_C = batch_C;
 
-      // Per-level aggregate output buffers (batch-scaled).
+      // Per-level aggregate output buffers (batch-scaled), double-buffered.
       size_t data_lv = agg_pool_bytes((uint64_t)slot_count * M_lv,
                                       agg->max_comp_chunk_bytes,
                                       C_lv,
                                       agg->cps_inner,
                                       agg->page_size);
-      {
-        struct cpu_agg_slot* as = &s->agg_slots[lv];
+      for (int fc = 0; fc < 2; ++fc) {
+        struct cpu_agg_slot* as = &s->agg_slots[lv][fc];
         if (batch_C > 0) {
           as->offsets = (size_t*)malloc((batch_C + 1) * sizeof(size_t));
           as->chunk_sizes = (size_t*)calloc(batch_C, sizeof(size_t));
@@ -299,10 +299,12 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     free(s->morton_lut[lv]);
     free(s->lod_fixed_dims_offsets[lv]);
 
-    struct cpu_agg_slot* as = &s->agg_slots[lv];
-    free(as->data);
-    free(as->offsets);
-    free(as->chunk_sizes);
+    for (int fc = 0; fc < 2; ++fc) {
+      struct cpu_agg_slot* as = &s->agg_slots[lv][fc];
+      free(as->data);
+      free(as->offsets);
+      free(as->chunk_sizes);
+    }
   }
   free(s->shard_order_sizes);
 
@@ -395,9 +397,10 @@ compute_memory_info(const struct computed_stream_layouts* cl,
                                       al->cps_inner,
                                       al->page_size);
 
-      agg += data_lv +
-             (batch_C + 1) * sizeof(size_t) + // offsets (batch-scaled)
-             batch_C * sizeof(size_t);        // chunk_sizes (batch-scaled)
+      // Double-buffered: 2 slots per level.
+      agg += 2 * (data_lv +
+                  (batch_C + 1) * sizeof(size_t) + // offsets (batch-scaled)
+                  batch_C * sizeof(size_t));       // chunk_sizes (batch-scaled)
 
       // Batch LUTs (gather + perm).
       {
@@ -684,6 +687,7 @@ make_view(struct tile_stream_cpu* s)
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
     .io_done = s->io_done,
+    .agg_current = s->agg_current,
     .chunk_pool = s->chunk_pool,
     .chunk_pool_bytes = 0,
     .compressed = s->compressed,

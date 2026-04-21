@@ -24,10 +24,11 @@ struct flush_level_view
   uint64_t chunk_offset;
   uint32_t* batch_chunk_to_shard_map; // [K_l * M_lv] perm LUT (mutable)
   uint32_t* batch_gather;             // [K_l * M_lv] gather LUT (mutable)
-  struct cpu_agg_slot* agg_slot;
+  struct cpu_agg_slot* agg_slot;      // [2] double-buffered agg slots
   struct shard_state* shard;
-  struct io_event*
-    io_done; // tracks pending async IO for this level's agg buffer
+  struct io_event* io_done;  // [2] per-slot pending-IO fences
+  uint8_t* agg_current;      // points to the level's slot-alternator byte
+                             // (0 or 1); value is the slot to use next
 };
 
 struct flush_batch_params
