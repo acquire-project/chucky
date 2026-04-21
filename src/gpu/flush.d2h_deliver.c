@@ -90,8 +90,9 @@ kick_offset_d2h(struct d2h_deliver_stage* stage,
                 CUstream d2h_stream)
 {
   const int fc = handoff->fc;
-  const uint32_t n_epochs = handoff->n_epochs;
   const uint32_t level_mask = handoff->active_levels_mask;
+  (void)batch;
+  (void)dims;
 
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
@@ -99,13 +100,9 @@ kick_offset_d2h(struct d2h_deliver_stage* stage,
 
     struct level_flush_state* lvl = &stage->levels[lv];
 
-    uint32_t active_count = 1;
-    if (n_epochs > 1) {
-      active_count = level_actual_active_count(
-        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
-      if (active_count == 0)
-        continue;
-    }
+    uint32_t active_count = handoff->active_counts[lv];
+    if (active_count == 0)
+      continue;
 
     struct aggregate_slot* agg = &lvl->agg[fc];
     uint64_t covering = (uint64_t)active_count * lvl->agg_layout.covering_count;
@@ -140,8 +137,9 @@ queue_bulk_d2h(struct d2h_deliver_stage* stage,
                CUstream d2h_stream)
 {
   const int fc = handoff->fc;
-  const uint32_t n_epochs = handoff->n_epochs;
   const uint32_t level_mask = handoff->active_levels_mask;
+  (void)batch;
+  (void)dims;
 
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(level_mask & (1u << lv)))
@@ -149,13 +147,9 @@ queue_bulk_d2h(struct d2h_deliver_stage* stage,
 
     struct level_flush_state* lvl = &stage->levels[lv];
 
-    uint32_t active_count = 1;
-    if (n_epochs > 1) {
-      active_count = level_actual_active_count(
-        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
-      if (active_count == 0)
-        continue;
-    }
+    uint32_t active_count = handoff->active_counts[lv];
+    if (active_count == 0)
+      continue;
 
     struct aggregate_slot* agg = &lvl->agg[fc];
 
@@ -168,10 +162,9 @@ queue_bulk_d2h(struct d2h_deliver_stage* stage,
                      lvl->agg_layout.cps_inner,
                      lvl->agg_layout.page_size);
 
-    CU(
-      Error,
-      cuMemcpyDtoHAsync(
-        agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, cap, d2h_stream));
+    CU(Error,
+       cuMemcpyDtoHAsync(
+         agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, cap, d2h_stream));
     CU(Error, cuEventRecord(agg->ready, d2h_stream));
   }
 
@@ -243,8 +236,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
       if (!(handoff->active_levels_mask & (1u << lv)))
         continue;
       struct level_flush_state* lvl = &stage->levels[lv];
-      uint32_t active_count = level_actual_active_count(
-        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
+      uint32_t active_count = handoff->active_counts[lv];
       if (active_count == 0)
         continue;
       uint64_t batch_covering =
@@ -315,8 +307,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         continue;
 
       struct level_flush_state* lvl = &stage->levels[lv];
-      uint32_t active_count = level_actual_active_count(
-        lvl, batch, dims, handoff->batch_active_masks, lv, n_epochs);
+      uint32_t active_count = handoff->active_counts[lv];
       if (active_count == 0)
         continue;
 

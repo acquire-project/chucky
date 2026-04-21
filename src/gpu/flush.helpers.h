@@ -21,9 +21,12 @@ level_active_epochs(const struct level_flush_state* lvl,
 }
 
 // Count actual active epochs for a level from per-epoch masks.
-// For infrequent append-downsampled levels (period > K, batch_active_count ==
-// 0), level_active_epochs returns 0 even when the level fired.  This function
-// falls back to scanning the per-epoch masks in that case.
+// Always scans masks: the steady-state pattern shifts between batches when
+// K doesn't divide the level period, so lvl->batch_active_count is only a
+// safe upper bound (for buffer sizing), not the current batch's actual count.
+// Callers must pass masks that outlive any later pool/slot reuse — see
+// struct flush_handoff::active_counts for the pre-computed, lifetime-safe
+// alternative used by d2h delivery.
 static inline uint32_t
 level_actual_active_count(const struct level_flush_state* lvl,
                           const struct batch_state* batch,
@@ -32,10 +35,10 @@ level_actual_active_count(const struct level_flush_state* lvl,
                           int lv,
                           uint32_t n_epochs)
 {
-  uint32_t n = level_active_epochs(lvl, batch, dims, lv, n_epochs);
-  if (n > 0)
-    return n;
-  // Infrequent level: count from actual per-epoch masks
+  (void)lvl;
+  (void)batch;
+  (void)dims;
+  uint32_t n = 0;
   for (uint32_t e = 0; e < n_epochs; ++e)
     if (batch_active_masks[e] & (1u << lv))
       n++;

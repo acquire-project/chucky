@@ -152,12 +152,22 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   for (int lv = 0; lv < p->nlod; ++lv) {
     const struct flush_level_view* lvl = &p->levels[lv];
 
+    // Scan per-epoch masks to get active_count and pool positions.
+    // Emission pattern depends on batch alignment with level period, so
+    // always derive from masks rather than an assumed steady-state pattern.
+    uint32_t* pool_epochs = p->pool_epochs_scratch;
     uint32_t active_count = 0;
     for (uint32_t e = 0; e < n_epochs; ++e)
       if (active_masks[e] & (1u << lv))
-        active_count++;
+        pool_epochs[active_count++] = e;
     if (active_count == 0)
       continue;
+
+    // LUT buffers are sized for max(batch_active_count, 1) * M entries.
+    uint32_t lut_cap =
+      lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
+    if (active_count > lut_cap)
+      return 1;
 
     // Wait for pending async IO before overwriting aggregate buffer.
     if (p->sink->wait_fence)
@@ -167,27 +177,13 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (p->sink->has_error && p->sink->has_error(p->sink))
       return 1;
 
-    // Recompute batch LUTs if active_count differs from pre-computed.
-    if (active_count != lvl->batch_active_count) {
-      // LUT buffers are sized for max(batch_active_count, 1) * M entries.
-      uint32_t lut_cap =
-        lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
-      if (active_count > lut_cap)
-        return 1;
-
-      uint32_t* pool_epochs = p->pool_epochs_scratch;
-      uint32_t ai = 0;
-      for (uint32_t e = 0; e < n_epochs; ++e)
-        if (active_masks[e] & (1u << lv))
-          pool_epochs[ai++] = e;
-      aggregate_batch_luts(lvl->agg_layout,
-                           p->levels_geo,
-                           lv,
-                           active_count,
-                           pool_epochs,
-                           lvl->batch_gather,
-                           lvl->batch_chunk_to_shard_map);
-    }
+    aggregate_batch_luts(lvl->agg_layout,
+                         p->levels_geo,
+                         lv,
+                         active_count,
+                         pool_epochs,
+                         lvl->batch_gather,
+                         lvl->batch_chunk_to_shard_map);
 
     if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
       return 1;
