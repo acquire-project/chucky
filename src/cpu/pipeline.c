@@ -170,8 +170,16 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
       return 1;
 
     // Wait for pending async IO before overwriting aggregate buffer.
-    if (p->sink->wait_fence)
+    if (p->sink->wait_fence) {
+      struct platform_clock fence_clk = { 0 };
+      if (p->metrics)
+        platform_toc(&fence_clk);
       p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
+      if (p->metrics) {
+        float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
+        accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
+      }
+    }
 
     // Fail fast if async IO encountered an error.
     if (p->sink->has_error && p->sink->has_error(p->sink))
