@@ -396,6 +396,9 @@ test_stream_lz4_roundtrip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_LZ4_NON_STANDARD, .level = 1 },
+    // Tiny dims — auto-K against the 512 MiB byte target would ask nvcomp
+    // for a multi-GiB temp buffer. K=1 keeps the batch size sane.
+    .epochs_per_batch = 1,
   };
 
   struct tile_stream_gpu* s = NULL;
