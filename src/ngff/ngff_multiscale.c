@@ -2,6 +2,7 @@
 #include "defs.limits.h"
 #include "dimension.h"
 #include "lod/lod_plan.h"
+#include "ngff.h"
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "zarr/attr_set.h"
@@ -10,6 +11,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int
+ngff_axes_copy(struct ngff_axis* dst, const struct ngff_axis* src, uint8_t rank)
+{
+  if (!dst || !src)
+    return 1;
+  for (uint8_t d = 0; d < rank; ++d) {
+    dst[d] = src[d];
+    if (src[d].unit) {
+      char* dup = strdup(src[d].unit);
+      if (!dup) {
+        ngff_axes_free_units(dst, d);
+        for (uint8_t z = d; z < rank; ++z)
+          dst[z] = (struct ngff_axis){ 0 };
+        return 1;
+      }
+      dst[d].unit = dup;
+    }
+  }
+  return 0;
+}
+
+void
+ngff_axes_free_units(struct ngff_axis* axes, uint8_t rank)
+{
+  if (!axes)
+    return;
+  for (uint8_t d = 0; d < rank; ++d) {
+    free((char*)axes[d].unit);
+    axes[d].unit = NULL;
+  }
+}
 
 struct ngff_multiscale
 {
@@ -20,7 +53,7 @@ struct ngff_multiscale
   struct zarr_array** levels;
   int nlod;
   uint8_t rank;
-  char prefix[4096];
+  struct strbuf prefix; // owned
   struct ngff_axis axes[MAX_ZARR_RANK];
   struct attr_set attrs;
 };
@@ -34,25 +67,30 @@ write_ngff_group_metadata(struct ngff_multiscale* ms)
   for (int lv = 0; lv < ms->nlod; ++lv)
     level_ptrs[lv] = zarr_array_dimensions(ms->levels[lv]);
 
-  // Zero-init so a trailing-NUL scan can clamp the write length if
-  // jw_length ever overcounts (see zarr_array.c note, #96).
-  char json[ZARR_GROUP_JSON_MAX_LENGTH] = { 0 };
-  int len = ngff_multiscale_group_json(
-    json, sizeof(json), ms->rank, ms->nlod, level_ptrs, ms->axes, &ms->attrs);
-  if (len < 0)
-    return 1;
-  size_t write_len = strnlen(json, (size_t)len);
+  struct strbuf key = { 0 };
+  struct strbuf json = { 0 };
+  int rc = 1;
 
-  // Write the full group zarr.json (the ngff function generates the complete
-  // JSON including zarr_format, node_type, and attributes).
-  char key[4096];
-  if (ms->prefix[0])
-    snprintf(key, sizeof(key), "%s/zarr.json", ms->prefix);
-  else
-    snprintf(key, sizeof(key), "zarr.json");
-  int rc = ms->store->put(ms->store, key, json, write_len);
+  if (ngff_multiscale_group_json(
+        &json, ms->rank, ms->nlod, level_ptrs, ms->axes, &ms->attrs))
+    goto done;
+
+  if (strbuf_len(&ms->prefix) > 0) {
+    if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&ms->prefix)))
+      goto done;
+  } else {
+    if (strbuf_append_cstr(&key, "zarr.json"))
+      goto done;
+  }
+
+  rc = ms->store->put(
+    ms->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
   if (rc == 0)
     ms->attrs.dirty = 0;
+
+done:
+  strbuf_free(&key);
+  strbuf_free(&json);
   return rc;
 }
 
@@ -93,7 +131,7 @@ ngff_multiscale_update_append(struct shard_sink* self,
 
   if (write_ngff_group_metadata(ms)) {
     log_error("ngff_multiscale: failed to rewrite group zarr.json for %s",
-              ms->prefix);
+              strbuf_cstr(&ms->prefix));
     return 1;
   }
   return 0;
@@ -161,10 +199,10 @@ ngff_multiscale_init(struct store* store,
   ms->nlod = plan->levels.nlod;
   ms->rank = cfg->rank;
   attr_set_init(&ms->attrs);
-  if (prefix)
-    snprintf(ms->prefix, sizeof(ms->prefix), "%s", prefix);
+  if (prefix && prefix[0])
+    CHECK(Fail_ms, strbuf_set(&ms->prefix, prefix) == 0);
   if (cfg->axes)
-    memcpy(ms->axes, cfg->axes, cfg->rank * sizeof(struct ngff_axis));
+    CHECK(Fail_ms, ngff_axes_copy(ms->axes, cfg->axes, cfg->rank) == 0);
 
   ms->base.open = ngff_multiscale_open;
   ms->base.update_append = ngff_multiscale_update_append;
@@ -199,18 +237,16 @@ ngff_multiscale_init(struct store* store,
         plan->levels.level[lv].dim[d].chunks_per_shard;
     }
 
-    char name[16];
-    snprintf(name, sizeof(name), "%d", lv);
+    struct strbuf level_prefix = { 0 };
+    int lp_rc = (prefix && prefix[0])
+                  ? strbuf_appendf(&level_prefix, "%s/%d", prefix, lv)
+                  : strbuf_appendf(&level_prefix, "%d", lv);
+    if (lp_rc) {
+      strbuf_free(&level_prefix);
+      goto Fail_levels;
+    }
 
-    char level_prefix[4096];
-    int lp_n;
-    if (prefix && prefix[0])
-      lp_n = snprintf(level_prefix, sizeof(level_prefix), "%s/%s", prefix, name);
-    else
-      lp_n = snprintf(level_prefix, sizeof(level_prefix), "%s", name);
-    (void)lp_n;
-
-    CHECK(Fail_levels, store->mkdirs(store, level_prefix) == 0);
+    int mkrc = store->mkdirs(store, strbuf_cstr(&level_prefix));
 
     struct zarr_array_config acfg = {
       .data_type = cfg->data_type,
@@ -221,7 +257,10 @@ ngff_multiscale_init(struct store* store,
     };
 
     ms->levels[lv] =
-      zarr_array_create_with_pool(store, pool, slot_base, level_prefix, &acfg);
+      mkrc == 0 ? zarr_array_create_with_pool(
+                    store, pool, slot_base, strbuf_cstr(&level_prefix), &acfg)
+                : NULL;
+    strbuf_free(&level_prefix);
     CHECK(Fail_levels, ms->levels[lv]);
 
     uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
@@ -240,6 +279,8 @@ Fail_levels:
   }
   free(ms->levels);
 Fail_ms:
+  ngff_axes_free_units(ms->axes, cfg->rank);
+  strbuf_free(&ms->prefix);
   free(ms);
 Fail_plan:
   lod_plan_free(plan);
@@ -331,6 +372,8 @@ ngff_multiscale_destroy(struct ngff_multiscale* ms)
     zarr_array_destroy(ms->levels[i]);
   free(ms->levels);
   attr_set_destroy(&ms->attrs);
+  ngff_axes_free_units(ms->axes, ms->rank);
+  strbuf_free(&ms->prefix);
   struct shard_pool* pool = ms->owns_pool ? ms->pool : NULL;
   free(ms);
   if (pool)

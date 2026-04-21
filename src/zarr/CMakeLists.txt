@@ -1,4 +1,4 @@
-add_src_lib(json_writer SOURCES json_writer.c json_writer.h)
+add_src_lib(json_writer SOURCES json_writer.c json_writer.h LINKS strbuf)
 
 add_src_lib(json_validate SOURCES json_validate.c json_validate.h)
 
@@ -15,29 +15,29 @@ add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
 )
 
 add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
-    LINKS io_queue platform platform_io writer chucky_log
+    LINKS io_queue platform platform_io writer strbuf chucky_log
 )
 
 add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
-    LINKS shard_pool_fs platform_io chucky_log
+    LINKS shard_pool_fs platform_io strbuf chucky_log
 )
 
 add_src_lib(zarr_group SOURCES zarr_group.c zarr_group.h
-    LINKS zarr_metadata attr_set chucky_log
+    LINKS zarr_metadata attr_set strbuf chucky_log
 )
 
 add_src_lib(zarr_array SOURCES zarr_array.c zarr_array.h
-    LINKS zarr_metadata attr_set lod_plan writer chucky_log
+    LINKS zarr_metadata attr_set lod_plan writer strbuf chucky_log
 )
 
 add_src_lib(s3_client SOURCES s3_client.c s3_client.h
-    LINKS AWS::aws-c-s3 chucky_log
+    LINKS AWS::aws-c-s3 strbuf chucky_log
 )
 
 add_src_lib(shard_pool_s3 SOURCES shard_pool_s3.c shard_pool_s3.h
-    LINKS s3_client writer chucky_log
+    LINKS s3_client writer strbuf chucky_log
 )
 
 add_src_lib(store_s3 SOURCES store_s3.c store_s3.h
-    LINKS shard_pool_s3 s3_client dtype chucky_log
+    LINKS shard_pool_s3 s3_client dtype strbuf chucky_log
 )

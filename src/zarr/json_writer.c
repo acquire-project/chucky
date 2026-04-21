@@ -1,15 +1,11 @@
 #include "zarr/json_writer.h"
 
 #include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
 
 void
-jw_init(struct json_writer* jw, char* buf, size_t cap)
+jw_init(struct json_writer* jw, struct strbuf* sb)
 {
-  jw->buf = buf;
-  jw->cap = cap;
-  jw->pos = 0;
+  jw->sb = sb;
   jw->needs_comma = 0;
   jw->error = 0;
 }
@@ -21,14 +17,10 @@ jw_put(struct json_writer* jw, const char* fmt, ...)
     return;
   va_list ap;
   va_start(ap, fmt);
-  size_t avail = jw->cap > jw->pos ? jw->cap - jw->pos : 0;
-  int n = vsnprintf(jw->buf + jw->pos, avail, fmt, ap);
+  int rc = strbuf_vappendf(jw->sb, fmt, ap);
   va_end(ap);
-  if (n < 0 || (size_t)n >= avail) {
+  if (rc)
     jw->error = 1;
-    return;
-  }
-  jw->pos += (size_t)n;
 }
 
 static void
@@ -175,7 +167,7 @@ jw_raw(struct json_writer* jw, const char* text)
 size_t
 jw_length(const struct json_writer* jw)
 {
-  return jw->pos;
+  return strbuf_len(jw->sb);
 }
 
 int

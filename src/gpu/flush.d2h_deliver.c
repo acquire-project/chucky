@@ -188,6 +188,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                      const struct lod_shared_state* lod_shared,
                      struct stream_metrics* metrics)
 {
+  (void)batch;
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
@@ -279,7 +280,6 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
-  const uint32_t n_epochs = handoff->n_epochs;
 
   // Fail fast if async IO encountered an error.
   if (sink->has_error && sink->has_error(sink))

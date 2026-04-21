@@ -5,6 +5,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _MSC_VER
@@ -35,6 +36,38 @@ static const char name_table[128][2] = {
   ['2'] = "2", ['3'] = "3", ['4'] = "4", ['5'] = "5", ['6'] = "6", ['7'] = "7",
   ['8'] = "8", ['9'] = "9",
 };
+
+int
+dims_copy(struct dimension* dst, const struct dimension* src, uint8_t rank)
+{
+  if (!dst || !src)
+    return 1;
+  for (uint8_t d = 0; d < rank; ++d) {
+    dst[d] = src[d];
+    if (src[d].name) {
+      char* dup = strdup(src[d].name);
+      if (!dup) {
+        dims_free_names(dst, d);
+        for (uint8_t z = d; z < rank; ++z)
+          dst[z] = (struct dimension){ 0 };
+        return 1;
+      }
+      dst[d].name = dup;
+    }
+  }
+  return 0;
+}
+
+void
+dims_free_names(struct dimension* dims, uint8_t rank)
+{
+  if (!dims)
+    return;
+  for (uint8_t d = 0; d < rank; ++d) {
+    free((char*)dims[d].name);
+    dims[d].name = NULL;
+  }
+}
 
 uint8_t
 dims_create(struct dimension* dims, const char* names, const uint64_t* sizes)

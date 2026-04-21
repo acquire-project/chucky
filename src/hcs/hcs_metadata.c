@@ -5,8 +5,7 @@
 #include <stdio.h>
 
 int
-hcs_plate_attributes_json(char* buf,
-                          size_t cap,
+hcs_plate_attributes_json(struct strbuf* sb,
                           const char* plate_name,
                           int rows,
                           int cols,
@@ -16,7 +15,7 @@ hcs_plate_attributes_json(char* buf,
                           const struct attr_set* extras)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw); // attributes root
 
@@ -95,19 +94,16 @@ hcs_plate_attributes_json(char* buf,
   attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes root
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }
 
 int
-hcs_well_attributes_json(char* buf,
-                         size_t cap,
+hcs_well_attributes_json(struct strbuf* sb,
                          int field_count,
                          const struct attr_set* extras)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw); // attributes root
 
@@ -137,7 +133,5 @@ hcs_well_attributes_json(char* buf,
   attr_set_emit(extras, &jw);
   jw_object_end(&jw); // attributes root
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }

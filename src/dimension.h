@@ -26,6 +26,18 @@ struct dimension
 uint8_t
 dims_create(struct dimension* dims, const char* names, const uint64_t* sizes);
 
+// Deep-copy rank dimensions from src to dst, duplicating name strings.
+// After success, dst owns its name strings; free with dims_free_names.
+// Returns 0 on success. On failure, frees any partial name allocations and
+// leaves dst zero-initialized for the affected slots.
+int
+dims_copy(struct dimension* dst, const struct dimension* src, uint8_t rank);
+
+// Free name strings previously allocated by dims_copy. Safe on
+// zero-initialized slots (free(NULL)). Does not free the array itself.
+void
+dims_free_names(struct dimension* dims, uint8_t rank);
+
 // Set storage order from a string of dimension names.
 // Each character in order names a dimension; its position is the storage
 // position assigned to that dimension. strlen(order) must equal rank.

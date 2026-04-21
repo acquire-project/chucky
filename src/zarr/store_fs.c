@@ -1,65 +1,84 @@
 #include "zarr/store_fs.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/shard_pool_fs.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 struct store_fs
 {
   struct store base;
-  char root[4096];
+  struct strbuf root; // owned
   int unbuffered;
 };
+
+// Build "<root>/<key>" into a fresh strbuf. Caller frees with strbuf_free.
+// Returns 0 on success.
+static int
+fs_join(const struct store_fs* fs, const char* key, struct strbuf* out)
+{
+  return strbuf_appendf(out, "%s/%s", strbuf_cstr(&fs->root), key);
+}
 
 static int
 fs_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
-  char path[4096];
-  int n = snprintf(path, sizeof(path), "%s/%s", fs->root, key);
-  (void)n;
+  struct strbuf path = { 0 };
+  int rc = 1;
+  if (fs_join(fs, key, &path))
+    goto done;
 
-  platform_fd fd = platform_open_write(path, 0);
+  platform_fd fd = platform_open_write(strbuf_cstr(&path), 0);
   if (fd == PLATFORM_FD_INVALID)
-    return 1;
-  int rc = platform_write(fd, data, len);
+    goto done;
+  rc = platform_write(fd, data, len) != 0;
   platform_close(fd);
-  return rc != 0;
+done:
+  strbuf_free(&path);
+  return rc;
 }
 
 static int
 fs_mkdirs(struct store* self, const char* key)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
-  char path[4096];
-  int n = snprintf(path, sizeof(path), "%s/%s", fs->root, key);
-  (void)n;
-  return platform_mkdirp(path);
+  struct strbuf path = { 0 };
+  int rc = 1;
+  if (fs_join(fs, key, &path))
+    goto done;
+  rc = platform_mkdirp(strbuf_cstr(&path));
+done:
+  strbuf_free(&path);
+  return rc;
 }
 
 static struct shard_pool*
 fs_create_pool(struct store* self, uint64_t nslots)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
-  return shard_pool_fs_create(fs->root, nslots, fs->unbuffered);
+  return shard_pool_fs_create(strbuf_cstr(&fs->root), nslots, fs->unbuffered);
 }
 
 static int
 fs_has_existing_data(struct store* self)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
-  char path[4096];
-  snprintf(path, sizeof(path), "%s/zarr.json", fs->root);
-  return platform_path_exists(path);
+  struct strbuf path = { 0 };
+  int exists = 0;
+  if (strbuf_appendf(&path, "%s/zarr.json", strbuf_cstr(&fs->root)) == 0)
+    exists = platform_path_exists(strbuf_cstr(&path));
+  strbuf_free(&path);
+  return exists;
 }
 
 static void
 fs_destroy(struct store* self)
 {
-  free(container_of(self, struct store_fs, base));
+  struct store_fs* fs = container_of(self, struct store_fs, base);
+  strbuf_free(&fs->root);
+  free(fs);
 }
 
 struct store*
@@ -76,10 +95,13 @@ store_fs_create(const char* root, int unbuffered)
   fs->base.has_existing_data = fs_has_existing_data;
   fs->base.destroy = fs_destroy;
   fs->unbuffered = unbuffered;
-  snprintf(fs->root, sizeof(fs->root), "%s", root);
+  CHECK(Fail_fs, strbuf_set(&fs->root, root) == 0);
 
   return &fs->base;
 
+Fail_fs:
+  strbuf_free(&fs->root);
+  free(fs);
 Fail:
   return NULL;
 }

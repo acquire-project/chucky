@@ -1,19 +1,12 @@
 #include "zarr/zarr_group.h"
-#include "defs.limits.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr.h"
 #include "zarr/attr_set.h"
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-
-static const char group_prefix[] =
-  "{\"zarr_format\":3,\"node_type\":\"group\","
-  "\"consolidated_metadata\":null,\"attributes\":";
-static const char group_suffix[] = "}";
 
 int
 zarr_group_write_with_raw_attrs(struct store* store,
@@ -24,20 +17,14 @@ zarr_group_write_with_raw_attrs(struct store* store,
   CHECK(Fail, key);
   CHECK(Fail, attributes_json);
 
-  size_t attr_len = strlen(attributes_json);
-  size_t total = sizeof(group_prefix) - 1 + attr_len + sizeof(group_suffix);
-  char* buf = (char*)malloc(total);
-  CHECK(Fail, buf);
-
-  memcpy(buf, group_prefix, sizeof(group_prefix) - 1);
-  memcpy(buf + sizeof(group_prefix) - 1, attributes_json, attr_len);
-  memcpy(buf + sizeof(group_prefix) - 1 + attr_len,
-         group_suffix,
-         sizeof(group_suffix));
-  size_t len = total - 1; // exclude null terminator from group_suffix
-
-  int rc = store->put(store, key, buf, len);
-  free(buf);
+  struct strbuf buf = { 0 };
+  int rc = strbuf_appendf(&buf,
+                          "{\"zarr_format\":3,\"node_type\":\"group\","
+                          "\"consolidated_metadata\":null,\"attributes\":%s}",
+                          attributes_json);
+  if (rc == 0)
+    rc = store->put(store, key, strbuf_cstr(&buf), strbuf_len(&buf));
+  strbuf_free(&buf);
   return rc;
 
 Fail:
@@ -49,29 +36,18 @@ Fail:
 struct zarr_group
 {
   struct store* store; // borrowed
-  char key[4096];
+  struct strbuf key;   // owned
   struct attr_set attrs;
 };
 
 static int
 zarr_group_write(struct zarr_group* g)
 {
-  // Group skeleton is ~100 bytes; size for actual attrs to avoid truncation.
-  size_t attr_bytes = 0;
-  for (size_t i = 0; i < g->attrs.count; ++i) {
-    attr_bytes += strlen(g->attrs.items[i].key);
-    attr_bytes += strlen(g->attrs.items[i].json_value);
-    attr_bytes += 16;
-  }
-  size_t cap = 256 + attr_bytes;
-  // See note in zarr_array.c:write_array_metadata — calloc + strnlen clamp
-  // guards the file against any overcount from jw_length (#96).
-  char* buf = (char*)calloc(1, cap);
-  if (!buf)
-    return 1;
+  struct strbuf json = { 0 };
+  int rc = 1;
 
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, &json);
 
   jw_object_begin(&jw);
   jw_key(&jw, "zarr_format");
@@ -86,15 +62,16 @@ zarr_group_write(struct zarr_group* g)
   jw_object_end(&jw);
   jw_object_end(&jw);
 
-  if (jw_error(&jw)) {
-    free(buf);
-    return 1;
-  }
-  size_t write_len = strnlen(buf, jw_length(&jw));
-  int rc = g->store->put(g->store, g->key, buf, write_len);
-  free(buf);
+  if (jw_error(&jw))
+    goto done;
+
+  rc = g->store->put(
+    g->store, strbuf_cstr(&g->key), strbuf_cstr(&json), strbuf_len(&json));
   if (rc == 0)
     g->attrs.dirty = 0;
+
+done:
+  strbuf_free(&json);
   return rc;
 }
 
@@ -108,13 +85,11 @@ zarr_group_create(struct store* store, const char* key)
   CHECK(Fail, g);
   g->store = store;
   attr_set_init(&g->attrs);
-  if (key[0])
-    snprintf(g->key, sizeof(g->key), "%s/zarr.json", key);
-  else
-    snprintf(g->key, sizeof(g->key), "zarr.json");
-
-  if (zarr_group_write(g) != 0) {
+  int rc = (key[0]) ? strbuf_appendf(&g->key, "%s/zarr.json", key)
+                    : strbuf_append_cstr(&g->key, "zarr.json");
+  if (rc || zarr_group_write(g) != 0) {
     attr_set_destroy(&g->attrs);
+    strbuf_free(&g->key);
     free(g);
     return NULL;
   }
@@ -132,6 +107,7 @@ zarr_group_destroy(struct zarr_group* g)
   if (g->attrs.dirty)
     zarr_group_write(g);
   attr_set_destroy(&g->attrs);
+  strbuf_free(&g->key);
   free(g);
 }
 

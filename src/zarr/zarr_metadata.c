@@ -33,10 +33,10 @@ dtype_zarr_string(enum dtype dt)
 }
 
 int
-zarr_root_json(char* buf, size_t cap)
+zarr_root_json(struct strbuf* sb)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw);
   jw_key(&jw, "zarr_format");
@@ -50,14 +50,11 @@ zarr_root_json(char* buf, size_t cap)
   jw_object_end(&jw);
   jw_object_end(&jw);
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }
 
 int
-zarr_array_json(char* buf,
-                size_t cap,
+zarr_array_json(struct strbuf* sb,
                 uint8_t rank,
                 const struct dimension* dimensions,
                 enum dtype data_type,
@@ -67,7 +64,7 @@ zarr_array_json(char* buf,
                 const struct attr_set* extras)
 {
   struct json_writer jw;
-  jw_init(&jw, buf, cap);
+  jw_init(&jw, sb);
 
   jw_object_begin(&jw);
 
@@ -236,9 +233,7 @@ zarr_array_json(char* buf,
 
   jw_object_end(&jw);
 
-  if (jw_error(&jw))
-    return -1;
-  return (int)jw_length(&jw);
+  return jw_error(&jw) ? 1 : 0;
 }
 
 int

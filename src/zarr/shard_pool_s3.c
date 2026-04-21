@@ -1,10 +1,9 @@
 #include "zarr/shard_pool_s3.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/s3_client.h"
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 // --- Pool struct (defined early so slot functions can access it) ---
 
@@ -14,8 +13,8 @@ struct shard_pool_s3
 {
   struct shard_pool base;
   struct s3_client* client; // borrowed, not owned
-  char bucket[256];
-  char prefix[4096]; // prepended to shard keys
+  struct strbuf bucket;     // owned
+  struct strbuf prefix;     // owned; empty if no prefix
   struct s3_slot* slots;
   uint64_t nslots;
   uint64_t finalize_seq;
@@ -107,21 +106,23 @@ pool_s3_open(struct shard_pool* self, uint64_t slot, const char* key)
   // Wait for previous upload on this slot
   s3_wait_pending(w);
 
-  char full_key[4096];
-  int n;
-  if (p->prefix[0])
-    n = snprintf(full_key, sizeof(full_key), "%s/%s", p->prefix, key);
-  else
-    n = snprintf(full_key, sizeof(full_key), "%s", key);
-  (void)n;
+  struct strbuf full_key = { 0 };
+  int ok = (strbuf_len(&p->prefix) > 0
+              ? strbuf_appendf(&full_key, "%s/%s", strbuf_cstr(&p->prefix), key)
+              : strbuf_append_cstr(&full_key, key)) == 0;
 
-  w->upload = s3_upload_begin(p->client, p->bucket, full_key);
+  w->upload = ok ? s3_upload_begin(
+                     p->client, strbuf_cstr(&p->bucket), strbuf_cstr(&full_key))
+                 : NULL;
   if (!w->upload) {
-    log_error(
-      "shard_pool_s3: failed to begin upload for %s/%s", p->bucket, full_key);
+    log_error("shard_pool_s3: failed to begin upload for %s/%s",
+              strbuf_cstr(&p->bucket),
+              strbuf_cstr(&full_key));
+    strbuf_free(&full_key);
     goto Fail;
   }
 
+  strbuf_free(&full_key);
   return &w->base;
 
 Fail:
@@ -189,6 +190,8 @@ pool_s3_destroy(struct shard_pool* self)
   }
 
   free(p->slots);
+  strbuf_free(&p->bucket);
+  strbuf_free(&p->prefix);
   free(p);
 }
 
@@ -216,10 +219,10 @@ shard_pool_s3_create(struct s3_client* client,
   p->base.pending_bytes = pool_s3_pending_bytes;
   p->base.destroy = pool_s3_destroy;
   p->client = client;
-  if (prefix)
-    snprintf(p->prefix, sizeof(p->prefix), "%s", prefix);
+  if (prefix && prefix[0])
+    CHECK(Fail_alloc, strbuf_set(&p->prefix, prefix) == 0);
   p->nslots = nslots;
-  snprintf(p->bucket, sizeof(p->bucket), "%s", bucket);
+  CHECK(Fail_alloc, strbuf_set(&p->bucket, bucket) == 0);
 
   p->slots = (struct s3_slot*)calloc((size_t)nslots, sizeof(struct s3_slot));
   CHECK(Fail_alloc, p->slots);
@@ -235,6 +238,8 @@ shard_pool_s3_create(struct s3_client* client,
   return &p->base;
 
 Fail_alloc:
+  strbuf_free(&p->bucket);
+  strbuf_free(&p->prefix);
   free(p);
 Fail:
   return NULL;
