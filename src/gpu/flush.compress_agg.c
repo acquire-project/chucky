@@ -235,6 +235,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
                   CUstream compress_stream,
                   struct flush_handoff* out)
 {
+  (void)batch;
+  (void)dims;
   const int fc = in->fc;
   const uint32_t n_epochs = in->n_epochs;
 
@@ -265,28 +267,29 @@ compress_agg_kick(struct compress_agg_stage* stage,
                         compress_stream) == 0);
   }
 
+  // Zero per-level active counts; populated below and copied into handoff so
+  // d2h delivery doesn't need to re-scan masks (the slot's masks buffer can
+  // be reset by a pool swap before delivery runs).
+  uint32_t active_counts[LOD_MAX_LEVELS] = { 0 };
+
   // Per-level batch aggregate on compress stream.
-  // Always use the batch aggregate path (LUT-based).  When active_count
-  // differs from the pre-computed batch_active_count, recompute host-side
-  // LUTs and upload them before launching the kernel.
+  // Always use the batch aggregate path (LUT-based) and derive pool positions
+  // from per-epoch masks (the steady-state pattern shifts when K doesn't
+  // divide the level period, so a pre-computed LUT is not always valid).
   for (int lv = 0; lv < levels->nlod; ++lv) {
     if (!(in->active_levels_mask & (1u << lv)))
       continue;
 
     struct level_flush_state* lvl = &stage->levels[lv];
-    uint32_t active_count = level_active_epochs(lvl, batch, dims, lv, n_epochs);
 
-    // Scan masks to determine active_count and pool epochs.
-    // level_active_epochs returns 0 for infrequent append-downsampled levels
-    // (period > K); in that case we scan masks directly.
     uint32_t* pool_epochs_buf = stage->pool_epochs_scratch;
-    if (active_count == 0) {
-      for (uint32_t e = 0; e < n_epochs; ++e)
-        if (in->batch_active_masks[e] & (1u << lv))
-          pool_epochs_buf[active_count++] = e;
-      if (active_count == 0)
-        continue;
-    }
+    uint32_t active_count = 0;
+    for (uint32_t e = 0; e < n_epochs; ++e)
+      if (in->batch_active_masks[e] & (1u << lv))
+        pool_epochs_buf[active_count++] = e;
+    if (active_count == 0)
+      continue;
+    active_counts[lv] = active_count;
 
     struct aggregate_slot* agg = &lvl->agg[fc];
     uint64_t chunks_lv = levels->level[lv].chunk_count;
@@ -294,21 +297,13 @@ compress_agg_kick(struct compress_agg_stage* stage,
     uint64_t batch_covering =
       (uint64_t)active_count * lvl->agg_layout.covering_count;
 
-    // Recompute LUTs if active_count doesn't match pre-computed.
-    if (active_count != lvl->batch_active_count) {
-      // LUT buffers are sized for max(batch_active_count, 1) * chunks_lv.
-      uint32_t lut_cap =
-        lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
-      CHECK(Error, active_count <= lut_cap);
+    // LUT buffers are sized for max(batch_active_count, 1) * chunks_lv.
+    uint32_t lut_cap =
+      lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
+    CHECK(Error, active_count <= lut_cap);
 
-      // Scan masks for actual pool positions (unless already done above).
-      {
-        uint32_t ai = 0;
-        for (uint32_t e = 0; e < n_epochs; ++e)
-          if (in->batch_active_masks[e] & (1u << lv))
-            pool_epochs_buf[ai++] = e;
-      }
-
+    // Rebuild batch LUTs for this batch's actual pool positions and upload.
+    {
       uint64_t lut_len = batch_chunk_count;
       uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
       uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
@@ -360,8 +355,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
 
-  // Fill handoff (masks pointer is borrowed from the flush slot — lifetime is
-  // safe because the slot isn't reset until after d2h_deliver_drain completes).
+  // Fill handoff. active_counts is copied (not borrowed) so delivery can
+  // run after a pool swap has overwritten the slot's mask buffer.
   out->fc = fc;
   out->n_epochs = n_epochs;
   out->active_levels_mask = in->active_levels_mask;
@@ -374,6 +369,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   for (int lv = 0; lv < levels->nlod; ++lv) {
     out->agg[lv] = &stage->levels[lv].agg[fc];
     out->agg_layout[lv] = &stage->levels[lv].agg_layout;
+    out->active_counts[lv] = active_counts[lv];
   }
 
   return 0;

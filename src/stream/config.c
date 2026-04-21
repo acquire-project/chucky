@@ -331,11 +331,14 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
 
     uint64_t chunks_lv = out->levels.level[lv].chunk_count;
 
+    // Upper bound on epochs firing at this level within a K-epoch batch.
+    // K may not divide period, so ceildiv covers the case where the emission
+    // boundary falls inside a batch (e.g., K=3, period=2: batches alternate
+    // between 1 and 2 level-1 emissions — buffers must fit the worst case).
     uint32_t batch_count = out->epochs_per_batch;
     if (out->dims.append_downsample && lv > 0) {
       uint32_t period = 1u << lv;
-      batch_count =
-        (out->epochs_per_batch >= period) ? out->epochs_per_batch / period : 0;
+      batch_count = (uint32_t)ceildiv(out->epochs_per_batch, period);
     }
     out->per_level[lv].batch_active_count = batch_count;
 
