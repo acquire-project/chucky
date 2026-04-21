@@ -174,7 +174,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
 
     const uint8_t cur = *lvl->agg_current;
 
-    // Wait on the slot we're about to reuse (oldest pending IO on this level).
+    // Wait on the slot we're about to overwrite.
     if (p->sink->wait_fence) {
       struct platform_clock fence_clk = { 0 };
       if (p->metrics)
