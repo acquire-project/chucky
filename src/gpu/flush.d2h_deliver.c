@@ -285,7 +285,13 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   if (sink->has_error && sink->has_error(sink))
     goto Error;
 
-  CU(Error, cuEventSynchronize(stage->ready[fc]));
+  {
+    struct platform_clock kick_clk = { 0 };
+    platform_toc(&kick_clk);
+    CU(Error, cuEventSynchronize(stage->ready[fc]));
+    float kick_ms = platform_toc(&kick_clk) * 1000.0f;
+    accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
+  }
   record_flush_metrics(stage,
                        handoff,
                        levels,
