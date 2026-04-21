@@ -41,9 +41,10 @@ make_flush_params(struct cpu_stream_view* v)
       .chunk_offset = v->levels->level[lv].chunk_offset,
       .batch_chunk_to_shard_map = v->batch_chunk_to_shard_map[lv],
       .batch_gather = v->batch_gather[lv],
-      .agg_slot = &v->agg_slots[lv],
+      .agg_slot = v->agg_slots[lv],     // &v->agg_slots[lv][0], array of 2
       .shard = &v->shard[lv],
-      .io_done = &v->io_done[lv],
+      .io_done = v->io_done[lv],        // &v->io_done[lv][0], array of 2
+      .agg_current = &v->agg_current[lv],
     };
   }
   return p;
@@ -307,8 +308,11 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     platform_toc(&emit_clk);
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
-      if (v->sink->wait_fence)
-        v->sink->wait_fence(v->sink, (uint8_t)lv, v->io_done[lv]);
+      // Both slots may hold in-flight IO; wait on both before finalize.
+      if (v->sink->wait_fence) {
+        v->sink->wait_fence(v->sink, (uint8_t)lv, v->io_done[lv][0]);
+        v->sink->wait_fence(v->sink, (uint8_t)lv, v->io_done[lv][1]);
+      }
 
       if (v->sink->has_error && v->sink->has_error(v->sink))
         return writer_error();

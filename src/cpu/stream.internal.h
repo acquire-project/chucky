@@ -30,9 +30,11 @@ struct tile_stream_cpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
-  // Per-level aggregate output (batch-scaled).
-  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS]; // [level] sized for batch
-  size_t* shard_order_sizes;                     // [max_batch_C] shared scratch
+  // Per-level aggregate output (batch-scaled), double-buffered so aggregate
+  // of batch N+1 overlaps prior pwrites on batch N's slot.
+  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS][2];
+  uint8_t agg_current[LOD_MAX_LEVELS]; // next slot to use per level (0 or 1)
+  size_t* shard_order_sizes;           // [max_batch_C] shared scratch
 
   // Batch aggregate LUTs (per level).
   uint32_t* batch_gather[LOD_MAX_LEVELS];             // [K_l * M_l]
@@ -68,9 +70,9 @@ struct tile_stream_cpu
   uint32_t* batch_active_masks;  // [K] per-epoch active level mask
   uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
 
-  // IO fence state: tracks pending async IO per level so we don't
+  // IO fence state: tracks pending async IO per level per slot so we don't
   // overwrite aggregate buffers before write_direct completes.
-  struct io_event io_done[LOD_MAX_LEVELS];
+  struct io_event io_done[LOD_MAX_LEVELS][2];
 
   int nthreads;           // resolved at init: always > 0
   size_t shard_alignment; // from sink; 0 = no alignment

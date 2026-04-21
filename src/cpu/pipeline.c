@@ -40,15 +40,17 @@ compute_batch_luts(const struct computed_stream_layouts* cl,
 // ---- flush_batch helpers ----
 
 static struct aggregate_cpu_workspace
-make_agg_workspace(const struct flush_level_view* lvl, size_t* permuted_sizes)
+make_agg_workspace(const struct flush_level_view* lvl,
+                   const struct cpu_agg_slot* slot,
+                   size_t* permuted_sizes)
 {
   return (struct aggregate_cpu_workspace){
     .perm = lvl->batch_chunk_to_shard_map,
     .permuted_sizes = permuted_sizes,
-    .data = lvl->agg_slot->data,
-    .data_capacity = lvl->agg_slot->data_capacity_bytes,
-    .offsets = lvl->agg_slot->offsets,
-    .chunk_sizes = lvl->agg_slot->chunk_sizes,
+    .data = slot->data,
+    .data_capacity = slot->data_capacity_bytes,
+    .offsets = slot->offsets,
+    .chunk_sizes = slot->chunk_sizes,
   };
 }
 
@@ -86,6 +88,7 @@ static int
 aggregate_and_deliver_batch(int lv,
                             const struct flush_batch_params* p,
                             const struct flush_level_view* lvl,
+                            const struct cpu_agg_slot* slot,
                             uint32_t active_count)
 {
   struct platform_clock clk = { 0 };
@@ -93,7 +96,7 @@ aggregate_and_deliver_batch(int lv,
     platform_toc(&clk);
 
   struct aggregate_cpu_workspace ws =
-    make_agg_workspace(lvl, p->shard_order_sizes_bytes);
+    make_agg_workspace(lvl, slot, p->shard_order_sizes_bytes);
   struct aggregate_result ar;
   if (aggregate_cpu_batch_into(p->compressed,
                                p->comp_sizes,
@@ -169,12 +172,14 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     if (active_count > lut_cap)
       return 1;
 
-    // Wait for pending async IO before overwriting aggregate buffer.
+    const uint8_t cur = *lvl->agg_current;
+
+    // Wait on the slot we're about to reuse (oldest pending IO on this level).
     if (p->sink->wait_fence) {
       struct platform_clock fence_clk = { 0 };
       if (p->metrics)
         platform_toc(&fence_clk);
-      p->sink->wait_fence(p->sink, (uint8_t)lv, *lvl->io_done);
+      p->sink->wait_fence(p->sink, (uint8_t)lv, lvl->io_done[cur]);
       if (p->metrics) {
         float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
         accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
@@ -193,12 +198,15 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                          lvl->batch_gather,
                          lvl->batch_chunk_to_shard_map);
 
-    if (aggregate_and_deliver_batch(lv, p, lvl, active_count))
+    if (aggregate_and_deliver_batch(lv, p, lvl, &lvl->agg_slot[cur], active_count))
       return 1;
 
-    // Record fence so next batch waits for this delivery's IO.
+    // Record fence on the just-delivered slot so the next reuse waits for it.
     if (p->sink->record_fence)
-      *lvl->io_done = p->sink->record_fence(p->sink, (uint8_t)lv);
+      lvl->io_done[cur] = p->sink->record_fence(p->sink, (uint8_t)lv);
+
+    // Next delivery on this level uses the other slot.
+    *lvl->agg_current = cur ^ 1;
   }
 
   return 0;
