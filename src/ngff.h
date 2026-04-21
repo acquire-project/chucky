@@ -40,6 +40,8 @@ ngff_axes_copy(struct ngff_axis* dst,
 
 // Free unit strings previously allocated by ngff_axes_copy. Safe on
 // zero-initialized slots (free(NULL)). Does not free the array itself.
+// Only the unit pointer is owned; scale and type are plain scalars and are
+// left untouched.
 void
 ngff_axes_free_units(struct ngff_axis* axes, uint8_t rank);
 

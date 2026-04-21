@@ -1,6 +1,7 @@
 #include "util/strbuf.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,7 +52,10 @@ strbuf_reserve(struct strbuf* sb, size_t need)
 
   size_t len = (size_t)(sb->end - sb->beg);
   size_t cap = (size_t)(sb->cap_end - sb->beg); // includes NUL slot
-  size_t want = len + need + 1;                 // +1 for NUL
+  // Check len + need + 1 without overflowing size_t.
+  if (need > SIZE_MAX - 1 - len)
+    return 1;
+  size_t want = len + need + 1; // +1 for NUL
   if (want <= cap)
     return 0;
 
@@ -153,4 +157,10 @@ const char*
 strbuf_cstr(const struct strbuf* sb)
 {
   return (sb && sb->beg) ? sb->beg : "";
+}
+
+size_t
+strbuf_len(const struct strbuf* sb)
+{
+  return sb->beg ? (size_t)(sb->end - sb->beg) : 0;
 }

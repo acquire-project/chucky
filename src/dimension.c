@@ -44,6 +44,9 @@ dims_copy(struct dimension* dst, const struct dimension* src, uint8_t rank)
     return 1;
   for (uint8_t d = 0; d < rank; ++d) {
     dst[d] = src[d];
+    // Null out the aliased source name before any allocation so the cleanup
+    // below never sees an un-duplicated pointer from src.
+    dst[d].name = NULL;
     if (src[d].name) {
       char* dup = strdup(src[d].name);
       if (!dup) {

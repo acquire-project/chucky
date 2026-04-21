@@ -245,7 +245,7 @@ zarr_for_each_intermediate(const char* array_name,
     return 0;
 
   size_t len = strlen(array_name);
-  if (len == 0 || len >= 4096)
+  if (len == 0)
     return -1;
 
   // Reject leading slash, trailing slash, or empty segments (//)
@@ -254,19 +254,27 @@ zarr_for_each_intermediate(const char* array_name,
   if (strstr(array_name, "//"))
     return -1;
 
-  char name[4096];
-  memcpy(name, array_name, len + 1);
+  struct strbuf name = { 0 };
+  int rc = 0;
+  if (strbuf_append(&name, array_name, len)) {
+    rc = -1;
+    goto done;
+  }
 
+  char* buf = name.beg;
   for (size_t i = 0; i < len; ++i) {
-    if (name[i] == '/') {
-      name[i] = '\0';
-      int rc = fn(name, ctx);
-      name[i] = '/';
+    if (buf[i] == '/') {
+      buf[i] = '\0';
+      rc = fn(buf, ctx);
+      buf[i] = '/';
       if (rc != 0)
-        return rc;
+        goto done;
     }
   }
-  return 0;
+
+done:
+  strbuf_free(&name);
+  return rc;
 }
 
 int

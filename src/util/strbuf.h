@@ -53,7 +53,10 @@ strbuf_append_cstr(struct strbuf* sb, const char* s);
 // printf-style append. Returns 0 on success.
 int
 strbuf_appendf(struct strbuf* sb, const char* fmt, ...)
-  __attribute__((format(printf, 2, 3)));
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((format(printf, 2, 3)))
+#endif
+  ;
 
 // va_list variant of strbuf_appendf.
 int
@@ -65,11 +68,8 @@ int
 strbuf_set(struct strbuf* sb, const char* s);
 
 // Current content length (bytes, excluding NUL).
-static inline size_t
-strbuf_len(const struct strbuf* sb)
-{
-  return sb->beg ? (size_t)(sb->end - sb->beg) : 0;
-}
+size_t
+strbuf_len(const struct strbuf* sb);
 
 // NUL-terminated pointer to content. Never NULL: returns "" for empty/
 // zero-init bufs.

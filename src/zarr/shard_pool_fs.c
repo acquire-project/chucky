@@ -218,16 +218,16 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   int flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
   w->fd = platform_open_write(strbuf_cstr(&path), flags);
   if (w->fd == PLATFORM_FD_INVALID) {
-    // Directory may not exist yet — create parent and retry
-    char* last_slash = strrchr(path.beg, '/');
+    // Directory may not exist yet — create parent and retry.
+    const char* path_cstr = strbuf_cstr(&path);
+    const char* last_slash = strrchr(path_cstr, '/');
     if (last_slash) {
-      *last_slash = '\0';
-      if (platform_mkdirp(strbuf_cstr(&path)) == 0) {
-        *last_slash = '/';
+      struct strbuf dir = { 0 };
+      if (strbuf_append(&dir, path_cstr, (size_t)(last_slash - path_cstr)) ==
+            0 &&
+          platform_mkdirp(strbuf_cstr(&dir)) == 0)
         w->fd = platform_open_write(strbuf_cstr(&path), flags);
-      } else {
-        *last_slash = '/';
-      }
+      strbuf_free(&dir);
     }
     if (w->fd == PLATFORM_FD_INVALID) {
       log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&path));
