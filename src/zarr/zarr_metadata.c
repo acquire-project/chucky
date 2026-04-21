@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char*
@@ -254,26 +255,24 @@ zarr_for_each_intermediate(const char* array_name,
   if (strstr(array_name, "//"))
     return -1;
 
-  struct strbuf name = { 0 };
-  int rc = 0;
-  if (strbuf_append(&name, array_name, len)) {
-    rc = -1;
-    goto done;
-  }
+  // Mutable scratch copy so we can temporarily NUL-terminate at each slash.
+  char* name = (char*)malloc(len + 1);
+  if (!name)
+    return -1;
+  memcpy(name, array_name, len + 1);
 
-  char* buf = name.beg;
+  int rc = 0;
   for (size_t i = 0; i < len; ++i) {
-    if (buf[i] == '/') {
-      buf[i] = '\0';
-      rc = fn(buf, ctx);
-      buf[i] = '/';
+    if (name[i] == '/') {
+      name[i] = '\0';
+      rc = fn(name, ctx);
+      name[i] = '/';
       if (rc != 0)
-        goto done;
+        break;
     }
   }
 
-done:
-  strbuf_free(&name);
+  free(name);
   return rc;
 }
 

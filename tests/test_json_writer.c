@@ -6,6 +6,7 @@
 #include "zarr/json_writer.h"
 #include "zarr/zarr_metadata.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -119,6 +120,33 @@ test_grows_past_inline(void)
   strbuf_free(&sb);
   return 0;
 
+Fail:
+  strbuf_free(&sb);
+  return 1;
+}
+
+// Verify that jw_error is 0 on a fresh writer and that downstream writes
+// succeed cleanly. Note: actually triggering jw_error in a unit test
+// requires either injecting a strbuf OOM or forcing vsnprintf to fail —
+// neither is portable without a mock allocator. The underlying overflow
+// guard is covered by test_strbuf's test_reserve_overflow_guard; this test
+// just confirms the happy-path error flag stays clean.
+static int
+test_jw_error_clean(void)
+{
+  log_info("=== test_jw_error_clean ===");
+  struct strbuf sb = { 0 };
+  struct json_writer jw;
+  jw_init(&jw, &sb);
+  CHECK(Fail, !jw_error(&jw));
+  jw_object_begin(&jw);
+  jw_key(&jw, "k");
+  jw_string(&jw, "v");
+  jw_object_end(&jw);
+  CHECK(Fail, !jw_error(&jw));
+  CHECK(Fail, strcmp(strbuf_cstr(&sb), "{\"k\":\"v\"}") == 0);
+  strbuf_free(&sb);
+  return 0;
 Fail:
   strbuf_free(&sb);
   return 1;
@@ -422,6 +450,7 @@ main(void)
     { "nested", test_nested },
     { "string_escaping", test_string_escaping },
     { "grows_past_inline", test_grows_past_inline },
+    { "jw_error_clean", test_jw_error_clean },
     { "array_commas", test_array_commas },
     { "uint", test_uint },
     { "zarr_metadata", test_zarr_metadata },

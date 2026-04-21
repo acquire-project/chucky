@@ -60,8 +60,14 @@ s3_has_existing_data(struct store* self)
   struct store_s3* s = container_of(self, struct store_s3, base);
   struct strbuf full = { 0 };
   int rc = 0;
-  if (s3_full_key(s, "zarr.json", &full) == 0)
+  if (s3_full_key(s, "zarr.json", &full)) {
+    // Fail closed: assume data may exist so the caller doesn't silently
+    // overwrite a live dataset on transient OOM.
+    log_error("store_s3: failed to build key for existence check");
+    rc = 1;
+  } else {
     rc = s3_client_head(s->client, strbuf_cstr(&s->bucket), strbuf_cstr(&full));
+  }
   strbuf_free(&full);
   return rc;
 }

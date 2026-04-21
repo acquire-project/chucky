@@ -10,6 +10,7 @@
 #include "zarr/store.h"
 #include "zarr/zarr_group.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +69,28 @@ static const char*
 plate_row_names_ptr(const struct hcs_plate* p)
 {
   return p->has_row_names ? p->row_names : NULL;
+}
+
+// Build a printf-formatted path into a scratch strbuf, mkdir it, and free.
+// Returns 0 on success.
+static int
+mkdirs_fmt(struct store* store, const char* fmt, ...)
+#if defined(__GNUC__) || defined(__clang__)
+  __attribute__((format(printf, 2, 3)))
+#endif
+  ;
+static int
+mkdirs_fmt(struct store* store, const char* fmt, ...)
+{
+  struct strbuf path = { 0 };
+  va_list ap;
+  va_start(ap, fmt);
+  int rc = strbuf_vappendf(&path, fmt, ap);
+  va_end(ap);
+  if (rc == 0)
+    rc = store->mkdirs(store, strbuf_cstr(&path));
+  strbuf_free(&path);
+  return rc;
 }
 
 static int
@@ -215,16 +238,14 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     char rc = row_char(cfg, r);
 
     // Row group
-    struct strbuf path_scratch = { 0 };
-    if (strbuf_appendf(&path_scratch, "%s/%c", cfg->name, rc)) {
-      strbuf_free(&path_scratch);
-      goto Fail_fovs;
-    }
-    int mkrc = store->mkdirs(store, strbuf_cstr(&path_scratch));
+    struct strbuf row_dir = { 0 };
+    int row_rc = strbuf_appendf(&row_dir, "%s/%c", cfg->name, rc);
+    if (row_rc == 0)
+      row_rc = store->mkdirs(store, strbuf_cstr(&row_dir));
     struct zarr_group* g =
-      mkrc == 0 ? zarr_group_create(store, strbuf_cstr(&path_scratch)) : NULL;
-    strbuf_free(&path_scratch);
-    CHECK(Fail_fovs, mkrc == 0 && g);
+      row_rc == 0 ? zarr_group_create(store, strbuf_cstr(&row_dir)) : NULL;
+    strbuf_free(&row_dir);
+    CHECK(Fail_fovs, row_rc == 0 && g);
     zarr_group_destroy(g);
 
     for (int c = 0; c < cfg->cols; ++c) {
@@ -232,27 +253,20 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
         continue;
 
       // Well group with OME well attributes
-      struct strbuf well_dir = { 0 };
-      if (strbuf_appendf(&well_dir, "%s/%c/%d", cfg->name, rc, c + 1)) {
-        strbuf_free(&well_dir);
-        goto Fail_fovs;
-      }
-      int wmkrc = store->mkdirs(store, strbuf_cstr(&well_dir));
-      strbuf_free(&well_dir);
-      CHECK(Fail_fovs, wmkrc == 0);
+      CHECK(Fail_fovs,
+            mkdirs_fmt(store, "%s/%c/%d", cfg->name, rc, c + 1) == 0);
       CHECK(Fail_fovs, write_well_group(p, r, c) == 0);
 
       // FOV multiscale sinks
       for (int f = 0; f < cfg->field_count; ++f) {
         struct strbuf fov_prefix = { 0 };
-        if (strbuf_appendf(
-              &fov_prefix, "%s/%c/%d/%d", cfg->name, rc, c + 1, f)) {
-          strbuf_free(&fov_prefix);
-          goto Fail_fovs;
-        }
+        int fp_rc =
+          strbuf_appendf(&fov_prefix, "%s/%c/%d/%d", cfg->name, rc, c + 1, f);
         int idx = fov_index(p, r, c, f);
-        p->fovs[idx] = ngff_multiscale_create_with_pool(
-          store, pool, strbuf_cstr(&fov_prefix), &cfg->fov);
+        p->fovs[idx] = fp_rc == 0
+                         ? ngff_multiscale_create_with_pool(
+                             store, pool, strbuf_cstr(&fov_prefix), &cfg->fov)
+                         : NULL;
         strbuf_free(&fov_prefix);
         CHECK(Fail_fovs, p->fovs[idx]);
       }

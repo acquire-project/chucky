@@ -19,6 +19,9 @@ ngff_axes_copy(struct ngff_axis* dst, const struct ngff_axis* src, uint8_t rank)
     return 1;
   for (uint8_t d = 0; d < rank; ++d) {
     dst[d] = src[d];
+    // Null the aliased source pointer before any allocation so the cleanup
+    // below never sees an un-duplicated pointer from src.
+    dst[d].unit = NULL;
     if (src[d].unit) {
       char* dup = strdup(src[d].unit);
       if (!dup) {

@@ -2,6 +2,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
+#include <stdint.h>
 #include <string.h>
 
 static int
@@ -196,6 +197,53 @@ Fail:
   return 1;
 }
 
+// Exercise the boundary between the first vsnprintf fitting and triggering
+// the grow+retry path: fill inline to within 1 byte of its capacity, then
+// appendf one more character. Exits the inline buffer by exactly one byte.
+static int
+test_appendf_at_inline_boundary(void)
+{
+  log_info("=== test_appendf_at_inline_boundary ===");
+  struct strbuf sb = { 0 };
+  // Append STRBUF_INLINE_CAP - 1 bytes — fits exactly (leaving NUL slot).
+  char fill[STRBUF_INLINE_CAP - 1];
+  memset(fill, 'x', sizeof(fill));
+  CHECK(Fail, strbuf_append(&sb, fill, sizeof(fill)) == 0);
+  CHECK(Fail, sb.beg == sb.inline_buf);
+  CHECK(Fail, strbuf_len(&sb) == STRBUF_INLINE_CAP - 1);
+
+  // One more byte would overflow inline (no room for content + NUL); must
+  // grow and retry.
+  CHECK(Fail, strbuf_appendf(&sb, "%c", '!') == 0);
+  CHECK(Fail, sb.beg != sb.inline_buf); // moved to heap
+  CHECK(Fail, strbuf_len(&sb) == STRBUF_INLINE_CAP);
+  CHECK(Fail, sb.beg[STRBUF_INLINE_CAP - 1] == '!');
+  CHECK(Fail, sb.beg[STRBUF_INLINE_CAP] == 0);
+  strbuf_free(&sb);
+  return 0;
+Fail:
+  strbuf_free(&sb);
+  return 1;
+}
+
+// Oversized reserve request must fail via the overflow guard, not wrap to
+// an absurdly small allocation and write past it.
+static int
+test_reserve_overflow_guard(void)
+{
+  log_info("=== test_reserve_overflow_guard ===");
+  struct strbuf sb = { 0 };
+  CHECK(Fail, strbuf_reserve(&sb, SIZE_MAX) != 0);
+  // Buffer should remain usable after the failed reserve.
+  CHECK(Fail, strbuf_append_cstr(&sb, "ok") == 0);
+  CHECK(Fail, strcmp(strbuf_cstr(&sb), "ok") == 0);
+  strbuf_free(&sb);
+  return 0;
+Fail:
+  strbuf_free(&sb);
+  return 1;
+}
+
 // Appending raw bytes with embedded NULs preserves the bytes; the public
 // C-string view ends at the first NUL but the length is correct.
 static int
@@ -230,6 +278,8 @@ main(void)
   failed += test_set_reuses_heap_allocation();
   failed += test_reset_on_zero_init();
   failed += test_reserve_zero();
+  failed += test_appendf_at_inline_boundary();
+  failed += test_reserve_overflow_guard();
   failed += test_binary_with_embedded_nul();
   if (failed)
     log_error("%d strbuf tests FAILED", failed);

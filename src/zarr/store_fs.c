@@ -66,9 +66,14 @@ fs_has_existing_data(struct store* self)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
   struct strbuf path = { 0 };
-  int exists = 0;
-  if (strbuf_appendf(&path, "%s/zarr.json", strbuf_cstr(&fs->root)) == 0)
+  int exists;
+  if (strbuf_appendf(&path, "%s/zarr.json", strbuf_cstr(&fs->root))) {
+    // Fail closed: assume data may exist rather than silently overwrite.
+    log_error("store_fs: failed to build path for existence check");
+    exists = 1;
+  } else {
     exists = platform_path_exists(strbuf_cstr(&path));
+  }
   strbuf_free(&path);
   return exists;
 }
