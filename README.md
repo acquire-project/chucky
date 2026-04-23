@@ -11,7 +11,7 @@ large multidimensional arrays (tensors) using CUDA.
 ## Overview
 
 Chucky implements a GPU-accelerated streaming pipeline for writing compressed,
-sharded [Zarr v3][zarr-v3] stores from high-throughput data sources (2–5 GB/s).
+sharded [Zarr v3][zarr-v3] stores from high-throughput data sources (5+ GB/s).
 Zarr v3 shards pack
 multiple compressed chunks into a single file, reducing file count by orders of
 magnitude compared to one-file-per-chunk layouts.
