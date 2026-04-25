@@ -1,4 +1,5 @@
 #include "writer.h"
+#include "defs.limits.h"
 #include "zarr/shard_pool.h"
 
 #include "log/log.h"
@@ -98,11 +99,16 @@ shard_sink_drain(struct shard_sink* s, int nlod)
 {
   if (!s)
     return 0;
-  if (s->record_fence && s->wait_fence) {
-    for (int lv = 0; lv < nlod; ++lv) {
-      struct io_event ev = s->record_fence(s, (uint8_t)lv);
-      s->wait_fence(s, (uint8_t)lv, ev);
-    }
+  if (s->record_fence && s->wait_fence && nlod > 0) {
+    // Record all level fences first, then wait — so per-level pools
+    // drain concurrently rather than serializing.
+    struct io_event evs[LOD_MAX_LEVELS];
+    if (nlod > LOD_MAX_LEVELS)
+      nlod = LOD_MAX_LEVELS;
+    for (int lv = 0; lv < nlod; ++lv)
+      evs[lv] = s->record_fence(s, (uint8_t)lv);
+    for (int lv = 0; lv < nlod; ++lv)
+      s->wait_fence(s, (uint8_t)lv, evs[lv]);
   }
   return s->has_error ? s->has_error(s) : 0;
 }
