@@ -7,6 +7,7 @@
 #include "test_shard_verify.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
+#include "zarr/shard_pool_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -536,26 +537,144 @@ test_partial_batch_readback(const char* tmpdir)
   return rc;
 }
 
+// Unbuffered FS sinks (O_DIRECT) require page-aligned source pointers for
+// the zero-copy write_direct path. If the aggregate buffer is not
+// page-aligned, deliver_to_shards_batch falls back to the copying write
+// path on every shard run — silently halving throughput. This test feeds
+// realistic-sized data through an unbuffered sink and asserts that the
+// pool's direct-write counter recorded at least one zero-copy write.
+static int
+test_unbuffered_zero_copy(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_zero_copy ===");
+
+  // Inner geometry that produces shards larger than a page so writes are
+  // a meaningful test of the alignment guarantee.
+  const int inner_size[2] = { 64, 64 };
+  const int n_epochs = 4;
+  const int chunks_per_shard_append = 2;
+  const int epoch_elements = inner_size[0] * inner_size[1];
+  const int total_elements = n_epochs * epoch_elements;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = chunks_per_shard_append,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = inner_size[0],
+      .chunk_size = 32,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = inner_size[1],
+      .chunk_size = 32,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s =
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  // Read counters before destroy. Pool is borrowed; freed by the sink close.
+  struct shard_pool* pool = test_zarr_sink_get_pool(&z);
+  CHECK(Fail4, pool);
+
+  uint64_t copy_calls = 0, direct_calls = 0;
+  uint64_t copy_bytes = 0, direct_bytes = 0;
+  shard_pool_fs_path_counts(
+    pool, &copy_calls, &direct_calls, &copy_bytes, &direct_bytes);
+
+  log_info("  copy: %llu calls / %.2f KiB",
+           (unsigned long long)copy_calls,
+           (double)copy_bytes / 1024.0);
+  log_info("  direct: %llu calls / %.2f KiB",
+           (unsigned long long)direct_calls,
+           (double)direct_bytes / 1024.0);
+
+  // The data path must take write_direct. The copy path is reserved for
+  // shard-index finalize writes (and any mid-batch fallback). This
+  // assertion fails when the aggregate buffer is not page-aligned.
+  CHECK(Fail4, direct_calls > 0);
+  CHECK(Fail4, direct_bytes > 0);
+
+  tile_stream_cpu_destroy(s);
+  test_zarr_sink_close(&z);
+  free(src);
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_zero_copy");
+  return 1;
+}
+
 int
 main(void)
 {
   int err = 0;
 
-  char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256];
+  char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256], tmpdir5[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir3, sizeof(tmpdir3)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir4, sizeof(tmpdir4)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir5, sizeof(tmpdir5)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
   err |= test_batch_readback(tmpdir3);
   err |= test_partial_batch_readback(tmpdir4);
+  err |= test_unbuffered_zero_copy(tmpdir5);
 
   test_tmpdir_remove(tmpdir1);
   test_tmpdir_remove(tmpdir2);
   test_tmpdir_remove(tmpdir3);
   test_tmpdir_remove(tmpdir4);
+  test_tmpdir_remove(tmpdir5);
   return err;
 
 Fail:

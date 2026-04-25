@@ -9,6 +9,30 @@
 #include <stdlib.h>
 #include <string.h>
 
+// --- Pool ---
+
+struct fs_slot;
+
+struct shard_pool_fs
+{
+  struct shard_pool base;
+  struct io_queue* queue;
+  struct fs_slot* slots;
+  uint64_t nslots;
+  int unbuffered;
+  struct strbuf root; // owned
+  uint64_t queued_bytes;
+  _Atomic uint64_t retired_bytes;
+  _Atomic int io_error;
+
+  // Path-selection counters for tests / diagnostics. Incremented on every
+  // call to fs_slot_write (copy) and fs_slot_write_direct (zero-copy).
+  _Atomic uint64_t copy_calls;
+  _Atomic uint64_t direct_calls;
+  _Atomic uint64_t copy_bytes;
+  _Atomic uint64_t direct_bytes;
+};
+
 // --- Writer slot for a single shard file ---
 
 struct fs_slot
@@ -20,6 +44,7 @@ struct fs_slot
   _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
   uint64_t* queued_bytes;          // points to shard_pool_fs.queued_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
+  struct shard_pool_fs* pool;      // back-pointer for path counters
 };
 
 struct pwrite_job
@@ -53,6 +78,10 @@ fs_slot_write(struct shard_writer* self,
 {
   struct fs_slot* w = (struct fs_slot*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  if (w->pool) {
+    atomic_fetch_add(&w->pool->copy_calls, 1);
+    atomic_fetch_add(&w->pool->copy_bytes, (uint64_t)nbytes);
+  }
 
   if (w->queue) {
     struct pwrite_job* j;
@@ -121,6 +150,10 @@ fs_slot_write_direct(struct shard_writer* self,
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
   if (nbytes == 0)
     return 0;
+  if (w->pool) {
+    atomic_fetch_add(&w->pool->direct_calls, 1);
+    atomic_fetch_add(&w->pool->direct_bytes, (uint64_t)nbytes);
+  }
 
   if (w->queue) {
     struct pwrite_ref_job* j =
@@ -183,21 +216,6 @@ fs_slot_finalize(struct shard_writer* self)
 Error:
   return 1;
 }
-
-// --- Pool ---
-
-struct shard_pool_fs
-{
-  struct shard_pool base;
-  struct io_queue* queue;
-  struct fs_slot* slots;
-  uint64_t nslots;
-  int unbuffered;
-  struct strbuf root; // owned
-  uint64_t queued_bytes;
-  _Atomic uint64_t retired_bytes;
-  _Atomic int io_error;
-};
 
 static struct shard_writer*
 pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
@@ -343,6 +361,25 @@ shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
   return io_queue_post(p->queue, gate_fn, (void*)gate, NULL);
 }
 
+void
+shard_pool_fs_path_counts(const struct shard_pool* self,
+                          uint64_t* out_copy_calls,
+                          uint64_t* out_direct_calls,
+                          uint64_t* out_copy_bytes,
+                          uint64_t* out_direct_bytes)
+{
+  const struct shard_pool_fs* p =
+    container_of(self, const struct shard_pool_fs, base);
+  if (out_copy_calls)
+    *out_copy_calls = atomic_load(&p->copy_calls);
+  if (out_direct_calls)
+    *out_direct_calls = atomic_load(&p->direct_calls);
+  if (out_copy_bytes)
+    *out_copy_bytes = atomic_load(&p->copy_bytes);
+  if (out_direct_bytes)
+    *out_direct_bytes = atomic_load(&p->direct_bytes);
+}
+
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
 {
@@ -383,6 +420,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->retired_bytes = &p->retired_bytes;
     s->queued_bytes = &p->queued_bytes;
     s->io_error = &p->io_error;
+    s->pool = p;
   }
 
   return &p->base;

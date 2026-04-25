@@ -77,64 +77,76 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   // Per-epoch mask + scratch buffers, sized to K.
   s->batch_active_masks = (uint32_t*)calloc(K, sizeof(uint32_t));
   CHECK(Fail, s->batch_active_masks);
-  s->pool_epochs_scratch = (uint32_t*)malloc((size_t)K * sizeof(uint32_t));
+  // Worst case is per-LOD pool_epochs of length K, packed together.
+  s->pool_epochs_scratch =
+    (uint32_t*)malloc((size_t)LOD_MAX_LEVELS * (size_t)K * sizeof(uint32_t));
   CHECK(Fail, s->pool_epochs_scratch);
 
   // Per-level shard + aggregate state.
   {
-    uint64_t max_batch_C = 0;
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       const struct level_layout_info* li = &s->cl.per_level[lv];
       s->agg_layout[lv] = li->agg_layout;
-      const struct aggregate_layout* agg = &s->agg_layout[lv];
-
-      uint32_t K_l = li->batch_active_count;
-      s->batch_active_count[lv] = K_l;
-      uint32_t slot_count = K_l > 0 ? K_l : 1;
-      uint64_t C_lv = agg->covering_count;
-      uint64_t M_lv = agg->chunks_per_epoch;
-      uint64_t batch_C = (uint64_t)slot_count * C_lv;
-
-      if (batch_C > max_batch_C)
-        max_batch_C = batch_C;
-
-      // Per-level aggregate output buffers (batch-scaled), double-buffered.
-      size_t data_lv = agg_pool_bytes((uint64_t)slot_count * M_lv,
-                                      agg->max_comp_chunk_bytes,
-                                      C_lv,
-                                      agg->cps_inner,
-                                      agg->page_size);
-      for (int fc = 0; fc < 2; ++fc) {
-        struct cpu_agg_slot* as = &s->agg_slots[lv][fc];
-        if (batch_C > 0) {
-          as->offsets = (size_t*)malloc((batch_C + 1) * sizeof(size_t));
-          as->chunk_sizes = (size_t*)calloc(batch_C, sizeof(size_t));
-          CHECK(Fail, as->offsets && as->chunk_sizes);
-        }
-        if (data_lv > 0) {
-          as->data = malloc(data_lv);
-          as->data_capacity_bytes = data_lv;
-          CHECK(Fail, as->data);
-        }
-      }
-
-      // Batch aggregate LUTs (gather + perm).
-      if (M_lv > 0) {
-        uint64_t lut_len = (uint64_t)slot_count * M_lv;
-
-        s->batch_gather[lv] = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-        s->batch_chunk_to_shard_map[lv] =
-          (uint32_t*)malloc(lut_len * sizeof(uint32_t));
-        CHECK(Fail, s->batch_gather[lv] && s->batch_chunk_to_shard_map[lv]);
-      }
-
+      s->batch_active_count[lv] = li->batch_active_count;
       CHECK(Fail, init_shard_state(&s->shard[lv], li) == 0);
     }
 
-    // Shared permuted_sizes scratch (sized to max batch C).
-    if (max_batch_C > 0) {
-      s->shard_order_sizes = (size_t*)calloc(max_batch_C, sizeof(size_t));
+    // Worst-case unified batch layout: every LOD active across every epoch
+    // of its batch_active_count. Sizes the shared per-slot data buffer +
+    // unified scratch arrays.
+    {
+      uint32_t worst[LOD_MAX_LEVELS];
+      for (int lv = 0; lv < s->levels.nlod; ++lv) {
+        uint32_t k = s->batch_active_count[lv];
+        worst[lv] = k > 0 ? k : 1;
+      }
+      const size_t page = s->cl.per_level[0].agg_layout.page_size;
+      CHECK(Fail,
+            batch_aggregate_layout_init(&s->max_batch_layout,
+                                        s->agg_layout,
+                                        worst,
+                                        (uint8_t)s->levels.nlod,
+                                        page) == 0);
+    }
+
+    // Shared permuted_sizes scratch — sized to the unified worst-case
+    // covering count.
+    if (s->max_batch_layout.total_batch_covering > 0) {
+      s->shard_order_sizes = (size_t*)calloc(
+        s->max_batch_layout.total_batch_covering, sizeof(size_t));
       CHECK(Fail, s->shard_order_sizes);
+    }
+
+    // Allocate the two double-buffered slots once each. Each slot owns a
+    // page-aligned data buffer and unified scratch arrays.
+    {
+      const uint64_t cap_chunks = s->max_batch_layout.total_batch_chunks;
+      const uint64_t cap_cov = s->max_batch_layout.total_batch_covering;
+      const size_t cap_data = s->max_batch_layout.total_data_bytes;
+      const size_t align = platform_page_alignment();
+      for (int fc = 0; fc < 2; ++fc) {
+        struct cpu_agg_slot* as = &s->agg_slots[fc];
+        as->data_capacity_bytes = align_up(cap_data, align);
+        if (cap_data > 0) {
+          as->data = platform_aligned_alloc(align, as->data_capacity_bytes);
+          CHECK(Fail, as->data);
+        }
+        if (cap_chunks > 0) {
+          as->perm = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
+          as->gather = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
+          as->source_lod = (uint8_t*)malloc(cap_chunks * sizeof(uint8_t));
+          CHECK(Fail, as->perm && as->gather && as->source_lod);
+        }
+        if (cap_cov > 0) {
+          // +LOD_MAX_LEVELS slack across all three for the per-LOD shift
+          // applied by the unified aggregate.
+          const uint64_t cov_alloc = cap_cov + LOD_MAX_LEVELS;
+          as->permuted_sizes = (size_t*)calloc(cov_alloc, sizeof(size_t));
+          as->offsets = (size_t*)malloc(cov_alloc * sizeof(size_t));
+          as->chunk_sizes = (size_t*)calloc(cov_alloc, sizeof(size_t));
+          CHECK(Fail, as->permuted_sizes && as->offsets && as->chunk_sizes);
+        }
+      }
     }
   }
 
@@ -216,17 +228,10 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
     };
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
-      luts.batch_gather[lv] = s->batch_gather[lv];
-      luts.batch_chunk_to_shard_map[lv] = s->batch_chunk_to_shard_map[lv];
       luts.morton_lut[lv] = s->morton_lut[lv];
       luts.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
     }
-    cpu_pipeline_compute_luts(&s->cl,
-                              &s->levels,
-                              s->batch_active_count,
-                              s->agg_layout,
-                              s->nthreads,
-                              &luts);
+    cpu_pipeline_compute_luts(&s->cl, &s->levels, s->nthreads, &luts);
   }
 
   // Metrics.
@@ -294,17 +299,19 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
         free(ss->shards[si].index);
       free(ss->shards);
     }
-    free(s->batch_gather[lv]);
-    free(s->batch_chunk_to_shard_map[lv]);
     free(s->morton_lut[lv]);
     free(s->lod_fixed_dims_offsets[lv]);
+  }
 
-    for (int fc = 0; fc < 2; ++fc) {
-      struct cpu_agg_slot* as = &s->agg_slots[lv][fc];
-      free(as->data);
-      free(as->offsets);
-      free(as->chunk_sizes);
-    }
+  for (int fc = 0; fc < 2; ++fc) {
+    struct cpu_agg_slot* as = &s->agg_slots[fc];
+    platform_aligned_free(as->data);
+    free(as->perm);
+    free(as->gather);
+    free(as->source_lod);
+    free(as->permuted_sizes);
+    free(as->offsets);
+    free(as->chunk_sizes);
   }
   free(s->shard_order_sizes);
 
@@ -687,7 +694,7 @@ make_view(struct tile_stream_cpu* s)
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
     .io_done = s->io_done,
-    .agg_current = s->agg_current,
+    .agg_current = &s->agg_current,
     .chunk_pool = s->chunk_pool,
     .chunk_pool_bytes = 0,
     .compressed = s->compressed,
@@ -704,8 +711,6 @@ make_view(struct tile_stream_cpu* s)
     .metadata_update_clock = &s->metadata_update_clock,
   };
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    v.batch_gather[lv] = s->batch_gather[lv];
-    v.batch_chunk_to_shard_map[lv] = s->batch_chunk_to_shard_map[lv];
     v.morton_lut[lv] = s->morton_lut[lv];
     v.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
   }

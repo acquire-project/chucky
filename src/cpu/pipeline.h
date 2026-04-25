@@ -6,29 +6,33 @@
 #include "types.stream.h"
 #include "zarr/shard_delivery.h"
 
-// Aggregate output slot (one per level).
+// Per-slot aggregate workspace shared across all LODs in a batch. The data
+// buffer is page-aligned so deliver-time write_direct guards still hold
+// against unbuffered (O_DIRECT) shard sinks. Scratch arrays are sized for
+// the worst-case unified batch (every LOD active across every epoch).
 struct cpu_agg_slot
 {
   void* data; // aggregated compressed chunks in shard order
   size_t data_capacity_bytes;
-  size_t* offsets;     // [C_lv + 1] exclusive prefix sum
-  size_t* chunk_sizes; // [C_lv] pre-padding sizes for shard index
+
+  // Unified scratch sized to max(total_batch_chunks, 1).
+  uint32_t* perm;
+  uint32_t* gather;
+  uint8_t* source_lod;
+
+  // Unified scratch sized to max(total_batch_covering, 1).
+  size_t* permuted_sizes;
+  size_t* offsets;     // [max_total_covering + 1] exclusive prefix sum
+  size_t* chunk_sizes; // [max_total_covering] pre-padding sizes
 };
 
 // ---- flush_batch ----
 
 struct flush_level_view
 {
-  struct aggregate_layout* agg_layout;
   uint32_t batch_active_count;
   uint64_t chunk_offset;
-  uint32_t* batch_chunk_to_shard_map; // [K_l * M_lv] perm LUT (mutable)
-  uint32_t* batch_gather;             // [K_l * M_lv] gather LUT (mutable)
-  struct cpu_agg_slot* agg_slot;      // [2] double-buffered agg slots
   struct shard_state* shard;
-  struct io_event* io_done;  // [2] per-slot pending-IO fences
-  uint8_t* agg_current;      // points to the level's slot-alternator byte
-                             // (0 or 1); value is the slot to use next
 };
 
 struct flush_batch_params
@@ -45,12 +49,20 @@ struct flush_batch_params
   int nlod;
   const struct computed_stream_layouts* cl;
   const struct level_geometry* levels_geo;
+  // Per-LOD aggregate_layouts for the unified batch LUT builder. Points
+  // at a contiguous LOD_MAX_LEVELS-element array (typically owned by the
+  // stream).
+  const struct aggregate_layout* per_lod_agg_layouts;
   struct flush_level_view levels[LOD_MAX_LEVELS];
   size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
+  size_t page_size;               // for batch layout padding (0 = no padding)
   int nthreads;                   // resolved at init: always > 0
   uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
+  struct cpu_agg_slot* agg_slots; // [2] shared per-batch workspace
+  struct io_event* io_done;       // [2] per-slot pending-IO fence
+  uint8_t* agg_current;           // single alternator byte (0 or 1)
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -90,8 +102,6 @@ cpu_pipeline_scatter_epoch(const struct scatter_epoch_params* p,
 
 struct lut_targets
 {
-  uint32_t* batch_gather[LOD_MAX_LEVELS];
-  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
   uint64_t* scatter_fixed_dims_offsets;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
@@ -99,13 +109,10 @@ struct lut_targets
 };
 
 void
-cpu_pipeline_compute_luts(
-  const struct computed_stream_layouts* cl,
-  const struct level_geometry* levels,
-  const uint32_t batch_active_count[LOD_MAX_LEVELS],
-  const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
-  int nthreads,
-  struct lut_targets* out);
+cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
+                          const struct level_geometry* levels,
+                          int nthreads,
+                          struct lut_targets* out);
 
 // ---- append drain ----
 

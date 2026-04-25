@@ -30,16 +30,19 @@ struct tile_stream_cpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
-  // Per-level aggregate output (batch-scaled), double-buffered so aggregate
-  // of batch N+1 overlaps prior pwrites on batch N's slot.
-  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS][2];
-  uint8_t agg_current[LOD_MAX_LEVELS]; // next slot to use per level (0 or 1)
-  size_t* shard_order_sizes;           // [max_batch_C] shared scratch
+  // Unified per-batch aggregate output (across all LODs), double-buffered
+  // so aggregate of batch N+1 overlaps prior pwrites on batch N's slot.
+  // Each slot owns a page-aligned data buffer plus unified scratch arrays
+  // sized for the worst-case batch.
+  struct cpu_agg_slot agg_slots[2];
+  uint8_t agg_current;       // next slot to use (0 or 1)
+  size_t* shard_order_sizes; // [max_batch_C_max] shared scratch
 
-  // Batch aggregate LUTs (per level).
-  uint32_t* batch_gather[LOD_MAX_LEVELS];             // [K_l * M_l]
-  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS]; // [K_l * M_l]
-  uint32_t batch_active_count[LOD_MAX_LEVELS];        // K_l per level
+  uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
+
+  // Worst-case batch layout used to size scratch and the shared data
+  // buffer once per slot at create time.
+  struct batch_aggregate_layout max_batch_layout;
 
   // LOD (multiscale only)
   void* linear; // linear epoch buffer (input accumulated here before scatter)
@@ -70,9 +73,10 @@ struct tile_stream_cpu
   uint32_t* batch_active_masks;  // [K] per-epoch active level mask
   uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
 
-  // IO fence state: tracks pending async IO per level per slot so we don't
-  // overwrite aggregate buffers before write_direct completes.
-  struct io_event io_done[LOD_MAX_LEVELS][2];
+  // IO fence state: per-slot pending IO so we don't overwrite the shared
+  // aggregate buffer before write_direct completes. Single fence per slot
+  // covers writes from all LODs in the batch.
+  struct io_event io_done[2];
 
   int nthreads;           // resolved at init: always > 0
   size_t shard_alignment; // from sink; 0 = no alignment

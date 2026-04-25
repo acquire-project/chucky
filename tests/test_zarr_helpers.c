@@ -3,6 +3,7 @@
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/store.h"
+#include "zarr/zarr_array.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -88,6 +89,12 @@ struct shard_sink*
 test_zarr_sink_as_shard_sink(struct test_zarr_sink* z)
 {
   return zarr_array_as_shard_sink(z->array);
+}
+
+struct shard_pool*
+test_zarr_sink_get_pool(const struct test_zarr_sink* z)
+{
+  return z ? zarr_array_get_pool(z->array) : NULL;
 }
 
 void

@@ -16,3 +16,8 @@ zarr_array_create_with_pool(struct store* store,
                             uint64_t slot_base,
                             const char* prefix,
                             const struct zarr_array_config* cfg);
+
+// Borrowed pool accessor — does NOT transfer ownership. Returns NULL if a
+// is NULL. Used by tests that need to inspect the underlying pool.
+struct shard_pool*
+zarr_array_get_pool(const struct zarr_array* a);

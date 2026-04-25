@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+struct shard_pool;
+
 // --- Single zarr v3 array ---
 
 struct test_zarr_sink
@@ -31,6 +33,12 @@ test_zarr_sink_open(struct test_zarr_sink* z,
 
 struct shard_sink*
 test_zarr_sink_as_shard_sink(struct test_zarr_sink* z);
+
+// Borrowed pool accessor — returns the shard_pool that backs the array's
+// store. Used by tests that need to read pool-level diagnostics (e.g.
+// shard_pool_fs_path_counts). Returns NULL if z has no array yet.
+struct shard_pool*
+test_zarr_sink_get_pool(const struct test_zarr_sink* z);
 
 void
 test_zarr_sink_flush(struct test_zarr_sink* z);

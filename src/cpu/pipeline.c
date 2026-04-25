@@ -9,52 +9,9 @@
 
 #include <stdlib.h>
 
-// ---- batch LUT computation ----
-
-// Convenience: compute pool_epochs from the standard formula
-// pool_epoch = (a + 1) * period - 1, then delegate to aggregate_batch_luts.
-// Init-time helper — allocates a small scratch internally.
-static int
-compute_batch_luts(const struct computed_stream_layouts* cl,
-                   const struct level_geometry* levels,
-                   const struct aggregate_layout* agg,
-                   int lv,
-                   uint32_t active_count,
-                   uint32_t* out_gather,
-                   uint32_t* out_perm)
-{
-  uint32_t* pool_epochs =
-    (uint32_t*)malloc((size_t)active_count * sizeof(uint32_t));
-  if (!pool_epochs)
-    return 1;
-  for (uint32_t a = 0; a < active_count; ++a) {
-    uint32_t period = (cl->dims.append_downsample && lv > 0) ? (1u << lv) : 1;
-    pool_epochs[a] = (a + 1) * period - 1;
-  }
-  aggregate_batch_luts(
-    agg, levels, lv, active_count, pool_epochs, out_gather, out_perm);
-  free(pool_epochs);
-  return 0;
-}
-
 // ---- flush_batch helpers ----
 
-static struct aggregate_cpu_workspace
-make_agg_workspace(const struct flush_level_view* lvl,
-                   const struct cpu_agg_slot* slot,
-                   size_t* permuted_sizes)
-{
-  return (struct aggregate_cpu_workspace){
-    .perm = lvl->batch_chunk_to_shard_map,
-    .permuted_sizes = permuted_sizes,
-    .data = slot->data,
-    .data_capacity = slot->data_capacity_bytes,
-    .offsets = slot->offsets,
-    .chunk_sizes = slot->chunk_sizes,
-  };
-}
-
-// Deliver an aggregate result to shards, with optional metrics.
+// Deliver one LOD's aggregate result to its shards, with optional metrics.
 static int
 deliver_aggregate(int lv,
                   const struct flush_batch_params* p,
@@ -81,40 +38,6 @@ deliver_aggregate(int lv,
     accumulate_metric_ms(&p->metrics->sink, ms, sink_bytes, 0);
   }
   return 0;
-}
-
-// Aggregate + deliver a batch of active_count epochs.
-static int
-aggregate_and_deliver_batch(int lv,
-                            const struct flush_batch_params* p,
-                            const struct flush_level_view* lvl,
-                            const struct cpu_agg_slot* slot,
-                            uint32_t active_count)
-{
-  struct platform_clock clk = { 0 };
-  if (p->metrics)
-    platform_toc(&clk);
-
-  struct aggregate_cpu_workspace ws =
-    make_agg_workspace(lvl, slot, p->shard_order_sizes_bytes);
-  struct aggregate_result ar;
-  if (aggregate_cpu_batch_into(p->compressed,
-                               p->comp_sizes,
-                               lvl->batch_gather,
-                               lvl->agg_layout,
-                               active_count,
-                               &ws,
-                               &ar,
-                               p->nthreads))
-    return 1;
-
-  if (p->metrics) {
-    uint64_t batch_C = (uint64_t)active_count * lvl->agg_layout->covering_count;
-    float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(&p->metrics->aggregate, ms, ar.offsets[batch_C], 0);
-  }
-
-  return deliver_aggregate(lv, p, lvl, &ar, active_count);
 }
 
 // ---- flush_batch ----
@@ -151,63 +74,115 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     }
   }
 
-  // Aggregate + deliver per-level.
+  // Build per-LOD pool_epochs from active_masks. Each LOD's active count
+  // depends on which epochs in the batch flagged that LOD. The shared
+  // pool_epochs_scratch is sized [LOD_MAX_LEVELS * K]; carve a per-LOD
+  // slice of length n_epochs (K is always >= n_epochs).
+  uint32_t per_lod_n_active[LOD_MAX_LEVELS] = { 0 };
+  const uint32_t* pool_epochs[LOD_MAX_LEVELS];
   for (int lv = 0; lv < p->nlod; ++lv) {
-    const struct flush_level_view* lvl = &p->levels[lv];
-
-    // Scan per-epoch masks to get active_count and pool positions.
-    // Emission pattern depends on batch alignment with level period, so
-    // always derive from masks rather than an assumed steady-state pattern.
-    uint32_t* pool_epochs = p->pool_epochs_scratch;
-    uint32_t active_count = 0;
+    uint32_t* dst = p->pool_epochs_scratch + (size_t)lv * n_epochs;
+    uint32_t k = 0;
     for (uint32_t e = 0; e < n_epochs; ++e)
       if (active_masks[e] & (1u << lv))
-        pool_epochs[active_count++] = e;
+        dst[k++] = e;
+    per_lod_n_active[lv] = k;
+    pool_epochs[lv] = dst;
+  }
+
+  // Build the unified batch layout for this kick.
+  struct batch_aggregate_layout layout;
+  if (batch_aggregate_layout_init(&layout,
+                                  p->per_lod_agg_layouts,
+                                  per_lod_n_active,
+                                  (uint8_t)p->nlod,
+                                  p->page_size))
+    return 1;
+
+  // Pick the slot to write into and wait on its previous use.
+  const uint8_t cur = *p->agg_current;
+  struct cpu_agg_slot* slot = &p->agg_slots[cur];
+
+  if (slot->data_capacity_bytes < layout.total_data_bytes)
+    return 1;
+
+  if (p->sink->wait_fence) {
+    struct platform_clock fence_clk = { 0 };
+    if (p->metrics)
+      platform_toc(&fence_clk);
+    p->sink->wait_fence(p->sink, 0, p->io_done[cur]);
+    if (p->metrics) {
+      float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
+      accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
+    }
+  }
+
+  if (p->sink->has_error && p->sink->has_error(p->sink))
+    return 1;
+
+  // Skip the rest of the batch when no LOD has active epochs (e.g. a
+  // partial flush where every level was already drained).
+  if (layout.total_batch_chunks == 0)
+    return 0;
+
+  // Build unified gather + perm + source_lod into the slot's scratch.
+  aggregate_batch_luts_unified(&layout,
+                               p->per_lod_agg_layouts,
+                               p->levels_geo,
+                               pool_epochs,
+                               slot->gather,
+                               slot->perm,
+                               slot->source_lod);
+
+  // Aggregate (single OpenMP loop spans all LODs in pass 3).
+  struct platform_clock agg_clk = { 0 };
+  if (p->metrics)
+    platform_toc(&agg_clk);
+
+  struct aggregate_cpu_workspace ws = {
+    .perm = slot->perm,
+    .permuted_sizes = slot->permuted_sizes,
+    .offsets = slot->offsets,
+    .chunk_sizes = slot->chunk_sizes,
+    .data = slot->data,
+    .data_capacity = slot->data_capacity_bytes,
+  };
+  struct aggregate_result per_lod_results[LOD_MAX_LEVELS];
+  if (aggregate_cpu_batch_into_unified(p->compressed,
+                                       p->comp_sizes,
+                                       slot->gather,
+                                       slot->source_lod,
+                                       &layout,
+                                       &ws,
+                                       per_lod_results,
+                                       p->nthreads))
+    return 1;
+
+  if (p->metrics) {
+    float ms = (float)(platform_toc(&agg_clk) * 1000.0);
+    size_t agg_bytes = layout.total_data_bytes;
+    accumulate_metric_ms(&p->metrics->aggregate, ms, agg_bytes, 0);
+  }
+
+  // Per-LOD deliver. Sink dispatches by level, so this stays per-LOD.
+  for (int lv = 0; lv < p->nlod; ++lv) {
+    const struct flush_level_view* lvl = &p->levels[lv];
+    const uint32_t active_count = per_lod_n_active[lv];
     if (active_count == 0)
       continue;
-
-    // LUT buffers are sized for max(batch_active_count, 1) * M entries.
-    uint32_t lut_cap =
-      lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
-    if (active_count > lut_cap)
+    if (deliver_aggregate(lv, p, lvl, &per_lod_results[lv], active_count))
       return 1;
-
-    const uint8_t cur = *lvl->agg_current;
-
-    // Wait on the slot we're about to overwrite.
-    if (p->sink->wait_fence) {
-      struct platform_clock fence_clk = { 0 };
-      if (p->metrics)
-        platform_toc(&fence_clk);
-      p->sink->wait_fence(p->sink, (uint8_t)lv, lvl->io_done[cur]);
-      if (p->metrics) {
-        float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
-        accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
-      }
-    }
-
-    // Fail fast if async IO encountered an error.
-    if (p->sink->has_error && p->sink->has_error(p->sink))
-      return 1;
-
-    aggregate_batch_luts(lvl->agg_layout,
-                         p->levels_geo,
-                         lv,
-                         active_count,
-                         pool_epochs,
-                         lvl->batch_gather,
-                         lvl->batch_chunk_to_shard_map);
-
-    if (aggregate_and_deliver_batch(lv, p, lvl, &lvl->agg_slot[cur], active_count))
-      return 1;
-
-    // Record fence on the just-delivered slot so the next reuse waits for it.
-    if (p->sink->record_fence)
-      lvl->io_done[cur] = p->sink->record_fence(p->sink, (uint8_t)lv);
-
-    // Next delivery on this level uses the other slot.
-    *lvl->agg_current = cur ^ 1;
   }
+
+  // Record fence on the just-delivered slot so the next slot reuse waits
+  // for the union of all LODs' IO. FS sink ignores the level argument;
+  // multiscale dispatches by level — record on level 0 covers the FS case
+  // and is the conservative choice for any per-level-queue sink.
+  if (p->sink->record_fence)
+    p->io_done[cur] = p->sink->record_fence(p->sink, 0);
+
+  // Next batch uses the other slot.
+  *p->agg_current = cur ^ 1;
 
   return 0;
 }
@@ -363,29 +338,12 @@ Error:
 // ---- LUT computation ----
 
 void
-cpu_pipeline_compute_luts(
-  const struct computed_stream_layouts* cl,
-  const struct level_geometry* levels,
-  const uint32_t batch_active_count[LOD_MAX_LEVELS],
-  const struct aggregate_layout agg_layout[LOD_MAX_LEVELS],
-  int nthreads,
-  struct lut_targets* out)
+cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
+                          const struct level_geometry* levels,
+                          int nthreads,
+                          struct lut_targets* out)
 {
-  // Per-level batch LUTs.
-  for (int lv = 0; lv < levels->nlod; ++lv) {
-    const struct aggregate_layout* agg = &agg_layout[lv];
-    uint32_t K_l = batch_active_count[lv];
-    uint32_t slot_count = K_l > 0 ? K_l : 1;
-
-    if (out->batch_gather[lv] && out->batch_chunk_to_shard_map[lv])
-      (void)compute_batch_luts(cl,
-                               levels,
-                               agg,
-                               lv,
-                               slot_count,
-                               out->batch_gather[lv],
-                               out->batch_chunk_to_shard_map[lv]);
-  }
+  (void)cl;
 
   // LOD LUTs (multiscale only).
   if (levels->enable_multiscale) {
