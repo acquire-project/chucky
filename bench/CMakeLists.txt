@@ -59,6 +59,7 @@ set(BENCH_STREAM_SOURCES
     bench_stream_medfmt_multiscale_dim0.c
     bench_stream_smallepoch_single.c
     bench_stream_256cube_two_streams.c
+    bench_stream_acq2k_single.c
 )
 
 foreach(src IN LISTS BENCH_STREAM_SOURCES)

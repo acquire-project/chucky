@@ -39,7 +39,8 @@ compress_blosc(struct codec_config codec,
   size_t typesize = bytes_per_element > 0 ? bytes_per_element : 1;
   _Atomic int err = 0;
   int i;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 1024) num_threads(nthreads)
+#pragma omp parallel for schedule(dynamic) if (batch_size > 64)                \
+  num_threads(nthreads)
   for (i = 0; i < (int)batch_size; ++i) {
     if (err)
       continue;
