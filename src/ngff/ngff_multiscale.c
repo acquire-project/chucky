@@ -351,7 +351,7 @@ ngff_multiscale_create(struct store* store,
   struct ngff_multiscale* ms =
     ngff_multiscale_init(store, pool, prefix, cfg, &plan);
   if (!ms) {
-    pool->destroy(pool);
+    shard_pool_destroy(pool);
     return NULL;
   }
   ms->owns_pool = 1;
@@ -379,8 +379,7 @@ ngff_multiscale_destroy(struct ngff_multiscale* ms)
   strbuf_free(&ms->prefix);
   struct shard_pool* pool = ms->owns_pool ? ms->pool : NULL;
   free(ms);
-  if (pool)
-    pool->destroy(pool);
+  shard_pool_destroy(pool);
 }
 
 struct shard_sink*

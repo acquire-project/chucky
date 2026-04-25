@@ -18,3 +18,8 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered);
 // without depending on filesystem behavior. Returns 0 on successful enqueue.
 int
 shard_pool_fs_inject_failing_job(struct shard_pool* pool);
+
+// Test helper: enqueue a job that spins until *gate becomes non-zero.
+// Caller owns gate. Returns 0 on successful enqueue.
+int
+shard_pool_fs_inject_blocking_job(struct shard_pool* pool, _Atomic int* gate);

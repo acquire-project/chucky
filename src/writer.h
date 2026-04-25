@@ -89,6 +89,22 @@ shard_sink_pending_bytes(const struct shard_sink* s);
 size_t
 shard_sink_required_shard_alignment(const struct shard_sink* s);
 
+// Drain pending async IO on this sink across all levels. Returns non-zero
+// if the sink reports an error after drain.
+int
+shard_sink_drain(struct shard_sink* s, int nlod);
+
+// Two-phase drain: record fences for all levels, then wait. Lets callers
+// fan out the record phase across many sinks before blocking on waits.
+// `evs` must point to at least `nlod` io_event slots.
+void
+shard_sink_drain_record(struct shard_sink* s, int nlod, struct io_event* evs);
+
+int
+shard_sink_drain_wait(struct shard_sink* s,
+                      int nlod,
+                      const struct io_event* evs);
+
 struct writer_result
 writer_ok(void);
 

@@ -56,3 +56,46 @@ test_file_exists(const char* path)
   DWORD attr = GetFileAttributesA(path);
   return attr != INVALID_FILE_ATTRIBUTES;
 }
+
+struct test_thread
+{
+  HANDLE handle;
+  void (*fn)(void*);
+  void* arg;
+};
+
+static DWORD WINAPI
+thread_trampoline(LPVOID p)
+{
+  struct test_thread* t = (struct test_thread*)p;
+  t->fn(t->arg);
+  return 0;
+}
+
+int
+test_thread_start(struct test_thread** out, void (*fn)(void*), void* arg)
+{
+  struct test_thread* t = (struct test_thread*)malloc(sizeof(*t));
+  if (!t)
+    return -1;
+  t->fn = fn;
+  t->arg = arg;
+  t->handle = CreateThread(NULL, 0, thread_trampoline, t, 0, NULL);
+  if (!t->handle) {
+    free(t);
+    return -1;
+  }
+  *out = t;
+  return 0;
+}
+
+int
+test_thread_join(struct test_thread* t)
+{
+  if (!t)
+    return -1;
+  WaitForSingleObject(t->handle, INFINITE);
+  CloseHandle(t->handle);
+  free(t);
+  return 0;
+}
