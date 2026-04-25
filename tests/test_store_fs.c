@@ -2,9 +2,9 @@
 #include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
+#include "zarr.h"
 #include "zarr/shard_pool.h"
 #include "zarr/shard_pool_fs.h"
-#include "zarr.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 
@@ -125,13 +125,13 @@ test_shard_pool_write(void)
   CHECK(Fail3, n == len);
   CHECK(Fail3, memcmp(buf, data, n) == 0);
 
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
 
 Fail3:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail2:
   s->destroy(s);
 Fail:
@@ -168,13 +168,13 @@ test_shard_pool_fence(void)
   CHECK(Fail3, pool->has_error(pool) == 0);
   CHECK(Fail3, pool->pending_bytes(pool) == 0);
 
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
 
 Fail3:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail2:
   s->destroy(s);
 Fail:
@@ -207,13 +207,13 @@ test_shard_pool_on_demand_mkdir(void)
   CHECK(Fail3, f);
   fclose(f);
 
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
 
 Fail3:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail2:
   s->destroy(s);
 Fail:
@@ -261,7 +261,7 @@ test_shard_pool_unbuffered(void)
   CHECK(Fail4, test_file_exists(path));
 
   platform_aligned_free(data);
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
@@ -269,7 +269,7 @@ test_shard_pool_unbuffered(void)
 Fail4:
   platform_aligned_free(data);
 Fail3:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail2:
   s->destroy(s);
 Fail:
@@ -296,12 +296,12 @@ test_shard_pool_error_propagation(void)
   CHECK(Fail2, flush_err != 0);
   CHECK(Fail2, pool->has_error(pool) != 0);
 
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail:
   log_error("  FAIL");
   return 1;

@@ -292,7 +292,7 @@ Fail_alloc:
   strbuf_free(&p->name);
   free(p);
 Fail_pool:
-  pool->destroy(pool);
+  shard_pool_destroy(pool);
 Fail:
   return NULL;
 }
@@ -324,8 +324,7 @@ hcs_plate_destroy(struct hcs_plate* p)
   strbuf_free(&p->name);
   struct shard_pool* pool = p->pool;
   free(p);
-  if (pool)
-    pool->destroy(pool);
+  shard_pool_destroy(pool);
 }
 
 struct shard_sink*

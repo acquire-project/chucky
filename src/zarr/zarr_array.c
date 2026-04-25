@@ -278,7 +278,7 @@ zarr_array_create(struct store* store,
   struct zarr_array* a =
     zarr_array_init(store, pool, prefix, cfg, sc, cps, sic, 0);
   if (!a) {
-    pool->destroy(pool);
+    shard_pool_destroy(pool);
     return NULL;
   }
   a->owns_pool = 1;
@@ -301,8 +301,7 @@ zarr_array_destroy(struct zarr_array* a)
   strbuf_free(&a->prefix);
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);
-  if (pool)
-    pool->destroy(pool);
+  shard_pool_destroy(pool);
 }
 
 struct shard_sink*
