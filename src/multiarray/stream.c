@@ -121,7 +121,7 @@ struct pool_maxima
 
   // Unified per-batch maxima across all arrays.
   size_t agg_data_bytes_total;       // shared data buffer per slot
-  uint64_t total_batch_chunks_max;   // unified gather/perm/source_lod len
+  uint64_t total_batch_chunks_max;   // unified gather/perm len
   uint64_t total_batch_covering_max; // unified offsets/sizes len
 
   size_t scatter_lut_count;
@@ -313,7 +313,8 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     CHECK(Fail, ms->comp_sizes);
   }
 
-  // Unified per-batch aggregate slots, double-buffered.
+  // Unified per-batch aggregate slots, double-buffered. cap_data is already
+  // page-aligned by batch_aggregate_layout_init.
   {
     const uint64_t cap_chunks = mx->total_batch_chunks_max;
     const uint64_t cap_cov = mx->total_batch_covering_max;
@@ -321,16 +322,15 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     const size_t align = platform_page_alignment();
     for (int fc = 0; fc < 2; ++fc) {
       struct cpu_agg_slot* as = &ms->agg_slots[fc];
-      as->data_capacity_bytes = align_up(cap_data, align);
+      as->data_capacity_bytes = cap_data;
       if (cap_data > 0) {
-        as->data = platform_aligned_alloc(align, as->data_capacity_bytes);
+        as->data = platform_aligned_alloc(align, cap_data);
         CHECK(Fail, as->data);
       }
       if (cap_chunks > 0) {
         as->perm = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
         as->gather = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
-        as->source_lod = (uint8_t*)malloc(cap_chunks * sizeof(uint8_t));
-        CHECK(Fail, as->perm && as->gather && as->source_lod);
+        CHECK(Fail, as->perm && as->gather);
       }
       if (cap_cov > 0) {
         // +LOD_MAX_LEVELS slack for the per-LOD shift applied by the
@@ -495,7 +495,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     platform_aligned_free(as->data);
     free(as->perm);
     free(as->gather);
-    free(as->source_lod);
     free(as->permuted_sizes);
     free(as->offsets);
     free(as->chunk_sizes);

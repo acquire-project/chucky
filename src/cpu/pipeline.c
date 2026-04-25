@@ -90,13 +90,15 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     pool_epochs[lv] = dst;
   }
 
-  // Build the unified batch layout for this kick.
+  // Build the unified batch layout for this kick. page_size is uniform
+  // across LODs (sourced from the sink at config time), so reading it from
+  // the first per-LOD layout is authoritative.
   struct batch_aggregate_layout layout;
   if (batch_aggregate_layout_init(&layout,
                                   p->per_lod_agg_layouts,
                                   per_lod_n_active,
                                   (uint8_t)p->nlod,
-                                  p->page_size))
+                                  p->per_lod_agg_layouts[0].page_size))
     return 1;
 
   // Pick the slot to write into and wait on its previous use.
@@ -125,14 +127,13 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   if (layout.total_batch_chunks == 0)
     return 0;
 
-  // Build unified gather + perm + source_lod into the slot's scratch.
+  // Build unified gather + perm into the slot's scratch.
   aggregate_batch_luts_unified(&layout,
                                p->per_lod_agg_layouts,
                                p->levels_geo,
                                pool_epochs,
                                slot->gather,
-                               slot->perm,
-                               slot->source_lod);
+                               slot->perm);
 
   // Aggregate (single OpenMP loop spans all LODs in pass 3).
   struct platform_clock agg_clk = { 0 };
@@ -151,7 +152,6 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   if (aggregate_cpu_batch_into_unified(p->compressed,
                                        p->comp_sizes,
                                        slot->gather,
-                                       slot->source_lod,
                                        &layout,
                                        &ws,
                                        per_lod_results,
@@ -164,7 +164,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     accumulate_metric_ms(&p->metrics->aggregate, ms, agg_bytes, 0);
   }
 
-  // Per-LOD deliver. Sink dispatches by level, so this stays per-LOD.
+  // Per-LOD deliver. Sink dispatches per-level; the fence is shared.
   for (int lv = 0; lv < p->nlod; ++lv) {
     const struct flush_level_view* lvl = &p->levels[lv];
     const uint32_t active_count = per_lod_n_active[lv];
@@ -174,10 +174,9 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
       return 1;
   }
 
-  // Record fence on the just-delivered slot so the next slot reuse waits
-  // for the union of all LODs' IO. FS sink ignores the level argument;
-  // multiscale dispatches by level — record on level 0 covers the FS case
-  // and is the conservative choice for any per-level-queue sink.
+  // Single fence on the just-delivered slot covers all LODs' IO. Shard sinks
+  // share one IO queue across levels, so one fence is enough — the next slot
+  // reuse waits for every pwrite from this batch.
   if (p->sink->record_fence)
     p->io_done[cur] = p->sink->record_fence(p->sink, 0);
 

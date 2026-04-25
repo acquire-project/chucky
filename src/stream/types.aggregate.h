@@ -76,7 +76,7 @@ extern "C"
     uint64_t chunks_per_shard_inner; // cps_inner_lv
     uint32_t n_active;               // active epochs for this LOD in batch
 
-    uint64_t batch_chunk_offset;    // start in unified gather/perm/source_lod
+    uint64_t batch_chunk_offset;    // start in unified gather/perm
     uint64_t batch_covering_offset; // start in unified offsets/chunk_sizes/...
     size_t data_segment_offset;     // page-aligned byte offset in shared data
     size_t data_segment_bytes;      // capacity reserved for this segment
@@ -106,27 +106,17 @@ extern "C"
                                   uint8_t nlod,
                                   size_t page_size);
 
-  // Worst-case sizing variant: assumes every LOD is fully active across all
-  // K = batch_active_count epochs. Used at create-time to allocate scratch
-  // and the shared data buffer once per slot.
-  int batch_aggregate_layout_max(struct batch_aggregate_layout* out,
-                                 const struct aggregate_layout* per_lod,
-                                 uint8_t nlod,
-                                 uint32_t batch_active_count,
-                                 size_t page_size);
-
-  // Build unified gather + perm + source_lod for a batch across all LODs.
+  // Build unified gather + perm for a batch across all LODs.
   // per_lod and pool_epochs are ragged: pool_epochs[lv][a] for a in
-  // 0..layout->lods[lv].n_active. out_gather/out_perm/out_source_lod are
-  // sized total_batch_chunks. perm values are unified — i.e. per-LOD perm
+  // 0..layout->lods[lv].n_active. out_gather/out_perm are sized
+  // total_batch_chunks. perm values are unified — i.e. per-LOD perm
   // targets are already shifted by batch_covering_offset.
   void aggregate_batch_luts_unified(const struct batch_aggregate_layout* layout,
                                     const struct aggregate_layout* per_lod,
                                     const struct level_geometry* levels,
                                     const uint32_t* const* pool_epochs,
                                     uint32_t* out_gather,
-                                    uint32_t* out_perm,
-                                    uint8_t* out_source_lod);
+                                    uint32_t* out_perm);
 
 #ifdef __cplusplus
 }

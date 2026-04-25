@@ -1,6 +1,5 @@
 #include "cpu/aggregate.h"
 
-#include "platform/platform.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
@@ -189,65 +188,12 @@ aggregate_cpu_batch_into(const void* compressed_base,
   return 0;
 }
 
-// ---- Batch-shaped (unified across LODs) workspace + aggregate ----
-
-int
-aggregate_cpu_workspace_init_batch(struct aggregate_cpu_workspace* ws,
-                                   uint64_t max_total_chunks,
-                                   uint64_t max_total_covering,
-                                   size_t max_total_data_bytes,
-                                   size_t alignment)
-{
-  memset(ws, 0, sizeof(*ws));
-  if (alignment == 0)
-    alignment = platform_page_alignment();
-
-  if (max_total_chunks > 0) {
-    ws->perm = (uint32_t*)malloc(max_total_chunks * sizeof(uint32_t));
-    CHECK(Error, ws->perm);
-  }
-  if (max_total_covering > 0) {
-    // +LOD_MAX_LEVELS slack across permuted_sizes, offsets, and chunk_sizes
-    // leaves room for the per-LOD shift used by the unified aggregate so
-    // adjacent LODs' spans never collide.
-    const uint64_t cov = max_total_covering + LOD_MAX_LEVELS;
-    ws->permuted_sizes = (size_t*)calloc(cov, sizeof(size_t));
-    ws->offsets = (size_t*)malloc(cov * sizeof(size_t));
-    ws->chunk_sizes = (size_t*)calloc(cov, sizeof(size_t));
-    CHECK(Error, ws->permuted_sizes && ws->offsets && ws->chunk_sizes);
-  }
-
-  ws->data_capacity = align_up(max_total_data_bytes, alignment);
-  if (ws->data_capacity > 0) {
-    ws->data = platform_aligned_alloc(alignment, ws->data_capacity);
-    CHECK(Error, ws->data);
-  }
-
-  return 0;
-
-Error:
-  aggregate_cpu_workspace_free_batch(ws);
-  return 1;
-}
-
-void
-aggregate_cpu_workspace_free_batch(struct aggregate_cpu_workspace* ws)
-{
-  if (!ws)
-    return;
-  free(ws->perm);
-  free(ws->permuted_sizes);
-  free(ws->offsets);
-  free(ws->chunk_sizes);
-  platform_aligned_free(ws->data);
-  memset(ws, 0, sizeof(*ws));
-}
+// ---- Unified-across-LODs per-batch aggregate ----
 
 int
 aggregate_cpu_batch_into_unified(const void* compressed_base,
                                  const size_t* comp_sizes_base,
                                  const uint32_t* gather,
-                                 const uint8_t* source_lod,
                                  const struct batch_aggregate_layout* layout,
                                  struct aggregate_cpu_workspace* ws,
                                  struct aggregate_result* per_lod_results,
@@ -307,8 +253,7 @@ aggregate_cpu_batch_into_unified(const void* compressed_base,
 
   // Pass 3: unified parallel gather across all LODs. Pool stride is uniform
   // (max_output_size shared across LODs), so source addressing only needs
-  // gather[i] * max_comp regardless of source_lod.
-  (void)source_lod;
+  // gather[i] * max_comp.
   {
     int i;
 #pragma omp parallel for schedule(static) if (total_chunks > 16)               \

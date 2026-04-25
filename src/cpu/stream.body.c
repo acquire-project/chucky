@@ -31,7 +31,6 @@ make_flush_params(struct cpu_stream_view* v)
     .shard_order_sizes_bytes = v->shard_order_sizes,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
-    .page_size = v->cl->per_level[0].agg_layout.page_size,
     .nthreads = v->nthreads,
     .pool_epochs_scratch = v->pool_epochs_scratch,
     .agg_slots = v->agg_slots,
@@ -307,8 +306,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     platform_toc(&emit_clk);
 
     // Both slots may hold in-flight IO from this batch; wait on both before
-    // finalize. Single fence per slot now covers all LODs since the batch
-    // shares one workspace.
+    // finalize. Single fence per slot covers all LODs (one shared IO queue).
     if (v->sink->wait_fence) {
       v->sink->wait_fence(v->sink, 0, v->io_done[0]);
       v->sink->wait_fence(v->sink, 0, v->io_done[1]);

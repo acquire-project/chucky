@@ -148,27 +148,13 @@ Error:
   return 1;
 }
 
-int
-batch_aggregate_layout_max(struct batch_aggregate_layout* out,
-                           const struct aggregate_layout* per_lod,
-                           uint8_t nlod,
-                           uint32_t batch_active_count,
-                           size_t page_size)
-{
-  uint32_t n_active[LOD_MAX_LEVELS];
-  for (uint8_t lv = 0; lv < nlod; ++lv)
-    n_active[lv] = batch_active_count;
-  return batch_aggregate_layout_init(out, per_lod, n_active, nlod, page_size);
-}
-
 void
 aggregate_batch_luts_unified(const struct batch_aggregate_layout* layout,
                              const struct aggregate_layout* per_lod,
                              const struct level_geometry* levels,
                              const uint32_t* const* pool_epochs,
                              uint32_t* out_gather,
-                             uint32_t* out_perm,
-                             uint8_t* out_source_lod)
+                             uint32_t* out_perm)
 {
   for (uint8_t lv = 0; lv < layout->nlod; ++lv) {
     const struct lod_segment* seg = &layout->lods[lv];
@@ -195,10 +181,8 @@ aggregate_batch_luts_unified(const struct batch_aggregate_layout* layout,
     // with the same lv-shifted offsets layout written in aggregate's pass
     // 2. Without the +lv, LOD k's perm targets would index into LOD k-1's
     // last offset, off by one for every LOD past the first.
-    for (uint64_t i = 0; i < segment_chunks; ++i) {
+    for (uint64_t i = 0; i < segment_chunks; ++i)
       out_perm[base_chunk + i] += (uint32_t)(base_cov + lv);
-      out_source_lod[base_chunk + i] = lv;
-    }
   }
 }
 

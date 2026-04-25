@@ -18,7 +18,6 @@ struct cpu_agg_slot
   // Unified scratch sized to max(total_batch_chunks, 1).
   uint32_t* perm;
   uint32_t* gather;
-  uint8_t* source_lod;
 
   // Unified scratch sized to max(total_batch_covering, 1).
   size_t* permuted_sizes;
@@ -57,7 +56,6 @@ struct flush_batch_params
   size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
-  size_t page_size;               // for batch layout padding (0 = no padding)
   int nthreads;                   // resolved at init: always > 0
   uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
   struct cpu_agg_slot* agg_slots; // [2] shared per-batch workspace
