@@ -1,5 +1,5 @@
-// Regression test for #110: tile_stream_gpu_destroy must drain sink IO
-// before freeing pinned aggregate buffers it references.
+// Regression test: tile_stream_gpu_destroy must drain sink IO before
+// freeing pinned aggregate buffers it references.
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -17,7 +17,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <cuda.h>
 
@@ -114,8 +113,6 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
   CHECK(Cleanup, src);
-  for (size_t i = 0; i < total_elements; ++i)
-    src[i] = (uint32_t)i;
 
   {
     struct slice input = { .beg = src, .end = src + total_elements };

@@ -5,6 +5,8 @@
 #include "log/log.h"
 #include "platform/platform.h"
 
+#include <assert.h>
+
 struct writer_result
 writer_append(struct writer* w, struct slice data)
 {
@@ -94,21 +96,37 @@ shard_sink_required_shard_alignment(const struct shard_sink* s)
                                             : 0;
 }
 
+void
+shard_sink_drain_record(struct shard_sink* s, int nlod, struct io_event* evs)
+{
+  if (!s || !s->record_fence || nlod <= 0)
+    return;
+  assert(nlod <= LOD_MAX_LEVELS);
+  for (int lv = 0; lv < nlod; ++lv)
+    evs[lv] = s->record_fence(s, (uint8_t)lv);
+}
+
 int
-shard_sink_drain(struct shard_sink* s, int nlod)
+shard_sink_drain_wait(struct shard_sink* s,
+                      int nlod,
+                      const struct io_event* evs)
 {
   if (!s)
     return 0;
-  if (s->record_fence && s->wait_fence && nlod > 0) {
-    struct io_event evs[LOD_MAX_LEVELS];
-    if (nlod > LOD_MAX_LEVELS)
-      nlod = LOD_MAX_LEVELS;
-    for (int lv = 0; lv < nlod; ++lv)
-      evs[lv] = s->record_fence(s, (uint8_t)lv);
+  if (s->wait_fence && nlod > 0) {
+    assert(nlod <= LOD_MAX_LEVELS);
     for (int lv = 0; lv < nlod; ++lv)
       s->wait_fence(s, (uint8_t)lv, evs[lv]);
   }
   return s->has_error ? s->has_error(s) : 0;
+}
+
+int
+shard_sink_drain(struct shard_sink* s, int nlod)
+{
+  struct io_event evs[LOD_MAX_LEVELS];
+  shard_sink_drain_record(s, nlod, evs);
+  return shard_sink_drain_wait(s, nlod, evs);
 }
 
 size_t

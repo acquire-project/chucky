@@ -72,7 +72,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
 
-  // Drain sink IO before compress_agg_destroy frees referenced buffers (#110).
+  // Drain sink IO before compress_agg_destroy frees referenced buffers.
   if (shard_sink_drain(s->ctx.sink, s->ctx.levels.nlod))
     log_error("sink reported IO errors during teardown");
 
