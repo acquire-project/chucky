@@ -411,6 +411,7 @@ run_bench(const struct bench_config* cfg)
     .epochs_per_batch = chosen_epochs_per_batch,
     .target_batch_bytes = 512u << 20,
     .backpressure_bytes = cfg->backpressure_bytes,
+    .max_threads = cfg->max_threads,
   };
 
   uint64_t est_total_chunks = 0;
@@ -603,13 +604,15 @@ struct bench_cli_args
   uint64_t io_bw_mbps;
   uint64_t io_latency_us;
   size_t backpressure_bytes;
+  int max_threads;
 };
 
 // Parse the shared bench CLI flags into out. Unknown options print a usage
 // string and return 1. Flags accepted:
 //   --fill --codec --reduce --backend --dtype --frames --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
-//   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure.
+//   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
+//   --max-threads.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
 static int
@@ -633,6 +636,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_bw_mbps = 0;
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
+  out->max_threads = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -677,6 +681,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       out->io_latency_us = strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--backpressure") == 0 && i + 1 < ac) {
       out->backpressure_bytes = parse_bytes(av[++i]);
+    } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
+      out->max_threads = (int)strtol(av[++i], NULL, 10);
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -687,7 +693,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-bucket B --s3-region R --s3-endpoint E [--s3-prefix P] "
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
-              "[--backpressure N (bytes, e.g. 256M)]\n",
+              "[--backpressure N (bytes, e.g. 256M)] "
+              "[--max-threads N (0 = OpenMP default)]\n",
               av[0]);
       return 1;
     }
@@ -746,6 +753,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
+    .max_threads = a.max_threads,
   };
   ecode = run_bench(&cfg);
 
@@ -907,6 +915,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .epochs_per_batch = chosen_epochs_per_batch,
     .target_batch_bytes = 512u << 20,
     .backpressure_bytes = cfg->backpressure_bytes,
+    .max_threads = cfg->max_threads,
   };
 
   // Memory estimates
@@ -1115,6 +1124,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
+    .max_threads = a.max_threads,
   };
   int ecode = run_bench_two_streams(&cfg);
 
