@@ -109,7 +109,7 @@ aggregate_cpu_into(const void* compressed,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if (M > 1024) num_threads(nthreads)
+#pragma omp parallel for schedule(static) if (M > 64) num_threads(nthreads)
     for (i = 0; i < (int)M; ++i) {
       size_t nbytes = comp_sizes[i];
       if (nbytes == 0)
@@ -169,7 +169,8 @@ aggregate_cpu_batch_into(const void* compressed_base,
   // Pass 3: gather compressed chunks in shard order.
   {
     int i;
-#pragma omp parallel for schedule(static) if (batch_M > 1024) num_threads(nthreads)
+#pragma omp parallel for schedule(static) if (batch_M > 64)                    \
+  num_threads(nthreads)
     for (i = 0; i < (int)batch_M; ++i) {
       size_t nbytes = comp_sizes_base[gather[i]];
       if (nbytes == 0)
