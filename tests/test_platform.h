@@ -24,3 +24,17 @@ test_mkdir(const char* path);
 // Check whether a file exists. Returns 1 if it exists, 0 otherwise.
 int
 test_file_exists(const char* path);
+
+// --- Threading (for tests that need a side worker, e.g. blocking-sink
+// regression tests). Minimal: start + join. No cancellation; the test
+// must arrange for the worker to return via its own signaling.
+
+typedef struct test_thread test_thread;
+
+// Start fn(arg) on a new thread. Returns 0 on success, -1 on failure.
+int
+test_thread_start(test_thread** out, void (*fn)(void*), void* arg);
+
+// Wait for the thread to finish and free resources. Returns 0 on success.
+int
+test_thread_join(test_thread* t);

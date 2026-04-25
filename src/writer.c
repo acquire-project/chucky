@@ -93,6 +93,20 @@ shard_sink_required_shard_alignment(const struct shard_sink* s)
                                             : 0;
 }
 
+int
+shard_sink_drain(struct shard_sink* s, int nlod)
+{
+  if (!s)
+    return 0;
+  if (s->record_fence && s->wait_fence) {
+    for (int lv = 0; lv < nlod; ++lv) {
+      struct io_event ev = s->record_fence(s, (uint8_t)lv);
+      s->wait_fence(s, (uint8_t)lv, ev);
+    }
+  }
+  return s->has_error ? s->has_error(s) : 0;
+}
+
 size_t
 shard_pool_pending_bytes(const struct shard_pool* p)
 {
@@ -104,4 +118,11 @@ shard_pool_required_shard_alignment(const struct shard_pool* p)
 {
   return (p && p->required_shard_alignment) ? p->required_shard_alignment(p)
                                             : 0;
+}
+
+void
+shard_pool_destroy(struct shard_pool* p)
+{
+  if (p)
+    p->destroy(p);
 }

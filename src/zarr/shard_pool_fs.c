@@ -328,6 +328,21 @@ shard_pool_fs_inject_failing_job(struct shard_pool* self)
   return io_queue_post(p->queue, fail_fn, (void*)&p->io_error, NULL);
 }
 
+static void
+gate_fn(void* arg)
+{
+  _Atomic int* gate = (_Atomic int*)arg;
+  while (atomic_load(gate) == 0)
+    platform_sleep_ns(1000000LL); // 1ms
+}
+
+int
+shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  return io_queue_post(p->queue, gate_fn, (void*)gate, NULL);
+}
+
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
 {

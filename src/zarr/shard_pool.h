@@ -43,3 +43,7 @@ shard_pool_pending_bytes(const struct shard_pool* p);
 
 size_t
 shard_pool_required_shard_alignment(const struct shard_pool* p);
+
+// NULL-safe destroy wrapper. Dispatches to p->destroy(p) when p is non-NULL.
+void
+shard_pool_destroy(struct shard_pool* p);

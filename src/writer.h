@@ -89,6 +89,13 @@ shard_sink_pending_bytes(const struct shard_sink* s);
 size_t
 shard_sink_required_shard_alignment(const struct shard_sink* s);
 
+// Drain pending async IO on this sink across all levels by recording a
+// terminal fence per level and waiting on it. No-op for synchronous sinks
+// (those without record_fence/wait_fence). Returns non-zero if the sink
+// reports an error after drain.
+int
+shard_sink_drain(struct shard_sink* s, int nlod);
+
 struct writer_result
 writer_ok(void);
 

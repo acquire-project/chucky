@@ -10,6 +10,7 @@
 #include "platform/platform.h"
 #include "stream/config.h"
 #include "util/prelude.h"
+#include "writer.h"
 
 #include <cuda.h>
 #include <stdlib.h>
@@ -70,6 +71,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compute);
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
+
+  // Drain pending sink IO that references aggregate slot memory before we
+  // free those buffers below in compress_agg_destroy. See issue #110.
+  if (shard_sink_drain(s->ctx.sink, s->ctx.levels.nlod))
+    log_error("sink reported IO errors during teardown");
 
   destroy_batch_events(&s->engine.batch);
   destroy_flush_pipeline(&s->engine.flush);
@@ -140,8 +146,7 @@ static int
 init_flush_pipeline(struct flush_pipeline* fp, uint32_t K)
 {
   for (int fc = 0; fc < 2; ++fc) {
-    fp->slot[fc].batch_active_masks =
-      (uint32_t*)calloc(K, sizeof(uint32_t));
+    fp->slot[fc].batch_active_masks = (uint32_t*)calloc(K, sizeof(uint32_t));
     if (!fp->slot[fc].batch_active_masks)
       return 1;
   }

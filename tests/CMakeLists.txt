@@ -123,6 +123,7 @@ add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driv
 # Test platform utilities
 add_test_lib(test_platform test_platform.h)
 add_platform_sources(test_platform)
+target_link_libraries(test_platform PUBLIC Threads::Threads)
 
 # Shared test data generation library
 add_test_lib(test_data test_data.c test_data.h)
@@ -151,6 +152,10 @@ target_compile_definitions(
 )
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_destroy_drain PROPERTIES TIMEOUT 30)
+endif()
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)
 

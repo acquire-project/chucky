@@ -9,6 +9,7 @@
 #include "multiarray.gpu.h"
 #include "stream/config.h"
 #include "util/prelude.h"
+#include "writer.h"
 #include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
@@ -607,6 +608,13 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   sync_all(&ms->engine.streams);
 
   if (ms->arrays) {
+    // Drain each array's sink before freeing the shared aggregate buffers
+    // it references below. See issue #110.
+    for (int a = 0; a < ms->n_arrays; ++a) {
+      struct array_descriptor_gpu* desc = &ms->arrays[a];
+      if (shard_sink_drain(desc->ctx.sink, desc->ctx.levels.nlod))
+        log_error("array %d sink reported IO errors during teardown", a);
+    }
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);
