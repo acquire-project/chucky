@@ -1,16 +1,5 @@
-// Regression test for issue #110.
-//
-// On GPU stream teardown, h_aggregated (pinned host memory referenced by
-// async pwrite_ref jobs) used to be freed before the sink's IO queue had
-// drained. tile_stream_gpu_destroy now calls shard_sink_drain to record
-// and wait on a terminal fence per level before freeing the aggregate
-// slots.
-//
-// We verify the drain is actually present by injecting a job that blocks
-// on an atomic gate. With the drain in place, destroy runs on a worker
-// thread and blocks until the test releases the gate. Without the drain,
-// destroy returns immediately and the assertion that the worker is still
-// alive fails.
+// Regression test for #110: tile_stream_gpu_destroy must drain sink IO
+// before freeing pinned aggregate buffers it references.
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -32,12 +21,8 @@
 
 #include <cuda.h>
 
-// Timing budgets. We know the sink IO is a single CPU-bound spin and a
-// handful of pwrite jobs against ~512 KiB of compressed data, so we can
-// afford tight bounds: the test does not depend on disk speed because
-// the gate job blocks the io_queue worker until we release it.
-#define DRAIN_OBSERVE_MS 200         // wait this long while gate is closed
-#define POST_RELEASE_TIMEOUT_MS 5000 // generous bound after gate releases
+#define DRAIN_OBSERVE_MS 200
+#define POST_RELEASE_TIMEOUT_MS 5000
 #define POLL_STEP_MS 10
 
 struct destroy_args
@@ -70,10 +55,6 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
 {
   log_info("=== test_destroy_waits_for_sink_io ===");
 
-  // Mirror tests/test_zarr_fs_sink.c::test_pipeline geometry: 12x8x12
-  // elements, 2x4x3 chunks, (3,2,2) chunks/shard => 4 shards. This config
-  // is known-good for the compress pipeline, so writes actually queue
-  // pwrite_ref jobs behind the blocking gate.
   struct dimension dims[3] = {
     { .size = 12,
       .chunk_size = 2,
@@ -108,7 +89,6 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   CHECK(Cleanup, store->mkdirs(store, ".") == 0);
   CHECK(Cleanup, store->mkdirs(store, "0") == 0);
 
-  // 8 shards => 8 slots so writes don't serialize through one slot.
   pool = store->create_pool(store, 8);
   CHECK(Cleanup, pool);
 
@@ -143,38 +123,24 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // Inject the blocking job before destroy. It sits at seq=1 in the
-  // io_queue. The destroy auto-flush will queue pwrite jobs behind it,
-  // and shard_sink_drain will record a terminal fence behind everything.
-  // wait_fence then blocks until the gate is released.
+  // Gate sits at seq=1 in the io_queue ahead of any pwrite jobs the
+  // destroy auto-flush will queue behind it.
   CHECK(Cleanup, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
 
   struct destroy_args da = { .s = s };
   atomic_store(&da.done, 0);
   CHECK(Cleanup, test_thread_start(&thr, destroy_thread_fn, &da) == 0);
-
-  // Hand ownership of the stream to the worker thread.
   s = NULL;
 
-  // Phase 1: while the gate is closed, destroy MUST be blocked in
-  // shard_sink_drain. If `done` is set within DRAIN_OBSERVE_MS, the
-  // drain isn't waiting — fix is missing.
   platform_sleep_ns((int64_t)DRAIN_OBSERVE_MS * 1000000LL);
   int destroy_returned_early = (atomic_load(&da.done) != 0);
 
-  // Release the gate. The blocking job exits, queued pwrites drain, the
-  // terminal fence retires, destroy unblocks. Always release so the
-  // failure path can still tear down the pool cleanly.
   atomic_store(&gate, 1);
 
-  // Phase 2: bounded wait for destroy to finish. With the fix this is
-  // ~milliseconds; we allow POST_RELEASE_TIMEOUT_MS as a slop budget for
-  // CI noise. If we exceed it, something is genuinely wrong — fail loud
-  // and leak the worker rather than hanging the test.
   if (wait_for_done(&da.done, POST_RELEASE_TIMEOUT_MS)) {
     log_error("destroy did not finish within %d ms after gate release",
               POST_RELEASE_TIMEOUT_MS);
-    // Intentionally do NOT join — would hang. Leak the test_thread.
+    // Don't join — would hang. Leak the worker.
     thr = NULL;
     goto Cleanup;
   }
@@ -197,9 +163,6 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
 
 Cleanup:
   free(src);
-  // If the worker is still pending (e.g. early init failure before
-  // handoff), we never spawned it; if we leaked it on timeout, thr is
-  // already NULL.
   tile_stream_gpu_destroy(s);
   test_thread_join(thr);
   zarr_array_destroy(arr);

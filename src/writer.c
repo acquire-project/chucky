@@ -100,8 +100,6 @@ shard_sink_drain(struct shard_sink* s, int nlod)
   if (!s)
     return 0;
   if (s->record_fence && s->wait_fence && nlod > 0) {
-    // Record all level fences first, then wait — so per-level pools
-    // drain concurrently rather than serializing.
     struct io_event evs[LOD_MAX_LEVELS];
     if (nlod > LOD_MAX_LEVELS)
       nlod = LOD_MAX_LEVELS;
