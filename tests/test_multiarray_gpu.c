@@ -650,11 +650,14 @@ test_flush_idempotent_after_finished(void)
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   const int finalize_after_flush = sink.finalize_count;
   const int open_after_flush = sink.open_count;
+  const int update_append_after_flush = sink.update_append_count;
 
-  // Second flush — idempotent: no new sink calls.
+  // Second flush — idempotent: no new sink calls (including no metadata
+  // re-write via update_append).
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   CHECK(Fail, sink.finalize_count == finalize_after_flush);
   CHECK(Fail, sink.open_count == open_after_flush);
+  CHECK(Fail, sink.update_append_count == update_append_after_flush);
 
   // Further updates still report finished with full input unconsumed, and
   // do not touch the sink.
@@ -668,10 +671,19 @@ test_flush_idempotent_after_finished(void)
   CHECK(Fail, sink.finalize_count == finalize_after_flush);
   CHECK(Fail, sink.open_count == open_after_flush);
 
+  // Flush after the at-capacity probe must remain idempotent: the probe
+  // must not re-arm the latch. Watching update_append_count catches a
+  // phantom re-arm even when no shards need finalizing.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count == finalize_after_flush);
+  CHECK(Fail, sink.open_count == open_after_flush);
+  CHECK(Fail, sink.update_append_count == update_append_after_flush);
+
   // Destroy runs another auto-flush, also idempotent.
   multiarray_tile_stream_gpu_destroy(ms);
   CHECK(Fail, sink.finalize_count == finalize_after_flush);
   CHECK(Fail, sink.open_count == open_after_flush);
+  CHECK(Fail, sink.update_append_count == update_append_after_flush);
   test_sink_free(&sink);
   log_info("  PASS");
   return 0;
@@ -721,7 +733,7 @@ Fail:
 // ---- Test: flush is a resumable explicit sync ----
 //
 // After flush(), an array-stream is still appendable. update() succeeds with
-// new data, and the next flush() commits the new batch.
+// new data, and the next flush() commits the new batch with distinct content.
 static int
 test_flush_resumable(void)
 {
@@ -730,7 +742,8 @@ test_flush_resumable(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // Unbounded dim 0 so max_cursor is 0 (no input-side termination).
+  // Unbounded dim 0 so max_cursor is 0 (no input-side termination). One
+  // epoch per shard so each batch produces a fresh shard with fresh content.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -757,15 +770,16 @@ test_flush_resumable(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
 
-  // First batch: 1 epoch (4 u16) + flush.
+  // First batch: 1 epoch (4 u16) of 0xAA + flush.
   CHECK(Fail,
         write_fill(w, 0, 4, sizeof(uint16_t), 0xAA).error ==
           multiarray_writer_ok);
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   const int finalize_after_first = sink.finalize_count;
-  CHECK(Fail, finalize_after_first > 0);
+  const int shards_after_first = test_sink_shard_count(&sink);
+  CHECK(Fail, shards_after_first > 0);
 
-  // Second batch: another epoch succeeds — stream is still appendable.
+  // Second batch: another epoch with distinct fill 0xBB succeeds.
   {
     struct multiarray_writer_result r =
       write_fill(w, 0, 4, sizeof(uint16_t), 0xBB);
@@ -774,7 +788,29 @@ test_flush_resumable(void)
 
   // Second flush commits the new batch.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  // Strict checks: a NEW shard finalized with NEW content. A silent
+  // double-flush of batch 1 would not produce both signals.
   CHECK(Fail, sink.finalize_count > finalize_after_first);
+  const int shards_after_second = test_sink_shard_count(&sink);
+  CHECK(Fail, shards_after_second > shards_after_first);
+
+  // Scan all finalized shards: at least one byte 0xAA (batch 1) and at least
+  // one byte 0xBB (batch 2) must be present in the durable output.
+  int found_aa = 0, found_bb = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    const struct test_shard_writer* sw = &sink.writers[0][i];
+    if (!sw->buf || sw->size == 0)
+      continue;
+    for (size_t k = 0; k < sw->size; ++k) {
+      if (sw->buf[k] == 0xAA)
+        found_aa = 1;
+      if (sw->buf[k] == 0xBB)
+        found_bb = 1;
+    }
+  }
+  CHECK(Fail, found_aa);
+  CHECK(Fail, found_bb);
 
   multiarray_tile_stream_gpu_destroy(ms);
   test_sink_free(&sink);
