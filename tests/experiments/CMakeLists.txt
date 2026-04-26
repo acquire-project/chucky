@@ -17,9 +17,6 @@ function(add_gpu_experiment TGT)
 endfunction()
 
 add_gpu_experiment(index.ops index.ops.c LINKS CUDA::cuda_driver index_ops_util stream)
-if(CHUCKY_ENABLE_GPU)
-    enable_openmp(index.ops)
-endif()
 
 add_gpu_experiment(index.ops.cuda index.ops.cuda.c LINKS CUDA::cuda_driver CUDA::cudart_static transpose index_ops_util chucky_log)
 

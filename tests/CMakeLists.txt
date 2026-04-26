@@ -76,6 +76,9 @@ target_link_libraries(
         chucky_log
 )
 
+# Threadpool unit tests
+add_test_exe(test_threadpool test_threadpool.c threadpool platform)
+
 # Index operations unit tests (pure CPU)
 add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
 
@@ -83,20 +86,16 @@ add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
 add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 
 # CPU transpose test (no CUDA)
-add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu index_ops_util chucky_log)
-enable_openmp(test_transpose_cpu)
+add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu threadpool index_ops_util chucky_log)
 
 # CPU compress test (no CUDA)
-add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu chucky_log)
-enable_openmp(test_compress_cpu)
+add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chucky_log)
 
 # CPU aggregate test (no CUDA)
-add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu stream_config chucky_log)
-enable_openmp(test_aggregate_cpu)
+add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu threadpool stream_config chucky_log)
 
 # CPU LOD test (no CUDA)
-add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util platform chucky_log)
-enable_openmp(test_lod_cpu)
+add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)
 
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)

@@ -3,6 +3,8 @@
 #include "types.codec.h"
 #include <stddef.h>
 
+struct threadpool;
+
 // Check blosc codec availability. Returns 0 if blosc is available, non-zero
 // if not (stub build). Rejects non-blosc codec ids.
 // Level range is validated separately in validate_config.
@@ -22,4 +24,4 @@ compress_blosc(struct codec_config codec,
                size_t chunk_bytes,
                size_t batch_size,
                size_t bytes_per_element,
-               int nthreads);
+               struct threadpool* pool);

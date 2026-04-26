@@ -1,10 +1,12 @@
 #include "cpu/aggregate.h"
+#include "threadpool/threadpool.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
+
+static struct threadpool* g_pool;
 
 // Build a simple aggregate layout for a 3D case:
 //   chunk_count = {2, 3} (dims 1..rank-1, dim 0 is the epoch dim)
@@ -48,7 +50,8 @@ test_simple(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
+        aggregate_cpu_into(
+          compressed, comp_sizes, &layout, &ws, &result, g_pool) == 0);
 
   // Verify: each chunk i should appear at its permuted position P[i].
   // The offsets should be a valid prefix sum.
@@ -120,7 +123,8 @@ test_multishard(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
+        aggregate_cpu_into(
+          compressed, comp_sizes, &layout, &ws, &result, g_pool) == 0);
 
   // Verify round-trip: each chunk's data at its permuted offset
   for (uint64_t i = 0; i < M; ++i) {
@@ -186,7 +190,8 @@ test_page_aligned(void)
   struct aggregate_result result;
   CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
   CHECK(Fail,
-        aggregate_cpu_into(compressed, comp_sizes, &layout, &ws, &result, omp_get_max_threads()) == 0);
+        aggregate_cpu_into(
+          compressed, comp_sizes, &layout, &ws, &result, g_pool) == 0);
 
   // Verify shard boundaries are page-aligned.
   // Each shard has cps_inner chunks. The offset after each shard group
@@ -226,9 +231,17 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
+  g_pool = threadpool_new(3);
+  if (!g_pool) {
+    log_error("threadpool_new failed");
+    return 1;
+  }
+
   int rc = 0;
   rc |= test_simple();
   rc |= test_multishard();
   rc |= test_page_aligned();
+
+  threadpool_free(g_pool);
   return rc;
 }

@@ -14,6 +14,8 @@ extern "C"
 {
 #endif
 
+  struct threadpool;
+
   // Reduce across LOD levels in-place.
   // values buffer holds all levels: total = levels.ends[nlod-1] elements.
   // csrs: array of nlod-1 reduce_csr entries, one per level transition.
@@ -22,7 +24,7 @@ extern "C"
                      void* values,
                      enum dtype dtype,
                      enum lod_reduce_method method,
-                     int nthreads);
+                     struct threadpool* pool);
 
   // Build morton-to-chunk-pool LUT for level lv.
   // chunk_lut must have room for lod_nelem[lv] entries.
@@ -30,7 +32,7 @@ extern "C"
                                int lv,
                                const struct tile_stream_layout* layout,
                                uint32_t* chunk_lut,
-                               int nthreads);
+                               struct threadpool* pool);
 
   // Scatter level `lv` from morton-ordered values into chunk pool using
   // the given tile_stream_layout (lifted shape/strides for that level).
@@ -46,7 +48,7 @@ extern "C"
                                const uint32_t* chunk_lut,
                                const uint64_t* fixed_dims_chunk_offsets,
                                enum dtype dtype,
-                               int nthreads);
+                               struct threadpool* pool);
 
   // Append fold: accumulate inner-reduced data (levels 1+) from the morton
   // buffer into the accumulator. On first call (counts[lv]==0) copies;
@@ -60,7 +62,7 @@ extern "C"
                           const uint32_t* counts,
                           enum dtype dtype,
                           enum lod_reduce_method method,
-                          int nthreads);
+                          struct threadpool* pool);
 
   // Append emit: finalize accumulator for level lv back to morton buffer.
   // For float mean: divides by count. For int mean/min/max: copies.
@@ -71,20 +73,20 @@ extern "C"
                           uint32_t count,
                           enum dtype dtype,
                           enum lod_reduce_method method,
-                          int nthreads);
+                          struct threadpool* pool);
 
   // Build scatter LUT for L0: maps morton position to source linear offset
   // within one batch. lut must have room for lod_nelem[0] entries.
   // Computed once at init, reused every epoch.
   void lod_cpu_build_scatter_lut(const struct lod_plan* p,
                                  uint32_t* lut,
-                                 int nthreads);
+                                 struct threadpool* pool);
 
   // Build per-fixed-dims offsets into the linear source for scatter/gather.
   // offsets must have room for fixed_dims_count entries.
   void lod_cpu_build_scatter_fixed_dims_offsets(const struct lod_plan* p,
                                                 uint64_t* offsets,
-                                                int nthreads);
+                                                struct threadpool* pool);
 
   // Gather linear input into morton-ordered LOD L0 buffer using
   // precomputed LUT. Sequential writes, random reads.
@@ -95,7 +97,7 @@ extern "C"
                      const uint32_t* scatter_lut,
                      const uint64_t* fixed_dims_offsets,
                      enum dtype dtype,
-                     int nthreads);
+                     struct threadpool* pool);
 
 #ifdef __cplusplus
 }

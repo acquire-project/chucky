@@ -1,10 +1,10 @@
 #include "cpu/compress.h"
 #include "cpu/compress_blosc.h"
 
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
 #include <lz4hc.h>
-#include <omp.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <zstd.h>
@@ -27,6 +27,89 @@ compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes)
   }
 }
 
+struct copy_ctx
+{
+  const char* src;
+  size_t input_stride;
+  char* dst;
+  size_t max_output_size;
+  size_t* comp_sizes;
+  size_t chunk_bytes;
+};
+
+static void
+copy_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct copy_ctx* c = (struct copy_ctx*)vctx;
+  for (size_t i = beg; i < end; ++i) {
+    memcpy(c->dst + i * c->max_output_size,
+           c->src + i * c->input_stride,
+           c->chunk_bytes);
+    c->comp_sizes[i] = c->chunk_bytes;
+  }
+}
+
+struct lz4_ctx
+{
+  const char* src;
+  size_t input_stride;
+  char* dst;
+  size_t max_output_size;
+  size_t* comp_sizes;
+  size_t chunk_bytes;
+  int level;
+  _Atomic int err;
+};
+
+static void
+lz4_one(size_t i, int tid, void* vctx)
+{
+  (void)tid;
+  struct lz4_ctx* c = (struct lz4_ctx*)vctx;
+  if (atomic_load_explicit(&c->err, memory_order_relaxed))
+    return;
+  int rc = LZ4_compress_HC(c->src + i * c->input_stride,
+                           c->dst + i * c->max_output_size,
+                           (int)c->chunk_bytes,
+                           (int)c->max_output_size,
+                           c->level);
+  if (rc <= 0)
+    atomic_store_explicit(&c->err, 1, memory_order_relaxed);
+  else
+    c->comp_sizes[i] = (size_t)rc;
+}
+
+struct zstd_ctx
+{
+  const char* src;
+  size_t input_stride;
+  char* dst;
+  size_t max_output_size;
+  size_t* comp_sizes;
+  size_t chunk_bytes;
+  int level;
+  _Atomic int err;
+};
+
+static void
+zstd_one(size_t i, int tid, void* vctx)
+{
+  (void)tid;
+  struct zstd_ctx* c = (struct zstd_ctx*)vctx;
+  if (atomic_load_explicit(&c->err, memory_order_relaxed))
+    return;
+  size_t rc = ZSTD_compress(c->dst + i * c->max_output_size,
+                            c->max_output_size,
+                            c->src + i * c->input_stride,
+                            c->chunk_bytes,
+                            c->level);
+  if (ZSTD_isError(rc))
+    atomic_store_explicit(&c->err, 1, memory_order_relaxed);
+  else
+    c->comp_sizes[i] = rc;
+}
+
 int
 compress_cpu(struct codec_config codec,
              const void* src,
@@ -37,58 +120,32 @@ compress_cpu(struct codec_config codec,
              size_t chunk_bytes,
              size_t batch_size,
              size_t bytes_per_element,
-             int nthreads)
+             struct threadpool* pool)
 {
-  int i;
   switch (codec.id) {
-    case CODEC_NONE:
-#pragma omp parallel for schedule(static) if (batch_size > 64)                 \
-  num_threads(nthreads)
-      for (i = 0; i < (int)batch_size; ++i) {
-        memcpy((char*)dst + i * max_output_size,
-               (const char*)src + i * input_stride,
-               chunk_bytes);
-        comp_sizes[i] = chunk_bytes;
-      }
+    case CODEC_NONE: {
+      struct copy_ctx c = { (const char*)src, input_stride, (char*)dst,
+                            max_output_size,  comp_sizes,   chunk_bytes };
+      threadpool_for_n(pool, batch_size, copy_range, &c);
       return 0;
+    }
 
     case CODEC_LZ4_NON_STANDARD: {
-      _Atomic int err = 0;
-      int level = codec.level;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 64)                \
-  num_threads(nthreads)
-      for (i = 0; i < (int)batch_size; ++i) {
-        if (err)
-          continue;
-        const char* in = (const char*)src + i * input_stride;
-        char* out = (char*)dst + i * max_output_size;
-        int rc = LZ4_compress_HC(
-          in, out, (int)chunk_bytes, (int)max_output_size, level);
-        if (rc <= 0)
-          err = 1;
-        else
-          comp_sizes[i] = (size_t)rc;
-      }
-      return err;
+      struct lz4_ctx c = { (const char*)src, input_stride,
+                           (char*)dst,       max_output_size,
+                           comp_sizes,       chunk_bytes,
+                           codec.level,      0 };
+      threadpool_for_n_dynamic(pool, batch_size, lz4_one, &c);
+      return atomic_load_explicit(&c.err, memory_order_acquire);
     }
 
     case CODEC_ZSTD: {
-      int level = codec.level;
-      _Atomic int err = 0;
-#pragma omp parallel for schedule(dynamic) if (batch_size > 64)                \
-  num_threads(nthreads)
-      for (i = 0; i < (int)batch_size; ++i) {
-        if (err)
-          continue;
-        const void* in = (const char*)src + i * input_stride;
-        void* out = (char*)dst + i * max_output_size;
-        size_t rc = ZSTD_compress(out, max_output_size, in, chunk_bytes, level);
-        if (ZSTD_isError(rc))
-          err = 1;
-        else
-          comp_sizes[i] = rc;
-      }
-      return err;
+      struct zstd_ctx c = { (const char*)src, input_stride,
+                            (char*)dst,       max_output_size,
+                            comp_sizes,       chunk_bytes,
+                            codec.level,      0 };
+      threadpool_for_n_dynamic(pool, batch_size, zstd_one, &c);
+      return atomic_load_explicit(&c.err, memory_order_acquire);
     }
 
     case CODEC_BLOSC_LZ4:
@@ -102,7 +159,7 @@ compress_cpu(struct codec_config codec,
                             chunk_bytes,
                             batch_size,
                             bytes_per_element,
-                            nthreads);
+                            pool);
 
     default:
       return 1;

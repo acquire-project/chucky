@@ -200,7 +200,7 @@ lod_compute_gpu(const struct lod_plan* p,
     uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
     uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
     CHECK(Fail, reduce_csr_alloc(&host_csrs[l], src_total, dst_total) == 0);
-    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l) == 0);
+    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l, NULL) == 0);
     const struct reduce_csr* csr = &host_csrs[l];
     if (csr->starts && csr->indices) {
       CHECK(Fail,
@@ -461,7 +461,7 @@ lod_compute_gpu_u16(const struct lod_plan* p,
     uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
     uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
     CHECK(Fail, reduce_csr_alloc(&host_csrs[l], src_total, dst_total) == 0);
-    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l) == 0);
+    CHECK(Fail, reduce_csr_build(&host_csrs[l], p, l, NULL) == 0);
     const struct reduce_csr* csr = &host_csrs[l];
     if (csr->starts && csr->indices) {
       CHECK(Fail,

@@ -3,6 +3,8 @@
 #include "stream/types.aggregate.h"
 #include <stddef.h>
 
+struct threadpool;
+
 // Pre-allocated workspace for zero-allocation aggregation.
 struct aggregate_cpu_workspace
 {
@@ -30,7 +32,7 @@ aggregate_cpu_into(const void* compressed,
                    const struct aggregate_layout* layout,
                    struct aggregate_cpu_workspace* ws,
                    struct aggregate_result* result,
-                   int nthreads);
+                   struct threadpool* pool);
 
 // Batch variant: aggregate n_active epochs at once using gather LUT.
 // gather[n_active * M]: maps batch input index → compressed chunk index.
@@ -45,7 +47,7 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          uint32_t n_active,
                          struct aggregate_cpu_workspace* ws,
                          struct aggregate_result* result,
-                         int nthreads);
+                         struct threadpool* pool);
 
 // Unified per-batch aggregate. Single OpenMP loop over total_batch_chunks
 // gathers compressed chunks from across all LODs into the shared, page-
@@ -59,4 +61,4 @@ aggregate_cpu_batch_into_unified(
   const struct batch_aggregate_layout* layout,
   struct aggregate_cpu_workspace* ws,
   struct aggregate_result* per_lod_results, // [layout->nlod]
-  int nthreads);
+  struct threadpool* pool);

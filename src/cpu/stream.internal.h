@@ -64,8 +64,8 @@ struct tile_stream_cpu
   uint64_t cursor_elements;
   uint64_t total_element_limit; // configured stream length in elements (across
                                 // all append chunks). 0 = unbounded.
-  int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 after flush; reset by append for idempotency
+  int pool_fully_covered;       // 1 if scatter overwrites every pool position
+  int flushed; // 1 after flush; reset by append for idempotency
 
   // Batch accumulation state (K = cl.epochs_per_batch).
   uint32_t batch_accumulated;    // 0..K-1
@@ -77,8 +77,8 @@ struct tile_stream_cpu
   // covers writes from all LODs in the batch.
   struct io_event io_done[2];
 
-  int nthreads;           // resolved at init: always > 0
-  size_t shard_alignment; // from sink; 0 = no alignment
+  struct threadpool* pool; // owned by stream
+  size_t shard_alignment;  // from sink; 0 = no alignment
 
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;

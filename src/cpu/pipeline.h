@@ -6,6 +6,8 @@
 #include "types.stream.h"
 #include "zarr/shard_delivery.h"
 
+struct threadpool;
+
 // Per-slot aggregate workspace shared across all LODs in a batch. The data
 // buffer is page-aligned so deliver-time write_direct guards still hold
 // against unbuffered (O_DIRECT) shard sinks. Scratch arrays are sized for
@@ -55,7 +57,7 @@ struct flush_batch_params
   struct flush_level_view levels[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
-  int nthreads;                   // resolved at init: always > 0
+  struct threadpool* pool;        // owned by stream
   uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
   struct cpu_agg_slot* agg_slots; // [2] shared per-batch workspace
   struct io_event* io_done;       // [2] per-slot pending-IO fence
@@ -85,8 +87,8 @@ struct scatter_epoch_params
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_fixed_dims_offsets[LOD_MAX_LEVELS];
   void* append_accum;
-  uint32_t* append_counts;        // mutable
-  int nthreads;                   // resolved at init: always > 0
+  uint32_t* append_counts; // mutable
+  struct threadpool* pool;
   struct stream_metrics* metrics; // NULL to skip timing
 };
 
@@ -108,7 +110,7 @@ struct lut_targets
 void
 cpu_pipeline_compute_luts(const struct computed_stream_layouts* cl,
                           const struct level_geometry* levels,
-                          int nthreads,
+                          struct threadpool* pool,
                           struct lut_targets* out);
 
 // ---- append drain ----
@@ -124,7 +126,7 @@ struct append_drain_params
   void* chunk_pool;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
   uint64_t* lod_fixed_dims_offsets[LOD_MAX_LEVELS];
-  int nthreads;                   // resolved at init: always > 0
+  struct threadpool* pool;
   struct stream_metrics* metrics; // NULL to skip timing
 };
 

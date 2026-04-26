@@ -1,17 +1,20 @@
 #include "cpu/compress.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
 #ifdef HAVE_BLOSC
 #include <blosc.h>
 #endif
 #include <lz4.h>
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zstd.h>
 
 #define CHUNK_BYTES 4096
 #define BATCH_SIZE 16
+
+static struct threadpool* g_pool;
+static struct threadpool* g_pool1; // single-thread (0 workers + caller)
 
 static void
 fill_pattern(void* buf, size_t bytes, uint8_t seed)
@@ -50,7 +53,7 @@ test_codec_none(void)
                      CHUNK_BYTES,
                      BATCH_SIZE,
                      1,
-                     omp_get_max_threads()) == 0);
+                     g_pool) == 0);
 
   for (int i = 0; i < BATCH_SIZE; ++i) {
     CHECK(Fail, comp_sizes[i] == CHUNK_BYTES);
@@ -102,7 +105,7 @@ test_codec_lz4(void)
           CHUNK_BYTES,
           BATCH_SIZE,
           1,
-          omp_get_max_threads()) == 0);
+          g_pool) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -160,7 +163,7 @@ test_codec_zstd(void)
                      CHUNK_BYTES,
                      BATCH_SIZE,
                      1,
-                     omp_get_max_threads()) == 0);
+                     g_pool) == 0);
 
   // Decompress and verify round-trip
   void* recovered = malloc(CHUNK_BYTES);
@@ -222,7 +225,7 @@ test_nthreads_1(void)
                      CHUNK_BYTES,
                      MT_BATCH,
                      1,
-                     1) == 0);
+                     g_pool1) == 0);
 
   // Decompress and verify round-trip
   recovered = malloc(CHUNK_BYTES);
@@ -287,7 +290,7 @@ test_codec_blosc(enum compression_codec id, const char* name)
                      CHUNK_BYTES,
                      BATCH_SIZE,
                      1,
-                     omp_get_max_threads()) == 0);
+                     g_pool) == 0);
 
   // Decompress and verify round-trip
   recovered = malloc(CHUNK_BYTES);
@@ -322,6 +325,13 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
+  g_pool = threadpool_new(3);  // 4-way parallelism
+  g_pool1 = threadpool_new(0); // caller-only
+  if (!g_pool || !g_pool1) {
+    log_error("threadpool_new failed");
+    return 1;
+  }
+
   int rc = 0;
   rc |= test_codec_none();
   rc |= test_codec_lz4();
@@ -331,5 +341,8 @@ main(int ac, char* av[])
   rc |= test_codec_blosc(CODEC_BLOSC_LZ4, "blosc_lz4");
   rc |= test_codec_blosc(CODEC_BLOSC_ZSTD, "blosc_zstd");
 #endif
+
+  threadpool_free(g_pool);
+  threadpool_free(g_pool1);
   return rc;
 }

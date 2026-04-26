@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 struct lod_plan;
+struct threadpool;
 
 // Host CSR reduce LUT for one level transition (l -> l+1).
 // Flattened: batch_count=1, indices contain absolute offsets within the source
@@ -31,7 +32,9 @@ struct reduce_csr
 // On failure leaves *csr in a state safe to pass to reduce_csr_free.
 // Returns 0 on success, non-zero on failure.
 int
-reduce_csr_alloc(struct reduce_csr* csr, uint64_t src_total, uint64_t dst_total);
+reduce_csr_alloc(struct reduce_csr* csr,
+                 uint64_t src_total,
+                 uint64_t dst_total);
 
 // Compute starts/indices for the transition plan->levels.level[level] ->
 // plan->levels.level[level+1]. Assumes alloc has been called with matching
@@ -41,7 +44,8 @@ reduce_csr_alloc(struct reduce_csr* csr, uint64_t src_total, uint64_t dst_total)
 int
 reduce_csr_build(struct reduce_csr* csr,
                  const struct lod_plan* plan,
-                 int level);
+                 int level,
+                 struct threadpool* pool);
 
 // Null-safe. Frees all allocations and zeros the struct. Safe to call on a
 // zeroed struct, a half-constructed struct (after a failed alloc), or twice.

@@ -4,6 +4,7 @@
 #include "multiarray.cpu.h"
 #include "platform/platform.h"
 #include "stream/config.h"
+#include "threadpool/threadpool.h"
 #include "zarr/shard_delivery.h"
 
 #include "cpu/compress.h"
@@ -12,7 +13,6 @@
 #include "util/metric.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -55,7 +55,7 @@ struct multiarray_tile_stream_cpu
   int active;            // -1 = none
   int luts_computed_for; // -1 = none, array index of last LUT computation
   int metrics_enabled;
-  int nthreads; // resolved at init: always > 0
+  struct threadpool* pool; // shared across all arrays in this multiarray
 
   struct array_descriptor* arrays;
 
@@ -135,7 +135,8 @@ static int
 init_array_descriptor(struct array_descriptor* desc,
                       const struct tile_stream_configuration* config,
                       struct shard_sink* sink,
-                      struct pool_maxima* maxima)
+                      struct pool_maxima* maxima,
+                      struct threadpool* pool)
 {
   if (config->dtype == dtype_f16)
     return 1;
@@ -283,7 +284,7 @@ init_array_descriptor(struct array_descriptor* desc,
         uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
         if (reduce_csr_alloc(&desc->csrs[l], src_total, dst_total))
           return 1;
-        if (reduce_csr_build(&desc->csrs[l], &desc->cl.plan, l))
+        if (reduce_csr_build(&desc->csrs[l], &desc->cl.plan, l, pool))
           return 1;
       }
     }
@@ -402,8 +403,12 @@ multiarray_tile_stream_cpu_create(
   ms->n_arrays = n_arrays;
   ms->active = -1;
   ms->luts_computed_for = -1;
-  ms->nthreads =
-    configs[0].max_threads > 0 ? configs[0].max_threads : omp_get_max_threads();
+  {
+    int nthreads = configs[0].max_threads > 0 ? configs[0].max_threads
+                                              : platform_default_thread_count();
+    ms->pool = threadpool_new(nthreads - 1);
+    CHECK(Fail, ms->pool);
+  }
 
   ms->arrays = (struct array_descriptor*)calloc(
     (size_t)n_arrays, sizeof(struct array_descriptor));
@@ -413,7 +418,7 @@ multiarray_tile_stream_cpu_create(
   for (int i = 0; i < n_arrays; ++i)
     CHECK(Fail,
           init_array_descriptor(
-            &ms->arrays[i], &configs[i], sinks[i], &maxima) == 0);
+            &ms->arrays[i], &configs[i], sinks[i], &maxima, ms->pool) == 0);
 
   CHECK(Fail, alloc_shared_buffers(ms, &maxima) == 0);
 
@@ -505,6 +510,7 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   free(ms->scatter_fixed_dims_offsets);
   free(ms->linear);
   free(ms->lod_values);
+  threadpool_free(ms->pool);
   free(ms);
 }
 
@@ -535,7 +541,7 @@ recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
     luts.morton_lut[lv] = ms->morton_lut[lv];
     luts.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }
-  cpu_pipeline_compute_luts(&desc->cl, &desc->levels, ms->nthreads, &luts);
+  cpu_pipeline_compute_luts(&desc->cl, &desc->levels, ms->pool, &luts);
   ms->luts_computed_for = array_index;
 }
 
@@ -621,7 +627,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,
     .scatter_fixed_dims_offsets =
       desc->levels.enable_multiscale ? ms->scatter_fixed_dims_offsets : NULL,
-    .nthreads = ms->nthreads,
+    .pool = ms->pool,
     .shard_alignment = desc->shard_alignment,
     .metrics = ms->metrics_enabled ? &ms->metrics : NULL,
     .metadata_update_clock = NULL, // multiarray defers metadata to final flush

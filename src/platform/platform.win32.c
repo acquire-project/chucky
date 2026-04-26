@@ -87,3 +87,136 @@ platform_call_once(platform_once* flag, void (*fn)(void))
 {
   InitOnceExecuteOnce(flag, once_callback, (PVOID)fn, NULL);
 }
+
+struct platform_thread
+{
+  HANDLE handle;
+  void (*fn)(void*);
+  void* arg;
+};
+
+static DWORD WINAPI
+thread_trampoline(LPVOID p)
+{
+  struct platform_thread* t = (struct platform_thread*)p;
+  t->fn(t->arg);
+  return 0;
+}
+
+struct platform_thread*
+platform_thread_start(void (*fn)(void*), void* arg)
+{
+  struct platform_thread* t =
+    (struct platform_thread*)calloc(1, sizeof(struct platform_thread));
+  if (!t)
+    return NULL;
+  t->fn = fn;
+  t->arg = arg;
+  t->handle = CreateThread(NULL, 0, thread_trampoline, t, 0, NULL);
+  if (!t->handle) {
+    free(t);
+    return NULL;
+  }
+  return t;
+}
+
+int
+platform_thread_join(struct platform_thread* t)
+{
+  if (!t)
+    return -1;
+  WaitForSingleObject(t->handle, INFINITE);
+  CloseHandle(t->handle);
+  free(t);
+  return 0;
+}
+
+struct platform_mutex
+{
+  SRWLOCK lock;
+};
+
+struct platform_mutex*
+platform_mutex_new(void)
+{
+  struct platform_mutex* m =
+    (struct platform_mutex*)calloc(1, sizeof(struct platform_mutex));
+  if (!m)
+    return NULL;
+  InitializeSRWLock(&m->lock);
+  return m;
+}
+
+void
+platform_mutex_free(struct platform_mutex* m)
+{
+  /* SRWLOCK has no destructor. */
+  free(m);
+}
+
+void
+platform_mutex_lock(struct platform_mutex* m)
+{
+  AcquireSRWLockExclusive(&m->lock);
+}
+
+void
+platform_mutex_unlock(struct platform_mutex* m)
+{
+  ReleaseSRWLockExclusive(&m->lock);
+}
+
+struct platform_cond
+{
+  CONDITION_VARIABLE cv;
+};
+
+struct platform_cond*
+platform_cond_new(void)
+{
+  struct platform_cond* c =
+    (struct platform_cond*)calloc(1, sizeof(struct platform_cond));
+  if (!c)
+    return NULL;
+  InitializeConditionVariable(&c->cv);
+  return c;
+}
+
+void
+platform_cond_free(struct platform_cond* c)
+{
+  /* CONDITION_VARIABLE has no destructor. */
+  free(c);
+}
+
+void
+platform_cond_wait(struct platform_cond* c, struct platform_mutex* m)
+{
+  SleepConditionVariableSRW(&c->cv, &m->lock, INFINITE, 0);
+}
+
+void
+platform_cond_broadcast(struct platform_cond* c)
+{
+  WakeAllConditionVariable(&c->cv);
+}
+
+void
+platform_cpu_pause(void)
+{
+#if defined(_M_IX86) || defined(_M_X64)
+  YieldProcessor(); /* expands to _mm_pause() */
+#elif defined(_M_ARM) || defined(_M_ARM64)
+  YieldProcessor(); /* expands to __yield() */
+#else
+  SwitchToThread();
+#endif
+}
+
+int
+platform_default_thread_count(void)
+{
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}

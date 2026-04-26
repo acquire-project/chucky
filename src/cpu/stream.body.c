@@ -30,7 +30,7 @@ make_flush_params(struct cpu_stream_view* v)
     .per_lod_agg_layouts = v->agg_layout,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
-    .nthreads = v->nthreads,
+    .pool = v->pool,
     .pool_epochs_scratch = v->pool_epochs_scratch,
     .agg_slots = v->agg_slots,
     .io_done = v->io_done,
@@ -63,7 +63,7 @@ make_scatter_params(struct cpu_stream_view* v)
     .scatter_fixed_dims_offsets = v->scatter_fixed_dims_offsets,
     .append_accum = v->append_accum,
     .append_counts = v->append_counts,
-    .nthreads = v->nthreads,
+    .pool = v->pool,
     .metrics = v->metrics,
   };
   for (int lv = 0; lv < v->levels->nlod; ++lv) {
@@ -151,7 +151,7 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
                             v->layout->lifted_rank,
                             v->layout->lifted_shape,
                             v->layout->lifted_strides,
-                            v->nthreads) == 0);
+                            v->pool) == 0);
       }
 
       float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -279,7 +279,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       .append_accum = v->append_accum,
       .append_counts = v->append_counts,
       .chunk_pool = v->chunk_pool,
-      .nthreads = v->nthreads,
+      .pool = v->pool,
       .metrics = v->metrics,
     };
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
