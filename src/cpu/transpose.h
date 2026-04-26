@@ -8,6 +8,8 @@ extern "C"
 {
 #endif
 
+  struct threadpool;
+
   // CPU scatter transpose using the vadd() algorithm.
   // Scatters src_bytes/bpe elements from src into dst using lifted
   // shape/strides. i_offset is the global flat input offset (for multi-call
@@ -20,7 +22,7 @@ extern "C"
                     uint8_t lifted_rank,
                     const uint64_t* lifted_shape,
                     const int64_t* lifted_strides,
-                    int nthreads);
+                    struct threadpool* pool);
 
 #ifdef __cplusplus
 }

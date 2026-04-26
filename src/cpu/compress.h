@@ -3,6 +3,8 @@
 #include "types.codec.h"
 #include <stddef.h>
 
+struct threadpool;
+
 // Max compressed output size per chunk for CPU codecs (lz4/zstd).
 size_t
 compress_cpu_max_output_size(enum compression_codec type, size_t chunk_bytes);
@@ -24,4 +26,4 @@ compress_cpu(struct codec_config codec,
              size_t chunk_bytes,
              size_t batch_size,
              size_t bytes_per_element,
-             int nthreads);
+             struct threadpool* pool);

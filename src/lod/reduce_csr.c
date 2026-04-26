@@ -2,9 +2,10 @@
 
 #include "defs.limits.h"
 #include "lod/lod_plan.h"
+#include "threadpool/threadpool.h"
 #include "util/index.ops.h"
 
-#include <omp.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,10 +134,73 @@ compute_mapping(uint64_t gi,
   *out_offset = offset;
 }
 
+struct csr_pass1_ctx
+{
+  const struct level_dims* src_ld;
+  const struct level_dims* dst_ld;
+  const uint64_t* src_lod_shape;
+  const uint64_t* dst_lod_shape;
+  uint32_t dropped_mask;
+  _Atomic uint64_t* starts;
+};
+
+static void
+csr_pass1_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct csr_pass1_ctx* c = (struct csr_pass1_ctx*)vctx;
+  for (size_t gi = beg; gi < end; ++gi) {
+    uint64_t dst_elem;
+    compute_mapping((uint64_t)gi,
+                    c->src_ld,
+                    c->dst_ld,
+                    c->src_lod_shape,
+                    c->dst_lod_shape,
+                    c->dropped_mask,
+                    &dst_elem,
+                    NULL,
+                    NULL);
+    atomic_fetch_add_explicit(
+      &c->starts[dst_elem + 1], 1, memory_order_relaxed);
+  }
+}
+
+struct csr_pass2_ctx
+{
+  const struct level_dims* src_ld;
+  const struct level_dims* dst_ld;
+  const uint64_t* src_lod_shape;
+  const uint64_t* dst_lod_shape;
+  uint32_t dropped_mask;
+  const uint64_t* starts;
+  uint64_t* indices;
+};
+
+static void
+csr_pass2_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct csr_pass2_ctx* c = (struct csr_pass2_ctx*)vctx;
+  for (size_t gi = beg; gi < end; ++gi) {
+    uint64_t dst_elem, src_elem, offset;
+    compute_mapping((uint64_t)gi,
+                    c->src_ld,
+                    c->dst_ld,
+                    c->src_lod_shape,
+                    c->dst_lod_shape,
+                    c->dropped_mask,
+                    &dst_elem,
+                    &src_elem,
+                    &offset);
+    c->indices[c->starts[dst_elem] + offset] = src_elem;
+  }
+}
+
 int
 reduce_csr_build(struct reduce_csr* csr,
                  const struct lod_plan* plan,
-                 int level)
+                 int level,
+                 struct threadpool* pool)
 {
   const struct level_dims* src_ld = &plan->levels.level[level];
   const struct level_dims* dst_ld = &plan->levels.level[level + 1];
@@ -160,26 +224,19 @@ reduce_csr_build(struct reduce_csr* csr,
   // turns starts[] into the exclusive bucket-base array we need for pass 2.
   memset(csr->starts, 0, (dst_total + 1) * sizeof(uint64_t));
 
-  // MSVC's OpenMP front-end rejects inline loop-variable declarations
-  // (for (int64_t i = 0; ...)) even with /openmp:llvm; declare before.
-  // https://learn.microsoft.com/en-us/cpp/error-messages/compiler-errors-2/compiler-error-c3015
   {
-    int64_t gi;
-#pragma omp parallel for schedule(static)
-    for (gi = 0; gi < (int64_t)src_total; ++gi) {
-      uint64_t dst_elem;
-      compute_mapping((uint64_t)gi,
-                      src_ld,
-                      dst_ld,
-                      src_lod_shape,
-                      dst_lod_shape,
-                      dropped_mask,
-                      &dst_elem,
-                      NULL,
-                      NULL);
-#pragma omp atomic
-      csr->starts[dst_elem + 1]++;
-    }
+    struct csr_pass1_ctx c = {
+      .src_ld = src_ld,
+      .dst_ld = dst_ld,
+      .src_lod_shape = src_lod_shape,
+      .dst_lod_shape = dst_lod_shape,
+      .dropped_mask = dropped_mask,
+      // starts is uint64_t* but we treat it as _Atomic uint64_t* for the
+      // increment. The non-atomic prefix-sum below is fine because the pool
+      // join fences all writes from pass 1.
+      .starts = (_Atomic uint64_t*)csr->starts,
+    };
+    threadpool_for_n(pool, src_total, csr_pass1_range, &c);
   }
 
   // In-place exclusive prefix sum. starts[0] is already 0.
@@ -191,21 +248,16 @@ reduce_csr_build(struct reduce_csr* csr,
   // elements mapping to the same dst (mixed-radix encoding of parity bits), so
   // threads never collide on the same index.
   {
-    int64_t gi;
-#pragma omp parallel for schedule(static)
-    for (gi = 0; gi < (int64_t)src_total; ++gi) {
-      uint64_t dst_elem, src_elem, offset;
-      compute_mapping((uint64_t)gi,
-                      src_ld,
-                      dst_ld,
-                      src_lod_shape,
-                      dst_lod_shape,
-                      dropped_mask,
-                      &dst_elem,
-                      &src_elem,
-                      &offset);
-      csr->indices[csr->starts[dst_elem] + offset] = src_elem;
-    }
+    struct csr_pass2_ctx c = {
+      .src_ld = src_ld,
+      .dst_ld = dst_ld,
+      .src_lod_shape = src_lod_shape,
+      .dst_lod_shape = dst_lod_shape,
+      .dropped_mask = dropped_mask,
+      .starts = csr->starts,
+      .indices = csr->indices,
+    };
+    threadpool_for_n(pool, src_total, csr_pass2_range, &c);
   }
 
   return 0;

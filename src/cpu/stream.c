@@ -7,10 +7,10 @@
 #include "defs.limits.h"
 #include "lod/lod_plan.h"
 #include "platform/platform.h"
+#include "threadpool/threadpool.h"
 #include "util/metric.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,8 +42,13 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     return NULL;
 
   s->config = *config;
-  s->nthreads =
-    config->max_threads > 0 ? config->max_threads : omp_get_max_threads();
+  {
+    int nthreads = config->max_threads > 0 ? config->max_threads
+                                           : platform_default_thread_count();
+    s->pool = threadpool_new(nthreads - 1);
+    if (!s->pool)
+      goto Fail;
+  }
   s->shard_alignment = shard_sink_required_shard_alignment(sink);
   s->shard_sink = sink;
 
@@ -207,7 +212,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
           uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
           uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
           CHECK(Fail, reduce_csr_alloc(&s->csrs[l], src_total, dst_total) == 0);
-          CHECK(Fail, reduce_csr_build(&s->csrs[l], plan, l) == 0);
+          CHECK(Fail, reduce_csr_build(&s->csrs[l], plan, l, s->pool) == 0);
         }
       }
     }
@@ -223,7 +228,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       luts.morton_lut[lv] = s->morton_lut[lv];
       luts.lod_fixed_dims_offsets[lv] = s->lod_fixed_dims_offsets[lv];
     }
-    cpu_pipeline_compute_luts(&s->cl, &s->levels, s->nthreads, &luts);
+    cpu_pipeline_compute_luts(&s->cl, &s->levels, s->pool, &luts);
   }
 
   // Metrics.
@@ -327,6 +332,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   }
 
   computed_stream_layouts_free(&s->cl);
+  threadpool_free(s->pool);
   free(s);
 }
 
@@ -697,7 +703,7 @@ make_view(struct tile_stream_cpu* s)
     .lod_values = s->lod_values,
     .scatter_lut = s->scatter_lut,
     .scatter_fixed_dims_offsets = s->scatter_fixed_dims_offsets,
-    .nthreads = s->nthreads,
+    .pool = s->pool,
     .shard_alignment = s->shard_alignment,
     .metrics = &s->metrics,
     .metadata_update_clock = &s->metadata_update_clock,

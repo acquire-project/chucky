@@ -3,12 +3,14 @@
 #include "lod/lod_plan.h"
 #include "morton.util.h"
 #include "stream/config.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
 #include <math.h>
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
+
+static struct threadpool* g_pool;
 
 // Cross-validate lod_cpu against per-element ravel reference.
 // Uses a 3D shape with LOD on dims 1,2 (lod_mask=0x6).
@@ -46,23 +48,18 @@ test_scatter_reduce_f32(enum lod_reduce_method method, const char* name)
   fixed_dims_offsets =
     (uint64_t*)malloc(plan.fixed_dims_count * sizeof(uint64_t));
   CHECK(Fail, scatter_lut && fixed_dims_offsets);
-  lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
-  lod_cpu_build_scatter_fixed_dims_offsets(
-    &plan, fixed_dims_offsets, omp_get_max_threads());
+  lod_cpu_build_scatter_lut(&plan, scatter_lut, g_pool);
+  lod_cpu_build_scatter_fixed_dims_offsets(&plan, fixed_dims_offsets, g_pool);
   size_t total = plan.level_spans.ends[plan.levels.nlod - 1];
   values = calloc(total, dtype_bpe(dtype_f32));
   CHECK(Fail, values);
+  CHECK(
+    Fail,
+    lod_cpu_gather(
+      &plan, src, values, scatter_lut, fixed_dims_offsets, dtype_f32, g_pool) ==
+      0);
   CHECK(Fail,
-        lod_cpu_gather(&plan,
-                       src,
-                       values,
-                       scatter_lut,
-                       fixed_dims_offsets,
-                       dtype_f32,
-                       omp_get_max_threads()) == 0);
-  CHECK(Fail,
-        lod_cpu_reduce(
-          &plan, csrs, values, dtype_f32, method, omp_get_max_threads()) == 0);
+        lod_cpu_reduce(&plan, csrs, values, dtype_f32, method, g_pool) == 0);
 
   // Verify L0: all source values should be present in the morton buffer.
   struct lod_span l0 = lod_spans_at(&plan.level_spans, 0);
@@ -136,27 +133,19 @@ test_scatter_reduce_u16(void)
   fixed_dims_offsets =
     (uint64_t*)malloc(plan.fixed_dims_count * sizeof(uint64_t));
   CHECK(Fail, scatter_lut && fixed_dims_offsets);
-  lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
-  lod_cpu_build_scatter_fixed_dims_offsets(
-    &plan, fixed_dims_offsets, omp_get_max_threads());
+  lod_cpu_build_scatter_lut(&plan, scatter_lut, g_pool);
+  lod_cpu_build_scatter_fixed_dims_offsets(&plan, fixed_dims_offsets, g_pool);
   size_t total = plan.level_spans.ends[plan.levels.nlod - 1];
   values = calloc(total, dtype_bpe(dtype_u16));
   CHECK(Fail, values);
+  CHECK(
+    Fail,
+    lod_cpu_gather(
+      &plan, src, values, scatter_lut, fixed_dims_offsets, dtype_u16, g_pool) ==
+      0);
   CHECK(Fail,
-        lod_cpu_gather(&plan,
-                       src,
-                       values,
-                       scatter_lut,
-                       fixed_dims_offsets,
-                       dtype_u16,
-                       omp_get_max_threads()) == 0);
-  CHECK(Fail,
-        lod_cpu_reduce(&plan,
-                       csrs,
-                       values,
-                       dtype_u16,
-                       lod_reduce_min,
-                       omp_get_max_threads()) == 0);
+        lod_cpu_reduce(
+          &plan, csrs, values, dtype_u16, lod_reduce_min, g_pool) == 0);
 
   // Basic sanity: L1 min values should be <= any L0 value.
   uint16_t* uv = (uint16_t*)values;
@@ -211,19 +200,13 @@ test_f16_rejected(void)
   fixed_dims_offsets =
     (uint64_t*)malloc(plan.fixed_dims_count * sizeof(uint64_t));
   CHECK(Fail, scatter_lut && fixed_dims_offsets);
-  lod_cpu_build_scatter_lut(&plan, scatter_lut, omp_get_max_threads());
-  lod_cpu_build_scatter_fixed_dims_offsets(
-    &plan, fixed_dims_offsets, omp_get_max_threads());
+  lod_cpu_build_scatter_lut(&plan, scatter_lut, g_pool);
+  lod_cpu_build_scatter_fixed_dims_offsets(&plan, fixed_dims_offsets, g_pool);
   size_t total = plan.level_spans.ends[plan.levels.nlod - 1];
   values = calloc(total, 2); // f16 = 2 bytes
   CHECK(Fail, values);
-  int rc = lod_cpu_gather(&plan,
-                          values,
-                          values,
-                          scatter_lut,
-                          fixed_dims_offsets,
-                          dtype_f16,
-                          omp_get_max_threads());
+  int rc = lod_cpu_gather(
+    &plan, values, values, scatter_lut, fixed_dims_offsets, dtype_f16, g_pool);
   CHECK(Fail, rc != 0); // should fail
   free(scatter_lut);
   free(fixed_dims_offsets);
@@ -957,6 +940,12 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
+  g_pool = threadpool_new(3);
+  if (!g_pool) {
+    log_error("threadpool_new failed");
+    return 1;
+  }
+
   int rc = 0;
   rc |= test_scatter_reduce_f32(lod_reduce_mean, "f32_mean");
   rc |= test_scatter_reduce_f32(lod_reduce_min, "f32_min");
@@ -1004,5 +993,7 @@ main(int ac, char* av[])
                                (uint64_t[]){ 4, 4, 4 },
                                0x6,
                                lod_reduce_mean);
+
+  threadpool_free(g_pool);
   return rc;
 }

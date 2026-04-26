@@ -1,9 +1,9 @@
 #include "cpu/aggregate.h"
 
+#include "threadpool/threadpool.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,13 +72,38 @@ aggregate_cpu_workspace_free(struct aggregate_cpu_workspace* ws)
   memset(ws, 0, sizeof(*ws));
 }
 
+struct gather_ctx
+{
+  const char* compressed;
+  const size_t* comp_sizes;
+  const uint32_t* perm;
+  const size_t* offsets;
+  char* data;
+  size_t max_comp;
+};
+
+static void
+gather_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct gather_ctx* c = (struct gather_ctx*)vctx;
+  for (size_t i = beg; i < end; ++i) {
+    size_t nbytes = c->comp_sizes[i];
+    if (nbytes == 0)
+      continue;
+    const char* src = c->compressed + i * c->max_comp;
+    char* dst = c->data + c->offsets[c->perm[i]];
+    memcpy(dst, src, nbytes);
+  }
+}
+
 int
 aggregate_cpu_into(const void* compressed,
                    const size_t* comp_sizes,
                    const struct aggregate_layout* layout,
                    struct aggregate_cpu_workspace* ws,
                    struct aggregate_result* result,
-                   int nthreads)
+                   struct threadpool* pool)
 {
   const uint64_t M = layout->chunks_per_epoch;
   const uint64_t C = layout->covering_count;
@@ -108,22 +133,47 @@ aggregate_cpu_into(const void* compressed,
 
   // Pass 3: gather compressed chunks in shard order.
   {
-    int i;
-#pragma omp parallel for schedule(static) if (M > 64) num_threads(nthreads)
-    for (i = 0; i < (int)M; ++i) {
-      size_t nbytes = comp_sizes[i];
-      if (nbytes == 0)
-        continue;
-      const char* src = (const char*)compressed + i * max_comp;
-      char* dst = (char*)ws->data + ws->offsets[ws->perm[i]];
-      memcpy(dst, src, nbytes);
-    }
+    struct gather_ctx c = {
+      .compressed = (const char*)compressed,
+      .comp_sizes = comp_sizes,
+      .perm = ws->perm,
+      .offsets = ws->offsets,
+      .data = (char*)ws->data,
+      .max_comp = max_comp,
+    };
+    threadpool_for_n(pool, M, gather_range, &c);
   }
 
   result->data = ws->data;
   result->offsets = ws->offsets;
   result->chunk_sizes = ws->chunk_sizes;
   return 0;
+}
+
+struct gather_indirect_ctx
+{
+  const char* compressed_base;
+  const size_t* comp_sizes_base;
+  const uint32_t* gather;
+  const uint32_t* perm;
+  const size_t* offsets;
+  char* data;
+  size_t max_comp;
+};
+
+static void
+gather_indirect_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct gather_indirect_ctx* c = (struct gather_indirect_ctx*)vctx;
+  for (size_t i = beg; i < end; ++i) {
+    size_t nbytes = c->comp_sizes_base[c->gather[i]];
+    if (nbytes == 0)
+      continue;
+    const char* src = c->compressed_base + (uint64_t)c->gather[i] * c->max_comp;
+    char* dst = c->data + c->offsets[c->perm[i]];
+    memcpy(dst, src, nbytes);
+  }
 }
 
 int
@@ -134,7 +184,7 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          uint32_t n_active,
                          struct aggregate_cpu_workspace* ws,
                          struct aggregate_result* result,
-                         int nthreads)
+                         struct threadpool* pool)
 {
   const uint64_t M = layout->chunks_per_epoch;
   const uint64_t C = layout->covering_count;
@@ -168,18 +218,16 @@ aggregate_cpu_batch_into(const void* compressed_base,
 
   // Pass 3: gather compressed chunks in shard order.
   {
-    int i;
-#pragma omp parallel for schedule(static) if (batch_M > 64)                    \
-  num_threads(nthreads)
-    for (i = 0; i < (int)batch_M; ++i) {
-      size_t nbytes = comp_sizes_base[gather[i]];
-      if (nbytes == 0)
-        continue;
-      const char* src =
-        (const char*)compressed_base + (uint64_t)gather[i] * max_comp;
-      char* dst = (char*)ws->data + ws->offsets[ws->perm[i]];
-      memcpy(dst, src, nbytes);
-    }
+    struct gather_indirect_ctx c = {
+      .compressed_base = (const char*)compressed_base,
+      .comp_sizes_base = comp_sizes_base,
+      .gather = gather,
+      .perm = ws->perm,
+      .offsets = ws->offsets,
+      .data = (char*)ws->data,
+      .max_comp = max_comp,
+    };
+    threadpool_for_n(pool, batch_M, gather_indirect_range, &c);
   }
 
   result->data = ws->data;
@@ -197,7 +245,7 @@ aggregate_cpu_batch_into_unified(const void* compressed_base,
                                  const struct batch_aggregate_layout* layout,
                                  struct aggregate_cpu_workspace* ws,
                                  struct aggregate_result* per_lod_results,
-                                 int nthreads)
+                                 struct threadpool* pool)
 {
   const uint64_t total_chunks = layout->total_batch_chunks;
   const uint64_t total_covering = layout->total_batch_covering;
@@ -255,18 +303,16 @@ aggregate_cpu_batch_into_unified(const void* compressed_base,
   // (max_output_size shared across LODs), so source addressing only needs
   // gather[i] * max_comp.
   {
-    int i;
-#pragma omp parallel for schedule(static) if (total_chunks > 16)               \
-  num_threads(nthreads)
-    for (i = 0; i < (int)total_chunks; ++i) {
-      const size_t nbytes = comp_sizes_base[gather[i]];
-      if (nbytes == 0)
-        continue;
-      const char* src =
-        (const char*)compressed_base + (uint64_t)gather[i] * max_comp;
-      char* dst = (char*)ws->data + ws->offsets[ws->perm[i]];
-      memcpy(dst, src, nbytes);
-    }
+    struct gather_indirect_ctx c = {
+      .compressed_base = (const char*)compressed_base,
+      .comp_sizes_base = comp_sizes_base,
+      .gather = gather,
+      .perm = ws->perm,
+      .offsets = ws->offsets,
+      .data = (char*)ws->data,
+      .max_comp = max_comp,
+    };
+    threadpool_for_n(pool, total_chunks, gather_indirect_range, &c);
   }
 
   // Per-LOD result views: same data base, per-LOD slice of offsets / sizes,

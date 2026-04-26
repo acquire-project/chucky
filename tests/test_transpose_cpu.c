@@ -1,11 +1,13 @@
 #include "cpu/transpose.h"
 #include "defs.limits.h"
 #include "index.ops.util.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
-#include <omp.h>
 #include <stdlib.h>
 #include <string.h>
+
+static struct threadpool* g_pool;
 
 // Run CPU transpose and verify against ravel() reference.
 static int
@@ -71,11 +73,16 @@ run_test(const char* name,
       p[i] = i;
   }
 
-  CHECK(
-    Fail,
-    transpose_cpu(
-      dst, src, src_bytes, bpe, 0, lifted_rank, lifted_shape, lifted_strides, omp_get_max_threads()) ==
-      0);
+  CHECK(Fail,
+        transpose_cpu(dst,
+                      src,
+                      src_bytes,
+                      bpe,
+                      0,
+                      lifted_rank,
+                      lifted_shape,
+                      lifted_strides,
+                      g_pool) == 0);
 
   // Verify against ravel() reference
   int errors = 0;
@@ -205,7 +212,7 @@ run_offset_test(const char* name,
                       lifted_rank,
                       lifted_shape,
                       lifted_strides,
-                      omp_get_max_threads()) == 0);
+                      g_pool) == 0);
 
   // Split: two calls with offset
   uint64_t split = epoch_elements / 3;
@@ -220,7 +227,7 @@ run_offset_test(const char* name,
                       lifted_rank,
                       lifted_shape,
                       lifted_strides,
-                      omp_get_max_threads()) == 0);
+                      g_pool) == 0);
   CHECK(Fail,
         transpose_cpu(dst_split,
                       (const char*)full_src + split_bytes,
@@ -230,7 +237,7 @@ run_offset_test(const char* name,
                       lifted_rank,
                       lifted_shape,
                       lifted_strides,
-                      omp_get_max_threads()) == 0);
+                      g_pool) == 0);
 
   // Compare
   if (memcmp(dst_full, dst_split, dst_bytes) != 0) {
@@ -332,6 +339,12 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
+  g_pool = threadpool_new(3);
+  if (!g_pool) {
+    log_error("threadpool_new failed");
+    return 1;
+  }
+
   int rc = 0;
 
   struct
@@ -357,5 +370,6 @@ main(int ac, char* av[])
     }
   }
 
+  threadpool_free(g_pool);
   return rc;
 }

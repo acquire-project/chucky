@@ -1,6 +1,4 @@
 #include "index.ops.util.h"
-#include "platform/platform.h"
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,72 +190,34 @@ vadd_agrees_with_add(void)
     return 1;
   }
 
-  struct
-  {
-    _Atomic int completed;
-    _Atomic int ecode;
-  } state = { 0 };
+  int ecode = 0;
+  for (int i = 0; i < num_tests; ++i) {
+    if (ecode)
+      break;
 
-#pragma omp parallel
-  {
-#pragma omp master
-    {
-      struct platform_clock clk = { 0 };
-      platform_toc(&clk);
-      int last_completed = 0;
-
-      while (state.completed < num_tests) {
-        float dt = platform_toc(&clk);
-        int delta = state.completed - last_completed;
-        float velocity = dt > 0 ? delta / dt : 0;
-        last_completed = state.completed;
-
-        printf("\rProgress: %d/%d (%.1f%%) - %.0f/s",
-               state.completed,
-               num_tests,
-               100.0 * state.completed / num_tests,
-               velocity);
-        fflush(stdout);
-        platform_sleep_ns(500000000LL);
-      }
-      printf("\n");
+    const uint64_t beg = test_cases[i];
+    const uint64_t* actual = vadd(rank, shape, transposed_strides, beg, n);
+    if (!actual) {
+      ecode = 1;
+      break;
     }
 
+    const uint64_t* expected = expected_all + beg;
+
     {
-      int i;
-#pragma omp for schedule(guided)
-      for (i = 0; i < num_tests; ++i) {
-        if (state.ecode)
-          continue;
-
-        const uint64_t beg = test_cases[i];
-        const uint64_t* actual = vadd(rank, shape, transposed_strides, beg, n);
-        if (!actual) {
-          state.ecode = 1;
-          continue;
-        }
-
-        const uint64_t* expected = expected_all + beg;
-
-        {
-          char buf[64] = { 0 };
-          snprintf(buf, sizeof(buf), "beg=%llu", (unsigned long long)beg);
-          int err = expect_arrays_equal(expected, actual, n - beg, buf);
-          if (err) {
-            state.ecode |= err;
-          }
-        }
-
-        free((void*)actual);
-
-        atomic_fetch_add_explicit(&state.completed, 1, memory_order_relaxed);
-      }
+      char buf[64] = { 0 };
+      snprintf(buf, sizeof(buf), "beg=%llu", (unsigned long long)beg);
+      int err = expect_arrays_equal(expected, actual, n - beg, buf);
+      if (err)
+        ecode |= err;
     }
+
+    free((void*)actual);
   }
 
   free(test_cases);
   free((void*)expected_all);
-  return state.ecode;
+  return ecode;
 }
 
 static int
@@ -293,92 +253,51 @@ vadd2_agrees_with_add(void)
   const uint64_t steps[] = { 1, 2, 3, 5, 7, 11, 32, 100, 1000 };
   const int num_steps = sizeof(steps) / sizeof(steps[0]);
 
-  struct
-  {
-    _Atomic int completed;
-    _Atomic int ecode;
-  } state = { 0 };
-
-#pragma omp parallel
-  {
-#pragma omp master
-    {
-      struct platform_clock clk = { 0 };
-      platform_toc(&clk);
-      int last_completed = 0;
-      const int total_tests = num_tests * num_steps;
-
-      while (state.completed < total_tests) {
-        float dt = platform_toc(&clk);
-        int delta = state.completed - last_completed;
-        float velocity = dt > 0 ? delta / dt : 0;
-        last_completed = state.completed;
-
-        printf("\rProgress: %d/%d (%.1f%%) - %.0f/s",
-               state.completed,
-               total_tests,
-               100.0 * state.completed / total_tests,
-               velocity);
-        fflush(stdout);
-        platform_sleep_ns(500000000LL);
+  int ecode = 0;
+  for (int step_idx = 0; step_idx < num_steps && !ecode; ++step_idx) {
+    for (int i = 0; i < num_tests && !ecode; ++i) {
+      const uint64_t step = steps[step_idx];
+      const uint64_t beg = (uint64_t)rand() % n;
+      const uint64_t* expected =
+        make_expected_step(rank, shape, transposed_strides, beg, n, step);
+      if (!expected) {
+        ecode = 1;
+        break;
       }
-      printf("\n");
-    }
 
-    {
-      int step_idx, i;
-#pragma omp for schedule(guided) collapse(2)
-      for (step_idx = 0; step_idx < num_steps; ++step_idx) {
-        for (i = 0; i < num_tests; ++i) {
-          if (state.ecode)
-            continue;
+      const uint64_t* actual =
+        vadd2(rank, shape, transposed_strides, beg, n, step);
+      if (!actual) {
+        free((void*)expected);
+        ecode = 1;
+        break;
+      }
 
-          const uint64_t step = steps[step_idx];
-          const uint64_t beg = (uint64_t)rand() % n;
-          const uint64_t* expected =
-            make_expected_step(rank, shape, transposed_strides, beg, n, step);
-          if (!expected) {
-            state.ecode = 1;
-            continue;
-          }
-
-          const uint64_t* actual =
-            vadd2(rank, shape, transposed_strides, beg, n, step);
-          if (!actual) {
-            free((void*)expected);
-            state.ecode = 1;
-            continue;
-          }
-
-          const size_t count = (n - beg + step - 1) / step;
-          {
-            char buf[64] = { 0 };
-            snprintf(buf,
-                     sizeof(buf),
-                     "beg=%llu, step=%llu",
-                     (unsigned long long)beg,
-                     (unsigned long long)step);
-            int err = expect_arrays_equal(expected, actual, count, buf);
-            if (err) {
-              int show = count < 10 ? (int)count : 10;
-              printf("Expected (first 10): ");
-              println_vu64(show, expected);
-              printf("Actual (first 10): ");
-              println_vu64(show, actual);
-              state.ecode |= err;
-            }
-          }
-
-          free((void*)expected);
-          free((void*)actual);
-
-          atomic_fetch_add_explicit(&state.completed, 1, memory_order_relaxed);
+      const size_t count = (n - beg + step - 1) / step;
+      {
+        char buf[64] = { 0 };
+        snprintf(buf,
+                 sizeof(buf),
+                 "beg=%llu, step=%llu",
+                 (unsigned long long)beg,
+                 (unsigned long long)step);
+        int err = expect_arrays_equal(expected, actual, count, buf);
+        if (err) {
+          int show = count < 10 ? (int)count : 10;
+          printf("Expected (first 10): ");
+          println_vu64(show, expected);
+          printf("Actual (first 10): ");
+          println_vu64(show, actual);
+          ecode |= err;
         }
       }
+
+      free((void*)expected);
+      free((void*)actual);
     }
   }
 
-  return state.ecode;
+  return ecode;
 }
 
 int

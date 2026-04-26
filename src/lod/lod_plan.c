@@ -5,7 +5,6 @@
 #include "util/prelude.h"
 
 #include <assert.h>
-#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,7 +101,6 @@ all_chunks_le_one(int lod_ndim,
   }
   return 1;
 }
-
 
 int
 lod_plan_init(struct lod_plan* p,

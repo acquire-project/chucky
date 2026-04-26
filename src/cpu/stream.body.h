@@ -56,7 +56,7 @@ struct cpu_stream_view
   uint64_t* lod_fixed_dims_offsets[LOD_MAX_LEVELS];
 
   // Runtime config
-  int nthreads;
+  struct threadpool* pool;
   size_t shard_alignment;
   struct stream_metrics* metrics;
   struct platform_clock* metadata_update_clock; // NULL to skip updates

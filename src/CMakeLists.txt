@@ -23,13 +23,16 @@ add_src_lib(dtype      SOURCES dtype.c dtype.h)
 add_src_lib(dimension  SOURCES dimension.c dimension.h)
 add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h
                                lod/reduce_csr.c lod/reduce_csr.h
-                       LINKS index_ops dimension dtype
+                       LINKS index_ops dimension dtype threadpool
 )
-enable_openmp(lod_plan)
 add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
 add_src_lib(platform SOURCES platform/platform.h LINKS Threads::Threads)
 add_platform_sources(platform platform/platform)
+
+add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
+    LINKS platform
+)
 
 add_src_lib(io_queue SOURCES zarr/io_queue.h LINKS Threads::Threads chucky_log)
 add_platform_sources(io_queue zarr/io_queue)

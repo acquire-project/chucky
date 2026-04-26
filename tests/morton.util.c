@@ -171,7 +171,7 @@ lod_reduce_cpu(const struct lod_plan* p,
     struct reduce_csr csr = { 0 };
     if (reduce_csr_alloc(&csr, src_total, dst_total))
       continue;
-    if (reduce_csr_build(&csr, p, l)) {
+    if (reduce_csr_build(&csr, p, l, NULL)) {
       reduce_csr_free(&csr);
       continue;
     }
@@ -368,7 +368,7 @@ lod_reduce_cpu_u16(const struct lod_plan* p,
     struct reduce_csr csr = { 0 };
     if (reduce_csr_alloc(&csr, src_total, dst_total))
       continue;
-    if (reduce_csr_build(&csr, p, l)) {
+    if (reduce_csr_build(&csr, p, l, NULL)) {
       reduce_csr_free(&csr);
       continue;
     }
@@ -578,7 +578,7 @@ lod_build_host_csrs(const struct lod_plan* p, struct reduce_csr* csrs)
     uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
     if (reduce_csr_alloc(&csrs[l], src_total, dst_total))
       goto Fail;
-    if (reduce_csr_build(&csrs[l], p, l))
+    if (reduce_csr_build(&csrs[l], p, l, NULL))
       goto Fail;
   }
   return 0;
