@@ -571,6 +571,38 @@ flush_impl(struct multiarray_writer* self)
   }
 
   ms->active = -1;
+
+  // Fan-out drain across all sinks so flush is a commit point: when it
+  // returns, every queued pwrite_ref job is durable and metadata reflects
+  // only durable chunks. stream_flush_body already drained per-array, but
+  // re-drain here to give callers a single barrier across the multiarray.
+  {
+    struct shard_sink** sinks =
+      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
+    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
+    if (sinks && nlods) {
+      for (int a = 0; a < ms->n_arrays; ++a) {
+        sinks[a] = ms->arrays[a].ctx.sink;
+        nlods[a] = ms->arrays[a].ctx.levels.nlod;
+      }
+      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
+      free(sinks);
+      free(nlods);
+      if (errors)
+        return (struct multiarray_writer_result){ .error =
+                                                    multiarray_writer_fail };
+    } else {
+      free(sinks);
+      free(nlods);
+      for (int a = 0; a < ms->n_arrays; ++a) {
+        struct array_descriptor_gpu* desc = &ms->arrays[a];
+        if (shard_sink_drain(desc->ctx.sink, desc->ctx.levels.nlod))
+          return (struct multiarray_writer_result){ .error =
+                                                      multiarray_writer_fail };
+      }
+    }
+  }
+
   return (struct multiarray_writer_result){ .error = multiarray_writer_ok };
 
 Error:
@@ -609,24 +641,19 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   sync_all(&ms->engine.streams);
 
   if (ms->arrays) {
-    // Drain sinks before freeing aggregate buffers they reference. Fan
-    // out the record phase across all arrays so wait blocks on the union
-    // of pending IO instead of serializing per-array drains.
-    struct io_event(*evs)[LOD_MAX_LEVELS] =
-      (struct io_event(*)[LOD_MAX_LEVELS])calloc((size_t)ms->n_arrays,
-                                                 sizeof(*evs));
-    if (evs) {
+    // Drain sinks before freeing aggregate buffers they reference.
+    struct shard_sink** sinks =
+      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
+    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
+    if (sinks && nlods) {
       for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        shard_sink_drain_record(desc->ctx.sink, desc->ctx.levels.nlod, evs[a]);
+        sinks[a] = ms->arrays[a].ctx.sink;
+        nlods[a] = ms->arrays[a].ctx.levels.nlod;
       }
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        if (shard_sink_drain_wait(
-              desc->ctx.sink, desc->ctx.levels.nlod, evs[a]))
-          log_error("array %d sink reported IO errors during teardown", a);
-      }
-      free(evs);
+      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
+      if (errors)
+        log_error("%d array sink(s) reported IO errors during teardown",
+                  errors);
     } else {
       for (int a = 0; a < ms->n_arrays; ++a) {
         struct array_descriptor_gpu* desc = &ms->arrays[a];
@@ -634,6 +661,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
           log_error("array %d sink reported IO errors during teardown", a);
       }
     }
+    free(sinks);
+    free(nlods);
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);

@@ -253,6 +253,9 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     }
   }
 
+  if (shard_sink_drain(ctx->sink, ctx->levels.nlod))
+    return writer_error();
+
   // Final metadata update using pre-emit chunk counts.
   if (ctx->sink->update_append) {
     const uint8_t na = dim_info_n_append(&ctx->dims);
