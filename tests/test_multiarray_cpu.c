@@ -917,10 +917,10 @@ Fail:
 
 // ---- Test: flush is idempotent after writer reaches `finished` ----
 //
-// Once the writer has reached capacity and been finalized (either by an
-// explicit `flush()` or by the destructor's auto-flush), subsequent `flush()`
-// and `update()` calls must be no-ops — not re-finalize already-finalized
-// shards. A prior bug caused the destructor's follow-up flush to deadlock
+// Once the writer has reached capacity (max_cursor) and been finalized,
+// subsequent `update()` calls report `finished` and produce no sink work,
+// and a redundant `flush()` is a no-op (no re-finalization of already-closed
+// shards). A prior bug caused the destructor's follow-up flush to deadlock
 // on Windows against an already-finalized sink.
 static int
 test_flush_idempotent_after_finished(void)
@@ -961,8 +961,9 @@ test_flush_idempotent_after_finished(void)
   CHECK(Fail, sink.finalize_count == finalize_after_fill);
   CHECK(Fail, sink.open_count == open_after_fill);
 
-  // Explicit flush runs the terminal flush. For this config all shards
-  // already finalized during the append, so no new opens/finalizes occur.
+  // Explicit flush commits any partial shard state. For this config all
+  // shards already finalized during the append, so no new opens/finalizes
+  // occur.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   const int finalize_after_flush = sink.finalize_count;
   const int open_after_flush = sink.open_count;
@@ -988,6 +989,76 @@ test_flush_idempotent_after_finished(void)
   multiarray_tile_stream_cpu_destroy(ms);
   CHECK(Fail, sink.finalize_count == finalize_after_flush);
   CHECK(Fail, sink.open_count == open_after_flush);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_cpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
+// ---- Test: flush is a resumable explicit sync ----
+//
+// After flush(), an array-stream is still appendable. update() succeeds with
+// new data, and the next flush() commits the new batch.
+static int
+test_flush_resumable(void)
+{
+  log_info("=== test_flush_resumable ===");
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+
+  // Unbounded dim 0 so max_cursor is 0 (no input-side termination).
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_cpu* ms =
+    multiarray_tile_stream_cpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
+
+  // First batch: 1 epoch (4 u16) + flush.
+  CHECK(Fail,
+        write_fill(w, 0, 4, sizeof(uint16_t), 0xAA).error ==
+          multiarray_writer_ok);
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  const int finalize_after_first = sink.finalize_count;
+  CHECK(Fail, finalize_after_first > 0);
+
+  // Second batch: another epoch succeeds — stream is still appendable.
+  {
+    struct multiarray_writer_result r =
+      write_fill(w, 0, 4, sizeof(uint16_t), 0xBB);
+    CHECK(Fail, r.error == multiarray_writer_ok);
+  }
+
+  // Second flush commits the new batch.
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count > finalize_after_first);
+
+  multiarray_tile_stream_cpu_destroy(ms);
   test_sink_free(&sink);
   log_info("  PASS");
   return 0;
@@ -1066,6 +1137,7 @@ main(int ac, char* av[])
   rc |= test_write_past_max_cursor();
   rc |= test_flush_no_data();
   rc |= test_flush_idempotent_after_finished();
+  rc |= test_flush_resumable();
   rc |= test_metrics_enabled();
   return rc;
 }

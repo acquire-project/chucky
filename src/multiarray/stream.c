@@ -642,14 +642,10 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor* desc = &ms->arrays[array_index];
 
-  // If this array has already been flushed (capacity reached with inline
-  // flush, or explicit flush), further appends are a no-op that report
-  // `finished` with the full input unconsumed.
-  if (desc->flushed)
-    return (struct multiarray_writer_result){
-      .error = multiarray_writer_finished,
-      .rest = data,
-    };
+  // Re-arm for the next sync: a non-empty update after flush has new work,
+  // so the next flush must run flush_body again.
+  if (desc->flushed && data.beg != data.end)
+    desc->flushed = 0;
 
   // Switch arrays if needed.
   if (array_index != ms->active) {
@@ -661,8 +657,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   struct cpu_stream_view v = make_multiarray_view(ms, desc);
   struct writer_result r = cpu_stream_append_body(&v, data);
 
-  // `writer_finished` here means "stream is at capacity"; finalization
-  // happens on explicit `flush()` or on destroy, not here.
+  // `writer_finished` here means "stream is at capacity (max_cursor)";
+  // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,
     .rest = r.rest,
@@ -679,9 +675,9 @@ flush_impl(struct multiarray_writer* self)
 
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
-    // Already-flushed arrays (either by inline flush on capacity or by a
-    // prior explicit flush) re-entering the body would re-finalize an
-    // already-finalized sink — on Windows that deadlocks.
+    // Idempotency: a redundant flush with no intervening updates re-finalizes
+    // already-closed sinks (deadlock on Windows). The flag is reset by
+    // update_impl when new data arrives.
     if (desc->flushed)
       continue;
     if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {
