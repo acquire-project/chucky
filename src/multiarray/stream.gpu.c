@@ -111,6 +111,26 @@ max_u32(uint32_t a, uint32_t b)
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
+// Quiesce the shared d2h delivery pipeline against the departing array
+// before another array binds in. Without this, the next array would inherit
+// stale fences from a different sink (deadlock — fences only retire on the
+// sink that issued them) or reuse aggregate buffers the prior sink is still
+// reading.
+static void
+drain_d2h_for_array(struct stream_engine* e,
+                    struct array_descriptor_gpu* desc)
+{
+  cuStreamSynchronize(e->streams.d2h);
+  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+    for (int fc = 0; fc < 2; ++fc) {
+      struct aggregate_slot* agg = &e->d2h_deliver.levels[lv].agg[fc];
+      if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
+        desc->ctx.sink->wait_fence(desc->ctx.sink, (uint8_t)lv, agg->io_done);
+      agg->io_done.seq = 0;
+    }
+  }
+}
+
 static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
@@ -145,6 +165,8 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 static void
 unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
+  drain_d2h_for_array(e, desc);
+
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
   for (int i = 0; i < 2; ++i) {
