@@ -572,36 +572,8 @@ flush_impl(struct multiarray_writer* self)
 
   ms->active = -1;
 
-  // Fan-out drain across all sinks so flush is a commit point: when it
-  // returns, every queued pwrite_ref job is durable and metadata reflects
-  // only durable chunks. stream_flush_body already drained per-array, but
-  // re-drain here to give callers a single barrier across the multiarray.
-  {
-    struct shard_sink** sinks =
-      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
-    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
-    if (sinks && nlods) {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        sinks[a] = ms->arrays[a].ctx.sink;
-        nlods[a] = ms->arrays[a].ctx.levels.nlod;
-      }
-      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
-      free(sinks);
-      free(nlods);
-      if (errors)
-        return (struct multiarray_writer_result){ .error =
-                                                    multiarray_writer_fail };
-    } else {
-      free(sinks);
-      free(nlods);
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        if (shard_sink_drain(desc->ctx.sink, desc->ctx.levels.nlod))
-          return (struct multiarray_writer_result){ .error =
-                                                      multiarray_writer_fail };
-      }
-    }
-  }
+  // Each array's stream_flush_body already drained its sink as a commit
+  // point; no additional drain needed here.
 
   return (struct multiarray_writer_result){ .error = multiarray_writer_ok };
 
@@ -655,11 +627,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
         log_error("%d array sink(s) reported IO errors during teardown",
                   errors);
     } else {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        if (shard_sink_drain(desc->ctx.sink, desc->ctx.levels.nlod))
-          log_error("array %d sink reported IO errors during teardown", a);
-      }
+      log_error("Failed to allocate drain arrays during teardown");
     }
     free(sinks);
     free(nlods);
