@@ -160,6 +160,10 @@ add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driv
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(test-test_destroy_drain PROPERTIES TIMEOUT 30)
 endif()
+add_gpu_test_exe(test_multiarray_flush_fs  test_multiarray_flush_fs.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream zarr_array store_fs store_api platform test_platform chucky_log)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_multiarray_flush_fs PROPERTIES TIMEOUT 30)
+endif()
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)
 
