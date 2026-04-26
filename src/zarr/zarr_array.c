@@ -135,19 +135,15 @@ zarr_array_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-zarr_array_record_fence_fn(struct shard_sink* self, uint8_t level)
+zarr_array_record_fence_fn(struct shard_sink* self)
 {
-  (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
   return a->pool->record_fence(a->pool);
 }
 
 static void
-zarr_array_wait_fence_fn(struct shard_sink* self,
-                         uint8_t level,
-                         struct io_event ev)
+zarr_array_wait_fence_fn(struct shard_sink* self, struct io_event ev)
 {
-  (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
   a->pool->wait_fence(a->pool, ev);
 }
@@ -301,7 +297,7 @@ zarr_array_destroy(struct zarr_array* a)
   strbuf_free(&a->prefix);
   // Drain via the sink interface before the pool is destroyed so teardown
   // doesn't depend on shard_pool internals.
-  if (shard_sink_drain(&a->base, 1))
+  if (shard_sink_drain(&a->base))
     log_error("zarr_array: sink reported IO errors during teardown");
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);

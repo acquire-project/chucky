@@ -67,10 +67,8 @@ struct shard_sink
                        const uint64_t* append_sizes);
 
   // IO fence for backpressure. NULL = no async IO.
-  struct io_event (*record_fence)(struct shard_sink* self, uint8_t level);
-  void (*wait_fence)(struct shard_sink* self,
-                     uint8_t level,
-                     struct io_event ev);
+  struct io_event (*record_fence)(struct shard_sink* self);
+  void (*wait_fence)(struct shard_sink* self, struct io_event ev);
 
   // Returns non-zero if any async IO has failed. NULL = no async IO.
   int (*has_error)(const struct shard_sink* self);
@@ -89,21 +87,18 @@ shard_sink_pending_bytes(const struct shard_sink* s);
 size_t
 shard_sink_required_shard_alignment(const struct shard_sink* s);
 
-// Drain pending async IO on this sink across all levels. Returns non-zero
-// if the sink reports an error after drain.
+// Drain pending async IO on this sink. Returns non-zero if the sink
+// reports an error after drain.
 int
-shard_sink_drain(struct shard_sink* s, int nlod);
+shard_sink_drain(struct shard_sink* s);
 
-// Two-phase drain: record fences for all levels, then wait. Lets callers
-// fan out the record phase across many sinks before blocking on waits.
-// `evs` must point to at least `nlod` io_event slots.
+// Two-phase drain: record a fence, then wait on it. Lets callers fan out
+// the record phase across many sinks before blocking on waits.
 void
-shard_sink_drain_record(struct shard_sink* s, int nlod, struct io_event* evs);
+shard_sink_drain_record(struct shard_sink* s, struct io_event* ev);
 
 int
-shard_sink_drain_wait(struct shard_sink* s,
-                      int nlod,
-                      const struct io_event* evs);
+shard_sink_drain_wait(struct shard_sink* s, struct io_event ev);
 
 struct writer_result
 writer_ok(void);

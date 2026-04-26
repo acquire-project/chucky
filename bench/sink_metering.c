@@ -68,17 +68,17 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 }
 
 static struct io_event
-metering_record_fence(struct shard_sink* self, uint8_t level)
+metering_record_fence(struct shard_sink* self)
 {
   struct metering_sink* ms = (struct metering_sink*)self;
-  return ms->inner->record_fence(ms->inner, level);
+  return ms->inner->record_fence(ms->inner);
 }
 
 static void
-metering_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+metering_wait_fence(struct shard_sink* self, struct io_event ev)
 {
   struct metering_sink* ms = (struct metering_sink*)self;
-  ms->inner->wait_fence(ms->inner, level, ev);
+  ms->inner->wait_fence(ms->inner, ev);
 }
 
 static int

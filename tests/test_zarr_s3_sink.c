@@ -504,7 +504,7 @@ test_concurrent_finalize(void)
   }
 
   // Record fence after first epoch
-  struct io_event fence = ss->record_fence(ss, 0);
+  struct io_event fence = ss->record_fence(ss);
   CHECK(Fail_sink, fence.seq > 0);
 
   // Write epoch 1: open triggers wait on pending, then new uploads
@@ -517,7 +517,7 @@ test_concurrent_finalize(void)
   }
 
   // Wait fence drains all pending
-  ss->wait_fence(ss, 0, fence);
+  ss->wait_fence(ss, fence);
 
   // Flush to drain epoch 1's pending uploads
   s3_test_sink_flush(&sink);

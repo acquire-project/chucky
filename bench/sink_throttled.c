@@ -98,19 +98,15 @@ throttled_shard_open(struct shard_sink* self,
 }
 
 static struct io_event
-throttled_shard_record_fence(struct shard_sink* self, uint8_t level)
+throttled_shard_record_fence(struct shard_sink* self)
 {
-  (void)level;
   struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
   return io_queue_record(s->queue);
 }
 
 static void
-throttled_shard_wait_fence(struct shard_sink* self,
-                           uint8_t level,
-                           struct io_event ev)
+throttled_shard_wait_fence(struct shard_sink* self, struct io_event ev)
 {
-  (void)level;
   struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
   io_event_wait(s->queue, ev);
 }

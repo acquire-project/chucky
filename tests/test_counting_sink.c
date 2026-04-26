@@ -68,17 +68,17 @@ counting_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-counting_record_fence(struct shard_sink* self, uint8_t level)
+counting_record_fence(struct shard_sink* self)
 {
   struct counting_sink* cs = (struct counting_sink*)self;
-  return cs->inner->record_fence(cs->inner, level);
+  return cs->inner->record_fence(cs->inner);
 }
 
 static void
-counting_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+counting_wait_fence(struct shard_sink* self, struct io_event ev)
 {
   struct counting_sink* cs = (struct counting_sink*)self;
-  cs->inner->wait_fence(cs->inner, level, ev);
+  cs->inner->wait_fence(cs->inner, ev);
 }
 
 static int

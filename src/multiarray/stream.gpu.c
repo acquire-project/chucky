@@ -125,7 +125,7 @@ drain_d2h_for_array(struct stream_engine* e,
     for (int fc = 0; fc < 2; ++fc) {
       struct aggregate_slot* agg = &e->d2h_deliver.levels[lv].agg[fc];
       if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
-        desc->ctx.sink->wait_fence(desc->ctx.sink, (uint8_t)lv, agg->io_done);
+        desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
       agg->io_done.seq = 0;
     }
   }

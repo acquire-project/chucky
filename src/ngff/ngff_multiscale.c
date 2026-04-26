@@ -141,19 +141,15 @@ ngff_multiscale_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-ngff_multiscale_record_fence_fn(struct shard_sink* self, uint8_t level)
+ngff_multiscale_record_fence_fn(struct shard_sink* self)
 {
-  (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   return ms->pool->record_fence(ms->pool);
 }
 
 static void
-ngff_multiscale_wait_fence_fn(struct shard_sink* self,
-                              uint8_t level,
-                              struct io_event ev)
+ngff_multiscale_wait_fence_fn(struct shard_sink* self, struct io_event ev)
 {
-  (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   ms->pool->wait_fence(ms->pool, ev);
 }
