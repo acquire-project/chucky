@@ -459,27 +459,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       log_error("CPU multiarray auto-flush failed during destroy");
   }
 
-  // Decouple teardown from flush_body internals: drain all sinks explicitly.
-  if (ms->arrays && ms->n_arrays > 0) {
-    struct shard_sink** sinks =
-      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
-    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
-    if (sinks && nlods) {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        sinks[a] = ms->arrays[a].sink;
-        nlods[a] = ms->arrays[a].levels.nlod;
-      }
-      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
-      if (errors)
-        log_error("%d array sink(s) reported IO errors during teardown",
-                  errors);
-    } else {
-      log_error("Failed to allocate drain arrays during teardown");
-    }
-    free(sinks);
-    free(nlods);
-  }
-
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
       struct array_descriptor* desc = &ms->arrays[i];

@@ -633,24 +633,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   sync_all(&ms->engine.streams);
 
   if (ms->arrays) {
-    // Drain sinks before freeing aggregate buffers they reference.
-    struct shard_sink** sinks =
-      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
-    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
-    if (sinks && nlods) {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        sinks[a] = ms->arrays[a].ctx.sink;
-        nlods[a] = ms->arrays[a].ctx.levels.nlod;
-      }
-      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
-      if (errors)
-        log_error("%d array sink(s) reported IO errors during teardown",
-                  errors);
-    } else {
-      log_error("Failed to allocate drain arrays during teardown");
-    }
-    free(sinks);
-    free(nlods);
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);

@@ -296,13 +296,13 @@ zarr_array_destroy(struct zarr_array* a)
   // Flush dirty attrs before teardown.
   if (a->attrs.dirty)
     write_array_metadata(a);
-  // Decouple teardown from shard_pool internals: drain pending IO via the
-  // sink interface before the pool is destroyed.
-  if (shard_sink_drain(&a->base, 1))
-    log_error("zarr_array: sink reported IO errors during teardown");
   attr_set_destroy(&a->attrs);
   dims_free_names(a->dimensions, a->rank);
   strbuf_free(&a->prefix);
+  // Drain via the sink interface before the pool is destroyed so teardown
+  // doesn't depend on shard_pool internals.
+  if (shard_sink_drain(&a->base, 1))
+    log_error("zarr_array: sink reported IO errors during teardown");
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);
   shard_pool_destroy(pool);

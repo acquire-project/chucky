@@ -287,10 +287,6 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     s->flushed = 1;
   }
 
-  // Decouple teardown from flush_body internals: drain the sink explicitly.
-  if (shard_sink_drain(s->shard_sink, s->levels.nlod))
-    log_error("sink reported IO errors during teardown");
-
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     struct shard_state* ss = &s->shard[lv];
     if (ss->shards) {
