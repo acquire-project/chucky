@@ -2,13 +2,6 @@
 //   tyx = 1024 x 2048 x 2048 u16, 64-cube chunks, 1 x 16 x 16 chunks/shard
 //   -> 64 shards of 128 MiB each.
 // Used for thread-scaling and IO-impact studies against tensorstore.
-//
-// Layout is pinned: chunk_size and chunks_per_shard are set directly and
-// chunk_ratios is left NULL so bench_util's resolve_chunk_sizing skips the
-// planner (no dims_budget_chunk_bytes, no dims_set_shard_geometry). This
-// preserves the exact (1, 16, 16) shard layout that benchmark.py uses; the
-// planner's target_concurrent_shards/min_shard_bytes hints would otherwise
-// collapse it to 4 large shards.
 #include "bench_util.h"
 #include "dimension.h"
 
