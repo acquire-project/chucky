@@ -733,6 +733,7 @@ cpu_flush_final(struct writer* self)
     return writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_flush_body(&v);
-  s->flushed = 1;
+  if (r.error == 0)
+    s->flushed = 1;
   return r;
 }

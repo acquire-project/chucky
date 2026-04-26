@@ -306,7 +306,8 @@ tile_stream_gpu_flush_final(struct writer* self)
   if (s->flushed)
     return writer_ok();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
-  s->flushed = 1;
+  if (r.error == 0)
+    s->flushed = 1;
   return r;
 }
 
