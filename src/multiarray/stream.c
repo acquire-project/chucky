@@ -642,10 +642,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor* desc = &ms->arrays[array_index];
 
-  // Re-arm for the next sync: a non-empty update after flush has new work,
-  // so the next flush must run flush_body again.
-  if (desc->flushed && data.beg != data.end)
-    desc->flushed = 0;
+  writer_arm_for_append(
+    &desc->flushed, data, desc->cursor_elements, desc->max_cursor_elements);
 
   // Switch arrays if needed.
   if (array_index != ms->active) {

@@ -284,10 +284,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
-  // Re-arm for the next sync: a non-empty append after flush has new work,
-  // so the next flush must run flush_body again.
-  if (s->flushed && input.beg != input.end)
-    s->flushed = 0;
+  writer_arm_for_append(
+    &s->flushed, input, s->ctx.cursor_elements, s->ctx.max_cursor_elements);
 
   struct platform_clock clk = { 0 };
   platform_toc(&clk);

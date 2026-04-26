@@ -714,10 +714,8 @@ cpu_append(struct writer* self, struct slice input)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
 
-  // Re-arm for the next sync: a non-empty append after flush has new work,
-  // so the next flush must run flush_body again.
-  if (s->flushed && input.beg != input.end)
-    s->flushed = 0;
+  writer_arm_for_append(
+    &s->flushed, input, s->cursor_elements, s->max_cursor_elements);
 
   struct cpu_stream_view v = make_view(s);
   return cpu_stream_append_body(&v, input);
