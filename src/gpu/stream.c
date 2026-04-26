@@ -93,7 +93,7 @@ stream_append_body(struct stream_engine* e,
 
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
-    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // remaining input unconsumed. Sink finalization is NOT run here — it
     // happens on explicit `writer_flush` or on stream destroy.
     if (max_cursor_elements > 0 && ctx->cursor_elements >= max_cursor_elements)
       return writer_finished_at(src, end);
@@ -284,8 +284,10 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
-  if (s->flushed)
-    return writer_finished_at(input.beg, input.end);
+  // Re-arm for the next sync: a non-empty append after flush has new work,
+  // so the next flush must run flush_body again.
+  if (s->flushed && input.beg != input.end)
+    s->flushed = 0;
 
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
@@ -301,7 +303,8 @@ tile_stream_gpu_flush_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Mirrors the CPU guard: avoid re-finalizing an already-finalized stream.
+  // Idempotency: mirrors the CPU guard. Reset by tile_stream_gpu_append when
+  // new data arrives.
   if (s->flushed)
     return writer_ok();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);

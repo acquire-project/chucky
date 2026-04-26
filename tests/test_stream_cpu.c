@@ -140,7 +140,8 @@ Fail:
   return 1;
 }
 
-// Test that append after flush returns an error.
+// Test that flush is a resumable explicit sync: append after flush succeeds
+// and a subsequent flush commits the new data.
 static int
 test_append_after_flush(void)
 {
@@ -186,7 +187,7 @@ test_append_after_flush(void)
 
   struct writer* w = tile_stream_cpu_writer(s);
 
-  // Write one epoch, then flush.
+  // First batch: append + flush.
   {
     struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
     struct writer_result r = writer_append(w, sl);
@@ -197,12 +198,35 @@ test_append_after_flush(void)
     CHECK(Fail, r.error == 0);
   }
 
-  // Append after flush must return "finished" (not a hard error).
+  int shards_after_first_flush = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    if (sink.writers[0][i].buf && sink.writers[0][i].size > 0)
+      shards_after_first_flush++;
+  }
+  CHECK(Fail, shards_after_first_flush > 0);
+
+  // Second batch: append after flush succeeds — stream is still appendable.
   {
     struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
     struct writer_result r = writer_append(w, sl);
-    CHECK(Fail, r.error == writer_error_finished);
+    CHECK(Fail, r.error == 0);
   }
+  // Second flush commits the new data.
+  {
+    struct writer_result r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  // Cursor reflects both batches.
+  CHECK(Fail, tile_stream_cpu_cursor(s) == 2 * epoch_elems);
+
+  // The second flush produced additional shard output.
+  int shards_after_second_flush = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    if (sink.writers[0][i].buf && sink.writers[0][i].size > 0)
+      shards_after_second_flush++;
+  }
+  CHECK(Fail, shards_after_second_flush > shards_after_first_flush);
 
   free(data);
   tile_stream_cpu_destroy(s);

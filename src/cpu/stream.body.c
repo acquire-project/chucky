@@ -107,7 +107,7 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
 
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
-    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // remaining input unconsumed. Sink finalization is NOT run here — it
     // happens on explicit `writer_flush` or on stream destroy. Keeping the
     // producer path free of sink finalization means appends never block on
     // IO the stream's owner hasn't asked for.

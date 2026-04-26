@@ -65,7 +65,7 @@ struct tile_stream_cpu
   uint64_t
     max_cursor_elements; // precomputed: total elements across all append chunks
   int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 after flush; append after flush is an error
+  int flushed;            // 1 after flush; reset by append for idempotency
 
   // Batch accumulation state (K = cl.epochs_per_batch).
   uint32_t batch_accumulated;    // 0..K-1
