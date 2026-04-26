@@ -93,7 +93,7 @@ shard_sink_required_shard_alignment(const struct shard_sink* s)
                                             : 0;
 }
 
-void
+static void
 shard_sink_drain_record(struct shard_sink* s, struct io_event* ev)
 {
   if (!s || !s->record_fence) {
@@ -103,7 +103,7 @@ shard_sink_drain_record(struct shard_sink* s, struct io_event* ev)
   *ev = s->record_fence(s);
 }
 
-int
+static int
 shard_sink_drain_wait(struct shard_sink* s, struct io_event ev)
 {
   if (!s)

@@ -70,8 +70,9 @@ struct shard_sink
   struct io_event (*record_fence)(struct shard_sink* self);
   void (*wait_fence)(struct shard_sink* self, struct io_event ev);
 
-  // Optional: flush sink-level state (e.g. dirty metadata). Called from
-  // writer_flush after the drain. NULL = no-op.
+  // Optional: flush sink-level state (e.g. dirty metadata).
+  // Called from writer_flush after outstanding shard IO has settled.
+  // NULL = no-op.
   int (*flush)(struct shard_sink* self);
 
   // Returns non-zero if any async IO has failed. NULL = no async IO.
@@ -95,14 +96,6 @@ shard_sink_required_shard_alignment(const struct shard_sink* s);
 // reports an error after drain.
 int
 shard_sink_drain(struct shard_sink* s);
-
-// Two-phase drain: record a fence, then wait on it. Lets callers fan out
-// the record phase across many sinks before blocking on waits.
-void
-shard_sink_drain_record(struct shard_sink* s, struct io_event* ev);
-
-int
-shard_sink_drain_wait(struct shard_sink* s, struct io_event ev);
 
 struct writer_result
 writer_ok(void);
