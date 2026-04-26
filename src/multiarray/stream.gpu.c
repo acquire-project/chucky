@@ -232,14 +232,14 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
       return 1;
   }
 
-  // max_cursor
+  // total_elements: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&desc->ctx.dims);
     if (dims[0].size > 0) {
-      desc->ctx.max_cursor_elements = desc->ctx.layout.epoch_elements;
+      desc->ctx.total_elements = desc->ctx.layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        desc->ctx.max_cursor_elements *=
+        desc->ctx.total_elements *=
           ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
@@ -519,7 +519,7 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   if (desc->flushed && r.rest.beg != data.beg)
     desc->flushed = 0;
 
-  // `writer_finished` here means "stream is at capacity (max_cursor)";
+  // `writer_finished` here means "stream is at capacity (total_elements)";
   // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,

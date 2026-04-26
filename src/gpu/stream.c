@@ -89,13 +89,13 @@ stream_append_body(struct stream_engine* e,
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
-  const uint64_t max_cursor_elements = ctx->max_cursor_elements;
+  const uint64_t total = ctx->total_elements;
 
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
     // remaining input unconsumed. Sink finalization is NOT run here — it
     // happens on explicit `writer_flush` or on stream destroy.
-    if (max_cursor_elements > 0 && ctx->cursor_elements >= max_cursor_elements)
+    if (total > 0 && ctx->cursor_elements >= total)
       return writer_finished_at(src, end);
 
     const uint64_t epoch_remaining =
@@ -106,9 +106,8 @@ stream_append_body(struct stream_engine* e,
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
 
     // Bounded append dims: clamp to remaining capacity
-    if (max_cursor_elements > 0) {
-      const uint64_t remaining_capacity =
-        max_cursor_elements - ctx->cursor_elements;
+    if (total > 0) {
+      const uint64_t remaining_capacity = total - ctx->cursor_elements;
       if (elements_this_pass > remaining_capacity)
         elements_this_pass = remaining_capacity;
     }

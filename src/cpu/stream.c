@@ -244,16 +244,17 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
   }
 
-  // Precompute max_cursor so cpu_append doesn't recompute each call.
+  // Precompute total_elements (configured stream length) so the body can
+  // detect the at-capacity case without recomputing each call.
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&s->cl.dims);
     if (dims[0].size > 0) {
-      s->max_cursor_elements = s->layout.epoch_elements;
+      s->total_elements = s->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        s->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        s->total_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
     } else {
-      s->max_cursor_elements = 0;
+      s->total_elements = 0;
     }
   }
 
@@ -672,7 +673,7 @@ make_view(struct tile_stream_cpu* s)
     .layout = &s->layout,
     .levels = &s->levels,
     .cursor_elements = &s->cursor_elements,
-    .max_cursor_elements = s->max_cursor_elements,
+    .total_elements = s->total_elements,
     .batch_accumulated = &s->batch_accumulated,
     .batch_active_masks = s->batch_active_masks,
     .pool_epochs_scratch = s->pool_epochs_scratch,

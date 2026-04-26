@@ -285,15 +285,15 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
 
   CU(FailPhase2, cuStreamSynchronize(out->engine.streams.compute));
 
-  // Precompute max_cursor_elements so append doesn't recompute each call.
+  // Precompute total_elements (configured stream length) so the body can
+  // detect the at-capacity case without recomputing each call.
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&out->ctx.dims);
     if (dims[0].size > 0) {
-      out->ctx.max_cursor_elements = out->ctx.layout.epoch_elements;
+      out->ctx.total_elements = out->ctx.layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        out->ctx.max_cursor_elements *=
-          ceildiv(dims[d].size, dims[d].chunk_size);
+        out->ctx.total_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
 

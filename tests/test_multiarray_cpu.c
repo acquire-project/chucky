@@ -830,17 +830,17 @@ Fail:
   return 1;
 }
 
-// ---- Test: write past max_cursor returns finished ----
+// ---- Test: write past total_elements returns finished ----
 
 static int
-test_write_past_max_cursor(void)
+test_write_past_total_elements(void)
 {
-  log_info("=== test_write_past_max_cursor ===");
+  log_info("=== test_write_past_total_elements ===");
 
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // 2D 4x4 u8: epoch_elements=8, 2 epochs, max_cursor=16.
+  // 2D 4x4 u8: epoch_elements=8, 2 epochs, total_elements=16.
   struct dimension dims[2];
   struct tile_stream_configuration config = make_2d_config(dims, dtype_u8);
 
@@ -853,7 +853,7 @@ test_write_past_max_cursor(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
-  // Write exactly max_cursor (16 elements).
+  // Write exactly total_elements (16 elements).
   CHECK(Fail, write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
 
   // Writing more should return finished.
@@ -917,7 +917,7 @@ Fail:
 
 // ---- Test: flush is idempotent after writer reaches `finished` ----
 //
-// Once the writer has reached capacity (max_cursor) and been finalized,
+// Once the writer has reached capacity (total_elements) and been finalized,
 // subsequent `update()` calls report `finished` and produce no sink work,
 // and a redundant `flush()` is a no-op (no re-finalization of already-closed
 // shards). A prior bug caused the destructor's follow-up flush to deadlock
@@ -930,7 +930,7 @@ test_flush_idempotent_after_finished(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // 2D 4x4 u8: epoch_elements=8, 2 epochs, max_cursor=16.
+  // 2D 4x4 u8: epoch_elements=8, 2 epochs, total_elements=16.
   struct dimension dims[2];
   struct tile_stream_configuration config = make_2d_config(dims, dtype_u8);
   struct tile_stream_configuration configs[] = { config };
@@ -942,7 +942,8 @@ test_flush_idempotent_after_finished(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
 
-  // Fill exactly max_cursor. Cursor reaches the cap; loop exits naturally.
+  // Fill exactly total_elements. Cursor reaches the cap; loop exits
+  // naturally.
   // Batch flushes on epoch boundaries finalize complete shards during the
   // append; partial shards wait for an explicit flush or destroy.
   CHECK(Fail, write_fill(w, 0, 16, 1, 0xAA).error == multiarray_writer_ok);
@@ -1024,7 +1025,7 @@ test_flush_resumable(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // Unbounded dim 0 so max_cursor is 0 (no input-side termination). One
+  // Unbounded dim 0 so total_elements is 0 (no input-side termination). One
   // epoch per shard so each batch produces a fresh shard with fresh content.
   struct dimension dims[] = {
     { .size = 0,
@@ -1170,7 +1171,7 @@ main(int ac, char* av[])
   rc |= test_lod_basic();
   rc |= test_mixed_dtypes();
   rc |= test_mixed_lod();
-  rc |= test_write_past_max_cursor();
+  rc |= test_write_past_total_elements();
   rc |= test_flush_no_data();
   rc |= test_flush_idempotent_after_finished();
   rc |= test_flush_resumable();
