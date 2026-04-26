@@ -284,15 +284,14 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
-  writer_arm_for_append(
-    &s->flushed, input, s->ctx.cursor_elements, s->ctx.max_cursor_elements);
-
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
   struct writer_result r = stream_append_body(&s->engine, &s->ctx, input);
   float ms = (float)(platform_toc(&clk) * 1000.0);
   if (ms > s->engine.metrics.max_append_ms)
     s->engine.metrics.max_append_ms = ms;
+  if (s->flushed && r.rest.beg != input.beg)
+    s->flushed = 0;
   return r;
 }
 

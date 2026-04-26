@@ -508,11 +508,6 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
-  writer_arm_for_append(&desc->flushed,
-                        data,
-                        desc->ctx.cursor_elements,
-                        desc->ctx.max_cursor_elements);
-
   // Switch arrays if needed
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -521,6 +516,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   }
 
   struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+  if (desc->flushed && r.rest.beg != data.beg)
+    desc->flushed = 0;
 
   // `writer_finished` here means "stream is at capacity (max_cursor)";
   // finalization happens on explicit `flush()` or on destroy, not here.

@@ -128,14 +128,3 @@ writer_flush(struct writer* w);
 // Append data to a writer, retrying with exponential back-off on stall.
 struct writer_result
 writer_append_wait(struct writer* w, struct slice data);
-
-// Re-arm the flush latch for the next sync. If `*flushed` is set, the input
-// is non-empty, and the cursor is below max_cursor (or unbounded), clears
-// `*flushed` so a subsequent flush will run flush_body again. Stays set when
-// the body would refuse the data (at capacity), keeping flush idempotent.
-// `max_cursor == 0` means unbounded.
-void
-writer_arm_for_append(int* flushed,
-                      struct slice input,
-                      uint64_t cursor,
-                      uint64_t max_cursor);

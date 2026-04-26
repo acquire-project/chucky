@@ -714,11 +714,11 @@ cpu_append(struct writer* self, struct slice input)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
 
-  writer_arm_for_append(
-    &s->flushed, input, s->cursor_elements, s->max_cursor_elements);
-
   struct cpu_stream_view v = make_view(s);
-  return cpu_stream_append_body(&v, input);
+  struct writer_result r = cpu_stream_append_body(&v, input);
+  if (s->flushed && r.rest.beg != input.beg)
+    s->flushed = 0;
+  return r;
 }
 
 static struct writer_result

@@ -83,21 +83,6 @@ writer_finished_at(const void* beg, const void* end)
   return r;
 }
 
-void
-writer_arm_for_append(int* flushed,
-                      struct slice input,
-                      uint64_t cursor,
-                      uint64_t max_cursor)
-{
-  if (!*flushed)
-    return;
-  if (input.beg == input.end)
-    return;
-  if (max_cursor > 0 && cursor >= max_cursor)
-    return;
-  *flushed = 0;
-}
-
 size_t
 shard_sink_pending_bytes(const struct shard_sink* s)
 {
