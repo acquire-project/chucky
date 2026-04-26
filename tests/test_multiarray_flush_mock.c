@@ -1,25 +1,13 @@
-// Regression test: multiarray GPU flush across two shard_sinks must never
-// pass a fence issued by sink A to sink B's wait_fence. This would deadlock
-// in production (different pool counters); here we use mock sinks that detect
-// the cross-sink mis-routing deterministically and flag it without blocking.
+// Regression test: multiarray GPU flush must never deliver a fence issued
+// by one sink to a different sink's wait. In production that deadlocks
+// because fences only retire on the sink that issued them; here mock sinks
+// detect the cross-sink mis-routing deterministically and flag it without
+// blocking, so the assertion is a flag check rather than a timeout.
 //
-// Bug shape (pre-fix): the shared d2h_deliver stage stores a per-(level, fc)
-// io_event fence in `agg[fc].io_done`. Array A's prior round stamps that slot
-// via sinkA->record_fence. After bind_context(B), wait_io_fences reads the
-// stale slot and passes A's seq to sinkB->wait_fence — which never retires
-// because B's pool counter is independent. The fix in unbind_context calls
-// drain_d2h_for_array which waits on each stale fence with the *departing*
-// sink and zeroes the slot before the swap.
-//
-// The mock here issues monotonic seq values from per-sink counters and
-// records every issued seq in a set. wait_fence checks membership in the
-// receiving sink's set: any miss means the engine handed a fence to the
-// wrong sink and we set cross_sink_violation. The mock returns immediately
-// so the test never blocks — the assertion is on the violation flag.
-//
-// With the fix: drain_d2h_for_array clears agg[fc].io_done at unbind, so
-// every wait_fence call receives only seqs issued by the matching sink.
-// Without the fix: we observe at least one cross-sink wait_fence call.
+// The fix lives in unbind_context via drain_d2h_for_array, which waits on
+// any cached fence with the departing sink and clears it before another
+// array binds in. Without that drain, the next array picks up a fence the
+// prior sink stamped on the shared delivery pipeline.
 
 #include "dimension.h"
 #include "multiarray.gpu.h"
@@ -39,20 +27,16 @@
 struct mock_shard_sink
 {
   struct shard_sink base;
-  int id;                 // 0, 1, ... — for diagnostic logging only
-  uint64_t next_seq;      // monotonic per-sink seq counter
-  // Per-level set of issued seqs. We only care about (lv, *) — record_fence
-  // already includes the level, but the bug surfaces on level 0 with nlod=1
-  // so a flat set per level is sufficient.
+  int id;
+  uint64_t next_seq;
+  // Per-level record of fences this sink issued; consulted on wait to
+  // detect a fence that came from elsewhere.
   uint64_t issued[MOCK_MAX_LEVELS][MOCK_MAX_ISSUED];
   int n_issued[MOCK_MAX_LEVELS];
 
-  // Set when wait_fence receives a seq this sink never issued — i.e. the
-  // engine routed a fence from a different sink to us.
   int cross_sink_violation;
-  uint64_t bad_seq; // first seq that triggered the violation, for logging
+  uint64_t bad_seq;
 
-  // Discard writer — open() returns this for any (level, shard_index).
   struct shard_writer dwriter;
   uint8_t dbuf[DISCARD_BUF_BYTES];
 };
@@ -103,7 +87,7 @@ mock_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
 {
   struct mock_shard_sink* m = (struct mock_shard_sink*)self;
   if (ev.seq == 0)
-    return; // never-set fence, ignore (matches engine's seq>0 guard)
+    return;
   if (level >= MOCK_MAX_LEVELS) {
     if (!m->cross_sink_violation) {
       m->cross_sink_violation = 1;
@@ -113,9 +97,8 @@ mock_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
   }
   for (int i = 0; i < m->n_issued[level]; ++i) {
     if (m->issued[level][i] == ev.seq)
-      return; // ours — fine.
+      return;
   }
-  // Seq not issued by this sink — engine handed us another sink's fence.
   if (!m->cross_sink_violation) {
     m->cross_sink_violation = 1;
     m->bad_seq = ev.seq;
@@ -144,9 +127,8 @@ mock_sink_init(struct mock_shard_sink* m, int id)
 
 // ---- Test body ----
 
-// Build a simple 2D config that yields nlod=1 and a small epoch so 1 epoch
-// is enough to drive a sync flush. epochs_per_batch=1 forces every epoch to
-// flush inline through d2h_deliver_kick — that path stamps agg[fc].io_done.
+// Single-LOD config sized so each update triggers an inline flush — that's
+// the path that exercises the cached fence the fix targets.
 static struct tile_stream_configuration
 make_simple_config(struct dimension dims[2])
 {
@@ -198,29 +180,18 @@ test_no_cross_sink_fence_routing(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
 
-  // Drive several rounds of A→B switches so agg[fc].io_done is populated by
-  // sinkA, then a flush via sinkB attempts to use it. Each epoch is 8 u16
-  // elements with epochs_per_batch=1 → every update triggers a synchronous
-  // batch flush through d2h_deliver_kick (which stamps record_fence and
-  // calls wait_io_fences).
-  //
-  // Round 1: write to A (stamps sinkA fence on agg[fc].io_done).
+  // Alternate A and B several times so the shared delivery pipeline carries
+  // a fence from the prior sink across each switch. Two rounds cover both
+  // double-buffered slots.
   CHECK(Fail, write_epoch(w, 0, 8) == 0);
-  // Switch to B — without the fix, agg[fc].io_done still holds sinkA's seq
-  // when bind_context(B) runs. B's flush below calls wait_io_fences which
-  // routes that seq into sinkB->wait_fence → cross-sink violation.
   CHECK(Fail, write_epoch(w, 1, 8) == 0);
-  // Round 2: back to A, then B again — repeat to cover both fc=0 and fc=1
-  // slots in the shared d2h stage.
   CHECK(Fail, write_epoch(w, 0, 8) == 0);
   CHECK(Fail, write_epoch(w, 1, 8) == 0);
 
-  // Final flush — also exercises the unbind path on the active array.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
-  // The actual assertion: neither sink ever received a fence the other
-  // issued. With the fix this is invariant; without it the violation
-  // flag fires deterministically.
+  // Neither sink should ever receive a fence the other issued. With the fix
+  // this is invariant; without it the violation flag fires deterministically.
   if (sinkA.cross_sink_violation)
     log_error("sinkA received foreign seq=%llu",
               (unsigned long long)sinkA.bad_seq);

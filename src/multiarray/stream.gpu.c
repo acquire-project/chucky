@@ -111,11 +111,11 @@ max_u32(uint32_t a, uint32_t b)
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
-// Quiesce the shared d2h_deliver state w.r.t. the given array before swapping
-// in another. Without this, a later array can call wait_io_fences with a
-// stale io_done from a different sink (deadlock — different pool counters)
-// or overwrite agg[fc].h_aggregated while the prior sink's pwrite_ref is
-// still reading it.
+// Quiesce the shared d2h delivery pipeline against the departing array
+// before another array binds in. Without this, the next array would inherit
+// stale fences from a different sink (deadlock — fences only retire on the
+// sink that issued them) or reuse aggregate buffers the prior sink is still
+// reading.
 static void
 drain_d2h_for_array(struct stream_engine* e,
                     struct array_descriptor_gpu* desc)
