@@ -178,8 +178,6 @@ test_drain_many_fans_out(const char* tmpdir)
     log_error("drain_many did not finish within %d ms after second gate "
               "release",
               POST_RELEASE_TIMEOUT_MS);
-    // Don't join — would hang. Leak the worker.
-    thr = NULL;
     goto Cleanup;
   }
 

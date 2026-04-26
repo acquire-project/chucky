@@ -28,3 +28,8 @@ io_queue_record(struct io_queue* q);
 // Block until all jobs up to and including ev.seq have completed.
 void
 io_event_wait(const struct io_queue* q, struct io_event ev);
+
+// Returns non-zero once io_queue_destroy has been called on the queue.
+// Long-running jobs can poll this to bail out early on shutdown.
+int
+io_queue_is_shutdown(const struct io_queue* q);

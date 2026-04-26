@@ -192,3 +192,13 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
     pthread_cond_wait(&mq->cond_retired, &mq->mutex);
   pthread_mutex_unlock(&mq->mutex);
 }
+
+int
+io_queue_is_shutdown(const struct io_queue* q)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  pthread_mutex_lock(&mq->mutex);
+  int r = mq->shutdown;
+  pthread_mutex_unlock(&mq->mutex);
+  return r;
+}

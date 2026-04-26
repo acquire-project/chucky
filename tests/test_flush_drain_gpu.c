@@ -139,8 +139,6 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   if (wait_for_done(&fa.done, POST_RELEASE_TIMEOUT_MS)) {
     log_error("flush did not finish within %d ms after gate release",
               POST_RELEASE_TIMEOUT_MS);
-    // Don't join — would hang. Leak the worker.
-    thr = NULL;
     goto Cleanup;
   }
 
