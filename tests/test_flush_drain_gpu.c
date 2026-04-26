@@ -1,5 +1,6 @@
-// Regression test: tile_stream_gpu_destroy must drain sink IO before
-// freeing pinned aggregate buffers it references.
+// Regression test: writer_flush() on the GPU stream must drain sink IO
+// before returning, so flush is a commit point: when it returns, all
+// queued pwrite_ref jobs are durable.
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -24,18 +25,20 @@
 #define POST_RELEASE_TIMEOUT_MS 5000
 #define POLL_STEP_MS 10
 
-struct destroy_args
+struct flush_args
 {
-  struct tile_stream_gpu* s;
+  struct writer* w;
   _Atomic int done;
+  int error;
 };
 
 static void
-destroy_thread_fn(void* arg)
+flush_thread_fn(void* arg)
 {
-  struct destroy_args* da = (struct destroy_args*)arg;
-  tile_stream_gpu_destroy(da->s);
-  atomic_store(&da->done, 1);
+  struct flush_args* fa = (struct flush_args*)arg;
+  struct writer_result r = writer_flush(fa->w);
+  fa->error = r.error;
+  atomic_store(&fa->done, 1);
 }
 
 static int
@@ -50,9 +53,9 @@ wait_for_done(_Atomic int* done, int timeout_ms)
 }
 
 static int
-test_destroy_waits_for_sink_io(const char* tmpdir)
+test_flush_waits_for_sink_io(const char* tmpdir)
 {
-  log_info("=== test_destroy_waits_for_sink_io ===");
+  log_info("=== test_flush_waits_for_sink_io ===");
 
   struct dimension dims[3] = {
     { .size = 12,
@@ -121,21 +124,20 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   }
 
   // Gate sits at seq=1 in the io_queue ahead of any pwrite jobs the
-  // destroy auto-flush will queue behind it.
+  // flush will queue behind it.
   CHECK(Cleanup, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
 
-  struct destroy_args da = { .s = s };
-  atomic_store(&da.done, 0);
-  CHECK(Cleanup, test_thread_start(&thr, destroy_thread_fn, &da) == 0);
-  s = NULL;
+  struct flush_args fa = { .w = tile_stream_gpu_writer(s) };
+  atomic_store(&fa.done, 0);
+  CHECK(Cleanup, test_thread_start(&thr, flush_thread_fn, &fa) == 0);
 
   platform_sleep_ns((int64_t)DRAIN_OBSERVE_MS * 1000000LL);
-  int destroy_returned_early = (atomic_load(&da.done) != 0);
+  int flush_returned_early = (atomic_load(&fa.done) != 0);
 
   atomic_store(&gate, 1);
 
-  if (wait_for_done(&da.done, POST_RELEASE_TIMEOUT_MS)) {
-    log_error("destroy did not finish within %d ms after gate release",
+  if (wait_for_done(&fa.done, POST_RELEASE_TIMEOUT_MS)) {
+    log_error("flush did not finish within %d ms after gate release",
               POST_RELEASE_TIMEOUT_MS);
     goto Cleanup;
   }
@@ -143,8 +145,13 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   test_thread_join(thr);
   thr = NULL;
 
-  if (destroy_returned_early) {
-    log_error("destroy returned before sink IO drained — fix is not in place");
+  if (flush_returned_early) {
+    log_error("flush returned before sink IO drained — fix is not in place");
+    goto Cleanup;
+  }
+
+  if (fa.error) {
+    log_error("flush returned error %d", fa.error);
     goto Cleanup;
   }
 
@@ -185,9 +192,9 @@ main(int ac, char* av[])
 
   {
     char sub[4200];
-    snprintf(sub, sizeof(sub), "%s/destroy_drain", tmpdir);
+    snprintf(sub, sizeof(sub), "%s/flush_drain", tmpdir);
     test_mkdir(sub);
-    ecode |= test_destroy_waits_for_sink_io(sub);
+    ecode |= test_flush_waits_for_sink_io(sub);
   }
 
 Cleanup:

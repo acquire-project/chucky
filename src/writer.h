@@ -105,6 +105,10 @@ shard_sink_drain_wait(struct shard_sink* s,
                       int nlod,
                       const struct io_event* evs);
 
+// Drain N sinks together. Returns the number of sinks reporting errors.
+int
+shard_sink_drain_many(struct shard_sink** sinks, const int* nlods, int n);
+
 struct writer_result
 writer_ok(void);
 
