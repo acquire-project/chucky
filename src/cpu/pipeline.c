@@ -79,7 +79,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   // pool_epochs_scratch is sized [LOD_MAX_LEVELS * K]; carve a per-LOD
   // slice of length n_epochs (K is always >= n_epochs).
   uint32_t per_lod_n_active[LOD_MAX_LEVELS] = { 0 };
-  const uint32_t* pool_epochs[LOD_MAX_LEVELS];
+  const uint32_t* pool_epochs[LOD_MAX_LEVELS] = { 0 };
   for (int lv = 0; lv < p->nlod; ++lv) {
     uint32_t* dst = p->pool_epochs_scratch + (size_t)lv * n_epochs;
     uint32_t k = 0;

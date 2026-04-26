@@ -69,7 +69,6 @@ struct multiarray_tile_stream_cpu
   // Each slot owns a page-aligned data buffer plus unified scratch arrays
   // sized for the worst-case unified batch across all arrays.
   struct cpu_agg_slot agg_slots[2];
-  size_t* shard_order_sizes;
 
   // Shared LUT storage (recomputed on switch).
   uint32_t* scatter_lut;
@@ -355,11 +354,6 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
       CHECK(Fail, ms->lod_fixed_dims_offsets[lv]);
     }
   }
-  if (mx->total_batch_covering_max > 0) {
-    ms->shard_order_sizes =
-      (size_t*)calloc(mx->total_batch_covering_max, sizeof(size_t));
-    CHECK(Fail, ms->shard_order_sizes);
-  }
   if (mx->scatter_lut_count > 0) {
     ms->scatter_lut =
       (uint32_t*)malloc(mx->scatter_lut_count * sizeof(uint32_t));
@@ -503,7 +497,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     free(ms->morton_lut[lv]);
     free(ms->lod_fixed_dims_offsets[lv]);
   }
-  free(ms->shard_order_sizes);
   free(ms->scatter_lut);
   free(ms->scatter_fixed_dims_offsets);
   free(ms->linear);
@@ -619,7 +612,6 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .compressed = ms->compressed,
     .comp_sizes = ms->comp_sizes,
     .agg_slots = ms->agg_slots,
-    .shard_order_sizes = ms->shard_order_sizes,
     .linear = desc->levels.enable_multiscale ? ms->linear : NULL,
     .lod_values = desc->levels.enable_multiscale ? ms->lod_values : NULL,
     .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,

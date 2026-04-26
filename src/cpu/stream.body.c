@@ -28,7 +28,6 @@ make_flush_params(struct cpu_stream_view* v)
     .cl = v->cl,
     .levels_geo = v->levels,
     .per_lod_agg_layouts = v->agg_layout,
-    .shard_order_sizes_bytes = v->shard_order_sizes,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .nthreads = v->nthreads,

@@ -46,6 +46,10 @@ target_link_libraries(morton_util PUBLIC lod_plan index_ops)
 add_test_lib(test_shard_sink test_shard_sink.c test_shard_sink.h)
 target_link_libraries(test_shard_sink PUBLIC writer)
 
+# Test-only counting sink shim (wraps a sink, counts copy vs zero-copy paths)
+add_test_lib(test_counting_sink test_counting_sink.c test_counting_sink.h)
+target_link_libraries(test_counting_sink PUBLIC writer)
+
 # Shared GPU test helpers (fill, config builder)
 add_gpu_test_lib(test_gpu_helpers test_gpu_helpers.c test_gpu_helpers.h LINKS stream CUDA::cuda_driver)
 
@@ -107,7 +111,7 @@ add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driv
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
 
 # CPU stream + zarr store integration (exercises async IO fencing)
-add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu test_zarr_helpers writer Zstd::Zstd test_platform test_shard_verify)
+add_test_exe(test_cpu_zarr_fs test_cpu_zarr_fs.c stream_cpu test_zarr_helpers test_counting_sink writer Zstd::Zstd test_platform test_shard_verify)
 
 # Zarr readback validation via zarr-python (requires uv)
 add_test_exe(test_zarr_readback test_zarr_readback.c stream_cpu test_zarr_helpers writer test_platform chucky_log)

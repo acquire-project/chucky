@@ -53,7 +53,6 @@ struct flush_batch_params
   // stream).
   const struct aggregate_layout* per_lod_agg_layouts;
   struct flush_level_view levels[LOD_MAX_LEVELS];
-  size_t* shard_order_sizes_bytes;
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
   int nthreads;                   // resolved at init: always > 0

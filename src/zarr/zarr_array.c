@@ -316,12 +316,6 @@ zarr_array_flush(struct zarr_array* a)
   return a ? a->pool->flush(a->pool) : 0;
 }
 
-struct shard_pool*
-zarr_array_get_pool(const struct zarr_array* a)
-{
-  return a ? a->pool : NULL;
-}
-
 int
 zarr_array_has_error(const struct zarr_array* a)
 {

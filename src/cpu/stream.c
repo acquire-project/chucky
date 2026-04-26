@@ -109,14 +109,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
                                         page) == 0);
     }
 
-    // Shared permuted_sizes scratch — sized to the unified worst-case
-    // covering count.
-    if (s->max_batch_layout.total_batch_covering > 0) {
-      s->shard_order_sizes = (size_t*)calloc(
-        s->max_batch_layout.total_batch_covering, sizeof(size_t));
-      CHECK(Fail, s->shard_order_sizes);
-    }
-
     // Allocate the two double-buffered slots once each. Each slot owns a
     // page-aligned data buffer and unified scratch arrays. cap_data is
     // already page-aligned by batch_aggregate_layout_init.
@@ -312,7 +304,6 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     free(as->offsets);
     free(as->chunk_sizes);
   }
-  free(s->shard_order_sizes);
 
   free(s->chunk_pool);
   free(s->compressed);
@@ -410,9 +401,6 @@ compute_memory_info(const struct computed_stream_layouts* cl,
                               cov_alloc * sizeof(size_t) +    // offsets
                               cov_alloc * sizeof(size_t);     // chunk_sizes
       agg += 2 * per_slot;
-
-      // Shared shard-order scratch sized to the unified covering count.
-      agg += cap_cov * sizeof(size_t);
     }
 
     // Batch state: per-epoch active mask + per-LOD pool_epochs scratch.
@@ -702,7 +690,6 @@ make_view(struct tile_stream_cpu* s)
     .compressed = s->compressed,
     .comp_sizes = s->comp_sizes,
     .agg_slots = s->agg_slots,
-    .shard_order_sizes = s->shard_order_sizes,
     .linear = s->linear,
     .lod_values = s->lod_values,
     .scatter_lut = s->scatter_lut,

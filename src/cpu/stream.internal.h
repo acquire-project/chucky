@@ -35,8 +35,7 @@ struct tile_stream_cpu
   // Each slot owns a page-aligned data buffer plus unified scratch arrays
   // sized for the worst-case batch.
   struct cpu_agg_slot agg_slots[2];
-  uint8_t agg_current;       // next slot to use (0 or 1)
-  size_t* shard_order_sizes; // [max_batch_C_max] shared scratch
+  uint8_t agg_current; // next slot to use (0 or 1)
 
   uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
 

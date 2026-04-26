@@ -46,7 +46,6 @@ struct cpu_stream_view
   void* compressed;
   size_t* comp_sizes;
   struct cpu_agg_slot* agg_slots; // [2] unified per-batch workspace
-  size_t* shard_order_sizes;
   void* linear;
   void* lod_values;
 

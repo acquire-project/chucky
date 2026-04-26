@@ -3,11 +3,11 @@
 
 #include "stream.cpu.h"
 #include "stream/layouts.h"
+#include "test_counting_sink.h"
 #include "test_platform.h"
 #include "test_shard_verify.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
-#include "zarr/shard_pool_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -541,8 +541,8 @@ test_partial_batch_readback(const char* tmpdir)
 // the zero-copy write_direct path. If the aggregate buffer is not
 // page-aligned, deliver_to_shards_batch falls back to the copying write
 // path on every shard run — silently halving throughput. This test feeds
-// realistic-sized data through an unbuffered sink and asserts that the
-// pool's direct-write counter recorded at least one zero-copy write.
+// realistic-sized data through an unbuffered sink wrapped in a counting
+// shim and asserts that at least one write took the zero-copy path.
 static int
 test_unbuffered_zero_copy(const char* tmpdir)
 {
@@ -591,6 +591,9 @@ test_unbuffered_zero_copy(const char* tmpdir)
                             (struct codec_config){ .id = CODEC_NONE },
                             /*unbuffered=*/1) == 0);
 
+  struct counting_sink counter;
+  counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
+
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
     .dtype = dtype_u16,
@@ -599,8 +602,7 @@ test_unbuffered_zero_copy(const char* tmpdir)
     .codec = { .id = CODEC_NONE },
   };
 
-  struct tile_stream_cpu* s =
-    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &counter.base);
   CHECK(Fail3, s);
 
   {
@@ -613,14 +615,10 @@ test_unbuffered_zero_copy(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  // Read counters before destroy. Pool is borrowed; freed by the sink close.
-  struct shard_pool* pool = test_zarr_sink_get_pool(&z);
-  CHECK(Fail4, pool);
-
   uint64_t copy_calls = 0, direct_calls = 0;
   uint64_t copy_bytes = 0, direct_bytes = 0;
-  shard_pool_fs_path_counts(
-    pool, &copy_calls, &direct_calls, &copy_bytes, &direct_bytes);
+  counting_sink_path_counts(
+    &counter, &copy_calls, &direct_calls, &copy_bytes, &direct_bytes);
 
   log_info("  copy: %llu calls / %.2f KiB",
            (unsigned long long)copy_calls,

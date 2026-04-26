@@ -120,8 +120,14 @@ batch_aggregate_layout_init(struct batch_aggregate_layout* out,
                                       batch_cov,
                                       seg->n_active * in->cps_inner,
                                       page_size);
-    if (seg_bytes == 0 && batch_chunks > 0)
+    if (seg_bytes == 0 && batch_chunks > 0) {
+      log_error("batch_aggregate_layout_init: lod %u agg_pool_bytes overflow "
+                "(batch_chunks=%llu, max_comp=%zu)",
+                (unsigned)lv,
+                (unsigned long long)batch_chunks,
+                in->max_comp_chunk_bytes);
       goto Error;
+    }
 
     seg->data_segment_bytes = seg_bytes;
 
