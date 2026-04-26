@@ -59,10 +59,12 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
     return;
 
   // Auto-finalize any unwritten data so destroy is a safe commit point for
-  // callers that didn't explicitly flush. Errors here are swallowed — the
-  // stream is tearing down, there's no one to report to.
+  // callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
   if (!s->flushed) {
-    (void)stream_flush_body(&s->engine, &s->ctx);
+    struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
+    if (r.error)
+      log_error("GPU stream auto-flush failed during destroy");
     s->flushed = 1;
   }
 

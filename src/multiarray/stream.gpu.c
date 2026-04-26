@@ -622,9 +622,13 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     return;
 
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
-  // for callers that didn't explicitly flush. Errors here are swallowed —
-  // the stream is tearing down, there's no one to report to.
-  (void)flush_impl(&ms->writer);
+  // for callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
+  {
+    struct multiarray_writer_result r = flush_impl(&ms->writer);
+    if (r.error)
+      log_error("GPU multiarray auto-flush failed during destroy");
+  }
 
   sync_all(&ms->engine.streams);
 
