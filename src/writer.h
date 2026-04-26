@@ -70,6 +70,10 @@ struct shard_sink
   struct io_event (*record_fence)(struct shard_sink* self);
   void (*wait_fence)(struct shard_sink* self, struct io_event ev);
 
+  // Optional: flush sink-level state (e.g. dirty metadata). Called from
+  // writer_flush after the drain. NULL = no-op.
+  int (*flush)(struct shard_sink* self);
+
   // Returns non-zero if any async IO has failed. NULL = no async IO.
   int (*has_error)(const struct shard_sink* self);
 

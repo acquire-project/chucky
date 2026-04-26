@@ -33,7 +33,8 @@ zarr_array_create(struct store* store,
                   const struct zarr_array_config* cfg);
 
 // Auto-flushes pending metadata best-effort; ignores flush errors. Call
-// zarr_array_flush_metadata before destroy if you need to detect failures.
+// writer_flush on the owning stream/writer before destroy if you need to
+// detect failures.
 void
 zarr_array_destroy(struct zarr_array* a);
 
@@ -63,11 +64,6 @@ int
 zarr_array_set_attribute(struct zarr_array* a,
                          const char* attr_key,
                          const char* json_value);
-
-// Force the array's zarr.json to be rewritten now with current shape and
-// buffered attributes.
-int
-zarr_array_flush_metadata(struct zarr_array* a);
 
 // --- Group handle ---
 

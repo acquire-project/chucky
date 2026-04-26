@@ -338,5 +338,8 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     }
   }
 
+  if (v->sink->flush && v->sink->flush(v->sink))
+    return writer_error();
+
   return writer_ok();
 }

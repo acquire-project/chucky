@@ -267,6 +267,9 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     }
   }
 
+  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
+    return writer_error();
+
   return writer_ok();
 }
 
