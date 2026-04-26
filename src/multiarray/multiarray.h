@@ -10,6 +10,15 @@ enum multiarray_writer_error
   multiarray_writer_not_flushable = 3,
 };
 
+// update_impl pass-through assigns writer_result.error directly into a
+// multiarray_writer_result.error field; the enums must agree on shared codes.
+_Static_assert((int)multiarray_writer_ok == (int)writer_error_ok,
+               "writer/multiarray ok codes must match");
+_Static_assert((int)multiarray_writer_fail == (int)writer_error_fail,
+               "writer/multiarray fail codes must match");
+_Static_assert((int)multiarray_writer_finished == (int)writer_error_finished,
+               "writer/multiarray finished codes must match");
+
 struct multiarray_writer_result
 {
   int error;
