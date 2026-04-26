@@ -213,7 +213,7 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                          morton_bytes);
     if (dims->append_downsample) {
       size_t accum_bpe = dtype_bpe(config->dtype);
-      size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
+      size_t accum_bytes = lod->append_accum.element_capacity * accum_bpe;
       accumulate_metric_cu(&metrics->lod_append_fold,
                            t->t_reduce_end,
                            t->t_append_end,

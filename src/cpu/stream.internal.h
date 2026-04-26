@@ -62,10 +62,10 @@ struct tile_stream_cpu
   uint32_t append_counts[LOD_MAX_LEVELS]; // per-level fold count
 
   uint64_t cursor_elements;
-  uint64_t
-    max_cursor_elements; // precomputed: total elements across all append chunks
+  uint64_t total_element_limit; // configured stream length in elements (across
+                                // all append chunks). 0 = unbounded.
   int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 after flush; append after flush is an error
+  int flushed;            // 1 after flush; reset by append for idempotency
 
   // Batch accumulation state (K = cl.epochs_per_batch).
   uint32_t batch_accumulated;    // 0..K-1

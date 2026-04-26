@@ -89,13 +89,13 @@ stream_append_body(struct stream_engine* e,
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
 
-  const uint64_t max_cursor_elements = ctx->max_cursor_elements;
+  const uint64_t total_limit = ctx->total_element_limit;
 
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
-    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // remaining input unconsumed. Sink finalization is NOT run here — it
     // happens on explicit `writer_flush` or on stream destroy.
-    if (max_cursor_elements > 0 && ctx->cursor_elements >= max_cursor_elements)
+    if (total_limit > 0 && ctx->cursor_elements >= total_limit)
       return writer_finished_at(src, end);
 
     const uint64_t epoch_remaining =
@@ -106,9 +106,8 @@ stream_append_body(struct stream_engine* e,
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
 
     // Bounded append dims: clamp to remaining capacity
-    if (max_cursor_elements > 0) {
-      const uint64_t remaining_capacity =
-        max_cursor_elements - ctx->cursor_elements;
+    if (total_limit > 0) {
+      const uint64_t remaining_capacity = total_limit - ctx->cursor_elements;
       if (elements_this_pass > remaining_capacity)
         elements_this_pass = remaining_capacity;
     }
@@ -287,15 +286,14 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
-  if (s->flushed)
-    return writer_finished_at(input.beg, input.end);
-
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
   struct writer_result r = stream_append_body(&s->engine, &s->ctx, input);
   float ms = (float)(platform_toc(&clk) * 1000.0);
   if (ms > s->engine.metrics.max_append_ms)
     s->engine.metrics.max_append_ms = ms;
+  if (s->flushed && r.rest.beg != input.beg)
+    s->flushed = 0;
   return r;
 }
 
@@ -304,11 +302,13 @@ tile_stream_gpu_flush_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Mirrors the CPU guard: avoid re-finalizing an already-finalized stream.
+  // Idempotency: mirrors the CPU guard. Reset by tile_stream_gpu_append when
+  // new data arrives.
   if (s->flushed)
     return writer_ok();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
-  s->flushed = 1;
+  if (r.error == 0)
+    s->flushed = 1;
   return r;
 }
 

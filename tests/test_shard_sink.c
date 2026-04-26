@@ -48,6 +48,20 @@ discard_finalize(struct shard_writer* self)
   return 0;
 }
 
+static int
+test_sink_update_append(struct shard_sink* self,
+                        uint8_t level,
+                        uint8_t n_append,
+                        const uint64_t* append_sizes)
+{
+  (void)level;
+  (void)n_append;
+  (void)append_sizes;
+  struct test_shard_sink* s = (struct test_shard_sink*)self;
+  s->update_append_count++;
+  return 0;
+}
+
 static struct shard_writer*
 test_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
@@ -82,6 +96,7 @@ test_sink_init_multi(struct test_shard_sink* s,
 {
   memset(s, 0, sizeof(*s));
   s->base.open = test_sink_open;
+  s->base.update_append = test_sink_update_append;
   s->per_shard_capacity = per_shard_capacity;
   s->num_levels = num_levels;
   s->discard_writer.write = discard_write;

@@ -107,7 +107,7 @@ struct lod_state
     CUdeviceptr d_level_ids;
     CUdeviceptr d_counts;
     uint32_t counts[LOD_MAX_LEVELS];
-    uint64_t total_elements;
+    uint64_t element_capacity;
     uint64_t morton_offset;
   } append_accum;
 };
@@ -205,7 +205,7 @@ struct stream_context
   struct level_geometry levels;
   struct dim_info dims;
   uint64_t cursor_elements;
-  uint64_t max_cursor_elements; // 0 = unbounded
+  uint64_t total_element_limit; // configured stream length; 0 = unbounded
   size_t shard_alignment;       // from sink; 0 = no alignment
 };
 

@@ -103,15 +103,15 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
   const size_t bpe = dtype_bpe(v->config->dtype);
   const uint8_t* src = (const uint8_t*)input.beg;
   const uint8_t* end = (const uint8_t*)input.end;
-  const uint64_t max_cursor = v->max_cursor_elements;
+  const uint64_t total_limit = v->total_element_limit;
 
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
-    // remaining input unconsumed. The terminal flush is NOT run here — it
+    // remaining input unconsumed. Sink finalization is NOT run here — it
     // happens on explicit `writer_flush` or on stream destroy. Keeping the
     // producer path free of sink finalization means appends never block on
     // IO the stream's owner hasn't asked for.
-    if (max_cursor > 0 && *v->cursor_elements >= max_cursor)
+    if (total_limit > 0 && *v->cursor_elements >= total_limit)
       return writer_finished_at(src, end);
 
     const uint64_t epoch_remaining =
@@ -121,8 +121,8 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
     uint64_t elements =
       epoch_remaining < input_remaining ? epoch_remaining : input_remaining;
 
-    if (max_cursor > 0) {
-      uint64_t cap = max_cursor - *v->cursor_elements;
+    if (total_limit > 0) {
+      uint64_t cap = total_limit - *v->cursor_elements;
       if (elements > cap)
         elements = cap;
     }

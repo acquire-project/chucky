@@ -3,6 +3,7 @@
 #include "gpu/stream.flush.h"
 #include "platform/platform.h"
 #include "stream/config.h"
+#include "stream/dim_info.h"
 
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
@@ -82,6 +83,8 @@ orch_ctx_setup(struct orch_ctx* c,
   c->s->ctx.sink = sink;
   c->s->ctx.levels = c->cl.levels;
   c->s->ctx.layout = c->cl.layouts[0];
+  CHECK(Fail,
+        dim_info_init(&c->s->ctx.dims, config->dimensions, config->rank) == 0);
 
   const uint32_t K = c->cl.epochs_per_batch;
   const uint64_t total_chunks = c->cl.levels.total_chunks;

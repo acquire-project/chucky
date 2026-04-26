@@ -21,7 +21,7 @@ struct cpu_stream_view
 
   // Mutable per-array cursor + batch state
   uint64_t* cursor_elements;
-  uint64_t max_cursor_elements;
+  uint64_t total_element_limit;
   uint32_t* batch_accumulated;
   uint32_t* batch_active_masks;  // [K]
   uint32_t* pool_epochs_scratch; // [K] scratch for LUT recompute

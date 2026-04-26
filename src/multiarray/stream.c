@@ -29,7 +29,7 @@ struct array_descriptor
   struct shard_state shard[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   uint64_t cursor_elements;
-  uint64_t max_cursor_elements;
+  uint64_t total_element_limit;
   uint32_t batch_accumulated;
   uint32_t* batch_active_masks;  // [K], heap-allocated
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K], heap-allocated
@@ -171,16 +171,16 @@ init_array_descriptor(struct array_descriptor* desc,
   if (!desc->pool_epochs_scratch)
     return 1;
 
-  // max_cursor
+  // total_element_limit: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&desc->cl.dims);
     if (dims[0].size > 0) {
-      desc->max_cursor_elements = desc->layout.epoch_elements;
+      desc->total_element_limit = desc->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        desc->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        desc->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
     } else {
-      desc->max_cursor_elements = 0;
+      desc->total_element_limit = 0;
     }
   }
 
@@ -594,7 +594,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .layout = &desc->layout,
     .levels = &desc->levels,
     .cursor_elements = &desc->cursor_elements,
-    .max_cursor_elements = desc->max_cursor_elements,
+    .total_element_limit = desc->total_element_limit,
     .batch_accumulated = &desc->batch_accumulated,
     .batch_active_masks = desc->batch_active_masks,
     .pool_epochs_scratch = desc->pool_epochs_scratch,
@@ -642,15 +642,6 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor* desc = &ms->arrays[array_index];
 
-  // If this array has already been flushed (capacity reached with inline
-  // flush, or explicit flush), further appends are a no-op that report
-  // `finished` with the full input unconsumed.
-  if (desc->flushed)
-    return (struct multiarray_writer_result){
-      .error = multiarray_writer_finished,
-      .rest = data,
-    };
-
   // Switch arrays if needed.
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -660,9 +651,11 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct cpu_stream_view v = make_multiarray_view(ms, desc);
   struct writer_result r = cpu_stream_append_body(&v, data);
+  if (desc->flushed && r.rest.beg != data.beg)
+    desc->flushed = 0;
 
-  // `writer_finished` here means "stream is at capacity"; finalization
-  // happens on explicit `flush()` or on destroy, not here.
+  // `writer_finished` here means "stream is at capacity (total_element_limit)";
+  // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,
     .rest = r.rest,
@@ -679,9 +672,9 @@ flush_impl(struct multiarray_writer* self)
 
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
-    // Already-flushed arrays (either by inline flush on capacity or by a
-    // prior explicit flush) re-entering the body would re-finalize an
-    // already-finalized sink — on Windows that deadlocks.
+    // Idempotency: a redundant flush with no intervening updates re-finalizes
+    // already-closed sinks (deadlock on Windows). The flag is reset by
+    // update_impl when new data arrives.
     if (desc->flushed)
       continue;
     if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {

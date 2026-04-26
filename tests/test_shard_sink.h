@@ -32,6 +32,7 @@ struct test_shard_sink
   size_t per_shard_capacity;
   int open_count;
   int finalize_count;
+  int update_append_count;
 };
 
 // Initialize a multi-level sink.

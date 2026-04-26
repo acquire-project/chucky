@@ -244,16 +244,17 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     s->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
   }
 
-  // Precompute max_cursor so cpu_append doesn't recompute each call.
+  // Precompute total_element_limit (configured stream length) so the body can
+  // detect the at-capacity case without recomputing each call.
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&s->cl.dims);
     if (dims[0].size > 0) {
-      s->max_cursor_elements = s->layout.epoch_elements;
+      s->total_element_limit = s->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        s->max_cursor_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        s->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
     } else {
-      s->max_cursor_elements = 0;
+      s->total_element_limit = 0;
     }
   }
 
@@ -672,7 +673,7 @@ make_view(struct tile_stream_cpu* s)
     .layout = &s->layout,
     .levels = &s->levels,
     .cursor_elements = &s->cursor_elements,
-    .max_cursor_elements = s->max_cursor_elements,
+    .total_element_limit = s->total_element_limit,
     .batch_accumulated = &s->batch_accumulated,
     .batch_active_masks = s->batch_active_masks,
     .pool_epochs_scratch = s->pool_epochs_scratch,
@@ -714,11 +715,11 @@ cpu_append(struct writer* self, struct slice input)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
 
-  if (s->flushed)
-    return writer_finished_at(input.beg, input.end);
-
   struct cpu_stream_view v = make_view(s);
-  return cpu_stream_append_body(&v, input);
+  struct writer_result r = cpu_stream_append_body(&v, input);
+  if (s->flushed && r.rest.beg != input.beg)
+    s->flushed = 0;
+  return r;
 }
 
 static struct writer_result
@@ -726,13 +727,14 @@ cpu_flush_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  // Re-entering the flush body on an already-finalized stream would
-  // re-finalize already-closed sinks — a deadlock on Windows and wasted
-  // work elsewhere.
+  // Idempotency: a redundant flush with no intervening appends re-finalizes
+  // already-closed sinks (deadlock on Windows, wasted work elsewhere).
+  // The flag is reset by cpu_append when new data arrives.
   if (s->flushed)
     return writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_flush_body(&v);
-  s->flushed = 1;
+  if (r.error == 0)
+    s->flushed = 1;
   return r;
 }

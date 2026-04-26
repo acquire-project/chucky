@@ -7,7 +7,7 @@ struct tile_stream_gpu
   struct writer writer;
   struct stream_engine engine;
   struct stream_context ctx;
-  int flushed; // 1 after flush; append after flush returns finished
+  int flushed; // 1 after flush; reset by append for idempotency
 };
 
 // Set writer vtable (append/flush).

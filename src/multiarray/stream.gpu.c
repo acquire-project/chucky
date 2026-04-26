@@ -183,14 +183,15 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
       e->compress_agg.levels[lv].batch_active_count;
   }
 
-  // Save per-array LOD mutable state. counts[] and total_elements track
-  // running append-accumulator state across epochs.
+  // Save per-array LOD state. counts[] tracks running append-accumulator
+  // state across epochs; element_capacity is the fixed accumulator buffer
+  // size set at init.
   if (desc->ctx.levels.enable_multiscale) {
     memcpy(desc->array_lod.append_accum.counts,
            e->lod.append_accum.counts,
            sizeof(desc->array_lod.append_accum.counts));
-    desc->array_lod.append_accum.total_elements =
-      e->lod.append_accum.total_elements;
+    desc->array_lod.append_accum.element_capacity =
+      e->lod.append_accum.element_capacity;
   }
 }
 
@@ -254,14 +255,14 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
       return 1;
   }
 
-  // max_cursor
+  // total_element_limit: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&desc->ctx.dims);
     if (dims[0].size > 0) {
-      desc->ctx.max_cursor_elements = desc->ctx.layout.epoch_elements;
+      desc->ctx.total_element_limit = desc->ctx.layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        desc->ctx.max_cursor_elements *=
+        desc->ctx.total_element_limit *=
           ceildiv(dims[d].size, dims[d].chunk_size);
     }
   }
@@ -530,15 +531,6 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
-  // If this array has already been flushed (capacity reached with inline
-  // flush, or explicit flush), further appends are a no-op that report
-  // `finished` with the full input unconsumed.
-  if (desc->flushed)
-    return (struct multiarray_writer_result){
-      .error = multiarray_writer_finished,
-      .rest = data,
-    };
-
   // Switch arrays if needed
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -547,9 +539,11 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   }
 
   struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+  if (desc->flushed && r.rest.beg != data.beg)
+    desc->flushed = 0;
 
-  // `writer_finished` here means "stream is at capacity"; finalization
-  // happens on explicit `flush()` or on destroy, not here.
+  // `writer_finished` here means "stream is at capacity (total_element_limit)";
+  // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,
     .rest = r.rest,
@@ -571,9 +565,9 @@ flush_impl(struct multiarray_writer* self)
   // Flush each array that has data
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
-    // Already-flushed arrays (either by inline flush on capacity or by a
-    // prior explicit flush) re-entering the body would re-finalize an
-    // already-finalized sink.
+    // Idempotency: a redundant flush with no intervening updates re-finalizes
+    // already-closed sinks. The flag is reset by update_impl when new data
+    // arrives.
     if (desc->flushed)
       continue;
     if (desc->ctx.cursor_elements == 0 && desc->batch_accumulated == 0) {
