@@ -303,12 +303,11 @@ pool_fs_destroy(struct shard_pool* self)
       fs_slot_finalize(&p->slots[i].base);
   }
 
-  // Flush remaining I/O
-  if (p->queue) {
-    struct io_event ev = io_queue_record(p->queue);
-    io_event_wait(p->queue, ev);
+  // Tear down the queue. io_queue_destroy signals shutdown and joins the
+  // worker; the worker drains all queued jobs before exiting, so any
+  // outstanding pwrite/close jobs run before destroy returns.
+  if (p->queue)
     io_queue_destroy(p->queue);
-  }
 
   free(p->slots);
   strbuf_free(&p->root);
@@ -330,19 +329,37 @@ shard_pool_fs_inject_failing_job(struct shard_pool* self)
   return io_queue_post(p->queue, fail_fn, (void*)&p->io_error, NULL);
 }
 
+struct gate_ctx
+{
+  _Atomic int* gate;
+  struct io_queue* queue;
+};
+
 static void
 gate_fn(void* arg)
 {
-  _Atomic int* gate = (_Atomic int*)arg;
-  while (atomic_load(gate) == 0)
+  struct gate_ctx* g = (struct gate_ctx*)arg;
+  while (atomic_load(g->gate) == 0) {
+    if (io_queue_is_shutdown(g->queue))
+      return;
     platform_sleep_ns(1000000LL); // 1ms
+  }
 }
 
 int
 shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  return io_queue_post(p->queue, gate_fn, (void*)gate, NULL);
+  struct gate_ctx* g = (struct gate_ctx*)malloc(sizeof(*g));
+  if (!g)
+    return 1;
+  g->gate = gate;
+  g->queue = p->queue;
+  if (io_queue_post(p->queue, gate_fn, (void*)g, free)) {
+    free(g);
+    return 1;
+  }
+  return 0;
 }
 
 struct shard_pool*

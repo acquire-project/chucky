@@ -190,3 +190,13 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
     SleepConditionVariableSRW(&mq->cond_retired, &mq->srw, INFINITE, 0);
   ReleaseSRWLockExclusive(&mq->srw);
 }
+
+int
+io_queue_is_shutdown(const struct io_queue* q)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  AcquireSRWLockExclusive(&mq->srw);
+  int r = mq->shutdown;
+  ReleaseSRWLockExclusive(&mq->srw);
+  return r;
+}

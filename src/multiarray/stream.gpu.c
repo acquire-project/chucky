@@ -111,6 +111,26 @@ max_u32(uint32_t a, uint32_t b)
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
+// Quiesce the shared d2h delivery pipeline against the departing array
+// before another array binds in. Without this, the next array would inherit
+// stale fences from a different sink (deadlock — fences only retire on the
+// sink that issued them) or reuse aggregate buffers the prior sink is still
+// reading.
+static void
+drain_d2h_for_array(struct stream_engine* e,
+                    struct array_descriptor_gpu* desc)
+{
+  cuStreamSynchronize(e->streams.d2h);
+  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+    for (int fc = 0; fc < 2; ++fc) {
+      struct aggregate_slot* agg = &e->d2h_deliver.levels[lv].agg[fc];
+      if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
+        desc->ctx.sink->wait_fence(desc->ctx.sink, (uint8_t)lv, agg->io_done);
+      agg->io_done.seq = 0;
+    }
+  }
+}
+
 static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
@@ -145,6 +165,8 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 static void
 unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
+  drain_d2h_for_array(e, desc);
+
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
   for (int i = 0; i < 2; ++i) {
@@ -565,6 +587,10 @@ flush_impl(struct multiarray_writer* self)
   }
 
   ms->active = -1;
+
+  // Each array's stream_flush_body already drained its sink as a commit
+  // point; no additional drain needed here.
+
   return (struct multiarray_writer_result){ .error = multiarray_writer_ok };
 
 Error:
@@ -603,31 +629,24 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   sync_all(&ms->engine.streams);
 
   if (ms->arrays) {
-    // Drain sinks before freeing aggregate buffers they reference. Fan
-    // out the record phase across all arrays so wait blocks on the union
-    // of pending IO instead of serializing per-array drains.
-    struct io_event(*evs)[LOD_MAX_LEVELS] =
-      (struct io_event(*)[LOD_MAX_LEVELS])calloc((size_t)ms->n_arrays,
-                                                 sizeof(*evs));
-    if (evs) {
+    // Drain sinks before freeing aggregate buffers they reference.
+    struct shard_sink** sinks =
+      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
+    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
+    if (sinks && nlods) {
       for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        shard_sink_drain_record(desc->ctx.sink, desc->ctx.levels.nlod, evs[a]);
+        sinks[a] = ms->arrays[a].ctx.sink;
+        nlods[a] = ms->arrays[a].ctx.levels.nlod;
       }
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        if (shard_sink_drain_wait(
-              desc->ctx.sink, desc->ctx.levels.nlod, evs[a]))
-          log_error("array %d sink reported IO errors during teardown", a);
-      }
-      free(evs);
+      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
+      if (errors)
+        log_error("%d array sink(s) reported IO errors during teardown",
+                  errors);
     } else {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        struct array_descriptor_gpu* desc = &ms->arrays[a];
-        if (shard_sink_drain(desc->ctx.sink, desc->ctx.levels.nlod))
-          log_error("array %d sink reported IO errors during teardown", a);
-      }
+      log_error("Failed to allocate drain arrays during teardown");
     }
+    free(sinks);
+    free(nlods);
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);

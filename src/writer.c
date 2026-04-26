@@ -6,6 +6,7 @@
 #include "platform/platform.h"
 
 #include <assert.h>
+#include <stdlib.h>
 
 struct writer_result
 writer_append(struct writer* w, struct slice data)
@@ -127,6 +128,32 @@ shard_sink_drain(struct shard_sink* s, int nlod)
   struct io_event evs[LOD_MAX_LEVELS];
   shard_sink_drain_record(s, nlod, evs);
   return shard_sink_drain_wait(s, nlod, evs);
+}
+
+int
+shard_sink_drain_many(struct shard_sink** sinks, const int* nlods, int n)
+{
+  if (n <= 0)
+    return 0;
+  struct io_event* evs =
+    (struct io_event*)calloc((size_t)n * LOD_MAX_LEVELS, sizeof(*evs));
+  if (!evs) {
+    int errors = 0;
+    for (int i = 0; i < n; ++i) {
+      if (shard_sink_drain(sinks[i], nlods[i]))
+        ++errors;
+    }
+    return errors;
+  }
+  for (int i = 0; i < n; ++i)
+    shard_sink_drain_record(sinks[i], nlods[i], &evs[i * LOD_MAX_LEVELS]);
+  int errors = 0;
+  for (int i = 0; i < n; ++i) {
+    if (shard_sink_drain_wait(sinks[i], nlods[i], &evs[i * LOD_MAX_LEVELS]))
+      ++errors;
+  }
+  free(evs);
+  return errors;
 }
 
 size_t
