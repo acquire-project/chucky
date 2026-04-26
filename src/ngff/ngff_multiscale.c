@@ -439,3 +439,11 @@ ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
 Fail:
   return 1;
 }
+
+struct zarr_array*
+ngff_multiscale_level(const struct ngff_multiscale* ms, int level)
+{
+  if (!ms || level < 0 || level >= ms->nlod)
+    return NULL;
+  return ms->levels[level];
+}
