@@ -277,11 +277,13 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     return;
 
   // Auto-finalize any unwritten data so destroy is a safe commit point for
-  // callers that didn't explicitly flush. Errors here are swallowed — the
-  // stream is tearing down, there's no one to report to.
+  // callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
   if (!s->flushed) {
     struct cpu_stream_view v = make_view(s);
-    (void)cpu_stream_flush_body(&v);
+    struct writer_result r = cpu_stream_flush_body(&v);
+    if (r.error)
+      log_error("CPU stream auto-flush failed during destroy");
     s->flushed = 1;
   }
 

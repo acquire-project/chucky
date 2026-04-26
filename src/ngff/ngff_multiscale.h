@@ -14,3 +14,10 @@ ngff_multiscale_create_with_pool(struct store* store,
                                  struct shard_pool* pool,
                                  const char* prefix,
                                  const struct ngff_multiscale_config* cfg);
+
+struct zarr_array;
+
+// Private: borrow a per-level zarr_array. Lifetime tied to the multiscale.
+// Used by tests to set per-level attributes that exercise the flush cascade.
+struct zarr_array*
+ngff_multiscale_level(const struct ngff_multiscale* ms, int level);

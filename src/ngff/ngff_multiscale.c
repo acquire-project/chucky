@@ -141,19 +141,15 @@ ngff_multiscale_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-ngff_multiscale_record_fence_fn(struct shard_sink* self, uint8_t level)
+ngff_multiscale_record_fence_fn(struct shard_sink* self)
 {
-  (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   return ms->pool->record_fence(ms->pool);
 }
 
 static void
-ngff_multiscale_wait_fence_fn(struct shard_sink* self,
-                              uint8_t level,
-                              struct io_event ev)
+ngff_multiscale_wait_fence_fn(struct shard_sink* self, struct io_event ev)
 {
-  (void)level;
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
   ms->pool->wait_fence(ms->pool, ev);
 }
@@ -180,6 +176,21 @@ ngff_multiscale_required_shard_alignment_fn(const struct shard_sink* self)
   const struct ngff_multiscale* ms =
     container_of(self, struct ngff_multiscale, base);
   return shard_pool_required_shard_alignment(ms->pool);
+}
+
+static int
+ngff_multiscale_flush_fn(struct shard_sink* self)
+{
+  struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
+  int rc = 0;
+  for (int lv = 0; lv < ms->nlod; ++lv) {
+    struct shard_sink* child = zarr_array_as_shard_sink(ms->levels[lv]);
+    if (child && child->flush)
+      rc |= child->flush(child);
+  }
+  if (ms->attrs.dirty)
+    rc |= write_ngff_group_metadata(ms);
+  return rc;
 }
 
 // --- Shared create logic ---
@@ -211,6 +222,7 @@ ngff_multiscale_init(struct store* store,
   ms->base.update_append = ngff_multiscale_update_append;
   ms->base.record_fence = ngff_multiscale_record_fence_fn;
   ms->base.wait_fence = ngff_multiscale_wait_fence_fn;
+  ms->base.flush = ngff_multiscale_flush_fn;
   ms->base.has_error = ngff_multiscale_has_error_fn;
   ms->base.pending_bytes = ngff_multiscale_pending_bytes_fn;
   ms->base.required_shard_alignment =
@@ -369,8 +381,8 @@ ngff_multiscale_destroy(struct ngff_multiscale* ms)
 {
   if (!ms)
     return;
-  if (ms->attrs.dirty)
-    write_ngff_group_metadata(ms);
+  if (ms->attrs.dirty && write_ngff_group_metadata(ms))
+    log_error("ngff_multiscale: metadata flush failed during destroy");
   for (int i = 0; i < ms->nlod; ++i)
     zarr_array_destroy(ms->levels[i]);
   free(ms->levels);
@@ -426,4 +438,12 @@ ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
   return write_ngff_group_metadata(ms);
 Fail:
   return 1;
+}
+
+struct zarr_array*
+ngff_multiscale_level(const struct ngff_multiscale* ms, int level)
+{
+  if (!ms || level < 0 || level >= ms->nlod)
+    return NULL;
+  return ms->levels[level];
 }

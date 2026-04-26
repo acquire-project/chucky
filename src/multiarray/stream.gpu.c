@@ -125,7 +125,7 @@ drain_d2h_for_array(struct stream_engine* e,
     for (int fc = 0; fc < 2; ++fc) {
       struct aggregate_slot* agg = &e->d2h_deliver.levels[lv].agg[fc];
       if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
-        desc->ctx.sink->wait_fence(desc->ctx.sink, (uint8_t)lv, agg->io_done);
+        desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
       agg->io_done.seq = 0;
     }
   }
@@ -622,31 +622,17 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     return;
 
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
-  // for callers that didn't explicitly flush. Errors here are swallowed —
-  // the stream is tearing down, there's no one to report to.
-  (void)flush_impl(&ms->writer);
+  // for callers that didn't explicitly flush. Errors are logged but not
+  // propagated — destroy returns void.
+  {
+    struct multiarray_writer_result r = flush_impl(&ms->writer);
+    if (r.error)
+      log_error("GPU multiarray auto-flush failed during destroy");
+  }
 
   sync_all(&ms->engine.streams);
 
   if (ms->arrays) {
-    // Drain sinks before freeing aggregate buffers they reference.
-    struct shard_sink** sinks =
-      (struct shard_sink**)calloc((size_t)ms->n_arrays, sizeof(*sinks));
-    int* nlods = (int*)calloc((size_t)ms->n_arrays, sizeof(*nlods));
-    if (sinks && nlods) {
-      for (int a = 0; a < ms->n_arrays; ++a) {
-        sinks[a] = ms->arrays[a].ctx.sink;
-        nlods[a] = ms->arrays[a].ctx.levels.nlod;
-      }
-      int errors = shard_sink_drain_many(sinks, nlods, ms->n_arrays);
-      if (errors)
-        log_error("%d array sink(s) reported IO errors during teardown",
-                  errors);
-    } else {
-      log_error("Failed to allocate drain arrays during teardown");
-    }
-    free(sinks);
-    free(nlods);
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);

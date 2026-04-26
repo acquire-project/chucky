@@ -135,19 +135,15 @@ zarr_array_update_append(struct shard_sink* self,
 }
 
 static struct io_event
-zarr_array_record_fence_fn(struct shard_sink* self, uint8_t level)
+zarr_array_record_fence_fn(struct shard_sink* self)
 {
-  (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
   return a->pool->record_fence(a->pool);
 }
 
 static void
-zarr_array_wait_fence_fn(struct shard_sink* self,
-                         uint8_t level,
-                         struct io_event ev)
+zarr_array_wait_fence_fn(struct shard_sink* self, struct io_event ev)
 {
-  (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
   a->pool->wait_fence(a->pool, ev);
 }
@@ -171,6 +167,15 @@ zarr_array_required_shard_alignment_fn(const struct shard_sink* self)
 {
   const struct zarr_array* a = container_of(self, struct zarr_array, base);
   return shard_pool_required_shard_alignment(a->pool);
+}
+
+static int
+zarr_array_flush_fn(struct shard_sink* self)
+{
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  if (!a->attrs.dirty)
+    return 0;
+  return write_array_metadata(a);
 }
 
 // --- Core init (geometry already computed) ---
@@ -212,6 +217,7 @@ zarr_array_init(struct store* store,
   a->base.update_append = zarr_array_update_append;
   a->base.record_fence = zarr_array_record_fence_fn;
   a->base.wait_fence = zarr_array_wait_fence_fn;
+  a->base.flush = zarr_array_flush_fn;
   a->base.has_error = zarr_array_has_error_fn;
   a->base.pending_bytes = zarr_array_pending_bytes_fn;
   a->base.required_shard_alignment = zarr_array_required_shard_alignment_fn;
@@ -293,12 +299,17 @@ zarr_array_destroy(struct zarr_array* a)
 {
   if (!a)
     return;
-  // Flush dirty attrs before teardown.
-  if (a->attrs.dirty)
-    write_array_metadata(a);
+  // Fallback for callers that didn't flush via the writer/sink — same shape
+  // as the auto-flush log in stream destroys.
+  if (a->attrs.dirty && write_array_metadata(a))
+    log_error("zarr_array: metadata flush failed during destroy");
   attr_set_destroy(&a->attrs);
   dims_free_names(a->dimensions, a->rank);
   strbuf_free(&a->prefix);
+  // Drain via the sink interface before the pool is destroyed so teardown
+  // doesn't depend on shard_pool internals.
+  if (shard_sink_drain(&a->base))
+    log_error("zarr_array: sink reported IO errors during teardown");
   struct shard_pool* pool = a->owns_pool ? a->pool : NULL;
   free(a);
   shard_pool_destroy(pool);

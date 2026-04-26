@@ -307,8 +307,8 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     // Both slots may hold in-flight IO from this batch; wait on both before
     // finalize. Single fence per slot covers all LODs (one shared IO queue).
     if (v->sink->wait_fence) {
-      v->sink->wait_fence(v->sink, 0, v->io_done[0]);
-      v->sink->wait_fence(v->sink, 0, v->io_done[1]);
+      v->sink->wait_fence(v->sink, v->io_done[0]);
+      v->sink->wait_fence(v->sink, v->io_done[1]);
     }
 
     if (v->sink->has_error && v->sink->has_error(v->sink))
@@ -337,6 +337,9 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
         return writer_error();
     }
   }
+
+  if (v->sink->flush && v->sink->flush(v->sink))
+    return writer_error();
 
   return writer_ok();
 }

@@ -71,7 +71,7 @@ wait_io_fences(const struct d2h_deliver_stage* stage,
       continue;
     struct aggregate_slot* agg = &stage->levels[lv].agg[fc];
     if (agg->io_done.seq > 0)
-      sink->wait_fence(sink, (uint8_t)lv, agg->io_done);
+      sink->wait_fence(sink, agg->io_done);
   }
   if (stage->metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
@@ -334,7 +334,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       sink_bytes += level_bytes;
 
       if (sink->record_fence)
-        lvl->agg[fc].io_done = sink->record_fence(sink, (uint8_t)lv);
+        lvl->agg[fc].io_done = sink->record_fence(sink);
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;

@@ -1,8 +1,11 @@
 #include "dimension.h"
 #include "store.h"
+#include "stream.cpu.h"
 #include "test_platform.h"
 #include "util/prelude.h"
+#include "writer.h"
 #include "zarr.h"
+#include "zarr/zarr_array.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -551,6 +554,73 @@ Fail:
   return 1;
 }
 
+// Regression: writer_flush must cascade to the sink's flush hook so
+// dirty attribute metadata is written without going through destroy.
+static int
+test_writer_flush_cascades_to_sink(void)
+{
+  log_info("=== test_writer_flush_cascades_to_sink ===");
+  CHECK(Fail, mk_subdir("cascade") == 0);
+  struct store* s = store_fs_create(tmpdir, 0);
+  CHECK(Fail, s);
+
+  struct dimension dims[2] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 16, .chunk_size = 8, .name = "x", .storage_position = 1 },
+  };
+  struct zarr_array_config acfg = {
+    .data_type = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+  };
+  struct zarr_array* a = zarr_array_create(s, "cascade", &acfg);
+  CHECK(Fail2, a);
+
+  CHECK(Fail3, zarr_array_set_attribute(a, "tag", "\"streamed\"") == 0);
+
+  struct tile_stream_configuration cfg = {
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .buffer_capacity_bytes = 4096,
+  };
+  struct tile_stream_cpu* ts =
+    tile_stream_cpu_create(&cfg, zarr_array_as_shard_sink(a));
+  CHECK(Fail3, ts);
+
+  struct writer* w = tile_stream_cpu_writer(ts);
+  struct writer_result r = writer_flush(w);
+  CHECK(Fail4, r.error == 0);
+
+  // The cascade should have cleared the dirty bit and persisted the attr.
+  char* out = read_file("cascade/zarr.json", NULL);
+  CHECK(Fail4, out);
+  CHECK(Fail_out, contains(out, "\"tag\":\"streamed\""));
+
+  free(out);
+  tile_stream_cpu_destroy(ts);
+  zarr_array_destroy(a);
+  store_destroy(s);
+  log_info("  PASS");
+  return 0;
+Fail_out:
+  free(out);
+Fail4:
+  tile_stream_cpu_destroy(ts);
+Fail3:
+  zarr_array_destroy(a);
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -566,6 +636,7 @@ main(void)
   err |= test_array_value_shapes();
   err |= test_array_large_value();
   err |= test_array_collide_top_level();
+  err |= test_writer_flush_cascades_to_sink();
   err |= test_group_create_set_destroy();
   err |= test_group_multiple_keys();
   err |= test_group_root();

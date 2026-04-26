@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MOCK_MAX_LEVELS 4
 #define MOCK_MAX_ISSUED 256
 #define DISCARD_BUF_BYTES (1u << 16)
 
@@ -29,10 +28,10 @@ struct mock_shard_sink
   struct shard_sink base;
   int id;
   uint64_t next_seq;
-  // Per-level record of fences this sink issued; consulted on wait to
-  // detect a fence that came from elsewhere.
-  uint64_t issued[MOCK_MAX_LEVELS][MOCK_MAX_ISSUED];
-  int n_issued[MOCK_MAX_LEVELS];
+  // Record of fences this sink issued; consulted on wait to detect a fence
+  // that came from elsewhere.
+  uint64_t issued[MOCK_MAX_ISSUED];
+  int n_issued;
 
   int cross_sink_violation;
   uint64_t bad_seq;
@@ -71,32 +70,23 @@ mock_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 }
 
 static struct io_event
-mock_record_fence(struct shard_sink* self, uint8_t level)
+mock_record_fence(struct shard_sink* self)
 {
   struct mock_shard_sink* m = (struct mock_shard_sink*)self;
-  if (level >= MOCK_MAX_LEVELS)
-    return (struct io_event){ .seq = 0 };
   uint64_t seq = ++m->next_seq;
-  if (m->n_issued[level] < MOCK_MAX_ISSUED)
-    m->issued[level][m->n_issued[level]++] = seq;
+  if (m->n_issued < MOCK_MAX_ISSUED)
+    m->issued[m->n_issued++] = seq;
   return (struct io_event){ .seq = seq };
 }
 
 static void
-mock_wait_fence(struct shard_sink* self, uint8_t level, struct io_event ev)
+mock_wait_fence(struct shard_sink* self, struct io_event ev)
 {
   struct mock_shard_sink* m = (struct mock_shard_sink*)self;
   if (ev.seq == 0)
     return;
-  if (level >= MOCK_MAX_LEVELS) {
-    if (!m->cross_sink_violation) {
-      m->cross_sink_violation = 1;
-      m->bad_seq = ev.seq;
-    }
-    return;
-  }
-  for (int i = 0; i < m->n_issued[level]; ++i) {
-    if (m->issued[level][i] == ev.seq)
+  for (int i = 0; i < m->n_issued; ++i) {
+    if (m->issued[i] == ev.seq)
       return;
   }
   if (!m->cross_sink_violation) {

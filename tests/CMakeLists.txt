@@ -101,6 +101,12 @@ enable_openmp(test_lod_cpu)
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)
 
+# Regression: writer_flush propagates sink->flush errors.
+add_test_exe(test_sink_flush_error test_sink_flush_error.c stream_cpu writer test_shard_sink chucky_log)
+
+# Regression: writer_flush cascades through ngff_multiscale to child arrays.
+add_test_exe(test_ngff_flush_cascade test_ngff_flush_cascade.c stream_cpu writer ngff_multiscale zarr_array zarr_group store_fs store_api test_platform chucky_log)
+
 # CPU multi-array stream test (no CUDA)
 add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu writer test_shard_sink chucky_log)
 
@@ -141,7 +147,7 @@ add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_dr
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group test_platform chucky_log)
-add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api test_platform chucky_log)
+add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api stream_cpu writer test_platform chucky_log)
 add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs store_api test_platform chucky_log)
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
@@ -158,7 +164,6 @@ target_compile_definitions(
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
 add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
-add_test_exe(test_flush_drain_multiarray_gpu test_flush_drain_multiarray_gpu.c zarr_array store_fs store_api shard_pool_fs platform test_platform writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)

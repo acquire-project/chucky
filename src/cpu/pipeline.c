@@ -112,7 +112,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     struct platform_clock fence_clk = { 0 };
     if (p->metrics)
       platform_toc(&fence_clk);
-    p->sink->wait_fence(p->sink, 0, p->io_done[cur]);
+    p->sink->wait_fence(p->sink, p->io_done[cur]);
     if (p->metrics) {
       float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
       accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
@@ -178,7 +178,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   // share one IO queue across levels, so one fence is enough — the next slot
   // reuse waits for every pwrite from this batch.
   if (p->sink->record_fence)
-    p->io_done[cur] = p->sink->record_fence(p->sink, 0);
+    p->io_done[cur] = p->sink->record_fence(p->sink);
 
   // Next batch uses the other slot.
   *p->agg_current = cur ^ 1;
