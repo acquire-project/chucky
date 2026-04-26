@@ -107,7 +107,7 @@ struct lod_state
     CUdeviceptr d_level_ids;
     CUdeviceptr d_counts;
     uint32_t counts[LOD_MAX_LEVELS];
-    uint64_t total_elements;
+    uint64_t element_capacity;
     uint64_t morton_offset;
   } append_accum;
 };

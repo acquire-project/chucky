@@ -444,20 +444,20 @@ lod_state_init_accumulators(struct lod_state* lod,
 
   lod->append_accum.morton_offset = p->level_spans.ends[0];
 
-  lod->append_accum.total_elements = 0;
+  lod->append_accum.element_capacity = 0;
   for (int lv = 1; lv < p->levels.nlod; ++lv)
-    lod->append_accum.total_elements +=
+    lod->append_accum.element_capacity +=
       p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
 
-  if (lod->append_accum.total_elements == 0)
+  if (lod->append_accum.element_capacity == 0)
     return 0;
 
   size_t accum_bpe = dtype_bpe(config->dtype);
-  size_t accum_bytes = lod->append_accum.total_elements * accum_bpe;
+  size_t accum_bytes = lod->append_accum.element_capacity * accum_bpe;
   CU(Fail, cuMemAlloc(&lod->append_accum.d_accum, accum_bytes));
 
   {
-    uint8_t* h_level_ids = (uint8_t*)malloc(lod->append_accum.total_elements);
+    uint8_t* h_level_ids = (uint8_t*)malloc(lod->append_accum.element_capacity);
     CHECK(Fail, h_level_ids);
 
     uint64_t offset = 0;
@@ -469,14 +469,14 @@ lod_state_init_accumulators(struct lod_state* lod,
     }
 
     CUresult r = cuMemAlloc(&lod->append_accum.d_level_ids,
-                            lod->append_accum.total_elements);
+                            lod->append_accum.element_capacity);
     if (r != CUDA_SUCCESS) {
       free(h_level_ids);
       goto Fail;
     }
     r = cuMemcpyHtoD(lod->append_accum.d_level_ids,
                      h_level_ids,
-                     lod->append_accum.total_elements);
+                     lod->append_accum.element_capacity);
     free(h_level_ids);
     if (r != CUDA_SUCCESS)
       goto Fail;
@@ -570,7 +570,7 @@ run_append_fold_emit(struct lod_state* lod,
                              lod->append_accum.d_counts,
                              dtype,
                              append_reduce_method,
-                             lod->append_accum.total_elements,
+                             lod->append_accum.element_capacity,
                              compute) == 0);
 
   // Increment counts, emit ready levels back to morton
@@ -716,7 +716,7 @@ lod_run_epoch(struct lod_state* lod,
   // which higher levels fire this epoch.
   uint32_t active_levels_mask =
     dims->append_downsample ? 1u : (uint32_t)((1u << p->levels.nlod) - 1);
-  if (dims->append_downsample && lod->append_accum.total_elements > 0) {
+  if (dims->append_downsample && lod->append_accum.element_capacity > 0) {
     CHECK(
       Error,
       run_append_fold_emit(

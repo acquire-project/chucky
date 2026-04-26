@@ -161,14 +161,15 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
       e->compress_agg.levels[lv].batch_active_count;
   }
 
-  // Save per-array LOD mutable state. counts[] and total_elements track
-  // running append-accumulator state across epochs.
+  // Save per-array LOD state. counts[] tracks running append-accumulator
+  // state across epochs; element_capacity is the fixed accumulator buffer
+  // size set at init.
   if (desc->ctx.levels.enable_multiscale) {
     memcpy(desc->array_lod.append_accum.counts,
            e->lod.append_accum.counts,
            sizeof(desc->array_lod.append_accum.counts));
-    desc->array_lod.append_accum.total_elements =
-      e->lod.append_accum.total_elements;
+    desc->array_lod.append_accum.element_capacity =
+      e->lod.append_accum.element_capacity;
   }
 }
 
