@@ -187,3 +187,97 @@ aggregate_cpu_batch_into(const void* compressed_base,
   result->chunk_sizes = ws->chunk_sizes;
   return 0;
 }
+
+// ---- Unified-across-LODs per-batch aggregate ----
+
+int
+aggregate_cpu_batch_into_unified(const void* compressed_base,
+                                 const size_t* comp_sizes_base,
+                                 const uint32_t* gather,
+                                 const struct batch_aggregate_layout* layout,
+                                 struct aggregate_cpu_workspace* ws,
+                                 struct aggregate_result* per_lod_results,
+                                 int nthreads)
+{
+  const uint64_t total_chunks = layout->total_batch_chunks;
+  const uint64_t total_covering = layout->total_batch_covering;
+  const uint8_t nlod = layout->nlod;
+  const size_t max_comp = layout->max_comp_chunk_bytes;
+
+  // Each LOD's offsets array has cnt + 1 entries. Adjacent LODs' end/start
+  // positions would collide on one shared index of a single packed array.
+  // Solution: shift each LOD's view by `lv` so every LOD owns a disjoint
+  // span in offsets/permuted_sizes/chunk_sizes. aggregate_batch_luts_unified
+  // applies the same shift to perm targets so all references stay in sync.
+  // The trailing +nlod slack on each scratch array (allocated by the
+  // workspace) covers the shifted span.
+  memset(ws->permuted_sizes, 0, (total_covering + nlod) * sizeof(size_t));
+
+  // Pass 1: scatter compressed sizes into permuted-by-shard layout.
+  for (uint64_t i = 0; i < total_chunks; ++i)
+    ws->permuted_sizes[ws->perm[i]] = comp_sizes_base[gather[i]];
+
+  // Save pre-padding sizes for the shard-index step.
+  memcpy(ws->chunk_sizes,
+         ws->permuted_sizes,
+         (total_covering + nlod) * sizeof(size_t));
+
+  // Pass 1.5: per-LOD shard padding. Each LOD has its own cps_inner and
+  // group geometry, so padding stays per-segment.
+  if (layout->page_size > 0) {
+    for (uint8_t lv = 0; lv < nlod; ++lv) {
+      const struct lod_segment* seg = &layout->lods[lv];
+      if (seg->n_active == 0 || seg->chunks_per_shard_inner == 0)
+        continue;
+      pad_shard_sizes(ws->permuted_sizes + seg->batch_covering_offset + lv,
+                      (uint64_t)seg->n_active * seg->covering_count,
+                      (uint64_t)seg->n_active * seg->chunks_per_shard_inner,
+                      layout->page_size);
+    }
+  }
+
+  // Pass 2: per-LOD prefix sum within each LOD's shifted span. Anchored
+  // at the LOD's page-aligned data_segment_offset so absolute byte
+  // positions land in the correct slot of the shared data buffer.
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct lod_segment* seg = &layout->lods[lv];
+    if (seg->n_active == 0)
+      continue;
+    const uint64_t base = seg->batch_covering_offset + lv;
+    const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
+    ws->offsets[base] = seg->data_segment_offset;
+    for (uint64_t i = 0; i < cnt; ++i)
+      ws->offsets[base + i + 1] =
+        ws->offsets[base + i] + ws->permuted_sizes[base + i];
+  }
+
+  // Pass 3: unified parallel gather across all LODs. Pool stride is uniform
+  // (max_output_size shared across LODs), so source addressing only needs
+  // gather[i] * max_comp.
+  {
+    int i;
+#pragma omp parallel for schedule(static) if (total_chunks > 16)               \
+  num_threads(nthreads)
+    for (i = 0; i < (int)total_chunks; ++i) {
+      const size_t nbytes = comp_sizes_base[gather[i]];
+      if (nbytes == 0)
+        continue;
+      const char* src =
+        (const char*)compressed_base + (uint64_t)gather[i] * max_comp;
+      char* dst = (char*)ws->data + ws->offsets[ws->perm[i]];
+      memcpy(dst, src, nbytes);
+    }
+  }
+
+  // Per-LOD result views: same data base, per-LOD slice of offsets / sizes,
+  // each shifted by `lv` to match the disjoint span layout above.
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct lod_segment* seg = &layout->lods[lv];
+    per_lod_results[lv].data = ws->data;
+    per_lod_results[lv].offsets = ws->offsets + seg->batch_covering_offset + lv;
+    per_lod_results[lv].chunk_sizes =
+      ws->chunk_sizes + seg->batch_covering_offset + lv;
+  }
+
+  return 0;
+}

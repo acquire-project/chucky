@@ -1,5 +1,6 @@
 #include "stream/types.aggregate.h"
 
+#include "platform/platform.h"
 #include "stream/layouts.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
@@ -58,6 +59,136 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
         (uint32_t)(ravel(2, shard_shape, shard_strides, perm_pos) +
                    a * cps_inner);
     }
+  }
+}
+
+// Populate a batch_aggregate_layout from per-LOD layouts and the per-LOD
+// active counts in this batch. Each LOD's data segment offset is rounded
+// up to page alignment so deliver-time write_direct guards still hold.
+int
+batch_aggregate_layout_init(struct batch_aggregate_layout* out,
+                            const struct aggregate_layout* per_lod,
+                            const uint32_t* per_lod_n_active,
+                            uint8_t nlod,
+                            size_t page_size)
+{
+  CHECK(Error, out);
+  CHECK(Error, per_lod);
+  CHECK(Error, per_lod_n_active);
+  CHECK(Error, nlod >= 1 && nlod <= LOD_MAX_LEVELS);
+
+  memset(out, 0, sizeof(*out));
+  out->nlod = nlod;
+  out->page_size = page_size;
+  out->max_comp_chunk_bytes = per_lod[0].max_comp_chunk_bytes;
+
+  const size_t page_align =
+    page_size > 0 ? page_size : platform_page_alignment();
+
+  uint64_t chunk_acc = 0;
+  uint64_t covering_acc = 0;
+  size_t data_acc = 0;
+
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct aggregate_layout* in = &per_lod[lv];
+    struct lod_segment* seg = &out->lods[lv];
+
+    // Pool stride is uniform across LODs (see stream/config.c:357 — same
+    // max_output_size is passed to every aggregate_layout_compute call).
+    CHECK(Error, in->max_comp_chunk_bytes == out->max_comp_chunk_bytes);
+
+    seg->chunks_per_epoch = in->chunks_per_epoch;
+    seg->covering_count = in->covering_count;
+    seg->chunks_per_shard_inner = in->cps_inner;
+    seg->n_active = per_lod_n_active[lv];
+
+    seg->batch_chunk_offset = chunk_acc;
+    seg->batch_covering_offset = covering_acc;
+    seg->data_segment_offset = data_acc;
+
+    const uint64_t batch_chunks =
+      (uint64_t)seg->n_active * seg->chunks_per_epoch;
+    const uint64_t batch_cov = (uint64_t)seg->n_active * seg->covering_count;
+
+    chunk_acc += batch_chunks;
+    covering_acc += batch_cov;
+
+    // Per-LOD segment capacity — sized via the same agg_pool_bytes math
+    // used by the per-LOD path so behavior is identical when nlod == 1.
+    size_t seg_bytes = agg_pool_bytes(batch_chunks,
+                                      in->max_comp_chunk_bytes,
+                                      batch_cov,
+                                      seg->n_active * in->cps_inner,
+                                      page_size);
+    if (seg_bytes == 0 && batch_chunks > 0) {
+      log_error("batch_aggregate_layout_init: lod %u agg_pool_bytes overflow "
+                "(batch_chunks=%llu, max_comp=%zu)",
+                (unsigned)lv,
+                (unsigned long long)batch_chunks,
+                in->max_comp_chunk_bytes);
+      goto Error;
+    }
+
+    seg->data_segment_bytes = seg_bytes;
+
+    // Round each segment up to a page boundary so the next LOD's segment
+    // base is also page-aligned within the unified buffer.
+    if (lv + 1 < nlod) {
+      size_t next = data_acc + seg_bytes;
+      next = align_up(next, page_align);
+      data_acc = next;
+    } else {
+      data_acc += seg_bytes;
+    }
+  }
+
+  out->total_batch_chunks = chunk_acc;
+  out->total_batch_covering = covering_acc;
+  out->total_data_bytes = align_up(data_acc, page_align);
+
+  return 0;
+
+Error:
+  if (out)
+    memset(out, 0, sizeof(*out));
+  return 1;
+}
+
+void
+aggregate_batch_luts_unified(const struct batch_aggregate_layout* layout,
+                             const struct aggregate_layout* per_lod,
+                             const struct level_geometry* levels,
+                             const uint32_t* const* pool_epochs,
+                             uint32_t* out_gather,
+                             uint32_t* out_perm)
+{
+  for (uint8_t lv = 0; lv < layout->nlod; ++lv) {
+    const struct lod_segment* seg = &layout->lods[lv];
+    if (seg->n_active == 0)
+      continue;
+
+    const uint64_t base_chunk = seg->batch_chunk_offset;
+    const uint64_t base_cov = seg->batch_covering_offset;
+    const uint64_t segment_chunks =
+      (uint64_t)seg->n_active * seg->chunks_per_epoch;
+
+    // Reuse the per-LOD builder against this segment's slice of the LUTs;
+    // perm targets it produces are local to the LOD's covering range, so
+    // shift them by base_cov to live in the unified covering space.
+    aggregate_batch_luts(&per_lod[lv],
+                         levels,
+                         (int)lv,
+                         seg->n_active,
+                         pool_epochs[lv],
+                         out_gather + base_chunk,
+                         out_perm + base_chunk);
+
+    // Shift perm targets by base_cov + lv so each LOD's perm range aligns
+    // with the same lv-shifted offsets layout written in aggregate's pass
+    // 2. Without the +lv, LOD k's perm targets would index into LOD k-1's
+    // last offset, off by one for every LOD past the first.
+    for (uint64_t i = 0; i < segment_chunks; ++i)
+      out_perm[base_chunk + i] += (uint32_t)(base_cov + lv);
   }
 }
 

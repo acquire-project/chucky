@@ -9,6 +9,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+// --- Pool ---
+
+struct fs_slot;
+
+struct shard_pool_fs
+{
+  struct shard_pool base;
+  struct io_queue* queue;
+  struct fs_slot* slots;
+  uint64_t nslots;
+  int unbuffered;
+  struct strbuf root; // owned
+  uint64_t queued_bytes;
+  _Atomic uint64_t retired_bytes;
+  _Atomic int io_error;
+};
+
 // --- Writer slot for a single shard file ---
 
 struct fs_slot
@@ -183,21 +200,6 @@ fs_slot_finalize(struct shard_writer* self)
 Error:
   return 1;
 }
-
-// --- Pool ---
-
-struct shard_pool_fs
-{
-  struct shard_pool base;
-  struct io_queue* queue;
-  struct fs_slot* slots;
-  uint64_t nslots;
-  int unbuffered;
-  struct strbuf root; // owned
-  uint64_t queued_bytes;
-  _Atomic uint64_t retired_bytes;
-  _Atomic int io_error;
-};
 
 static struct shard_writer*
 pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)

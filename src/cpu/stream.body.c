@@ -27,24 +27,21 @@ make_flush_params(struct cpu_stream_view* v)
     .nlod = v->levels->nlod,
     .cl = v->cl,
     .levels_geo = v->levels,
-    .shard_order_sizes_bytes = v->shard_order_sizes,
+    .per_lod_agg_layouts = v->agg_layout,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .nthreads = v->nthreads,
     .pool_epochs_scratch = v->pool_epochs_scratch,
+    .agg_slots = v->agg_slots,
+    .io_done = v->io_done,
+    .agg_current = v->agg_current,
     .metrics = v->metrics,
   };
   for (int lv = 0; lv < v->levels->nlod; ++lv) {
     p.levels[lv] = (struct flush_level_view){
-      .agg_layout = &v->agg_layout[lv],
       .batch_active_count = v->batch_active_count[lv],
       .chunk_offset = v->levels->level[lv].chunk_offset,
-      .batch_chunk_to_shard_map = v->batch_chunk_to_shard_map[lv],
-      .batch_gather = v->batch_gather[lv],
-      .agg_slot = v->agg_slots[lv],     // &v->agg_slots[lv][0], array of 2
       .shard = &v->shard[lv],
-      .io_done = v->io_done[lv],        // &v->io_done[lv][0], array of 2
-      .agg_current = &v->agg_current[lv],
     };
   }
   return p;
@@ -307,16 +304,17 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     struct platform_clock emit_clk = { 0 };
     platform_toc(&emit_clk);
 
+    // Both slots may hold in-flight IO from this batch; wait on both before
+    // finalize. Single fence per slot covers all LODs (one shared IO queue).
+    if (v->sink->wait_fence) {
+      v->sink->wait_fence(v->sink, 0, v->io_done[0]);
+      v->sink->wait_fence(v->sink, 0, v->io_done[1]);
+    }
+
+    if (v->sink->has_error && v->sink->has_error(v->sink))
+      return writer_error();
+
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
-      // Both slots may hold in-flight IO; wait on both before finalize.
-      if (v->sink->wait_fence) {
-        v->sink->wait_fence(v->sink, (uint8_t)lv, v->io_done[lv][0]);
-        v->sink->wait_fence(v->sink, (uint8_t)lv, v->io_done[lv][1]);
-      }
-
-      if (v->sink->has_error && v->sink->has_error(v->sink))
-        return writer_error();
-
       if (v->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&v->shard[lv], v->shard_alignment))
           return writer_error();

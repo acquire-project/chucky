@@ -32,12 +32,15 @@ struct array_descriptor
   uint64_t max_cursor_elements;
   uint32_t batch_accumulated;
   uint32_t* batch_active_masks;  // [K], heap-allocated
-  uint32_t* pool_epochs_scratch; // [K], heap-allocated
+  uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K], heap-allocated
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
-  struct io_event io_done[LOD_MAX_LEVELS][2]; // per-slot fences
-  uint8_t agg_current[LOD_MAX_LEVELS];        // next slot to use per level
+  struct io_event io_done[2]; // per-slot fences (single fence covers batch)
+  uint8_t agg_current;        // next slot to use (0 or 1)
+  // Worst-case unified batch layout for this array — used to pre-size
+  // per-array view of the shared agg_slots scratch.
+  struct batch_aggregate_layout max_batch_layout;
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
   int flushed;            // 1 once flush body has run for this array
@@ -62,13 +65,12 @@ struct multiarray_tile_stream_cpu
   void* compressed;
   size_t* comp_sizes;
 
-  // Shared aggregate workspace (double-buffered per level).
-  struct cpu_agg_slot agg_slots[LOD_MAX_LEVELS][2];
-  size_t* shard_order_sizes;
+  // Shared aggregate workspace: one double-buffered pair across all LODs.
+  // Each slot owns a page-aligned data buffer plus unified scratch arrays
+  // sized for the worst-case unified batch across all arrays.
+  struct cpu_agg_slot agg_slots[2];
 
   // Shared LUT storage (recomputed on switch).
-  uint32_t* batch_gather[LOD_MAX_LEVELS];
-  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
   uint64_t* scatter_fixed_dims_offsets;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
@@ -112,12 +114,15 @@ struct pool_maxima
   size_t chunk_pool_bytes;
   size_t compressed_bytes;
   size_t comp_sizes_count;
-  uint64_t batch_covering_count;
+  size_t pool_epochs_scratch_count; // LOD_MAX_LEVELS * max_K
   size_t linear_bytes;
   size_t lod_values_bytes;
-  size_t agg_data_bytes[LOD_MAX_LEVELS];
-  uint64_t agg_batch_C_count[LOD_MAX_LEVELS];
-  size_t batch_gather_count[LOD_MAX_LEVELS];
+
+  // Unified per-batch maxima across all arrays.
+  size_t agg_data_bytes_total;       // shared data buffer per slot
+  uint64_t total_batch_chunks_max;   // unified gather/perm len
+  uint64_t total_batch_covering_max; // unified offsets/sizes len
+
   size_t scatter_lut_count;
   size_t scatter_fixed_dims_offsets_count;
   size_t morton_lut_count[LOD_MAX_LEVELS];
@@ -161,7 +166,8 @@ init_array_descriptor(struct array_descriptor* desc,
   desc->batch_active_masks = (uint32_t*)calloc(K, sizeof(uint32_t));
   if (!desc->batch_active_masks)
     return 1;
-  desc->pool_epochs_scratch = (uint32_t*)malloc((size_t)K * sizeof(uint32_t));
+  desc->pool_epochs_scratch =
+    (uint32_t*)malloc((size_t)LOD_MAX_LEVELS * (size_t)K * sizeof(uint32_t));
   if (!desc->pool_epochs_scratch)
     return 1;
 
@@ -192,33 +198,41 @@ init_array_descriptor(struct array_descriptor* desc,
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
     desc->agg_layout[lv] = li->agg_layout;
-
-    const struct aggregate_layout* al = &desc->agg_layout[lv];
-    uint32_t K_l = li->batch_active_count;
-    desc->batch_active_count[lv] = K_l;
-    uint32_t slot_count = K_l > 0 ? K_l : 1;
-    uint64_t C_lv = al->covering_count;
-    uint64_t M_lv = al->chunks_per_epoch;
-    uint64_t batch_C = (uint64_t)slot_count * C_lv;
-
-    if (batch_C > maxima->batch_covering_count)
-      maxima->batch_covering_count = batch_C;
-    if (batch_C > maxima->agg_batch_C_count[lv])
-      maxima->agg_batch_C_count[lv] = batch_C;
-    maxima->agg_data_bytes[lv] =
-      max_sz(maxima->agg_data_bytes[lv],
-             agg_pool_bytes((uint64_t)slot_count * M_lv,
-                            al->max_comp_chunk_bytes,
-                            C_lv,
-                            al->cps_inner,
-                            al->page_size));
-
-    maxima->batch_gather_count[lv] =
-      max_sz(maxima->batch_gather_count[lv], (uint64_t)slot_count * M_lv);
-
+    desc->batch_active_count[lv] = li->batch_active_count;
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
   }
+
+  // Worst-case unified batch layout for this array — every LOD active for
+  // every epoch of its batch_active_count.
+  {
+    uint32_t worst[LOD_MAX_LEVELS];
+    for (int lv = 0; lv < desc->levels.nlod; ++lv) {
+      uint32_t k = desc->batch_active_count[lv];
+      worst[lv] = k > 0 ? k : 1;
+    }
+    const size_t page = desc->cl.per_level[0].agg_layout.page_size;
+    if (batch_aggregate_layout_init(&desc->max_batch_layout,
+                                    desc->agg_layout,
+                                    worst,
+                                    (uint8_t)desc->levels.nlod,
+                                    page))
+      return 1;
+
+    maxima->agg_data_bytes_total = max_sz(
+      maxima->agg_data_bytes_total, desc->max_batch_layout.total_data_bytes);
+    if (desc->max_batch_layout.total_batch_chunks >
+        maxima->total_batch_chunks_max)
+      maxima->total_batch_chunks_max =
+        desc->max_batch_layout.total_batch_chunks;
+    if (desc->max_batch_layout.total_batch_covering >
+        maxima->total_batch_covering_max)
+      maxima->total_batch_covering_max =
+        desc->max_batch_layout.total_batch_covering;
+  }
+
+  maxima->pool_epochs_scratch_count =
+    max_sz(maxima->pool_epochs_scratch_count, (size_t)LOD_MAX_LEVELS * K);
 
   // LOD sizes.
   if (desc->levels.enable_multiscale) {
@@ -298,30 +312,37 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     CHECK(Fail, ms->comp_sizes);
   }
 
-  // Per-level aggregate slots + LUT storage. Double-buffered so a batch's
-  // aggregate overlaps the prior batch's pwrites on the other slot.
-  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    uint64_t batch_C = mx->agg_batch_C_count[lv];
+  // Unified per-batch aggregate slots, double-buffered. cap_data is already
+  // page-aligned by batch_aggregate_layout_init.
+  {
+    const uint64_t cap_chunks = mx->total_batch_chunks_max;
+    const uint64_t cap_cov = mx->total_batch_covering_max;
+    const size_t cap_data = mx->agg_data_bytes_total;
+    const size_t align = platform_page_alignment();
     for (int fc = 0; fc < 2; ++fc) {
-      struct cpu_agg_slot* as = &ms->agg_slots[lv][fc];
-      if (batch_C > 0) {
-        as->offsets = (size_t*)malloc((batch_C + 1) * sizeof(size_t));
-        as->chunk_sizes = (size_t*)calloc(batch_C, sizeof(size_t));
-        CHECK(Fail, as->offsets && as->chunk_sizes);
-      }
-      if (mx->agg_data_bytes[lv] > 0) {
-        as->data = malloc(mx->agg_data_bytes[lv]);
-        as->data_capacity_bytes = mx->agg_data_bytes[lv];
+      struct cpu_agg_slot* as = &ms->agg_slots[fc];
+      as->data_capacity_bytes = cap_data;
+      if (cap_data > 0) {
+        as->data = platform_aligned_alloc(align, cap_data);
         CHECK(Fail, as->data);
       }
+      if (cap_chunks > 0) {
+        as->perm = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
+        as->gather = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
+        CHECK(Fail, as->perm && as->gather);
+      }
+      if (cap_cov > 0) {
+        // +LOD_MAX_LEVELS slack for the per-LOD shift applied by the
+        // unified aggregate.
+        const uint64_t cov_alloc = cap_cov + LOD_MAX_LEVELS;
+        as->permuted_sizes = (size_t*)calloc(cov_alloc, sizeof(size_t));
+        as->offsets = (size_t*)malloc(cov_alloc * sizeof(size_t));
+        as->chunk_sizes = (size_t*)calloc(cov_alloc, sizeof(size_t));
+        CHECK(Fail, as->permuted_sizes && as->offsets && as->chunk_sizes);
+      }
     }
-    if (mx->batch_gather_count[lv] > 0) {
-      ms->batch_gather[lv] =
-        (uint32_t*)malloc(mx->batch_gather_count[lv] * sizeof(uint32_t));
-      ms->batch_chunk_to_shard_map[lv] =
-        (uint32_t*)malloc(mx->batch_gather_count[lv] * sizeof(uint32_t));
-      CHECK(Fail, ms->batch_gather[lv] && ms->batch_chunk_to_shard_map[lv]);
-    }
+  }
+  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
     if (mx->morton_lut_count[lv] > 0) {
       ms->morton_lut[lv] =
         (uint32_t*)malloc(mx->morton_lut_count[lv] * sizeof(uint32_t));
@@ -332,11 +353,6 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
         mx->lod_fixed_dims_offsets_count[lv], sizeof(uint64_t));
       CHECK(Fail, ms->lod_fixed_dims_offsets[lv]);
     }
-  }
-  if (mx->batch_covering_count > 0) {
-    ms->shard_order_sizes =
-      (size_t*)calloc(mx->batch_covering_count, sizeof(size_t));
-    CHECK(Fail, ms->shard_order_sizes);
   }
   if (mx->scatter_lut_count > 0) {
     ms->scatter_lut =
@@ -468,18 +484,19 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   free(ms->compressed);
   free(ms->comp_sizes);
 
+  for (int fc = 0; fc < 2; ++fc) {
+    struct cpu_agg_slot* as = &ms->agg_slots[fc];
+    platform_aligned_free(as->data);
+    free(as->perm);
+    free(as->gather);
+    free(as->permuted_sizes);
+    free(as->offsets);
+    free(as->chunk_sizes);
+  }
   for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    for (int fc = 0; fc < 2; ++fc) {
-      free(ms->agg_slots[lv][fc].data);
-      free(ms->agg_slots[lv][fc].offsets);
-      free(ms->agg_slots[lv][fc].chunk_sizes);
-    }
-    free(ms->batch_gather[lv]);
-    free(ms->batch_chunk_to_shard_map[lv]);
     free(ms->morton_lut[lv]);
     free(ms->lod_fixed_dims_offsets[lv]);
   }
-  free(ms->shard_order_sizes);
   free(ms->scatter_lut);
   free(ms->scatter_fixed_dims_offsets);
   free(ms->linear);
@@ -511,17 +528,10 @@ recompute_luts(struct multiarray_tile_stream_cpu* ms, int array_index)
     .scatter_fixed_dims_offsets = ms->scatter_fixed_dims_offsets,
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    luts.batch_gather[lv] = ms->batch_gather[lv];
-    luts.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
     luts.morton_lut[lv] = ms->morton_lut[lv];
     luts.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }
-  cpu_pipeline_compute_luts(&desc->cl,
-                            &desc->levels,
-                            desc->batch_active_count,
-                            desc->agg_layout,
-                            ms->nthreads,
-                            &luts);
+  cpu_pipeline_compute_luts(&desc->cl, &desc->levels, ms->nthreads, &luts);
   ms->luts_computed_for = array_index;
 }
 
@@ -596,13 +606,12 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
     .io_done = desc->io_done,
-    .agg_current = desc->agg_current,
+    .agg_current = &desc->agg_current,
     .chunk_pool = ms->chunk_pool,
     .chunk_pool_bytes = ms->chunk_pool_bytes,
     .compressed = ms->compressed,
     .comp_sizes = ms->comp_sizes,
     .agg_slots = ms->agg_slots,
-    .shard_order_sizes = ms->shard_order_sizes,
     .linear = desc->levels.enable_multiscale ? ms->linear : NULL,
     .lod_values = desc->levels.enable_multiscale ? ms->lod_values : NULL,
     .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,
@@ -614,8 +623,6 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .metadata_update_clock = NULL, // multiarray defers metadata to final flush
   };
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-    v.batch_gather[lv] = ms->batch_gather[lv];
-    v.batch_chunk_to_shard_map[lv] = ms->batch_chunk_to_shard_map[lv];
     v.morton_lut[lv] = ms->morton_lut[lv];
     v.lod_fixed_dims_offsets[lv] = ms->lod_fixed_dims_offsets[lv];
   }

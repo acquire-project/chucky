@@ -46,3 +46,17 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          struct aggregate_cpu_workspace* ws,
                          struct aggregate_result* result,
                          int nthreads);
+
+// Unified per-batch aggregate. Single OpenMP loop over total_batch_chunks
+// gathers compressed chunks from across all LODs into the shared, page-
+// aligned data buffer. Per-LOD result views are written into per_lod_results
+// so the caller's deliver-per-LOD path can hand each segment to its sink.
+int
+aggregate_cpu_batch_into_unified(
+  const void* compressed_base,
+  const size_t* comp_sizes_base,
+  const uint32_t* gather, // [total_batch_chunks]
+  const struct batch_aggregate_layout* layout,
+  struct aggregate_cpu_workspace* ws,
+  struct aggregate_result* per_lod_results, // [layout->nlod]
+  int nthreads);

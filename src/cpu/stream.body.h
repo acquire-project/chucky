@@ -33,23 +33,23 @@ struct cpu_stream_view
   uint32_t* batch_active_count;        // [LOD_MAX_LEVELS] array
   struct reduce_csr* csrs;             // [nlod-1] CSR LUTs
   void* append_accum;
-  uint32_t* append_counts;        // [LOD_MAX_LEVELS]
-  struct io_event (*io_done)[2];  // [LOD_MAX_LEVELS][2] per-slot fences
-  uint8_t* agg_current;           // [LOD_MAX_LEVELS] per-level slot index
+  uint32_t* append_counts; // [LOD_MAX_LEVELS]
+
+  // Shared, per-slot fences and slot alternator. Single fence per slot
+  // covers writes from all LODs in a batch.
+  struct io_event* io_done; // [2]
+  uint8_t* agg_current;     // single byte (slot 0 or 1)
 
   // Shared buffers
   void* chunk_pool;
   size_t chunk_pool_bytes;
   void* compressed;
   size_t* comp_sizes;
-  struct cpu_agg_slot (*agg_slots)[2]; // [LOD_MAX_LEVELS][2] double-buffered
-  size_t* shard_order_sizes;
+  struct cpu_agg_slot* agg_slots; // [2] unified per-batch workspace
   void* linear;
   void* lod_values;
 
   // Shared LUTs
-  uint32_t* batch_gather[LOD_MAX_LEVELS];
-  uint32_t* batch_chunk_to_shard_map[LOD_MAX_LEVELS];
   uint32_t* scatter_lut;
   uint64_t* scatter_fixed_dims_offsets;
   uint32_t* morton_lut[LOD_MAX_LEVELS];
