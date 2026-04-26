@@ -101,6 +101,9 @@ enable_openmp(test_lod_cpu)
 # CPU stream end-to-end test (no CUDA)
 add_test_exe(test_stream_cpu test_stream_cpu.c stream_cpu writer test_shard_sink chucky_log)
 
+# Regression: writer_flush propagates sink->flush errors.
+add_test_exe(test_sink_flush_error test_sink_flush_error.c stream_cpu writer test_shard_sink chucky_log)
+
 # CPU multi-array stream test (no CUDA)
 add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu writer test_shard_sink chucky_log)
 
