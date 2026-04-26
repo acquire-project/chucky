@@ -205,7 +205,7 @@ struct stream_context
   struct level_geometry levels;
   struct dim_info dims;
   uint64_t cursor_elements;
-  uint64_t total_elements;      // configured stream length; 0 = unbounded
+  uint64_t total_element_limit; // configured stream length; 0 = unbounded
   size_t shard_alignment;       // from sink; 0 = no alignment
 };
 

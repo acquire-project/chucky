@@ -18,7 +18,7 @@ enum writer_error_code
 {
   writer_error_ok = 0,
   writer_error_fail = 1,
-  writer_error_finished = 2, // stream complete: total_elements reached
+  writer_error_finished = 2, // stream complete: total_element_limit reached
 };
 
 struct writer_result

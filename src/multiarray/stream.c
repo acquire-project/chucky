@@ -29,7 +29,7 @@ struct array_descriptor
   struct shard_state shard[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   uint64_t cursor_elements;
-  uint64_t total_elements;
+  uint64_t total_element_limit;
   uint32_t batch_accumulated;
   uint32_t* batch_active_masks;  // [K], heap-allocated
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K], heap-allocated
@@ -171,16 +171,16 @@ init_array_descriptor(struct array_descriptor* desc,
   if (!desc->pool_epochs_scratch)
     return 1;
 
-  // total_elements: configured stream length (0 = unbounded)
+  // total_element_limit: configured stream length (0 = unbounded)
   {
     const struct dimension* dims = config->dimensions;
     const uint8_t na = dim_info_n_append(&desc->cl.dims);
     if (dims[0].size > 0) {
-      desc->total_elements = desc->layout.epoch_elements;
+      desc->total_element_limit = desc->layout.epoch_elements;
       for (int d = 0; d < na; ++d)
-        desc->total_elements *= ceildiv(dims[d].size, dims[d].chunk_size);
+        desc->total_element_limit *= ceildiv(dims[d].size, dims[d].chunk_size);
     } else {
-      desc->total_elements = 0;
+      desc->total_element_limit = 0;
     }
   }
 
@@ -594,7 +594,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .layout = &desc->layout,
     .levels = &desc->levels,
     .cursor_elements = &desc->cursor_elements,
-    .total_elements = desc->total_elements,
+    .total_element_limit = desc->total_element_limit,
     .batch_accumulated = &desc->batch_accumulated,
     .batch_active_masks = desc->batch_active_masks,
     .pool_epochs_scratch = desc->pool_epochs_scratch,
@@ -654,7 +654,7 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   if (desc->flushed && r.rest.beg != data.beg)
     desc->flushed = 0;
 
-  // `writer_finished` here means "stream is at capacity (total_elements)";
+  // `writer_finished` here means "stream is at capacity (total_element_limit)";
   // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
     .error = r.error,
