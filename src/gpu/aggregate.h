@@ -39,12 +39,6 @@ extern "C"
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
-  int aggregate_by_shard_async(const struct aggregate_layout* layout,
-                               void* d_compressed,
-                               size_t* d_comp_sizes,
-                               struct aggregate_slot* slot,
-                               CUstream stream);
-
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,

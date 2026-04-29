@@ -141,7 +141,6 @@ target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
-add_gpu_test_exe(test_aggregate       test_aggregate.c       LINKS CUDA::cuda_driver CUDA::cudart_static aggregate index_ops_util)
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
