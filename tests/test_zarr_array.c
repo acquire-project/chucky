@@ -1,4 +1,5 @@
 #include "dimension.h"
+#include "platform/platform.h"
 #include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
@@ -87,7 +88,7 @@ test_zarr_array_shard_write(void)
 {
   log_info("=== test_zarr_array_shard_write ===");
 
-  struct store* store = store_fs_create(tmpdir, 0);
+  struct store* store = store_fs_create(tmpdir, 1);
   CHECK(Fail, store);
 
   CHECK(Fail2, store->mkdirs(store, "arr1d") == 0);
@@ -109,40 +110,56 @@ test_zarr_array_shard_write(void)
 
   struct shard_sink* sink = zarr_array_as_shard_sink(a);
 
+  // O_DIRECT requires page-aligned source pointer and write size.
+  size_t pa = platform_page_alignment();
+  uint8_t* buf = (uint8_t*)platform_aligned_alloc(pa, pa);
+  CHECK(Fail3, buf);
+
   // Write shard 0
   struct shard_writer* w = sink->open(sink, 0, 0);
-  CHECK(Fail3, w);
-  uint8_t data0[4] = { 1, 2, 3, 4 };
-  CHECK(Fail3, w->write(w, 0, data0, data0 + 4) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
+  CHECK(Fail4, w);
+  memset(buf, 0, pa);
+  buf[0] = 1;
+  buf[1] = 2;
+  buf[2] = 3;
+  buf[3] = 4;
+  CHECK(Fail4, w->write(w, 0, buf, buf + pa) == 0);
+  CHECK(Fail4, w->finalize(w) == 0);
 
   // Write shard 1
   w = sink->open(sink, 0, 1);
-  CHECK(Fail3, w);
-  uint8_t data1[4] = { 5, 6, 7, 8 };
-  CHECK(Fail3, w->write(w, 0, data1, data1 + 4) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
+  CHECK(Fail4, w);
+  memset(buf, 0, pa);
+  buf[0] = 5;
+  buf[1] = 6;
+  buf[2] = 7;
+  buf[3] = 8;
+  CHECK(Fail4, w->write(w, 0, buf, buf + pa) == 0);
+  CHECK(Fail4, w->finalize(w) == 0);
 
-  CHECK(Fail3, zarr_array_flush(a) == 0);
-  CHECK(Fail3, zarr_array_has_error(a) == 0);
+  CHECK(Fail4, zarr_array_flush(a) == 0);
+  CHECK(Fail4, zarr_array_has_error(a) == 0);
 
   // Verify shard files exist
   char path[4096];
   snprintf(path, sizeof(path), "%s/arr1d/c/0", tmpdir);
   FILE* f = fopen(path, "rb");
-  CHECK(Fail3, f);
+  CHECK(Fail4, f);
   fclose(f);
 
   snprintf(path, sizeof(path), "%s/arr1d/c/1", tmpdir);
   f = fopen(path, "rb");
-  CHECK(Fail3, f);
+  CHECK(Fail4, f);
   fclose(f);
 
+  platform_aligned_free(buf);
   zarr_array_destroy(a);
   store_destroy(store);
   log_info("  PASS");
   return 0;
 
+Fail4:
+  platform_aligned_free(buf);
 Fail3:
   zarr_array_destroy(a);
 Fail2:
@@ -303,7 +320,7 @@ test_zarr_array_root(void)
   char root[4096];
   snprintf(root, sizeof(root), "%s/rootarr", tmpdir);
 
-  struct store* store = store_fs_create(root, 0);
+  struct store* store = store_fs_create(root, 1);
   CHECK(Fail, store);
   CHECK(Fail2, store->mkdirs(store, ".") == 0);
 
@@ -323,25 +340,34 @@ test_zarr_array_root(void)
 
   char path[4096];
   snprintf(path, sizeof(path), "%s/rootarr/zarr.json", tmpdir);
-  char buf[4096];
+  char rbuf[4096];
   size_t len;
-  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail3, strstr(buf, "\"node_type\":\"array\""));
+  CHECK(Fail3, read_file(path, rbuf, sizeof(rbuf), &len) == 0);
+  CHECK(Fail3, strstr(rbuf, "\"node_type\":\"array\""));
+
+  // O_DIRECT requires page-aligned source pointer and write size.
+  size_t pa = platform_page_alignment();
+  uint8_t* dbuf = (uint8_t*)platform_aligned_alloc(pa, pa);
+  CHECK(Fail3, dbuf);
+  memset(dbuf, 0, pa);
+  dbuf[0] = 0x42;
 
   // Open a shard with empty prefix — exercises the no-prefix key path
   struct shard_sink* sink = zarr_array_as_shard_sink(a);
   struct shard_writer* w = sink->open(sink, 0, 0);
-  CHECK(Fail3, w);
-  uint8_t byte = 0x42;
-  CHECK(Fail3, w->write(w, 0, &byte, &byte + 1) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
-  CHECK(Fail3, zarr_array_flush(a) == 0);
+  CHECK(Fail4, w);
+  CHECK(Fail4, w->write(w, 0, dbuf, dbuf + pa) == 0);
+  CHECK(Fail4, w->finalize(w) == 0);
+  CHECK(Fail4, zarr_array_flush(a) == 0);
 
+  platform_aligned_free(dbuf);
   zarr_array_destroy(a);
   store_destroy(store);
   log_info("  PASS");
   return 0;
 
+Fail4:
+  platform_aligned_free(dbuf);
 Fail3:
   zarr_array_destroy(a);
 Fail2:

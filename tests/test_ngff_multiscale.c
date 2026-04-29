@@ -1,5 +1,6 @@
 #include "dimension.h"
 #include "ngff.h"
+#include "platform/platform.h"
 #include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
@@ -129,7 +130,7 @@ test_multiscale_shard_sink(void)
 {
   log_info("=== test_multiscale_shard_sink ===");
 
-  struct store* store = store_fs_create(tmpdir, 0);
+  struct store* store = store_fs_create(tmpdir, 1);
   CHECK(Fail, store);
   store->mkdirs(store, ".");
 
@@ -166,39 +167,46 @@ test_multiscale_shard_sink(void)
   struct shard_sink* sink = ngff_multiscale_as_shard_sink(ms);
   CHECK(Fail3, sink);
 
+  // O_DIRECT requires page-aligned source pointer and write size.
+  size_t pa = platform_page_alignment();
+  uint8_t* data = (uint8_t*)platform_aligned_alloc(pa, pa);
+  CHECK(Fail3, data);
+  memset(data, 0xAA, pa);
+
   // Open a shard on level 0, write some data, finalize
   struct shard_writer* w = sink->open(sink, 0, 0);
-  CHECK(Fail3, w);
-  uint8_t data[32];
-  memset(data, 0xAA, sizeof(data));
-  CHECK(Fail3, w->write(w, 0, data, data + sizeof(data)) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
+  CHECK(Fail4, w);
+  CHECK(Fail4, w->write(w, 0, data, data + pa) == 0);
+  CHECK(Fail4, w->finalize(w) == 0);
 
   // update_append: extend dim 0 from 0 to 4
   uint64_t new_sizes[1] = { 4 };
-  CHECK(Fail3, sink->update_append(sink, 0, 1, new_sizes) == 0);
+  CHECK(Fail4, sink->update_append(sink, 0, 1, new_sizes) == 0);
 
   // Verify L0 array zarr.json was updated
   char path[4096];
   snprintf(path, sizeof(path), "%s/ms/0/zarr.json", tmpdir);
   char buf[4096];
   size_t len;
-  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail3, strstr(buf, "\"shape\":[4,32]"));
+  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail4, strstr(buf, "\"shape\":[4,32]"));
 
   // Verify group zarr.json was updated (multiscales metadata)
   snprintf(path, sizeof(path), "%s/ms/zarr.json", tmpdir);
-  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
-  CHECK(Fail3, strstr(buf, "\"multiscales\""));
+  CHECK(Fail4, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail4, strstr(buf, "\"multiscales\""));
 
   // Flush pending I/O
-  CHECK(Fail3, ngff_multiscale_flush(ms) == 0);
+  CHECK(Fail4, ngff_multiscale_flush(ms) == 0);
 
+  platform_aligned_free(data);
   ngff_multiscale_destroy(ms);
   store_destroy(store);
   log_info("  PASS");
   return 0;
 
+Fail4:
+  platform_aligned_free(data);
 Fail3:
   ngff_multiscale_destroy(ms);
 Fail2:
