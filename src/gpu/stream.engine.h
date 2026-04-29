@@ -41,9 +41,9 @@ struct staging_state
 // batch_active_masks is heap-allocated to epochs_per_batch entries.
 struct flush_slot_gpu
 {
-  uint32_t active_levels_mask; // union of per-epoch active masks
+  uint32_t active_levels_mask;  // union of per-epoch active masks
   uint32_t* batch_active_masks; // [K] per-epoch active level masks
-  int batch_epoch_count; // number of epochs accumulated in this batch
+  int batch_epoch_count;        // number of epochs accumulated in this batch
 };
 
 struct level_flush_state
@@ -56,6 +56,13 @@ struct level_flush_state
   CUdeviceptr
     d_batch_perm; // [K_l * M_l] uint32: batch-chunk -> shard-ordered pos
   uint32_t batch_active_count; // K_l = K / 2^l for this level
+  // Cross-batch tail carry-over (per-LOD persistent state).
+  // d_tail_carry holds each shard's ragged tail bytes from the prior batch;
+  // copy_leading_tail_k stages them into d_aggregated, stash_tail_k overwrites
+  // them with the new tail. h_tail_bytes mirrors per-shard tail lengths on the
+  // host and is uploaded to a slot's d_tail_bytes_prev at every kick.
+  CUdeviceptr d_tail_carry; // [num_shards * page_size]
+  size_t* h_tail_bytes;     // [num_shards]
 };
 
 // Per-frame-counter timing events (double-buffered).
@@ -137,7 +144,7 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
   CUdeviceptr pool_buf;
-  CUevent pool_ready;    // batch-level (from batch_state.pool_ready)
+  CUevent pool_ready; // batch-level (from batch_state.pool_ready)
   CUevent lod_done;
   CUevent prev_d2h_done; // prior D2H on same fc; compress waits on this so
                          // aggregate doesn't overwrite agg[fc].d_aggregated
@@ -180,11 +187,11 @@ struct d2h_deliver_stage
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
-  int current;                                 // fc currently being filled
-  int pending[2];                              // per-fc: batch awaiting delivery
-  uint64_t pending_seq[2];                     // monotonic kick seq per pending
-  uint64_t next_seq;                           // next seq to assign on kick
-  struct flush_handoff pending_handoff[2];     // per-fc
+  int current;                             // fc currently being filled
+  int pending[2];                          // per-fc: batch awaiting delivery
+  uint64_t pending_seq[2];                 // monotonic kick seq per pending
+  uint64_t next_seq;                       // next seq to assign on kick
+  struct flush_handoff pending_handoff[2]; // per-fc
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,

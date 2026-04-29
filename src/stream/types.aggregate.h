@@ -30,11 +30,19 @@ extern "C"
     uint64_t chunks_per_epoch; // M: actual chunk count
     uint64_t covering_count;   // C >= M: product of padded dims
     size_t max_comp_chunk_bytes;
-    uint64_t cps_inner; // product of chunks_per_shard for inner dims
-    size_t page_size;   // 0 = no padding
+    uint64_t cps_inner;  // product of chunks_per_shard for inner dims
+    uint64_t num_shards; // covering_count / cps_inner
+    size_t page_size;    // 0 = no padding
+    // Per-shard reservation in d_aggregated. Sized so each shard has space for
+    // a leading tail (< page_size) carried over from the prior batch plus the
+    // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes.
+    // Page-aligned. Zero when page_size == 0.
+    size_t shard_capacity;
   };
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
+  // active_count_max is the maximum number of active epochs per batch for this
+  // level (used to size shard_capacity).
   int aggregate_layout_compute(struct aggregate_layout* layout,
                                uint8_t rank,
                                uint8_t n_append,
@@ -42,6 +50,7 @@ extern "C"
                                const uint64_t* chunks_per_shard,
                                uint64_t chunks_per_epoch,
                                size_t max_comp_chunk_bytes,
+                               uint32_t active_count_max,
                                size_t page_size);
 
   // Aggregated output for shard delivery (CUDA-free).

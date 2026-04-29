@@ -109,6 +109,8 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_perm);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
+  cuMemFree((CUdeviceptr)slot->d_tail_bytes_prev);
+  cuMemFree((CUdeviceptr)slot->d_bias);
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
@@ -169,6 +171,7 @@ extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_chunk_count,
                           uint64_t batch_covering_count,
+                          uint64_t num_shards,
                           size_t comp_pool_bytes)
 {
   uint64_t C = batch_covering_count;
@@ -184,6 +187,13 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
      cuMemAlloc((CUdeviceptr*)&slot->d_offsets, (C + 1) * sizeof(size_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_perm, M * sizeof(uint32_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
+  if (num_shards > 0) {
+    CU(Error,
+       cuMemAlloc((CUdeviceptr*)&slot->d_tail_bytes_prev,
+                  num_shards * sizeof(size_t)));
+    CU(Error,
+       cuMemAlloc((CUdeviceptr*)&slot->d_bias, num_shards * sizeof(size_t)));
+  }
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
   CU(Error,
      cuMemHostAlloc((void**)&slot->h_offsets, (C + 1) * sizeof(size_t), 0));

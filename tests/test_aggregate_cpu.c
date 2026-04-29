@@ -32,7 +32,7 @@ test_simple(void)
 
   CHECK(Fail,
         aggregate_layout_compute(
-          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) ==
+          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 1, 0) ==
           0);
 
   // Create fake compressed data: chunk i has size (10 + i) bytes,
@@ -105,7 +105,7 @@ test_multishard(void)
 
   CHECK(Fail,
         aggregate_layout_compute(
-          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 0) ==
+          &layout, rank, 1, chunk_count, chunks_per_shard, M, max_comp, 1, 0) ==
           0);
 
   CHECK(Fail, layout.covering_count == 12);
@@ -177,6 +177,7 @@ test_page_aligned(void)
                                  chunks_per_shard,
                                  M,
                                  max_comp,
+                                 1,
                                  page_size) == 0);
 
   compressed = (char*)calloc(M, max_comp);

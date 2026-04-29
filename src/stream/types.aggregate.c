@@ -200,6 +200,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
                          const uint64_t* chunks_per_shard,
                          uint64_t chunks_per_epoch,
                          size_t max_comp_chunk_bytes,
+                         uint32_t active_count_max,
                          size_t page_size)
 {
   uint64_t shard_count[HALF_MAX_RANK];
@@ -244,7 +245,19 @@ aggregate_layout_compute(struct aggregate_layout* layout,
     cps_inner *= eff_cps[d];
 
   layout->cps_inner = cps_inner;
+  layout->num_shards = layout->covering_count / cps_inner;
   layout->page_size = page_size;
+
+  // Per-shard reservation in d_aggregated: enough room for the worst-case
+  // batch (active_count_max * cps_inner chunks at max_comp_chunk_bytes each)
+  // plus one page for the leading tail carried in from the prior batch,
+  // rounded up to a page so adjacent shard regions remain page-aligned.
+  if (page_size > 0 && active_count_max > 0) {
+    size_t worst = (size_t)active_count_max * cps_inner * max_comp_chunk_bytes;
+    layout->shard_capacity = align_up(worst + page_size, page_size);
+  } else {
+    layout->shard_capacity = 0;
+  }
 
   // Shard strides: stride(sc[d]) = prod(sc[j] for j>d) * cps_inner
   {

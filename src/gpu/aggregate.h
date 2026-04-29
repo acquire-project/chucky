@@ -18,14 +18,16 @@ extern "C"
 
   struct aggregate_slot
   {
-    size_t* d_permuted_sizes; // device: (C+1) size_t, zeroed each epoch
-    size_t* d_offsets;        // device: (C+1) size_t
-    uint32_t* d_perm;         // device: M uint32_t
-    void* d_aggregated;       // device: comp_pool_bytes
-    void* h_aggregated;       // host pinned: comp_pool_bytes
-    size_t* h_offsets;        // host pinned: (C+1) size_t
-    size_t* h_permuted_sizes; // host pinned: C size_t (real, pre-padding)
-    void* d_temp;             // CUB scratch
+    size_t* d_permuted_sizes;  // device: (C+1) size_t, zeroed each epoch
+    size_t* d_offsets;         // device: (C+1) size_t
+    uint32_t* d_perm;          // device: M uint32_t
+    void* d_aggregated;        // device: comp_pool_bytes
+    void* h_aggregated;        // host pinned: comp_pool_bytes
+    size_t* h_offsets;         // host pinned: (C+1) size_t
+    size_t* h_permuted_sizes;  // host pinned: C size_t (real, pre-padding)
+    size_t* d_tail_bytes_prev; // device: num_shards size_t (uploaded per kick)
+    size_t* d_bias;            // device: num_shards size_t (compute_bias_k)
+    void* d_temp;              // CUB scratch
     size_t temp_bytes;
     CUevent ready;           // D2H completion
     struct io_event io_done; // tracks IO completion from this slot's data
@@ -42,6 +44,7 @@ extern "C"
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,
+                                uint64_t num_shards,
                                 size_t comp_pool_bytes);
 
   int aggregate_batch_by_shard_async(void* d_compressed,

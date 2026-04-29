@@ -51,6 +51,9 @@ destroy_level_state(struct level_flush_state* lls)
     aggregate_slot_destroy(&lls->agg[i]);
   cu_mem_free(lls->d_batch_gather);
   cu_mem_free(lls->d_batch_perm);
+  cu_mem_free(lls->d_tail_carry);
+  free(lls->h_tail_bytes);
+  lls->h_tail_bytes = NULL;
   if (lls->shard.shards) {
     for (uint64_t i = 0; i < lls->shard.shard_inner_count; ++i)
       free(lls->shard.shards[i].index);
@@ -112,13 +115,26 @@ compress_agg_init(struct compress_agg_stage* stage,
                                             li->agg_layout.cps_inner,
                                             li->agg_layout.page_size);
 
+    const uint64_t num_shards = li->agg_layout.num_shards;
+
     for (int i = 0; i < 2; ++i) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->levels[lv].agg[i],
                                       batch_chunks,
                                       batch_covering,
+                                      num_shards,
                                       batch_agg_bytes) == 0);
       CU(Fail, cuEventRecord(stage->levels[lv].agg[i].ready, compute));
+    }
+
+    // Per-LOD persistent tail-carry state.
+    if (num_shards > 0 && li->agg_layout.page_size > 0) {
+      const size_t carry_bytes = num_shards * li->agg_layout.page_size;
+      CU(Fail, cuMemAlloc(&stage->levels[lv].d_tail_carry, carry_bytes));
+      CU(Fail, cuMemsetD8(stage->levels[lv].d_tail_carry, 0, carry_bytes));
+      stage->levels[lv].h_tail_bytes =
+        (size_t*)calloc(num_shards, sizeof(size_t));
+      CHECK(Fail, stage->levels[lv].h_tail_bytes);
     }
 
     // Shard state
