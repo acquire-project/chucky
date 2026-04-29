@@ -20,30 +20,127 @@ write_total_k(size_t* __restrict__ d_offsets,
 }
 
 // ---------------------------------------------------------------------------
-// Kernel: pad_shard_sizes_k
-//   Each thread handles one shard: sums its chunk sizes, computes padding to
-//   reach the next page boundary, and adds it to the last chunk's size.
-//   This ensures shard-boundary offsets are page-aligned after prefix sum.
+// Kernel: compute_bias_k
+//   Thread s computes the per-shard offset bias used to land chunks at
+//     d_aggregated[shard_base[s] + tail_bytes_prev[s] + within_shard_offset]
+//   given that the exclusive prefix sum produced tight (unpadded) cumulative
+//   offsets. shard_base[s] = s * shard_capacity is page-aligned by
+//   construction. bias[s] = s * shard_capacity + tail_bytes_prev[s] -
+//   d_offsets[s * tps_group]
 // ---------------------------------------------------------------------------
 __global__ void
-pad_shard_sizes_k(size_t* __restrict__ d_permuted_sizes,
-                  uint64_t cps_inner,
-                  uint64_t num_shards,
-                  size_t page_size)
+compute_bias_k(size_t* __restrict__ d_bias,
+               const size_t* __restrict__ d_offsets,
+               const size_t* __restrict__ d_tail_bytes_prev,
+               uint64_t tps_group,
+               uint64_t num_shards,
+               size_t shard_capacity)
 {
   uint64_t s = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (s >= num_shards)
     return;
+  d_bias[s] =
+    s * shard_capacity + d_tail_bytes_prev[s] - d_offsets[s * tps_group];
+}
 
-  uint64_t base = s * cps_inner;
-  size_t total = 0;
-  for (uint64_t i = 0; i < cps_inner; i++)
-    total += d_permuted_sizes[base + i];
+// ---------------------------------------------------------------------------
+// Kernel: apply_bias_k
+//   Thread j adds d_bias[j / tps_group] to d_offsets[j], shifting all chunks
+//   in shard s into their final positions in d_aggregated.
+// ---------------------------------------------------------------------------
+__global__ void
+apply_bias_k(size_t* __restrict__ d_offsets,
+             const size_t* __restrict__ d_bias,
+             uint64_t tps_group,
+             uint64_t C)
+{
+  uint64_t j = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  if (j >= C)
+    return;
+  d_offsets[j] += d_bias[j / tps_group];
+}
 
-  size_t aligned = ((total + page_size - 1) / page_size) * page_size;
-  size_t padding = aligned - total;
-  if (padding > 0)
-    d_permuted_sizes[base + cps_inner - 1] += padding;
+// ---------------------------------------------------------------------------
+// Kernel: copy_leading_tail_k
+//   Block s copies tail_bytes_prev[s] bytes from d_tail_carry[s * page_size]
+//   into d_aggregated[s * shard_capacity], staging the prior batch's ragged
+//   tail at the start of this shard's region. No-op when tail length is 0.
+// ---------------------------------------------------------------------------
+__global__ void
+copy_leading_tail_k(void* __restrict__ d_aggregated,
+                    const void* __restrict__ d_tail_carry,
+                    const size_t* __restrict__ d_tail_bytes_prev,
+                    size_t shard_capacity,
+                    size_t page_size)
+{
+  const uint64_t s = blockIdx.x;
+  const size_t nbytes = d_tail_bytes_prev[s];
+  if (nbytes == 0)
+    return;
+  const uint8_t* src = (const uint8_t*)d_tail_carry + s * page_size;
+  uint8_t* dst = (uint8_t*)d_aggregated + s * shard_capacity;
+  for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
+    dst[off] = src[off];
+}
+
+// ---------------------------------------------------------------------------
+// Kernel: stash_tail_k
+//   Block s computes the new ragged tail for shard s and copies it to
+//   d_tail_carry[s * page_size] for the next batch. Also writes the new tail
+//   length to d_tail_bytes[s]. Steps:
+//     real_total[s] = sum_{i in shard s}(d_permuted_sizes)
+//     total[s]      = real_total + d_tail_bytes[s]   (read pre-write)
+//     write_bytes   = floor(total / page) * page
+//     tail_bytes    = total - write_bytes  (< page_size)
+//   When is_finalizing is nonzero, writes 0 to d_tail_bytes[s] and skips the
+//   byte copy — the next batch starts fresh on a new shard generation.
+// ---------------------------------------------------------------------------
+__global__ void
+stash_tail_k(const void* __restrict__ d_aggregated,
+             void* __restrict__ d_tail_carry,
+             size_t* __restrict__ d_tail_bytes,
+             const size_t* __restrict__ d_permuted_sizes,
+             uint64_t tps_group,
+             size_t shard_capacity,
+             size_t page_size,
+             int is_finalizing)
+{
+  const uint64_t s = blockIdx.x;
+  __shared__ size_t s_total;
+  __shared__ size_t s_write_bytes;
+  __shared__ size_t s_tail_bytes;
+  __shared__ size_t s_tail_prev;
+
+  if (threadIdx.x == 0)
+    s_tail_prev = d_tail_bytes[s];
+  __syncthreads();
+
+  size_t partial = 0;
+  for (uint64_t i = threadIdx.x; i < tps_group; i += blockDim.x)
+    partial += d_permuted_sizes[s * tps_group + i];
+
+  if (threadIdx.x == 0)
+    s_total = 0;
+  __syncthreads();
+  atomicAdd((unsigned long long*)&s_total, (unsigned long long)partial);
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    s_total += s_tail_prev;
+    s_write_bytes = (s_total / page_size) * page_size;
+    s_tail_bytes = s_total - s_write_bytes;
+    d_tail_bytes[s] = is_finalizing ? 0 : s_tail_bytes;
+  }
+  __syncthreads();
+
+  if (is_finalizing || s_tail_bytes == 0)
+    return;
+
+  const uint8_t* src =
+    (const uint8_t*)d_aggregated + s * shard_capacity + s_write_bytes;
+  uint8_t* dst = (uint8_t*)d_tail_carry + s * page_size;
+  for (size_t off = threadIdx.x; off < s_tail_bytes; off += blockDim.x)
+    dst[off] = src[off];
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +206,6 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_perm);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
-  cuMemFree((CUdeviceptr)slot->d_tail_bytes_prev);
   cuMemFree((CUdeviceptr)slot->d_bias);
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
@@ -189,9 +285,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
   if (num_shards > 0) {
     CU(Error,
-       cuMemAlloc((CUdeviceptr*)&slot->d_tail_bytes_prev,
-                  num_shards * sizeof(size_t)));
-    CU(Error,
        cuMemAlloc((CUdeviceptr*)&slot->d_bias, num_shards * sizeof(size_t)));
   }
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
@@ -234,10 +327,17 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                size_t max_comp_chunk_bytes,
                                const struct aggregate_layout* layout,
                                struct aggregate_slot* slot,
+                               size_t* d_tail_bytes,
+                               CUdeviceptr d_tail_carry,
+                               int is_finalizing,
                                CUstream stream)
 {
   const uint64_t N = batch_chunk_count;
   const uint64_t C = batch_covering_count;
+  const uint64_t num_shards = layout->num_shards;
+  const size_t page_size = layout->page_size;
+  const size_t shard_capacity = layout->shard_capacity;
+  const uint64_t tps_group = num_shards > 0 ? C / num_shards : 0;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
   // Zero permuted_sizes (C+1 entries)
@@ -255,26 +355,15 @@ aggregate_batch_by_shard_async(void* d_compressed,
       d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
   }
 
-  // D2H real (pre-padding) permuted sizes for shard index
+  // D2H real permuted sizes (host uses these for delivery sizing + next-kick
+  // tail bookkeeping).
   CU(Error,
      cuMemcpyDtoHAsync(slot->h_permuted_sizes,
                        (CUdeviceptr)slot->d_permuted_sizes,
                        C * sizeof(size_t),
                        stream));
 
-  // Pass 1.5: pad shard sizes for page alignment.
-  // Pad at shard-group boundaries (cps_inner * batch_count entries per group)
-  // so all epochs for one shard are contiguous and can be written in one call.
-  if (layout->page_size > 0 && layout->cps_inner > 0) {
-    uint64_t num_shards = layout->covering_count / layout->cps_inner;
-    uint64_t tps_group = C / num_shards; // cps_inner * batch_count
-    const int block = 256;
-    const int grid = (int)((num_shards + block - 1) / block);
-    pad_shard_sizes_k<<<grid, block, 0, cuda_stream>>>(
-      slot->d_permuted_sizes, tps_group, num_shards, layout->page_size);
-  }
-
-  // Pass 2: exclusive prefix sum on C elements
+  // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
   {
     size_t temp = slot->temp_bytes;
     cub::DeviceScan::ExclusiveSum(slot->d_temp,
@@ -288,7 +377,40 @@ aggregate_batch_by_shard_async(void* d_compressed,
       slot->d_offsets, slot->d_permuted_sizes, C);
   }
 
-  // Pass 3: gather compressed tiles using LUTs
+  if (page_size > 0 && num_shards > 0) {
+    // Pass 3a: per-shard bias (relocates each shard's chunks into its
+    // shard_capacity-sized region with leading-tail headroom).
+    {
+      const int block = 128;
+      const int grid = (int)((num_shards + block - 1) / block);
+      compute_bias_k<<<grid, block, 0, cuda_stream>>>(slot->d_bias,
+                                                      slot->d_offsets,
+                                                      d_tail_bytes,
+                                                      tps_group,
+                                                      num_shards,
+                                                      shard_capacity);
+    }
+    // Pass 3b: apply bias to each chunk's offset.
+    {
+      const int block = 256;
+      const int grid = (int)((C + block - 1) / block);
+      apply_bias_k<<<grid, block, 0, cuda_stream>>>(
+        slot->d_offsets, slot->d_bias, tps_group, C);
+    }
+    // Pass 3c: stage prior batch's ragged tail at the head of each shard's
+    // region so chunks pack just past it.
+    {
+      const int block = 256;
+      copy_leading_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
+        slot->d_aggregated,
+        (const void*)d_tail_carry,
+        d_tail_bytes,
+        shard_capacity,
+        page_size);
+    }
+  }
+
+  // Pass 4: gather compressed tiles using LUTs.
   {
     const int block = 256;
     const int grid = (int)N;
@@ -299,6 +421,23 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                                     d_batch_gather,
                                                     d_batch_perm,
                                                     max_comp_chunk_bytes);
+  }
+
+  // Pass 5: stash the new ragged tail (post-gather) into d_tail_carry and
+  // update d_tail_bytes for the next batch's leading-tail accounting. When
+  // is_finalizing, writes 0 instead so the next shard generation starts
+  // fresh.
+  if (page_size > 0 && num_shards > 0) {
+    const int block = 256;
+    stash_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
+      slot->d_aggregated,
+      (void*)d_tail_carry,
+      d_tail_bytes,
+      slot->d_permuted_sizes,
+      tps_group,
+      shard_capacity,
+      page_size,
+      is_finalizing);
   }
 
   return 0;

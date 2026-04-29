@@ -309,11 +309,7 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
     uint64_t batch_chunks = (uint64_t)slot_count * chunks_lv;
     uint64_t batch_covering =
       (uint64_t)slot_count * li->agg_layout.covering_count;
-    size_t batch_agg_bytes = agg_pool_bytes(batch_chunks,
-                                            desc->cl.max_output_size,
-                                            li->agg_layout.covering_count,
-                                            li->agg_layout.cps_inner,
-                                            li->agg_layout.page_size);
+    size_t batch_agg_bytes = agg_pool_bytes_layout(&li->agg_layout);
 
     mx->level[lv].batch_chunks =
       max_u64(mx->level[lv].batch_chunks, batch_chunks);

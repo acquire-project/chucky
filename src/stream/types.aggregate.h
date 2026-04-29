@@ -18,6 +18,12 @@ extern "C"
                         uint64_t cps_inner,
                         size_t page_size);
 
+  // Compute the aggregated-buffer size for the GPU streaming path that uses
+  // tail carry-over (shard-capacity-sized regions per shard). Returns 0 on
+  // overflow or when num_shards is 0.
+  struct aggregate_layout;
+  size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
+
   // Aggregate layout fields. Host fields are always valid.
   // d_* fields are GPU device pointers (NULL on CPU).
   struct aggregate_layout
@@ -30,9 +36,10 @@ extern "C"
     uint64_t chunks_per_epoch; // M: actual chunk count
     uint64_t covering_count;   // C >= M: product of padded dims
     size_t max_comp_chunk_bytes;
-    uint64_t cps_inner;  // product of chunks_per_shard for inner dims
-    uint64_t num_shards; // covering_count / cps_inner
-    size_t page_size;    // 0 = no padding
+    uint64_t cps_inner;        // product of chunks_per_shard for inner dims
+    uint64_t num_shards;       // covering_count / cps_inner
+    uint32_t active_count_max; // worst-case active epochs per batch
+    size_t page_size;          // 0 = no padding
     // Per-shard reservation in d_aggregated. Sized so each shard has space for
     // a leading tail (< page_size) carried over from the prior batch plus the
     // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes.

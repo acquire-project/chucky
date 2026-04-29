@@ -25,6 +25,27 @@ Overflow:
   return 0;
 }
 
+size_t
+agg_pool_bytes_layout(const struct aggregate_layout* layout)
+{
+  if (!layout || layout->num_shards == 0)
+    return 0;
+  if (layout->shard_capacity == 0) {
+    // Layout was computed without a shard_capacity (page_size == 0 path).
+    // Fall back to the un-paginated chunk pool size, sized for the worst-case
+    // batch (active_count_max epochs).
+    uint32_t active = layout->active_count_max ? layout->active_count_max : 1;
+    CHECK_MUL_OVERFLOW(
+      Overflow, layout->covering_count, layout->max_comp_chunk_bytes, SIZE_MAX);
+    size_t per_epoch = layout->covering_count * layout->max_comp_chunk_bytes;
+    CHECK_MUL_OVERFLOW(Overflow, per_epoch, (uint64_t)active, SIZE_MAX);
+    return per_epoch * active;
+  }
+  return layout->num_shards * layout->shard_capacity;
+Overflow:
+  return 0;
+}
+
 void
 aggregate_batch_luts(const struct aggregate_layout* agg,
                      const struct level_geometry* levels,
@@ -246,6 +267,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
 
   layout->cps_inner = cps_inner;
   layout->num_shards = layout->covering_count / cps_inner;
+  layout->active_count_max = active_count_max;
   layout->page_size = page_size;
 
   // Per-shard reservation in d_aggregated: enough room for the worst-case

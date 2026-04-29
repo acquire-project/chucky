@@ -97,6 +97,18 @@ platform_close(platform_fd fd)
 }
 
 int
+platform_ftruncate(platform_fd fd, uint64_t logical_size)
+{
+  LARGE_INTEGER li;
+  li.QuadPart = (LONGLONG)logical_size;
+  if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
+    return -1;
+  if (!SetEndOfFile(fd))
+    return -1;
+  return 0;
+}
+
+int
 platform_path_exists(const char* path)
 {
   wchar_t wpath[4096];

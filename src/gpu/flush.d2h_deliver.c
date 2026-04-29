@@ -154,13 +154,8 @@ queue_bulk_d2h(struct d2h_deliver_stage* stage,
     struct aggregate_slot* agg = &lvl->agg[fc];
 
     // Worst-case bytes across the aggregate buffer for this level/batch.
-    // No host sync needed — h_offsets isn't consulted here.
-    size_t cap =
-      agg_pool_bytes((uint64_t)active_count * levels->level[lv].chunk_count,
-                     handoff->max_output_size,
-                     lvl->agg_layout.covering_count,
-                     lvl->agg_layout.cps_inner,
-                     lvl->agg_layout.page_size);
+    // Sized for shard-capacity reservations (one region per shard).
+    size_t cap = agg_pool_bytes_layout(&lvl->agg_layout);
 
     CU(Error,
        cuMemcpyDtoHAsync(
@@ -326,6 +321,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (deliver_to_shards_batch((uint8_t)lv,
                                   &lvl->shard,
                                   &ar,
+                                  &lvl->agg_layout,
+                                  lvl->h_tail_bytes,
                                   active_count,
                                   sink,
                                   stage->shard_alignment,

@@ -11,6 +11,11 @@ struct active_shard
   size_t data_cursor;
   uint64_t* index;             // 2 * chunks_per_shard_total entries
   struct shard_writer* writer; // from sink->open, NULL until first use
+  // Carry-over tail bytes captured at the end of each delivery so that
+  // end-of-stream finalize_shards can flush them along with the index.
+  // tail_buf has capacity page_size; tail_bytes is the live length (< page).
+  uint8_t* tail_buf;
+  size_t tail_bytes;
 };
 
 struct shard_state
@@ -36,10 +41,17 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment);
 
 // Deliver compressed chunk data from a batch aggregate slot to shards.
 // n_active: number of active epochs for this level in the batch.
+// layout: aggregate layout for shard_capacity / num_shards / page_size.
+// h_tail_bytes: [num_shards] per-shard ragged-tail length carried across
+// batches;
+//   read for this batch's leading-tail accounting and updated post-batch.
+//   May be NULL when layout->page_size == 0 (legacy contiguous path).
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
                         struct aggregate_result* result,
+                        const struct aggregate_layout* layout,
+                        size_t* h_tail_bytes,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,

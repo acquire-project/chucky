@@ -89,6 +89,12 @@ platform_close(platform_fd fd)
 }
 
 int
+platform_ftruncate(platform_fd fd, uint64_t logical_size)
+{
+  return ftruncate(fd, (off_t)logical_size) == 0 ? 0 : -1;
+}
+
+int
 platform_path_exists(const char* path)
 {
   struct stat st;

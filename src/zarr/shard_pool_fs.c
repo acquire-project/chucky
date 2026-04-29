@@ -175,6 +175,47 @@ close_fn(void* arg)
   platform_close(j->fd);
 }
 
+struct truncate_job
+{
+  platform_fd fd;
+  uint64_t logical_size;
+  _Atomic int* io_error;
+};
+
+static void
+truncate_fn(void* arg)
+{
+  struct truncate_job* j = (struct truncate_job*)arg;
+  if (platform_ftruncate(j->fd, j->logical_size) != 0) {
+    log_error("shard_pool_fs ftruncate failed");
+    atomic_store(j->io_error, 1);
+  }
+}
+
+static int
+fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
+{
+  struct fs_slot* w = (struct fs_slot*)self;
+  if (w->fd == PLATFORM_FD_INVALID)
+    return 0;
+
+  if (w->queue) {
+    struct truncate_job* j =
+      (struct truncate_job*)malloc(sizeof(struct truncate_job));
+    if (!j)
+      return 1;
+    j->fd = w->fd;
+    j->logical_size = logical_size;
+    j->io_error = w->io_error;
+    if (io_queue_post(w->queue, truncate_fn, j, free)) {
+      free(j);
+      return 1;
+    }
+    return 0;
+  }
+  return platform_ftruncate(w->fd, logical_size) == 0 ? 0 : 1;
+}
+
 static int
 fs_slot_finalize(struct shard_writer* self)
 {
@@ -395,6 +436,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     struct fs_slot* s = &p->slots[i];
     s->base.write = fs_slot_write;
     s->base.write_direct = fs_slot_write_direct;
+    s->base.truncate = fs_slot_truncate;
     s->base.finalize = fs_slot_finalize;
     s->fd = PLATFORM_FD_INVALID;
     s->queue = p->queue;

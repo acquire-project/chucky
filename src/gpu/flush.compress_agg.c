@@ -52,11 +52,15 @@ destroy_level_state(struct level_flush_state* lls)
   cu_mem_free(lls->d_batch_gather);
   cu_mem_free(lls->d_batch_perm);
   cu_mem_free(lls->d_tail_carry);
+  cu_mem_free((CUdeviceptr)lls->d_tail_bytes);
+  lls->d_tail_bytes = NULL;
   free(lls->h_tail_bytes);
   lls->h_tail_bytes = NULL;
   if (lls->shard.shards) {
-    for (uint64_t i = 0; i < lls->shard.shard_inner_count; ++i)
+    for (uint64_t i = 0; i < lls->shard.shard_inner_count; ++i) {
       free(lls->shard.shards[i].index);
+      free(lls->shard.shards[i].tail_buf);
+    }
     free(lls->shard.shards);
   }
 }
@@ -109,11 +113,7 @@ compress_agg_init(struct compress_agg_stage* stage,
     uint64_t batch_chunks = (uint64_t)slot_count * chunks_lv;
     uint64_t batch_covering =
       (uint64_t)slot_count * li->agg_layout.covering_count;
-    size_t batch_agg_bytes = agg_pool_bytes(batch_chunks,
-                                            cl->max_output_size,
-                                            li->agg_layout.covering_count,
-                                            li->agg_layout.cps_inner,
-                                            li->agg_layout.page_size);
+    size_t batch_agg_bytes = agg_pool_bytes_layout(&li->agg_layout);
 
     const uint64_t num_shards = li->agg_layout.num_shards;
 
@@ -127,15 +127,23 @@ compress_agg_init(struct compress_agg_stage* stage,
       CU(Fail, cuEventRecord(stage->levels[lv].agg[i].ready, compute));
     }
 
-    // Per-LOD persistent tail-carry state.
+    // Per-LOD persistent tail-carry state (GPU-resident).
     if (num_shards > 0 && li->agg_layout.page_size > 0) {
       const size_t carry_bytes = num_shards * li->agg_layout.page_size;
       CU(Fail, cuMemAlloc(&stage->levels[lv].d_tail_carry, carry_bytes));
       CU(Fail, cuMemsetD8(stage->levels[lv].d_tail_carry, 0, carry_bytes));
+      CU(Fail,
+         cuMemAlloc((CUdeviceptr*)&stage->levels[lv].d_tail_bytes,
+                    num_shards * sizeof(size_t)));
+      CU(Fail,
+         cuMemsetD8((CUdeviceptr)stage->levels[lv].d_tail_bytes,
+                    0,
+                    num_shards * sizeof(size_t)));
       stage->levels[lv].h_tail_bytes =
         (size_t*)calloc(num_shards, sizeof(size_t));
       CHECK(Fail, stage->levels[lv].h_tail_bytes);
     }
+    stage->levels[lv].predicted_epoch_in_shard = 0;
 
     // Shard state
     struct shard_state* ss = &stage->levels[lv].shard;
@@ -149,10 +157,15 @@ compress_agg_init(struct compress_agg_stage* stage,
     CHECK(Fail, ss->shards);
 
     size_t index_bytes = 2 * ss->chunks_per_shard_total * sizeof(uint64_t);
+    const size_t page = li->agg_layout.page_size;
     for (uint64_t i = 0; i < ss->shard_inner_count; ++i) {
       ss->shards[i].index = (uint64_t*)malloc(index_bytes);
       CHECK(Fail, ss->shards[i].index);
       memset(ss->shards[i].index, 0xFF, index_bytes);
+      if (page > 0) {
+        ss->shards[i].tail_buf = (uint8_t*)malloc(page);
+        CHECK(Fail, ss->shards[i].tail_buf);
+      }
     }
 
     ss->epoch_in_shard = 0;
@@ -355,6 +368,20 @@ compress_agg_kick(struct compress_agg_stage* stage,
     LutRecomputeDone:;
     }
 
+    // Predict whether THIS batch will close the current shard generation.
+    // predicted_epoch_in_shard advances at kick time so the prediction can
+    // run before delivery has updated shard.epoch_in_shard. stash_tail_k
+    // uses the flag to zero d_tail_bytes when finalizing so the next shard
+    // starts fresh.
+    int is_finalizing = 0;
+    if (lvl->shard.chunks_per_shard_append > 0) {
+      uint64_t pred_after =
+        lvl->predicted_epoch_in_shard + (uint64_t)active_count;
+      is_finalizing = (pred_after >= lvl->shard.chunks_per_shard_append);
+      lvl->predicted_epoch_in_shard =
+        is_finalizing ? 0 : pred_after % lvl->shard.chunks_per_shard_append;
+    }
+
     CHECK(Error,
           aggregate_batch_by_shard_async(
             (void*)stage->d_compressed[fc],
@@ -366,6 +393,9 @@ compress_agg_kick(struct compress_agg_stage* stage,
             stage->codec.max_output_size,
             &lvl->agg_layout,
             agg,
+            lvl->d_tail_bytes,
+            lvl->d_tail_carry,
+            is_finalizing,
             compress_stream) == 0);
   }
 
