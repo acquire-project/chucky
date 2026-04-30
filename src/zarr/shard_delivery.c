@@ -4,6 +4,8 @@
 #include "util/prelude.h"
 #include "zarr/crc32c.h"
 
+#include "log/log.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -274,12 +276,11 @@ deliver_to_shards_batch(uint8_t level,
                                    &fbuf,
                                    &aligned_bytes,
                                    &logical_bytes) == 0);
-          int wr =
-            (is_first_run_for_shard && sh->writer->write_direct)
-              ? sh->writer->write_direct(
-                  sh->writer, sh->data_cursor, fbuf, fbuf + aligned_bytes)
-              : sh->writer->write(
-                  sh->writer, sh->data_cursor, fbuf, fbuf + aligned_bytes);
+          // fbuf is a temporary local allocation; write_direct is zero-copy
+          // (io worker reads asynchronously), so freeing fbuf right after
+          // would be a use-after-free. Always use write, which copies.
+          int wr = sh->writer->write(
+            sh->writer, sh->data_cursor, fbuf, fbuf + aligned_bytes);
           if (sa > 0)
             platform_aligned_free(fbuf);
           else
