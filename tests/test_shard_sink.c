@@ -20,6 +20,16 @@ test_sink_write(struct shard_writer* self,
 }
 
 static int
+test_sink_truncate(struct shard_writer* self, uint64_t logical_size)
+{
+  struct test_shard_writer* w = (struct test_shard_writer*)self;
+  if (logical_size > w->capacity)
+    return 1;
+  w->size = logical_size;
+  return 0;
+}
+
+static int
 test_sink_finalize(struct shard_writer* self)
 {
   struct test_shard_writer* w = (struct test_shard_writer*)self;
@@ -62,6 +72,13 @@ test_sink_update_append(struct shard_sink* self,
   return 0;
 }
 
+static size_t
+test_sink_required_shard_alignment(const struct shard_sink* self)
+{
+  const struct test_shard_sink* s = (const struct test_shard_sink*)self;
+  return s->shard_alignment;
+}
+
 static struct shard_writer*
 test_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
@@ -78,6 +95,7 @@ test_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     w->buf = (uint8_t*)calloc(1, s->per_shard_capacity);
     w->capacity = s->per_shard_capacity;
     w->base.write = test_sink_write;
+    w->base.truncate = test_sink_truncate;
     w->base.finalize = test_sink_finalize;
     w->sink = s;
   }
@@ -97,6 +115,7 @@ test_sink_init_multi(struct test_shard_sink* s,
   memset(s, 0, sizeof(*s));
   s->base.open = test_sink_open;
   s->base.update_append = test_sink_update_append;
+  s->base.required_shard_alignment = test_sink_required_shard_alignment;
   s->per_shard_capacity = per_shard_capacity;
   s->num_levels = num_levels;
   s->discard_writer.write = discard_write;

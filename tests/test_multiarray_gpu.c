@@ -602,11 +602,11 @@ Fail:
 }
 
 // ---- Test: flush is idempotent after writer reaches `finished` ----
-// Once the writer has reached capacity (total_element_limit) and been finalized,
-// subsequent `update()` calls report `finished` and produce no sink work,
-// and a redundant `flush()` is a no-op (no re-finalization of already-closed
-// shards). A prior bug caused the destructor's follow-up flush to deadlock
-// on Windows against an already-finalized sink.
+// Once the writer has reached capacity (total_element_limit) and been
+// finalized, subsequent `update()` calls report `finished` and produce no sink
+// work, and a redundant `flush()` is a no-op (no re-finalization of
+// already-closed shards). A prior bug caused the destructor's follow-up flush
+// to deadlock on Windows against an already-finalized sink.
 static int
 test_flush_idempotent_after_finished(void)
 {
@@ -743,8 +743,9 @@ test_flush_resumable(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination). One
-  // epoch per shard so each batch produces a fresh shard with fresh content.
+  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination).
+  // One epoch per shard so each batch produces a fresh shard with fresh
+  // content.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -1080,6 +1081,132 @@ Fail:
   return 1;
 }
 
+// ---- Test: tail-carry across two arrays with non-zero shard alignment ----
+//
+// Exercises the multistream path with page_size > 0 (the tail-carry kernels
+// would null-deref before this test was written). Runs 2 batches per shard
+// per array with interleaved writes, then verifies the per-shard on-disk
+// invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
+// padding).
+static int
+test_tail_carry_two_arrays(void)
+{
+  log_info("=== test_tail_carry_two_arrays ===");
+
+  struct test_shard_sink sink0, sink1;
+  test_sink_init_1(&sink0);
+  test_sink_init_1(&sink1);
+  // Non-zero alignment activates the carry-over path on the GPU.
+  sink0.shard_alignment = 4096;
+  sink1.shard_alignment = 4096;
+
+  // Both arrays: dim0 size=4 chunk=1 cps_append=2 (→ 2 shards along dim0,
+  // 2 epochs per shard). dim1 chunk=2 cps=2 (→ cps_inner=2). With
+  // epochs_per_batch=1 we get 2 batches per shard, so each shard sees one
+  // tail-carry kick followed by a finalize kick.
+  struct dimension dims0[2];
+  dims_create(dims0, "yx", (uint64_t[]){ 4, 4 });
+  dims_set_chunk_sizes(dims0, 2, (uint64_t[]){ 1, 2 });
+  dims_set_shard_counts(dims0, 2, (uint64_t[]){ 2, 2 });
+  struct tile_stream_configuration config0 = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims0,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 1,
+  };
+
+  struct dimension dims1[2];
+  dims_create(dims1, "yx", (uint64_t[]){ 4, 6 });
+  dims_set_chunk_sizes(dims1, 2, (uint64_t[]){ 1, 3 });
+  dims_set_shard_counts(dims1, 2, (uint64_t[]){ 2, 2 });
+  struct tile_stream_configuration config1 = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u8,
+    .rank = 2,
+    .dimensions = dims1,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 1,
+  };
+
+  struct tile_stream_configuration configs[] = { config0, config1 };
+  struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // Interleave writes at epoch granularity so bind/unbind alternates.
+  // Array 0: epoch_elements = 1 * 4 = 4. Array 1: epoch_elements = 1 * 6 = 6.
+  // Total per array = 4 epochs (2 shards * 2 epochs/shard).
+  for (int e = 0; e < 4; ++e) {
+    CHECK(Fail,
+          write_fill(w, 0, 4, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
+            multiarray_writer_ok);
+    CHECK(Fail,
+          write_fill(w, 1, 6, sizeof(uint8_t), (uint8_t)(0x80 + e)).error ==
+            multiarray_writer_ok);
+  }
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  // Per-shard invariant: file size == Σ chunk_bytes + index_data + crc4
+  // (no inter-batch zero padding). Read the index out of each shard buffer
+  // and sum the recorded chunk sizes, mirroring the integration tests.
+  // shard_count_along_dim0 = 2; cps_inner = 1, cps_append = 2 → 2 chunks/shard.
+  struct
+  {
+    struct test_shard_sink* sink;
+    int chunks_per_shard_total;
+    int expected_shard_count;
+  } cases[2] = {
+    { &sink0, 2, 2 },
+    { &sink1, 2, 2 },
+  };
+
+  for (int c = 0; c < 2; ++c) {
+    int cps = cases[c].chunks_per_shard_total;
+    size_t index_total = (size_t)cps * 2 * sizeof(uint64_t) + 4;
+    int found = 0;
+    for (int i = 0; i < cases[c].expected_shard_count; ++i) {
+      struct test_shard_writer* sw = &cases[c].sink->writers[0][i];
+      CHECK(Fail, sw->buf);
+      CHECK(Fail, sw->finalized);
+      CHECK(Fail, sw->size > index_total);
+
+      const uint8_t* index_ptr = sw->buf + sw->size - index_total;
+      uint64_t expected_payload = 0;
+      for (int j = 0; j < cps; ++j) {
+        uint64_t nbytes;
+        memcpy(&nbytes,
+               index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+               sizeof(uint64_t));
+        expected_payload += nbytes;
+      }
+      CHECK(Fail, sw->size == expected_payload + index_total);
+      found++;
+    }
+    CHECK(Fail, found == cases[c].expected_shard_count);
+    log_info("  array %d: %d shards verified", c, found);
+  }
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -1116,6 +1243,7 @@ main(int ac, char* av[])
   ret |= test_mixed_dtypes();
   ret |= test_lod_basic();
   ret |= test_mixed_lod();
+  ret |= test_tail_carry_two_arrays();
 
   cuCtxDestroy(ctx);
   return ret;

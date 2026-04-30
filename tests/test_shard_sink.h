@@ -30,6 +30,7 @@ struct test_shard_sink
   int num_levels;
   int num_shards_per_level[TEST_SHARD_SINK_MAX_LEVELS];
   size_t per_shard_capacity;
+  size_t shard_alignment; // 0 = no alignment; non-zero exposes carry-over path
   int open_count;
   int finalize_count;
   int update_append_count;

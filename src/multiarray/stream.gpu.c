@@ -41,6 +41,17 @@ struct array_descriptor_gpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
+  // Per-LOD tail-carry state. GPU buffers and host shadow are descriptor-owned;
+  // bind copies the pointers + predicted_epoch_in_shard into the engine, unbind
+  // saves the predicted counter back. Sharing across arrays would contaminate
+  // each array's first batch with the prior array's stashed tail.
+  struct
+  {
+    CUdeviceptr d_tail_carry;
+    size_t* d_tail_bytes;
+    size_t* h_tail_bytes;
+    uint64_t predicted_epoch_in_shard;
+  } tail[LOD_MAX_LEVELS];
   int flushed; // 1 once flush body has run for this array
 };
 
@@ -152,6 +163,11 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     e->compress_agg.levels[lv].agg_layout = desc->agg_layout[lv];
     e->compress_agg.levels[lv].batch_active_count =
       desc->batch_active_count[lv];
+    e->compress_agg.levels[lv].d_tail_carry = desc->tail[lv].d_tail_carry;
+    e->compress_agg.levels[lv].d_tail_bytes = desc->tail[lv].d_tail_bytes;
+    e->compress_agg.levels[lv].h_tail_bytes = desc->tail[lv].h_tail_bytes;
+    e->compress_agg.levels[lv].predicted_epoch_in_shard =
+      desc->tail[lv].predicted_epoch_in_shard;
   }
   e->d2h_deliver.nlod = desc->ctx.levels.nlod;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
@@ -181,6 +197,14 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
     desc->batch_active_count[lv] =
       e->compress_agg.levels[lv].batch_active_count;
+    desc->tail[lv].predicted_epoch_in_shard =
+      e->compress_agg.levels[lv].predicted_epoch_in_shard;
+    // Clear engine-side aliases so any stale-pointer use crashes loudly
+    // rather than corrupting the next-bound array's tail state.
+    e->compress_agg.levels[lv].d_tail_carry = 0;
+    e->compress_agg.levels[lv].d_tail_bytes = NULL;
+    e->compress_agg.levels[lv].h_tail_bytes = NULL;
+    e->compress_agg.levels[lv].predicted_epoch_in_shard = 0;
   }
 
   // Save per-array LOD state. counts[] tracks running append-accumulator
@@ -323,6 +347,29 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
 
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
+
+    // Per-LOD tail-carry state (descriptor-owned; bind copies pointers into
+    // the shared engine). Only allocate when alignment is required.
+    const uint64_t num_shards = li->agg_layout.num_shards;
+    const size_t page = li->agg_layout.page_size;
+    if (num_shards > 0 && page > 0) {
+      const size_t carry_bytes = num_shards * page;
+      if (cuMemAlloc(&desc->tail[lv].d_tail_carry, carry_bytes) != CUDA_SUCCESS)
+        return 1;
+      if (cuMemsetD8(desc->tail[lv].d_tail_carry, 0, carry_bytes) !=
+          CUDA_SUCCESS)
+        return 1;
+      if (cuMemAlloc((CUdeviceptr*)&desc->tail[lv].d_tail_bytes,
+                     num_shards * sizeof(size_t)) != CUDA_SUCCESS)
+        return 1;
+      if (cuMemsetD8((CUdeviceptr)desc->tail[lv].d_tail_bytes,
+                     0,
+                     num_shards * sizeof(size_t)) != CUDA_SUCCESS)
+        return 1;
+      desc->tail[lv].h_tail_bytes = (size_t*)calloc(num_shards, sizeof(size_t));
+      if (!desc->tail[lv].h_tail_bytes)
+        return 1;
+    }
   }
 
   return 0;
@@ -340,11 +387,16 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     struct shard_state* ss = &desc->shard[lv];
     if (ss->shards) {
-      for (uint64_t i = 0; i < ss->shard_inner_count; ++i)
+      for (uint64_t i = 0; i < ss->shard_inner_count; ++i) {
         free(ss->shards[i].index);
+        free(ss->shards[i].tail_buf);
+      }
       free(ss->shards);
     }
     aggregate_layout_destroy(&desc->agg_layout[lv]);
+    cu_mem_free(desc->tail[lv].d_tail_carry);
+    cu_mem_free((CUdeviceptr)desc->tail[lv].d_tail_bytes);
+    free(desc->tail[lv].h_tail_bytes);
   }
   // array_lod owns everything except d_linear/d_morton/timing (which stay 0
   // in the per-array struct). ctx.layout_gpu aliases array_lod.layout_gpu[0]
