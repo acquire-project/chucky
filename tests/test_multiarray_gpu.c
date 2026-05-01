@@ -1207,6 +1207,127 @@ Fail:
   return 1;
 }
 
+// ---- Test: tail-carry where one batch crosses a shard generation ----
+//
+// Reproduces the case where epochs_per_batch > chunks_per_shard_append.
+// Geometry: dim0 size=6 chunk=1, shard_count=2 → cps_append=3, 2 shards
+//           dim1 size=2 chunk=2, shard_count=1 → cps_inner=1, 1 shard
+// → 6 epochs total, 3 chunks/shard along dim0, 2 shards.
+//
+// epochs_per_batch=4 forces batch 1 to span shard 0 (3 epochs) + partial
+// shard 1 (1 epoch). Batch 2 finishes shard 1 (2 more epochs).
+//
+// In the broken implementation the GPU's stash_tail_k computes the tail
+// over both generations packed in a single shard column, while the host
+// correctly splits them per generation. The host's h_tail_bytes and the
+// GPU's d_tail_bytes diverge, and the next batch reads the wrong leading-
+// tail bytes from d_aggregated. Verified two ways: the byte-level file size
+// invariant AND decompression by following the on-disk index back to the
+// original fill bytes.
+static int
+test_tail_carry_cross_generation(void)
+{
+  log_info("=== test_tail_carry_cross_generation ===");
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+  sink.shard_alignment = 4096;
+
+  struct dimension dims[2];
+  dims_create(dims, "yx", (uint64_t[]){ 6, 2 });
+  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, 2 });
+  dims_set_shard_counts(dims, 2, (uint64_t[]){ 2, 1 });
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 4,
+  };
+
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // 6 epochs * 2 elements/epoch = 12 elements total. Use distinct fill
+  // values so we can detect cross-batch contamination.
+  for (int e = 0; e < 6; ++e)
+    CHECK(Fail,
+          write_fill(w, 0, 2, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
+            multiarray_writer_ok);
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  const int chunks_per_shard_total = 3;
+  const size_t index_total =
+    (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t) + 4;
+
+  int found = 0;
+  for (int i = 0; i < 2; ++i) {
+    struct test_shard_writer* sw = &sink.writers[0][i];
+    CHECK(Fail, sw->buf);
+    CHECK(Fail, sw->finalized);
+    CHECK(Fail, sw->size > index_total);
+
+    const uint8_t* index_ptr = sw->buf + sw->size - index_total;
+    uint64_t chunk_offs[3] = { 0 }, chunk_szs[3] = { 0 };
+    uint64_t expected_payload = 0;
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      memcpy(&chunk_offs[j], index_ptr + (size_t)j * 16, sizeof(uint64_t));
+      memcpy(&chunk_szs[j],
+             index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+             sizeof(uint64_t));
+      expected_payload += chunk_szs[j];
+    }
+    if (sw->size != expected_payload + index_total) {
+      log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                i,
+                sw->size,
+                (unsigned long long)expected_payload,
+                index_total);
+      goto Fail;
+    }
+    // Decompress-free check (CODEC_NONE): each chunk is 2 elements * 2 bytes.
+    // Shard i covers epochs [i*3 .. i*3+3); chunk j inside shard => epoch
+    // i*3+j; fill byte = 0x10 + (i*3 + j).
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      CHECK(Fail, chunk_szs[j] == 4);
+      const uint8_t* p = sw->buf + chunk_offs[j];
+      uint8_t expected = (uint8_t)(0x10 + i * 3 + j);
+      for (int b = 0; b < 4; ++b) {
+        if (p[b] != expected) {
+          log_error("  shard %d chunk %d byte %d: got 0x%02x want 0x%02x",
+                    i,
+                    j,
+                    b,
+                    p[b],
+                    expected);
+          goto Fail;
+        }
+      }
+    }
+    found++;
+  }
+  CHECK(Fail, found == 2);
+  log_info("  PASS (%d shards verified)", found);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -1244,6 +1365,7 @@ main(int ac, char* av[])
   ret |= test_lod_basic();
   ret |= test_mixed_lod();
   ret |= test_tail_carry_two_arrays();
+  ret |= test_tail_carry_cross_generation();
 
   cuCtxDestroy(ctx);
   return ret;

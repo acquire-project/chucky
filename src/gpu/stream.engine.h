@@ -57,19 +57,17 @@ struct level_flush_state
     d_batch_perm; // [K_l * M_l] uint32: batch-chunk -> shard-ordered pos
   uint32_t batch_active_count; // K_l = K / 2^l for this level
   // Cross-batch tail carry-over (per-LOD persistent state, GPU-resident).
-  // d_tail_bytes [num_shards] is the per-shard ragged-tail length; updated by
-  // stash_tail_k at the end of each batch and read by compute_bias_k /
-  // copy_leading_tail_k at the start of the next batch.
-  // d_tail_carry [num_shards * page_size] holds the actual tail bytes.
-  // h_tail_bytes is a host shadow used by delivery to size writes (stays in
-  // sync via independent host-side derivation from h_permuted_sizes).
-  // predicted_epoch_in_shard advances at kick time so the host can predict
-  // whether THIS batch will close the shard generation; passed to
-  // stash_tail_k so it can zero d_tail_bytes on finalize.
+  // d_tail_bytes [num_shards] is the per-shard ragged-tail length; read by
+  // compute_bias_k / copy_leading_tail_k at the start of each batch and
+  // uploaded by the host (from h_tail_bytes) at the end of every batch's
+  // delivery. d_tail_carry [num_shards * page_size] holds the actual tail
+  // bytes, also uploaded by the host. The host owns the per-generation
+  // bookkeeping (in deliver_to_shards_batch); the GPU has no view of where
+  // shard generations begin and end within a batch and so cannot compute
+  // the tail itself.
   CUdeviceptr d_tail_carry;
   size_t* d_tail_bytes;
   size_t* h_tail_bytes;
-  uint64_t predicted_epoch_in_shard;
 };
 
 // Per-frame-counter timing events (double-buffered).

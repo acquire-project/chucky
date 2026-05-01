@@ -143,7 +143,6 @@ compress_agg_init(struct compress_agg_stage* stage,
         (size_t*)calloc(num_shards, sizeof(size_t));
       CHECK(Fail, stage->levels[lv].h_tail_bytes);
     }
-    stage->levels[lv].predicted_epoch_in_shard = 0;
 
     // Shard state
     struct shard_state* ss = &stage->levels[lv].shard;
@@ -368,20 +367,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
     LutRecomputeDone:;
     }
 
-    // Predict whether THIS batch will close the current shard generation.
-    // predicted_epoch_in_shard advances at kick time so the prediction can
-    // run before delivery has updated shard.epoch_in_shard. stash_tail_k
-    // uses the flag to zero d_tail_bytes when finalizing so the next shard
-    // starts fresh.
-    int is_finalizing = 0;
-    if (lvl->shard.chunks_per_shard_append > 0) {
-      uint64_t pred_after =
-        lvl->predicted_epoch_in_shard + (uint64_t)active_count;
-      is_finalizing = (pred_after >= lvl->shard.chunks_per_shard_append);
-      lvl->predicted_epoch_in_shard =
-        is_finalizing ? 0 : pred_after % lvl->shard.chunks_per_shard_append;
-    }
-
     CHECK(Error,
           aggregate_batch_by_shard_async(
             (void*)stage->d_compressed[fc],
@@ -395,7 +380,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
             agg,
             lvl->d_tail_bytes,
             lvl->d_tail_carry,
-            is_finalizing,
             compress_stream) == 0);
   }
 

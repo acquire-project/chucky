@@ -47,13 +47,13 @@ extern "C"
                                 size_t comp_pool_bytes);
 
   // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
-  //   for this batch's leading-tail accounting and overwritten in place with
-  //   the new tail length by stash_tail_k.
+  //   by compute_bias_k for this batch's leading-tail accounting. The host
+  //   uploads the post-delivery values after every batch so the contents
+  //   reflect per-shard-generation tails (the GPU has no view of generation
+  //   boundaries within a batch and so cannot compute them itself).
   // d_tail_carry: persistent per-LOD device buffer of num_shards * page_size
-  //   bytes; holds the actual ragged tail bytes between batches.
-  // is_finalizing: nonzero when this batch closes the current shard
-  //   generation; stash_tail_k writes 0 instead of the computed tail so the
-  //   next shard starts with no carry-over.
+  //   bytes; holds the actual ragged tail bytes between batches. Same
+  //   uploaded-by-host invariant as d_tail_bytes.
   int aggregate_batch_by_shard_async(void* d_compressed,
                                      size_t* d_comp_sizes,
                                      const uint32_t* d_batch_gather,
@@ -65,7 +65,6 @@ extern "C"
                                      struct aggregate_slot* slot,
                                      size_t* d_tail_bytes,
                                      CUdeviceptr d_tail_carry,
-                                     int is_finalizing,
                                      CUstream stream);
 
 #ifdef __cplusplus

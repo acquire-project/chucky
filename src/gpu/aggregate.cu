@@ -84,66 +84,6 @@ copy_leading_tail_k(void* __restrict__ d_aggregated,
 }
 
 // ---------------------------------------------------------------------------
-// Kernel: stash_tail_k
-//   Block s computes the new ragged tail for shard s and copies it to
-//   d_tail_carry[s * page_size] for the next batch. Also writes the new tail
-//   length to d_tail_bytes[s]. Steps:
-//     real_total[s] = sum_{i in shard s}(d_permuted_sizes)
-//     total[s]      = real_total + d_tail_bytes[s]   (read pre-write)
-//     write_bytes   = floor(total / page) * page
-//     tail_bytes    = total - write_bytes  (< page_size)
-//   When is_finalizing is nonzero, writes 0 to d_tail_bytes[s] and skips the
-//   byte copy — the next batch starts fresh on a new shard generation.
-// ---------------------------------------------------------------------------
-__global__ void
-stash_tail_k(const void* __restrict__ d_aggregated,
-             void* __restrict__ d_tail_carry,
-             size_t* __restrict__ d_tail_bytes,
-             const size_t* __restrict__ d_permuted_sizes,
-             uint64_t tps_group,
-             size_t shard_capacity,
-             size_t page_size,
-             int is_finalizing)
-{
-  const uint64_t s = blockIdx.x;
-  __shared__ size_t s_total;
-  __shared__ size_t s_write_bytes;
-  __shared__ size_t s_tail_bytes;
-  __shared__ size_t s_tail_prev;
-
-  if (threadIdx.x == 0)
-    s_tail_prev = d_tail_bytes[s];
-  __syncthreads();
-
-  size_t partial = 0;
-  for (uint64_t i = threadIdx.x; i < tps_group; i += blockDim.x)
-    partial += d_permuted_sizes[s * tps_group + i];
-
-  if (threadIdx.x == 0)
-    s_total = 0;
-  __syncthreads();
-  atomicAdd((unsigned long long*)&s_total, (unsigned long long)partial);
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    s_total += s_tail_prev;
-    s_write_bytes = (s_total / page_size) * page_size;
-    s_tail_bytes = s_total - s_write_bytes;
-    d_tail_bytes[s] = is_finalizing ? 0 : s_tail_bytes;
-  }
-  __syncthreads();
-
-  if (is_finalizing || s_tail_bytes == 0)
-    return;
-
-  const uint8_t* src =
-    (const uint8_t*)d_aggregated + s * shard_capacity + s_write_bytes;
-  uint8_t* dst = (uint8_t*)d_tail_carry + s * page_size;
-  for (size_t off = threadIdx.x; off < s_tail_bytes; off += blockDim.x)
-    dst[off] = src[off];
-}
-
-// ---------------------------------------------------------------------------
 // Host functions
 // ---------------------------------------------------------------------------
 
@@ -329,7 +269,6 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                struct aggregate_slot* slot,
                                size_t* d_tail_bytes,
                                CUdeviceptr d_tail_carry,
-                               int is_finalizing,
                                CUstream stream)
 {
   const uint64_t N = batch_chunk_count;
@@ -423,22 +362,11 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                                     max_comp_chunk_bytes);
   }
 
-  // Pass 5: stash the new ragged tail (post-gather) into d_tail_carry and
-  // update d_tail_bytes for the next batch's leading-tail accounting. When
-  // is_finalizing, writes 0 instead so the next shard generation starts
-  // fresh.
-  if (page_size > 0 && num_shards > 0) {
-    const int block = 256;
-    stash_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
-      slot->d_aggregated,
-      (void*)d_tail_carry,
-      d_tail_bytes,
-      slot->d_permuted_sizes,
-      tps_group,
-      shard_capacity,
-      page_size,
-      is_finalizing);
-  }
+  // The next batch's compute_bias_k / copy_leading_tail_k consume
+  // d_tail_bytes / d_tail_carry. Both are uploaded by the host after
+  // delivery (see flush.d2h_deliver.c) so the values reflect per-shard-
+  // generation tails — the GPU has no view of where shard generations
+  // begin and end within a batch and so cannot compute them itself.
 
   return 0;
 

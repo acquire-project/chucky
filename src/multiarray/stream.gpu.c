@@ -41,16 +41,14 @@ struct array_descriptor_gpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
-  // Per-LOD tail-carry state. GPU buffers and host shadow are descriptor-owned;
-  // bind copies the pointers + predicted_epoch_in_shard into the engine, unbind
-  // saves the predicted counter back. Sharing across arrays would contaminate
-  // each array's first batch with the prior array's stashed tail.
+  // Per-LOD tail-carry state. GPU buffers and host shadow are descriptor-
+  // owned; bind copies the pointers into the engine. Sharing across arrays
+  // would contaminate each array's first batch with the prior array's tail.
   struct
   {
     CUdeviceptr d_tail_carry;
     size_t* d_tail_bytes;
     size_t* h_tail_bytes;
-    uint64_t predicted_epoch_in_shard;
   } tail[LOD_MAX_LEVELS];
   int flushed; // 1 once flush body has run for this array
 };
@@ -166,8 +164,6 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     e->compress_agg.levels[lv].d_tail_carry = desc->tail[lv].d_tail_carry;
     e->compress_agg.levels[lv].d_tail_bytes = desc->tail[lv].d_tail_bytes;
     e->compress_agg.levels[lv].h_tail_bytes = desc->tail[lv].h_tail_bytes;
-    e->compress_agg.levels[lv].predicted_epoch_in_shard =
-      desc->tail[lv].predicted_epoch_in_shard;
   }
   e->d2h_deliver.nlod = desc->ctx.levels.nlod;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
@@ -197,14 +193,11 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
     desc->batch_active_count[lv] =
       e->compress_agg.levels[lv].batch_active_count;
-    desc->tail[lv].predicted_epoch_in_shard =
-      e->compress_agg.levels[lv].predicted_epoch_in_shard;
     // Clear engine-side aliases so any stale-pointer use crashes loudly
     // rather than corrupting the next-bound array's tail state.
     e->compress_agg.levels[lv].d_tail_carry = 0;
     e->compress_agg.levels[lv].d_tail_bytes = NULL;
     e->compress_agg.levels[lv].h_tail_bytes = NULL;
-    e->compress_agg.levels[lv].predicted_epoch_in_shard = 0;
   }
 
   // Save per-array LOD state. counts[] tracks running append-accumulator
