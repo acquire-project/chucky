@@ -40,89 +40,8 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
   return 0;
 }
 
-int
-finalize_shards(struct shard_state* ss, size_t shard_alignment)
-{
-  int err = 0;
-
-  for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
-    struct active_shard* sh = &ss->shards[si];
-    if (!sh->writer)
-      continue;
-
-    size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
-    size_t tail_bytes = sh->tail_bytes;
-    size_t logical_bytes = tail_bytes + index_data_bytes + 4;
-    size_t write_bytes = shard_alignment > 0
-                           ? align_up(logical_bytes, shard_alignment)
-                           : logical_bytes;
-
-    uint8_t* buf =
-      shard_alignment > 0
-        ? (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes)
-        : (uint8_t*)malloc(write_bytes);
-
-    if (!buf) {
-      log_error("finalize_shards: alloc failed for shard %llu",
-                (unsigned long long)si);
-      err = 1;
-    } else {
-      if (tail_bytes > 0)
-        memcpy(buf, sh->tail_buf, tail_bytes);
-      memcpy(buf + tail_bytes, sh->index, index_data_bytes);
-
-      uint32_t crc_val = crc32c(buf + tail_bytes, index_data_bytes);
-      memcpy(buf + tail_bytes + index_data_bytes, &crc_val, 4);
-
-      if (write_bytes > logical_bytes)
-        memset(buf + logical_bytes, 0, write_bytes - logical_bytes);
-
-      if (sh->writer->write(
-            sh->writer, sh->data_cursor, buf, buf + write_bytes)) {
-        log_error("finalize_shards: write failed for shard %llu",
-                  (unsigned long long)si);
-        err = 1;
-      }
-
-      if (shard_alignment > 0)
-        platform_aligned_free(buf);
-      else
-        free(buf);
-    }
-
-    // Trim the trailing pad so shard_index_parse finds the index at the file's
-    // end. No-op for sinks whose truncate hook is NULL (e.g. S3).
-    if (!err && sh->writer->truncate) {
-      uint64_t logical_size = sh->data_cursor + (uint64_t)logical_bytes;
-      if (sh->writer->truncate(sh->writer, logical_size)) {
-        log_error("finalize_shards: truncate failed for shard %llu",
-                  (unsigned long long)si);
-        err = 1;
-      }
-    }
-
-    if (sh->writer->finalize(sh->writer)) {
-      log_error("finalize_shards: finalize failed for shard %llu",
-                (unsigned long long)si);
-      err = 1;
-    }
-
-    sh->writer = NULL;
-    sh->data_cursor = 0;
-    sh->tail_bytes = 0;
-    memset(sh->index, 0xFF, ss->chunks_per_shard_total * 2 * sizeof(uint64_t));
-  }
-
-  ss->epoch_in_shard = 0;
-  ss->shard_epoch++;
-  return err;
-}
-
-// Build the index buffer for a shard: page-aligned scratch holding tail data
-// (already in h_aggregated) followed by the index + crc.  Layout:
-//   [tail_bytes][index_data][crc4][trailing zero pad to alignment]
-// Returns the malloc'd buffer (caller frees with platform_aligned_free or
-// free), the aligned size, and the logical (un-padded) size.
+// Build the page-aligned scratch holding [tail][index][crc4][zero pad].
+// Caller frees via free_finalize_buf with the same shard_alignment.
 static int
 build_finalize_buf(const uint8_t* tail_src,
                    size_t tail_bytes,
@@ -156,6 +75,79 @@ build_finalize_buf(const uint8_t* tail_src,
   *out_aligned_bytes = aligned_bytes;
   *out_logical_bytes = logical_bytes;
   return 0;
+}
+
+static void
+free_finalize_buf(uint8_t* buf, size_t shard_alignment)
+{
+  if (shard_alignment > 0)
+    platform_aligned_free(buf);
+  else
+    free(buf);
+}
+
+int
+finalize_shards(struct shard_state* ss, size_t shard_alignment)
+{
+  int err = 0;
+  size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
+
+  for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
+    struct active_shard* sh = &ss->shards[si];
+    if (!sh->writer)
+      continue;
+
+    uint8_t* buf = NULL;
+    size_t aligned_bytes = 0;
+    size_t logical_bytes = 0;
+
+    if (build_finalize_buf(sh->tail_buf,
+                           sh->tail_bytes,
+                           sh->index,
+                           index_data_bytes,
+                           shard_alignment,
+                           &buf,
+                           &aligned_bytes,
+                           &logical_bytes)) {
+      log_error("finalize_shards: alloc failed for shard %llu",
+                (unsigned long long)si);
+      err = 1;
+    } else {
+      if (sh->writer->write(
+            sh->writer, sh->data_cursor, buf, buf + aligned_bytes)) {
+        log_error("finalize_shards: write failed for shard %llu",
+                  (unsigned long long)si);
+        err = 1;
+      }
+      free_finalize_buf(buf, shard_alignment);
+    }
+
+    // Trim the trailing pad so shard_index_parse finds the index at the file's
+    // end. No-op for sinks whose truncate hook is NULL (e.g. S3).
+    if (!err && sh->writer->truncate) {
+      uint64_t logical_size = sh->data_cursor + (uint64_t)logical_bytes;
+      if (sh->writer->truncate(sh->writer, logical_size)) {
+        log_error("finalize_shards: truncate failed for shard %llu",
+                  (unsigned long long)si);
+        err = 1;
+      }
+    }
+
+    if (sh->writer->finalize(sh->writer)) {
+      log_error("finalize_shards: finalize failed for shard %llu",
+                (unsigned long long)si);
+      err = 1;
+    }
+
+    sh->writer = NULL;
+    sh->data_cursor = 0;
+    sh->tail_bytes = 0;
+    memset(sh->index, 0xFF, index_data_bytes);
+  }
+
+  ss->epoch_in_shard = 0;
+  ss->shard_epoch++;
+  return err;
 }
 
 // Sum h_permuted_sizes for chunks in shard si over epoch range [a, a+run_len).
@@ -230,6 +222,9 @@ deliver_to_shards_batch(uint8_t level,
         // bytes (only on this shard's first run in the batch) are last batch's
         // ragged tail (already staged on the GPU side); chunks follow.
         const size_t shard_base = (size_t)si * shard_capacity;
+        // Only the first run for shard column si in this batch sees the
+        // carried-over tail. The run_finalizes branch zeros h_tail_bytes[si]
+        // before returning, so post-finalize runs in the same batch read 0.
         const int is_first_run_for_shard = (bytes_consumed[si] == 0);
         const size_t tail_in =
           (is_first_run_for_shard && h_tail_bytes) ? h_tail_bytes[si] : 0;
@@ -281,10 +276,7 @@ deliver_to_shards_batch(uint8_t level,
           // would be a use-after-free. Always use write, which copies.
           int wr = sh->writer->write(
             sh->writer, sh->data_cursor, fbuf, fbuf + aligned_bytes);
-          if (sa > 0)
-            platform_aligned_free(fbuf);
-          else
-            free(fbuf);
+          free_finalize_buf(fbuf, sa);
           CHECK(Error, wr == 0);
           total_bytes += aligned_bytes;
           if (sh->writer->truncate) {
