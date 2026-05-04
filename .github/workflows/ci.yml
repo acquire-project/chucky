@@ -46,6 +46,7 @@ jobs:
 
       - uses: mamba-org/setup-micromamba@v2
         with:
+          micromamba-version: 2.0.5-0
           environment-name: ci
           create-args: >-
             cmake ninja sccache uv
@@ -85,6 +86,7 @@ jobs:
 
       - uses: mamba-org/setup-micromamba@v2
         with:
+          micromamba-version: 2.0.5-0
           environment-name: ci
           create-args: >-
             cmake ninja sccache uv

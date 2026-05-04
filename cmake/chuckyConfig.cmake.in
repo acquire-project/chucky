@@ -1,0 +1,47 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Make bundled Find*.cmake modules visible to find_dependency for the duration
+# of this file. Restore the consumer's CMAKE_MODULE_PATH at the end.
+set(_chucky_orig_module_path "${CMAKE_MODULE_PATH}")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
+find_dependency(Threads)
+
+# CONFIG-first / MODULE-fallback for libs that may be packaged either way.
+# This matches the project's own Lz4.cmake/Zstd.cmake/Blosc.cmake so the
+# imported target names baked into the targets export (e.g. LZ4::lz4_static)
+# resolve regardless of the consumer's environment.
+macro(_chucky_find_dep_config_or_module config_name module_name)
+    find_package(${config_name} CONFIG QUIET)
+    if(NOT ${config_name}_FOUND)
+        find_dependency(${module_name})
+    endif()
+endmacro()
+
+_chucky_find_dep_config_or_module(lz4 Lz4)
+_chucky_find_dep_config_or_module(zstd Zstd)
+if(@HAVE_BLOSC@)
+    _chucky_find_dep_config_or_module(blosc Blosc)
+endif()
+
+find_dependency(aws-c-s3 CONFIG)
+
+if(@CHUCKY_ENABLE_GPU@)
+    find_dependency(CUDAToolkit 12.8)
+    find_dependency(Nvcomp)
+endif()
+
+set(CMAKE_MODULE_PATH "${_chucky_orig_module_path}")
+unset(_chucky_orig_module_path)
+
+include("${CMAKE_CURRENT_LIST_DIR}/@CHUCKY_AGGREGATE_NAME@Targets.cmake")
+
+# Default `chucky::chucky[-cpu]` to the shared variant. Guard against being
+# re-included on a transitive find_package call.
+if(NOT TARGET chucky::@CHUCKY_AGGREGATE_NAME@)
+    add_library(chucky::@CHUCKY_AGGREGATE_NAME@ ALIAS chucky::@CHUCKY_AGGREGATE_NAME@-shared)
+endif()
+
+check_required_components(@CHUCKY_AGGREGATE_NAME@)
