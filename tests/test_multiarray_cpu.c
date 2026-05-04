@@ -675,6 +675,9 @@ test_lod_basic(void)
   int shards_per_level[] = { 16, 16, 16 };
   struct test_shard_sink sink;
   test_sink_init_multi(&sink, 3, shards_per_level, SHARD_CAP);
+  // Activate carry-over so the unified per-LOD aggregate path emits per-
+  // shard regions on every level (lvl > 0 included).
+  sink.shard_alignment = 4096;
 
   struct multiarray_tile_stream_cpu* ms = NULL;
 
@@ -705,6 +708,34 @@ test_lod_basic(void)
   CHECK(Fail, lod_count > 0);
 
   log_info("  L0 shards: %d, L1+ shards: %d", l0_count, lod_count);
+
+  // Tail-carry byte invariant per LOD. dim_extent_compute_shards clamps
+  // chunks_per_shard down to the actual chunk count when a level shrinks
+  // (lod_plan.c:467), so cps_total varies per level. For this geometry:
+  //   L0: cps {1,2,2} → 4 entries per shard index
+  //   L1: cps {1,1,1} → 1 (yx clamped from 2→1 after one downsample)
+  //   L2: cps {1,1,1} → 1
+  const size_t cps_total_per_lv[3] = { 4, 1, 1 };
+  for (int lv = 0; lv < 3; ++lv) {
+    const size_t cps_total = cps_total_per_lv[lv];
+    const size_t index_total = cps_total * 2 * sizeof(uint64_t) + 4;
+    for (int si = 0; si < TEST_SHARD_SINK_MAX_SHARDS; ++si) {
+      struct test_shard_writer* sw = &sink.writers[lv][si];
+      if (!sw->buf || sw->size == 0)
+        continue;
+      CHECK(Fail, sw->size > index_total);
+      const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_total);
+      uint64_t expected_payload = 0;
+      for (size_t c = 0; c < cps_total; ++c) {
+        uint64_t off = idx[2 * c];
+        uint64_t nb = idx[2 * c + 1];
+        if (off == UINT64_MAX && nb == UINT64_MAX)
+          continue;
+        expected_payload += nb;
+      }
+      CHECK(Fail, sw->size == expected_payload + index_total);
+    }
+  }
 
   multiarray_tile_stream_cpu_destroy(ms);
   test_sink_free(&sink);
