@@ -94,6 +94,15 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       s->agg_layout[lv] = li->agg_layout;
       s->batch_active_count[lv] = li->batch_active_count;
       CHECK(Fail, init_shard_state(&s->shard[lv], li) == 0);
+
+      // Per-LOD tail-carry shadow. Updated in place by deliver_to_shards_batch
+      // once tail-carry delivery is wired up.
+      const uint64_t num_shards = li->agg_layout.num_shards;
+      const size_t page = li->agg_layout.page_size;
+      if (num_shards > 0 && page > 0) {
+        s->h_tail_bytes[lv] = (size_t*)calloc(num_shards, sizeof(size_t));
+        CHECK(Fail, s->h_tail_bytes[lv]);
+      }
     }
 
     // Worst-case unified batch layout: every LOD active across every epoch
@@ -299,6 +308,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
         free(ss->shards[si].index);
       free(ss->shards);
     }
+    free(s->h_tail_bytes[lv]);
     free(s->morton_lut[lv]);
     free(s->lod_fixed_dims_offsets[lv]);
   }
@@ -688,6 +698,7 @@ make_view(struct tile_stream_cpu* s)
     .pool_fully_covered = s->pool_fully_covered,
     .shard = s->shard,
     .agg_layout = s->agg_layout,
+    .h_tail_bytes = s->h_tail_bytes,
     .batch_active_count = s->batch_active_count,
     .csrs = s->csrs,
     .append_accum = s->append_accum,

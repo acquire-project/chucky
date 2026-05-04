@@ -30,6 +30,7 @@ struct cpu_stream_view
   // Per-array shard/LOD state
   struct shard_state* shard;           // [LOD_MAX_LEVELS] array
   struct aggregate_layout* agg_layout; // [LOD_MAX_LEVELS] array
+  size_t** h_tail_bytes;               // [LOD_MAX_LEVELS] of [num_shards_lv]
   uint32_t* batch_active_count;        // [LOD_MAX_LEVELS] array
   struct reduce_csr* csrs;             // [nlod-1] CSR LUTs
   void* append_accum;

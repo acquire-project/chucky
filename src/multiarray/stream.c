@@ -27,6 +27,10 @@ struct array_descriptor
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
   struct shard_state shard[LOD_MAX_LEVELS];
+  // Per-LOD ragged-tail length carried across batches. Descriptor-owned so
+  // an array switch doesn't contaminate the next array's first batch with the
+  // prior array's tail. NULL when page_size==0.
+  size_t* h_tail_bytes[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   uint64_t cursor_elements;
   uint64_t total_element_limit;
@@ -202,6 +206,16 @@ init_array_descriptor(struct array_descriptor* desc,
     desc->batch_active_count[lv] = li->batch_active_count;
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
+
+    // Per-LOD tail-carry shadow. Updated in place by deliver_to_shards_batch
+    // once tail-carry delivery is wired up.
+    const uint64_t num_shards = li->agg_layout.num_shards;
+    const size_t page = li->agg_layout.page_size;
+    if (num_shards > 0 && page > 0) {
+      desc->h_tail_bytes[lv] = (size_t*)calloc(num_shards, sizeof(size_t));
+      if (!desc->h_tail_bytes[lv])
+        return 1;
+    }
   }
 
   // Worst-case unified batch layout for this array — every LOD active for
@@ -474,6 +488,7 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
             free(ss->shards[si].index);
           free(ss->shards);
         }
+        free(desc->h_tail_bytes[lv]);
       }
       free(desc->append_accum);
       free(desc->batch_active_masks);
@@ -611,6 +626,7 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .pool_fully_covered = desc->pool_fully_covered,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
+    .h_tail_bytes = desc->h_tail_bytes,
     .batch_active_count = desc->batch_active_count,
     .csrs = desc->csrs,
     .append_accum = desc->append_accum,

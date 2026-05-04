@@ -54,6 +54,10 @@ struct flush_batch_params
   // at a contiguous LOD_MAX_LEVELS-element array (typically owned by the
   // stream).
   const struct aggregate_layout* per_lod_agg_layouts;
+  // Per-LOD per-shard ragged-tail length carried across batches. NULL when
+  // page_size==0. h_tail_bytes[lv] is a [num_shards_lv] array; entries are
+  // updated in place by deliver_to_shards_batch.
+  size_t** h_tail_bytes;
   struct flush_level_view levels[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   size_t shard_alignment_bytes;

@@ -30,6 +30,9 @@ struct tile_stream_cpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
+  // Per-LOD ragged-tail length carried across batches. NULL when page_size==0.
+  size_t* h_tail_bytes[LOD_MAX_LEVELS];
+
   // Unified per-batch aggregate output (across all LODs), double-buffered
   // so aggregate of batch N+1 overlaps prior pwrites on batch N's slot.
   // Each slot owns a page-aligned data buffer plus unified scratch arrays
