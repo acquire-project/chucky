@@ -109,7 +109,7 @@ test_cascade_to_multiscale_group(void)
   CHECK(Fail, mk_subdir("caseA") == 0);
   char root[4096];
   snprintf(root, sizeof(root), "%s/caseA", tmpdir);
-  struct store* s = store_fs_create(root, 0);
+  struct store* s = store_fs_create(root, 1);
   CHECK(Fail, s);
 
   // Parent must seed the root group before the multiscale subgroup.
@@ -166,7 +166,7 @@ test_cascade_to_child_array(void)
   CHECK(Fail, mk_subdir("caseB") == 0);
   char root[4096];
   snprintf(root, sizeof(root), "%s/caseB", tmpdir);
-  struct store* s = store_fs_create(root, 0);
+  struct store* s = store_fs_create(root, 1);
   CHECK(Fail, s);
 
   {

@@ -83,7 +83,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = store_fs_create(tmpdir, 0);
+  store = store_fs_create(tmpdir, 1);
   CHECK(Cleanup, store);
   CHECK(Cleanup, store->mkdirs(store, ".") == 0);
   CHECK(Cleanup, store->mkdirs(store, "0") == 0);
