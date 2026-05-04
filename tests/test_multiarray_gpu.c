@@ -1087,7 +1087,9 @@ Fail:
 // would null-deref before this test was written). Runs 2 batches per shard
 // per array with interleaved writes, then verifies the per-shard on-disk
 // invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
-// padding).
+// padding). Uses CODEC_ZSTD on both arrays so compression+tail-carry is
+// covered alongside the multistream switch (GPU multiarray requires all
+// arrays share a codec).
 static int
 test_tail_carry_two_arrays(void)
 {
@@ -1113,7 +1115,7 @@ test_tail_carry_two_arrays(void)
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims0,
-    .codec = { .id = CODEC_NONE },
+    .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 1,
   };
 
@@ -1126,7 +1128,7 @@ test_tail_carry_two_arrays(void)
     .dtype = dtype_u8,
     .rank = 2,
     .dimensions = dims1,
-    .codec = { .id = CODEC_NONE },
+    .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 1,
   };
 
