@@ -1,6 +1,7 @@
 // Test tile_stream_cpu + zarr store integration.
 // Exercises the write_direct -> io_queue async path that requires fencing.
 
+#include "platform/platform.h"
 #include "stream.cpu.h"
 #include "stream/layouts.h"
 #include "test_counting_sink.h"
@@ -553,14 +554,20 @@ test_unbuffered_zero_copy(const char* tmpdir)
 {
   log_info("=== test_unbuffered_zero_copy ===");
 
-  // Inner geometry that produces shards larger than a page so writes are
-  // a meaningful test of the alignment guarantee. n_epochs > cps_append
-  // ensures multiple batches per shard so the non-finalizing write_direct
-  // path is exercised.
-  const int inner_size[2] = { 64, 64 };
+  // Per-batch bytes must exceed one page so write_bytes = (total_run /
+  // page_size) * page_size > 0 and the non-finalizing write hits the
+  // zero-copy path. Apple Silicon has 16 KiB pages, so the chunk geometry
+  // is sized from platform_page_alignment(): a single batch is one epoch
+  // of 4 chunks (2x2 inner), so chunk_size^2 * 8 >= 2 * page is enough.
+  const size_t page = platform_page_alignment();
+  log_info("  platform page alignment: %zu", page);
+  int chunk = 32;
+  while ((size_t)chunk * (size_t)chunk * 8u < 2u * page)
+    chunk *= 2;
+  const int inner_dim = chunk * 2; // 2x2 inner chunks, one inner shard
   const int n_epochs = 4;
   const int chunks_per_shard_append = 2;
-  const int epoch_elements = inner_size[0] * inner_size[1];
+  const int epoch_elements = inner_dim * inner_dim;
   const int total_elements = n_epochs * epoch_elements;
 
   uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
@@ -574,13 +581,13 @@ test_unbuffered_zero_copy(const char* tmpdir)
       .chunks_per_shard = chunks_per_shard_append,
       .name = "t",
       .storage_position = 0 },
-    { .size = inner_size[0],
-      .chunk_size = 32,
+    { .size = inner_dim,
+      .chunk_size = chunk,
       .chunks_per_shard = 2,
       .name = "y",
       .storage_position = 1 },
-    { .size = inner_size[1],
-      .chunk_size = 32,
+    { .size = inner_dim,
+      .chunk_size = chunk,
       .chunks_per_shard = 2,
       .name = "x",
       .storage_position = 2 },
