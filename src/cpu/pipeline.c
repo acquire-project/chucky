@@ -152,19 +152,21 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     .data_capacity = slot->data_capacity_bytes,
   };
   struct aggregate_result per_lod_results[LOD_MAX_LEVELS];
-  // levels[0].shard points at the contiguous shard_state[LOD_MAX_LEVELS]
-  // owned by the stream / array descriptor; aggregate indexes [lv] from there
-  // to stage leading tails when page_size > 0.
-  if (aggregate_cpu_batch_into_unified(p->compressed,
-                                       p->comp_sizes,
-                                       slot->gather,
-                                       &layout,
-                                       p->per_lod_agg_layouts,
-                                       p->nlod > 0 ? p->levels[0].shard : NULL,
-                                       p->h_tail_bytes,
-                                       &ws,
-                                       per_lod_results,
-                                       p->pool))
+  struct shard_state* shards_by_lod[LOD_MAX_LEVELS] = { 0 };
+  for (int lv = 0; lv < p->nlod; ++lv)
+    shards_by_lod[lv] = p->levels[lv].shard;
+  if (aggregate_cpu_batch_into_unified(&(struct aggregate_cpu_inputs){
+        .compressed_base = p->compressed,
+        .comp_sizes_base = p->comp_sizes,
+        .gather = slot->gather,
+        .layout = &layout,
+        .per_lod_layouts = p->per_lod_agg_layouts,
+        .shards_by_lod = shards_by_lod,
+        .h_tail_bytes = p->h_tail_bytes,
+        .ws = &ws,
+        .per_lod_results = per_lod_results,
+        .pool = p->pool,
+      }))
     return 1;
 
   if (p->metrics) {

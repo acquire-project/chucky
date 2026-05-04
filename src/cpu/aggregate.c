@@ -240,17 +240,19 @@ aggregate_cpu_batch_into(const void* compressed_base,
 // ---- Unified-across-LODs per-batch aggregate ----
 
 int
-aggregate_cpu_batch_into_unified(const void* compressed_base,
-                                 const size_t* comp_sizes_base,
-                                 const uint32_t* gather,
-                                 const struct batch_aggregate_layout* layout,
-                                 const struct aggregate_layout* per_lod_layouts,
-                                 struct shard_state* shards,
-                                 size_t* const* h_tail_bytes,
-                                 struct aggregate_cpu_workspace* ws,
-                                 struct aggregate_result* per_lod_results,
-                                 struct threadpool* pool)
+aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
 {
+  const void* compressed_base = in->compressed_base;
+  const size_t* comp_sizes_base = in->comp_sizes_base;
+  const uint32_t* gather = in->gather;
+  const struct batch_aggregate_layout* layout = in->layout;
+  const struct aggregate_layout* per_lod_layouts = in->per_lod_layouts;
+  struct shard_state* const* shards_by_lod = in->shards_by_lod;
+  size_t* const* h_tail_bytes = in->h_tail_bytes;
+  struct aggregate_cpu_workspace* ws = in->ws;
+  struct aggregate_result* per_lod_results = in->per_lod_results;
+  struct threadpool* pool = in->pool;
+
   const uint64_t total_chunks = layout->total_batch_chunks;
   const uint64_t total_covering = layout->total_batch_covering;
   const uint8_t nlod = layout->nlod;
@@ -319,13 +321,13 @@ aggregate_cpu_batch_into_unified(const void* compressed_base,
   // Leading-tail copy: stage prior batch's ragged tail at the front of each
   // shard's region. CPU equivalent of the GPU's copy_leading_tail_k. Carry-
   // over branch only.
-  if (use_carryover && shards) {
+  if (use_carryover && shards_by_lod) {
     for (uint8_t lv = 0; lv < nlod; ++lv) {
       const struct lod_segment* seg = &layout->lods[lv];
-      if (seg->n_active == 0 || !h_tail_bytes || !h_tail_bytes[lv])
+      const struct shard_state* ss = shards_by_lod[lv];
+      if (seg->n_active == 0 || !ss || !h_tail_bytes || !h_tail_bytes[lv])
         continue;
       const size_t shard_capacity = per_lod_layouts[lv].shard_capacity;
-      const struct shard_state* ss = &shards[lv];
       char* seg_base = (char*)ws->data + seg->data_segment_offset;
       for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
         const size_t nbytes = h_tail_bytes[lv][si];
