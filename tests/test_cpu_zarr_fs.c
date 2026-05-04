@@ -542,14 +542,21 @@ test_partial_batch_readback(const char* tmpdir)
 // page-aligned, deliver_to_shards_batch falls back to the copying write
 // path on every shard run — silently halving throughput. This test feeds
 // realistic-sized data through an unbuffered sink wrapped in a counting
-// shim and asserts that at least one write took the zero-copy path.
+// shim and asserts that at least one mid-shard batch took write_direct.
+//
+// Tail-carry note: the bundled finalize write (last batch in each shard)
+// always copies because it builds a temporary fbuf. Only non-finalizing
+// batches can take the zero-copy write_direct path — so the test config
+// must produce > 1 batch per shard to exercise it.
 static int
 test_unbuffered_zero_copy(const char* tmpdir)
 {
   log_info("=== test_unbuffered_zero_copy ===");
 
   // Inner geometry that produces shards larger than a page so writes are
-  // a meaningful test of the alignment guarantee.
+  // a meaningful test of the alignment guarantee. n_epochs > cps_append
+  // ensures multiple batches per shard so the non-finalizing write_direct
+  // path is exercised.
   const int inner_size[2] = { 64, 64 };
   const int n_epochs = 4;
   const int chunks_per_shard_append = 2;
@@ -594,8 +601,12 @@ test_unbuffered_zero_copy(const char* tmpdir)
   struct counting_sink counter;
   counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
 
+  // Force epochs_per_batch == 1 so the 2-epoch shards see 2 batches each:
+  // first batch is non-finalizing (write_direct path), second batch
+  // finalizes (bundled copy).
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .epochs_per_batch = 1,
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
@@ -803,10 +814,6 @@ main(void)
   err |= test_batch_readback(tmpdir3);
   err |= test_partial_batch_readback(tmpdir4);
   err |= test_unbuffered_zero_copy(tmpdir5);
-  // FIXME: failing — CPU pipeline does not yet implement tail carryover
-  // (cpu/pipeline.c passes NULL/NULL to deliver_to_shards_batch). To be
-  // fixed in a follow-up PR that reworks cpu/aggregate.c to use
-  // shard_capacity-sized regions per shard like the GPU does.
   err |= test_unbuffered_invariant(tmpdir6);
 
   test_tmpdir_remove(tmpdir1);

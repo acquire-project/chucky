@@ -24,11 +24,12 @@ deliver_aggregate(int lv,
     platform_toc(&sink_clk);
 
   size_t sink_bytes = 0;
+  size_t* h_tail = (p->h_tail_bytes ? p->h_tail_bytes[lv] : NULL);
   if (deliver_to_shards_batch((uint8_t)lv,
                               lvl->shard,
                               ar,
-                              NULL,
-                              NULL,
+                              &p->per_lod_agg_layouts[lv],
+                              h_tail,
                               active_count,
                               p->sink,
                               p->shard_alignment_bytes,
@@ -151,10 +152,16 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     .data_capacity = slot->data_capacity_bytes,
   };
   struct aggregate_result per_lod_results[LOD_MAX_LEVELS];
+  // levels[0].shard points at the contiguous shard_state[LOD_MAX_LEVELS]
+  // owned by the stream / array descriptor; aggregate indexes [lv] from there
+  // to stage leading tails when page_size > 0.
   if (aggregate_cpu_batch_into_unified(p->compressed,
                                        p->comp_sizes,
                                        slot->gather,
                                        &layout,
+                                       p->per_lod_agg_layouts,
+                                       p->nlod > 0 ? p->levels[0].shard : NULL,
+                                       p->h_tail_bytes,
                                        &ws,
                                        per_lod_results,
                                        p->pool))

@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 struct threadpool;
+struct shard_state;
 
 // Pre-allocated workspace for zero-allocation aggregation.
 struct aggregate_cpu_workspace
@@ -49,16 +50,29 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          struct aggregate_result* result,
                          struct threadpool* pool);
 
-// Unified per-batch aggregate. Single OpenMP loop over total_batch_chunks
-// gathers compressed chunks from across all LODs into the shared, page-
-// aligned data buffer. Per-LOD result views are written into per_lod_results
-// so the caller's deliver-per-LOD path can hand each segment to its sink.
+// Unified per-batch aggregate. Gathers compressed chunks from across all LODs
+// into the shared, page-aligned data buffer. Per-LOD result views are written
+// into per_lod_results so the caller's deliver-per-LOD path can hand each
+// segment to its sink.
+//
+// When layout->page_size > 0, lays out per-shard `shard_capacity`-sized
+// regions matching the GPU tail-carry path: each shard's first chunk is
+// anchored at `si*shard_capacity + h_tail_bytes[lv][si]`, and the leading
+// tail bytes are copied from `shards[lv].shards[si].tail_buf`. When page_size
+// is zero, falls back to a single contiguous prefix-sum per LOD.
+//
+// per_lod_layouts: required when page_size > 0 (for shard_capacity).
+// shards: required when page_size > 0; pass `&desc->shard[0]` (LOD_MAX_LEVELS).
+// h_tail_bytes: per-LOD per-shard ragged-tail lengths; NULL when page_size==0.
 int
 aggregate_cpu_batch_into_unified(
   const void* compressed_base,
   const size_t* comp_sizes_base,
   const uint32_t* gather, // [total_batch_chunks]
   const struct batch_aggregate_layout* layout,
+  const struct aggregate_layout* per_lod_layouts,
+  struct shard_state* shards,  // [LOD_MAX_LEVELS] (NULL if page==0)
+  size_t* const* h_tail_bytes, // [LOD_MAX_LEVELS] (NULL if page==0)
   struct aggregate_cpu_workspace* ws,
   struct aggregate_result* per_lod_results, // [layout->nlod]
   struct threadpool* pool);
