@@ -2,6 +2,8 @@
 #   Creates a STATIC library, exposes its headers, and links warnings.
 #   LINKS are added as PUBLIC dependencies.
 #   All targets get src/ as their single public include root.
+#   Each target is recorded in CHUCKY_INTERNAL_TARGETS so the aggregate
+#   library at the bottom of this file can collect its object files.
 set(_SRC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 function(add_src_lib TARGET)
     cmake_parse_arguments(ARG "" "" "SOURCES;LINKS" ${ARGN})
@@ -11,6 +13,7 @@ function(add_src_lib TARGET)
     if(ARG_LINKS)
         target_link_libraries(${TARGET} PUBLIC ${ARG_LINKS})
     endif()
+    set_property(GLOBAL APPEND PROPERTY CHUCKY_INTERNAL_TARGETS ${TARGET})
 endfunction()
 
 # --- Shared libraries (no CUDA dependency) ---
@@ -67,3 +70,55 @@ add_subdirectory(multiarray)
 add_subdirectory(zarr)
 add_subdirectory(ngff)
 add_subdirectory(hcs)
+
+# --- Aggregate library: chucky (GPU+CPU) or chucky-cpu (CPU only) ---
+# Merges all internal STATIC libs into one combined library, built as both
+# STATIC and SHARED. The same prefix installs one variant; consumers needing
+# both pull two derivations from the flake.
+
+set(CHUCKY_AGGREGATE_NAME chucky-cpu)
+if(CHUCKY_ENABLE_GPU)
+    set(CHUCKY_AGGREGATE_NAME chucky)
+endif()
+set(CHUCKY_AGGREGATE_NAME ${CHUCKY_AGGREGATE_NAME} PARENT_SCOPE)
+
+get_property(_chucky_internal GLOBAL PROPERTY CHUCKY_INTERNAL_TARGETS)
+list(
+    TRANSFORM _chucky_internal
+    REPLACE "(.+)" "$<TARGET_OBJECTS:\\1>"
+    OUTPUT_VARIABLE _chucky_objects
+)
+
+# Conditional deps via generator expressions — empty branches are dropped at
+# generation time without referencing missing targets.
+set(_with_blosc $<BOOL:${HAVE_BLOSC}>)
+set(_with_gpu $<BOOL:${CHUCKY_ENABLE_GPU}>)
+set(_chucky_public_deps
+    Threads::Threads
+    Lz4::Lz4
+    Zstd::Zstd
+    AWS::aws-c-s3
+    $<${_with_blosc}:Blosc::Blosc>
+    $<${_with_gpu}:CUDA::cuda_driver>
+    $<${_with_gpu}:CUDA::cudart_static>
+    $<${_with_gpu}:nvcomp::nvcomp>
+)
+
+foreach(_kind static shared)
+    string(TOUPPER ${_kind} _KIND)
+    add_library(${CHUCKY_AGGREGATE_NAME}-${_kind} ${_KIND} ${_chucky_objects})
+    set_target_properties(
+        ${CHUCKY_AGGREGATE_NAME}-${_kind}
+        PROPERTIES OUTPUT_NAME ${CHUCKY_AGGREGATE_NAME}
+    )
+    target_include_directories(
+        ${CHUCKY_AGGREGATE_NAME}-${_kind}
+        INTERFACE
+            $<BUILD_INTERFACE:${_SRC_INCLUDE_DIR}>
+            $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(
+        ${CHUCKY_AGGREGATE_NAME}-${_kind}
+        PUBLIC ${_chucky_public_deps}
+    )
+endforeach()

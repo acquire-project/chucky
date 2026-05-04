@@ -1,0 +1,9 @@
+libdir=@CMAKE_INSTALL_FULL_LIBDIR@
+includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
+
+Name: @CHUCKY_AGGREGATE_NAME@
+Description: chucky streaming zarr writer (@CHUCKY_VARIANT_DESCRIPTION@)
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -l@CHUCKY_AGGREGATE_NAME@
+Libs.private: @CHUCKY_PC_LIBS_PRIVATE@

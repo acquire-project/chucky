@@ -46,6 +46,68 @@
             };
           };
         };
+
+        # Shared dependency lists used by both devShell and the package builds.
+        lz4Static = pkgs.lz4.overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DBUILD_STATIC_LIBS=ON" ];
+        });
+        zstdStatic = pkgs.zstd.override { enableStatic = true; };
+
+        commonBuildInputs = with pkgs; [
+          c-blosc
+          lz4Static
+          zstdStatic
+          # s3 writer
+          aws-c-common
+          aws-c-cal
+          aws-c-io
+          aws-c-http
+          aws-c-auth
+          aws-c-s3
+          aws-c-compression
+          aws-c-sdkutils
+          aws-checksums
+          s2n-tls
+        ];
+        gpuBuildInputs = with pkgs; [
+          cudaPackages.cudatoolkit
+          cudaPackages.nvcomp
+          cudaPackages.nvcomp.static
+          llvmPackages.openmp
+        ];
+
+        commonNativeBuildInputs = with pkgs; [
+          cmake
+          ninja
+          pkg-config
+        ];
+
+        mkChucky =
+          {
+            variant, # "gpu" | "cpu"
+          }:
+          let
+            isGpu = variant == "gpu";
+            pname = if isGpu then "chucky" else "chucky-cpu";
+          in
+          pkgs.stdenv.mkDerivation {
+            inherit pname;
+            version = "0.1.0";
+            src = self;
+
+            nativeBuildInputs = commonNativeBuildInputs;
+            buildInputs = commonBuildInputs ++ pkgs.lib.optionals isGpu gpuBuildInputs;
+
+            cmakeFlags = [
+              "-DCHUCKY_ENABLE_GPU=${if isGpu then "ON" else "OFF"}"
+              "-DBUILD_TESTING=OFF"
+            ];
+
+            # Tests are disabled in the package builds; CI exercises them via the
+            # devShell. CMake still adds `enable_testing()` and the tests subdir,
+            # so we override CTest to no-op rather than touch the in-tree CMake.
+            doCheck = false;
+          };
       in
       {
         checks = {
@@ -53,6 +115,12 @@
         };
 
         formatter = pkgs.nixfmt-tree;
+
+        packages = {
+          chucky = mkChucky { variant = "gpu"; };
+          chucky-cpu = mkChucky { variant = "cpu"; };
+          default = mkChucky { variant = "gpu"; };
+        };
 
         devShells.default = pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
           name = "chucky";
@@ -63,49 +131,27 @@
             pkgs.zlib
           ];
 
-          nativeBuildInputs = with pkgs; [
-            cmake
-            claude-code.packages.${system}.default
-            docker
-            gdb
-            gh
-            man-pages
-            man-pages-posix
-            neocmakelsp
-            ninja
-            nixd
-            llvmPackages.llvm   # llvm-profdata, llvm-cov for coverage
-            perf
-            pkg-config
-            tmux
-            tokei
-            awscli2
-            python3
-            uv
-          ];
+          nativeBuildInputs =
+            commonNativeBuildInputs
+            ++ (with pkgs; [
+              claude-code.packages.${system}.default
+              docker
+              gdb
+              gh
+              man-pages
+              man-pages-posix
+              neocmakelsp
+              nixd
+              llvmPackages.llvm # llvm-profdata, llvm-cov for coverage
+              perf
+              tmux
+              tokei
+              awscli2
+              python3
+              uv
+            ]);
 
-          buildInputs = with pkgs; [
-            c-blosc
-            cudaPackages.cudatoolkit
-            cudaPackages.nvcomp
-            cudaPackages.nvcomp.static
-            llvmPackages.openmp
-            (lz4.overrideAttrs (old: {
-              cmakeFlags = (old.cmakeFlags or [ ]) ++ [ "-DBUILD_STATIC_LIBS=ON" ];
-            }))
-            (zstd.override { enableStatic = true; })
-            # s3 writer
-            aws-c-common
-            aws-c-cal
-            aws-c-io
-            aws-c-http
-            aws-c-auth
-            aws-c-s3
-            aws-c-compression
-            aws-c-sdkutils
-            aws-checksums
-            s2n-tls
-          ];
+          buildInputs = commonBuildInputs ++ gpuBuildInputs;
         };
       }
     );
