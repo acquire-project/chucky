@@ -99,11 +99,14 @@ platform_close(platform_fd fd)
 int
 platform_ftruncate(platform_fd fd, uint64_t logical_size)
 {
-  LARGE_INTEGER li;
-  li.QuadPart = (LONGLONG)logical_size;
-  if (!SetFilePointerEx(fd, li, NULL, FILE_BEGIN))
-    return -1;
-  if (!SetEndOfFile(fd))
+  // Use SetFileInformationByHandle rather than SetFilePointerEx + SetEndOfFile.
+  // SetFilePointerEx on a handle opened with FILE_FLAG_NO_BUFFERING requires a
+  // sector-aligned offset; the metadata path here does not. The tail-carry
+  // finalize truncates to a non-aligned logical size after a page-aligned
+  // bundle write, so the metadata path is the one that works.
+  FILE_END_OF_FILE_INFO info;
+  info.EndOfFile.QuadPart = (LONGLONG)logical_size;
+  if (!SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info)))
     return -1;
   return 0;
 }
