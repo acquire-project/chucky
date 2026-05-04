@@ -42,8 +42,12 @@ endif()
 include(CMakePackageConfigHelpers)
 set(_cmake_dir ${CMAKE_INSTALL_LIBDIR}/cmake/${CHUCKY_AGGREGATE_NAME})
 
+set(_chucky_install_targets ${CHUCKY_AGGREGATE_NAME}-static)
+if(CHUCKY_BUILD_SHARED)
+    list(APPEND _chucky_install_targets ${CHUCKY_AGGREGATE_NAME}-shared)
+endif()
 install(
-    TARGETS ${CHUCKY_AGGREGATE_NAME}-static ${CHUCKY_AGGREGATE_NAME}-shared
+    TARGETS ${_chucky_install_targets}
     EXPORT ${CHUCKY_AGGREGATE_NAME}Targets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

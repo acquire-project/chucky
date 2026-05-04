@@ -100,6 +100,7 @@
 
             cmakeFlags = [
               "-DCHUCKY_ENABLE_GPU=${if isGpu then "ON" else "OFF"}"
+              "-DCHUCKY_BUILD_SHARED=ON"
               "-DBUILD_TESTING=OFF"
             ];
 

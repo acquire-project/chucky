@@ -72,9 +72,12 @@ add_subdirectory(ngff)
 add_subdirectory(hcs)
 
 # --- Aggregate library: chucky (GPU+CPU) or chucky-cpu (CPU only) ---
-# Merges all internal STATIC libs into one combined library, built as both
-# STATIC and SHARED. The same prefix installs one variant; consumers needing
-# both pull two derivations from the flake.
+# Merges all internal STATIC libs into one combined library. The static
+# variant is always built; the shared variant is opt-in (CHUCKY_BUILD_SHARED)
+# because it requires every transitive dep to be -fPIC, which is not the
+# case for system static libs in the CI Docker images.
+
+option(CHUCKY_BUILD_SHARED "Build aggregate as a shared library too" OFF)
 
 set(CHUCKY_AGGREGATE_NAME chucky-cpu)
 if(CHUCKY_ENABLE_GPU)
@@ -104,7 +107,11 @@ set(_chucky_public_deps
     $<${_with_gpu}:nvcomp::nvcomp>
 )
 
-foreach(_kind static shared)
+set(_chucky_kinds static)
+if(CHUCKY_BUILD_SHARED)
+    list(APPEND _chucky_kinds shared)
+endif()
+foreach(_kind IN LISTS _chucky_kinds)
     string(TOUPPER ${_kind} _KIND)
     add_library(${CHUCKY_AGGREGATE_NAME}-${_kind} ${_KIND} ${_chucky_objects})
     set_target_properties(
