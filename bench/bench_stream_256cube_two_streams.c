@@ -17,7 +17,7 @@ main(int ac, char* av[])
                                   .dims = dims,
                                   .rank = rank,
                                   .chunk_ratios = ratios,
-                                  .target_chunk_bytes = 1 << 18,
+                                  .target_chunk_bytes = 1 << 20,
                                   .min_chunk_bytes = 1 << 14,
                                   .min_shard_bytes = 1ull << 30,
                                   .target_concurrent_shards = 16,
