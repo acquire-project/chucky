@@ -28,8 +28,11 @@ write_total_k(size_t* __restrict__ d_offsets,
 //   first chunk lands page-aligned. Stores one bias per (shard, gen) into
 //   d_per_gen_bias[s * max_gens + g]; apply_bias_per_gen_k looks up the
 //   correct entry per chunk.
-//   When requires_gen_pads is 0, behaves identically to the legacy single-
-//   bias path: bias_0 fills every gen slot.
+//
+// The pad recurrence  a[g+1] = align_up(end[g] + a[g], page) - end[g]  is a
+// scan with a non-additive associative operator. With max_gens typically
+// 2-4, parallelizing across gens within a shard is not worthwhile; one
+// thread per shard with a serial inner loop is fastest in practice.
 // ---------------------------------------------------------------------------
 __global__ void
 compute_bias_per_gen_k(size_t* __restrict__ d_per_gen_bias,
@@ -42,8 +45,7 @@ compute_bias_per_gen_k(size_t* __restrict__ d_per_gen_bias,
                        uint64_t max_gens,
                        uint64_t num_shards,
                        size_t shard_capacity,
-                       size_t page_size,
-                       int requires_gen_pads)
+                       size_t page_size)
 {
   const uint64_t s = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (s >= num_shards)
@@ -59,7 +61,7 @@ compute_bias_per_gen_k(size_t* __restrict__ d_per_gen_bias,
   for (uint64_t g = 0; g < max_gens; ++g)
     row[g] = bias_0;
 
-  if (!requires_gen_pads || max_gens <= 1 || cps_append == 0 || cps_inner == 0)
+  if (max_gens <= 1 || cps_append == 0 || cps_inner == 0)
     return;
 
   const uint64_t n_active = tps_group / cps_inner;
@@ -338,7 +340,6 @@ aggregate_batch_by_shard_async(void* d_compressed,
   const uint64_t cps_append = layout->chunks_per_shard_append;
   const uint64_t max_gens =
     layout->max_gens_per_batch > 0 ? layout->max_gens_per_batch : 1;
-  const int requires_gen_pads = layout->requires_gen_pads;
   const uint64_t tps_group = num_shards > 0 ? C / num_shards : 0;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
@@ -397,8 +398,7 @@ aggregate_batch_by_shard_async(void* d_compressed,
         max_gens,
         num_shards,
         shard_capacity,
-        page_size,
-        requires_gen_pads);
+        page_size);
     }
     // Pass 3b: apply per-(shard, gen) bias to each chunk's offset.
     {
@@ -440,11 +440,9 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                                     max_comp_chunk_bytes);
   }
 
-  // The next batch's compute_bias_per_gen_k / copy_leading_tail_k consume
-  // d_tail_bytes / d_tail_carry. Both are uploaded by the host after
-  // delivery (see flush.d2h_deliver.c) so the values reflect end-of-batch
-  // per-shard tails. Intra-batch gen boundaries are handled here by the
-  // per-gen bias instead of being baked into d_tail_bytes.
+  // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
+  // (flush.d2h_deliver.c). Intra-batch gen boundaries are handled here via
+  // the per-gen bias rather than baked into d_tail_bytes.
 
   return 0;
 

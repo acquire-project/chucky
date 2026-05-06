@@ -330,25 +330,22 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         goto Error;
       sink_bytes += level_bytes;
 
-      // Push the post-delivery tail state to the GPU so the next batch's
-      // compute_bias_k / copy_leading_tail_k see per-generation tails.  The
-      // host computed these correctly in deliver_to_shards_batch (it knows
-      // where shard generations begin and end); the GPU does not.
+      // Push host-computed post-delivery tail state to GPU. Host owns
+      // generation-boundary bookkeeping; GPU does not see it.
+      // Two bulk transfers (lengths + densely-packed tail bytes) regardless
+      // of shard count.
       if (lvl->d_tail_bytes && lvl->h_tail_bytes &&
           lvl->agg_layout.page_size > 0) {
         const uint64_t num_shards = lvl->agg_layout.num_shards;
-        const size_t page = lvl->agg_layout.page_size;
         CU(Error,
            cuMemcpyHtoD((CUdeviceptr)lvl->d_tail_bytes,
                         lvl->h_tail_bytes,
                         num_shards * sizeof(size_t)));
-        for (uint64_t si = 0; si < lvl->shard.shard_inner_count; ++si) {
-          const struct active_shard* sh = &lvl->shard.shards[si];
-          if (sh->tail_bytes > 0 && sh->tail_buf) {
-            CU(Error,
-               cuMemcpyHtoD(
-                 lvl->d_tail_carry + si * page, sh->tail_buf, sh->tail_bytes));
-          }
+        if (lvl->shard.tail_buf_pool && lvl->shard.tail_buf_pool_bytes > 0) {
+          CU(Error,
+             cuMemcpyHtoD(lvl->d_tail_carry,
+                          lvl->shard.tail_buf_pool,
+                          lvl->shard.tail_buf_pool_bytes));
         }
       }
 
