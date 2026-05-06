@@ -1,7 +1,13 @@
 # syntax=docker/dockerfile:1
 
-# CUDA 12.8 required for SM 100 (Blackwell) target
-FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+# CUDA major.minor.patch tag of the nvidia/cuda base image. SM 100 (Blackwell)
+# requires CUDA 12.8+; default is 13.2.1. Override with --build-arg to target
+# CUDA 12 (e.g. CUDA_VERSION=12.8.1 CUDA_MAJOR=12).
+ARG CUDA_VERSION=13.2.1
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04
+# Re-declare ARGs needed in subsequent layers; they are reset by FROM.
+ARG CUDA_MAJOR=13
+ARG NVCOMP_VERSION=5.1.0.21
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
@@ -48,7 +54,7 @@ RUN wget -qO /tmp/awscliv2.zip \
     && rm -rf /tmp/awscliv2.zip /tmp/aws
 
 RUN wget -qO /tmp/nvcomp.tar.xz \
-        "https://developer.download.nvidia.com/compute/nvcomp/redist/nvcomp/linux-x86_64/nvcomp-linux-x86_64-5.1.0.21_cuda12-archive.tar.xz" \
+        "https://developer.download.nvidia.com/compute/nvcomp/redist/nvcomp/linux-x86_64/nvcomp-linux-x86_64-${NVCOMP_VERSION}_cuda${CUDA_MAJOR}-archive.tar.xz" \
     && mkdir -p /opt/nvcomp \
     && tar -xJf /tmp/nvcomp.tar.xz -C /opt/nvcomp --strip-components=1 \
     && rm /tmp/nvcomp.tar.xz
