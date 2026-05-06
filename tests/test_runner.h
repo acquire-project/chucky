@@ -20,7 +20,7 @@
                                                                                \
     CU(RunGpuFail_, cuInit(0));                                                \
     CU(RunGpuFail_, cuDeviceGet(&dev_, 0));                                    \
-    CU(RunGpuFail_, cuCtxCreate(&ctx_, 0, dev_));                              \
+    CU(RunGpuFail_, cu_ctx_create(&ctx_, 0, dev_));                              \
                                                                                \
     int rc_ = 0;                                                               \
     struct                                                                     \

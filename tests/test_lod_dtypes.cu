@@ -496,7 +496,7 @@ main(void)
   CUdevice dev;
   CUcontext ctx;
   if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&dev, 0) != CUDA_SUCCESS ||
-      cuCtxCreate(&ctx, 0, dev) != CUDA_SUCCESS) {
+      cu_ctx_create(&ctx, 0, dev) != CUDA_SUCCESS) {
     log_error("CUDA init failed");
     return 1;
   }

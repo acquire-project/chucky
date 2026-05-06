@@ -720,7 +720,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     CUdevice dev;
     CU(Fail, cuInit(0));
     CU(Fail, cuDeviceGet(&dev, 0));
-    CU(Fail, cuCtxCreate(&ctx, 0, dev));
+    CU(Fail, cu_ctx_create(&ctx, 0, dev));
   }
 
   struct bench_config cfg = {
@@ -1098,7 +1098,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   CUcontext ctx = 0;
   CU(Fail, cuInit(0));
   CU(Fail, cuDeviceGet(&dev, 0));
-  CU(Fail, cuCtxCreate(&ctx, 0, dev));
+  CU(Fail, cu_ctx_create(&ctx, 0, dev));
 
   struct bench_config cfg = {
     .label = spec.label,
