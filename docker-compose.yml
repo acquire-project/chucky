@@ -17,7 +17,14 @@ services:
       retries: 5
 
   test:
-    build: .
+    build:
+      context: .
+      args:
+        # Defaults match the Dockerfile (CUDA 13.2). CI overrides via env vars
+        # to exercise the CUDA 12 build path on the same self-hosted runner.
+        CUDA_VERSION: ${CUDA_VERSION:-13.2.1}
+        CUDA_MAJOR: ${CUDA_MAJOR:-13}
+        NVCOMP_VERSION: ${NVCOMP_VERSION:-5.1.0.21}
     devices:
       - nvidia.com/gpu=all
     depends_on:

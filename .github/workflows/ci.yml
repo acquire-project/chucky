@@ -171,10 +171,20 @@ jobs:
 
   gpu-tests:
     runs-on: [self-hosted, Linux, gpu]
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda:
+          - { major: 13, version: 13.2.1 }
+          - { major: 12, version: 12.8.1 }
+    name: gpu-tests (cuda${{ matrix.cuda.major }})
+    env:
+      CUDA_VERSION: ${{ matrix.cuda.version }}
+      CUDA_MAJOR: ${{ matrix.cuda.major }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test (GPU)
+      - name: Build and test (GPU, CUDA ${{ matrix.cuda.version }})
         run: docker compose run --rm test
 
       - name: Cleanup
