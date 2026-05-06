@@ -294,8 +294,9 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   //    next batch's leading tail rolls forward via deliver_to_shards_batch.
   //    pad_shard_sizes is intentionally skipped — padding is replaced by
   //    bias-anchored offsets and per-gen page advances.
-  //  - legacy (page_size == 0): contiguous prefix-sum across the LOD's
+  //  - contiguous (page_size == 0): single prefix-sum across the LOD's
   //    range, anchored at seg->data_segment_offset (absolute in ws->data).
+  //    Used when the sink has no alignment requirement.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct lod_segment* seg = &layout->lods[lv];
     if (seg->n_active == 0)

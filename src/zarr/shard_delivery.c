@@ -283,18 +283,20 @@ deliver_run_nonfinalizing(struct active_shard* sh,
   return 0;
 }
 
-// Legacy contiguous-offsets path (page_size == 0): single write of the run's
-// concatenated chunks, then index recording, then cursor advance.
+// Non-carry-over path: agg buffer is a single contiguous prefix-sum across
+// all shards (no per-shard regions, no leading-tail). One write per run, then
+// index recording, then cursor advance. Used whenever the sink has no
+// alignment requirement (buffered FS, S3, in-memory).
 static int
-deliver_run_legacy(struct active_shard* sh,
-                   const struct aggregate_result* result,
-                   uint64_t j_run_start,
-                   uint64_t j_run_end,
-                   uint32_t run_len,
-                   uint64_t eis_start,
-                   uint64_t cps_inner,
-                   size_t sa,
-                   size_t* total_bytes)
+deliver_run_contiguous(struct active_shard* sh,
+                       const struct aggregate_result* result,
+                       uint64_t j_run_start,
+                       uint64_t j_run_end,
+                       uint32_t run_len,
+                       uint64_t eis_start,
+                       uint64_t cps_inner,
+                       size_t sa,
+                       size_t* total_bytes)
 {
   size_t run_bytes = result->offsets[j_run_end] - result->offsets[j_run_start];
   if (run_bytes > 0) {
@@ -451,15 +453,15 @@ deliver_to_shards_batch(uint8_t level,
           bytes_consumed[si] = align_up(bytes_consumed[si], page_size);
       } else {
         CHECK(Error,
-              deliver_run_legacy(sh,
-                                 result,
-                                 j_run_start,
-                                 j_run_end,
-                                 run_len,
-                                 ss->epoch_in_shard,
-                                 cps_inner,
-                                 sa,
-                                 &total_bytes) == 0);
+              deliver_run_contiguous(sh,
+                                     result,
+                                     j_run_start,
+                                     j_run_end,
+                                     run_len,
+                                     ss->epoch_in_shard,
+                                     cps_inner,
+                                     sa,
+                                     &total_bytes) == 0);
       }
     }
 

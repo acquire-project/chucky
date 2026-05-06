@@ -806,9 +806,7 @@ Fail:
 
 // Tail-carryover invariant on the CPU pipeline. With a page-aligned
 // (unbuffered) sink, on-disk shard size MUST equal Σ chunk_nbytes + index +
-// crc — no inter-batch zero padding. The CPU pipeline currently passes
-// NULL/NULL to deliver_to_shards_batch (falling through to the legacy
-// padded path), so this test fails until CPU carryover is wired up.
+// crc — no inter-batch zero padding.
 static int
 test_unbuffered_invariant(const char* tmpdir)
 {

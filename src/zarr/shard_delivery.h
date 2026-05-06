@@ -45,7 +45,7 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment);
 // h_tail_bytes: [num_shards] per-shard ragged-tail length carried across
 // batches;
 //   read for this batch's leading-tail accounting and updated post-batch.
-//   May be NULL when layout->page_size == 0 (legacy contiguous path).
+//   May be NULL when layout->page_size == 0 (no-alignment contiguous path).
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
