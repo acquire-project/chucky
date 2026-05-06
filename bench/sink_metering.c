@@ -39,6 +39,13 @@ metering_write_direct(struct shard_writer* self,
 }
 
 static int
+metering_truncate(struct shard_writer* self, uint64_t logical_size)
+{
+  struct metering_writer* w = (struct metering_writer*)self;
+  return w->inner->truncate(w->inner, logical_size);
+}
+
+static int
 metering_finalize(struct shard_writer* self)
 {
   struct metering_writer* w = (struct metering_writer*)self;
@@ -61,6 +68,7 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
       ms->writers[i].inner = inner;
       ms->writers[i].base.write_direct =
         inner->write_direct ? metering_write_direct : NULL;
+      ms->writers[i].base.truncate = inner->truncate ? metering_truncate : NULL;
       return &ms->writers[i].base;
     }
   }
