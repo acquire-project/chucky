@@ -103,6 +103,10 @@ compress_agg_init(struct compress_agg_stage* stage,
     const struct level_layout_info* li = &cl->per_level[lv];
 
     stage->levels[lv].agg_layout = li->agg_layout;
+    // GPU bias kernels pad intra-batch generation boundaries up to a page,
+    // matching the CPU aggregator. Deliver consumes this flag to advance
+    // bytes_consumed[si] over the agg-buffer pad after each finalizing run.
+    stage->levels[lv].agg_layout.requires_gen_pads = 1;
     CHECK(Fail, aggregate_layout_upload(&stage->levels[lv].agg_layout) == 0);
 
     stage->levels[lv].batch_active_count = li->batch_active_count;
@@ -116,6 +120,7 @@ compress_agg_init(struct compress_agg_stage* stage,
     size_t batch_agg_bytes = agg_pool_bytes_layout(&li->agg_layout);
 
     const uint64_t num_shards = li->agg_layout.num_shards;
+    const uint64_t max_gens = li->agg_layout.max_gens_per_batch;
 
     for (int i = 0; i < 2; ++i) {
       CHECK(Fail,
@@ -123,6 +128,7 @@ compress_agg_init(struct compress_agg_stage* stage,
                                       batch_chunks,
                                       batch_covering,
                                       num_shards,
+                                      max_gens,
                                       batch_agg_bytes) == 0);
       CU(Fail, cuEventRecord(stage->levels[lv].agg[i].ready, compute));
     }
@@ -380,6 +386,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
             agg,
             lvl->d_tail_bytes,
             lvl->d_tail_carry,
+            lvl->shard.epoch_in_shard,
             compress_stream) == 0);
   }
 

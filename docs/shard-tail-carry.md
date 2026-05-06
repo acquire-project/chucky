@@ -128,12 +128,13 @@ align_up(total_run_gen0, page)` is page-aligned and the run takes
 `write_direct` like every other non-finalizing run. No copying-write
 fallback for steady-state delivery.
 
-The GPU aggregator (`aggregate.cu`) does not yet pad gen boundaries — it
-leaves `requires_gen_pads = 0` on the layout, so deliver does NOT advance
-`bytes_consumed[si]` over a non-existent pad. Post-finalize runs on the GPU
-path remain non-page-aligned and fall back to the copying `write` path; the
-GPU port of the pad logic is a separate follow-up tracked in the plan
-section below.
+The GPU aggregator (`aggregate.cu`) pads gen boundaries the same way: the
+`compute_bias_per_gen_k` kernel walks each shard serially, accumulates a
+per-gen pad up to the next page, and writes one bias entry per `(shard, gen)`
+into `d_per_gen_bias`. `apply_bias_per_gen_k` looks up the right entry per
+chunk via `gen_of(j) = (epoch_in_shard + active_epoch_of(j)) / cps_append`.
+The GPU path therefore also flips `requires_gen_pads = 1` on its layouts,
+matching the CPU.
 
 ## Async coupling
 
@@ -144,21 +145,3 @@ to drain. That's why `write_direct` can return immediately while the source
 buffer (the aggregated workspace) stays alive — slot rotation is gated by the
 fence, not by the write call.
 
----
-
-# GPU follow-up
-
-The CPU aggregator now pads intra-batch generation boundaries up to the
-next page so deliver always takes `write_direct`. The GPU side
-(`aggregate.cu`: `compute_bias_k` / `apply_bias_k`) still produces
-gen-tight, unpadded layouts — every shard places gen `g+1`'s first chunk
-immediately after gen `g`'s last chunk inside the same shard region. When
-`epochs_per_batch > chunks_per_shard_append`, the GPU's post-finalize runs
-fall back to the copying `write` path.
-
-To bring the GPU to parity, the bias kernels need to become gen-aware along
-the same lines as the CPU prefix-sum: walk per-shard, compute bias =
-`shard_base + tail_in + sum(per-gen pad)`, and have deliver flip the
-`requires_gen_pads` flag on the layout. The CPU edit can ship independently;
-the GPU port carries the same risk profile (small edit, no on-disk format
-change, no async coupling change).

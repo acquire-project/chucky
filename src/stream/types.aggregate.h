@@ -52,6 +52,12 @@ extern "C"
     // aligned src. The CPU aggregator sets this; the GPU path leaves it 0
     // and falls back to a copying write for post-finalize runs.
     int requires_gen_pads;
+    // Worst-case number of shard generations a single batch can straddle:
+    //   ceil(active_count_max / chunks_per_shard_append) + 1
+    // The +1 covers a partial gen at the front when epoch_in_shard at batch
+    // start is non-zero. Used by the GPU bias kernels to size per-(shard,gen)
+    // bias tables; matches the pad reservation in shard_capacity.
+    uint64_t max_gens_per_batch;
   };
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).

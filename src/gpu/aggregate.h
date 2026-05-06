@@ -25,8 +25,11 @@ extern "C"
     void* h_aggregated;       // host pinned: comp_pool_bytes
     size_t* h_offsets;        // host pinned: (C+1) size_t
     size_t* h_permuted_sizes; // host pinned: C size_t (real, pre-padding)
-    size_t* d_bias;           // device: num_shards size_t (compute_bias_k)
-    void* d_temp;             // CUB scratch
+    // device: num_shards * max_gens size_t. compute_bias_per_gen_k writes one
+    // bias per (shard, generation); apply_bias_per_gen_k looks up the right
+    // entry per chunk.
+    size_t* d_per_gen_bias;
+    void* d_temp; // CUB scratch
     size_t temp_bytes;
     CUevent ready;           // D2H completion
     struct io_event io_done; // tracks IO completion from this slot's data
@@ -44,16 +47,19 @@ extern "C"
                                 uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,
                                 uint64_t num_shards,
+                                uint64_t max_gens,
                                 size_t comp_pool_bytes);
 
   // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
-  //   by compute_bias_k for this batch's leading-tail accounting. The host
-  //   uploads the post-delivery values after every batch so the contents
-  //   reflect per-shard-generation tails (the GPU has no view of generation
-  //   boundaries within a batch and so cannot compute them itself).
+  //   by compute_bias_per_gen_k for this batch's leading-tail accounting. The
+  //   host uploads the post-delivery values after every batch so the contents
+  //   reflect per-shard-generation tails (the GPU advances them at intra-batch
+  //   gen boundaries via per-(shard, gen) bias entries).
   // d_tail_carry: persistent per-LOD device buffer of num_shards * page_size
   //   bytes; holds the actual ragged tail bytes between batches. Same
   //   uploaded-by-host invariant as d_tail_bytes.
+  // epoch_in_shard: shard's append-dim epoch position at batch start; used by
+  //   the bias kernels to know which active epoch crosses a gen boundary.
   int aggregate_batch_by_shard_async(void* d_compressed,
                                      size_t* d_comp_sizes,
                                      const uint32_t* d_batch_gather,
@@ -65,6 +71,7 @@ extern "C"
                                      struct aggregate_slot* slot,
                                      size_t* d_tail_bytes,
                                      CUdeviceptr d_tail_carry,
+                                     uint64_t epoch_in_shard,
                                      CUstream stream);
 
 #ifdef __cplusplus

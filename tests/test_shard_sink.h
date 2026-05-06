@@ -34,6 +34,10 @@ struct test_shard_sink
   int open_count;
   int finalize_count;
   int update_append_count;
+  // Counts write_direct vs write calls so tests can verify the deliver path
+  // takes the zero-copy direct path on aligned runs.
+  int write_count;
+  int write_direct_count;
 };
 
 // Initialize a multi-level sink.

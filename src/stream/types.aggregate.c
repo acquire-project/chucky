@@ -273,20 +273,23 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   layout->chunks_per_shard_append = chunks_per_shard_append;
   layout->requires_gen_pads = 0;
 
+  // Worst-case shard generations a single batch can straddle. The +1
+  // accounts for a partial gen at the front when epoch_in_shard at batch
+  // start is non-zero.
+  {
+    uint64_t cps_app =
+      chunks_per_shard_append > 0 ? chunks_per_shard_append : 1;
+    uint64_t active = active_count_max > 0 ? active_count_max : 1;
+    layout->max_gens_per_batch = (active + cps_app - 1) / cps_app + 1;
+  }
+
   // Per-shard reservation in d_aggregated: enough room for the worst-case
   // batch plus inter-gen padding when the aggregator inserts it. Worst case:
   // a leading tail (< page) at the start, real chunk bytes, and one page of
-  // pad after each generation that completes inside the batch. With
-  // active_count_max epochs and chunks_per_shard_append epochs per gen, the
-  // batch can straddle ceil(active_count_max / cps_append) + 1 generations
-  // (the +1 covers a partial gen at the front when epoch_in_shard at the
-  // batch start is non-zero), giving up to that many extra pages.
+  // pad after each generation that completes inside the batch.
   if (page_size > 0 && active_count_max > 0) {
     size_t worst = (size_t)active_count_max * cps_inner * max_comp_chunk_bytes;
-    uint64_t cps_app =
-      chunks_per_shard_append > 0 ? chunks_per_shard_append : 1;
-    uint64_t max_gens = (active_count_max + cps_app - 1) / cps_app + 1;
-    size_t extra = (size_t)max_gens * page_size;
+    size_t extra = (size_t)layout->max_gens_per_batch * page_size;
     layout->shard_capacity = align_up(worst + extra, page_size);
   } else {
     layout->shard_capacity = 0;

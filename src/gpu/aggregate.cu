@@ -20,44 +20,98 @@ write_total_k(size_t* __restrict__ d_offsets,
 }
 
 // ---------------------------------------------------------------------------
-// Kernel: compute_bias_k
-//   Thread s computes the per-shard offset bias used to land chunks at
-//     d_aggregated[shard_base[s] + tail_bytes_prev[s] + within_shard_offset]
-//   given that the exclusive prefix sum produced tight (unpadded) cumulative
-//   offsets. shard_base[s] = s * shard_capacity is page-aligned by
-//   construction. bias[s] = s * shard_capacity + tail_bytes_prev[s] -
-//   d_offsets[s * tps_group]
+// Kernel: compute_bias_per_gen_k
+//   Thread s walks shard s's chunks serially, anchoring gen 0 at
+//     bias_0 = s * shard_capacity + tail_bytes_prev[s] - d_offsets[base]
+//   and at every intra-batch generation boundary (epoch_in_shard rolls over
+//   cps_append) advances the cursor up to the next page so the next gen's
+//   first chunk lands page-aligned. Stores one bias per (shard, gen) into
+//   d_per_gen_bias[s * max_gens + g]; apply_bias_per_gen_k looks up the
+//   correct entry per chunk.
+//   When requires_gen_pads is 0, behaves identically to the legacy single-
+//   bias path: bias_0 fills every gen slot.
 // ---------------------------------------------------------------------------
 __global__ void
-compute_bias_k(size_t* __restrict__ d_bias,
-               const size_t* __restrict__ d_offsets,
-               const size_t* __restrict__ d_tail_bytes_prev,
-               uint64_t tps_group,
-               uint64_t num_shards,
-               size_t shard_capacity)
+compute_bias_per_gen_k(size_t* __restrict__ d_per_gen_bias,
+                       const size_t* __restrict__ d_offsets,
+                       const size_t* __restrict__ d_tail_bytes_prev,
+                       uint64_t tps_group,
+                       uint64_t cps_inner,
+                       uint64_t cps_append,
+                       uint64_t epoch_in_shard,
+                       uint64_t max_gens,
+                       uint64_t num_shards,
+                       size_t shard_capacity,
+                       size_t page_size,
+                       int requires_gen_pads)
 {
-  uint64_t s = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  const uint64_t s = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (s >= num_shards)
     return;
-  d_bias[s] =
-    s * shard_capacity + d_tail_bytes_prev[s] - d_offsets[s * tps_group];
+
+  const uint64_t base = s * tps_group;
+  const size_t shard_base = s * shard_capacity;
+  const size_t tail_in = d_tail_bytes_prev[s];
+  const size_t base_off = d_offsets[base];
+  const size_t bias_0 = shard_base + tail_in - base_off;
+
+  size_t* row = d_per_gen_bias + s * max_gens;
+  for (uint64_t g = 0; g < max_gens; ++g)
+    row[g] = bias_0;
+
+  if (!requires_gen_pads || max_gens <= 1 || cps_append == 0 || cps_inner == 0)
+    return;
+
+  const uint64_t n_active = tps_group / cps_inner;
+  size_t cumulative_pad = 0;
+  uint64_t e = epoch_in_shard;
+  uint64_t gen = 0;
+
+  for (uint64_t ai = 0; ai < n_active; ++ai) {
+    e += 1;
+    if (e == cps_append) {
+      e = 0;
+      gen += 1;
+      if (gen >= max_gens)
+        break;
+      const uint64_t end_chunk = base + (ai + 1) * cps_inner;
+      const size_t pos_in_shard =
+        (d_offsets[end_chunk] - base_off) + tail_in + cumulative_pad;
+      const size_t aligned =
+        ((pos_in_shard + page_size - 1) / page_size) * page_size;
+      cumulative_pad += aligned - pos_in_shard;
+      row[gen] = bias_0 + cumulative_pad;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Kernel: apply_bias_k
-//   Thread j adds d_bias[j / tps_group] to d_offsets[j], shifting all chunks
-//   in shard s into their final positions in d_aggregated.
+// Kernel: apply_bias_per_gen_k
+//   Thread j adds d_per_gen_bias[s][gen_of(j)] to d_offsets[j], landing
+//   chunks at their final positions in d_aggregated. Generation index is
+//     gen_of(j) = (epoch_in_shard + active_epoch_of(j)) / cps_append
 // ---------------------------------------------------------------------------
 __global__ void
-apply_bias_k(size_t* __restrict__ d_offsets,
-             const size_t* __restrict__ d_bias,
-             uint64_t tps_group,
-             uint64_t C)
+apply_bias_per_gen_k(size_t* __restrict__ d_offsets,
+                     const size_t* __restrict__ d_per_gen_bias,
+                     uint64_t tps_group,
+                     uint64_t cps_inner,
+                     uint64_t cps_append,
+                     uint64_t epoch_in_shard,
+                     uint64_t max_gens,
+                     uint64_t C)
 {
-  uint64_t j = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  const uint64_t j = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (j >= C)
     return;
-  d_offsets[j] += d_bias[j / tps_group];
+
+  const uint64_t s = j / tps_group;
+  const uint64_t j_in_shard = j - s * tps_group;
+  const uint64_t ai = cps_inner > 0 ? j_in_shard / cps_inner : 0;
+  uint64_t gen = cps_append > 0 ? (epoch_in_shard + ai) / cps_append : 0;
+  if (gen >= max_gens)
+    gen = max_gens - 1;
+  d_offsets[j] += d_per_gen_bias[s * max_gens + gen];
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +200,7 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_perm);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
-  cuMemFree((CUdeviceptr)slot->d_bias);
+  cuMemFree((CUdeviceptr)slot->d_per_gen_bias);
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
@@ -208,6 +262,7 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_chunk_count,
                           uint64_t batch_covering_count,
                           uint64_t num_shards,
+                          uint64_t max_gens,
                           size_t comp_pool_bytes)
 {
   uint64_t C = batch_covering_count;
@@ -224,8 +279,10 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_perm, M * sizeof(uint32_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
   if (num_shards > 0) {
+    const uint64_t bias_entries = num_shards * (max_gens > 0 ? max_gens : 1);
     CU(Error,
-       cuMemAlloc((CUdeviceptr*)&slot->d_bias, num_shards * sizeof(size_t)));
+       cuMemAlloc((CUdeviceptr*)&slot->d_per_gen_bias,
+                  bias_entries * sizeof(size_t)));
   }
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
   CU(Error,
@@ -269,6 +326,7 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                struct aggregate_slot* slot,
                                size_t* d_tail_bytes,
                                CUdeviceptr d_tail_carry,
+                               uint64_t epoch_in_shard,
                                CUstream stream)
 {
   const uint64_t N = batch_chunk_count;
@@ -276,6 +334,11 @@ aggregate_batch_by_shard_async(void* d_compressed,
   const uint64_t num_shards = layout->num_shards;
   const size_t page_size = layout->page_size;
   const size_t shard_capacity = layout->shard_capacity;
+  const uint64_t cps_inner = layout->cps_inner;
+  const uint64_t cps_append = layout->chunks_per_shard_append;
+  const uint64_t max_gens =
+    layout->max_gens_per_batch > 0 ? layout->max_gens_per_batch : 1;
+  const int requires_gen_pads = layout->requires_gen_pads;
   const uint64_t tps_group = num_shards > 0 ? C / num_shards : 0;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
@@ -317,24 +380,39 @@ aggregate_batch_by_shard_async(void* d_compressed,
   }
 
   if (page_size > 0 && num_shards > 0) {
-    // Pass 3a: per-shard bias (relocates each shard's chunks into its
-    // shard_capacity-sized region with leading-tail headroom).
+    // Pass 3a: per-(shard, gen) bias. Anchors each shard's gen 0 at
+    // s*shard_capacity + tail_in and pads up to a page at every intra-batch
+    // gen boundary so the next gen's first chunk lands page-aligned.
     {
       const int block = 128;
       const int grid = (int)((num_shards + block - 1) / block);
-      compute_bias_k<<<grid, block, 0, cuda_stream>>>(slot->d_bias,
-                                                      slot->d_offsets,
-                                                      d_tail_bytes,
-                                                      tps_group,
-                                                      num_shards,
-                                                      shard_capacity);
+      compute_bias_per_gen_k<<<grid, block, 0, cuda_stream>>>(
+        slot->d_per_gen_bias,
+        slot->d_offsets,
+        d_tail_bytes,
+        tps_group,
+        cps_inner,
+        cps_append,
+        epoch_in_shard,
+        max_gens,
+        num_shards,
+        shard_capacity,
+        page_size,
+        requires_gen_pads);
     }
-    // Pass 3b: apply bias to each chunk's offset.
+    // Pass 3b: apply per-(shard, gen) bias to each chunk's offset.
     {
       const int block = 256;
       const int grid = (int)((C + block - 1) / block);
-      apply_bias_k<<<grid, block, 0, cuda_stream>>>(
-        slot->d_offsets, slot->d_bias, tps_group, C);
+      apply_bias_per_gen_k<<<grid, block, 0, cuda_stream>>>(
+        slot->d_offsets,
+        slot->d_per_gen_bias,
+        tps_group,
+        cps_inner,
+        cps_append,
+        epoch_in_shard,
+        max_gens,
+        C);
     }
     // Pass 3c: stage prior batch's ragged tail at the head of each shard's
     // region so chunks pack just past it.
@@ -362,11 +440,11 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                                     max_comp_chunk_bytes);
   }
 
-  // The next batch's compute_bias_k / copy_leading_tail_k consume
+  // The next batch's compute_bias_per_gen_k / copy_leading_tail_k consume
   // d_tail_bytes / d_tail_carry. Both are uploaded by the host after
-  // delivery (see flush.d2h_deliver.c) so the values reflect per-shard-
-  // generation tails — the GPU has no view of where shard generations
-  // begin and end within a batch and so cannot compute them itself.
+  // delivery (see flush.d2h_deliver.c) so the values reflect end-of-batch
+  // per-shard tails. Intra-batch gen boundaries are handled here by the
+  // per-gen bias instead of being baked into d_tail_bytes.
 
   return 0;
 

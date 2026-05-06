@@ -74,6 +74,7 @@ struct pool_maxima
     uint64_t batch_chunks;
     uint64_t batch_covering;
     uint64_t num_shards;
+    uint64_t max_gens;
     size_t batch_agg_bytes;
     uint64_t lut_len;
   } level[LOD_MAX_LEVELS];
@@ -318,6 +319,10 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
     desc->agg_layout[lv] = li->agg_layout;
+    // GPU bias kernels pad intra-batch generation boundaries up to a page,
+    // matching the CPU aggregator. Deliver consumes this flag to advance
+    // bytes_consumed[si] over the agg-buffer pad after each finalizing run.
+    desc->agg_layout[lv].requires_gen_pads = 1;
     desc->batch_active_count[lv] = li->batch_active_count;
 
     uint32_t slot_count =
@@ -334,6 +339,8 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
       max_u64(mx->level[lv].batch_covering, batch_covering);
     mx->level[lv].num_shards =
       max_u64(mx->level[lv].num_shards, li->agg_layout.num_shards);
+    mx->level[lv].max_gens =
+      max_u64(mx->level[lv].max_gens, li->agg_layout.max_gens_per_batch);
     mx->level[lv].batch_agg_bytes =
       max_sz(mx->level[lv].batch_agg_bytes, batch_agg_bytes);
     mx->level[lv].lut_len = max_u64(mx->level[lv].lut_len, batch_chunks);
@@ -462,6 +469,7 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                                         mx->level[lv].batch_chunks,
                                         mx->level[lv].batch_covering,
                                         mx->level[lv].num_shards,
+                                        mx->level[lv].max_gens,
                                         mx->level[lv].batch_agg_bytes) == 0);
         CU(Fail, cuEventRecord(lvl->agg[fc].ready, e->streams.compute));
       }

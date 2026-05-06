@@ -1259,16 +1259,26 @@ test_tail_carry_cross_generation(void)
 {
   log_info("=== test_tail_carry_cross_generation ===");
 
+  // Chunk size is chosen to span just over one page (2049 * 2 == 4098 bytes
+  // per chunk) so that:
+  //  - gen 0's three chunks (12294 bytes) do NOT land on a page boundary,
+  //    forcing the GPU bias kernel's intra-batch gen pad to engage;
+  //  - gen 1's first chunk in batch 0 (4098 bytes) is large enough that
+  //    deliver's nonfinalizing write covers a whole page, so write_direct
+  //    fires when the agg buffer's gen-1 src is page-aligned.
+  const size_t kChunkX = 2049;
+  const size_t kChunkBytes = kChunkX * sizeof(uint16_t); // 4098
+
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
   sink.shard_alignment = 4096;
 
   struct dimension dims[2];
-  dims_create(dims, "yx", (uint64_t[]){ 6, 2 });
-  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, 2 });
+  dims_create(dims, "yx", (uint64_t[]){ 6, kChunkX });
+  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, kChunkX });
   dims_set_shard_counts(dims, 2, (uint64_t[]){ 2, 1 });
   struct tile_stream_configuration config = {
-    .buffer_capacity_bytes = 4096,
+    .buffer_capacity_bytes = 32768,
     .dtype = dtype_u16,
     .rank = 2,
     .dimensions = dims,
@@ -1285,12 +1295,13 @@ test_tail_carry_cross_generation(void)
 
   struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
 
-  // 6 epochs * 2 elements/epoch = 12 elements total. Use distinct fill
-  // values so we can detect cross-batch contamination.
+  // 6 epochs * kChunkX elements/epoch. Use distinct fill values so we can
+  // detect cross-batch contamination.
   for (int e = 0; e < 6; ++e)
-    CHECK(Fail,
-          write_fill(w, 0, 2, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
-            multiarray_writer_ok);
+    CHECK(
+      Fail,
+      write_fill(w, 0, kChunkX, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
+        multiarray_writer_ok);
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
@@ -1323,16 +1334,16 @@ test_tail_carry_cross_generation(void)
                 index_total);
       goto Fail;
     }
-    // Decompress-free check (CODEC_NONE): each chunk is 2 elements * 2 bytes.
+    // Decompress-free check (CODEC_NONE): each chunk is kChunkBytes bytes.
     // Shard i covers epochs [i*3 .. i*3+3); chunk j inside shard => epoch
     // i*3+j; fill byte = 0x10 + (i*3 + j).
     for (int j = 0; j < chunks_per_shard_total; ++j) {
-      CHECK(Fail, chunk_szs[j] == 4);
+      CHECK(Fail, chunk_szs[j] == kChunkBytes);
       const uint8_t* p = sw->buf + chunk_offs[j];
       uint8_t expected = (uint8_t)(0x10 + i * 3 + j);
-      for (int b = 0; b < 4; ++b) {
+      for (size_t b = 0; b < kChunkBytes; ++b) {
         if (p[b] != expected) {
-          log_error("  shard %d chunk %d byte %d: got 0x%02x want 0x%02x",
+          log_error("  shard %d chunk %d byte %zu: got 0x%02x want 0x%02x",
                     i,
                     j,
                     b,
@@ -1345,7 +1356,19 @@ test_tail_carry_cross_generation(void)
     found++;
   }
   CHECK(Fail, found == 2);
-  log_info("  PASS (%d shards verified)", found);
+  // batch 0 spans shard 0's gen 0 (3 chunks, finalize) and shard 1's gen 0
+  // first chunk (4098 bytes, nonfinalizing). The GPU's per-(shard,gen) bias
+  // kernel pads gen 0 up to a page so gen 1's src in the agg buffer is
+  // page-aligned, which lets deliver's nonfinalizing write take write_direct.
+  if (sink.write_direct_count == 0) {
+    log_error("  expected write_direct calls on post-finalize runs (write=%d)",
+              sink.write_count);
+    goto Fail;
+  }
+  log_info("  PASS (%d shards verified, write_direct=%d, write=%d)",
+           found,
+           sink.write_direct_count,
+           sink.write_count);
 
   multiarray_tile_stream_gpu_destroy(ms);
   test_sink_free(&sink);
