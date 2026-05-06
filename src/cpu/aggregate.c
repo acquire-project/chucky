@@ -283,10 +283,12 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   //  - carry-over (page_size > 0): each shard owns a fixed page-aligned
   //    region of `shard_capacity` bytes. First chunk in shard si is anchored
   //    at `si * shard_capacity + h_tail_bytes[lv][si]` (relative to the LOD
-  //    segment start). Chunks pack tightly within the region; the next
-  //    batch's leading tail rolls forward via deliver_to_shards_batch.
+  //    segment start). Chunks within a single generation pack tightly; at
+  //    every intra-batch generation boundary the cursor is advanced up to
+  //    the next page so the next gen's first chunk is page-aligned. The
+  //    next batch's leading tail rolls forward via deliver_to_shards_batch.
   //    pad_shard_sizes is intentionally skipped — padding is replaced by
-  //    bias-anchored offsets.
+  //    bias-anchored offsets and per-gen page advances.
   //  - legacy (page_size == 0): contiguous prefix-sum across the LOD's
   //    range, anchored at seg->data_segment_offset (absolute in ws->data).
   for (uint8_t lv = 0; lv < nlod; ++lv) {
@@ -297,18 +299,39 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
     if (use_carryover) {
       const size_t shard_capacity = per_lod_layouts[lv].shard_capacity;
+      const size_t page = layout->page_size;
       const uint64_t cps_inner = seg->chunks_per_shard_inner;
-      const uint64_t tps_group = (uint64_t)seg->n_active * cps_inner;
       const uint64_t num_shards =
         cps_inner > 0 ? seg->covering_count / cps_inner : 0;
+      const struct shard_state* ss = shards_by_lod ? shards_by_lod[lv] : NULL;
+      const uint64_t cps_append =
+        ss ? ss->chunks_per_shard_append
+           : per_lod_layouts[lv].chunks_per_shard_append;
+      const uint64_t e0 = ss ? ss->epoch_in_shard : 0;
+      const uint32_t n_active = seg->n_active;
       for (uint64_t si = 0; si < num_shards; ++si) {
-        const uint64_t base_si = base + si * tps_group;
+        const uint64_t base_si = base + si * (uint64_t)n_active * cps_inner;
         const size_t tail_in =
           (h_tail_bytes && h_tail_bytes[lv]) ? h_tail_bytes[lv][si] : 0;
-        ws->offsets[base_si] = (size_t)si * shard_capacity + tail_in;
-        for (uint64_t k = 0; k < tps_group; ++k)
-          ws->offsets[base_si + k + 1] =
-            ws->offsets[base_si + k] + ws->permuted_sizes[base_si + k];
+        size_t cur = (size_t)si * shard_capacity + tail_in;
+        ws->offsets[base_si] = cur;
+        uint64_t e = e0;
+        for (uint32_t ai = 0; ai < n_active; ++ai) {
+          for (uint64_t j = 0; j < cps_inner; ++j) {
+            const uint64_t k = (uint64_t)ai * cps_inner + j;
+            cur += ws->permuted_sizes[base_si + k];
+            ws->offsets[base_si + k + 1] = cur;
+          }
+          e += 1;
+          if (cps_append > 0 && e >= cps_append) {
+            e = 0;
+            const uint64_t k_next = ((uint64_t)ai + 1) * cps_inner;
+            if (ai + 1 < n_active && page > 0) {
+              cur = align_up(cur, page);
+              ws->offsets[base_si + k_next] = cur;
+            }
+          }
+        }
       }
     } else {
       ws->offsets[base] = seg->data_segment_offset;

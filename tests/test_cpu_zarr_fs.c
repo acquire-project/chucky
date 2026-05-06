@@ -668,6 +668,142 @@ Fail:
   return 1;
 }
 
+// Intra-batch generation boundary: when epochs_per_batch > cps_append, one
+// batch spans multiple shard generations. The CPU aggregator pads each gen
+// boundary to a page boundary inside the agg buffer so every fresh-gen run
+// also takes write_direct, not the copying fallback.
+static int
+test_unbuffered_intra_batch_gen(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_intra_batch_gen ===");
+
+  const size_t page = platform_page_alignment();
+  log_info("  platform page alignment: %zu", page);
+  // Pick chunk_size so a single shard generation's data is NOT a multiple
+  // of page — that way the post-finalize run lands on a non-page-aligned
+  // src in the agg buffer unless the aggregator pads gen boundaries. With
+  // cps_inner=4 and bpe=2, gen total = 2 * 4 * chunk^2 * 2 bytes; pick the
+  // smallest chunk where (gen total) > page and (gen total) % page != 0.
+  int chunk = 8;
+  while (1) {
+    size_t gen_bytes = (size_t)2 * 4 * (size_t)chunk * (size_t)chunk * 2u;
+    if (gen_bytes > page && (gen_bytes % page) != 0)
+      break;
+    chunk += 8;
+  }
+  log_info("  chunk_size: %d", chunk);
+  const int inner_dim = chunk * 2; // 2x2 inner chunks
+  const int chunks_per_shard_append = 2;
+  // 5 epochs, cps_append=2, epochs_per_batch=3:
+  //   batch 0 (3 epochs): shard 0 finalizes (2), then shard 1 takes 1 epoch
+  //                       (non-finalizing run — must take write_direct).
+  //   batch 1 (2 epochs): shard 1 finalizes (1 more), shard 2 takes 1 epoch.
+  //   final flush: shard 2 finalizes (1 epoch, partial).
+  // Without the gen-pad fix, the post-finalize run in batch 0 starts at a
+  // non-page-aligned src and falls back to the copying write path.
+  const int n_epochs = 5;
+  const int epoch_elements = inner_dim * inner_dim;
+  const int total_elements = n_epochs * epoch_elements;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = chunks_per_shard_append,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = inner_dim,
+      .chunk_size = chunk,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = inner_dim,
+      .chunk_size = chunk,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  struct counting_sink counter;
+  counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
+
+  // 3 epochs per batch, 2 epochs per shard generation → first batch finalizes
+  // shard 0 mid-batch and continues into shard 1 with a non-finalizing run.
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .epochs_per_batch = 3,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &counter.base);
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  uint64_t copy_calls = 0, direct_calls = 0;
+  uint64_t copy_bytes = 0, direct_bytes = 0;
+  counting_sink_path_counts(
+    &counter, &copy_calls, &direct_calls, &copy_bytes, &direct_bytes);
+
+  log_info("  copy: %llu calls / %.2f KiB",
+           (unsigned long long)copy_calls,
+           (double)copy_bytes / 1024.0);
+  log_info("  direct: %llu calls / %.2f KiB",
+           (unsigned long long)direct_calls,
+           (double)direct_bytes / 1024.0);
+
+  // 3 shards, each finalizes once (copy). Both batches do a non-finalizing
+  // run after a mid-batch finalize: batch 0 ends with shard 1 partially
+  // filled, batch 1 ends with shard 2 partially filled. With the gen-pad fix
+  // those post-finalize runs land on page-aligned src and take write_direct.
+  CHECK(Fail4, direct_calls > 0);
+  CHECK(Fail4, direct_bytes > 0);
+  CHECK(Fail4, copy_calls == 3);
+
+  tile_stream_cpu_destroy(s);
+  test_zarr_sink_close(&z);
+  free(src);
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_intra_batch_gen");
+  return 1;
+}
+
 // Tail-carryover invariant on the CPU pipeline. With a page-aligned
 // (unbuffered) sink, on-disk shard size MUST equal Σ chunk_nbytes + index +
 // crc — no inter-batch zero padding. The CPU pipeline currently passes
@@ -808,19 +944,21 @@ main(void)
   int err = 0;
 
   char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256], tmpdir5[256],
-    tmpdir6[256];
+    tmpdir6[256], tmpdir7[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir3, sizeof(tmpdir3)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir4, sizeof(tmpdir4)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir5, sizeof(tmpdir5)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir6, sizeof(tmpdir6)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir7, sizeof(tmpdir7)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
   err |= test_batch_readback(tmpdir3);
   err |= test_partial_batch_readback(tmpdir4);
   err |= test_unbuffered_zero_copy(tmpdir5);
+  err |= test_unbuffered_intra_batch_gen(tmpdir7);
   err |= test_unbuffered_invariant(tmpdir6);
 
   test_tmpdir_remove(tmpdir1);
@@ -829,6 +967,7 @@ main(void)
   test_tmpdir_remove(tmpdir4);
   test_tmpdir_remove(tmpdir5);
   test_tmpdir_remove(tmpdir6);
+  test_tmpdir_remove(tmpdir7);
   return err;
 
 Fail:

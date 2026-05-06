@@ -353,6 +353,15 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
       so_chunks_per_shard[j] = de[storage_order[j]].chunks_per_shard;
     }
 
+    uint64_t cps_append = 1;
+    for (int d = 0; d < na; ++d)
+      cps_append *= de[d].chunks_per_shard;
+    if (out->dims.append_downsample && lv > 0) {
+      uint64_t divisor = 1ull << lv;
+      cps_append = (cps_append > divisor) ? cps_append / divisor : 1;
+    }
+    out->per_level[lv].chunks_per_shard_append = cps_append;
+
     CHECK(Fail,
           aggregate_layout_compute(&out->per_level[lv].agg_layout,
                                    rank,
@@ -362,18 +371,8 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                    chunks_lv,
                                    out->max_output_size,
                                    batch_count,
-                                   shard_alignment) == 0);
-
-    {
-      uint64_t cps_append = 1;
-      for (int d = 0; d < na; ++d)
-        cps_append *= de[d].chunks_per_shard;
-      if (out->dims.append_downsample && lv > 0) {
-        uint64_t divisor = 1ull << lv;
-        cps_append = (cps_append > divisor) ? cps_append / divisor : 1;
-      }
-      out->per_level[lv].chunks_per_shard_append = cps_append;
-    }
+                                   shard_alignment,
+                                   cps_append) == 0);
     out->per_level[lv].chunks_per_shard_inner = 1;
     for (int d = na; d < rank; ++d)
       out->per_level[lv].chunks_per_shard_inner *= de[d].chunks_per_shard;

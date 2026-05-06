@@ -23,13 +23,21 @@ ws->data
 ```
 
 `shard_capacity = align_up(active_count_max × cps_inner × max_comp_chunk_bytes
-+ page, page)`. The `+page` reservation guarantees room for an incoming tail
-plus a worst-case batch.
++ max_gens × page, page)` where
+`max_gens = ceil(active_count_max / chunks_per_shard_append) + 1`. The extra
+pages reserve room for an incoming leading tail (< page) plus up to one page
+of pad after every generation that completes inside the batch.
 
-The aggregator's per-shard prefix-sum anchors the first chunk at
-`shard_base + tail_in`, so the leading-tail-copy step stages the prior batch's
-tail bytes in `[shard_base, shard_base + tail_in)` and the new chunks pack
-tightly behind them.
+The CPU aggregator's per-shard prefix-sum anchors the first chunk at
+`shard_base + tail_in` and walks chunks epoch-by-epoch. After each generation
+completes (`epoch_in_shard` reaches `chunks_per_shard_append`), the cursor is
+advanced up to the next page boundary in the agg buffer. Chunks within a
+single generation pack tightly behind the leading tail; consecutive
+generations within one batch are page-aligned with respect to each other.
+
+The pad lives only in the agg buffer. The on-disk file still gets each
+generation truncated to its unpadded logical size by the prior generation's
+finalize, so the on-disk layout is unchanged.
 
 ## Per-shard state (`struct active_shard`)
 
@@ -109,20 +117,23 @@ When `run_finalizes` mid-batch and more runs follow for the same `si`:
 
 1. Finalize bundle written, file truncated and closed, state reset.
 2. Outer loop opens a new file via `sink->open(level, shard_epoch * shard_inner_count + si)`.
-3. `bytes_consumed[si]` is **not** reset, so `src_offset_in_shard` skips over
-   gen 0's region in the agg buffer to find gen 1's chunks.
+3. `bytes_consumed[si] += total_run` advances the agg-buffer cursor, then
+   when `gen_pads_enabled` is set on the layout (CPU pipeline) it is rounded
+   up to the next page so the next gen's `src` lands page-aligned.
 4. `h_tail_bytes[si]` was zeroed by the finalize, so gen 1 has no carry-in.
 
-Gen 1's `src` lives at `shard_base + total_run_gen0` in the agg buffer, which
-is **not** page-aligned in general (`total_run_gen0 = tail_in + run_real_gen0`,
-neither term page-aligned). The `is_first_run_for_shard` gate in deliver is
-false (`bytes_consumed[si] > 0`), so the alignment check fails and the run
-falls back to the copying `write` path.
+Because the aggregator already padded gen 1's first chunk up to the next
+page when laying out the agg buffer, gen 1's `src = data + shard_base +
+align_up(total_run_gen0, page)` is page-aligned and the run takes
+`write_direct` like every other non-finalizing run. No copying-write
+fallback for steady-state delivery.
 
-This is the only steady-state case where data takes the copying path. It only
-arises when `epochs_per_batch > chunks_per_shard_append` so a single batch
-spans more than one generation. The current test suite does not exercise this
-configuration.
+The GPU aggregator (`aggregate.cu`) does not yet pad gen boundaries — it
+leaves `gen_pads_enabled = 0` on the layout, so deliver does NOT advance
+`bytes_consumed[si]` over a non-existent pad. Post-finalize runs on the GPU
+path remain non-page-aligned and fall back to the copying `write` path; the
+GPU port of the pad logic is a separate follow-up tracked in the plan
+section below.
 
 ## Async coupling
 
@@ -135,87 +146,19 @@ fence, not by the write call.
 
 ---
 
-# Plan: pad gen boundaries in the agg buffer
+# GPU follow-up
 
-Goal: eliminate the copying-write fallback for intra-batch generation
-transitions so every non-finalizing write hits `write_direct`.
+The CPU aggregator now pads intra-batch generation boundaries up to the
+next page so deliver always takes `write_direct`. The GPU side
+(`aggregate.cu`: `compute_bias_k` / `apply_bias_k`) still produces
+gen-tight, unpadded layouts — every shard places gen `g+1`'s first chunk
+immediately after gen `g`'s last chunk inside the same shard region. When
+`epochs_per_batch > chunks_per_shard_append`, the GPU's post-finalize runs
+fall back to the copying `write` path.
 
-## Idea
-
-Pad each generation boundary in the per-shard agg-buffer region up to the
-next page boundary, mirroring the pad in `bytes_consumed[si]` on the deliver
-side. Each fresh generation then starts at a page-aligned `src` and the
-alignment gate in deliver always succeeds.
-
-The pad lives only in the agg buffer; the file still gets `truncate`'d to
-the unpadded logical size by the prior generation's finalize, so on-disk
-layout is unchanged.
-
-## Aggregator change
-
-The CPU aggregator's per-shard prefix-sum becomes gen-aware. New input:
-`epoch_in_shard_at_batch_start[lv]` — per-LOD scalar, all inner shards share
-the same gen progression.
-
-```
-cur = shard_base + tail_in
-e   = epoch_in_shard_at_batch_start[lv]
-for k in [0, n_active):
-  for j in [0, cps_inner):
-    offsets[..k,j] = cur
-    cur += sizes[..k,j]
-  e += 1
-  if e >= chunks_per_shard_append:
-    cur = align_up(cur, page_size)
-    e = 0
-```
-
-The leading-tail copy is unchanged — still applies only to gen 0.
-
-## Deliver change
-
-After a finalizing run, advance `bytes_consumed[si]` past the agg-buffer pad:
-
-```c
-bytes_consumed[si] = align_up(bytes_consumed[si] + total_run, page_size);
-```
-
-The `is_first_run_for_shard` gate in the alignment check can be dropped —
-every run for a freshly-opened generation now has a page-aligned `src`.
-
-## Sizing
-
-`shard_capacity` grows by up to `(max_gens_per_batch - 1) × page`:
-
-```
-max_gens_per_batch = ceil(active_count_max / chunks_per_shard_append)
-shard_capacity = align_up(worst + max_gens_per_batch × page, page)
-```
-
-In practice one extra page per generation boundary, negligible.
-
-## Index offsets stay correct
-
-`chunk_off = sh->data_cursor + (result->offsets[j] - shard_base - src_offset_in_shard)`
-still computes the right file offset. The agg-buffer pad is invisible to the
-file because each generation's file starts fresh with `data_cursor = 0`.
-
-## GPU path
-
-`aggregate.cu` (`compute_bias_k` / `apply_bias_k`) has the same shape and the
-same gap. The CPU change can ship independently; the GPU edit is structurally
-identical and a separate follow-up.
-
-## Test coverage
-
-A regression test is required: a config with
-`epochs_per_batch > chunks_per_shard_append` exercises intra-batch generation
-boundaries. The fix should turn the existing copying-write fallback into a
-direct write — countable via the `counting_sink` shim already used by
-`test_unbuffered_zero_copy`.
-
-## Risk
-
-Low. The change is two small edits (aggregator prefix-sum, deliver cursor)
-plus a size bump and a test. No on-disk format change, no async-coupling
-change.
+To bring the GPU to parity, the bias kernels need to become gen-aware along
+the same lines as the CPU prefix-sum: walk per-shard, compute bias =
+`shard_base + tail_in + sum(per-gen pad)`, and have deliver flip the
+`gen_pads_enabled` flag on the layout. The CPU edit can ship independently;
+the GPU port carries the same risk profile (small edit, no on-disk format
+change, no async coupling change).

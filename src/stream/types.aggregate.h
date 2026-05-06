@@ -40,16 +40,26 @@ extern "C"
     uint64_t num_shards;       // covering_count / cps_inner
     uint32_t active_count_max; // worst-case active epochs per batch
     size_t page_size;          // 0 = no padding
+    uint64_t chunks_per_shard_append; // shard length along append dims
     // Per-shard reservation in d_aggregated. Sized so each shard has space for
     // a leading tail (< page_size) carried over from the prior batch plus the
-    // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes.
+    // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes plus
+    // up to one page per intra-batch generation boundary when gen_pads_enabled.
     // Page-aligned. Zero when page_size == 0.
     size_t shard_capacity;
+    // 1 when the aggregator pads the agg buffer up to a page boundary at every
+    // intra-batch generation transition (so each fresh-gen run starts at a
+    // page-aligned src). The CPU aggregator sets this; the GPU path leaves it
+    // 0 and falls back to a copying write for post-finalize runs.
+    int gen_pads_enabled;
   };
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
   // active_count_max is the maximum number of active epochs per batch for this
-  // level (used to size shard_capacity).
+  // level (used to size shard_capacity). chunks_per_shard_append is the shard
+  // length along append dims at this level (after any per-level downsample
+  // divisor). It enters the shard_capacity reservation so the agg buffer has
+  // room for intra-batch generation-boundary pads.
   int aggregate_layout_compute(struct aggregate_layout* layout,
                                uint8_t rank,
                                uint8_t n_append,
@@ -58,7 +68,8 @@ extern "C"
                                uint64_t chunks_per_epoch,
                                size_t max_comp_chunk_bytes,
                                uint32_t active_count_max,
-                               size_t page_size);
+                               size_t page_size,
+                               uint64_t chunks_per_shard_append);
 
   // Aggregated output for shard delivery (CUDA-free).
   struct aggregate_result

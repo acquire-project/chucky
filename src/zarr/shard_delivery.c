@@ -182,6 +182,10 @@ deliver_to_shards_batch(uint8_t level,
   const size_t page_size = layout ? layout->page_size : 0;
   const size_t shard_capacity = layout ? layout->shard_capacity : 0;
   const int use_carryover = (page_size > 0 && shard_capacity > 0);
+  // When the aggregator padded intra-batch generation boundaries up to the
+  // next page, post-finalize runs in the same batch start at a page-aligned
+  // src — bytes_consumed must be advanced over the same pad.
+  const int gen_pads_enabled = (layout && layout->gen_pads_enabled);
   size_t total_bytes = 0;
 
   // Per-shard cumulative bytes consumed from the agg buffer in this batch.
@@ -293,7 +297,10 @@ deliver_to_shards_batch(uint8_t level,
           size_t write_bytes = (total_run / page_size) * page_size;
           if (write_bytes > 0) {
             const uint8_t* src_end = src + write_bytes;
-            int aligned = is_first_run_for_shard && ((uintptr_t)src % sa == 0);
+            // Alignment is sufficient on its own — when the aggregator pads
+            // intra-batch gen boundaries, post-finalize runs are also page-
+            // aligned. Without that pad, src is unaligned and we must copy.
+            int aligned = ((uintptr_t)src % sa == 0);
             int wr =
               (aligned && sh->writer->write_direct)
                 ? sh->writer->write_direct(
@@ -312,6 +319,10 @@ deliver_to_shards_batch(uint8_t level,
         }
 
         bytes_consumed[si] += total_run;
+        // Skip the agg-buffer's intra-batch generation pad so the next gen's
+        // src lands on a page boundary in the same shard region.
+        if (run_finalizes && gen_pads_enabled)
+          bytes_consumed[si] = align_up(bytes_consumed[si], page_size);
       } else {
         // Legacy contiguous-offsets path (page_size == 0).
         size_t run_bytes =

@@ -222,7 +222,8 @@ aggregate_layout_compute(struct aggregate_layout* layout,
                          uint64_t chunks_per_epoch,
                          size_t max_comp_chunk_bytes,
                          uint32_t active_count_max,
-                         size_t page_size)
+                         size_t page_size,
+                         uint64_t chunks_per_shard_append)
 {
   uint64_t shard_count[HALF_MAX_RANK];
   uint64_t eff_cps[HALF_MAX_RANK];
@@ -269,14 +270,24 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   layout->num_shards = layout->covering_count / cps_inner;
   layout->active_count_max = active_count_max;
   layout->page_size = page_size;
+  layout->chunks_per_shard_append = chunks_per_shard_append;
+  layout->gen_pads_enabled = 0;
 
   // Per-shard reservation in d_aggregated: enough room for the worst-case
-  // batch (active_count_max * cps_inner chunks at max_comp_chunk_bytes each)
-  // plus one page for the leading tail carried in from the prior batch,
-  // rounded up to a page so adjacent shard regions remain page-aligned.
+  // batch plus inter-gen padding when the aggregator inserts it. Worst case:
+  // a leading tail (< page) at the start, real chunk bytes, and one page of
+  // pad after each generation that completes inside the batch. With
+  // active_count_max epochs and chunks_per_shard_append epochs per gen, the
+  // batch can straddle ceil(active_count_max / cps_append) + 1 generations
+  // (the +1 covers a partial gen at the front when epoch_in_shard at the
+  // batch start is non-zero), giving up to that many extra pages.
   if (page_size > 0 && active_count_max > 0) {
     size_t worst = (size_t)active_count_max * cps_inner * max_comp_chunk_bytes;
-    layout->shard_capacity = align_up(worst + page_size, page_size);
+    uint64_t cps_app =
+      chunks_per_shard_append > 0 ? chunks_per_shard_append : 1;
+    uint64_t max_gens = (active_count_max + cps_app - 1) / cps_app + 1;
+    size_t extra = (size_t)max_gens * page_size;
+    layout->shard_capacity = align_up(worst + extra, page_size);
   } else {
     layout->shard_capacity = 0;
   }
