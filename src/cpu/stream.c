@@ -94,7 +94,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
       s->agg_layout[lv] = li->agg_layout;
       // CPU aggregator pads intra-batch generation boundaries to page
       // boundaries so deliver can always take write_direct on fresh-gen runs.
-      s->agg_layout[lv].gen_pads_enabled = 1;
+      s->agg_layout[lv].requires_gen_pads = 1;
       s->batch_active_count[lv] = li->batch_active_count;
       CHECK(Fail, init_shard_state(&s->shard[lv], li) == 0);
 

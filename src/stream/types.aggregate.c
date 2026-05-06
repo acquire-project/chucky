@@ -271,7 +271,7 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   layout->active_count_max = active_count_max;
   layout->page_size = page_size;
   layout->chunks_per_shard_append = chunks_per_shard_append;
-  layout->gen_pads_enabled = 0;
+  layout->requires_gen_pads = 0;
 
   // Per-shard reservation in d_aggregated: enough room for the worst-case
   // batch plus inter-gen padding when the aggregator inserts it. Worst case:

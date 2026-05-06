@@ -44,14 +44,14 @@ extern "C"
     // Per-shard reservation in d_aggregated. Sized so each shard has space for
     // a leading tail (< page_size) carried over from the prior batch plus the
     // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes plus
-    // up to one page per intra-batch generation boundary when gen_pads_enabled.
-    // Page-aligned. Zero when page_size == 0.
+    // up to one page per intra-batch generation boundary when
+    // requires_gen_pads is set. Page-aligned. Zero when page_size == 0.
     size_t shard_capacity;
-    // 1 when the aggregator pads the agg buffer up to a page boundary at every
-    // intra-batch generation transition (so each fresh-gen run starts at a
-    // page-aligned src). The CPU aggregator sets this; the GPU path leaves it
-    // 0 and falls back to a copying write for post-finalize runs.
-    int gen_pads_enabled;
+    // 1 when the agg buffer is padded up to a page boundary at every intra-
+    // batch generation transition, so each fresh-gen run starts at a page-
+    // aligned src. The CPU aggregator sets this; the GPU path leaves it 0
+    // and falls back to a copying write for post-finalize runs.
+    int requires_gen_pads;
   };
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).

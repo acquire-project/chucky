@@ -5,6 +5,7 @@
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -259,6 +260,10 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   const size_t max_comp = layout->max_comp_chunk_bytes;
   const int use_carryover = (layout->page_size > 0);
 
+  // Precondition: tail-carry callers must supply both arrays. Legacy callers
+  // (page_size == 0) may pass NULL.
+  assert(!use_carryover || (shards_by_lod && h_tail_bytes));
+
   // Each LOD's offsets array has cnt + 1 entries. Adjacent LODs' end/start
   // positions would collide on one shared index of a single packed array.
   // Solution: shift each LOD's view by `lv` so every LOD owns a disjoint
@@ -303,16 +308,14 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
       const uint64_t cps_inner = seg->chunks_per_shard_inner;
       const uint64_t num_shards =
         cps_inner > 0 ? seg->covering_count / cps_inner : 0;
-      const struct shard_state* ss = shards_by_lod ? shards_by_lod[lv] : NULL;
-      const uint64_t cps_append =
-        ss ? ss->chunks_per_shard_append
-           : per_lod_layouts[lv].chunks_per_shard_append;
-      const uint64_t e0 = ss ? ss->epoch_in_shard : 0;
+      const struct shard_state* ss = shards_by_lod[lv];
+      const uint64_t cps_append = ss->chunks_per_shard_append;
+      const uint64_t e0 = ss->epoch_in_shard;
+      const size_t* lv_tail = h_tail_bytes[lv];
       const uint32_t n_active = seg->n_active;
       for (uint64_t si = 0; si < num_shards; ++si) {
         const uint64_t base_si = base + si * (uint64_t)n_active * cps_inner;
-        const size_t tail_in =
-          (h_tail_bytes && h_tail_bytes[lv]) ? h_tail_bytes[lv][si] : 0;
+        const size_t tail_in = lv_tail ? lv_tail[si] : 0;
         size_t cur = (size_t)si * shard_capacity + tail_in;
         ws->offsets[base_si] = cur;
         uint64_t e = e0;
@@ -342,19 +345,21 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   }
 
   // Leading-tail copy: stage prior batch's ragged tail at the front of each
-  // shard's region. CPU equivalent of the GPU's copy_leading_tail_k. Carry-
-  // over branch only.
-  if (use_carryover && shards_by_lod) {
+  // shard's region. CPU equivalent of the GPU's copy_leading_tail_k.
+  if (use_carryover) {
     for (uint8_t lv = 0; lv < nlod; ++lv) {
       const struct lod_segment* seg = &layout->lods[lv];
-      const struct shard_state* ss = shards_by_lod[lv];
-      if (seg->n_active == 0 || !ss || !h_tail_bytes || !h_tail_bytes[lv])
+      if (seg->n_active == 0)
         continue;
+      const size_t* lv_tail = h_tail_bytes[lv];
+      if (!lv_tail)
+        continue;
+      const struct shard_state* ss = shards_by_lod[lv];
       const size_t shard_capacity = per_lod_layouts[lv].shard_capacity;
       char* seg_base = (char*)ws->data + seg->data_segment_offset;
       for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
-        const size_t nbytes = h_tail_bytes[lv][si];
-        if (nbytes == 0 || !ss->shards[si].tail_buf)
+        const size_t nbytes = lv_tail[si];
+        if (nbytes == 0)
           continue;
         memcpy(seg_base + (size_t)si * shard_capacity,
                ss->shards[si].tail_buf,

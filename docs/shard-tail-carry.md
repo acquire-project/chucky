@@ -118,7 +118,7 @@ When `run_finalizes` mid-batch and more runs follow for the same `si`:
 1. Finalize bundle written, file truncated and closed, state reset.
 2. Outer loop opens a new file via `sink->open(level, shard_epoch * shard_inner_count + si)`.
 3. `bytes_consumed[si] += total_run` advances the agg-buffer cursor, then
-   when `gen_pads_enabled` is set on the layout (CPU pipeline) it is rounded
+   when `requires_gen_pads` is set on the layout (CPU pipeline) it is rounded
    up to the next page so the next gen's `src` lands page-aligned.
 4. `h_tail_bytes[si]` was zeroed by the finalize, so gen 1 has no carry-in.
 
@@ -129,7 +129,7 @@ align_up(total_run_gen0, page)` is page-aligned and the run takes
 fallback for steady-state delivery.
 
 The GPU aggregator (`aggregate.cu`) does not yet pad gen boundaries — it
-leaves `gen_pads_enabled = 0` on the layout, so deliver does NOT advance
+leaves `requires_gen_pads = 0` on the layout, so deliver does NOT advance
 `bytes_consumed[si]` over a non-existent pad. Post-finalize runs on the GPU
 path remain non-page-aligned and fall back to the copying `write` path; the
 GPU port of the pad logic is a separate follow-up tracked in the plan
@@ -159,6 +159,6 @@ fall back to the copying `write` path.
 To bring the GPU to parity, the bias kernels need to become gen-aware along
 the same lines as the CPU prefix-sum: walk per-shard, compute bias =
 `shard_base + tail_in + sum(per-gen pad)`, and have deliver flip the
-`gen_pads_enabled` flag on the layout. The CPU edit can ship independently;
+`requires_gen_pads` flag on the layout. The CPU edit can ship independently;
 the GPU port carries the same risk profile (small edit, no on-disk format
 change, no async coupling change).
