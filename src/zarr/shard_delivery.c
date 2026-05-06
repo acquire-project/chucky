@@ -6,7 +6,6 @@
 
 #include "log/log.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +23,12 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
   if (!ss->shards)
     return 1;
   const size_t page = li->agg_layout.page_size;
+  if (page > 0 && li->shard_inner_count > 0) {
+    ss->tail_buf_pool_bytes = (size_t)li->shard_inner_count * page;
+    ss->tail_buf_pool = (uint8_t*)calloc(1, ss->tail_buf_pool_bytes);
+    if (!ss->tail_buf_pool)
+      return 1;
+  }
   for (uint64_t si = 0; si < li->shard_inner_count; ++si) {
     ss->shards[si].index =
       (uint64_t*)malloc(li->chunks_per_shard_total * 2 * sizeof(uint64_t));
@@ -32,17 +37,28 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
     memset(ss->shards[si].index,
            0xFF,
            li->chunks_per_shard_total * 2 * sizeof(uint64_t));
-    if (page > 0) {
-      ss->shards[si].tail_buf = (uint8_t*)malloc(page);
-      if (!ss->shards[si].tail_buf)
-        return 1;
-    }
+    if (page > 0)
+      ss->shards[si].tail_buf = ss->tail_buf_pool + si * page;
   }
   return 0;
 }
 
-// Build the page-aligned scratch holding [tail][index][crc4][zero pad].
-// Caller frees via free_finalize_buf with the same shard_alignment.
+void
+shard_state_destroy(struct shard_state* ss)
+{
+  if (!ss->shards) {
+    free(ss->tail_buf_pool);
+    *ss = (struct shard_state){ 0 };
+    return;
+  }
+  for (uint64_t si = 0; si < ss->shard_inner_count; ++si)
+    free(ss->shards[si].index);
+  free(ss->shards);
+  free(ss->tail_buf_pool);
+  *ss = (struct shard_state){ 0 };
+}
+
+// Build [tail][index][crc4][zero pad]; free with free_finalize_buf.
 static int
 build_finalize_buf(const uint8_t* tail_src,
                    size_t tail_bytes,
@@ -87,9 +103,7 @@ free_finalize_buf(uint8_t* buf, size_t shard_alignment)
     free(buf);
 }
 
-// Synchronize the per-shard tail length and bytes across the active_shard and
-// the host shadow array. n == 0 clears (no copy). Use this everywhere the tail
-// state changes so the two sources of truth never drift.
+// Set tail bytes on both active_shard and host shadow. n == 0 clears.
 static void
 shard_tail_set(struct active_shard* sh,
                size_t* h_tail_bytes_si,
@@ -138,8 +152,8 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
       free_finalize_buf(buf, shard_alignment);
     }
 
-    // Trim the trailing pad so shard_index_parse finds the index at the file's
-    // end. No-op for sinks whose truncate hook is NULL (e.g. S3).
+    // Trim trailing pad so the index sits at end-of-file. NULL on S3-like
+    // sinks.
     if (!err && sh->writer->truncate) {
       uint64_t logical_size = sh->data_cursor + (uint64_t)logical_bytes;
       if (sh->writer->truncate(sh->writer, logical_size)) {
@@ -182,9 +196,9 @@ sum_run_chunks(const size_t* chunk_sizes,
   return sum;
 }
 
-// Record the [eis_start, eis_start+run_len) shard-index entries for the run.
-// chunk_off is computed as sh->data_cursor + (offset_in_agg - base_off), where
-// base_off is the agg-buffer offset of the run's first chunk.
+// Index entries for [eis_start, eis_start+run_len). chunk_off =
+// data_cursor + (offsets[j] - base_off), where base_off is the agg-buffer
+// offset of the run's first chunk.
 static void
 record_run_index(struct active_shard* sh,
                  const struct aggregate_result* result,
@@ -210,9 +224,8 @@ record_run_index(struct active_shard* sh,
   }
 }
 
-// Carry-over finalizing run: bundle [tail || data || index || crc] into a
-// single page-aligned write, then truncate the file to the logical end. Must
-// use the copying write since fbuf is freed before the worker drains.
+// Bundle [tail || data || index || crc], page-aligned write, then truncate.
+// Copying write — fbuf is freed before the worker drains.
 static int
 deliver_run_finalizing(struct active_shard* sh,
                        const struct shard_state* ss,
@@ -253,9 +266,8 @@ deliver_run_finalizing(struct active_shard* sh,
   return 0;
 }
 
-// Carry-over non-finalizing run: write the page-aligned floor; capture the
-// sub-page remainder as the next batch's leading tail. write_direct when src
-// is page-aligned, else copy.
+// Write the page-aligned floor; sub-page remainder rolls into next batch's
+// leading tail. write_direct when src is page-aligned, else copy.
 static int
 deliver_run_nonfinalizing(struct active_shard* sh,
                           const uint8_t* src,
@@ -283,10 +295,8 @@ deliver_run_nonfinalizing(struct active_shard* sh,
   return 0;
 }
 
-// Non-carry-over path: agg buffer is a single contiguous prefix-sum across
-// all shards (no per-shard regions, no leading-tail). One write per run, then
-// index recording, then cursor advance. Used whenever the sink has no
-// alignment requirement (buffered FS, S3, in-memory).
+// Contiguous path (no alignment requirement): one write per run, record
+// index, advance cursor.
 static int
 deliver_run_contiguous(struct active_shard* sh,
                        const struct aggregate_result* result,
@@ -323,8 +333,8 @@ deliver_run_contiguous(struct active_shard* sh,
   return 0;
 }
 
-// Carry-over post-generation cleanup: the bundled finalize write already
-// emitted the index. Just call writer->finalize and reset per-shard state.
+// Post-bundle cleanup: bundle write already emitted the index, just
+// finalize the writer and reset per-shard state.
 static int
 close_shards_after_bundle(struct shard_state* ss)
 {
@@ -363,18 +373,15 @@ deliver_to_shards_batch(uint8_t level,
   const size_t page_size = layout ? layout->page_size : 0;
   const size_t shard_capacity = layout ? layout->shard_capacity : 0;
   const int use_carryover = (page_size > 0 && shard_capacity > 0);
-  // Whether the agg buffer pads gen boundaries — bytes_consumed must skip the
-  // pad after a finalizing run so the next gen's src is page-aligned.
+  // bytes_consumed must skip pad after a finalizing run so next gen's src is
+  // page-aligned.
   const int requires_gen_pads = (layout && layout->requires_gen_pads);
   size_t total_bytes = 0;
 
-  // Precondition: tail-carry callers must supply h_tail_bytes. Legacy callers
-  // (page_size == 0) may pass NULL.
-  assert(!use_carryover || h_tail_bytes != NULL);
+  // Tail-carry callers must supply h_tail_bytes; legacy may pass NULL.
+  CHECK(Error, !use_carryover || h_tail_bytes != NULL);
 
-  // Per-shard cumulative bytes consumed from the agg buffer in this batch.
-  // Advances per run for each shard so subsequent runs (after intra-batch
-  // shard finalizes) read from the correct offset.
+  // Per-shard cumulative bytes consumed from agg buffer in this batch.
   size_t* bytes_consumed = NULL;
   if (use_carryover) {
     bytes_consumed = (size_t*)calloc(ss->shard_inner_count, sizeof(size_t));
@@ -405,12 +412,6 @@ deliver_to_shards_batch(uint8_t level,
       uint64_t j_run_end = j_run_start + (uint64_t)run_len * cps_inner;
 
       if (use_carryover) {
-        // Each shard owns a fixed page-aligned region of `shard_capacity`
-        // bytes. The first run for a shard sees the leading tail (carried
-        // from the prior batch); subsequent runs in the same batch start
-        // past the consumed bytes. The aggregator may have padded gen
-        // boundaries (requires_gen_pads); deliver tracks that pad in
-        // bytes_consumed so the next gen's src lands page-aligned.
         const size_t shard_base = (size_t)si * shard_capacity;
         const int is_first_run_for_shard = (bytes_consumed[si] == 0);
         const size_t tail_in = is_first_run_for_shard ? h_tail_bytes[si] : 0;
@@ -421,8 +422,7 @@ deliver_to_shards_batch(uint8_t level,
         const uint8_t* src =
           (const uint8_t*)result->data + shard_base + src_offset_in_shard;
 
-        // Record index entries before any write so the finalize bundle's
-        // baked-in index is up to date.
+        // Index must be up to date before finalizing-run bundle write.
         record_run_index(sh,
                          result,
                          j_run_start,

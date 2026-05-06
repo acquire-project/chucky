@@ -13,7 +13,10 @@ struct active_shard
   struct shard_writer* writer; // from sink->open, NULL until first use
   // Carry-over tail bytes captured at the end of each delivery so that
   // end-of-stream finalize_shards can flush them along with the index.
-  // tail_buf has capacity page_size; tail_bytes is the live length (< page).
+  // tail_buf has capacity page_size — but is a slice into shard_state's
+  // contiguous tail_buf_pool, NOT independently allocated. tail_bytes is the
+  // live length (< page); it is the only validity gate (tail_buf may retain
+  // stale bytes after finalize resets tail_bytes to 0).
   uint8_t* tail_buf;
   size_t tail_bytes;
 };
@@ -27,12 +30,22 @@ struct shard_state
   uint64_t chunks_per_shard_total;  // prod(tps[d] for all d)
   uint64_t chunks_per_shard_append; // prod(tps[d] for d < n_append)
   struct active_shard* shards;      // array[shard_inner_count]
+  // Single contiguous pool for all shards' tail_bufs (shard_inner_count*page
+  // bytes). NULL when page == 0. Layout matches GPU's d_tail_carry so a single
+  // bulk HtoD upload replaces N per-shard transfers.
+  uint8_t* tail_buf_pool;
+  size_t tail_buf_pool_bytes;
 };
 
 // Initialize shard state from pre-computed level layout info.
 // Allocates the shards array and per-shard index buffers.
 int
 init_shard_state(struct shard_state* ss, const struct level_layout_info* li);
+
+// Free everything init_shard_state allocated. Safe on partially-initialized
+// or zeroed state. Leaves *ss zeroed.
+void
+shard_state_destroy(struct shard_state* ss);
 
 // Finalize completed shards (write index block + finalize).
 // Best-effort: tries every shard even if one fails. Returns 0 on success.

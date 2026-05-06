@@ -385,14 +385,7 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
     desc->flush_slots[fc].batch_active_masks = NULL;
   }
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    struct shard_state* ss = &desc->shard[lv];
-    if (ss->shards) {
-      for (uint64_t i = 0; i < ss->shard_inner_count; ++i) {
-        free(ss->shards[i].index);
-        free(ss->shards[i].tail_buf);
-      }
-      free(ss->shards);
-    }
+    shard_state_destroy(&desc->shard[lv]);
     aggregate_layout_destroy(&desc->agg_layout[lv]);
     cu_mem_free(desc->tail[lv].d_tail_carry);
     cu_mem_free((CUdeviceptr)desc->tail[lv].d_tail_bytes);

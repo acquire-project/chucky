@@ -482,12 +482,7 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     for (int i = 0; i < ms->n_arrays; ++i) {
       struct array_descriptor* desc = &ms->arrays[i];
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-        struct shard_state* ss = &desc->shard[lv];
-        if (ss->shards) {
-          for (uint64_t si = 0; si < ss->shard_inner_count; ++si)
-            free(ss->shards[si].index);
-          free(ss->shards);
-        }
+        shard_state_destroy(&desc->shard[lv]);
         free(desc->h_tail_bytes[lv]);
       }
       free(desc->append_accum);

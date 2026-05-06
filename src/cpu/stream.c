@@ -305,12 +305,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   }
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
-    struct shard_state* ss = &s->shard[lv];
-    if (ss->shards) {
-      for (uint64_t si = 0; si < ss->shard_inner_count; ++si)
-        free(ss->shards[si].index);
-      free(ss->shards);
-    }
+    shard_state_destroy(&s->shard[lv]);
     free(s->h_tail_bytes[lv]);
     free(s->morton_lut[lv]);
     free(s->lod_fixed_dims_offsets[lv]);

@@ -56,13 +56,7 @@ destroy_level_state(struct level_flush_state* lls)
   lls->d_tail_bytes = NULL;
   free(lls->h_tail_bytes);
   lls->h_tail_bytes = NULL;
-  if (lls->shard.shards) {
-    for (uint64_t i = 0; i < lls->shard.shard_inner_count; ++i) {
-      free(lls->shard.shards[i].index);
-      free(lls->shard.shards[i].tail_buf);
-    }
-    free(lls->shard.shards);
-  }
+  shard_state_destroy(&lls->shard);
 }
 
 int
@@ -150,31 +144,7 @@ compress_agg_init(struct compress_agg_stage* stage,
       CHECK(Fail, stage->levels[lv].h_tail_bytes);
     }
 
-    // Shard state
-    struct shard_state* ss = &stage->levels[lv].shard;
-    ss->chunks_per_shard_append = li->chunks_per_shard_append;
-    ss->chunks_per_shard_inner = li->chunks_per_shard_inner;
-    ss->chunks_per_shard_total = li->chunks_per_shard_total;
-    ss->shard_inner_count = li->shard_inner_count;
-
-    ss->shards = (struct active_shard*)calloc(ss->shard_inner_count,
-                                              sizeof(struct active_shard));
-    CHECK(Fail, ss->shards);
-
-    size_t index_bytes = 2 * ss->chunks_per_shard_total * sizeof(uint64_t);
-    const size_t page = li->agg_layout.page_size;
-    for (uint64_t i = 0; i < ss->shard_inner_count; ++i) {
-      ss->shards[i].index = (uint64_t*)malloc(index_bytes);
-      CHECK(Fail, ss->shards[i].index);
-      memset(ss->shards[i].index, 0xFF, index_bytes);
-      if (page > 0) {
-        ss->shards[i].tail_buf = (uint8_t*)malloc(page);
-        CHECK(Fail, ss->shards[i].tail_buf);
-      }
-    }
-
-    ss->epoch_in_shard = 0;
-    ss->shard_epoch = 0;
+    CHECK(Fail, init_shard_state(&stage->levels[lv].shard, li) == 0);
   }
 
   // Batch LUTs (gather + perm, epoch-major shard order).
