@@ -905,7 +905,10 @@ test_unbuffered_invariant(const char* tmpdir)
              sizeof(uint64_t));
       expected_payload += nbytes;
     }
-    if (len != expected_payload + index_total) {
+    if (expected_payload == 0) {
+      log_error("  shard %d: index has zero total payload", sh);
+      errors++;
+    } else if (len != expected_payload + index_total) {
       log_error("  shard %d: file size %zu != payload %llu + index %zu",
                 sh,
                 len,
@@ -936,13 +939,166 @@ Fail:
   return 1;
 }
 
+// Partial final shard: stream ends with epoch_in_shard < cps_append. The
+// end-of-stream finalize_shards path writes the in-flight tail_bytes alongside
+// the partial index. The file-size invariant must still hold, and only the
+// epochs actually written should have valid index entries.
+static int
+test_unbuffered_partial_final_shard(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_partial_final_shard ===");
+
+  // 3 epochs with cps_append=2 → shard 0 full (2 epochs), shard 1 partial
+  // (1 epoch). Partial shard never reaches a finalizing run from delivery —
+  // its final close happens via tile_stream_cpu_destroy → finalize_shards.
+  const int n_epochs = 3;
+  const int total_elements = n_epochs * 4 * 4;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s =
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  // tile_stream_cpu_destroy must drain the partial shard's tail through
+  // finalize_shards. After this returns, both shards exist on disk.
+  tile_stream_cpu_destroy(s);
+  test_zarr_sink_close(&z);
+
+  // 2 shards: shard 0 full (2 chunks), shard 1 partial (1 valid + 1 missing).
+  int errors = 0;
+  const int chunks_per_shard_total = 2;
+  const size_t index_data =
+    (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t);
+  const size_t index_total = index_data + 4;
+  for (int sh = 0; sh < 2; ++sh) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/0/c/%d/0/0", tmpdir, sh);
+
+    uint8_t* data = NULL;
+    size_t len = 0;
+    if (read_file_all(path, &data, &len) != 0) {
+      log_error("  shard %d: missing", sh);
+      errors++;
+      continue;
+    }
+    if (len <= index_total) {
+      log_error("  shard %d: file too short (%zu)", sh, len);
+      free(data);
+      errors++;
+      continue;
+    }
+    const uint8_t* index_ptr = data + len - index_total;
+    uint64_t expected_payload = 0;
+    int valid_chunks = 0;
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      uint64_t off, nbytes;
+      memcpy(&off, index_ptr + (size_t)j * 16, sizeof(uint64_t));
+      memcpy(&nbytes,
+             index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+             sizeof(uint64_t));
+      if (off == UINT64_MAX && nbytes == UINT64_MAX)
+        continue;
+      expected_payload += nbytes;
+      valid_chunks++;
+    }
+    int expected_valid = (sh == 0) ? 2 : 1;
+    if (valid_chunks != expected_valid) {
+      log_error("  shard %d: %d valid chunks, expected %d",
+                sh,
+                valid_chunks,
+                expected_valid);
+      errors++;
+    }
+    if (len != expected_payload + index_total) {
+      log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                sh,
+                len,
+                (unsigned long long)expected_payload,
+                index_total);
+      errors++;
+    }
+    free(data);
+  }
+
+  free(src);
+  if (errors) {
+    log_error("FAIL test_unbuffered_partial_final_shard (%d shard(s) wrong)",
+              errors);
+    return 1;
+  }
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_partial_final_shard");
+  return 1;
+}
+
 int
 main(void)
 {
   int err = 0;
 
   char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256], tmpdir5[256],
-    tmpdir6[256], tmpdir7[256];
+    tmpdir6[256], tmpdir7[256], tmpdir8[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir3, sizeof(tmpdir3)) == 0);
@@ -950,6 +1106,7 @@ main(void)
   CHECK(Fail, test_tmpdir_create(tmpdir5, sizeof(tmpdir5)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir6, sizeof(tmpdir6)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir7, sizeof(tmpdir7)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir8, sizeof(tmpdir8)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
@@ -958,6 +1115,7 @@ main(void)
   err |= test_unbuffered_zero_copy(tmpdir5);
   err |= test_unbuffered_intra_batch_gen(tmpdir7);
   err |= test_unbuffered_invariant(tmpdir6);
+  err |= test_unbuffered_partial_final_shard(tmpdir8);
 
   test_tmpdir_remove(tmpdir1);
   test_tmpdir_remove(tmpdir2);
@@ -966,6 +1124,7 @@ main(void)
   test_tmpdir_remove(tmpdir5);
   test_tmpdir_remove(tmpdir6);
   test_tmpdir_remove(tmpdir7);
+  test_tmpdir_remove(tmpdir8);
   return err;
 
 Fail:

@@ -528,13 +528,18 @@ test_content_isolation(void)
       CHECK(Fail, sw->size > index_tail);
       const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_tail);
       uint64_t expected_payload = 0;
+      int valid_chunks = 0;
       for (size_t c = 0; c < cps_total; ++c) {
         uint64_t off = idx[2 * c];
         uint64_t nb = idx[2 * c + 1];
         if (off == UINT64_MAX && nb == UINT64_MAX)
           continue;
         expected_payload += nb;
+        valid_chunks++;
       }
+      // sw->size > 0 means we wrote chunks; index must reflect them.
+      CHECK(Fail, valid_chunks > 0);
+      CHECK(Fail, expected_payload > 0);
       CHECK(Fail, sw->size == expected_payload + index_tail);
     }
   }
@@ -726,13 +731,17 @@ test_lod_basic(void)
       CHECK(Fail, sw->size > index_total);
       const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_total);
       uint64_t expected_payload = 0;
+      int valid_chunks = 0;
       for (size_t c = 0; c < cps_total; ++c) {
         uint64_t off = idx[2 * c];
         uint64_t nb = idx[2 * c + 1];
         if (off == UINT64_MAX && nb == UINT64_MAX)
           continue;
         expected_payload += nb;
+        valid_chunks++;
       }
+      CHECK(Fail, valid_chunks > 0);
+      CHECK(Fail, expected_payload > 0);
       CHECK(Fail, sw->size == expected_payload + index_total);
     }
   }
