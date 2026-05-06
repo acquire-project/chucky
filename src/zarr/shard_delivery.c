@@ -377,12 +377,12 @@ deliver_to_shards_batch(uint8_t level,
   // page-aligned.
   const int requires_gen_pads = (layout && layout->requires_gen_pads);
   size_t total_bytes = 0;
+  // Per-shard cumulative bytes consumed from agg buffer in this batch.
+  size_t* bytes_consumed = NULL;
 
   // Tail-carry callers must supply h_tail_bytes; legacy may pass NULL.
   CHECK(Error, !use_carryover || h_tail_bytes != NULL);
 
-  // Per-shard cumulative bytes consumed from agg buffer in this batch.
-  size_t* bytes_consumed = NULL;
   if (use_carryover) {
     bytes_consumed = (size_t*)calloc(ss->shard_inner_count, sizeof(size_t));
     if (!bytes_consumed)
