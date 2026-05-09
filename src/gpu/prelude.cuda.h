@@ -47,6 +47,19 @@ extern "C"
     return 1;
   }
 
+  // CUDA 13 added a CUctxCreateParams* argument in position 2; pass NULL to
+  // preserve the CUDA 12 behaviour. Wrap so call sites stay portable.
+  static inline CUresult cu_ctx_create(CUcontext* pctx,
+                                       unsigned int flags,
+                                       CUdevice dev)
+  {
+#if CUDA_VERSION >= 13000
+    return cuCtxCreate(pctx, NULL, flags, dev);
+#else
+    return cuCtxCreate(pctx, flags, dev);
+#endif
+  }
+
   static inline void cu_event_destroy(CUevent e)
   {
     if (e)

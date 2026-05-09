@@ -69,12 +69,17 @@
           aws-checksums
           s2n-tls
         ];
-        gpuBuildInputs = with pkgs; [
-          cudaPackages.cudatoolkit
-          cudaPackages.nvcomp
-          cudaPackages.nvcomp.static
-          llvmPackages.openmp
-        ];
+        # GPU build inputs are parameterized by CUDA version. The devshell and
+        # the default `chucky` package use CUDA 13.2 (Blackwell-era). A
+        # CUDA 12.9 variant (`chucky-cuda12`) is also emitted for downstream
+        # consumers that pin the older toolkit.
+        mkGpuBuildInputs =
+          cudaPackages: with pkgs; [
+            cudaPackages.cudatoolkit
+            cudaPackages.nvcomp
+            cudaPackages.nvcomp.static
+            llvmPackages.openmp
+          ];
 
         commonNativeBuildInputs = with pkgs; [
           cmake
@@ -85,18 +90,26 @@
         mkChucky =
           {
             variant, # "gpu" | "cpu"
+            cudaPackages ? pkgs.cudaPackages_13_2,
+            pname ? null,
           }:
           let
             isGpu = variant == "gpu";
-            pname = if isGpu then "chucky" else "chucky-cpu";
+            resolvedPname =
+              if pname != null then
+                pname
+              else if isGpu then
+                "chucky"
+              else
+                "chucky-cpu";
           in
           pkgs.stdenv.mkDerivation {
-            inherit pname;
+            pname = resolvedPname;
             version = "0.1.0";
             src = self;
 
             nativeBuildInputs = commonNativeBuildInputs;
-            buildInputs = commonBuildInputs ++ pkgs.lib.optionals isGpu gpuBuildInputs;
+            buildInputs = commonBuildInputs ++ pkgs.lib.optionals isGpu (mkGpuBuildInputs cudaPackages);
 
             cmakeFlags = [
               "-DCHUCKY_ENABLE_GPU=${if isGpu then "ON" else "OFF"}"
@@ -118,7 +131,19 @@
         formatter = pkgs.nixfmt-tree;
 
         packages = {
+          # Default GPU package is CUDA 13.2.
           chucky = mkChucky { variant = "gpu"; };
+          # Explicit per-CUDA aliases for downstream consumers.
+          chucky-cuda13 = mkChucky {
+            variant = "gpu";
+            cudaPackages = pkgs.cudaPackages_13_2;
+            pname = "chucky-cuda13";
+          };
+          chucky-cuda12 = mkChucky {
+            variant = "gpu";
+            cudaPackages = pkgs.cudaPackages_12;
+            pname = "chucky-cuda12";
+          };
           chucky-cpu = mkChucky { variant = "cpu"; };
           default = mkChucky { variant = "gpu"; };
         };
@@ -152,7 +177,7 @@
               uv
             ]);
 
-          buildInputs = commonBuildInputs ++ gpuBuildInputs;
+          buildInputs = commonBuildInputs ++ (mkGpuBuildInputs pkgs.cudaPackages_13_2);
         };
       }
     );

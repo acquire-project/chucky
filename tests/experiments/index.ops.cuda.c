@@ -410,7 +410,7 @@ main(int ac, char* av[])
 
   CU(Fail, cuInit(0));
   CU(Fail, cuDeviceGet(&dev, 0));
-  CU(Fail, cuCtxCreate(&ctx, 0, dev));
+  CU(Fail, cu_ctx_create(&ctx, 0, dev));
 
   printf("=== Test 0: CPU hit count verification ===\n");
   ecode |= test_transpose_hit_count_cpu();

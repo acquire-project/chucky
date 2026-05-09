@@ -297,7 +297,8 @@ def gpu_name() -> str:
 # ---------------------------------------------------------------------------
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
-            s3_region: str | None = None, s3_endpoint: str | None = None) -> dict | None:
+            s3_region: str | None = None, s3_endpoint: str | None = None,
+            tmpdir_root: Path | None = None) -> dict | None:
     """Execute a single benchmark run, return result dict or None if exe missing."""
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if sys.platform == "win32":
@@ -319,7 +320,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
 
     tmpdir = None
     if spec.sink == "fs":
-        tmpdir = tempfile.mkdtemp(prefix="chucky_io_")
+        tmpdir = tempfile.mkdtemp(prefix="chucky_io_",
+                                  dir=str(tmpdir_root) if tmpdir_root else None)
         cmd.extend(["-o", tmpdir])
     elif spec.sink == "s3":
         if not s3_bucket or not s3_region or not s3_endpoint:
@@ -406,8 +408,10 @@ def status_style(status: str) -> str:
 @click.option("--s3-region", default="us-east-1", show_default=True, help="S3 region.")
 @click.option("--s3-endpoint", default="http://localhost:9000", show_default=True,
               help="S3 endpoint URL.")
+@click.option("--tmpdir", "tmpdir_root", type=click.Path(path_type=Path), default=None,
+              help="Parent directory for fs-sink scratch dirs (default: system temp).")
 def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
-         s3_bucket, s3_region, s3_endpoint):
+         s3_bucket, s3_region, s3_endpoint, tmpdir_root):
     """Benchmark sweep runner for chucky."""
     commit = git_commit()
     hostname = platform.node()
@@ -529,7 +533,8 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 result = run_one(spec, build_dir,
                                  s3_bucket=s3_bucket,
                                  s3_region=s3_region,
-                                 s3_endpoint=s3_endpoint)
+                                 s3_endpoint=s3_endpoint,
+                                 tmpdir_root=tmpdir_root)
             except subprocess.TimeoutExpired:
                 result = {**spec.base_result(), "status": "timeout"}
             except Exception as e:

@@ -10,6 +10,7 @@
 // prior sink stamped on the shared delivery pipeline.
 
 #include "dimension.h"
+#include "gpu/prelude.cuda.h"
 #include "multiarray.gpu.h"
 #include "stream.gpu.h"
 #include "util/prelude.h"
@@ -215,7 +216,7 @@ main(int ac, char* av[])
   CUdevice dev;
   CUcontext ctx;
   if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS ||
-      cuCtxCreate(&ctx, 0, dev) != CUDA_SUCCESS) {
+      cu_ctx_create(&ctx, 0, dev) != CUDA_SUCCESS) {
     log_error("Failed to create CUDA context");
     return 1;
   }
