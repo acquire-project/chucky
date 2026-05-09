@@ -41,24 +41,18 @@ extern "C"
     uint32_t active_count_max; // worst-case active epochs per batch
     size_t page_size;          // 0 = no padding
     uint64_t chunks_per_shard_append; // shard length along append dims
-    // Per-shard reservation in d_aggregated. Sized so each shard has space for
-    // a leading tail (< page_size) carried over from the prior batch plus the
-    // worst-case batch_active_count * cps_inner * max_comp_chunk_bytes plus
-    // up to one page per intra-batch generation boundary when
-    // requires_gen_pads is set. Page-aligned. Zero when page_size == 0.
+    // Per-shard reservation in d_aggregated. Worst-case batch_active_count
+    // * cps_inner * max_comp_chunk_bytes plus one page slack for a leading
+    // carry-over tail (< page_size) from the prior batch. Page-aligned.
+    // Zero when page_size == 0.
     size_t shard_capacity;
-    // 1 when the agg buffer is padded up to a page boundary at every intra-
-    // batch generation transition, so each fresh-gen run starts at a page-
-    // aligned src. The CPU aggregator sets this; the GPU path leaves it 0
-    // and falls back to a copying write for post-finalize runs.
-    int requires_gen_pads;
-    // Worst-case number of shard generations a single batch can straddle:
-    //   ceil(active_count_max / chunks_per_shard_append) + 1
-    // The +1 covers a partial gen at the front when epoch_in_shard at batch
-    // start is non-zero. Used by the GPU bias kernels to size per-(shard,gen)
-    // bias tables; matches the pad reservation in shard_capacity.
-    uint64_t max_gens_per_batch;
   };
+
+  // Per-shard finalize-bundle slot size: one page for trailing sub-page data,
+  // index entries (16 bytes per chunk), 4-byte CRC, padded to page boundary.
+  // Used by init_shard_state to size shard_state.bundle_buf_pool. Returns 0
+  // when page_size is 0 (no alignment requirement) or on overflow.
+  size_t bundle_capacity_for(uint64_t chunks_per_shard_total, size_t page_size);
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
   // active_count_max is the maximum number of active epochs per batch for this

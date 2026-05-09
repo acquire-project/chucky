@@ -26,6 +26,25 @@ Overflow:
 }
 
 size_t
+bundle_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
+{
+  if (page_size == 0)
+    return 0;
+  // Bundle layout: [<page trailing data || index || CRC || pad-to-page].
+  // Worst-case total = (page-1) + chunks*16 + 4, rounded up to page.
+  CHECK_MUL_OVERFLOW(Overflow, chunks_per_shard_total, (uint64_t)16, SIZE_MAX);
+  size_t index_bytes = (size_t)chunks_per_shard_total * 16;
+  if (index_bytes > SIZE_MAX - 4)
+    return 0;
+  size_t logical = index_bytes + 4;
+  if (logical > SIZE_MAX - page_size)
+    return 0;
+  return align_up(page_size + logical, page_size);
+Overflow:
+  return 0;
+}
+
+size_t
 agg_pool_bytes_layout(const struct aggregate_layout* layout)
 {
   if (!layout || layout->num_shards == 0)
@@ -271,26 +290,12 @@ aggregate_layout_compute(struct aggregate_layout* layout,
   layout->active_count_max = active_count_max;
   layout->page_size = page_size;
   layout->chunks_per_shard_append = chunks_per_shard_append;
-  layout->requires_gen_pads = 0;
 
-  // Worst-case shard generations a single batch can straddle. The +1
-  // accounts for a partial gen at the front when epoch_in_shard at batch
-  // start is non-zero.
-  {
-    uint64_t cps_app =
-      chunks_per_shard_append > 0 ? chunks_per_shard_append : 1;
-    uint64_t active = active_count_max > 0 ? active_count_max : 1;
-    layout->max_gens_per_batch = (active + cps_app - 1) / cps_app + 1;
-  }
-
-  // Per-shard reservation in d_aggregated: enough room for the worst-case
-  // batch plus inter-gen padding when the aggregator inserts it. Worst case:
-  // a leading tail (< page) at the start, real chunk bytes, and one page of
-  // pad after each generation that completes inside the batch.
+  // Per-shard reservation in d_aggregated: worst-case batch real chunk
+  // bytes plus one page slack for a leading carry-over tail.
   if (page_size > 0 && active_count_max > 0) {
     size_t worst = (size_t)active_count_max * cps_inner * max_comp_chunk_bytes;
-    size_t extra = (size_t)layout->max_gens_per_batch * page_size;
-    layout->shard_capacity = align_up(worst + extra, page_size);
+    layout->shard_capacity = align_up(worst + page_size, page_size);
   } else {
     layout->shard_capacity = 0;
   }
