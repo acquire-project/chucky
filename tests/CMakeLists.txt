@@ -60,6 +60,10 @@ target_link_libraries(test_shard_verify PUBLIC chucky_log Zstd::Zstd)
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
 
+# Aggregate-result contract verifier (used by CPU and GPU contract tests)
+add_test_lib(aggregate_contract aggregate_contract.c aggregate_contract.h)
+target_link_libraries(aggregate_contract PUBLIC stream_config chucky_log)
+
 # Shared zarr sink test helpers (store + pool + array/multiscale setup)
 add_test_lib(test_zarr_helpers test_zarr_helpers.c test_zarr_helpers.h)
 target_link_libraries(
@@ -93,6 +97,16 @@ add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chuck
 
 # CPU aggregate test (no CUDA)
 add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu threadpool stream_config chucky_log)
+
+# Aggregate-result contract test (CPU)
+add_test_exe(test_aggregate_contract_cpu test_aggregate_contract_cpu.c
+    aggregate_cpu shard_delivery aggregate_contract threadpool stream_config lod_plan chucky_log
+)
+
+# Aggregate-result contract test (GPU)
+add_gpu_test_exe(test_aggregate_contract_gpu test_aggregate_contract_gpu.c
+    LINKS CUDA::cuda_driver CUDA::cudart_static aggregate aggregate_contract stream_config lod_plan chucky_log
+)
 
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)

@@ -237,19 +237,17 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
          in->ws->permuted_sizes,
          (total_covering + nlod) * sizeof(size_t));
 
-  // Pass 2: per-LOD prefix sum.
-  //  - carry-over: each shard's first chunk anchored at
-  //    `si * shard_capacity + h_tail_bytes[lv][si]` (LOD-segment-relative).
-  //    Chunks pack tightly per shard; intra-batch generations are contiguous.
-  //    The post-finalize fresh-gen run lands mid-shard (not page-aligned)
-  //    and intentionally takes the bounce path in delivery.
-  //  - contiguous: single prefix-sum anchored at seg->data_segment_offset.
+  // Pass 2: per-LOD prefix sum producing offsets segment-relative to each
+  // LOD's result.data (= ws->data + seg->data_segment_offset). The contract
+  // exposed to delivery is uniform with the GPU side: shard si's region
+  // starts at offset (si * shard_capacity) within result.data; first chunk
+  // lands at (si * shard_capacity + tail_in[si]) under carry-over, or at
+  // the next packed position under the legacy path.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct lod_segment* seg = &in->layout->lods[lv];
     if (seg->n_active == 0)
       continue;
     const uint64_t base = seg->batch_covering_offset + lv;
-    const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
     if (use_carryover) {
       const size_t shard_capacity = in->per_lod_layouts[lv].shard_capacity;
       const uint64_t cps_inner = seg->chunks_per_shard_inner;
@@ -257,19 +255,20 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
         cps_inner > 0 ? seg->covering_count / cps_inner : 0;
       const size_t* lv_tail = in->h_tail_bytes[lv];
       const uint32_t n_active = seg->n_active;
+      const uint64_t span = (uint64_t)n_active * cps_inner;
       for (uint64_t si = 0; si < num_shards; ++si) {
-        const uint64_t base_si = base + si * (uint64_t)n_active * cps_inner;
+        const uint64_t base_si = base + si * span;
         const size_t tail_in = lv_tail ? lv_tail[si] : 0;
         size_t cur = (size_t)si * shard_capacity + tail_in;
         in->ws->offsets[base_si] = cur;
-        const uint64_t span = (uint64_t)n_active * cps_inner;
         for (uint64_t k = 0; k < span; ++k) {
           cur += in->ws->permuted_sizes[base_si + k];
           in->ws->offsets[base_si + k + 1] = cur;
         }
       }
     } else {
-      in->ws->offsets[base] = seg->data_segment_offset;
+      const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
+      in->ws->offsets[base] = 0;
       for (uint64_t i = 0; i < cnt; ++i)
         in->ws->offsets[base + i + 1] =
           in->ws->offsets[base + i] + in->ws->permuted_sizes[base + i];
@@ -277,7 +276,8 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   }
 
   // Leading-tail copy: stage prior batch's ragged tail at the front of each
-  // shard's region (CPU equivalent of GPU's copy_leading_tail_k).
+  // shard's region within the LOD segment (CPU equivalent of GPU's
+  // copy_leading_tail_k).
   if (use_carryover) {
     for (uint8_t lv = 0; lv < nlod; ++lv) {
       const struct lod_segment* seg = &in->layout->lods[lv];
@@ -300,49 +300,37 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     }
   }
 
-  // Pass 3: gather compressed chunks. Carry-over offsets are LOD-segment-
-  // relative; legacy offsets are absolute in ws->data.
-  if (use_carryover) {
-    for (uint8_t lv = 0; lv < nlod; ++lv) {
-      const struct lod_segment* seg = &in->layout->lods[lv];
-      if (seg->n_active == 0)
-        continue;
-      const uint64_t lv_chunks =
-        (uint64_t)seg->n_active * seg->chunks_per_epoch;
-      if (lv_chunks == 0)
-        continue;
-      struct gather_indirect_ctx c = {
-        .compressed_base = (const char*)in->compressed_base,
-        .comp_sizes_base = in->comp_sizes_base,
-        .gather = in->gather + seg->batch_chunk_offset,
-        .perm = in->ws->perm + seg->batch_chunk_offset,
-        .offsets = in->ws->offsets,
-        .data = (char*)in->ws->data + seg->data_segment_offset,
-        .max_comp = in->layout->max_comp_chunk_bytes,
-      };
-      threadpool_for_n(in->pool, lv_chunks, gather_indirect_range, &c);
-    }
-  } else {
+  // Pass 3: per-LOD parallel gather. Offsets are segment-relative, so each
+  // LOD's gather context anchors data at ws->data + seg->data_segment_offset.
+  // The perm LUT is built (in aggregate_batch_luts_unified) with targets
+  // shifted by (base_covering + lv), so each LOD's perm values are global
+  // indices into ws->offsets — pass the full offsets array, not a slice.
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct lod_segment* seg = &in->layout->lods[lv];
+    if (seg->n_active == 0)
+      continue;
+    const uint64_t lv_chunks = (uint64_t)seg->n_active * seg->chunks_per_epoch;
+    if (lv_chunks == 0)
+      continue;
     struct gather_indirect_ctx c = {
       .compressed_base = (const char*)in->compressed_base,
       .comp_sizes_base = in->comp_sizes_base,
-      .gather = in->gather,
-      .perm = in->ws->perm,
+      .gather = in->gather + seg->batch_chunk_offset,
+      .perm = in->ws->perm + seg->batch_chunk_offset,
       .offsets = in->ws->offsets,
-      .data = (char*)in->ws->data,
+      .data = (char*)in->ws->data + seg->data_segment_offset,
       .max_comp = in->layout->max_comp_chunk_bytes,
     };
-    threadpool_for_n(in->pool, total_chunks, gather_indirect_range, &c);
+    threadpool_for_n(in->pool, lv_chunks, gather_indirect_range, &c);
   }
 
-  // Per-LOD result views. Carry-over shifts result->data to the LOD segment so
-  // deliver-time addressing through `data + si*shard_capacity + offset` is
-  // correct; legacy keeps the unified base.
+  // Per-LOD result views. result.data is shifted to the LOD's segment base
+  // so deliver-time addressing through (data + si*shard_capacity + ...) is
+  // correct, matching the GPU side's per-level h_aggregated.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct lod_segment* seg = &in->layout->lods[lv];
     in->per_lod_results[lv].data =
-      use_carryover ? (char*)in->ws->data + seg->data_segment_offset
-                    : in->ws->data;
+      (char*)in->ws->data + seg->data_segment_offset;
     in->per_lod_results[lv].offsets =
       in->ws->offsets + seg->batch_covering_offset + lv;
     in->per_lod_results[lv].chunk_sizes =
