@@ -6,6 +6,7 @@
 #include "zarr/io_queue.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -128,6 +129,18 @@ static void
 pwrite_ref_fn(void* arg)
 {
   struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
+  // DIAG: dump first 80 bytes of buffer pre-write to confirm what's on the
+  // wire. Remove once partial-shard finalize path is debugged.
+  size_t dn = j->nbytes < 80 ? j->nbytes : 80;
+  const uint8_t* d = (const uint8_t*)j->data;
+  char hex[3 * 80 + 1];
+  for (size_t i = 0; i < dn; ++i)
+    snprintf(hex + 3 * i, 4, "%02x ", d[i]);
+  hex[3 * dn] = 0;
+  log_info("pwrite_ref: nbytes=%zu offset=%llu first80=%s",
+           j->nbytes,
+           (unsigned long long)j->offset,
+           hex);
   if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0) {
     log_error("shard_pool_fs pwrite_ref failed");
     atomic_store(j->io_error, 1);
