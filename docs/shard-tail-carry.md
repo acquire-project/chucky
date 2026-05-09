@@ -11,7 +11,7 @@ multiples of the device's page alignment.
 
 We also want the on-disk shard file to have no inter-batch padding zeros: the
 shard's index records each chunk's actual byte offset and size, and any slack
-inside the file would be a correctness footgun for readers.
+inside the file is wasted bytes.
 
 Compressed chunks have variable size, so they don't naturally land on page
 boundaries. The "tail carry-over" mechanism reconciles these two demands by

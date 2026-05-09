@@ -792,8 +792,158 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   CHECK(Fail4, direct_bytes > 0);
   CHECK(Fail4, copy_calls == 2);
 
+  // Drain end-of-stream finalize and close before reading shard files.
   tile_stream_cpu_destroy(s);
+  s = NULL;
   test_zarr_sink_close(&z);
+
+  // File integrity check: each shard satisfies the size invariant
+  // (file_size == Σ chunk_nbytes + index + crc), and every valid chunk's
+  // bytes match the source pattern src[i] = i & 0xFFFF for some
+  // (epoch_in_shard, y_chunk, x_chunk) tuple. Shards 0, 1 are full
+  // (2 epochs × 4 inner chunks = 8 chunks). Shard 2 is partial (1 epoch ×
+  // 4 inner chunks = 4 chunks; the other 4 slots are UINT64_MAX sentinels).
+  // The bouncing intra-batch fresh-gen runs (shard 1's first chunk after
+  // batch 0's mid-batch finalize, shard 2's first chunk after batch 1's
+  // mid-batch finalize) are validated here — if the bounce path corrupted
+  // a single byte, this check fails.
+  {
+    const int chunks_per_shard_total = 8;
+    const int chunk_elements = chunk * chunk;
+    const int chunk_bytes = chunk_elements * (int)sizeof(uint16_t);
+    const size_t index_data =
+      (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t);
+    const size_t index_total = index_data + 4;
+    int integrity_errors = 0;
+
+    for (int sh = 0; sh < 3; ++sh) {
+      char path[1024];
+      snprintf(path, sizeof(path), "%s/0/c/%d/0/0", tmpdir, sh);
+
+      uint8_t* data = NULL;
+      size_t len = 0;
+      if (read_file_all(path, &data, &len) != 0) {
+        log_error("  shard %d: missing", sh);
+        integrity_errors++;
+        continue;
+      }
+      if (len <= index_total) {
+        log_error("  shard %d: file too short (%zu)", sh, len);
+        free(data);
+        integrity_errors++;
+        continue;
+      }
+
+      const uint8_t* index_ptr = data + len - index_total;
+      uint64_t chunk_offsets[8], chunk_sizes_arr[8];
+      uint64_t expected_payload = 0;
+      int valid_chunks = 0;
+      for (int j = 0; j < chunks_per_shard_total; ++j) {
+        memcpy(&chunk_offsets[j], index_ptr + (size_t)j * 16, 8);
+        memcpy(&chunk_sizes_arr[j], index_ptr + (size_t)j * 16 + 8, 8);
+        if (chunk_offsets[j] == UINT64_MAX && chunk_sizes_arr[j] == UINT64_MAX)
+          continue;
+        expected_payload += chunk_sizes_arr[j];
+        valid_chunks++;
+      }
+
+      // Size invariant: no inter-batch padding, no trailing zeros after CRC.
+      if (len != expected_payload + index_total) {
+        log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                  sh,
+                  len,
+                  (unsigned long long)expected_payload,
+                  index_total);
+        integrity_errors++;
+        free(data);
+        continue;
+      }
+
+      // Expected valid chunk count: shards 0,1 are full (8); shard 2 is
+      // partial (4: the first epoch's worth of inner chunks).
+      const int expected_valid = (sh == 2) ? 4 : 8;
+      if (valid_chunks != expected_valid) {
+        log_error("  shard %d: %d valid chunks, expected %d",
+                  sh,
+                  valid_chunks,
+                  expected_valid);
+        integrity_errors++;
+        free(data);
+        continue;
+      }
+
+      // Per-chunk content check. For each valid chunk, find the unique
+      // (epoch_in_shard, y_chunk, x_chunk) tuple whose source-pattern bytes
+      // match. Robust to the aggregator's within-shard permutation.
+      int tuple_seen[2][2][2] = { 0 };
+      const int eis_max = (sh == 2) ? 1 : 2;
+      int matched_total = 0;
+      for (int j = 0; j < chunks_per_shard_total; ++j) {
+        if (chunk_offsets[j] == UINT64_MAX)
+          continue;
+        if (chunk_sizes_arr[j] != (uint64_t)chunk_bytes) {
+          log_error("  shard %d chunk %d: size %llu != expected %d",
+                    sh,
+                    j,
+                    (unsigned long long)chunk_sizes_arr[j],
+                    chunk_bytes);
+          integrity_errors++;
+          continue;
+        }
+        const uint16_t* chunk_vals = (const uint16_t*)(data + chunk_offsets[j]);
+        int found = 0;
+        for (int eis = 0; eis < eis_max && !found; ++eis) {
+          const int global_epoch = sh * chunks_per_shard_append + eis;
+          for (int yc = 0; yc < 2 && !found; ++yc) {
+            for (int xc = 0; xc < 2 && !found; ++xc) {
+              if (tuple_seen[eis][yc][xc])
+                continue;
+              int match = 1;
+              for (int vy = 0; vy < chunk && match; ++vy) {
+                for (int vx = 0; vx < chunk; ++vx) {
+                  const int gy = yc * chunk + vy;
+                  const int gx = xc * chunk + vx;
+                  const int src_idx =
+                    global_epoch * inner_dim * inner_dim + gy * inner_dim + gx;
+                  const uint16_t expected = (uint16_t)(src_idx & 0xFFFF);
+                  if (chunk_vals[vy * chunk + vx] != expected) {
+                    match = 0;
+                    break;
+                  }
+                }
+              }
+              if (match) {
+                tuple_seen[eis][yc][xc] = 1;
+                matched_total++;
+                found = 1;
+              }
+            }
+          }
+        }
+        if (!found) {
+          log_error(
+            "  shard %d chunk %d: bytes don't match any expected tuple", sh, j);
+          integrity_errors++;
+        }
+      }
+      if (matched_total != expected_valid) {
+        log_error("  shard %d: matched %d chunks, expected %d",
+                  sh,
+                  matched_total,
+                  expected_valid);
+        integrity_errors++;
+      }
+      free(data);
+    }
+
+    if (integrity_errors) {
+      log_error("FAIL test_unbuffered_intra_batch_gen (%d integrity errors)",
+                integrity_errors);
+      free(src);
+      return 1;
+    }
+  }
+
   free(src);
   log_info("PASS");
   return 0;

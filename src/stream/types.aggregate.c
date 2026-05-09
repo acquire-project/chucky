@@ -153,20 +153,35 @@ batch_aggregate_layout_init(struct batch_aggregate_layout* out,
     chunk_acc += batch_chunks;
     covering_acc += batch_cov;
 
-    // Per-LOD segment capacity — sized via the same agg_pool_bytes math
-    // used by the per-LOD path so behavior is identical when nlod == 1.
-    size_t seg_bytes = agg_pool_bytes(batch_chunks,
-                                      in->max_comp_chunk_bytes,
-                                      batch_cov,
-                                      seg->n_active * in->cps_inner,
-                                      page_size);
-    if (seg_bytes == 0 && batch_chunks > 0) {
-      log_error("batch_aggregate_layout_init: lod %u agg_pool_bytes overflow "
-                "(batch_chunks=%llu, max_comp=%zu)",
-                (unsigned)lv,
-                (unsigned long long)batch_chunks,
-                in->max_comp_chunk_bytes);
-      goto Error;
+    // Per-LOD segment capacity. With carry-over (page_size > 0) the gather
+    // places shard si at base + si*shard_capacity, so the segment must reserve
+    // num_shards*shard_capacity — not the tightly-packed agg_pool_bytes value.
+    // Without carry-over fall back to the legacy chunk-pool sizing.
+    size_t seg_bytes;
+    if (page_size > 0 && in->shard_capacity > 0) {
+      seg_bytes = agg_pool_bytes_layout(in);
+      if (seg_bytes == 0 && in->num_shards > 0) {
+        log_error("batch_aggregate_layout_init: lod %u layout overflow "
+                  "(num_shards=%llu, shard_capacity=%zu)",
+                  (unsigned)lv,
+                  (unsigned long long)in->num_shards,
+                  in->shard_capacity);
+        goto Error;
+      }
+    } else {
+      seg_bytes = agg_pool_bytes(batch_chunks,
+                                 in->max_comp_chunk_bytes,
+                                 batch_cov,
+                                 seg->n_active * in->cps_inner,
+                                 page_size);
+      if (seg_bytes == 0 && batch_chunks > 0) {
+        log_error("batch_aggregate_layout_init: lod %u agg_pool_bytes overflow "
+                  "(batch_chunks=%llu, max_comp=%zu)",
+                  (unsigned)lv,
+                  (unsigned long long)batch_chunks,
+                  in->max_comp_chunk_bytes);
+        goto Error;
+      }
     }
 
     seg->data_segment_bytes = seg_bytes;
