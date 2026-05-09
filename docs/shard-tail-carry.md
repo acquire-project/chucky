@@ -4,7 +4,7 @@ How aggregated chunks reach disk in the unbuffered (O_DIRECT / F_NOCACHE /
 FILE_FLAG_NO_BUFFERING) sink, and how per-shard ragged tails roll forward
 across batches so the on-disk file contains no inter-batch padding.
 
-## Buffer layout (carry-over mode)
+## Aggregate buffer layout
 
 `page = sink->required_shard_alignment()`. When `page > 0` the workspace data
 buffer is laid out hierarchically:
@@ -23,21 +23,13 @@ ws->data
 ```
 
 `shard_capacity = align_up(active_count_max × cps_inner × max_comp_chunk_bytes
-+ max_gens × page, page)` where
-`max_gens = ceil(active_count_max / chunks_per_shard_append) + 1`. The extra
-pages reserve room for an incoming leading tail (< page) plus up to one page
-of pad after every generation that completes inside the batch.
++ page, page)`. The one page of slack reserves room for an incoming leading
+tail (< page).
 
-The CPU aggregator's per-shard prefix-sum anchors the first chunk at
-`shard_base + tail_in` and walks chunks epoch-by-epoch. After each generation
-completes (`epoch_in_shard` reaches `chunks_per_shard_append`), the cursor is
-advanced up to the next page boundary in the agg buffer. Chunks within a
-single generation pack tightly behind the leading tail; consecutive
-generations within one batch are page-aligned with respect to each other.
-
-The pad lives only in the agg buffer. The on-disk file still gets each
-generation truncated to its unpadded logical size by the prior generation's
-finalize, so the on-disk layout is unchanged.
+Chunks within one batch pack tightly per shard. Generations within one batch
+are contiguous in the aggregate buffer — there is **no per-generation
+padding**. Intra-batch generation crossings are handled at delivery time, not
+in the aggregator.
 
 ## Per-shard state (`struct active_shard`)
 
@@ -47,7 +39,15 @@ finalize, so the on-disk layout is unchanged.
 | `data_cursor` | next file offset to write at                                     |
 | `tail_buf`    | page-sized scratch holding the carry-forward bytes               |
 | `tail_bytes`  | how many bytes of `tail_buf` are valid                           |
+| `bundle_buf`  | per-shard bundle slot (slice of `shard_state.bundle_buf_pool`)   |
 | `index`       | `[chunks_per_shard_total][2]` (offset, size) pairs for the index |
+
+`tail_buf` and `bundle_buf` are slices of contiguous pools owned by
+`shard_state` (`tail_buf_pool`, `bundle_buf_pool`). Both lifetime-bounded by
+the stream — they outlive any single async write.
+
+`bundle_capacity = align_up(page + chunks_per_shard_total × 16 + 4, page)`:
+one page for the trailing sub-page data, the index, the CRC, page-padded.
 
 ## The run concept
 
@@ -60,11 +60,11 @@ run_finalizes = (run_len == remaining_in_shard)
 ```
 
 For each `(si, run)` pair the aggregator has already laid out the run's chunk
-bytes at `result->data + si*shard_capacity + bytes_consumed[si]`, where
+bytes at `result->data + si × shard_capacity + bytes_consumed[si]`, where
 `bytes_consumed[si]` is the cumulative agg-buffer offset advanced by prior
 runs in this batch.
 
-## Two run outcomes
+## Three run outcomes
 
 ### Non-finalizing run (batch ends mid-generation)
 
@@ -79,69 +79,92 @@ runs in this batch.
 
 ### Finalizing run (this run completes the shard generation)
 
-1. Build a temporary `fbuf = [remaining_data || index || CRC]`, padded up to a
-   page.
-2. Copy-write the bundle to the file. Must be `write` (not `write_direct`)
-   because `fbuf` is freed immediately and `write_direct` is async.
-3. Truncate the file to `data_cursor + logical_bytes` to drop the trailing
-   page-padding zeros.
-4. Close (async close job).
-5. Reset: `writer = NULL`, `data_cursor = 0`, clear `index`, `tail_bytes = 0`,
-   `h_tail_bytes[si] = 0`.
+The finalize is **two-step** when `total_run > page`:
+
+1. **Page-floor write**. Identical to non-finalizing: `write_bytes = (total_run
+   / page) × page` bytes via `write_direct` from the agg slot. Advances
+   `data_cursor` by `write_bytes`.
+2. **Bundle write**. Build `[trailing<page || index || CRC || zero-pad-to-page]`
+   in `sh->bundle_buf`, write via `write_direct` from the bundle slot at
+   `data_cursor`. Lifetime is bounded by `shard_state` (no malloc'd buffer to
+   free).
+3. **Truncate** to `data_cursor + logical_bytes` to drop trailing pad zeros
+   from the on-disk file.
+4. **Finalize** (close).
+5. Reset per-shard state: `writer = NULL`, `data_cursor = 0`, `tail_bytes = 0`,
+   index cleared.
+
+When `total_run < page`, step 1 is skipped and the bundle includes all of
+`total_run` as the "trailing" portion.
+
+### Intra-batch finalize (same shard finalizes twice in one batch)
+
+Triggered when `epochs_per_batch > chunks_per_shard_append`. The first
+finalize of a shard in a batch follows the path above and uses
+`sh->bundle_buf` for `write_direct` (zero-copy). The **second** finalize of
+the same shard within the same batch must bounce-copy the bundle through a
+malloc'd buffer because the prior finalize's `pwrite_ref_job` may still be
+pending in the io_queue. Reusing `sh->bundle_buf` while the worker still
+holds a pointer to it would cause a data race.
+
+Detection: the caller (`deliver_to_shards_batch`) passes
+`is_first_run_for_shard` to `deliver_run_finalizing`, which selects between
+`bundle_buf` (zero-copy) and a one-shot malloc bounce.
+
+The fresh-gen run that follows an intra-batch finalize (writing data into
+the new generation's file) also bounces because its source pointer in the
+agg slot is mid-shard, not page-aligned.
+
+Frequency of intra-batch finalize is governed by the ratio of
+`epochs_per_batch` to `chunks_per_shard_append`. Workloads with batches
+sized at or below one shard generation never hit this path.
 
 ## Batch boundary (same generation)
 
 The non-finalizing path leaves a sub-page tail in `sh->tail_buf` and
 `h_tail_bytes[si] > 0`. On the next batch:
 
-1. Aggregator anchors shard `si`'s first chunk at `shard_base + tail_in`.
-2. Leading-tail-copy memcpys `sh->tail_buf` into `[shard_base, shard_base + tail_in)`.
+1. Aggregator anchors shard `si`'s first chunk at
+   `shard_base + tail_in`.
+2. Leading-tail-copy memcpys `sh->tail_buf` into `[shard_base,
+   shard_base + tail_in)`.
 3. Deliver sees `src = result->data + shard_base + 0` (`bytes_consumed` is
    reset per batch); the tail is at the front, fresh chunks follow — one
    contiguous page-aligned region.
 
-Every batch's `write_bytes` write lands at a `data_cursor` that is a multiple
-of `page`. No inter-batch padding ever lands on disk.
+Every batch's `write_bytes` write lands at a `data_cursor` that is a
+multiple of `page`. No inter-batch padding ever lands on disk.
 
 ## Generation boundary (across batches)
 
 After a finalizing run, the next batch starts with `bytes_consumed[si] = 0`
 (it's a fresh allocation in `deliver_to_shards_batch`) and the file is fresh
 (`writer = NULL`, opened on first run via `sink->open`). `tail_in = 0` (the
-finalize zeroed it). So the new generation's first run has page-aligned `src`
-and goes through `write_direct`.
+finalize zeroed it). So the new generation's first run has page-aligned
+`src` and goes through `write_direct`, including the bundle on finalize.
 
-## Generation boundary (intra-batch)
+## GPU aggregator
 
-When `run_finalizes` mid-batch and more runs follow for the same `si`:
-
-1. Finalize bundle written, file truncated and closed, state reset.
-2. Outer loop opens a new file via `sink->open(level, shard_epoch * shard_inner_count + si)`.
-3. `bytes_consumed[si] += total_run` advances the agg-buffer cursor, then
-   when `requires_gen_pads` is set on the layout (CPU pipeline) it is rounded
-   up to the next page so the next gen's `src` lands page-aligned.
-4. `h_tail_bytes[si]` was zeroed by the finalize, so gen 1 has no carry-in.
-
-Because the aggregator already padded gen 1's first chunk up to the next
-page when laying out the agg buffer, gen 1's `src = data + shard_base +
-align_up(total_run_gen0, page)` is page-aligned and the run takes
-`write_direct` like every other non-finalizing run. No copying-write
-fallback for steady-state delivery.
-
-The GPU aggregator (`aggregate.cu`) pads gen boundaries the same way: the
-`compute_bias_per_gen_k` kernel walks each shard serially, accumulates a
-per-gen pad up to the next page, and writes one bias entry per `(shard, gen)`
-into `d_per_gen_bias`. `apply_bias_per_gen_k` looks up the right entry per
-chunk via `gen_of(j) = (epoch_in_shard + active_epoch_of(j)) / cps_append`.
-The GPU path therefore also flips `requires_gen_pads = 1` on its layouts,
-matching the CPU.
+`add_shard_bias_k` (one block per shard) computes a single per-shard bias
+`bias_s = s × shard_capacity + d_tail_bytes_prev[s] − d_offsets[s × tps_group]`
+into shared memory and applies it to every chunk's offset in shard `s`.
+After the exclusive prefix sum and bias addition, shard `s`'s first chunk
+lands at `s × shard_capacity + tail_in`, with subsequent chunks packed
+tightly. `copy_leading_tail_k` (one block per shard) stages the prior batch's
+ragged tail at the head of each shard's region before chunks pack just past
+it. There is no per-generation bias kernel — generations within one batch
+are contiguous in the agg buffer.
 
 ## Async coupling
 
-All `write` / `write_direct` / `truncate` / close jobs go on the same per-pool
-FIFO `io_queue`. The pool exposes `record_fence` / `wait_fence`; each batch
-ends with one fence so the next slot reuse waits for every IO from this batch
-to drain. That's why `write_direct` can return immediately while the source
-buffer (the aggregated workspace) stays alive — slot rotation is gated by the
-fence, not by the write call.
+All `write_direct` / `write` / `truncate` / close jobs go on the same
+per-pool FIFO `io_queue`. The pool exposes `record_fence` / `wait_fence`;
+each batch ends with one fence so the next slot reuse waits for every IO
+from this batch to drain. That's why `write_direct` can return immediately
+while the source buffer (the aggregated workspace, or the bundle slot) stays
+alive — slot rotation and stream lifetime gate the fence, not the write
+call.
 
+`shard_pool_fs.c` adds a debug-build assertion in `fs_slot_write` that
+`offset` and `nbytes` are multiples of `w->alignment` when `w->alignment > 0`,
+catching upstream bugs that would otherwise silently corrupt O_DIRECT writes.

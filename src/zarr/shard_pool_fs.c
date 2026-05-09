@@ -71,6 +71,12 @@ fs_slot_write(struct shard_writer* self,
   struct fs_slot* w = (struct fs_slot*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
 
+  // Debug-build watchdog: under O_DIRECT, length and offset must both be
+  // multiples of the device alignment (source pointer alignment is handled
+  // by the aligned_alloc + memcpy below).
+  CHECK(Error, w->alignment == 0 || nbytes % w->alignment == 0);
+  CHECK(Error, w->alignment == 0 || offset % w->alignment == 0);
+
   if (w->queue) {
     struct pwrite_job* j;
     void (*job_free)(void*) = free;
