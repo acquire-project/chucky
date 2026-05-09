@@ -216,6 +216,9 @@ static void
 close_truncate_fn(void* arg)
 {
   struct close_truncate_job* j = (struct close_truncate_job*)arg;
+  log_info("close_truncate_fn: path=%s size=%llu",
+           j->path,
+           (unsigned long long)j->logical_size);
   platform_close(j->fd);
   if (platform_truncate_path(j->path, j->logical_size) != 0) {
     log_error("shard_pool_fs truncate-path failed for %s", j->path);
