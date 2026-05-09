@@ -42,15 +42,15 @@ platform_mkdirp(const char* path)
 platform_fd
 platform_open_write(const char* path, int flags)
 {
-  DWORD attrs = FILE_ATTRIBUTE_NORMAL;
-  if (flags & PLATFORM_OPEN_UNBUFFERED)
-    attrs = FILE_FLAG_NO_BUFFERING;
+  // PLATFORM_OPEN_UNBUFFERED is a no-op on Windows: NO_BUFFERING + sub-sector
+  // EOF corrupts the trailing partial sector on 4K-logical NTFS volumes.
+  (void)flags;
   return CreateFileA(path,
                      GENERIC_WRITE,
-                     0,    // no sharing
-                     NULL, // default security
+                     0,
+                     NULL,
                      CREATE_ALWAYS,
-                     attrs,
+                     FILE_ATTRIBUTE_NORMAL,
                      NULL);
 }
 
@@ -105,26 +105,6 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size)
   if (!SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info)))
     return -1;
   return 0;
-}
-
-int
-platform_truncate_path(const char* path, uint64_t logical_size)
-{
-  HANDLE fd = CreateFileA(path,
-                          GENERIC_WRITE,
-                          0,
-                          NULL,
-                          OPEN_EXISTING,
-                          FILE_ATTRIBUTE_NORMAL,
-                          NULL);
-  if (fd == INVALID_HANDLE_VALUE)
-    return -1;
-  FILE_END_OF_FILE_INFO info;
-  info.EndOfFile.QuadPart = (LONGLONG)logical_size;
-  int ok =
-    SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info));
-  CloseHandle(fd);
-  return ok ? 0 : -1;
 }
 
 int

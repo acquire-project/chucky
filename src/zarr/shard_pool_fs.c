@@ -6,7 +6,6 @@
 #include "zarr/io_queue.h"
 
 #include <stdatomic.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,7 +34,6 @@ struct fs_slot
   platform_fd fd;
   struct io_queue* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  struct strbuf path;              // full path; needed to reopen for truncate
   _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
   uint64_t* queued_bytes;          // points to shard_pool_fs.queued_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
@@ -129,18 +127,6 @@ static void
 pwrite_ref_fn(void* arg)
 {
   struct pwrite_ref_job* j = (struct pwrite_ref_job*)arg;
-  // DIAG: dump first 80 bytes of buffer pre-write to confirm what's on the
-  // wire. Remove once partial-shard finalize path is debugged.
-  size_t dn = j->nbytes < 80 ? j->nbytes : 80;
-  const uint8_t* d = (const uint8_t*)j->data;
-  char hex[3 * 80 + 1];
-  for (size_t i = 0; i < dn; ++i)
-    snprintf(hex + 3 * i, 4, "%02x ", d[i]);
-  hex[3 * dn] = 0;
-  log_info("pwrite_ref: nbytes=%zu offset=%llu first80=%s",
-           j->nbytes,
-           (unsigned long long)j->offset,
-           hex);
   if (platform_pwrite(j->fd, j->data, j->nbytes, j->offset) != 0) {
     log_error("shard_pool_fs pwrite_ref failed");
     atomic_store(j->io_error, 1);
@@ -212,86 +198,12 @@ truncate_fn(void* arg)
   }
 }
 
-// Unbuffered (NO_BUFFERING / O_DIRECT) path: closing the writer fd before the
-// truncate lets the truncate run against a fresh, buffered handle to the same
-// path. SetFileInformationByHandle/FileEndOfFileInfo on a NO_BUFFERING handle
-// silently zero-fills the trailing partial sector inside the new EOF on
-// 4K-logical-sector volumes; the buffered handle avoids that.
-struct close_truncate_job
-{
-  platform_fd fd;
-  uint64_t logical_size;
-  char* path;
-  _Atomic int* io_error;
-};
-
-static void
-close_truncate_fn(void* arg)
-{
-  struct close_truncate_job* j = (struct close_truncate_job*)arg;
-  log_info("close_truncate_fn: path=%s size=%llu",
-           j->path,
-           (unsigned long long)j->logical_size);
-  platform_close(j->fd);
-  if (platform_truncate_path(j->path, j->logical_size) != 0) {
-    log_error("shard_pool_fs truncate-path failed for %s", j->path);
-    atomic_store(j->io_error, 1);
-  }
-}
-
-static void
-close_truncate_free(void* arg)
-{
-  struct close_truncate_job* j = (struct close_truncate_job*)arg;
-  free(j->path);
-  free(j);
-}
-
 static int
 fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
 {
   struct fs_slot* w = (struct fs_slot*)self;
   if (w->fd == PLATFORM_FD_INVALID)
     return 0;
-
-  if (w->alignment > 0) {
-    // Unbuffered: must close + reopen-buffered to truncate non-aligned EOF.
-    // Hand off the close to the io worker so prior pwrite jobs drain first.
-    const char* src = strbuf_cstr(&w->path);
-    size_t plen = strlen(src);
-    char* path_copy = (char*)malloc(plen + 1);
-    if (!path_copy)
-      return 1;
-    memcpy(path_copy, src, plen + 1);
-
-    if (w->queue) {
-      struct close_truncate_job* j =
-        (struct close_truncate_job*)malloc(sizeof(*j));
-      if (!j) {
-        free(path_copy);
-        return 1;
-      }
-      j->fd = w->fd;
-      j->logical_size = logical_size;
-      j->path = path_copy;
-      j->io_error = w->io_error;
-      if (io_queue_post(w->queue, close_truncate_fn, j, close_truncate_free)) {
-        free(path_copy);
-        free(j);
-        return 1;
-      }
-    } else {
-      platform_close(w->fd);
-      int rc = platform_truncate_path(path_copy, logical_size);
-      free(path_copy);
-      if (rc != 0)
-        return 1;
-    }
-    // The fd is owned by the close-truncate job now (or already closed).
-    // Mark invalid so fs_slot_finalize is a no-op.
-    w->fd = PLATFORM_FD_INVALID;
-    return 0;
-  }
 
   if (w->queue) {
     struct truncate_job* j =
@@ -348,34 +260,35 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   if (w->fd != PLATFORM_FD_INVALID)
     fs_slot_finalize(&w->base);
 
-  strbuf_reset(&w->path);
-  if (strbuf_appendf(&w->path, "%s/%s", strbuf_cstr(&p->root), key))
+  struct strbuf path = { 0 };
+  if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
 
   int flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
-  w->fd = platform_open_write(strbuf_cstr(&w->path), flags);
+  w->fd = platform_open_write(strbuf_cstr(&path), flags);
   if (w->fd == PLATFORM_FD_INVALID) {
     // Directory may not exist yet — create parent and retry.
-    const char* path_cstr = strbuf_cstr(&w->path);
+    const char* path_cstr = strbuf_cstr(&path);
     const char* last_slash = strrchr(path_cstr, '/');
     if (last_slash) {
       struct strbuf dir = { 0 };
       if (strbuf_append(&dir, path_cstr, (size_t)(last_slash - path_cstr)) ==
             0 &&
           platform_mkdirp(strbuf_cstr(&dir)) == 0)
-        w->fd = platform_open_write(strbuf_cstr(&w->path), flags);
+        w->fd = platform_open_write(strbuf_cstr(&path), flags);
       strbuf_free(&dir);
     }
     if (w->fd == PLATFORM_FD_INVALID) {
-      log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&w->path));
+      log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&path));
       goto Fail;
     }
   }
 
+  strbuf_free(&path);
   return &w->base;
 
 Fail:
-  strbuf_reset(&w->path);
+  strbuf_free(&path);
   return NULL;
 }
 
@@ -443,8 +356,6 @@ pool_fs_destroy(struct shard_pool* self)
   if (p->queue)
     io_queue_destroy(p->queue);
 
-  for (uint64_t i = 0; i < p->nslots; ++i)
-    strbuf_free(&p->slots[i].path);
   free(p->slots);
   strbuf_free(&p->root);
   free(p);
