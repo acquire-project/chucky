@@ -8,22 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void
-pad_shard_sizes(size_t* sizes, uint64_t C, uint64_t cps_inner, size_t page_size)
-{
-  uint64_t num_shards = C / cps_inner;
-  for (uint64_t s = 0; s < num_shards; ++s) {
-    uint64_t base = s * cps_inner;
-    size_t total = 0;
-    for (uint64_t j = 0; j < cps_inner; ++j)
-      total += sizes[base + j];
-    size_t aligned = align_up(total, page_size);
-    size_t padding = aligned - total;
-    if (padding > 0)
-      sizes[base + cps_inner - 1] += padding;
-  }
-}
-
 // ---- Pre-allocated workspace API ----
 
 int
@@ -119,13 +103,8 @@ aggregate_cpu_into(const void* compressed,
   for (uint64_t i = 0; i < M; ++i)
     ws->permuted_sizes[ws->perm[i]] = comp_sizes[i];
 
-  // Save pre-padding sizes for shard index.
+  // Save sizes for shard index.
   memcpy(ws->chunk_sizes, ws->permuted_sizes, C * sizeof(size_t));
-
-  // Pass 1.5: pad shard sizes for page alignment.
-  if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(
-      ws->permuted_sizes, C, layout->cps_inner, layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -202,15 +181,8 @@ aggregate_cpu_batch_into(const void* compressed_base,
   for (uint64_t i = 0; i < batch_M; ++i)
     ws->permuted_sizes[ws->perm[i]] = comp_sizes_base[gather[i]];
 
-  // Save pre-padding sizes for shard index.
+  // Save sizes for shard index.
   memcpy(ws->chunk_sizes, ws->permuted_sizes, batch_C * sizeof(size_t));
-
-  // Pass 1.5: pad shard sizes — per-shard with n_active * cps_inner group size.
-  if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(ws->permuted_sizes,
-                    batch_C,
-                    (uint64_t)n_active * layout->cps_inner,
-                    layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -267,8 +239,10 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
 
   // Pass 2: per-LOD prefix sum.
   //  - carry-over: each shard's first chunk anchored at
-  //    `si * shard_capacity + h_tail_bytes[lv][si]` (LOD-segment-relative);
-  //    intra-batch gen boundary advances cursor to the next page.
+  //    `si * shard_capacity + h_tail_bytes[lv][si]` (LOD-segment-relative).
+  //    Chunks pack tightly per shard; intra-batch generations are contiguous.
+  //    The post-finalize fresh-gen run lands mid-shard (not page-aligned)
+  //    and intentionally takes the bounce path in delivery.
   //  - contiguous: single prefix-sum anchored at seg->data_segment_offset.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct lod_segment* seg = &in->layout->lods[lv];
@@ -278,13 +252,9 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
     if (use_carryover) {
       const size_t shard_capacity = in->per_lod_layouts[lv].shard_capacity;
-      const size_t page = in->layout->page_size;
       const uint64_t cps_inner = seg->chunks_per_shard_inner;
       const uint64_t num_shards =
         cps_inner > 0 ? seg->covering_count / cps_inner : 0;
-      const struct shard_state* ss = in->shards_by_lod[lv];
-      const uint64_t cps_append = ss->chunks_per_shard_append;
-      const uint64_t e0 = ss->epoch_in_shard;
       const size_t* lv_tail = in->h_tail_bytes[lv];
       const uint32_t n_active = seg->n_active;
       for (uint64_t si = 0; si < num_shards; ++si) {
@@ -292,22 +262,10 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
         const size_t tail_in = lv_tail ? lv_tail[si] : 0;
         size_t cur = (size_t)si * shard_capacity + tail_in;
         in->ws->offsets[base_si] = cur;
-        uint64_t e = e0;
-        for (uint32_t ai = 0; ai < n_active; ++ai) {
-          for (uint64_t j = 0; j < cps_inner; ++j) {
-            const uint64_t k = (uint64_t)ai * cps_inner + j;
-            cur += in->ws->permuted_sizes[base_si + k];
-            in->ws->offsets[base_si + k + 1] = cur;
-          }
-          e += 1;
-          if (cps_append > 0 && e >= cps_append) {
-            e = 0;
-            const uint64_t k_next = ((uint64_t)ai + 1) * cps_inner;
-            if (ai + 1 < n_active && page > 0) {
-              cur = align_up(cur, page);
-              in->ws->offsets[base_si + k_next] = cur;
-            }
-          }
+        const uint64_t span = (uint64_t)n_active * cps_inner;
+        for (uint64_t k = 0; k < span; ++k) {
+          cur += in->ws->permuted_sizes[base_si + k];
+          in->ws->offsets[base_si + k + 1] = cur;
         }
       }
     } else {

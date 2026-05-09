@@ -669,9 +669,12 @@ Fail:
 }
 
 // Intra-batch generation boundary: when epochs_per_batch > cps_append, one
-// batch spans multiple shard generations. The CPU aggregator pads each gen
-// boundary to a page boundary inside the agg buffer so every fresh-gen run
-// also takes write_direct, not the copying fallback.
+// batch spans multiple shard generations. The aggregator packs chunks
+// tightly per shard (no per-gen padding), so the post-finalize run's source
+// lands at a mid-shard, non-page-aligned offset in the agg buffer. Delivery
+// falls through to the bounce path for those runs — accepted as the rare
+// slow path. This test pins that contract and validates byte-level shard
+// integrity through the bounce path.
 static int
 test_unbuffered_intra_batch_gen(const char* tmpdir)
 {
@@ -681,7 +684,7 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   log_info("  platform page alignment: %zu", page);
   // Pick chunk_size so a single shard generation's data is NOT a multiple
   // of page — that way the post-finalize run lands on a non-page-aligned
-  // src in the agg buffer unless the aggregator pads gen boundaries. With
+  // src in the agg buffer (intentionally hits the bounce path). With
   // cps_inner=4 and bpe=2, gen total = 2 * 4 * chunk^2 * 2 bytes; pick the
   // smallest chunk where (gen total) > page and (gen total) % page != 0.
   int chunk = 8;
@@ -695,12 +698,13 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   const int inner_dim = chunk * 2; // 2x2 inner chunks
   const int chunks_per_shard_append = 2;
   // 5 epochs, cps_append=2, epochs_per_batch=3:
-  //   batch 0 (3 epochs): shard 0 finalizes (2), then shard 1 takes 1 epoch
-  //                       (non-finalizing run — must take write_direct).
-  //   batch 1 (2 epochs): shard 1 finalizes (1 more), shard 2 takes 1 epoch.
-  //   final flush: shard 2 finalizes (1 epoch, partial).
-  // Without the gen-pad fix, the post-finalize run in batch 0 starts at a
-  // non-page-aligned src and falls back to the copying write path.
+  //   batch 0 (3 epochs): shard 0 finalizes (2 epochs, bundle = copy),
+  //                       then shard 1 takes 1 epoch (post-finalize run,
+  //                       src is mid-shard → bounce/copy).
+  //   batch 1 (2 epochs): shard 1 finalizes (1 more, bundle = copy),
+  //                       shard 2 takes 1 epoch (post-finalize → bounce/copy).
+  //   final flush: shard 2 finalizes (bundle = copy).
+  // Total: 3 bundles + 2 fresh-gen bounces = 5 copies, 0 direct.
   const int n_epochs = 5;
   const int epoch_elements = inner_dim * inner_dim;
   const int total_elements = n_epochs * epoch_elements;
@@ -779,13 +783,13 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
            (unsigned long long)direct_calls,
            (double)direct_bytes / 1024.0);
 
-  // 3 shards, each finalizes once (copy). Both batches do a non-finalizing
-  // run after a mid-batch finalize: batch 0 ends with shard 1 partially
-  // filled, batch 1 ends with shard 2 partially filled. With the gen-pad fix
-  // those post-finalize runs land on page-aligned src and take write_direct.
-  CHECK(Fail4, direct_calls > 0);
-  CHECK(Fail4, direct_bytes > 0);
-  CHECK(Fail4, copy_calls == 3);
+  // 3 shards each finalize once via a bundle copy (3 copies). Both batches
+  // do a non-finalizing run after a mid-batch finalize: those runs land on
+  // mid-shard, non-page-aligned src and take the bounce path (2 copies).
+  // No direct calls in this geometry — every write either bundles a finalize
+  // or bounces a fresh-gen run.
+  CHECK(Fail4, direct_calls == 0);
+  CHECK(Fail4, copy_calls == 5);
 
   tile_stream_cpu_destroy(s);
   test_zarr_sink_close(&z);

@@ -150,85 +150,6 @@ Fail:
   return 1;
 }
 
-// Test with page_size > 0 (shard alignment padding).
-static int
-test_page_aligned(void)
-{
-  log_info("=== test_aggregate_cpu_page_aligned ===");
-
-  struct aggregate_layout layout;
-  memset(&layout, 0, sizeof(layout));
-
-  // 3D: chunk_count={2, 2}, chunks_per_shard={1, 2}, shard_count={2, 1}
-  // cps_inner = 2, C = 2*1 * 1*2 = 4, M = 4
-  uint64_t chunk_count[] = { 0, 2, 2 };
-  uint64_t chunks_per_shard[] = { 0, 1, 2 };
-  uint8_t rank = 3;
-  uint64_t M = 4;
-  size_t max_comp = 100;
-  size_t page_size = 512;
-
-  size_t comp_sizes[4] = { 30, 40, 50, 60 };
-  char* compressed = NULL;
-
-  CHECK(Fail,
-        aggregate_layout_compute(&layout,
-                                 rank,
-                                 1,
-                                 chunk_count,
-                                 chunks_per_shard,
-                                 M,
-                                 max_comp,
-                                 1,
-                                 page_size,
-                                 1) == 0);
-
-  compressed = (char*)calloc(M, max_comp);
-  CHECK(Fail, compressed);
-
-  for (uint64_t i = 0; i < M; ++i)
-    memset(compressed + i * max_comp, (int)(i + 1), comp_sizes[i]);
-
-  struct aggregate_cpu_workspace ws;
-  memset(&ws, 0, sizeof(ws));
-  struct aggregate_result result;
-  CHECK(Fail, aggregate_cpu_workspace_init(&ws, &layout) == 0);
-  CHECK(Fail,
-        aggregate_cpu_into(
-          compressed, comp_sizes, &layout, &ws, &result, g_pool) == 0);
-
-  // Verify shard boundaries are page-aligned.
-  // Each shard has cps_inner chunks. The offset after each shard group
-  // should be a multiple of page_size.
-  uint64_t cps = layout.cps_inner;
-  uint64_t num_shards = layout.covering_count / cps;
-  for (uint64_t s = 0; s < num_shards; ++s) {
-    size_t shard_end = result.offsets[(s + 1) * cps];
-    CHECK(Fail, shard_end % page_size == 0);
-  }
-
-  // Verify chunk data integrity (pre-padding sizes).
-  for (uint64_t i = 0; i < M; ++i) {
-    uint32_t pi = (uint32_t)ravel(
-      layout.lifted_rank, layout.lifted_shape, layout.lifted_strides, i);
-    CHECK(Fail, result.chunk_sizes[pi] == comp_sizes[i]);
-    const char* p = (const char*)result.data + result.offsets[pi];
-    for (size_t j = 0; j < comp_sizes[i]; ++j)
-      CHECK(Fail, (uint8_t)p[j] == (uint8_t)(i + 1));
-  }
-
-  aggregate_cpu_workspace_free(&ws);
-  free(compressed);
-  log_info("  PASS");
-  return 0;
-
-Fail:
-  aggregate_cpu_workspace_free(&ws);
-  free(compressed);
-  log_error("  FAIL");
-  return 1;
-}
-
 int
 main(int ac, char* av[])
 {
@@ -244,7 +165,6 @@ main(int ac, char* av[])
   int rc = 0;
   rc |= test_simple();
   rc |= test_multishard();
-  rc |= test_page_aligned();
 
   threadpool_free(g_pool);
   return rc;

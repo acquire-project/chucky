@@ -373,9 +373,6 @@ deliver_to_shards_batch(uint8_t level,
   const size_t page_size = layout ? layout->page_size : 0;
   const size_t shard_capacity = layout ? layout->shard_capacity : 0;
   const int use_carryover = (page_size > 0 && shard_capacity > 0);
-  // bytes_consumed must skip pad after a finalizing run so next gen's src is
-  // page-aligned.
-  const int requires_gen_pads = (layout && layout->requires_gen_pads);
   size_t total_bytes = 0;
   // Per-shard cumulative bytes consumed from agg buffer in this batch.
   size_t* bytes_consumed = NULL;
@@ -448,9 +445,12 @@ deliver_to_shards_batch(uint8_t level,
                                           &total_bytes) == 0);
         }
 
+        // Intra-batch fresh-gen runs intentionally take the bounce path:
+        // after a finalizing run, the next gen's src lands at
+        // shard_base + tail_in + gen_N_real_bytes (mid-shard, not page-
+        // aligned), so deliver_run_nonfinalizing's write_direct guard fails
+        // and it falls through to write (bounce). Acceptable: rare path.
         bytes_consumed[si] += total_run;
-        if (run_finalizes && requires_gen_pads)
-          bytes_consumed[si] = align_up(bytes_consumed[si], page_size);
       } else {
         CHECK(Error,
               deliver_run_contiguous(sh,
