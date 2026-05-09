@@ -1,5 +1,6 @@
 #include "platform/platform_io.h"
 
+#include <stdio.h>
 #include <string.h>
 
 int
@@ -128,4 +129,68 @@ platform_path_exists(const char* path)
   if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
     return 0;
   return -1;
+}
+
+// Recursive descent: list path's children, delete each (recursing into
+// directories), then remove path itself.
+static int
+remove_tree_recurse(const char* path)
+{
+  char pattern[4096];
+  if ((size_t)snprintf(pattern, sizeof(pattern), "%s\\*", path) >=
+      sizeof(pattern))
+    return -1;
+
+  WIN32_FIND_DATAA fd;
+  HANDLE h = FindFirstFileA(pattern, &fd);
+  if (h != INVALID_HANDLE_VALUE) {
+    do {
+      if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+        continue;
+      char child[4096];
+      if ((size_t)snprintf(
+            child, sizeof(child), "%s\\%s", path, fd.cFileName) >=
+          sizeof(child)) {
+        FindClose(h);
+        return -1;
+      }
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (remove_tree_recurse(child) != 0) {
+          FindClose(h);
+          return -1;
+        }
+      } else {
+        // Clear read-only bit; otherwise DeleteFileA fails with EACCES.
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+          SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileA(child)) {
+          FindClose(h);
+          return -1;
+        }
+      }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+  } else {
+    DWORD err = GetLastError();
+    if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND)
+      return -1;
+    // Path doesn't exist as a directory; fall through to try as a file.
+  }
+
+  if (RemoveDirectoryA(path))
+    return 0;
+  if (DeleteFileA(path))
+    return 0;
+  DWORD err = GetLastError();
+  if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+    return 0;
+  return -1;
+}
+
+int
+platform_remove_tree(const char* path)
+{
+  if (!path || !path[0])
+    return 0;
+  return remove_tree_recurse(path);
 }

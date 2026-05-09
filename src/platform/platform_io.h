@@ -55,3 +55,9 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size);
 // on Windows / not-a-dir), -1 on unexpected IO error.
 int
 platform_path_exists(const char* path);
+
+// Recursively remove the file or directory at path, including all contents.
+// A missing path is treated as success. Returns 0 on success, -1 if any entry
+// could not be removed.
+int
+platform_remove_tree(const char* path);

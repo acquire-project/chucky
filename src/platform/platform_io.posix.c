@@ -1,9 +1,12 @@
 #define _GNU_SOURCE
+#define _XOPEN_SOURCE 700 // for nftw / FTW_DEPTH / FTW_PHYS
 #include "platform/platform_io.h"
 
 #include "log/log.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -94,6 +97,32 @@ platform_path_exists(const char* path)
   struct stat st;
   if (stat(path, &st) == 0)
     return 1;
+  if (errno == ENOENT || errno == ENOTDIR)
+    return 0;
+  return -1;
+}
+
+static int
+remove_entry_cb(const char* fpath,
+                const struct stat* sb,
+                int typeflag,
+                struct FTW* ftwbuf)
+{
+  (void)sb;
+  (void)typeflag;
+  (void)ftwbuf;
+  return remove(fpath) == 0 ? 0 : -1;
+}
+
+int
+platform_remove_tree(const char* path)
+{
+  if (!path || !path[0])
+    return 0;
+  // FTW_DEPTH: visit children before parent (post-order); FTW_PHYS: don't
+  // follow symlinks. 16 fds is plenty for the shallow zarr layouts used here.
+  if (nftw(path, remove_entry_cb, 16, FTW_DEPTH | FTW_PHYS) == 0)
+    return 0;
   if (errno == ENOENT || errno == ENOTDIR)
     return 0;
   return -1;
