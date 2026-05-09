@@ -238,9 +238,10 @@ test_shard_pool_unbuffered(void)
   struct shard_writer* w = pool->open(pool, 0, "unbuf/shard0.bin");
   CHECK(Fail3, w);
 
-  // Write enough data to be meaningful (must be page-aligned for O_DIRECT)
-  // Use a 4096-byte aligned buffer
-  size_t page = 4096;
+  // O_DIRECT / F_NOCACHE / FILE_FLAG_NO_BUFFERING require offset, length,
+  // and source pointer all aligned to the device's page alignment (16 KiB
+  // on Apple Silicon, 4 KiB on most Linux/Windows).
+  size_t page = platform_page_alignment();
   char* data = (char*)platform_aligned_alloc(page, page);
   CHECK(Fail3, data);
   memset(data, 0xAB, page);

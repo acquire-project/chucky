@@ -682,15 +682,14 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
 
   const size_t page = platform_page_alignment();
   log_info("  platform page alignment: %zu", page);
-  // Pick chunk_size so a single shard generation's data is NOT a multiple
-  // of page — that way the post-finalize run lands on a non-page-aligned
-  // src in the agg buffer (intentionally hits the bounce path). With
-  // cps_inner=4 and bpe=2, gen total = 2 * 4 * chunk^2 * 2 bytes; pick the
-  // smallest chunk where (gen total) > page and (gen total) % page != 0.
+  // Pick chunk so one epoch > page (post-finalize run hits the bounce path)
+  // and one generation is not a page multiple (forces mid-shard non-aligned
+  // src). cps_inner=4 (2x2 inner), bpe=2 → epoch_bytes = 4*chunk^2*2.
   int chunk = 8;
   while (1) {
-    size_t gen_bytes = (size_t)2 * 4 * (size_t)chunk * (size_t)chunk * 2u;
-    if (gen_bytes > page && (gen_bytes % page) != 0)
+    size_t epoch_bytes = (size_t)4 * (size_t)chunk * (size_t)chunk * 2u;
+    size_t gen_bytes = epoch_bytes * 2u;
+    if (epoch_bytes > page && (gen_bytes % page) != 0)
       break;
     chunk += 8;
   }
