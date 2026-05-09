@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 struct threadpool;
+struct shard_state;
 
 // Pre-allocated workspace for zero-allocation aggregation.
 struct aggregate_cpu_workspace
@@ -49,16 +50,41 @@ aggregate_cpu_batch_into(const void* compressed_base,
                          struct aggregate_result* result,
                          struct threadpool* pool);
 
-// Unified per-batch aggregate. Single OpenMP loop over total_batch_chunks
-// gathers compressed chunks from across all LODs into the shared, page-
-// aligned data buffer. Per-LOD result views are written into per_lod_results
-// so the caller's deliver-per-LOD path can hand each segment to its sink.
+// Inputs to aggregate_cpu_batch_into_unified. Grouped because the call has
+// many independent arguments; designated initializers at the call site keep
+// each argument labeled.
+struct aggregate_cpu_inputs
+{
+  // Compressed-pool inputs.
+  const void* compressed_base;
+  const size_t* comp_sizes_base;
+  const uint32_t* gather; // [total_batch_chunks]
+
+  // Layouts: unified batch + per-LOD geometry.
+  const struct batch_aggregate_layout* layout;
+  const struct aggregate_layout* per_lod_layouts; // [layout->nlod]
+
+  // Tail-carry inputs (carry-over mode only). Both NULL when page_size == 0.
+  // shards_by_lod[lv] is the shard_state for LOD lv. Each entry is independent;
+  // the function does not assume a contiguous backing array.
+  struct shard_state* const* shards_by_lod; // [layout->nlod]
+  size_t* const* h_tail_bytes;              // [layout->nlod]
+
+  // Workspace (reused) and outputs (per-LOD result views).
+  struct aggregate_cpu_workspace* ws;
+  struct aggregate_result* per_lod_results; // [layout->nlod]
+  struct threadpool* pool;
+};
+
+// Unified per-batch aggregate. Gathers compressed chunks from across all LODs
+// into the shared, page-aligned data buffer. Per-LOD result views are written
+// into per_lod_results so the caller's deliver-per-LOD path can hand each
+// segment to its sink.
+//
+// When layout->page_size > 0, lays out per-shard `shard_capacity`-sized
+// regions matching the GPU tail-carry path: each shard's first chunk is
+// anchored at `si*shard_capacity + h_tail_bytes[lv][si]`, and the leading
+// tail bytes are copied from `shards_by_lod[lv]->shards[si].tail_buf`. When
+// page_size is zero, falls back to a single contiguous prefix-sum per LOD.
 int
-aggregate_cpu_batch_into_unified(
-  const void* compressed_base,
-  const size_t* comp_sizes_base,
-  const uint32_t* gather, // [total_batch_chunks]
-  const struct batch_aggregate_layout* layout,
-  struct aggregate_cpu_workspace* ws,
-  struct aggregate_result* per_lod_results, // [layout->nlod]
-  struct threadpool* pool);
+aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in);

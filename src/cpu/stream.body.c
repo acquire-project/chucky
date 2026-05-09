@@ -28,6 +28,7 @@ make_flush_params(struct cpu_stream_view* v)
     .cl = v->cl,
     .levels_geo = v->levels,
     .per_lod_agg_layouts = v->agg_layout,
+    .h_tail_bytes = v->h_tail_bytes,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .pool = v->pool,
@@ -316,7 +317,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&v->shard[lv], v->shard_alignment))
+        if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment))
           return writer_error();
       }
     }

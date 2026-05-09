@@ -29,6 +29,13 @@ counting_write_direct(struct shard_writer* self,
 }
 
 static int
+counting_truncate(struct shard_writer* self, uint64_t logical_size)
+{
+  struct counting_writer* w = (struct counting_writer*)self;
+  return w->inner->truncate(w->inner, logical_size);
+}
+
+static int
 counting_finalize(struct shard_writer* self)
 {
   struct counting_writer* w = (struct counting_writer*)self;
@@ -51,6 +58,7 @@ counting_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
       cs->writers[i].inner = inner;
       cs->writers[i].base.write_direct =
         inner->write_direct ? counting_write_direct : NULL;
+      cs->writers[i].base.truncate = inner->truncate ? counting_truncate : NULL;
       return &cs->writers[i].base;
     }
   }

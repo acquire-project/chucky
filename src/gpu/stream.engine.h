@@ -41,9 +41,9 @@ struct staging_state
 // batch_active_masks is heap-allocated to epochs_per_batch entries.
 struct flush_slot_gpu
 {
-  uint32_t active_levels_mask; // union of per-epoch active masks
+  uint32_t active_levels_mask;  // union of per-epoch active masks
   uint32_t* batch_active_masks; // [K] per-epoch active level masks
-  int batch_epoch_count; // number of epochs accumulated in this batch
+  int batch_epoch_count;        // number of epochs accumulated in this batch
 };
 
 struct level_flush_state
@@ -56,6 +56,18 @@ struct level_flush_state
   CUdeviceptr
     d_batch_perm; // [K_l * M_l] uint32: batch-chunk -> shard-ordered pos
   uint32_t batch_active_count; // K_l = K / 2^l for this level
+  // Cross-batch tail carry-over (per-LOD persistent state, GPU-resident).
+  // d_tail_bytes [num_shards] is the per-shard ragged-tail length; read by
+  // compute_bias_k / copy_leading_tail_k at the start of each batch and
+  // uploaded by the host (from h_tail_bytes) at the end of every batch's
+  // delivery. d_tail_carry [num_shards * page_size] holds the actual tail
+  // bytes, also uploaded by the host. The host owns the per-generation
+  // bookkeeping (in deliver_to_shards_batch); the GPU has no view of where
+  // shard generations begin and end within a batch and so cannot compute
+  // the tail itself.
+  CUdeviceptr d_tail_carry;
+  size_t* d_tail_bytes;
+  size_t* h_tail_bytes;
 };
 
 // Per-frame-counter timing events (double-buffered).
@@ -137,7 +149,7 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
   CUdeviceptr pool_buf;
-  CUevent pool_ready;    // batch-level (from batch_state.pool_ready)
+  CUevent pool_ready; // batch-level (from batch_state.pool_ready)
   CUevent lod_done;
   CUevent prev_d2h_done; // prior D2H on same fc; compress waits on this so
                          // aggregate doesn't overwrite agg[fc].d_aggregated
@@ -180,11 +192,11 @@ struct d2h_deliver_stage
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
-  int current;                                 // fc currently being filled
-  int pending[2];                              // per-fc: batch awaiting delivery
-  uint64_t pending_seq[2];                     // monotonic kick seq per pending
-  uint64_t next_seq;                           // next seq to assign on kick
-  struct flush_handoff pending_handoff[2];     // per-fc
+  int current;                             // fc currently being filled
+  int pending[2];                          // per-fc: batch awaiting delivery
+  uint64_t pending_seq[2];                 // monotonic kick seq per pending
+  uint64_t next_seq;                       // next seq to assign on kick
+  struct flush_handoff pending_handoff[2]; // per-fc
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,

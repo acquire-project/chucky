@@ -1,5 +1,6 @@
 #include "zarr/shard_delivery.h"
 
+#include "log/log.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
 #include "zarr/crc32c.h"
@@ -20,6 +21,22 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
                                             sizeof(struct active_shard));
   if (!ss->shards)
     return 1;
+  const size_t page = li->agg_layout.page_size;
+  if (page > 0 && li->shard_inner_count > 0) {
+    ss->tail_buf_pool_bytes = (size_t)li->shard_inner_count * page;
+    ss->tail_buf_pool = (uint8_t*)calloc(1, ss->tail_buf_pool_bytes);
+    if (!ss->tail_buf_pool)
+      return 1;
+    ss->footer_capacity = footer_capacity_for(li->chunks_per_shard_total, page);
+    if (ss->footer_capacity == 0)
+      return 1;
+    ss->footer_buf_pool_bytes =
+      (size_t)li->shard_inner_count * ss->footer_capacity;
+    ss->footer_buf_pool =
+      (uint8_t*)platform_aligned_alloc(page, ss->footer_buf_pool_bytes);
+    if (!ss->footer_buf_pool)
+      return 1;
+  }
   for (uint64_t si = 0; si < li->shard_inner_count; ++si) {
     ss->shards[si].index =
       (uint64_t*)malloc(li->chunks_per_shard_total * 2 * sizeof(uint64_t));
@@ -28,61 +45,179 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
     memset(ss->shards[si].index,
            0xFF,
            li->chunks_per_shard_total * 2 * sizeof(uint64_t));
+    if (page > 0) {
+      ss->shards[si].tail_buf = ss->tail_buf_pool + si * page;
+      ss->shards[si].footer_buf =
+        ss->footer_buf_pool + si * ss->footer_capacity;
+    }
   }
   return 0;
 }
 
+void
+shard_state_destroy(struct shard_state* ss)
+{
+  if (ss->shards) {
+    for (uint64_t si = 0; si < ss->shard_inner_count; ++si)
+      free(ss->shards[si].index);
+    free(ss->shards);
+  }
+  free(ss->tail_buf_pool);
+  if (ss->footer_buf_pool)
+    platform_aligned_free(ss->footer_buf_pool);
+  *ss = (struct shard_state){ 0 };
+}
+
+// Build [tail || index || crc || zero-pad] into dst. Writes aligned_bytes
+// total (= logical_bytes rounded up to shard_alignment); the caller passes
+// dst_capacity >= aligned_bytes.
+static int
+build_shard_footer(uint8_t* dst,
+                   size_t dst_capacity,
+                   const uint8_t* tail_src,
+                   size_t tail_bytes,
+                   const uint64_t* index_data,
+                   size_t index_data_bytes,
+                   size_t shard_alignment,
+                   size_t* out_aligned_bytes,
+                   size_t* out_logical_bytes)
+{
+  size_t logical_bytes = tail_bytes + index_data_bytes + 4;
+  size_t aligned_bytes = shard_alignment > 0
+                           ? align_up(logical_bytes, shard_alignment)
+                           : logical_bytes;
+  if (aligned_bytes > dst_capacity)
+    return 1;
+
+  if (tail_bytes > 0)
+    memcpy(dst, tail_src, tail_bytes);
+  memcpy(dst + tail_bytes, index_data, index_data_bytes);
+  uint32_t crc_val = crc32c(dst + tail_bytes, index_data_bytes);
+  memcpy(dst + tail_bytes + index_data_bytes, &crc_val, 4);
+  if (aligned_bytes > logical_bytes)
+    memset(dst + logical_bytes, 0, aligned_bytes - logical_bytes);
+
+  *out_aligned_bytes = aligned_bytes;
+  *out_logical_bytes = logical_bytes;
+  return 0;
+}
+
+static void
+shard_tail_set(struct active_shard* sh,
+               size_t* h_tail_bytes_si,
+               const uint8_t* src,
+               size_t n)
+{
+  sh->tail_bytes = n;
+  *h_tail_bytes_si = n;
+  if (n > 0)
+    memcpy(sh->tail_buf, src, n);
+}
+
+// Build sh->footer_buf and write it via write_direct, fenced on
+// sh->footer_io_done. On sinks without write_direct (e.g. S3) bounce-copy
+// through a malloc'd buffer instead.
+//
+// Returns 0 on success; on failure logs and returns 1. *out_logical_bytes
+// holds the unpadded footer size (used for the truncate target).
+static int
+write_footer(struct active_shard* sh,
+             const struct shard_state* ss,
+             struct shard_sink* sink,
+             const uint8_t* tail_src,
+             size_t tail_bytes,
+             size_t shard_alignment,
+             size_t* out_aligned_bytes,
+             size_t* out_logical_bytes)
+{
+  const size_t index_data_bytes =
+    ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
+
+  if (sh->footer_buf && sh->writer->write_direct) {
+    if (sink && sink->wait_fence)
+      sink->wait_fence(sink, sh->footer_io_done);
+    if (build_shard_footer(sh->footer_buf,
+                           ss->footer_capacity,
+                           tail_src,
+                           tail_bytes,
+                           sh->index,
+                           index_data_bytes,
+                           shard_alignment,
+                           out_aligned_bytes,
+                           out_logical_bytes))
+      return 1;
+    if (sh->writer->write_direct(sh->writer,
+                                 sh->data_cursor,
+                                 sh->footer_buf,
+                                 sh->footer_buf + *out_aligned_bytes))
+      return 1;
+    if (sink && sink->record_fence)
+      sh->footer_io_done = sink->record_fence(sink);
+    return 0;
+  }
+
+  // Bounce path: write() copies into the job; buffer can be freed immediately.
+  size_t cap = tail_bytes + index_data_bytes + 4;
+  if (shard_alignment > 0)
+    cap = align_up(cap, shard_alignment);
+  uint8_t* buf = shard_alignment > 0
+                   ? (uint8_t*)platform_aligned_alloc(shard_alignment, cap)
+                   : (uint8_t*)malloc(cap);
+  if (!buf)
+    return 1;
+  int err = build_shard_footer(buf,
+                               cap,
+                               tail_src,
+                               tail_bytes,
+                               sh->index,
+                               index_data_bytes,
+                               shard_alignment,
+                               out_aligned_bytes,
+                               out_logical_bytes) ||
+            sh->writer->write(
+              sh->writer, sh->data_cursor, buf, buf + *out_aligned_bytes);
+  if (shard_alignment > 0)
+    platform_aligned_free(buf);
+  else
+    free(buf);
+  return err;
+}
+
 int
-finalize_shards(struct shard_state* ss, size_t shard_alignment)
+finalize_shards(struct shard_state* ss,
+                struct shard_sink* sink,
+                size_t shard_alignment)
 {
   int err = 0;
+  size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
 
   for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
     struct active_shard* sh = &ss->shards[si];
     if (!sh->writer)
       continue;
 
-    size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
-    size_t index_total_bytes = index_data_bytes + 4;
-
-    uint8_t* index_buf = NULL;
-    size_t write_bytes;
-    size_t index_offset;
-
-    if (shard_alignment > 0) {
-      write_bytes = align_up(index_total_bytes, shard_alignment);
-      index_buf =
-        (uint8_t*)platform_aligned_alloc(shard_alignment, write_bytes);
-      index_offset = write_bytes - index_total_bytes;
-    } else {
-      write_bytes = index_total_bytes;
-      index_buf = (uint8_t*)malloc(write_bytes);
-      index_offset = 0;
-    }
-
-    if (!index_buf) {
-      log_error("finalize_shards: index alloc failed for shard %llu",
+    size_t aligned_bytes = 0;
+    size_t logical_bytes = 0;
+    if (write_footer(sh,
+                     ss,
+                     sink,
+                     sh->tail_buf,
+                     sh->tail_bytes,
+                     shard_alignment,
+                     &aligned_bytes,
+                     &logical_bytes)) {
+      log_error("finalize_shards: footer write failed for shard %llu",
                 (unsigned long long)si);
       err = 1;
-    } else {
-      if (index_offset > 0)
-        memset(index_buf, 0, index_offset);
-      memcpy(index_buf + index_offset, sh->index, index_data_bytes);
+    }
 
-      uint32_t crc_val = crc32c(index_buf + index_offset, index_data_bytes);
-      memcpy(index_buf + index_offset + index_data_bytes, &crc_val, 4);
-
-      if (sh->writer->write(
-            sh->writer, sh->data_cursor, index_buf, index_buf + write_bytes)) {
-        log_error("finalize_shards: index write failed for shard %llu",
+    if (!err && sh->writer->truncate) {
+      uint64_t logical_size = sh->data_cursor + logical_bytes;
+      if (sh->writer->truncate(sh->writer, logical_size)) {
+        log_error("finalize_shards: truncate failed for shard %llu",
                   (unsigned long long)si);
         err = 1;
       }
-
-      if (shard_alignment > 0)
-        platform_aligned_free(index_buf);
-      else
-        free(index_buf);
     }
 
     if (sh->writer->finalize(sh->writer)) {
@@ -93,7 +228,8 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
 
     sh->writer = NULL;
     sh->data_cursor = 0;
-    memset(sh->index, 0xFF, ss->chunks_per_shard_total * 2 * sizeof(uint64_t));
+    sh->tail_bytes = 0;
+    memset(sh->index, 0xFF, index_data_bytes);
   }
 
   ss->epoch_in_shard = 0;
@@ -101,10 +237,196 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
   return err;
 }
 
+// Sum chunk_sizes for chunks in shard si over epoch range [a, a+run_len).
+// Used in place of `offsets[j_run_end] - offsets[j_run_start]` because
+// add_shard_bias_k on the GPU side biases offsets[base..base+tps_group-1]
+// but not the shard-end sentinel — an offsets diff that hits the sentinel
+// underflows.
+static size_t
+sum_run_chunks(const size_t* chunk_sizes,
+               uint64_t si,
+               uint32_t a,
+               uint32_t run_len,
+               uint32_t n_active,
+               uint64_t cps_inner)
+{
+  uint64_t base = si * (uint64_t)n_active * cps_inner + (uint64_t)a * cps_inner;
+  size_t sum = 0;
+  for (uint64_t k = 0; k < (uint64_t)run_len * cps_inner; ++k)
+    sum += chunk_sizes[base + k];
+  return sum;
+}
+
+// For each chunk j in [j_run_start, j_run_start + run_len*cps_inner),
+// set sh->index[2*slot] = data_cursor + (offsets[j] - base_off).
+static void
+record_run_index(struct active_shard* sh,
+                 const struct aggregate_result* result,
+                 uint64_t j_run_start,
+                 size_t base_off,
+                 uint32_t run_len,
+                 uint64_t eis_start,
+                 uint64_t cps_inner)
+{
+  for (uint32_t r = 0; r < run_len; ++r) {
+    uint64_t eis = eis_start + r;
+    uint64_t j_start = j_run_start + (uint64_t)r * cps_inner;
+    for (uint64_t j = j_start; j < j_start + cps_inner; ++j) {
+      size_t chunk_size = result->chunk_sizes[j];
+      if (chunk_size == 0)
+        continue;
+      uint64_t within_inner = j - j_start;
+      uint64_t slot_idx = eis * cps_inner + within_inner;
+      sh->index[2 * slot_idx] =
+        sh->data_cursor + (result->offsets[j] - base_off);
+      sh->index[2 * slot_idx + 1] = chunk_size;
+    }
+  }
+}
+
+// Page-floor write of run data, then footer write that closes the shard.
+static int
+deliver_run_finalizing(struct active_shard* sh,
+                       const struct shard_state* ss,
+                       struct shard_sink* sink,
+                       const uint8_t* src,
+                       size_t total_run,
+                       size_t* h_tail_bytes_si,
+                       size_t sa,
+                       size_t* total_bytes)
+{
+  size_t page_floor = sa > 0 ? (total_run / sa) * sa : 0;
+  if (page_floor > 0) {
+    int aligned = ((uintptr_t)src % sa == 0);
+    int wr =
+      (aligned && sh->writer->write_direct)
+        ? sh->writer->write_direct(
+            sh->writer, sh->data_cursor, src, src + page_floor)
+        : sh->writer->write(sh->writer, sh->data_cursor, src, src + page_floor);
+    if (wr)
+      return 1;
+    *total_bytes += page_floor;
+    sh->data_cursor += page_floor;
+  }
+
+  size_t aligned_bytes = 0;
+  size_t logical_bytes = 0;
+  if (write_footer(sh,
+                   ss,
+                   sink,
+                   src + page_floor,
+                   total_run - page_floor,
+                   sa,
+                   &aligned_bytes,
+                   &logical_bytes))
+    return 1;
+  *total_bytes += aligned_bytes;
+
+  if (sh->writer->truncate) {
+    uint64_t logical_size = sh->data_cursor + logical_bytes;
+    if (sh->writer->truncate(sh->writer, logical_size))
+      return 1;
+  }
+
+  shard_tail_set(sh, h_tail_bytes_si, NULL, 0);
+  return 0;
+}
+
+// Page-floor write; sub-page remainder rolls into next batch's leading tail.
+static int
+deliver_run_nonfinalizing(struct active_shard* sh,
+                          const uint8_t* src,
+                          size_t total_run,
+                          size_t* h_tail_bytes_si,
+                          size_t page_size,
+                          size_t sa,
+                          size_t* total_bytes)
+{
+  size_t write_bytes = (total_run / page_size) * page_size;
+  if (write_bytes > 0) {
+    const uint8_t* src_end = src + write_bytes;
+    int aligned = ((uintptr_t)src % sa == 0);
+    int wr =
+      (aligned && sh->writer->write_direct)
+        ? sh->writer->write_direct(sh->writer, sh->data_cursor, src, src_end)
+        : sh->writer->write(sh->writer, sh->data_cursor, src, src_end);
+    if (wr)
+      return 1;
+    *total_bytes += write_bytes;
+  }
+  sh->data_cursor += write_bytes;
+  shard_tail_set(
+    sh, h_tail_bytes_si, src + write_bytes, total_run - write_bytes);
+  return 0;
+}
+
+// Legacy path (no alignment requirement): one write per run.
+static int
+deliver_run_contiguous(struct active_shard* sh,
+                       const struct aggregate_result* result,
+                       uint64_t j_run_start,
+                       uint64_t j_run_end,
+                       uint32_t run_len,
+                       uint64_t eis_start,
+                       uint64_t cps_inner,
+                       size_t sa,
+                       size_t* total_bytes)
+{
+  size_t run_bytes = result->offsets[j_run_end] - result->offsets[j_run_start];
+  if (run_bytes > 0) {
+    const void* src = (const char*)result->data + result->offsets[j_run_start];
+    size_t write_bytes = sa > 0 ? align_up(run_bytes, sa) : run_bytes;
+    const void* src_end = (const char*)src + write_bytes;
+    int aligned = sa == 0 || ((uintptr_t)src % sa == 0);
+    int wr =
+      (aligned && sh->writer->write_direct)
+        ? sh->writer->write_direct(sh->writer, sh->data_cursor, src, src_end)
+        : sh->writer->write(sh->writer, sh->data_cursor, src, src_end);
+    if (wr)
+      return 1;
+    *total_bytes += write_bytes;
+  }
+  record_run_index(sh,
+                   result,
+                   j_run_start,
+                   result->offsets[j_run_start],
+                   run_len,
+                   eis_start,
+                   cps_inner);
+  sh->data_cursor += sa > 0 ? align_up(run_bytes, sa) : run_bytes;
+  return 0;
+}
+
+// Footer write already emitted the index; just close the writer and reset
+// per-shard state for the next generation.
+static int
+close_finalized_shards(struct shard_state* ss)
+{
+  size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
+  for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
+    struct active_shard* sh = &ss->shards[si];
+    if (!sh->writer)
+      continue;
+    if (sh->writer->finalize(sh->writer)) {
+      log_error("deliver: finalize failed for shard %llu",
+                (unsigned long long)si);
+      return 1;
+    }
+    sh->writer = NULL;
+    sh->data_cursor = 0;
+    memset(sh->index, 0xFF, index_data_bytes);
+  }
+  ss->epoch_in_shard = 0;
+  ss->shard_epoch++;
+  return 0;
+}
+
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
                         struct aggregate_result* result,
+                        const struct aggregate_layout* layout,
+                        size_t* h_tail_bytes,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,
@@ -112,11 +434,23 @@ deliver_to_shards_batch(uint8_t level,
 {
   const uint64_t cps_inner = ss->chunks_per_shard_inner;
   const size_t sa = shard_alignment;
+  const size_t page_size = layout ? layout->page_size : 0;
+  const size_t shard_capacity = layout ? layout->shard_capacity : 0;
+  const int use_carryover = (page_size > 0 && shard_capacity > 0);
   size_t total_bytes = 0;
+  // Per-shard cumulative bytes consumed from agg buffer in this batch;
+  // base_off for each run is shard_base + bytes_consumed[si].
+  size_t* bytes_consumed = NULL;
 
-  // Process epochs in runs: a run is a contiguous sequence of epochs that
-  // belong to the same shard (no shard completion boundary in between).
-  // Writing all epochs in a run with one write_direct call reduces syscalls.
+  CHECK(Error, !use_carryover || h_tail_bytes != NULL);
+  CHECK(Error, !use_carryover || sa == page_size);
+
+  if (use_carryover) {
+    bytes_consumed = (size_t*)calloc(ss->shard_inner_count, sizeof(size_t));
+    if (!bytes_consumed)
+      goto Error;
+  }
+
   uint32_t a = 0;
   while (a < n_active) {
     uint32_t remaining_in_shard =
@@ -125,6 +459,7 @@ deliver_to_shards_batch(uint8_t level,
     uint32_t run_len = remaining_in_shard < remaining_in_batch
                          ? remaining_in_shard
                          : remaining_in_batch;
+    int run_finalizes = (run_len == remaining_in_shard);
 
     for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
       struct active_shard* sh = &ss->shards[si];
@@ -135,84 +470,84 @@ deliver_to_shards_batch(uint8_t level,
         CHECK(Error, sh->writer);
       }
 
-      // Contiguous range in aggregated buffer for this run
       uint64_t j_run_start = si * n_active * cps_inner + a * cps_inner;
       uint64_t j_run_end = j_run_start + (uint64_t)run_len * cps_inner;
 
-      size_t run_bytes =
-        result->offsets[j_run_end] - result->offsets[j_run_start];
-      if (run_bytes > 0) {
-        const void* src =
-          (const char*)result->data + result->offsets[j_run_start];
-        // Unbuffered IO: round write size up to alignment. The padding
-        // region in h_aggregated is safe to read (buffer is oversized).
-        size_t write_bytes = sa > 0 ? align_up(run_bytes, sa) : run_bytes;
-        total_bytes += write_bytes;
+      if (use_carryover) {
+        // Aggregate-result contract: shard si's region starts at
+        // (si * shard_capacity) inside result->data; leading tail (if any)
+        // sits at the head; first chunk at (+ tail_in). h_tail_bytes[si]
+        // is reset to 0 by every finalizing run, so a non-zero value here
+        // always means "carry-in from the prior batch's last run".
+        const size_t shard_base = (size_t)si * shard_capacity;
+        const size_t tail_in = h_tail_bytes[si];
+        const size_t run_real = sum_run_chunks(
+          result->chunk_sizes, si, a, run_len, n_active, cps_inner);
+        const size_t total_run = tail_in + run_real;
+        const size_t base_off = shard_base + bytes_consumed[si];
+        const uint8_t* src = (const uint8_t*)result->data + base_off;
 
-        if (sa > 0) {
-          // Zero intra-entry padding for deterministic shard output.
-          // pad_shard_sizes inflates the last entry per shard group; the
-          // aggregate buffer has garbage in those bytes.  Only zero within
-          // each entry's [offset, offset+padded_size) range — do NOT extend
-          // into the align_up region which may overlap the next epoch's data.
-          for (uint64_t j = j_run_start; j < j_run_end; ++j) {
-            size_t data_end = result->offsets[j] + result->chunk_sizes[j];
-            size_t slot_end = result->offsets[j + 1];
-            if (slot_end > data_end)
-              memset((char*)result->data + data_end, 0, slot_end - data_end);
-          }
-        }
-        const void* src_end = (const char*)src + write_bytes;
+        record_run_index(sh,
+                         result,
+                         j_run_start,
+                         base_off,
+                         run_len,
+                         ss->epoch_in_shard,
+                         cps_inner);
 
-        // Use write_direct when source pointer is page-aligned (always true
-        // at shard-group boundaries; may not hold after a mid-batch shard
-        // completion splits a group).
-        // FIXME: this logic should be handle by a wrapper that is exposed in
-        //        writer.h - something like write_append()
-        int aligned = sa == 0 || ((uintptr_t)src % sa == 0);
-        if (aligned && sh->writer->write_direct) {
+        if (run_finalizes) {
           CHECK(Error,
-                sh->writer->write_direct(
-                  sh->writer, sh->data_cursor, src, src_end) == 0);
+                deliver_run_finalizing(sh,
+                                       ss,
+                                       sink,
+                                       src,
+                                       total_run,
+                                       &h_tail_bytes[si],
+                                       sa,
+                                       &total_bytes) == 0);
         } else {
           CHECK(Error,
-                sh->writer->write(sh->writer, sh->data_cursor, src, src_end) ==
-                  0);
+                deliver_run_nonfinalizing(sh,
+                                          src,
+                                          total_run,
+                                          &h_tail_bytes[si],
+                                          page_size,
+                                          sa,
+                                          &total_bytes) == 0);
         }
-      }
 
-      // Record shard index entries for each epoch in the run
-      for (uint32_t r = 0; r < run_len; ++r) {
-        uint64_t eis = ss->epoch_in_shard + r;
-        uint64_t j_start = j_run_start + (uint64_t)r * cps_inner;
-        for (uint64_t j = j_start; j < j_start + cps_inner; ++j) {
-          size_t chunk_size = result->chunk_sizes[j];
-          if (chunk_size > 0) {
-            uint64_t within_inner = j - j_start;
-            uint64_t slot_idx = eis * cps_inner + within_inner;
-            size_t chunk_off = sh->data_cursor + (result->offsets[j] -
-                                                  result->offsets[j_run_start]);
-            sh->index[2 * slot_idx] = chunk_off;
-            sh->index[2 * slot_idx + 1] = chunk_size;
-          }
-        }
+        bytes_consumed[si] += total_run;
+      } else {
+        CHECK(Error,
+              deliver_run_contiguous(sh,
+                                     result,
+                                     j_run_start,
+                                     j_run_end,
+                                     run_len,
+                                     ss->epoch_in_shard,
+                                     cps_inner,
+                                     sa,
+                                     &total_bytes) == 0);
       }
-
-      sh->data_cursor += sa > 0 ? align_up(run_bytes, sa) : run_bytes;
     }
 
     ss->epoch_in_shard += run_len;
     a += run_len;
 
     if (ss->epoch_in_shard >= ss->chunks_per_shard_append) {
-      CHECK(Error, finalize_shards(ss, sa) == 0);
+      if (use_carryover)
+        CHECK(Error, close_finalized_shards(ss) == 0);
+      else
+        CHECK(Error, finalize_shards(ss, sink, sa) == 0);
     }
   }
 
   if (out_bytes)
     *out_bytes = total_bytes;
+  free(bytes_consumed);
   return 0;
 
 Error:
+  free(bytes_consumed);
   return 1;
 }

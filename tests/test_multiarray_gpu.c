@@ -603,11 +603,11 @@ Fail:
 }
 
 // ---- Test: flush is idempotent after writer reaches `finished` ----
-// Once the writer has reached capacity (total_element_limit) and been finalized,
-// subsequent `update()` calls report `finished` and produce no sink work,
-// and a redundant `flush()` is a no-op (no re-finalization of already-closed
-// shards). A prior bug caused the destructor's follow-up flush to deadlock
-// on Windows against an already-finalized sink.
+// Once the writer has reached capacity (total_element_limit) and been
+// finalized, subsequent `update()` calls report `finished` and produce no sink
+// work, and a redundant `flush()` is a no-op (no re-finalization of
+// already-closed shards). A prior bug caused the destructor's follow-up flush
+// to deadlock on Windows against an already-finalized sink.
 static int
 test_flush_idempotent_after_finished(void)
 {
@@ -744,8 +744,9 @@ test_flush_resumable(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination). One
-  // epoch per shard so each batch produces a fresh shard with fresh content.
+  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination).
+  // One epoch per shard so each batch produces a fresh shard with fresh
+  // content.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -899,6 +900,9 @@ test_lod_basic(void)
   int shards_per_level[] = { 16, 16, 16 };
   struct test_shard_sink sink;
   test_sink_init_multi(&sink, 3, shards_per_level, SHARD_CAP);
+  // Activate carry-over so the unified per-LOD aggregate path emits per-
+  // shard regions on every level (lvl > 0 included).
+  sink.shard_alignment = 4096;
 
   struct multiarray_tile_stream_gpu* ms = NULL;
 
@@ -929,6 +933,35 @@ test_lod_basic(void)
   CHECK(Fail, lod_count > 0);
 
   log_info("  L0 shards: %d, L1+ shards: %d", l0_count, lod_count);
+
+  // Tail-carry byte invariant per LOD. cps_total clamps with shape per
+  // dim_extent_compute_shards (lod_plan.c:467): L0 has cps {1,2,2}=4 entries
+  // per shard; L1/L2 yx clamps to 1 each → 1 entry per shard.
+  const size_t cps_total_per_lv[3] = { 4, 1, 1 };
+  for (int lv = 0; lv < 3; ++lv) {
+    const size_t cps_total = cps_total_per_lv[lv];
+    const size_t index_total = cps_total * 2 * sizeof(uint64_t) + 4;
+    for (int si = 0; si < TEST_SHARD_SINK_MAX_SHARDS; ++si) {
+      struct test_shard_writer* sw = &sink.writers[lv][si];
+      if (!sw->buf || sw->size == 0)
+        continue;
+      CHECK(Fail, sw->size > index_total);
+      const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_total);
+      uint64_t expected_payload = 0;
+      int valid_chunks = 0;
+      for (size_t c = 0; c < cps_total; ++c) {
+        uint64_t off = idx[2 * c];
+        uint64_t nb = idx[2 * c + 1];
+        if (off == UINT64_MAX && nb == UINT64_MAX)
+          continue;
+        expected_payload += nb;
+        valid_chunks++;
+      }
+      CHECK(Fail, valid_chunks > 0);
+      CHECK(Fail, expected_payload > 0);
+      CHECK(Fail, sw->size == expected_payload + index_total);
+    }
+  }
 
   multiarray_tile_stream_gpu_destroy(ms);
   test_sink_free(&sink);
@@ -1081,6 +1114,277 @@ Fail:
   return 1;
 }
 
+// ---- Test: tail-carry across two arrays with non-zero shard alignment ----
+//
+// Exercises the multistream path with page_size > 0 (the tail-carry kernels
+// would null-deref before this test was written). Runs 2 batches per shard
+// per array with interleaved writes, then verifies the per-shard on-disk
+// invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
+// padding). Uses CODEC_ZSTD on both arrays so compression+tail-carry is
+// covered alongside the multistream switch (GPU multiarray requires all
+// arrays share a codec).
+static int
+test_tail_carry_two_arrays(void)
+{
+  log_info("=== test_tail_carry_two_arrays ===");
+
+  struct test_shard_sink sink0, sink1;
+  test_sink_init_1(&sink0);
+  test_sink_init_1(&sink1);
+  // Non-zero alignment activates the carry-over path on the GPU.
+  sink0.shard_alignment = 4096;
+  sink1.shard_alignment = 4096;
+
+  // Both arrays: dim0 size=4 chunk=1 cps_append=2 (→ 2 shards along dim0,
+  // 2 epochs per shard). dim1 chunk=2 cps=2 (→ cps_inner=2). With
+  // epochs_per_batch=1 we get 2 batches per shard, so each shard sees one
+  // tail-carry kick followed by a finalize kick.
+  struct dimension dims0[2];
+  dims_create(dims0, "yx", (uint64_t[]){ 4, 4 });
+  dims_set_chunk_sizes(dims0, 2, (uint64_t[]){ 1, 2 });
+  dims_set_shard_counts(dims0, 2, (uint64_t[]){ 2, 2 });
+  struct tile_stream_configuration config0 = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims0,
+    .codec = { .id = CODEC_ZSTD },
+    .epochs_per_batch = 1,
+  };
+
+  struct dimension dims1[2];
+  dims_create(dims1, "yx", (uint64_t[]){ 4, 6 });
+  dims_set_chunk_sizes(dims1, 2, (uint64_t[]){ 1, 3 });
+  dims_set_shard_counts(dims1, 2, (uint64_t[]){ 2, 2 });
+  struct tile_stream_configuration config1 = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u8,
+    .rank = 2,
+    .dimensions = dims1,
+    .codec = { .id = CODEC_ZSTD },
+    .epochs_per_batch = 1,
+  };
+
+  struct tile_stream_configuration configs[] = { config0, config1 };
+  struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // Interleave writes at epoch granularity so bind/unbind alternates.
+  // Array 0: epoch_elements = 1 * 4 = 4. Array 1: epoch_elements = 1 * 6 = 6.
+  // Total per array = 4 epochs (2 shards * 2 epochs/shard).
+  for (int e = 0; e < 4; ++e) {
+    CHECK(Fail,
+          write_fill(w, 0, 4, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
+            multiarray_writer_ok);
+    CHECK(Fail,
+          write_fill(w, 1, 6, sizeof(uint8_t), (uint8_t)(0x80 + e)).error ==
+            multiarray_writer_ok);
+  }
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  // Per-shard invariant: file size == Σ chunk_bytes + index_data + crc4
+  // (no inter-batch zero padding). Read the index out of each shard buffer
+  // and sum the recorded chunk sizes, mirroring the integration tests.
+  // shard_count_along_dim0 = 2; cps_inner = 1, cps_append = 2 → 2 chunks/shard.
+  struct
+  {
+    struct test_shard_sink* sink;
+    int chunks_per_shard_total;
+    int expected_shard_count;
+  } cases[2] = {
+    { &sink0, 2, 2 },
+    { &sink1, 2, 2 },
+  };
+
+  for (int c = 0; c < 2; ++c) {
+    int cps = cases[c].chunks_per_shard_total;
+    size_t index_total = (size_t)cps * 2 * sizeof(uint64_t) + 4;
+    int found = 0;
+    for (int i = 0; i < cases[c].expected_shard_count; ++i) {
+      struct test_shard_writer* sw = &cases[c].sink->writers[0][i];
+      CHECK(Fail, sw->buf);
+      CHECK(Fail, sw->finalized);
+      CHECK(Fail, sw->size > index_total);
+
+      const uint8_t* index_ptr = sw->buf + sw->size - index_total;
+      uint64_t expected_payload = 0;
+      for (int j = 0; j < cps; ++j) {
+        uint64_t nbytes;
+        memcpy(&nbytes,
+               index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+               sizeof(uint64_t));
+        expected_payload += nbytes;
+      }
+      CHECK(Fail, expected_payload > 0);
+      CHECK(Fail, sw->size == expected_payload + index_total);
+      found++;
+    }
+    CHECK(Fail, found == cases[c].expected_shard_count);
+    log_info("  array %d: %d shards verified", c, found);
+  }
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_error("  FAIL");
+  return 1;
+}
+
+// ---- Test: tail-carry where one batch crosses a shard generation ----
+//
+// Reproduces the case where epochs_per_batch > chunks_per_shard_append.
+// Geometry: dim0 size=6 chunk=1, shard_count=2 → cps_append=3, 2 shards
+//           dim1 size=2 chunk=2, shard_count=1 → cps_inner=1, 1 shard
+// → 6 epochs total, 3 chunks/shard along dim0, 2 shards.
+//
+// epochs_per_batch=4 forces batch 1 to span shard 0 (3 epochs) + partial
+// shard 1 (1 epoch). Batch 2 finishes shard 1 (2 more epochs).
+//
+// In the broken implementation the GPU's stash_tail_k computes the tail
+// over both generations packed in a single shard column, while the host
+// correctly splits them per generation. The host's h_tail_bytes and the
+// GPU's d_tail_bytes diverge, and the next batch reads the wrong leading-
+// tail bytes from d_aggregated. Verified two ways: the byte-level file size
+// invariant AND decompression by following the on-disk index back to the
+// original fill bytes.
+static int
+test_tail_carry_cross_generation(void)
+{
+  log_info("=== test_tail_carry_cross_generation ===");
+
+  // Chunk size is chosen to span just over one page (2049 * 2 == 4098 bytes
+  // per chunk) so that:
+  //  - gen 0's three chunks (12294 bytes) do NOT land on a page boundary;
+  //  - the post-finalize run in batch 0 lands at a mid-shard src (bounce);
+  //  - the second batch's non-finalizing run on shard 1 starts a fresh batch
+  //    at the page-aligned shard_base and takes write_direct.
+  const size_t kChunkX = 2049;
+  const size_t kChunkBytes = kChunkX * sizeof(uint16_t); // 4098
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+  sink.shard_alignment = 4096;
+
+  struct dimension dims[2];
+  dims_create(dims, "yx", (uint64_t[]){ 6, kChunkX });
+  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, kChunkX });
+  dims_set_shard_counts(dims, 2, (uint64_t[]){ 2, 1 });
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 32768,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 4,
+  };
+
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+
+  // 6 epochs * kChunkX elements/epoch. Use distinct fill values so we can
+  // detect cross-batch contamination.
+  for (int e = 0; e < 6; ++e)
+    CHECK(
+      Fail,
+      write_fill(w, 0, kChunkX, sizeof(uint16_t), (uint8_t)(0x10 + e)).error ==
+        multiarray_writer_ok);
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+
+  const int chunks_per_shard_total = 3;
+  const size_t index_total =
+    (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t) + 4;
+
+  int found = 0;
+  for (int i = 0; i < 2; ++i) {
+    struct test_shard_writer* sw = &sink.writers[0][i];
+    CHECK(Fail, sw->buf);
+    CHECK(Fail, sw->finalized);
+    CHECK(Fail, sw->size > index_total);
+
+    const uint8_t* index_ptr = sw->buf + sw->size - index_total;
+    uint64_t chunk_offs[3] = { 0 }, chunk_szs[3] = { 0 };
+    uint64_t expected_payload = 0;
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      memcpy(&chunk_offs[j], index_ptr + (size_t)j * 16, sizeof(uint64_t));
+      memcpy(&chunk_szs[j],
+             index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+             sizeof(uint64_t));
+      expected_payload += chunk_szs[j];
+    }
+    CHECK(Fail, expected_payload > 0);
+    if (sw->size != expected_payload + index_total) {
+      log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                i,
+                sw->size,
+                (unsigned long long)expected_payload,
+                index_total);
+      goto Fail;
+    }
+    // Decompress-free check (CODEC_NONE): each chunk is kChunkBytes bytes.
+    // Shard i covers epochs [i*3 .. i*3+3); chunk j inside shard => epoch
+    // i*3+j; fill byte = 0x10 + (i*3 + j).
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      CHECK(Fail, chunk_szs[j] == kChunkBytes);
+      const uint8_t* p = sw->buf + chunk_offs[j];
+      uint8_t expected = (uint8_t)(0x10 + i * 3 + j);
+      for (size_t b = 0; b < kChunkBytes; ++b) {
+        if (p[b] != expected) {
+          log_error("  shard %d chunk %d byte %zu: got 0x%02x want 0x%02x",
+                    i,
+                    j,
+                    b,
+                    p[b],
+                    expected);
+          goto Fail;
+        }
+      }
+    }
+    found++;
+  }
+  CHECK(Fail, found == 2);
+  // batch 0: shard 0 finalize (3 chunks, bundle = copy); shard 1 starts
+  // gen 0 with 1 chunk (post-finalize run, bounce = copy).
+  // batch 1: shard 1 finalizes (2 more chunks, bundle = copy).
+  // No write_direct calls in this geometry — every run either bundles a
+  // finalize or bounces a fresh-gen run. The byte-level on-disk check
+  // above validates correctness through the bounce path. Steady-state
+  // write_direct coverage lives in test_tail_carry_two_arrays.
+  log_info("  PASS (%d shards verified, write_direct=%d, write=%d)",
+           found,
+           sink.write_direct_count,
+           sink.write_count);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -1117,6 +1421,8 @@ main(int ac, char* av[])
   ret |= test_mixed_dtypes();
   ret |= test_lod_basic();
   ret |= test_mixed_lod();
+  ret |= test_tail_carry_two_arrays();
+  ret |= test_tail_carry_cross_generation();
 
   cuCtxDestroy(ctx);
   return ret;

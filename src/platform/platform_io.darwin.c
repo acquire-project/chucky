@@ -3,6 +3,8 @@
 #include "log/log.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <ftw.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -89,11 +91,41 @@ platform_close(platform_fd fd)
 }
 
 int
+platform_ftruncate(platform_fd fd, uint64_t logical_size)
+{
+  return ftruncate(fd, (off_t)logical_size) == 0 ? 0 : -1;
+}
+
+int
 platform_path_exists(const char* path)
 {
   struct stat st;
   if (stat(path, &st) == 0)
     return 1;
+  if (errno == ENOENT || errno == ENOTDIR)
+    return 0;
+  return -1;
+}
+
+static int
+remove_entry_cb(const char* fpath,
+                const struct stat* sb,
+                int typeflag,
+                struct FTW* ftwbuf)
+{
+  (void)sb;
+  (void)typeflag;
+  (void)ftwbuf;
+  return remove(fpath) == 0 ? 0 : -1;
+}
+
+int
+platform_remove_tree(const char* path)
+{
+  if (!path || !path[0])
+    return 0;
+  if (nftw(path, remove_entry_cb, 16, FTW_DEPTH | FTW_PHYS) == 0)
+    return 0;
   if (errno == ENOENT || errno == ENOTDIR)
     return 0;
   return -1;

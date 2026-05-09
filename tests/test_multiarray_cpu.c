@@ -417,14 +417,22 @@ test_content_isolation(void)
   struct test_shard_sink sink0, sink1;
   test_sink_init_1(&sink0);
   test_sink_init_1(&sink1);
+  // Activate the carry-over delivery path so the descriptor-owned
+  // h_tail_bytes plumbing is exercised on each array switch.
+  sink0.shard_alignment = 4096;
+  sink1.shard_alignment = 4096;
 
   // Both arrays: 2D 4x4 u16, chunk 2x2, cps 1x2.
   // 2 epochs, 2 chunks/epoch, 2 chunks/shard → 2 shards, 4 chunks each.
+  // epochs_per_batch=1 forces each shard to span 2 batches: the first kicks
+  // off a non-finalizing tail-carry, the second finalizes.
   struct dimension dims0[2], dims1[2];
   struct tile_stream_configuration configs[] = {
     make_2d_config(dims0, dtype_u16),
     make_2d_config(dims1, dtype_u16),
   };
+  configs[0].epochs_per_batch = 1;
+  configs[1].epochs_per_batch = 1;
   struct shard_sink* sinks_arr[] = { &sink0.base, &sink1.base };
 
   struct multiarray_tile_stream_cpu* ms =
@@ -507,6 +515,34 @@ test_content_isolation(void)
   CHECK(Fail, chunks_1 == 4);
 
   log_info("  array0: %d chunks, array1: %d chunks", chunks_0, chunks_1);
+
+  // Carry-over byte invariant: each non-empty shard satisfies
+  // shard_size == Σ chunk_bytes + index + crc, with no inter-batch padding.
+  // Verifies the descriptor-owned h_tail_bytes survived array switches.
+  struct test_shard_sink* sinks_check[2] = { &sink0, &sink1 };
+  for (int a = 0; a < 2; ++a) {
+    for (int si = 0; si < TEST_SHARD_SINK_MAX_SHARDS; ++si) {
+      struct test_shard_writer* sw = &sinks_check[a]->writers[0][si];
+      if (!sw->buf || sw->size == 0)
+        continue;
+      CHECK(Fail, sw->size > index_tail);
+      const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_tail);
+      uint64_t expected_payload = 0;
+      int valid_chunks = 0;
+      for (size_t c = 0; c < cps_total; ++c) {
+        uint64_t off = idx[2 * c];
+        uint64_t nb = idx[2 * c + 1];
+        if (off == UINT64_MAX && nb == UINT64_MAX)
+          continue;
+        expected_payload += nb;
+        valid_chunks++;
+      }
+      // sw->size > 0 means we wrote chunks; index must reflect them.
+      CHECK(Fail, valid_chunks > 0);
+      CHECK(Fail, expected_payload > 0);
+      CHECK(Fail, sw->size == expected_payload + index_tail);
+    }
+  }
 
   multiarray_tile_stream_cpu_destroy(ms);
   test_sink_free(&sink0);
@@ -644,6 +680,9 @@ test_lod_basic(void)
   int shards_per_level[] = { 16, 16, 16 };
   struct test_shard_sink sink;
   test_sink_init_multi(&sink, 3, shards_per_level, SHARD_CAP);
+  // Activate carry-over so the unified per-LOD aggregate path emits per-
+  // shard regions on every level (lvl > 0 included).
+  sink.shard_alignment = 4096;
 
   struct multiarray_tile_stream_cpu* ms = NULL;
 
@@ -674,6 +713,38 @@ test_lod_basic(void)
   CHECK(Fail, lod_count > 0);
 
   log_info("  L0 shards: %d, L1+ shards: %d", l0_count, lod_count);
+
+  // Tail-carry byte invariant per LOD. dim_extent_compute_shards clamps
+  // chunks_per_shard down to the actual chunk count when a level shrinks
+  // (lod_plan.c:467), so cps_total varies per level. For this geometry:
+  //   L0: cps {1,2,2} → 4 entries per shard index
+  //   L1: cps {1,1,1} → 1 (yx clamped from 2→1 after one downsample)
+  //   L2: cps {1,1,1} → 1
+  const size_t cps_total_per_lv[3] = { 4, 1, 1 };
+  for (int lv = 0; lv < 3; ++lv) {
+    const size_t cps_total = cps_total_per_lv[lv];
+    const size_t index_total = cps_total * 2 * sizeof(uint64_t) + 4;
+    for (int si = 0; si < TEST_SHARD_SINK_MAX_SHARDS; ++si) {
+      struct test_shard_writer* sw = &sink.writers[lv][si];
+      if (!sw->buf || sw->size == 0)
+        continue;
+      CHECK(Fail, sw->size > index_total);
+      const uint64_t* idx = (const uint64_t*)(sw->buf + sw->size - index_total);
+      uint64_t expected_payload = 0;
+      int valid_chunks = 0;
+      for (size_t c = 0; c < cps_total; ++c) {
+        uint64_t off = idx[2 * c];
+        uint64_t nb = idx[2 * c + 1];
+        if (off == UINT64_MAX && nb == UINT64_MAX)
+          continue;
+        expected_payload += nb;
+        valid_chunks++;
+      }
+      CHECK(Fail, valid_chunks > 0);
+      CHECK(Fail, expected_payload > 0);
+      CHECK(Fail, sw->size == expected_payload + index_total);
+    }
+  }
 
   multiarray_tile_stream_cpu_destroy(ms);
   test_sink_free(&sink);
@@ -917,11 +988,11 @@ Fail:
 
 // ---- Test: flush is idempotent after writer reaches `finished` ----
 //
-// Once the writer has reached capacity (total_element_limit) and been finalized,
-// subsequent `update()` calls report `finished` and produce no sink work,
-// and a redundant `flush()` is a no-op (no re-finalization of already-closed
-// shards). A prior bug caused the destructor's follow-up flush to deadlock
-// on Windows against an already-finalized sink.
+// Once the writer has reached capacity (total_element_limit) and been
+// finalized, subsequent `update()` calls report `finished` and produce no sink
+// work, and a redundant `flush()` is a no-op (no re-finalization of
+// already-closed shards). A prior bug caused the destructor's follow-up flush
+// to deadlock on Windows against an already-finalized sink.
 static int
 test_flush_idempotent_after_finished(void)
 {
@@ -1025,8 +1096,9 @@ test_flush_resumable(void)
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
 
-  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination). One
-  // epoch per shard so each batch produces a fresh shard with fresh content.
+  // Unbounded dim 0 so total_element_limit is 0 (no input-side termination).
+  // One epoch per shard so each batch produces a fresh shard with fresh
+  // content.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,

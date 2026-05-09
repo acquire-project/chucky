@@ -24,7 +24,7 @@ extern "C"
     void* d_aggregated;       // device: comp_pool_bytes
     void* h_aggregated;       // host pinned: comp_pool_bytes
     size_t* h_offsets;        // host pinned: (C+1) size_t
-    size_t* h_permuted_sizes; // host pinned: C size_t (real, pre-padding)
+    size_t* h_permuted_sizes; // host pinned: C size_t (real compressed sizes)
     void* d_temp;             // CUB scratch
     size_t temp_bytes;
     CUevent ready;           // D2H completion
@@ -39,17 +39,17 @@ extern "C"
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
-  int aggregate_by_shard_async(const struct aggregate_layout* layout,
-                               void* d_compressed,
-                               size_t* d_comp_sizes,
-                               struct aggregate_slot* slot,
-                               CUstream stream);
-
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,
                                 size_t comp_pool_bytes);
 
+  // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
+  //   by add_shard_bias_k for this batch's leading-tail accounting. The host
+  //   uploads the post-delivery values after every batch.
+  // d_tail_carry: persistent per-LOD device buffer of num_shards * page_size
+  //   bytes; holds the actual ragged tail bytes between batches. Same
+  //   uploaded-by-host invariant as d_tail_bytes.
   int aggregate_batch_by_shard_async(void* d_compressed,
                                      size_t* d_comp_sizes,
                                      const uint32_t* d_batch_gather,
@@ -59,6 +59,8 @@ extern "C"
                                      size_t max_comp_chunk_bytes,
                                      const struct aggregate_layout* layout,
                                      struct aggregate_slot* slot,
+                                     size_t* d_tail_bytes,
+                                     CUdeviceptr d_tail_carry,
                                      CUstream stream);
 
 #ifdef __cplusplus

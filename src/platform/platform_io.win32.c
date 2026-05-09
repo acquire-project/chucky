@@ -1,5 +1,6 @@
 #include "platform/platform_io.h"
 
+#include <stdio.h>
 #include <string.h>
 
 int
@@ -41,15 +42,15 @@ platform_mkdirp(const char* path)
 platform_fd
 platform_open_write(const char* path, int flags)
 {
-  DWORD attrs = FILE_ATTRIBUTE_NORMAL;
-  if (flags & PLATFORM_OPEN_UNBUFFERED)
-    attrs = FILE_FLAG_NO_BUFFERING;
+  // PLATFORM_OPEN_UNBUFFERED is a no-op on Windows: NO_BUFFERING + sub-sector
+  // EOF corrupts the trailing partial sector on 4K-logical NTFS volumes.
+  (void)flags;
   return CreateFileA(path,
                      GENERIC_WRITE,
-                     0,    // no sharing
-                     NULL, // default security
+                     0,
+                     NULL,
                      CREATE_ALWAYS,
-                     attrs,
+                     FILE_ATTRIBUTE_NORMAL,
                      NULL);
 }
 
@@ -97,6 +98,16 @@ platform_close(platform_fd fd)
 }
 
 int
+platform_ftruncate(platform_fd fd, uint64_t logical_size)
+{
+  FILE_END_OF_FILE_INFO info;
+  info.EndOfFile.QuadPart = (LONGLONG)logical_size;
+  if (!SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info)))
+    return -1;
+  return 0;
+}
+
+int
 platform_path_exists(const char* path)
 {
   wchar_t wpath[4096];
@@ -113,4 +124,68 @@ platform_path_exists(const char* path)
   if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
     return 0;
   return -1;
+}
+
+// Recursive descent: list path's children, delete each (recursing into
+// directories), then remove path itself.
+static int
+remove_tree_recurse(const char* path)
+{
+  char pattern[4096];
+  if ((size_t)snprintf(pattern, sizeof(pattern), "%s\\*", path) >=
+      sizeof(pattern))
+    return -1;
+
+  WIN32_FIND_DATAA fd;
+  HANDLE h = FindFirstFileA(pattern, &fd);
+  if (h != INVALID_HANDLE_VALUE) {
+    do {
+      if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+        continue;
+      char child[4096];
+      if ((size_t)snprintf(
+            child, sizeof(child), "%s\\%s", path, fd.cFileName) >=
+          sizeof(child)) {
+        FindClose(h);
+        return -1;
+      }
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (remove_tree_recurse(child) != 0) {
+          FindClose(h);
+          return -1;
+        }
+      } else {
+        // Clear read-only bit; otherwise DeleteFileA fails with EACCES.
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+          SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileA(child)) {
+          FindClose(h);
+          return -1;
+        }
+      }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+  } else {
+    DWORD err = GetLastError();
+    if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND)
+      return -1;
+    // Path doesn't exist as a directory; fall through to try as a file.
+  }
+
+  if (RemoveDirectoryA(path))
+    return 0;
+  if (DeleteFileA(path))
+    return 0;
+  DWORD err = GetLastError();
+  if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+    return 0;
+  return -1;
+}
+
+int
+platform_remove_tree(const char* path)
+{
+  if (!path || !path[0])
+    return 0;
+  return remove_tree_recurse(path);
 }

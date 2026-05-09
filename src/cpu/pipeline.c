@@ -24,9 +24,12 @@ deliver_aggregate(int lv,
     platform_toc(&sink_clk);
 
   size_t sink_bytes = 0;
+  size_t* h_tail = (p->h_tail_bytes ? p->h_tail_bytes[lv] : NULL);
   if (deliver_to_shards_batch((uint8_t)lv,
                               lvl->shard,
                               ar,
+                              &p->per_lod_agg_layouts[lv],
+                              h_tail,
                               active_count,
                               p->sink,
                               p->shard_alignment_bytes,
@@ -149,13 +152,21 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     .data_capacity = slot->data_capacity_bytes,
   };
   struct aggregate_result per_lod_results[LOD_MAX_LEVELS];
-  if (aggregate_cpu_batch_into_unified(p->compressed,
-                                       p->comp_sizes,
-                                       slot->gather,
-                                       &layout,
-                                       &ws,
-                                       per_lod_results,
-                                       p->pool))
+  struct shard_state* shards_by_lod[LOD_MAX_LEVELS] = { 0 };
+  for (int lv = 0; lv < p->nlod; ++lv)
+    shards_by_lod[lv] = p->levels[lv].shard;
+  if (aggregate_cpu_batch_into_unified(&(struct aggregate_cpu_inputs){
+        .compressed_base = p->compressed,
+        .comp_sizes_base = p->comp_sizes,
+        .gather = slot->gather,
+        .layout = &layout,
+        .per_lod_layouts = p->per_lod_agg_layouts,
+        .shards_by_lod = shards_by_lod,
+        .h_tail_bytes = p->h_tail_bytes,
+        .ws = &ws,
+        .per_lod_results = per_lod_results,
+        .pool = p->pool,
+      }))
     return 1;
 
   if (p->metrics) {

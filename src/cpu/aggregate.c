@@ -3,25 +3,10 @@
 #include "threadpool/threadpool.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
+#include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-static void
-pad_shard_sizes(size_t* sizes, uint64_t C, uint64_t cps_inner, size_t page_size)
-{
-  uint64_t num_shards = C / cps_inner;
-  for (uint64_t s = 0; s < num_shards; ++s) {
-    uint64_t base = s * cps_inner;
-    size_t total = 0;
-    for (uint64_t j = 0; j < cps_inner; ++j)
-      total += sizes[base + j];
-    size_t aligned = align_up(total, page_size);
-    size_t padding = aligned - total;
-    if (padding > 0)
-      sizes[base + cps_inner - 1] += padding;
-  }
-}
 
 // ---- Pre-allocated workspace API ----
 
@@ -118,13 +103,8 @@ aggregate_cpu_into(const void* compressed,
   for (uint64_t i = 0; i < M; ++i)
     ws->permuted_sizes[ws->perm[i]] = comp_sizes[i];
 
-  // Save pre-padding sizes for shard index.
+  // Save sizes for shard index.
   memcpy(ws->chunk_sizes, ws->permuted_sizes, C * sizeof(size_t));
-
-  // Pass 1.5: pad shard sizes for page alignment.
-  if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(
-      ws->permuted_sizes, C, layout->cps_inner, layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -201,15 +181,8 @@ aggregate_cpu_batch_into(const void* compressed_base,
   for (uint64_t i = 0; i < batch_M; ++i)
     ws->permuted_sizes[ws->perm[i]] = comp_sizes_base[gather[i]];
 
-  // Save pre-padding sizes for shard index.
+  // Save sizes for shard index.
   memcpy(ws->chunk_sizes, ws->permuted_sizes, batch_C * sizeof(size_t));
-
-  // Pass 1.5: pad shard sizes — per-shard with n_active * cps_inner group size.
-  if (layout->page_size > 0 && layout->cps_inner > 0)
-    pad_shard_sizes(ws->permuted_sizes,
-                    batch_C,
-                    (uint64_t)n_active * layout->cps_inner,
-                    layout->page_size);
 
   // Pass 2: exclusive prefix sum.
   ws->offsets[0] = 0;
@@ -239,91 +212,133 @@ aggregate_cpu_batch_into(const void* compressed_base,
 // ---- Unified-across-LODs per-batch aggregate ----
 
 int
-aggregate_cpu_batch_into_unified(const void* compressed_base,
-                                 const size_t* comp_sizes_base,
-                                 const uint32_t* gather,
-                                 const struct batch_aggregate_layout* layout,
-                                 struct aggregate_cpu_workspace* ws,
-                                 struct aggregate_result* per_lod_results,
-                                 struct threadpool* pool)
+aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
 {
-  const uint64_t total_chunks = layout->total_batch_chunks;
-  const uint64_t total_covering = layout->total_batch_covering;
-  const uint8_t nlod = layout->nlod;
-  const size_t max_comp = layout->max_comp_chunk_bytes;
+  const uint64_t total_chunks = in->layout->total_batch_chunks;
+  const uint64_t total_covering = in->layout->total_batch_covering;
+  const uint8_t nlod = in->layout->nlod;
+  const int use_carryover = (in->layout->page_size > 0);
+
+  // Tail-carry callers must supply both arrays; legacy may pass NULL.
+  CHECK(Error, !use_carryover || (in->shards_by_lod && in->h_tail_bytes));
 
   // Each LOD's offsets array has cnt + 1 entries. Adjacent LODs' end/start
-  // positions would collide on one shared index of a single packed array.
-  // Solution: shift each LOD's view by `lv` so every LOD owns a disjoint
-  // span in offsets/permuted_sizes/chunk_sizes. aggregate_batch_luts_unified
-  // applies the same shift to perm targets so all references stay in sync.
-  // The trailing +nlod slack on each scratch array (allocated by the
-  // workspace) covers the shifted span.
-  memset(ws->permuted_sizes, 0, (total_covering + nlod) * sizeof(size_t));
+  // would collide; shift each LOD's view by `lv` so every LOD owns a disjoint
+  // span. aggregate_batch_luts_unified applies the same shift to perm targets.
+  memset(in->ws->permuted_sizes, 0, (total_covering + nlod) * sizeof(size_t));
 
   // Pass 1: scatter compressed sizes into permuted-by-shard layout.
   for (uint64_t i = 0; i < total_chunks; ++i)
-    ws->permuted_sizes[ws->perm[i]] = comp_sizes_base[gather[i]];
+    in->ws->permuted_sizes[in->ws->perm[i]] =
+      in->comp_sizes_base[in->gather[i]];
 
   // Save pre-padding sizes for the shard-index step.
-  memcpy(ws->chunk_sizes,
-         ws->permuted_sizes,
+  memcpy(in->ws->chunk_sizes,
+         in->ws->permuted_sizes,
          (total_covering + nlod) * sizeof(size_t));
 
-  // Pass 1.5: per-LOD shard padding. Each LOD has its own cps_inner and
-  // group geometry, so padding stays per-segment.
-  if (layout->page_size > 0) {
-    for (uint8_t lv = 0; lv < nlod; ++lv) {
-      const struct lod_segment* seg = &layout->lods[lv];
-      if (seg->n_active == 0 || seg->chunks_per_shard_inner == 0)
-        continue;
-      pad_shard_sizes(ws->permuted_sizes + seg->batch_covering_offset + lv,
-                      (uint64_t)seg->n_active * seg->covering_count,
-                      (uint64_t)seg->n_active * seg->chunks_per_shard_inner,
-                      layout->page_size);
-    }
-  }
-
-  // Pass 2: per-LOD prefix sum within each LOD's shifted span. Anchored
-  // at the LOD's page-aligned data_segment_offset so absolute byte
-  // positions land in the correct slot of the shared data buffer.
+  // Pass 2: per-LOD prefix sum producing offsets segment-relative to each
+  // LOD's result.data (= ws->data + seg->data_segment_offset). The contract
+  // exposed to delivery is uniform with the GPU side: shard si's region
+  // starts at offset (si * shard_capacity) within result.data; first chunk
+  // lands at (si * shard_capacity + tail_in[si]) under carry-over, or at
+  // the next packed position under the legacy path.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
-    const struct lod_segment* seg = &layout->lods[lv];
+    const struct lod_segment* seg = &in->layout->lods[lv];
     if (seg->n_active == 0)
       continue;
     const uint64_t base = seg->batch_covering_offset + lv;
-    const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
-    ws->offsets[base] = seg->data_segment_offset;
-    for (uint64_t i = 0; i < cnt; ++i)
-      ws->offsets[base + i + 1] =
-        ws->offsets[base + i] + ws->permuted_sizes[base + i];
+    if (use_carryover) {
+      const size_t shard_capacity = in->per_lod_layouts[lv].shard_capacity;
+      const uint64_t cps_inner = seg->chunks_per_shard_inner;
+      const uint64_t num_shards =
+        cps_inner > 0 ? seg->covering_count / cps_inner : 0;
+      const size_t* lv_tail = in->h_tail_bytes[lv];
+      const uint32_t n_active = seg->n_active;
+      const uint64_t span = (uint64_t)n_active * cps_inner;
+      for (uint64_t si = 0; si < num_shards; ++si) {
+        const uint64_t base_si = base + si * span;
+        const size_t tail_in = lv_tail ? lv_tail[si] : 0;
+        size_t cur = (size_t)si * shard_capacity + tail_in;
+        in->ws->offsets[base_si] = cur;
+        for (uint64_t k = 0; k < span; ++k) {
+          cur += in->ws->permuted_sizes[base_si + k];
+          in->ws->offsets[base_si + k + 1] = cur;
+        }
+      }
+    } else {
+      const uint64_t cnt = (uint64_t)seg->n_active * seg->covering_count;
+      in->ws->offsets[base] = 0;
+      for (uint64_t i = 0; i < cnt; ++i)
+        in->ws->offsets[base + i + 1] =
+          in->ws->offsets[base + i] + in->ws->permuted_sizes[base + i];
+    }
   }
 
-  // Pass 3: unified parallel gather across all LODs. Pool stride is uniform
-  // (max_output_size shared across LODs), so source addressing only needs
-  // gather[i] * max_comp.
-  {
-    struct gather_indirect_ctx c = {
-      .compressed_base = (const char*)compressed_base,
-      .comp_sizes_base = comp_sizes_base,
-      .gather = gather,
-      .perm = ws->perm,
-      .offsets = ws->offsets,
-      .data = (char*)ws->data,
-      .max_comp = max_comp,
-    };
-    threadpool_for_n(pool, total_chunks, gather_indirect_range, &c);
+  // Leading-tail copy: stage prior batch's ragged tail at the front of each
+  // shard's region within the LOD segment (CPU equivalent of GPU's
+  // copy_leading_tail_k).
+  if (use_carryover) {
+    for (uint8_t lv = 0; lv < nlod; ++lv) {
+      const struct lod_segment* seg = &in->layout->lods[lv];
+      if (seg->n_active == 0)
+        continue;
+      const size_t* lv_tail = in->h_tail_bytes[lv];
+      if (!lv_tail)
+        continue;
+      const struct shard_state* ss = in->shards_by_lod[lv];
+      const size_t shard_capacity = in->per_lod_layouts[lv].shard_capacity;
+      char* seg_base = (char*)in->ws->data + seg->data_segment_offset;
+      for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
+        const size_t nbytes = lv_tail[si];
+        if (nbytes == 0)
+          continue;
+        memcpy(seg_base + (size_t)si * shard_capacity,
+               ss->shards[si].tail_buf,
+               nbytes);
+      }
+    }
   }
 
-  // Per-LOD result views: same data base, per-LOD slice of offsets / sizes,
-  // each shifted by `lv` to match the disjoint span layout above.
+  // Pass 3: per-LOD parallel gather. Offsets are segment-relative, so each
+  // LOD's gather context anchors data at ws->data + seg->data_segment_offset.
+  // The perm LUT is built (in aggregate_batch_luts_unified) with targets
+  // shifted by (base_covering + lv), so each LOD's perm values are global
+  // indices into ws->offsets — pass the full offsets array, not a slice.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
-    const struct lod_segment* seg = &layout->lods[lv];
-    per_lod_results[lv].data = ws->data;
-    per_lod_results[lv].offsets = ws->offsets + seg->batch_covering_offset + lv;
-    per_lod_results[lv].chunk_sizes =
-      ws->chunk_sizes + seg->batch_covering_offset + lv;
+    const struct lod_segment* seg = &in->layout->lods[lv];
+    if (seg->n_active == 0)
+      continue;
+    const uint64_t lv_chunks = (uint64_t)seg->n_active * seg->chunks_per_epoch;
+    if (lv_chunks == 0)
+      continue;
+    struct gather_indirect_ctx c = {
+      .compressed_base = (const char*)in->compressed_base,
+      .comp_sizes_base = in->comp_sizes_base,
+      .gather = in->gather + seg->batch_chunk_offset,
+      .perm = in->ws->perm + seg->batch_chunk_offset,
+      .offsets = in->ws->offsets,
+      .data = (char*)in->ws->data + seg->data_segment_offset,
+      .max_comp = in->layout->max_comp_chunk_bytes,
+    };
+    threadpool_for_n(in->pool, lv_chunks, gather_indirect_range, &c);
+  }
+
+  // Per-LOD result views. result.data is shifted to the LOD's segment base
+  // so deliver-time addressing through (data + si*shard_capacity + ...) is
+  // correct, matching the GPU side's per-level h_aggregated.
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct lod_segment* seg = &in->layout->lods[lv];
+    in->per_lod_results[lv].data =
+      (char*)in->ws->data + seg->data_segment_offset;
+    in->per_lod_results[lv].offsets =
+      in->ws->offsets + seg->batch_covering_offset + lv;
+    in->per_lod_results[lv].chunk_sizes =
+      in->ws->chunk_sizes + seg->batch_covering_offset + lv;
   }
 
   return 0;
+
+Error:
+  return 1;
 }

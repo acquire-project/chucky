@@ -1,6 +1,7 @@
 // Test tile_stream_cpu + zarr store integration.
 // Exercises the write_direct -> io_queue async path that requires fencing.
 
+#include "platform/platform.h"
 #include "stream.cpu.h"
 #include "stream/layouts.h"
 #include "test_counting_sink.h"
@@ -542,18 +543,31 @@ test_partial_batch_readback(const char* tmpdir)
 // page-aligned, deliver_to_shards_batch falls back to the copying write
 // path on every shard run — silently halving throughput. This test feeds
 // realistic-sized data through an unbuffered sink wrapped in a counting
-// shim and asserts that at least one write took the zero-copy path.
+// shim and asserts that at least one mid-shard batch took write_direct.
+//
+// Tail-carry note: the bundled finalize write (last batch in each shard)
+// always copies because it builds a temporary fbuf. Only non-finalizing
+// batches can take the zero-copy write_direct path — so the test config
+// must produce > 1 batch per shard to exercise it.
 static int
 test_unbuffered_zero_copy(const char* tmpdir)
 {
   log_info("=== test_unbuffered_zero_copy ===");
 
-  // Inner geometry that produces shards larger than a page so writes are
-  // a meaningful test of the alignment guarantee.
-  const int inner_size[2] = { 64, 64 };
+  // Per-batch bytes must exceed one page so write_bytes = (total_run /
+  // page_size) * page_size > 0 and the non-finalizing write hits the
+  // zero-copy path. Apple Silicon has 16 KiB pages, so the chunk geometry
+  // is sized from platform_page_alignment(): a single batch is one epoch
+  // of 4 chunks (2x2 inner), so chunk_size^2 * 8 >= 2 * page is enough.
+  const size_t page = platform_page_alignment();
+  log_info("  platform page alignment: %zu", page);
+  int chunk = 32;
+  while ((size_t)chunk * (size_t)chunk * 8u < 2u * page)
+    chunk *= 2;
+  const int inner_dim = chunk * 2; // 2x2 inner chunks, one inner shard
   const int n_epochs = 4;
   const int chunks_per_shard_append = 2;
-  const int epoch_elements = inner_size[0] * inner_size[1];
+  const int epoch_elements = inner_dim * inner_dim;
   const int total_elements = n_epochs * epoch_elements;
 
   uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
@@ -567,13 +581,13 @@ test_unbuffered_zero_copy(const char* tmpdir)
       .chunks_per_shard = chunks_per_shard_append,
       .name = "t",
       .storage_position = 0 },
-    { .size = inner_size[0],
-      .chunk_size = 32,
+    { .size = inner_dim,
+      .chunk_size = chunk,
       .chunks_per_shard = 2,
       .name = "y",
       .storage_position = 1 },
-    { .size = inner_size[1],
-      .chunk_size = 32,
+    { .size = inner_dim,
+      .chunk_size = chunk,
       .chunks_per_shard = 2,
       .name = "x",
       .storage_position = 2 },
@@ -594,8 +608,12 @@ test_unbuffered_zero_copy(const char* tmpdir)
   struct counting_sink counter;
   counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
 
+  // Force epochs_per_batch == 1 so the 2-epoch shards see 2 batches each:
+  // first batch is non-finalizing (write_direct path), second batch
+  // finalizes (bundled copy).
   const struct tile_stream_configuration config = {
     .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .epochs_per_batch = 1,
     .dtype = dtype_u16,
     .rank = 3,
     .dimensions = dims,
@@ -650,29 +668,617 @@ Fail:
   return 1;
 }
 
+// Intra-batch generation boundary: when epochs_per_batch > cps_append, one
+// batch spans multiple shard generations. The aggregator packs chunks
+// tightly per shard (no per-gen padding), so the post-finalize run's source
+// lands at a mid-shard, non-page-aligned offset in the agg buffer. Delivery
+// falls through to the bounce path for those runs — accepted as the rare
+// slow path. This test pins that contract and validates byte-level shard
+// integrity through the bounce path.
+static int
+test_unbuffered_intra_batch_gen(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_intra_batch_gen ===");
+
+  const size_t page = platform_page_alignment();
+  log_info("  platform page alignment: %zu", page);
+  // Pick chunk so one epoch > page (post-finalize run hits the bounce path)
+  // and one generation is not a page multiple (forces mid-shard non-aligned
+  // src). cps_inner=4 (2x2 inner), bpe=2 → epoch_bytes = 4*chunk^2*2.
+  int chunk = 8;
+  while (1) {
+    size_t epoch_bytes = (size_t)4 * (size_t)chunk * (size_t)chunk * 2u;
+    size_t gen_bytes = epoch_bytes * 2u;
+    if (epoch_bytes > page && (gen_bytes % page) != 0)
+      break;
+    chunk += 8;
+  }
+  log_info("  chunk_size: %d", chunk);
+  const int inner_dim = chunk * 2; // 2x2 inner chunks
+  const int chunks_per_shard_append = 2;
+  // 5 epochs, cps_append=2, epochs_per_batch=3:
+  //   batch 0 (3 epochs): shard 0 finalizes (2 epochs, page-floor = direct,
+  //                       bundle = direct), then shard 1 takes 1 epoch
+  //                       (post-finalize run, src is mid-shard → copy).
+  //   batch 1 (2 epochs): shard 1 finalizes (1 more, page-floor = direct,
+  //                       bundle = direct), shard 2 takes 1 epoch (post-
+  //                       finalize → copy).
+  //   final flush: shard 2 finalizes via finalize_shards (bundle = direct).
+  // Total: 5 direct (3 bundles + 2 page-floor finalize) + 2 copy (fresh-gen
+  // bounces). The bundle write_direct path is the lifetime-unification win.
+  const int n_epochs = 5;
+  const int epoch_elements = inner_dim * inner_dim;
+  const int total_elements = n_epochs * epoch_elements;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = chunks_per_shard_append,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = inner_dim,
+      .chunk_size = chunk,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = inner_dim,
+      .chunk_size = chunk,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  struct counting_sink counter;
+  counting_sink_init(&counter, test_zarr_sink_as_shard_sink(&z));
+
+  // 3 epochs per batch, 2 epochs per shard generation → first batch finalizes
+  // shard 0 mid-batch and continues into shard 1 with a non-finalizing run.
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .epochs_per_batch = 3,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &counter.base);
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  uint64_t copy_calls = 0, direct_calls = 0;
+  uint64_t copy_bytes = 0, direct_bytes = 0;
+  counting_sink_path_counts(
+    &counter, &copy_calls, &direct_calls, &copy_bytes, &direct_bytes);
+
+  log_info("  copy: %llu calls / %.2f KiB",
+           (unsigned long long)copy_calls,
+           (double)copy_bytes / 1024.0);
+  log_info("  direct: %llu calls / %.2f KiB",
+           (unsigned long long)direct_calls,
+           (double)direct_bytes / 1024.0);
+
+  // 3 shards finalize via bundle write_direct, plus 2 finalizing runs have a
+  // page-floor write_direct preceding the bundle. The post-finalize runs in
+  // batch 0 and batch 1 take the bounce path (2 copies).
+  CHECK(Fail4, direct_calls == 5);
+  CHECK(Fail4, direct_bytes > 0);
+  CHECK(Fail4, copy_calls == 2);
+
+  // Drain end-of-stream finalize and close before reading shard files.
+  tile_stream_cpu_destroy(s);
+  s = NULL;
+  test_zarr_sink_close(&z);
+
+  // File integrity check: each shard satisfies the size invariant
+  // (file_size == Σ chunk_nbytes + index + crc), and every valid chunk's
+  // bytes match the source pattern src[i] = i & 0xFFFF for some
+  // (epoch_in_shard, y_chunk, x_chunk) tuple. Shards 0, 1 are full
+  // (2 epochs × 4 inner chunks = 8 chunks). Shard 2 is partial (1 epoch ×
+  // 4 inner chunks = 4 chunks; the other 4 slots are UINT64_MAX sentinels).
+  // The bouncing intra-batch fresh-gen runs (shard 1's first chunk after
+  // batch 0's mid-batch finalize, shard 2's first chunk after batch 1's
+  // mid-batch finalize) are validated here — if the bounce path corrupted
+  // a single byte, this check fails.
+  {
+    const int chunks_per_shard_total = 8;
+    const int chunk_elements = chunk * chunk;
+    const int chunk_bytes = chunk_elements * (int)sizeof(uint16_t);
+    const size_t index_data =
+      (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t);
+    const size_t index_total = index_data + 4;
+    int integrity_errors = 0;
+
+    for (int sh = 0; sh < 3; ++sh) {
+      char path[1024];
+      snprintf(path, sizeof(path), "%s/0/c/%d/0/0", tmpdir, sh);
+
+      uint8_t* data = NULL;
+      size_t len = 0;
+      if (read_file_all(path, &data, &len) != 0) {
+        log_error("  shard %d: missing", sh);
+        integrity_errors++;
+        continue;
+      }
+      if (len <= index_total) {
+        log_error("  shard %d: file too short (%zu)", sh, len);
+        free(data);
+        integrity_errors++;
+        continue;
+      }
+
+      const uint8_t* index_ptr = data + len - index_total;
+      uint64_t chunk_offsets[8], chunk_sizes_arr[8];
+      uint64_t expected_payload = 0;
+      int valid_chunks = 0;
+      for (int j = 0; j < chunks_per_shard_total; ++j) {
+        memcpy(&chunk_offsets[j], index_ptr + (size_t)j * 16, 8);
+        memcpy(&chunk_sizes_arr[j], index_ptr + (size_t)j * 16 + 8, 8);
+        if (chunk_offsets[j] == UINT64_MAX && chunk_sizes_arr[j] == UINT64_MAX)
+          continue;
+        expected_payload += chunk_sizes_arr[j];
+        valid_chunks++;
+      }
+
+      // Size invariant: no inter-batch padding, no trailing zeros after CRC.
+      if (len != expected_payload + index_total) {
+        log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                  sh,
+                  len,
+                  (unsigned long long)expected_payload,
+                  index_total);
+        integrity_errors++;
+        free(data);
+        continue;
+      }
+
+      // Expected valid chunk count: shards 0,1 are full (8); shard 2 is
+      // partial (4: the first epoch's worth of inner chunks).
+      const int expected_valid = (sh == 2) ? 4 : 8;
+      if (valid_chunks != expected_valid) {
+        log_error("  shard %d: %d valid chunks, expected %d",
+                  sh,
+                  valid_chunks,
+                  expected_valid);
+        integrity_errors++;
+        free(data);
+        continue;
+      }
+
+      // Per-chunk content check. For each valid chunk, find the unique
+      // (epoch_in_shard, y_chunk, x_chunk) tuple whose source-pattern bytes
+      // match. Robust to the aggregator's within-shard permutation.
+      int tuple_seen[2][2][2] = { 0 };
+      const int eis_max = (sh == 2) ? 1 : 2;
+      int matched_total = 0;
+      for (int j = 0; j < chunks_per_shard_total; ++j) {
+        if (chunk_offsets[j] == UINT64_MAX)
+          continue;
+        if (chunk_sizes_arr[j] != (uint64_t)chunk_bytes) {
+          log_error("  shard %d chunk %d: size %llu != expected %d",
+                    sh,
+                    j,
+                    (unsigned long long)chunk_sizes_arr[j],
+                    chunk_bytes);
+          integrity_errors++;
+          continue;
+        }
+        const uint16_t* chunk_vals = (const uint16_t*)(data + chunk_offsets[j]);
+        int found = 0;
+        for (int eis = 0; eis < eis_max && !found; ++eis) {
+          const int global_epoch = sh * chunks_per_shard_append + eis;
+          for (int yc = 0; yc < 2 && !found; ++yc) {
+            for (int xc = 0; xc < 2 && !found; ++xc) {
+              if (tuple_seen[eis][yc][xc])
+                continue;
+              int match = 1;
+              for (int vy = 0; vy < chunk && match; ++vy) {
+                for (int vx = 0; vx < chunk; ++vx) {
+                  const int gy = yc * chunk + vy;
+                  const int gx = xc * chunk + vx;
+                  const int src_idx =
+                    global_epoch * inner_dim * inner_dim + gy * inner_dim + gx;
+                  const uint16_t expected = (uint16_t)(src_idx & 0xFFFF);
+                  if (chunk_vals[vy * chunk + vx] != expected) {
+                    match = 0;
+                    break;
+                  }
+                }
+              }
+              if (match) {
+                tuple_seen[eis][yc][xc] = 1;
+                matched_total++;
+                found = 1;
+              }
+            }
+          }
+        }
+        if (!found) {
+          log_error(
+            "  shard %d chunk %d: bytes don't match any expected tuple", sh, j);
+          integrity_errors++;
+        }
+      }
+      if (matched_total != expected_valid) {
+        log_error("  shard %d: matched %d chunks, expected %d",
+                  sh,
+                  matched_total,
+                  expected_valid);
+        integrity_errors++;
+      }
+      free(data);
+    }
+
+    if (integrity_errors) {
+      log_error("FAIL test_unbuffered_intra_batch_gen (%d integrity errors)",
+                integrity_errors);
+      free(src);
+      return 1;
+    }
+  }
+
+  free(src);
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_intra_batch_gen");
+  return 1;
+}
+
+// Tail-carryover invariant on the CPU pipeline. With a page-aligned
+// (unbuffered) sink, on-disk shard size MUST equal Σ chunk_nbytes + index +
+// crc — no inter-batch zero padding.
+static int
+test_unbuffered_invariant(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_invariant ===");
+
+  // Geometry chosen so each batch's contribution is short enough to leave a
+  // ragged tail (chunks much smaller than a page). 4 epochs × 1 element/
+  // chunk along dim0 with chunks_per_shard_append=2 → 2 batches per shard.
+  const int n_epochs = 4;
+  const int total_elements = n_epochs * 4 * 4;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s =
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  test_zarr_sink_close(&z);
+
+  // Walk the shard files. n_epochs=4, cps_append=2 → 2 shards.
+  int errors = 0;
+  for (int sh = 0; sh < 2; ++sh) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/0/c/%d/0/0", tmpdir, sh);
+
+    uint8_t* data = NULL;
+    size_t len = 0;
+    CHECK(Fail4, read_file_all(path, &data, &len) == 0);
+
+    const int chunks_per_shard_total = 2;
+    size_t index_data = (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t);
+    size_t index_total = index_data + 4;
+    if (len <= index_total) {
+      log_error("  shard %d: file too short (%zu)", sh, len);
+      free(data);
+      errors++;
+      continue;
+    }
+    const uint8_t* index_ptr = data + len - index_total;
+    uint64_t expected_payload = 0;
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      uint64_t nbytes;
+      memcpy(&nbytes,
+             index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+             sizeof(uint64_t));
+      expected_payload += nbytes;
+    }
+    if (expected_payload == 0) {
+      log_error("  shard %d: index has zero total payload", sh);
+      errors++;
+    } else if (len != expected_payload + index_total) {
+      log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                sh,
+                len,
+                (unsigned long long)expected_payload,
+                index_total);
+      errors++;
+    }
+    free(data);
+  }
+
+  tile_stream_cpu_destroy(s);
+  free(src);
+  if (errors) {
+    log_error("FAIL test_unbuffered_invariant (%d shard(s) wrong)", errors);
+    return 1;
+  }
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_invariant");
+  return 1;
+}
+
+// Partial final shard: stream ends with epoch_in_shard < cps_append. The
+// end-of-stream finalize_shards path writes the in-flight tail_bytes alongside
+// the partial index. The file-size invariant must still hold, and only the
+// epochs actually written should have valid index entries.
+static int
+test_unbuffered_partial_final_shard(const char* tmpdir)
+{
+  log_info("=== test_unbuffered_partial_final_shard ===");
+
+  // 3 epochs with cps_append=2 → shard 0 full (2 epochs), shard 1 partial
+  // (1 epoch). Partial shard never reaches a finalizing run from delivery —
+  // its final close happens via tile_stream_cpu_destroy → finalize_shards.
+  const int n_epochs = 3;
+  const int total_elements = n_epochs * 4 * 4;
+
+  uint16_t* src = (uint16_t*)malloc((size_t)total_elements * sizeof(uint16_t));
+  CHECK(Fail, src);
+  for (int i = 0; i < total_elements; ++i)
+    src[i] = (uint16_t)(i & 0xFFFF);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct test_zarr_sink z = { 0 };
+  CHECK(Fail2,
+        test_zarr_sink_open(&z,
+                            tmpdir,
+                            "0",
+                            dims,
+                            3,
+                            dtype_u16,
+                            0,
+                            (struct codec_config){ .id = CODEC_NONE },
+                            /*unbuffered=*/1) == 0);
+
+  const struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = (size_t)total_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+
+  struct tile_stream_cpu* s =
+    tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Fail3, s);
+
+  {
+    struct slice input = { .beg = src, .end = src + total_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Fail4, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Fail4, r.error == 0);
+  }
+
+  // tile_stream_cpu_destroy must drain the partial shard's tail through
+  // finalize_shards. After this returns, both shards exist on disk.
+  tile_stream_cpu_destroy(s);
+  test_zarr_sink_close(&z);
+
+  // 2 shards: shard 0 full (2 chunks), shard 1 partial (1 valid + 1 missing).
+  int errors = 0;
+  const int chunks_per_shard_total = 2;
+  const size_t index_data =
+    (size_t)chunks_per_shard_total * 2 * sizeof(uint64_t);
+  const size_t index_total = index_data + 4;
+  for (int sh = 0; sh < 2; ++sh) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/0/c/%d/0/0", tmpdir, sh);
+
+    uint8_t* data = NULL;
+    size_t len = 0;
+    if (read_file_all(path, &data, &len) != 0) {
+      log_error("  shard %d: missing", sh);
+      errors++;
+      continue;
+    }
+    if (len <= index_total) {
+      log_error("  shard %d: file too short (%zu)", sh, len);
+      free(data);
+      errors++;
+      continue;
+    }
+    const uint8_t* index_ptr = data + len - index_total;
+    uint64_t expected_payload = 0;
+    int valid_chunks = 0;
+    for (int j = 0; j < chunks_per_shard_total; ++j) {
+      uint64_t off, nbytes;
+      memcpy(&off, index_ptr + (size_t)j * 16, sizeof(uint64_t));
+      memcpy(&nbytes,
+             index_ptr + (size_t)j * 16 + sizeof(uint64_t),
+             sizeof(uint64_t));
+      if (off == UINT64_MAX && nbytes == UINT64_MAX)
+        continue;
+      expected_payload += nbytes;
+      valid_chunks++;
+    }
+    int expected_valid = (sh == 0) ? 2 : 1;
+    if (valid_chunks != expected_valid) {
+      log_error("  shard %d: %d valid chunks, expected %d",
+                sh,
+                valid_chunks,
+                expected_valid);
+      errors++;
+    }
+    if (len != expected_payload + index_total) {
+      log_error("  shard %d: file size %zu != payload %llu + index %zu",
+                sh,
+                len,
+                (unsigned long long)expected_payload,
+                index_total);
+      errors++;
+    }
+    free(data);
+  }
+
+  free(src);
+  if (errors) {
+    log_error("FAIL test_unbuffered_partial_final_shard (%d shard(s) wrong)",
+              errors);
+    return 1;
+  }
+  log_info("PASS");
+  return 0;
+
+Fail4:
+  tile_stream_cpu_destroy(s);
+Fail3:
+  test_zarr_sink_close(&z);
+Fail2:
+  free(src);
+Fail:
+  log_error("FAIL test_unbuffered_partial_final_shard");
+  return 1;
+}
+
 int
 main(void)
 {
   int err = 0;
 
-  char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256], tmpdir5[256];
+  char tmpdir1[256], tmpdir2[256], tmpdir3[256], tmpdir4[256], tmpdir5[256],
+    tmpdir6[256], tmpdir7[256], tmpdir8[256];
   CHECK(Fail, test_tmpdir_create(tmpdir1, sizeof(tmpdir1)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir2, sizeof(tmpdir2)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir3, sizeof(tmpdir3)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir4, sizeof(tmpdir4)) == 0);
   CHECK(Fail, test_tmpdir_create(tmpdir5, sizeof(tmpdir5)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir6, sizeof(tmpdir6)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir7, sizeof(tmpdir7)) == 0);
+  CHECK(Fail, test_tmpdir_create(tmpdir8, sizeof(tmpdir8)) == 0);
 
   err |= test_pipeline(tmpdir1);
   err |= test_streaming_append(tmpdir2);
   err |= test_batch_readback(tmpdir3);
   err |= test_partial_batch_readback(tmpdir4);
   err |= test_unbuffered_zero_copy(tmpdir5);
+  err |= test_unbuffered_intra_batch_gen(tmpdir7);
+  err |= test_unbuffered_invariant(tmpdir6);
+  err |= test_unbuffered_partial_final_shard(tmpdir8);
 
   test_tmpdir_remove(tmpdir1);
   test_tmpdir_remove(tmpdir2);
   test_tmpdir_remove(tmpdir3);
   test_tmpdir_remove(tmpdir4);
   test_tmpdir_remove(tmpdir5);
+  test_tmpdir_remove(tmpdir6);
+  test_tmpdir_remove(tmpdir7);
+  test_tmpdir_remove(tmpdir8);
   return err;
 
 Fail:

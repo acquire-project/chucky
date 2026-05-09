@@ -133,11 +133,10 @@ orch_ctx_setup(struct orch_ctx* c,
   // Batch state + pool_ready event
   c->s->engine.batch.epochs_per_batch = K;
   c->s->engine.batch.accumulated = 0;
-  CU(Fail,
-     cuEventCreate(&c->s->engine.batch.pool_ready, CU_EVENT_DEFAULT));
-  CU(Fail,
-     cuEventRecord(c->s->engine.batch.pool_ready,
-                   c->s->engine.streams.compute));
+  CU(Fail, cuEventCreate(&c->s->engine.batch.pool_ready, CU_EVENT_DEFAULT));
+  CU(
+    Fail,
+    cuEventRecord(c->s->engine.batch.pool_ready, c->s->engine.streams.compute));
 
   // Flush pipeline state
   memset(&c->s->engine.flush, 0, sizeof(c->s->engine.flush));
@@ -274,7 +273,7 @@ test_full_batch_auto_flush(void)
 
   // After full batch: drain_kick_and_swap fired
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
-  CHECK(Fail, c.s->engine.pools.current == 1); // swapped to pool 1
+  CHECK(Fail, c.s->engine.pools.current == 1);    // swapped to pool 1
   CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 pending at fc=0
   CHECK(Fail, c.s->engine.flush.pending[1] == 0);
 
@@ -378,9 +377,16 @@ test_accumulated_sync_partial(void)
   // Batch drained
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
-  // Data delivered to sink (1 epoch, shard not finalized since tps_0=2)
+  // Data delivered into the pipeline. With tail-carryover delivery, a partial
+  // batch's data is staged in the in-memory tail (writes to disk only happen
+  // at page-aligned boundaries / on shard finalize), so verify shard state
+  // rather than on-disk size.
   CHECK(Fail, sink.open_count >= 1);
-  CHECK(Fail, sink.writers[0][0].size > 0);
+  {
+    struct shard_state* ss = &c.s->engine.compress_agg.levels[0].shard;
+    struct active_shard* sh = &ss->shards[0];
+    CHECK(Fail, sh->tail_bytes > 0);
+  }
 
   // Sink metric recorded (platform_toc, not CUDA events — always fires)
   CHECK(Fail, c.s->engine.metrics.sink.count == 1);
@@ -435,7 +441,7 @@ test_two_batch_cycle(void)
 
   // Batch 2 kicked on fc=1. Lazy delivery: batch 1 stays pending at fc=0
   // until fc=0 is reused (batch 3) or the final flush drains it.
-  CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
+  CHECK(Fail, c.s->engine.pools.current == 0);    // swapped back to pool 0
   CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 still pending
   CHECK(Fail, c.s->engine.flush.pending[1] == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.batch.accumulated == 0);

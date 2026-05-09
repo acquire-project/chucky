@@ -47,6 +47,11 @@ struct shard_writer
                       uint64_t offset,
                       const void* beg,
                       const void* end);
+  // Optional: truncate the shard's persistent storage to logical_size bytes.
+  // Used after O_DIRECT writes that overshoot the logical end (page-aligned)
+  // so the shard file's on-disk size matches the index's expectations.
+  // NULL = no-op (object stores set size implicitly).
+  int (*truncate)(struct shard_writer* self, uint64_t logical_size);
   int (*finalize)(struct shard_writer* self); // shard complete, close/flush
 };
 

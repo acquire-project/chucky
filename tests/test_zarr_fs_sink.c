@@ -1143,6 +1143,15 @@ test_unbuffered_pipeline(const char* tmpdir)
         &chunk_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
     }
 
+    // Tail-carryover invariant: shard files are exactly
+    //   Σ chunk_nbytes + index + crc, no inter-batch zero padding.
+    {
+      uint64_t expected_payload = 0;
+      for (int i = 0; i < chunks_per_shard_total; ++i)
+        expected_payload += chunk_nbytes[i];
+      CHECK(Fail4, shard_len == expected_payload + index_total_bytes);
+    }
+
     size_t chunk_stride_bytes =
       tile_stream_gpu_layout(s)->chunk_stride * sizeof(uint32_t);
     int errors = 0;
@@ -1354,6 +1363,20 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
         memcpy(&chunk_offsets[i], index_ptr + (size_t)i * 16, sizeof(uint64_t));
         memcpy(
           &chunk_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
+      }
+
+      // Tail-carryover invariant: shard files are exactly
+      //   Σ chunk_nbytes + index + crc, no inter-batch zero padding.
+      uint64_t expected_payload = 0;
+      for (int i = 0; i < chunks_per_shard_total; ++i)
+        expected_payload += chunk_nbytes[i];
+      if (shard_len != expected_payload + index_total_bytes) {
+        log_error("shard %d: file size %zu != payload %llu + index %zu",
+                  i_shard,
+                  shard_len,
+                  (unsigned long long)expected_payload,
+                  index_total_bytes);
+        errors++;
       }
 
       size_t chunk_stride_bytes =

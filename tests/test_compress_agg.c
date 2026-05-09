@@ -1,5 +1,6 @@
 #include "gpu/flush.compress_agg.h"
 #include "stream/config.h"
+#include "stream/types.aggregate.h"
 
 #include "index.ops.util.h"
 #include "test_gpu_helpers.h"
@@ -25,7 +26,7 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  CUevent pool_ready; // recorded after last fill_epoch call
+  CUevent pool_ready;           // recorded after last fill_epoch call
   uint32_t* batch_active_masks; // [K] owned scratch for tests
   struct batch_state batch;
   int stage_inited;
@@ -154,6 +155,9 @@ Fail:
 }
 
 // D2H aggregate offsets and data for level 0. Caller frees *out_agg_data.
+// Copies the full d_aggregated pool because the new tail-carryover layout
+// places each shard's chunks at fixed `s * shard_capacity` offsets — not
+// contiguously packed at the start as the old pad-to-page layout did.
 static int
 ca_ctx_fetch_agg(struct flush_handoff* handoff,
                  uint64_t n_covering,
@@ -166,10 +170,10 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                   (CUdeviceptr)agg->d_offsets,
                   (n_covering + 1) * sizeof(size_t)));
 
-  size_t total_data = agg->h_offsets[n_covering];
-  void* h_agg = malloc(total_data);
+  size_t pool_bytes = agg_pool_bytes_layout(handoff->agg_layout[0]);
+  void* h_agg = malloc(pool_bytes);
   CHECK(Fail, h_agg);
-  CU(Fail, cuMemcpyDtoH(h_agg, (CUdeviceptr)agg->d_aggregated, total_data));
+  CU(Fail, cuMemcpyDtoH(h_agg, (CUdeviceptr)agg->d_aggregated, pool_bytes));
 
   *out_agg_data = h_agg;
   return 0;
@@ -264,12 +268,18 @@ test_compress_agg_single_epoch(void)
   CHECK(Fail, verify_offsets_monotonic(handoff.agg[0]->h_offsets, C) == 0);
 
   {
-    // Expected total includes shard-boundary padding.
+    // h_offsets[C] is the un-biased prefix-sum sentinel: sum of all real
+    // permuted_sizes — chunk_bytes per real chunk for CODEC_NONE.
+    // Each shard's data starts at s * shard_capacity in h_agg.
     const struct aggregate_layout* al = handoff.agg_layout[0];
     uint64_t num_shards = C / al->cps_inner;
-    size_t expected_total =
-      num_shards * align_up(al->cps_inner * chunk_bytes, al->page_size);
-    CHECK(Fail, handoff.agg[0]->h_offsets[C] == expected_total);
+    uint64_t N = (uint64_t)c.stage.levels[0].batch_active_count *
+                 c.cl.levels.level[0].chunk_count;
+    CHECK(Fail, handoff.agg[0]->h_offsets[C] == N * chunk_bytes);
+    for (uint64_t s = 0; s < num_shards; ++s)
+      CHECK(Fail,
+            handoff.agg[0]->h_offsets[s * al->cps_inner] ==
+              s * al->shard_capacity);
   }
   CHECK(Fail, verify_tiles_none(&handoff, &c, h_agg, fill_epoch0) == 0);
 
@@ -322,12 +332,16 @@ test_compress_agg_batch(void)
           0);
 
   {
-    // In batch mode, padding groups are (batch_count * cps_inner) per shard.
+    // h_offsets[batch_covering] is the un-biased prefix-sum sentinel: real
+    // chunk bytes summed across all chunks. Each shard's data starts at
+    // s * shard_capacity in h_agg.
     uint64_t num_shards = C / al->cps_inner;
     uint64_t tps_group = batch_covering / num_shards;
-    size_t expected_total =
-      num_shards * align_up(tps_group * chunk_bytes, al->page_size);
-    CHECK(Fail, handoff.agg[0]->h_offsets[batch_covering] == expected_total);
+    uint64_t N = (uint64_t)batch_count * c.cl.levels.level[0].chunk_count;
+    CHECK(Fail, handoff.agg[0]->h_offsets[batch_covering] == N * chunk_bytes);
+    for (uint64_t s = 0; s < num_shards; ++s)
+      CHECK(Fail,
+            handoff.agg[0]->h_offsets[s * tps_group] == s * al->shard_capacity);
   }
 
   // Verify data per epoch
@@ -415,11 +429,18 @@ test_compress_agg_partial_batch(void)
   CHECK(Fail, verify_offsets_monotonic(handoff.agg[0]->h_offsets, C) == 0);
 
   {
+    // Partial batch: only the actually-active 1 epoch's worth of chunks are
+    // filled by permute_sizes_batch_k; the rest of d_permuted_sizes stays 0
+    // (from cuMemset). Sentinel h_offsets[C] therefore equals N*chunk_bytes
+    // where N is the active-epoch chunk count, not K * chunks_lv.
     const struct aggregate_layout* al = handoff.agg_layout[0];
     uint64_t num_shards = C / al->cps_inner;
-    size_t expected_total =
-      num_shards * align_up(al->cps_inner * chunk_bytes, al->page_size);
-    CHECK(Fail, handoff.agg[0]->h_offsets[C] == expected_total);
+    uint64_t N = (uint64_t)1 * c.cl.levels.level[0].chunk_count; // n_epochs=1
+    CHECK(Fail, handoff.agg[0]->h_offsets[C] == N * chunk_bytes);
+    for (uint64_t s = 0; s < num_shards; ++s)
+      CHECK(Fail,
+            handoff.agg[0]->h_offsets[s * al->cps_inner] ==
+              s * al->shard_capacity);
   }
   CHECK(Fail, verify_tiles_none(&handoff, &c, h_agg, fill_epoch0) == 0);
 

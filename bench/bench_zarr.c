@@ -1,4 +1,5 @@
 #include "bench_zarr.h"
+#include "platform/platform_io.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/store.h"
@@ -30,6 +31,10 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
                    int is_multiscale)
 {
   *z = (struct bench_zarr_handle){ 0 };
+
+  // Clear any leftover output from a prior run with a different shape, which
+  // could otherwise leave directories where this run needs to write files.
+  platform_remove_tree(store_path);
 
   z->store = store_fs_create(store_path, 1 /* unbuffered */);
   CHECK(Fail, z->store);

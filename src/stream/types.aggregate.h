@@ -18,6 +18,12 @@ extern "C"
                         uint64_t cps_inner,
                         size_t page_size);
 
+  // Compute the aggregated-buffer size for the GPU streaming path that uses
+  // tail carry-over (shard-capacity-sized regions per shard). Returns 0 on
+  // overflow or when num_shards is 0.
+  struct aggregate_layout;
+  size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
+
   // Aggregate layout fields. Host fields are always valid.
   // d_* fields are GPU device pointers (NULL on CPU).
   struct aggregate_layout
@@ -30,11 +36,30 @@ extern "C"
     uint64_t chunks_per_epoch; // M: actual chunk count
     uint64_t covering_count;   // C >= M: product of padded dims
     size_t max_comp_chunk_bytes;
-    uint64_t cps_inner; // product of chunks_per_shard for inner dims
-    size_t page_size;   // 0 = no padding
+    uint64_t cps_inner;        // product of chunks_per_shard for inner dims
+    uint64_t num_shards;       // covering_count / cps_inner
+    uint32_t active_count_max; // worst-case active epochs per batch
+    size_t page_size;          // 0 = no padding
+    uint64_t chunks_per_shard_append; // shard length along append dims
+    // Per-shard reservation in d_aggregated. Worst-case batch_active_count
+    // * cps_inner * max_comp_chunk_bytes plus one page slack for a leading
+    // carry-over tail (< page_size) from the prior batch. Page-aligned.
+    // Zero when page_size == 0.
+    size_t shard_capacity;
   };
 
+  // Per-shard footer size: one page for trailing sub-page data, index
+  // entries (16 bytes per chunk), 4-byte CRC, padded to page boundary.
+  // Used by init_shard_state to size shard_state.footer_buf_pool. Returns 0
+  // when page_size is 0 (no alignment requirement) or on overflow.
+  size_t footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size);
+
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
+  // active_count_max is the maximum number of active epochs per batch for this
+  // level (used to size shard_capacity). chunks_per_shard_append is the shard
+  // length along append dims at this level (after any per-level downsample
+  // divisor). It enters the shard_capacity reservation so the agg buffer has
+  // room for intra-batch generation-boundary pads.
   int aggregate_layout_compute(struct aggregate_layout* layout,
                                uint8_t rank,
                                uint8_t n_append,
@@ -42,7 +67,9 @@ extern "C"
                                const uint64_t* chunks_per_shard,
                                uint64_t chunks_per_epoch,
                                size_t max_comp_chunk_bytes,
-                               size_t page_size);
+                               uint32_t active_count_max,
+                               size_t page_size,
+                               uint64_t chunks_per_shard_append);
 
   // Aggregated output for shard delivery (CUDA-free).
   struct aggregate_result

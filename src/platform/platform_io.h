@@ -47,7 +47,17 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes);
 void
 platform_close(platform_fd fd);
 
+// Truncate a file to logical_size bytes. Returns 0 on success, -1 on error.
+int
+platform_ftruncate(platform_fd fd, uint64_t logical_size);
+
 // Returns 1 if path exists, 0 if it does not (ENOENT / path-component-is-file
 // on Windows / not-a-dir), -1 on unexpected IO error.
 int
 platform_path_exists(const char* path);
+
+// Recursively remove the file or directory at path, including all contents.
+// A missing path is treated as success. Returns 0 on success, -1 if any entry
+// could not be removed.
+int
+platform_remove_tree(const char* path);
