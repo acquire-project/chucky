@@ -28,6 +28,10 @@ write_total_k(size_t* __restrict__ d_offsets,
 //   subsequent chunks tightly. Multiple generations within one batch are
 //   contiguous; intra-batch fresh-gen runs land mid-shard and intentionally
 //   take the bounce path in delivery.
+//
+//   bias_s is read once into shared memory before any thread writes back to
+//   d_offsets — otherwise thread 0's write to d_offsets[base] would clobber
+//   the prefix-sum value other threads still need to compute their bias.
 // ---------------------------------------------------------------------------
 __global__ void
 add_shard_bias_k(size_t* __restrict__ d_offsets,
@@ -40,8 +44,10 @@ add_shard_bias_k(size_t* __restrict__ d_offsets,
   if (s >= num_shards)
     return;
   const uint64_t base = s * tps_group;
-  const size_t bias_s =
-    s * shard_capacity + d_tail_bytes_prev[s] - d_offsets[base];
+  __shared__ size_t bias_s;
+  if (threadIdx.x == 0)
+    bias_s = s * shard_capacity + d_tail_bytes_prev[s] - d_offsets[base];
+  __syncthreads();
   for (uint64_t k = threadIdx.x; k < tps_group; k += blockDim.x)
     d_offsets[base + k] += bias_s;
 }

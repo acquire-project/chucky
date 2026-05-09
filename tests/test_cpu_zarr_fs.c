@@ -698,13 +698,15 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
   const int inner_dim = chunk * 2; // 2x2 inner chunks
   const int chunks_per_shard_append = 2;
   // 5 epochs, cps_append=2, epochs_per_batch=3:
-  //   batch 0 (3 epochs): shard 0 finalizes (2 epochs, bundle = copy),
-  //                       then shard 1 takes 1 epoch (post-finalize run,
-  //                       src is mid-shard → bounce/copy).
-  //   batch 1 (2 epochs): shard 1 finalizes (1 more, bundle = copy),
-  //                       shard 2 takes 1 epoch (post-finalize → bounce/copy).
-  //   final flush: shard 2 finalizes (bundle = copy).
-  // Total: 3 bundles + 2 fresh-gen bounces = 5 copies, 0 direct.
+  //   batch 0 (3 epochs): shard 0 finalizes (2 epochs, page-floor = direct,
+  //                       bundle = direct), then shard 1 takes 1 epoch
+  //                       (post-finalize run, src is mid-shard → copy).
+  //   batch 1 (2 epochs): shard 1 finalizes (1 more, page-floor = direct,
+  //                       bundle = direct), shard 2 takes 1 epoch (post-
+  //                       finalize → copy).
+  //   final flush: shard 2 finalizes via finalize_shards (bundle = direct).
+  // Total: 5 direct (3 bundles + 2 page-floor finalize) + 2 copy (fresh-gen
+  // bounces). The bundle write_direct path is the lifetime-unification win.
   const int n_epochs = 5;
   const int epoch_elements = inner_dim * inner_dim;
   const int total_elements = n_epochs * epoch_elements;
@@ -783,13 +785,12 @@ test_unbuffered_intra_batch_gen(const char* tmpdir)
            (unsigned long long)direct_calls,
            (double)direct_bytes / 1024.0);
 
-  // 3 shards each finalize once via a bundle copy (3 copies). Both batches
-  // do a non-finalizing run after a mid-batch finalize: those runs land on
-  // mid-shard, non-page-aligned src and take the bounce path (2 copies).
-  // No direct calls in this geometry — every write either bundles a finalize
-  // or bounces a fresh-gen run.
-  CHECK(Fail4, direct_calls == 0);
-  CHECK(Fail4, copy_calls == 5);
+  // 3 shards finalize via bundle write_direct, plus 2 finalizing runs have a
+  // page-floor write_direct preceding the bundle. The post-finalize runs in
+  // batch 0 and batch 1 take the bounce path (2 copies).
+  CHECK(Fail4, direct_calls == 5);
+  CHECK(Fail4, direct_bytes > 0);
+  CHECK(Fail4, copy_calls == 2);
 
   tile_stream_cpu_destroy(s);
   test_zarr_sink_close(&z);

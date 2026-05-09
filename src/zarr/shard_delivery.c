@@ -28,6 +28,15 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
     ss->tail_buf_pool = (uint8_t*)calloc(1, ss->tail_buf_pool_bytes);
     if (!ss->tail_buf_pool)
       return 1;
+    ss->bundle_capacity = bundle_capacity_for(li->chunks_per_shard_total, page);
+    if (ss->bundle_capacity == 0)
+      return 1;
+    ss->bundle_buf_pool_bytes =
+      (size_t)li->shard_inner_count * ss->bundle_capacity;
+    ss->bundle_buf_pool =
+      (uint8_t*)platform_aligned_alloc(page, ss->bundle_buf_pool_bytes);
+    if (!ss->bundle_buf_pool)
+      return 1;
   }
   for (uint64_t si = 0; si < li->shard_inner_count; ++si) {
     ss->shards[si].index =
@@ -37,8 +46,11 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
     memset(ss->shards[si].index,
            0xFF,
            li->chunks_per_shard_total * 2 * sizeof(uint64_t));
-    if (page > 0)
+    if (page > 0) {
       ss->shards[si].tail_buf = ss->tail_buf_pool + si * page;
+      ss->shards[si].bundle_buf =
+        ss->bundle_buf_pool + si * ss->bundle_capacity;
+    }
   }
   return 0;
 }
@@ -48,6 +60,8 @@ shard_state_destroy(struct shard_state* ss)
 {
   if (!ss->shards) {
     free(ss->tail_buf_pool);
+    if (ss->bundle_buf_pool)
+      platform_aligned_free(ss->bundle_buf_pool);
     *ss = (struct shard_state){ 0 };
     return;
   }
@@ -55,17 +69,25 @@ shard_state_destroy(struct shard_state* ss)
     free(ss->shards[si].index);
   free(ss->shards);
   free(ss->tail_buf_pool);
+  if (ss->bundle_buf_pool)
+    platform_aligned_free(ss->bundle_buf_pool);
   *ss = (struct shard_state){ 0 };
 }
 
-// Build [tail][index][crc4][zero pad]; free with free_finalize_buf.
+// Build the finalize bundle [tail || index || CRC || zero-pad] into a
+// caller-provided destination. Returns 0 on success.
+//   dst, dst_capacity:  buffer to write into (must be >= aligned_bytes).
+//   shard_alignment:    0 means tight pack (logical == aligned).
+//   out_aligned_bytes:  bytes actually written including pad.
+//   out_logical_bytes:  bytes excluding pad (used for truncate target).
 static int
-build_finalize_buf(const uint8_t* tail_src,
+build_finalize_buf(uint8_t* dst,
+                   size_t dst_capacity,
+                   const uint8_t* tail_src,
                    size_t tail_bytes,
                    const uint64_t* index_data,
                    size_t index_data_bytes,
                    size_t shard_alignment,
-                   uint8_t** out_buf,
                    size_t* out_aligned_bytes,
                    size_t* out_logical_bytes)
 {
@@ -73,34 +95,20 @@ build_finalize_buf(const uint8_t* tail_src,
   size_t aligned_bytes = shard_alignment > 0
                            ? align_up(logical_bytes, shard_alignment)
                            : logical_bytes;
-  uint8_t* buf =
-    shard_alignment > 0
-      ? (uint8_t*)platform_aligned_alloc(shard_alignment, aligned_bytes)
-      : (uint8_t*)malloc(aligned_bytes);
-  if (!buf)
+  if (aligned_bytes > dst_capacity)
     return 1;
 
   if (tail_bytes > 0)
-    memcpy(buf, tail_src, tail_bytes);
-  memcpy(buf + tail_bytes, index_data, index_data_bytes);
-  uint32_t crc_val = crc32c(buf + tail_bytes, index_data_bytes);
-  memcpy(buf + tail_bytes + index_data_bytes, &crc_val, 4);
+    memcpy(dst, tail_src, tail_bytes);
+  memcpy(dst + tail_bytes, index_data, index_data_bytes);
+  uint32_t crc_val = crc32c(dst + tail_bytes, index_data_bytes);
+  memcpy(dst + tail_bytes + index_data_bytes, &crc_val, 4);
   if (aligned_bytes > logical_bytes)
-    memset(buf + logical_bytes, 0, aligned_bytes - logical_bytes);
+    memset(dst + logical_bytes, 0, aligned_bytes - logical_bytes);
 
-  *out_buf = buf;
   *out_aligned_bytes = aligned_bytes;
   *out_logical_bytes = logical_bytes;
   return 0;
-}
-
-static void
-free_finalize_buf(uint8_t* buf, size_t shard_alignment)
-{
-  if (shard_alignment > 0)
-    platform_aligned_free(buf);
-  else
-    free(buf);
 }
 
 // Set tail bytes on both active_shard and host shadow. n == 0 clears.
@@ -127,29 +135,69 @@ finalize_shards(struct shard_state* ss, size_t shard_alignment)
     if (!sh->writer)
       continue;
 
-    uint8_t* buf = NULL;
     size_t aligned_bytes = 0;
     size_t logical_bytes = 0;
 
-    if (build_finalize_buf(sh->tail_buf,
-                           sh->tail_bytes,
-                           sh->index,
-                           index_data_bytes,
-                           shard_alignment,
-                           &buf,
-                           &aligned_bytes,
-                           &logical_bytes)) {
-      log_error("finalize_shards: alloc failed for shard %llu",
-                (unsigned long long)si);
-      err = 1;
-    } else {
-      if (sh->writer->write(
-            sh->writer, sh->data_cursor, buf, buf + aligned_bytes)) {
+    // page > 0 → write_direct from sh->bundle_buf (zero-copy, lifetime
+    // bounded by shard_state). page == 0 → malloc bounce (S3-like).
+    if (sh->bundle_buf) {
+      if (build_finalize_buf(sh->bundle_buf,
+                             ss->bundle_capacity,
+                             sh->tail_buf,
+                             sh->tail_bytes,
+                             sh->index,
+                             index_data_bytes,
+                             shard_alignment,
+                             &aligned_bytes,
+                             &logical_bytes)) {
+        log_error("finalize_shards: build failed for shard %llu",
+                  (unsigned long long)si);
+        err = 1;
+      } else if (sh->writer->write_direct
+                   ? sh->writer->write_direct(sh->writer,
+                                              sh->data_cursor,
+                                              sh->bundle_buf,
+                                              sh->bundle_buf + aligned_bytes)
+                   : sh->writer->write(sh->writer,
+                                       sh->data_cursor,
+                                       sh->bundle_buf,
+                                       sh->bundle_buf + aligned_bytes)) {
         log_error("finalize_shards: write failed for shard %llu",
                   (unsigned long long)si);
         err = 1;
       }
-      free_finalize_buf(buf, shard_alignment);
+    } else {
+      size_t cap = index_data_bytes + sh->tail_bytes + 4;
+      if (shard_alignment > 0)
+        cap = align_up(cap, shard_alignment);
+      uint8_t* buf = shard_alignment > 0
+                       ? (uint8_t*)platform_aligned_alloc(shard_alignment, cap)
+                       : (uint8_t*)malloc(cap);
+      if (!buf) {
+        log_error("finalize_shards: alloc failed for shard %llu",
+                  (unsigned long long)si);
+        err = 1;
+      } else {
+        if (build_finalize_buf(buf,
+                               cap,
+                               sh->tail_buf,
+                               sh->tail_bytes,
+                               sh->index,
+                               index_data_bytes,
+                               shard_alignment,
+                               &aligned_bytes,
+                               &logical_bytes) ||
+            sh->writer->write(
+              sh->writer, sh->data_cursor, buf, buf + aligned_bytes)) {
+          log_error("finalize_shards: write failed for shard %llu",
+                    (unsigned long long)si);
+          err = 1;
+        }
+        if (shard_alignment > 0)
+          platform_aligned_free(buf);
+        else
+          free(buf);
+      }
     }
 
     // Trim trailing pad so the index sits at end-of-file. NULL on S3-like
@@ -224,8 +272,15 @@ record_run_index(struct active_shard* sh,
   }
 }
 
-// Bundle [tail || data || index || crc], page-aligned write, then truncate.
-// Copying write — fbuf is freed before the worker drains.
+// Two-step finalize: write the page-floor of total_run via write_direct,
+// then write the bundle [<page tail || index || CRC || pad].
+//
+// can_use_bundle_buf: true on the FIRST finalize of this shard in this
+// batch — sh->bundle_buf is safe to reuse via write_direct because the
+// previous batch's bundle IO has drained (slot fence). On intra-batch
+// generation crossings (second finalize of the same shard in one batch),
+// the prior finalize's bundle pwrite_ref may still be pending in the
+// io_queue, so we must bounce-copy through a malloc'd buffer.
 static int
 deliver_run_finalizing(struct active_shard* sh,
                        const struct shard_state* ss,
@@ -233,26 +288,82 @@ deliver_run_finalizing(struct active_shard* sh,
                        size_t total_run,
                        size_t* h_tail_bytes_si,
                        size_t sa,
+                       int can_use_bundle_buf,
                        size_t* total_bytes)
 {
   size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
-  uint8_t* fbuf = NULL;
+
+  // Step 1: page-floor write_direct of run data.
+  size_t page_floor = sa > 0 ? (total_run / sa) * sa : 0;
+  if (page_floor > 0) {
+    int aligned = ((uintptr_t)src % sa == 0);
+    int wr =
+      (aligned && sh->writer->write_direct)
+        ? sh->writer->write_direct(
+            sh->writer, sh->data_cursor, src, src + page_floor)
+        : sh->writer->write(sh->writer, sh->data_cursor, src, src + page_floor);
+    if (wr)
+      return 1;
+    *total_bytes += page_floor;
+    sh->data_cursor += page_floor;
+  }
+
+  // Step 2: build [trailing || index || CRC || pad], write.
+  const uint8_t* trailing = src + page_floor;
+  size_t trailing_bytes = total_run - page_floor;
   size_t aligned_bytes = 0;
   size_t logical_bytes = 0;
-  if (build_finalize_buf(src,
-                         total_run,
-                         sh->index,
-                         index_data_bytes,
-                         sa,
-                         &fbuf,
-                         &aligned_bytes,
-                         &logical_bytes))
-    return 1;
 
-  int wr =
-    sh->writer->write(sh->writer, sh->data_cursor, fbuf, fbuf + aligned_bytes);
-  free_finalize_buf(fbuf, sa);
-  if (wr)
+  uint8_t* dst;
+  size_t dst_capacity;
+  uint8_t* malloc_buf = NULL;
+  if (can_use_bundle_buf && sh->bundle_buf) {
+    dst = sh->bundle_buf;
+    dst_capacity = ss->bundle_capacity;
+  } else {
+    size_t cap = trailing_bytes + index_data_bytes + 4;
+    if (sa > 0)
+      cap = align_up(cap, sa);
+    malloc_buf = sa > 0 ? (uint8_t*)platform_aligned_alloc(sa, cap)
+                        : (uint8_t*)malloc(cap);
+    if (!malloc_buf)
+      return 1;
+    dst = malloc_buf;
+    dst_capacity = cap;
+  }
+
+  int build_err = build_finalize_buf(dst,
+                                     dst_capacity,
+                                     trailing,
+                                     trailing_bytes,
+                                     sh->index,
+                                     index_data_bytes,
+                                     sa,
+                                     &aligned_bytes,
+                                     &logical_bytes);
+  int wr_err = 0;
+  if (!build_err) {
+    if (malloc_buf) {
+      // Bounce-copy: write() copies into the job, dst can be freed.
+      wr_err = sh->writer->write(
+        sh->writer, sh->data_cursor, dst, dst + aligned_bytes);
+    } else {
+      // Zero-copy: write_direct holds dst until io drains; lifetime gated by
+      // shard_state (bundle_buf lives for the stream).
+      wr_err = sh->writer->write_direct
+                 ? sh->writer->write_direct(
+                     sh->writer, sh->data_cursor, dst, dst + aligned_bytes)
+                 : sh->writer->write(
+                     sh->writer, sh->data_cursor, dst, dst + aligned_bytes);
+    }
+  }
+  if (malloc_buf) {
+    if (sa > 0)
+      platform_aligned_free(malloc_buf);
+    else
+      free(malloc_buf);
+  }
+  if (build_err || wr_err)
     return 1;
   *total_bytes += aligned_bytes;
 
@@ -429,11 +540,19 @@ deliver_to_shards_batch(uint8_t level,
                          cps_inner);
 
         if (run_finalizes) {
-          CHECK(
-            Error,
-            deliver_run_finalizing(
-              sh, ss, src, total_run, &h_tail_bytes[si], sa, &total_bytes) ==
-              0);
+          // First finalize of a shard in a batch can reuse sh->bundle_buf
+          // for write_direct (prior batch's bundle IO drained via slot
+          // fence). Subsequent intra-batch finalizes must bounce because
+          // the previous bundle pwrite_ref is still pending.
+          CHECK(Error,
+                deliver_run_finalizing(sh,
+                                       ss,
+                                       src,
+                                       total_run,
+                                       &h_tail_bytes[si],
+                                       sa,
+                                       is_first_run_for_shard,
+                                       &total_bytes) == 0);
         } else {
           CHECK(Error,
                 deliver_run_nonfinalizing(sh,

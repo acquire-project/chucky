@@ -19,6 +19,14 @@ struct active_shard
   // stale bytes after finalize resets tail_bytes to 0).
   uint8_t* tail_buf;
   size_t tail_bytes;
+  // Per-shard finalize-bundle slot; slice of shard_state.bundle_buf_pool
+  // (NOT independently allocated). bundle_capacity bytes; build_finalize_buf
+  // writes [<page tail || index || CRC || pad] into it, then finalize emits
+  // a single write_direct from this slot. Lifetime: the slot is reused only
+  // when this shard's prior bundle IO has retired (FIFO io_queue + close
+  // on the old fd serializes correctly across intra-batch generation
+  // crossings).
+  uint8_t* bundle_buf;
 };
 
 struct shard_state
@@ -35,6 +43,12 @@ struct shard_state
   // bulk HtoD upload replaces N per-shard transfers.
   uint8_t* tail_buf_pool;
   size_t tail_buf_pool_bytes;
+  // Single contiguous pool for all shards' finalize bundles
+  // (shard_inner_count * bundle_capacity bytes, page-aligned). NULL when
+  // page == 0. Each shard's bundle_buf is a slice of this pool.
+  uint8_t* bundle_buf_pool;
+  size_t bundle_buf_pool_bytes;
+  size_t bundle_capacity; // per-shard bundle slot size
 };
 
 // Initialize shard state from pre-computed level layout info.
