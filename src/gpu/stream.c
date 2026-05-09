@@ -246,8 +246,8 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   // Emit partial shards for all levels
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.levels[lv].shard.epoch_in_shard > 0) {
-      if (finalize_shards(&e->compress_agg.levels[lv].shard,
-                          ctx->shard_alignment))
+      if (finalize_shards(
+            &e->compress_agg.levels[lv].shard, ctx->sink, ctx->shard_alignment))
         return writer_error();
     }
   }

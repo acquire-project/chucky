@@ -48,11 +48,11 @@ extern "C"
     size_t shard_capacity;
   };
 
-  // Per-shard finalize-bundle slot size: one page for trailing sub-page data,
-  // index entries (16 bytes per chunk), 4-byte CRC, padded to page boundary.
-  // Used by init_shard_state to size shard_state.bundle_buf_pool. Returns 0
+  // Per-shard footer size: one page for trailing sub-page data, index
+  // entries (16 bytes per chunk), 4-byte CRC, padded to page boundary.
+  // Used by init_shard_state to size shard_state.footer_buf_pool. Returns 0
   // when page_size is 0 (no alignment requirement) or on overflow.
-  size_t bundle_capacity_for(uint64_t chunks_per_shard_total, size_t page_size);
+  size_t footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size);
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
   // active_count_max is the maximum number of active epochs per batch for this

@@ -317,7 +317,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&v->shard[lv], v->shard_alignment))
+        if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment))
           return writer_error();
       }
     }

@@ -84,20 +84,21 @@ Per-LOD `struct shard_state` owns two contiguous pools, each
 | pool                      | purpose                                                  |
 |---------------------------|----------------------------------------------------------|
 | `tail_buf_pool`           | sub-page carry-over bytes between batches (one per shard)|
-| `bundle_buf_pool`         | finalize bundle scratch (one per shard, page-aligned)    |
+| `footer_buf_pool`         | shard-footer scratch (one per shard, page-aligned)       |
 
 Each `struct active_shard` is one inner shard's slice into those pools, plus
 its own per-shard state:
 
-| field         | purpose                                                                       |
-|---------------|-------------------------------------------------------------------------------|
-| `writer`      | open shard-file handle from `sink->open(...)`; `NULL` between generations     |
-| `data_cursor` | next file offset to write at                                                  |
-| `index`       | `[chunks_per_shard_total][2]` `(offset, size)` pairs, written at finalize     |
-| `tail_buf`    | slice into `tail_buf_pool`; valid bytes in `tail_bytes` (always `< page`)     |
-| `bundle_buf`  | slice into `bundle_buf_pool`; capacity `bundle_capacity`, content built lazily|
+| field            | purpose                                                                       |
+|------------------|-------------------------------------------------------------------------------|
+| `writer`         | open shard-file handle from `sink->open(...)`; `NULL` between generations     |
+| `data_cursor`    | next file offset to write at                                                  |
+| `index`          | `[chunks_per_shard_total][2]` `(offset, size)` pairs, written at finalize     |
+| `tail_buf`       | slice into `tail_buf_pool`; valid bytes in `tail_bytes` (always `< page`)     |
+| `footer_buf`     | slice into `footer_buf_pool`; capacity `footer_capacity`, built lazily        |
+| `footer_io_done` | io fence for `footer_buf`; wait before refill, record after every `write_direct` |
 
-`bundle_capacity = align_up(page + chunks_per_shard_total*16 + 4, page)`:
+`footer_capacity = align_up(page + chunks_per_shard_total*16 + 4, page)`:
 one page for the trailing sub-page data, the index (16 bytes per chunk), the
 4-byte CRC, padded.
 
@@ -133,45 +134,35 @@ arrive in a future batch.
 
 ### Finalizing run (this run completes the generation)
 
-The shard's last data goes here; we close out by writing the index. This is
+The shard's last data goes here; we close out by writing the **footer** —
+the page-aligned `[trailing<page || index || CRC || zero-pad]` blob. This is
 **two-step** when `total_run >= page`:
 
 1. **Page-floor write**. Same as non-finalizing: write `(total_run / page) *
    page` bytes via `write_direct` from the agg buffer. Advance `data_cursor`.
-2. **Bundle write**. Build `[trailing<page || index || CRC || zero-pad-to-page]`
-   into `sh->bundle_buf`, write it via `write_direct` from the bundle slot at
-   the new `data_cursor`. The bundle slot lives with the stream, so
-   `write_direct`'s pointer is safe across the async write.
+2. **Footer write**. `wait_fence(sh->footer_io_done)` so any prior reuser of
+   `sh->footer_buf` has retired, build the footer into it, `write_direct` it
+   at the new `data_cursor`, then `record_fence` back into `footer_io_done`.
 3. **Truncate** the file to `data_cursor + logical_bytes` to drop the
    trailing zero-pad on disk.
 4. **Finalize** (close).
 5. Reset per-shard state: `writer = NULL`, `data_cursor = 0`, `tail_bytes = 0`,
    `index` cleared.
 
-When `total_run < page`, step 1 is skipped and the bundle includes all of
+When `total_run < page`, step 1 is skipped and the footer includes all of
 `total_run` as the leading "trailing" portion.
 
-### Intra-batch finalize (same shard finalizes twice in one batch)
+### Intra-batch fresh-gen run
 
-Triggered when `epochs_per_batch > chunks_per_shard_append`. The first
-finalize for shard si in this batch follows the path above and uses
-`sh->bundle_buf` for `write_direct` (zero-copy). The **second** finalize must
-not reuse `bundle_buf` directly: the prior finalize's `pwrite_ref_job` may
-still be sitting in the io_queue holding a pointer to the same bytes.
-Overwriting them races the worker.
+When `epochs_per_batch > chunks_per_shard_append`, one batch can finalize the
+same shard slot multiple times — finalize gen N, open gen N+1, possibly
+finalize gen N+1 too. The footer write for each finalize uses the same
+`sh->footer_buf`; the per-shard fence (`footer_io_done`) makes the reuse
+safe regardless of how many finalizes happen in a batch.
 
-So the second-and-later intra-batch finalize for the same shard
-**bounce-copies** the bundle through a malloc'd buffer (`write`, not
-`write_direct`). The caller signals this via `is_first_run_for_shard`
-(equivalent to `bytes_consumed[si] == 0`).
-
-The *fresh-gen non-finalizing run* that follows an intra-batch finalize also
-bounces, because its source pointer in the agg buffer is mid-shard, not
-page-aligned.
-
-How often does this fire? It depends on
-`epochs_per_batch / chunks_per_shard_append`. Workloads that size batches
-at or below one generation never hit this path.
+The non-finalizing run that follows an intra-batch finalize lands at a
+mid-shard, non-page-aligned source in the agg buffer; `deliver_run_nonfinalizing`
+detects this and falls through to the bounce-copy `write` path.
 
 ## Carrying tails across batches
 
@@ -189,18 +180,15 @@ Every `write_bytes` write lands at a `data_cursor` that is a multiple of
 a generation, the next batch starts with `bytes_consumed[si] = 0`,
 `writer = NULL`, `tail_bytes = 0`. The next run opens a new shard file via
 `sink->open(...)` and writes from a page-aligned source — including the
-finalize bundle later. This is the "ideal" steady-state path and the one
-intra-batch-finalize avoids by bouncing.
+footer later. This is the "ideal" steady-state path.
 
 ## End-of-stream finalize
 
 `finalize_shards` runs when the writer is flushed and any shard is still
-open (a partial generation at the end of the stream). It builds each
-remaining shard's bundle into `sh->bundle_buf` (or a malloc'd buffer for
-sinks without `write_direct`, like S3), `write_direct`s it, truncates,
-finalizes, and resets state. By construction there is no pending IO on
-these shards — they were never finalized in a prior batch — so reusing
-`sh->bundle_buf` is always safe here.
+open (a partial generation at the end of the stream). It writes each
+remaining shard's footer through the same `write_footer` helper used by
+delivery — `wait_fence(footer_io_done)`, build, `write_direct`,
+`record_fence` — then truncates, closes, and resets state.
 
 ## Async, lifetime, and the io_queue
 
@@ -214,14 +202,16 @@ Two lifetime mechanisms cover this:
   a fence (`sink->record_fence`) after queueing all of its writes; the next
   batch waits on that fence (`sink->wait_fence`) before reusing the slot.
   So agg-buffer pointers stay valid across the async drain.
-- **Bundle pool** — `shard_state.bundle_buf_pool` lives for the lifetime of
-  the stream. Stream destroy waits on the sink's fence before freeing the
-  pool. The only intra-stream race (intra-batch second finalize on the same
-  shard) is handled by bouncing instead of reusing the slot.
+- **Footer buffer** — every `active_shard` carries its own `footer_io_done`
+  event. `write_footer` waits on it before refilling `footer_buf` and
+  records a fresh event after each `write_direct`. Reuse is therefore
+  bounded to "after the prior IO retired", regardless of how many batches or
+  finalizes happen in between.
 
 `write` (`pwrite_job`) avoids the lifetime question entirely by malloc'ing a
 new buffer and copying the source bytes into it. The job carries its own
-memory; the caller can release the source immediately.
+memory; the caller can release the source immediately. Sinks that don't
+provide `write_direct` (e.g. S3) take this path for the footer write.
 
 ## GPU aggregator notes
 

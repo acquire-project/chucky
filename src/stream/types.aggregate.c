@@ -26,11 +26,11 @@ Overflow:
 }
 
 size_t
-bundle_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
+footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
 {
   if (page_size == 0)
     return 0;
-  // Bundle layout: [<page trailing data || index || CRC || pad-to-page].
+  // Footer layout: [<page trailing data || index || CRC || pad-to-page].
   // Worst-case total = (page-1) + chunks*16 + 4, rounded up to page.
   CHECK_MUL_OVERFLOW(Overflow, chunks_per_shard_total, (uint64_t)16, SIZE_MAX);
   size_t index_bytes = (size_t)chunks_per_shard_total * 16;

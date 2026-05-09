@@ -6,73 +6,71 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// A shard file ends with one page-aligned write — its **footer** —
+// containing [<page trailing chunk bytes || index || crc || zero-pad].
+// The footer combines the ragged sub-page leftover after the page-floor
+// write with the index/crc so close-out is a single O_DIRECT call.
+
 struct active_shard
 {
-  size_t data_cursor;
-  uint64_t* index;             // 2 * chunks_per_shard_total entries
-  struct shard_writer* writer; // from sink->open, NULL until first use
-  // Carry-over tail bytes captured at the end of each delivery so that
-  // end-of-stream finalize_shards can flush them along with the index.
-  // tail_buf has capacity page_size — but is a slice into shard_state's
-  // contiguous tail_buf_pool, NOT independently allocated. tail_bytes is the
-  // live length (< page); it is the only validity gate (tail_buf may retain
-  // stale bytes after finalize resets tail_bytes to 0).
+  uint64_t data_cursor;        // file offset for next write
+  uint64_t* index;             // [2 * chunks_per_shard_total]
+  struct shard_writer* writer; // sink->open(), NULL between generations
+
+  // Sub-page bytes carried across batches (leading tail prepended to the
+  // next batch's first run). Slice of shard_state.tail_buf_pool. tail_bytes
+  // (< page) is the validity gate; tail_buf may retain stale bytes after
+  // finalize zeros tail_bytes.
   uint8_t* tail_buf;
   size_t tail_bytes;
-  // Per-shard finalize-bundle slot; slice of shard_state.bundle_buf_pool
-  // (NOT independently allocated). bundle_capacity bytes; build_finalize_buf
-  // writes [<page tail || index || CRC || pad] into it, then finalize emits
-  // a single write_direct from this slot. Lifetime: the slot is reused only
-  // when this shard's prior bundle IO has retired (FIFO io_queue + close
-  // on the old fd serializes correctly across intra-batch generation
-  // crossings).
-  uint8_t* bundle_buf;
+
+  // Slice of shard_state.footer_buf_pool, lifetime-fenced via footer_io_done.
+  // Reuse rule: wait_fence(footer_io_done) before refilling, record_fence
+  // after every write_direct.
+  uint8_t* footer_buf;
+  struct io_event footer_io_done;
 };
 
 struct shard_state
 {
   uint64_t epoch_in_shard;    // 0..chunks_per_shard_append-1
-  uint64_t shard_epoch;       // flat append shard index (0, 1, 2, ...)
-  uint64_t shard_inner_count; // S_inner = prod(shard_count[d] for d>=n_append)
-  uint64_t chunks_per_shard_inner;  // prod(tps[d] for d>=n_append)
-  uint64_t chunks_per_shard_total;  // prod(tps[d] for all d)
-  uint64_t chunks_per_shard_append; // prod(tps[d] for d < n_append)
-  struct active_shard* shards;      // array[shard_inner_count]
-  // Single contiguous pool for all shards' tail_bufs (shard_inner_count*page
-  // bytes). NULL when page == 0. Layout matches GPU's d_tail_carry so a single
-  // bulk HtoD upload replaces N per-shard transfers.
+  uint64_t shard_epoch;       // flat append shard index
+  uint64_t shard_inner_count; // S_inner = prod(shard_count[d>=n_append])
+  uint64_t chunks_per_shard_inner;
+  uint64_t chunks_per_shard_total;
+  uint64_t chunks_per_shard_append;
+  struct active_shard* shards; // [shard_inner_count]
+
+  // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
+  // bulk HtoD upload covers all shards. NULL when page == 0.
   uint8_t* tail_buf_pool;
   size_t tail_buf_pool_bytes;
-  // Single contiguous pool for all shards' finalize bundles
-  // (shard_inner_count * bundle_capacity bytes, page-aligned). NULL when
-  // page == 0. Each shard's bundle_buf is a slice of this pool.
-  uint8_t* bundle_buf_pool;
-  size_t bundle_buf_pool_bytes;
-  size_t bundle_capacity; // per-shard bundle slot size
+
+  // Contiguous footer pool (page-aligned). NULL when page == 0.
+  uint8_t* footer_buf_pool;
+  size_t footer_buf_pool_bytes;
+  size_t footer_capacity; // bytes per shard
 };
 
-// Initialize shard state from pre-computed level layout info.
-// Allocates the shards array and per-shard index buffers.
 int
 init_shard_state(struct shard_state* ss, const struct level_layout_info* li);
 
-// Free everything init_shard_state allocated. Safe on partially-initialized
-// or zeroed state. Leaves *ss zeroed.
+// Safe on partially-initialized or zeroed state; leaves *ss zeroed.
 void
 shard_state_destroy(struct shard_state* ss);
 
-// Finalize completed shards (write index block + finalize).
-// Best-effort: tries every shard even if one fails. Returns 0 on success.
+// Best-effort finalize of every shard with an open writer. Returns 0 on
+// success. Calls sink->wait_fence/record_fence on each shard's footer to
+// keep the footer_buf reuse cycle correct.
 int
-finalize_shards(struct shard_state* ss, size_t shard_alignment);
+finalize_shards(struct shard_state* ss,
+                struct shard_sink* sink,
+                size_t shard_alignment);
 
-// Deliver compressed chunk data from a batch aggregate slot to shards.
-// n_active: number of active epochs for this level in the batch.
-// layout: aggregate layout for shard_capacity / num_shards / page_size.
-// h_tail_bytes: [num_shards] per-shard ragged-tail length carried across
-// batches;
-//   read for this batch's leading-tail accounting and updated post-batch.
-//   May be NULL when layout->page_size == 0 (no-alignment contiguous path).
+// Deliver compressed chunks from one batch's aggregate slot to shards.
+//   layout: aggregate layout for shard_capacity / num_shards / page_size.
+//   h_tail_bytes: [num_shards] sub-page leading-tail bytes carried in;
+//                 updated in place. NULL only when page_size == 0.
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
