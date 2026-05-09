@@ -116,7 +116,6 @@ compress_agg_init(struct compress_agg_stage* stage,
             aggregate_batch_slot_init(&stage->levels[lv].agg[i],
                                       batch_chunks,
                                       batch_covering,
-                                      num_shards,
                                       batch_agg_bytes) == 0);
       CU(Fail, cuEventRecord(stage->levels[lv].agg[i].ready, compute));
     }
@@ -350,7 +349,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
             agg,
             lvl->d_tail_bytes,
             lvl->d_tail_carry,
-            lvl->shard.epoch_in_shard,
             compress_stream) == 0);
   }
 

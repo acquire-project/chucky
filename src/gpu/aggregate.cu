@@ -198,10 +198,8 @@ extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_chunk_count,
                           uint64_t batch_covering_count,
-                          uint64_t num_shards,
                           size_t comp_pool_bytes)
 {
-  (void)num_shards;
   uint64_t C = batch_covering_count;
   uint64_t M = batch_chunk_count;
 
@@ -257,10 +255,8 @@ aggregate_batch_by_shard_async(void* d_compressed,
                                struct aggregate_slot* slot,
                                size_t* d_tail_bytes,
                                CUdeviceptr d_tail_carry,
-                               uint64_t epoch_in_shard,
                                CUstream stream)
 {
-  (void)epoch_in_shard;
   const uint64_t N = batch_chunk_count;
   const uint64_t C = batch_covering_count;
   const uint64_t num_shards = layout->num_shards;

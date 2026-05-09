@@ -42,7 +42,6 @@ extern "C"
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,
-                                uint64_t num_shards,
                                 size_t comp_pool_bytes);
 
   // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
@@ -51,7 +50,6 @@ extern "C"
   // d_tail_carry: persistent per-LOD device buffer of num_shards * page_size
   //   bytes; holds the actual ragged tail bytes between batches. Same
   //   uploaded-by-host invariant as d_tail_bytes.
-  // epoch_in_shard: kept in the signature for now (unused).
   int aggregate_batch_by_shard_async(void* d_compressed,
                                      size_t* d_comp_sizes,
                                      const uint32_t* d_batch_gather,
@@ -63,7 +61,6 @@ extern "C"
                                      struct aggregate_slot* slot,
                                      size_t* d_tail_bytes,
                                      CUdeviceptr d_tail_carry,
-                                     uint64_t epoch_in_shard,
                                      CUstream stream);
 
 #ifdef __cplusplus

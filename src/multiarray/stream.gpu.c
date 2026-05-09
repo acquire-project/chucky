@@ -73,7 +73,6 @@ struct pool_maxima
   {
     uint64_t batch_chunks;
     uint64_t batch_covering;
-    uint64_t num_shards;
     size_t batch_agg_bytes;
     uint64_t lut_len;
   } level[LOD_MAX_LEVELS];
@@ -332,8 +331,6 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
       max_u64(mx->level[lv].batch_chunks, batch_chunks);
     mx->level[lv].batch_covering =
       max_u64(mx->level[lv].batch_covering, batch_covering);
-    mx->level[lv].num_shards =
-      max_u64(mx->level[lv].num_shards, li->agg_layout.num_shards);
     mx->level[lv].batch_agg_bytes =
       max_sz(mx->level[lv].batch_agg_bytes, batch_agg_bytes);
     mx->level[lv].lut_len = max_u64(mx->level[lv].lut_len, batch_chunks);
@@ -454,7 +451,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
               aggregate_batch_slot_init(&lvl->agg[fc],
                                         mx->level[lv].batch_chunks,
                                         mx->level[lv].batch_covering,
-                                        mx->level[lv].num_shards,
                                         mx->level[lv].batch_agg_bytes) == 0);
         CU(Fail, cuEventRecord(lvl->agg[fc].ready, e->streams.compute));
       }
