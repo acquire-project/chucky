@@ -100,15 +100,31 @@ platform_close(platform_fd fd)
 int
 platform_ftruncate(platform_fd fd, uint64_t logical_size)
 {
-  // Flush pending FILE_FLAG_NO_BUFFERING writes before moving EOF —
-  // otherwise NTFS may zero-fill the trailing partial sector when EOF
-  // is set non-sector-aligned.
-  FlushFileBuffers(fd);
   FILE_END_OF_FILE_INFO info;
   info.EndOfFile.QuadPart = (LONGLONG)logical_size;
   if (!SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info)))
     return -1;
   return 0;
+}
+
+int
+platform_truncate_path(const char* path, uint64_t logical_size)
+{
+  HANDLE fd = CreateFileA(path,
+                          GENERIC_WRITE,
+                          0,
+                          NULL,
+                          OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL,
+                          NULL);
+  if (fd == INVALID_HANDLE_VALUE)
+    return -1;
+  FILE_END_OF_FILE_INFO info;
+  info.EndOfFile.QuadPart = (LONGLONG)logical_size;
+  int ok =
+    SetFileInformationByHandle(fd, FileEndOfFileInfo, &info, sizeof(info));
+  CloseHandle(fd);
+  return ok ? 0 : -1;
 }
 
 int

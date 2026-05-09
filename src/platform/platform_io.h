@@ -51,6 +51,16 @@ platform_close(platform_fd fd);
 int
 platform_ftruncate(platform_fd fd, uint64_t logical_size);
 
+// Truncate the file at `path` to `logical_size` bytes by opening a fresh
+// handle. Required on Windows when the only existing handle was opened with
+// FILE_FLAG_NO_BUFFERING and the target size is not sector-aligned —
+// SetFileInformationByHandle on such a handle silently zero-fills the
+// trailing partial sector inside the new EOF on some volumes (4K-logical
+// disks observed in CI). Caller must ensure no NO_BUFFERING handle to the
+// same path is currently open. Returns 0 on success, -1 on error.
+int
+platform_truncate_path(const char* path, uint64_t logical_size);
+
 // Returns 1 if path exists, 0 if it does not (ENOENT / path-component-is-file
 // on Windows / not-a-dir), -1 on unexpected IO error.
 int
