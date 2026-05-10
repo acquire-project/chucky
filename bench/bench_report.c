@@ -22,12 +22,13 @@ print_metric_row(const struct stream_metric* m)
     return;
   const int N = m->count;
   double avg_ms = (double)m->ms / N;
-  double bytes_per = m->input_bytes / N;
   double avg_gbs = gb_per_s(m->input_bytes, (double)m->ms);
   int has_best = m->best_ms < 1e29f;
 
   if (has_best) {
-    double best_gbs = gb_per_s(bytes_per, (double)m->best_ms);
+    // Use the bytes recorded for that exact call so partial-batch tails
+    // don't inflate "best" via an average-bytes / min-time fudge.
+    double best_gbs = gb_per_s(m->best_input_bytes, (double)m->best_ms);
     print_report("  %-12s %8.2f %8.2f %10.2f %10.2f",
                  m->name,
                  avg_gbs,
@@ -186,6 +187,10 @@ json_stage_metric(struct json_writer* jw,
   if (sm->best_ms < 1e29f) {
     jw_key(jw, "best_ms");
     jw_float(jw, (double)sm->best_ms);
+    jw_key(jw, "best_in_gibs");
+    jw_float(jw, gb_per_s(sm->best_input_bytes, (double)sm->best_ms));
+    jw_key(jw, "best_out_gibs");
+    jw_float(jw, gb_per_s(sm->best_output_bytes, (double)sm->best_ms));
   }
   jw_key(jw, "in_gibs");
   jw_float(jw, in_gibs);

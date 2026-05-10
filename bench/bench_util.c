@@ -140,7 +140,8 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       .codec = cfg->codec,
       .reduce_method = cfg->reduce_method,
       .append_reduce_method = cfg->append_reduce_method,
-      .target_batch_bytes = 512u << 20,
+      .target_batch_bytes =
+        cfg->target_batch_bytes ? cfg->target_batch_bytes : 512u << 20,
     };
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
@@ -592,6 +593,7 @@ struct bench_cli_args
   enum bench_backend backend;
   enum dtype dtype;
   size_t target_chunk_bytes;
+  size_t target_batch_bytes;
   size_t memory_budget;
   uint64_t frames;
   int json_output;
@@ -624,6 +626,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->backend = BENCH_GPU;
   out->dtype = dtype_u16;
   out->target_chunk_bytes = 0;
+  out->target_batch_bytes = 0;
   out->memory_budget = 0;
   out->frames = 0;
   out->json_output = 0;
@@ -661,6 +664,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       out->json_output = 1;
     } else if (strcmp(av[i], "--chunk-bytes") == 0 && i + 1 < ac) {
       out->target_chunk_bytes = parse_bytes(av[++i]);
+    } else if (strcmp(av[i], "--batch-bytes") == 0 && i + 1 < ac) {
+      out->target_batch_bytes = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "--memory-budget") == 0 && i + 1 < ac) {
       out->memory_budget = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
@@ -689,7 +694,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
-              "[--json] [--chunk-bytes N] [--memory-budget N] [-o path] "
+              "[--json] [--chunk-bytes N] [--batch-bytes N] "
+              "[--memory-budget N] [-o path] "
               "[--s3-bucket B --s3-region R --s3-endpoint E [--s3-prefix P] "
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
@@ -745,6 +751,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .target_chunk_bytes =
       a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes,
     .min_chunk_bytes = spec.min_chunk_bytes,
+    .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,
@@ -1117,6 +1124,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .target_chunk_bytes =
       a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes,
     .min_chunk_bytes = spec.min_chunk_bytes,
+    .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,

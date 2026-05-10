@@ -12,10 +12,12 @@
 struct stream_metric
 {
   const char* name;
-  float ms;            // cumulative
-  float best_ms;       // best single measurement (1e30f = not yet measured)
-  double input_bytes;  // cumulative bytes read by stage
-  double output_bytes; // cumulative bytes written by stage
+  float ms;                 // cumulative
+  float best_ms;            // best single measurement (1e30f = not yet measured)
+  double best_input_bytes;  // input_bytes at the best-ms call (for best GiB/s)
+  double best_output_bytes; // output_bytes at the best-ms call
+  double input_bytes;       // cumulative bytes read by stage
+  double output_bytes;      // cumulative bytes written by stage
   int count;
 };
 
