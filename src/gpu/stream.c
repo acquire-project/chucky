@@ -124,7 +124,18 @@ stream_append_body(struct stream_engine* e,
         if (e->stage.bytes_written == 0) {
           const int si = e->stage.current;
           struct staging_slot* ss = &e->stage.slot[si];
-          CU(Error, cuEventSynchronize(ss->t_h2d_end));
+          // Poll instead of cuEventSynchronize to keep the producer thread
+          // hot — it has memcpy work queued up immediately after.
+          for (;;) {
+            CUresult r = cuEventQuery(ss->t_h2d_end);
+            if (r == CUDA_SUCCESS)
+              break;
+            if (r != CUDA_ERROR_NOT_READY) {
+              handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+              goto Error;
+            }
+            platform_sleep_ns(50000); // 50 µs
+          }
 
           if (ctx->cursor_elements > 0) {
             accumulate_metric_cu(&e->metrics.h2d,

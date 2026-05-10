@@ -281,9 +281,21 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     goto Error;
 
   {
+    // Poll the D2H ready event with short sleeps instead of cuEventSynchronize.
+    // The driver wakes a blocked thread via OS scheduler; polling keeps the
+    // thread runnable and lets a follow-on thread-pool ingest pattern fit.
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
-    CU(Error, cuEventSynchronize(stage->ready[fc]));
+    for (;;) {
+      CUresult r = cuEventQuery(stage->ready[fc]);
+      if (r == CUDA_SUCCESS)
+        break;
+      if (r != CUDA_ERROR_NOT_READY) {
+        handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+        goto Error;
+      }
+      platform_sleep_ns(50000); // 50 µs
+    }
     float kick_ms = platform_toc(&kick_clk) * 1000.0f;
     accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
   }
