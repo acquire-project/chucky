@@ -303,7 +303,7 @@ main(int ac, char* av[])
     return 1;
   if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS)
     return 1;
-  if (cuCtxCreate(&ctx, 0, dev) != CUDA_SUCCESS)
+  if (cu_ctx_create(&ctx, 0, dev) != CUDA_SUCCESS)
     return 1;
 
   int rc = 0;
