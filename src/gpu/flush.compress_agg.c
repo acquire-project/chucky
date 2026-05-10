@@ -250,19 +250,38 @@ compress_agg_kick(struct compress_agg_stage* stage,
   if (in->prev_d2h_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
 
-  // Compress all epochs as one batch
+  // Compress all epochs as one batch.
+  //
+  // For CODEC_NONE the codec_compress fast path is a single DtoD copy from the
+  // chunk pool into d_compressed[fc]. That's pure waste: aggregate's gather
+  // kernel uses src_idx * max_comp_chunk_bytes addressing, and for CODEC_NONE
+  // the chunk pool is already laid out as M chunks of chunk_bytes
+  // (== max_comp_chunk_bytes). d_comp_sizes is pre-populated at codec init
+  // with chunk_bytes for every entry. So we can have aggregate read directly
+  // from the pool and skip the DtoD entirely. We still record the
+  // compress-start/end events so downstream metrics + event waits are valid.
   {
     CHECK_MUL_OVERFLOW(Error, n_epochs, levels->total_chunks, UINT64_MAX);
     uint64_t batch_chunks = (uint64_t)n_epochs * levels->total_chunks;
     size_t real_chunk_bytes = stage->codec.chunk_bytes;
-    CHECK(Error,
-          kick_compress(stage,
-                        fc,
-                        (void*)in->pool_buf,
-                        batch_chunks,
-                        real_chunk_bytes,
-                        compress_stream) == 0);
+    if (stage->codec.type == CODEC_NONE) {
+      CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
+      CU(Error, cuEventRecord(stage->t_compress_end[fc], compress_stream));
+    } else {
+      CHECK(Error,
+            kick_compress(stage,
+                          fc,
+                          (void*)in->pool_buf,
+                          batch_chunks,
+                          real_chunk_bytes,
+                          compress_stream) == 0);
+    }
   }
+
+  // Aggregate source: chunk pool when no compression, d_compressed[fc] otherwise.
+  const void* d_aggregate_src = (stage->codec.type == CODEC_NONE)
+                                  ? (const void*)in->pool_buf
+                                  : (const void*)stage->d_compressed[fc];
 
   // Zero per-level active counts; populated below and copied into handoff so
   // d2h delivery doesn't need to re-scan masks (the slot's masks buffer can
@@ -338,7 +357,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
     CHECK(Error,
           aggregate_batch_by_shard_async(
-            (void*)stage->d_compressed[fc],
+            (void*)d_aggregate_src,
             stage->codec.d_comp_sizes,
             (const uint32_t*)(uintptr_t)lvl->d_batch_gather,
             (const uint32_t*)(uintptr_t)lvl->d_batch_perm,
