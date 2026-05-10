@@ -169,6 +169,12 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
      cuMemcpyDtoH(agg->h_offsets,
                   (CUdeviceptr)agg->d_offsets,
                   (n_covering + 1) * sizeof(size_t)));
+  // Production fetches h_permuted_sizes via d2h_deliver_kick on d2h_stream;
+  // tests that drive compress_agg_kick directly do the D2H here.
+  CU(Fail,
+     cuMemcpyDtoH(agg->h_permuted_sizes,
+                  (CUdeviceptr)agg->d_permuted_sizes,
+                  n_covering * sizeof(size_t)));
 
   size_t pool_bytes = agg_pool_bytes_layout(handoff->agg_layout[0]);
   void* h_agg = malloc(pool_bytes);

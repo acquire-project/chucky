@@ -112,6 +112,15 @@ kick_offset_d2h(struct d2h_deliver_stage* stage,
                          (CUdeviceptr)agg->d_offsets,
                          (covering + 1) * sizeof(size_t),
                          d2h_stream));
+    // Permuted per-chunk sizes are needed alongside offsets for delivery
+    // sizing and next-kick tail bookkeeping. Queue here so it lands together
+    // with offsets on the same d2h stream (was inline on the aggregate
+    // stream — that path is dead now).
+    CU(Error,
+       cuMemcpyDtoHAsync(agg->h_permuted_sizes,
+                         (CUdeviceptr)agg->d_permuted_sizes,
+                         covering * sizeof(size_t),
+                         d2h_stream));
   }
   CU(Error, cuEventRecord(stage->offsets_ready[fc], d2h_stream));
 
