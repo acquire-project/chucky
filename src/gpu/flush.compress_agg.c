@@ -56,6 +56,8 @@ destroy_level_state(struct level_flush_state* lls)
   lls->d_tail_bytes = NULL;
   free(lls->h_tail_bytes);
   lls->h_tail_bytes = NULL;
+  free(lls->steady_pool_epochs);
+  lls->steady_pool_epochs = NULL;
   shard_state_destroy(&lls->shard);
 }
 
@@ -170,6 +172,14 @@ compress_agg_init(struct compress_agg_stage* stage,
                            pool_epochs,
                            h_gather,
                            h_perm);
+
+      // Snapshot the steady-state pool epoch pattern for the kick fast path.
+      lvl->steady_pool_epochs =
+        (uint32_t*)malloc((size_t)slot_count * sizeof(uint32_t));
+      CHECK(LutFail, lvl->steady_pool_epochs);
+      memcpy(lvl->steady_pool_epochs,
+             pool_epochs,
+             (size_t)slot_count * sizeof(uint32_t));
     }
 
     CU(LutFail, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
@@ -307,8 +317,18 @@ compress_agg_kick(struct compress_agg_stage* stage,
       lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
     CHECK(Error, active_count <= lut_cap);
 
-    // Rebuild batch LUTs for this batch's actual pool positions and upload.
-    {
+    // Fast path: when this batch's pool epochs match the init-time steady
+    // pattern, the cached LUTs (uploaded once at init) are still correct and
+    // we can skip the per-kick rebuild + 2 H2Ds. This is the common case for
+    // single-array streams and for multiscale steady state where K divides
+    // the level period.
+    const int lut_steady = lvl->steady_pool_epochs &&
+                           active_count == lvl->batch_active_count &&
+                           memcmp(pool_epochs_buf,
+                                  lvl->steady_pool_epochs,
+                                  (size_t)active_count * sizeof(uint32_t)) == 0;
+
+    if (!lut_steady) {
       uint64_t lut_len = batch_chunk_count;
       uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
       uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));

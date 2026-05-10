@@ -56,6 +56,11 @@ struct level_flush_state
   CUdeviceptr
     d_batch_perm; // [K_l * M_l] uint32: batch-chunk -> shard-ordered pos
   uint32_t batch_active_count; // K_l = K / 2^l for this level
+  // Steady-state pool-epoch pattern: the pool positions assumed when the
+  // init-time LUTs were computed. compress_agg_kick reuses the cached LUTs
+  // when the runtime pool_epochs match this pattern (the common case for
+  // single-array streams and multiscale steady state).
+  uint32_t* steady_pool_epochs; // [batch_active_count] host-side
   // Cross-batch tail carry-over (per-LOD persistent state, GPU-resident).
   // d_tail_bytes [num_shards] is the per-shard ragged-tail length; read by
   // compute_bias_k / copy_leading_tail_k at the start of each batch and
