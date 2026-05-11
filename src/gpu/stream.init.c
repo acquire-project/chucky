@@ -394,8 +394,12 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   const size_t chunk_pool_bytes =
     2 * (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
 
+  // CODEC_NONE skips the d_compressed[fc] allocation (aggregate reads pool
+  // directly); see compress_agg_init / compress_agg_kick.
   const size_t compressed_pool_bytes =
-    2 * (uint64_t)K * total_chunks * max_output_size;
+    (config->codec.id == CODEC_NONE)
+      ? 0
+      : 2 * (uint64_t)K * total_chunks * max_output_size;
 
   size_t codec_bytes = 0;
   codec_bytes += codec_batch * sizeof(size_t); // d_comp_sizes

@@ -194,7 +194,7 @@ run_gpu_aggregate(struct gpu_run* r,
 
   // Kick the per-shard aggregate.
   CHECK(Fail,
-        aggregate_batch_by_shard_async((void*)r->d_compressed,
+        aggregate_batch_by_shard_async((const void*)r->d_compressed,
                                        r->d_comp_sizes,
                                        r->d_gather,
                                        r->d_perm,
@@ -209,15 +209,21 @@ run_gpu_aggregate(struct gpu_run* r,
 
   CU(Fail, cuStreamSynchronize(r->stream));
 
-  // Pull offsets back to host. Allocate a separate copy so the slot's
-  // h_offsets is decoupled from the contract result struct (lifetime-wise,
-  // both are fine here, but the pattern matches how delivery sees it).
+  // Pull offsets and permuted sizes back to host. Allocate a separate copy
+  // for offsets so the slot's h_offsets is decoupled from the contract
+  // result struct (lifetime-wise, both are fine here, but the pattern
+  // matches how delivery sees it). h_permuted_sizes is now copied here
+  // (production does the D2H in d2h_deliver_kick on d2h_stream).
   r->h_offsets = (size_t*)calloc(batch_C + 1, sizeof(size_t));
   CHECK(Fail, r->h_offsets);
   CU(Fail,
      cuMemcpyDtoH(r->h_offsets,
                   (CUdeviceptr)r->slot.d_offsets,
                   (batch_C + 1) * sizeof(size_t)));
+  CU(Fail,
+     cuMemcpyDtoH(r->slot.h_permuted_sizes,
+                  (CUdeviceptr)r->slot.d_permuted_sizes,
+                  batch_C * sizeof(size_t)));
 
   r->result.data = r->slot.h_aggregated;
   r->result.offsets = r->h_offsets;

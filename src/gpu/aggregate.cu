@@ -244,7 +244,7 @@ Error:
 // ---------------------------------------------------------------------------
 
 extern "C" int
-aggregate_batch_by_shard_async(void* d_compressed,
+aggregate_batch_by_shard_async(const void* d_compressed,
                                size_t* d_comp_sizes,
                                const uint32_t* d_batch_gather,
                                const uint32_t* d_batch_perm,
@@ -279,14 +279,6 @@ aggregate_batch_by_shard_async(void* d_compressed,
     permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
       d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
   }
-
-  // D2H real permuted sizes (host uses these for delivery sizing + next-kick
-  // tail bookkeeping).
-  CU(Error,
-     cuMemcpyDtoHAsync(slot->h_permuted_sizes,
-                       (CUdeviceptr)slot->d_permuted_sizes,
-                       C * sizeof(size_t),
-                       stream));
 
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
   {

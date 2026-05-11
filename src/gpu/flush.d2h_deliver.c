@@ -112,6 +112,15 @@ kick_offset_d2h(struct d2h_deliver_stage* stage,
                          (CUdeviceptr)agg->d_offsets,
                          (covering + 1) * sizeof(size_t),
                          d2h_stream));
+    // Permuted per-chunk sizes are needed alongside offsets for delivery
+    // sizing and next-kick tail bookkeeping. Queue here so it lands together
+    // with offsets on the same d2h stream (was inline on the aggregate
+    // stream — that path is dead now).
+    CU(Error,
+       cuMemcpyDtoHAsync(agg->h_permuted_sizes,
+                         (CUdeviceptr)agg->d_permuted_sizes,
+                         covering * sizeof(size_t),
+                         d2h_stream));
   }
   CU(Error, cuEventRecord(stage->offsets_ready[fc], d2h_stream));
 
@@ -281,9 +290,29 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     goto Error;
 
   {
+    // Poll the D2H ready event with short sleeps instead of cuEventSynchronize.
+    // The driver wakes a blocked thread via OS scheduler; polling keeps the
+    // thread runnable and lets a follow-on thread-pool ingest pattern fit.
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
-    CU(Error, cuEventSynchronize(stage->ready[fc]));
+    for (;;) {
+      CUresult r = cuEventQuery(stage->ready[fc]);
+      if (r == CUDA_SUCCESS)
+        break;
+      if (r == CUDA_ERROR_DEINITIALIZED) {
+        // Context torn down (shutdown). Data is already on host for this
+        // poll site; treat as a clean exit. Logged so the swallow is
+        // observable if it ever happens outside teardown.
+        log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)",
+                  fc);
+        break;
+      }
+      if (r != CUDA_ERROR_NOT_READY) {
+        handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+        goto Error;
+      }
+      platform_sleep_ns(50000); // 50 µs
+    }
     float kick_ms = platform_toc(&kick_clk) * 1000.0f;
     accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
   }

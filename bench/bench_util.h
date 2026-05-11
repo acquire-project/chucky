@@ -40,6 +40,7 @@ struct bench_config
                              // conventions
   size_t target_chunk_bytes; // 0 = use 1MB default
   size_t min_chunk_bytes;    // auto-fit floor; 0 = no floor
+  size_t target_batch_bytes; // 0 = 512 MiB default; controls auto-K
   size_t memory_budget;      // 0 = auto-detect
   size_t min_shard_bytes;    // minimum uncompressed bytes per shard
   uint32_t

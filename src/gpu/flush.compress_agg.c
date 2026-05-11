@@ -56,6 +56,8 @@ destroy_level_state(struct level_flush_state* lls)
   lls->d_tail_bytes = NULL;
   free(lls->h_tail_bytes);
   lls->h_tail_bytes = NULL;
+  free(lls->steady_pool_epochs);
+  lls->steady_pool_epochs = NULL;
   shard_state_destroy(&lls->shard);
 }
 
@@ -83,10 +85,15 @@ compress_agg_init(struct compress_agg_stage* stage,
   CHECK(Fail, stage->pool_epochs_scratch);
 
   CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
-  // Compressed buffers + events
+  // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf
+  // (see compress_agg_kick), so the d_compressed buffer is unused — skip its
+  // M * chunk_bytes allocation per fc. Destroy is NULL-safe.
+  const int need_compressed = (stage->codec.type != CODEC_NONE);
   for (int fc = 0; fc < 2; ++fc) {
-    CU(Fail,
-       cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
+    if (need_compressed)
+      CU(Fail,
+         cuMemAlloc(&stage->d_compressed[fc],
+                    M * stage->codec.max_output_size));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_aggregate_end[fc], CU_EVENT_DEFAULT));
@@ -170,6 +177,14 @@ compress_agg_init(struct compress_agg_stage* stage,
                            pool_epochs,
                            h_gather,
                            h_perm);
+
+      // Snapshot the steady-state pool epoch pattern for the kick fast path.
+      lvl->steady_pool_epochs =
+        (uint32_t*)malloc((size_t)slot_count * sizeof(uint32_t));
+      CHECK(LutFail, lvl->steady_pool_epochs);
+      memcpy(lvl->steady_pool_epochs,
+             pool_epochs,
+             (size_t)slot_count * sizeof(uint32_t));
     }
 
     CU(LutFail, cuMemAlloc(&lvl->d_batch_gather, lut_len * sizeof(uint32_t)));
@@ -217,8 +232,19 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
     cu_event_destroy(stage->t_compress_end[fc]);
     cu_event_destroy(stage->t_aggregate_end[fc]);
   }
-  for (int lv = 0; lv < nlod; ++lv)
+  for (int lv = 0; lv < nlod; ++lv) {
+    const struct level_flush_state* lls = &stage->levels[lv];
+    const uint64_t total = lls->lut_steady_count + lls->lut_recompute_count;
+    if (total > 0) {
+      log_debug("compress_agg lv=%d lut_steady=%llu lut_recompute=%llu "
+                "(steady=%.1f%%)",
+                lv,
+                (unsigned long long)lls->lut_steady_count,
+                (unsigned long long)lls->lut_recompute_count,
+                100.0 * (double)lls->lut_steady_count / (double)total);
+    }
     destroy_level_state(&stage->levels[lv]);
+  }
 }
 
 // --- Kick ---
@@ -250,17 +276,24 @@ compress_agg_kick(struct compress_agg_stage* stage,
   if (in->prev_d2h_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
 
-  // Compress all epochs as one batch
-  {
+  // CODEC_NONE: aggregate reads the chunk pool directly (gather strides match)
+  // so codec_compress would just DtoD the pool to d_compressed for nothing.
+  const int skip_compress = (stage->codec.type == CODEC_NONE);
+  const CUdeviceptr d_aggregate_src =
+    skip_compress ? in->pool_buf : stage->d_compressed[fc];
+
+  if (skip_compress) {
+    CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
+    CU(Error, cuEventRecord(stage->t_compress_end[fc], compress_stream));
+  } else {
     CHECK_MUL_OVERFLOW(Error, n_epochs, levels->total_chunks, UINT64_MAX);
     uint64_t batch_chunks = (uint64_t)n_epochs * levels->total_chunks;
-    size_t real_chunk_bytes = stage->codec.chunk_bytes;
     CHECK(Error,
           kick_compress(stage,
                         fc,
                         (void*)in->pool_buf,
                         batch_chunks,
-                        real_chunk_bytes,
+                        stage->codec.chunk_bytes,
                         compress_stream) == 0);
   }
 
@@ -299,8 +332,22 @@ compress_agg_kick(struct compress_agg_stage* stage,
       lvl->batch_active_count > 0 ? lvl->batch_active_count : 1;
     CHECK(Error, active_count <= lut_cap);
 
-    // Rebuild batch LUTs for this batch's actual pool positions and upload.
-    {
+    // Fast path: when this batch's pool epochs match the init-time steady
+    // pattern, the cached LUTs (uploaded once at init) are still correct and
+    // we can skip the per-kick rebuild + 2 H2Ds. This is the common case for
+    // single-array streams and for multiscale steady state where K divides
+    // the level period.
+    const int lut_steady = lvl->steady_pool_epochs &&
+                           active_count == lvl->batch_active_count &&
+                           memcmp(pool_epochs_buf,
+                                  lvl->steady_pool_epochs,
+                                  (size_t)active_count * sizeof(uint32_t)) == 0;
+    if (lut_steady)
+      lvl->lut_steady_count++;
+    else
+      lvl->lut_recompute_count++;
+
+    if (!lut_steady) {
       uint64_t lut_len = batch_chunk_count;
       uint32_t* h_gather = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
       uint32_t* h_perm = (uint32_t*)malloc(lut_len * sizeof(uint32_t));
@@ -338,7 +385,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
     CHECK(Error,
           aggregate_batch_by_shard_async(
-            (void*)stage->d_compressed[fc],
+            (const void*)d_aggregate_src,
             stage->codec.d_comp_sizes,
             (const uint32_t*)(uintptr_t)lvl->d_batch_gather,
             (const uint32_t*)(uintptr_t)lvl->d_batch_perm,
