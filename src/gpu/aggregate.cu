@@ -244,7 +244,7 @@ Error:
 // ---------------------------------------------------------------------------
 
 extern "C" int
-aggregate_batch_by_shard_async(void* d_compressed,
+aggregate_batch_by_shard_async(const void* d_compressed,
                                size_t* d_comp_sizes,
                                const uint32_t* d_batch_gather,
                                const uint32_t* d_batch_perm,

@@ -268,9 +268,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
   // CODEC_NONE: aggregate reads the chunk pool directly (gather strides match)
   // so codec_compress would just DtoD the pool to d_compressed for nothing.
   const int skip_compress = (stage->codec.type == CODEC_NONE);
-  const void* d_aggregate_src =
-    skip_compress ? (const void*)in->pool_buf
-                  : (const void*)stage->d_compressed[fc];
+  const CUdeviceptr d_aggregate_src =
+    skip_compress ? in->pool_buf : stage->d_compressed[fc];
 
   if (skip_compress) {
     CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
@@ -371,7 +370,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
     CHECK(Error,
           aggregate_batch_by_shard_async(
-            (void*)d_aggregate_src,
+            (const void*)d_aggregate_src,
             stage->codec.d_comp_sizes,
             (const uint32_t*)(uintptr_t)lvl->d_batch_gather,
             (const uint32_t*)(uintptr_t)lvl->d_batch_perm,

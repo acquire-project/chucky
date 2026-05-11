@@ -50,7 +50,7 @@ extern "C"
   // d_tail_carry: persistent per-LOD device buffer of num_shards * page_size
   //   bytes; holds the actual ragged tail bytes between batches. Same
   //   uploaded-by-host invariant as d_tail_bytes.
-  int aggregate_batch_by_shard_async(void* d_compressed,
+  int aggregate_batch_by_shard_async(const void* d_compressed,
                                      size_t* d_comp_sizes,
                                      const uint32_t* d_batch_gather,
                                      const uint32_t* d_batch_perm,

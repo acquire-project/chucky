@@ -194,7 +194,7 @@ run_gpu_aggregate(struct gpu_run* r,
 
   // Kick the per-shard aggregate.
   CHECK(Fail,
-        aggregate_batch_by_shard_async((void*)r->d_compressed,
+        aggregate_batch_by_shard_async((const void*)r->d_compressed,
                                        r->d_comp_sizes,
                                        r->d_gather,
                                        r->d_perm,
