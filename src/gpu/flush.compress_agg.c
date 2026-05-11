@@ -85,10 +85,15 @@ compress_agg_init(struct compress_agg_stage* stage,
   CHECK(Fail, stage->pool_epochs_scratch);
 
   CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
-  // Compressed buffers + events
+  // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf
+  // (see compress_agg_kick), so the d_compressed buffer is unused — skip its
+  // M * chunk_bytes allocation per fc. Destroy is NULL-safe.
+  const int need_compressed = (stage->codec.type != CODEC_NONE);
   for (int fc = 0; fc < 2; ++fc) {
-    CU(Fail,
-       cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
+    if (need_compressed)
+      CU(Fail,
+         cuMemAlloc(&stage->d_compressed[fc],
+                    M * stage->codec.max_output_size));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_aggregate_end[fc], CU_EVENT_DEFAULT));
