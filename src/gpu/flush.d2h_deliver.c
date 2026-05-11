@@ -297,8 +297,16 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     platform_toc(&kick_clk);
     for (;;) {
       CUresult r = cuEventQuery(stage->ready[fc]);
-      if (r == CUDA_SUCCESS || r == CUDA_ERROR_DEINITIALIZED)
-        break; // shutdown: data already on host, treat as done
+      if (r == CUDA_SUCCESS)
+        break;
+      if (r == CUDA_ERROR_DEINITIALIZED) {
+        // Context torn down (shutdown). Data is already on host for this
+        // poll site; treat as a clean exit. Logged so the swallow is
+        // observable if it ever happens outside teardown.
+        log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)",
+                  fc);
+        break;
+      }
       if (r != CUDA_ERROR_NOT_READY) {
         handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
         goto Error;

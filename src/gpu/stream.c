@@ -128,8 +128,17 @@ stream_append_body(struct stream_engine* e,
           // hot — it has memcpy work queued up immediately after.
           for (;;) {
             CUresult r = cuEventQuery(ss->t_h2d_end);
-            if (r == CUDA_SUCCESS || r == CUDA_ERROR_DEINITIALIZED)
-              break; // shutdown: ok
+            if (r == CUDA_SUCCESS)
+              break;
+            if (r == CUDA_ERROR_DEINITIALIZED) {
+              // Context torn down (shutdown). Data is already on host for
+              // this poll site; clean exit is correct. Logged so the
+              // swallow is observable outside teardown.
+              log_debug("stream.append: cuEventQuery returned DEINITIALIZED "
+                        "(slot=%d)",
+                        si);
+              break;
+            }
             if (r != CUDA_ERROR_NOT_READY) {
               handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
               goto Error;
