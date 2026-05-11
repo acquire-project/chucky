@@ -1021,7 +1021,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     char cbuf[32];
     format_bytes(cbuf, sizeof(cbuf), (uint64_t)sink_bytes[k]);
     print_report("  Compressed:    %s", cbuf);
-    print_report("");
+    fputc('\n', stderr);
     print_report("  %-12s %8s %8s %10s %10s",
                  "Stage",
                  "avg GB/s",
