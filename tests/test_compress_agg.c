@@ -641,9 +641,64 @@ Fail:
   return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Test 6: CODEC_NONE skips d_compressed alloc; CODEC_ZSTD allocates it.
+// Pins the "aggregate reads pool directly" invariant — without the
+// allocation, any future regression that tries to read/write d_compressed
+// on the codec=none path will crash on a NULL device pointer instead of
+// silently waste M * chunk_bytes of VRAM.
+// ---------------------------------------------------------------------------
+static int
+test_compress_agg_none_no_compressed_buffer(void)
+{
+  log_info("=== test_compress_agg_none_no_compressed_buffer ===");
+  int ok = 0;
+
+  // CODEC_NONE: d_compressed[fc] must be unallocated (0).
+  {
+    struct ca_test_ctx c;
+    ca_ctx_init(&c);
+    CHECK(NoneFail,
+          ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) ==
+            0);
+    CHECK(NoneFail, c.stage.d_compressed[0] == (CUdeviceptr)0);
+    CHECK(NoneFail, c.stage.d_compressed[1] == (CUdeviceptr)0);
+    ca_ctx_destroy(&c);
+    goto ZstdCheck;
+  NoneFail:
+    ca_ctx_destroy(&c);
+    goto Fail;
+  }
+
+ZstdCheck:
+  // CODEC_ZSTD: d_compressed[fc] must be allocated.
+  {
+    struct ca_test_ctx c;
+    ca_ctx_init(&c);
+    CHECK(ZstdFail,
+          ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_ZSTD }, 2, 2) ==
+            0);
+    CHECK(ZstdFail, c.stage.d_compressed[0] != (CUdeviceptr)0);
+    CHECK(ZstdFail, c.stage.d_compressed[1] != (CUdeviceptr)0);
+    ca_ctx_destroy(&c);
+    goto Done;
+  ZstdFail:
+    ca_ctx_destroy(&c);
+    goto Fail;
+  }
+
+Done:
+  ok = 1;
+Fail:
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS({ "compress_agg_single_epoch", test_compress_agg_single_epoch },
               { "compress_agg_batch", test_compress_agg_batch },
               { "compress_agg_partial_batch", test_compress_agg_partial_batch },
               { "compress_agg_zstd_single_epoch",
                 test_compress_agg_zstd_single_epoch },
-              { "compress_agg_zstd_batch", test_compress_agg_zstd_batch }, )
+              { "compress_agg_zstd_batch", test_compress_agg_zstd_batch },
+              { "compress_agg_none_no_compressed_buffer",
+                test_compress_agg_none_no_compressed_buffer }, )
