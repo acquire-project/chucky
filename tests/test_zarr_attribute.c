@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char tmpdir[4096];
+static char tmpdir[512];
 
 static int
 make_tmpdir(void)
