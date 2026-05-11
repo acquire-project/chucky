@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char tmpdir[4096];
+static char tmpdir[512];
 
 static char*
 read_file(const char* rel)
