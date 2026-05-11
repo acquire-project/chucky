@@ -232,8 +232,19 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
     cu_event_destroy(stage->t_compress_end[fc]);
     cu_event_destroy(stage->t_aggregate_end[fc]);
   }
-  for (int lv = 0; lv < nlod; ++lv)
+  for (int lv = 0; lv < nlod; ++lv) {
+    const struct level_flush_state* lls = &stage->levels[lv];
+    const uint64_t total = lls->lut_steady_count + lls->lut_recompute_count;
+    if (total > 0) {
+      log_debug("compress_agg lv=%d lut_steady=%llu lut_recompute=%llu "
+                "(steady=%.1f%%)",
+                lv,
+                (unsigned long long)lls->lut_steady_count,
+                (unsigned long long)lls->lut_recompute_count,
+                100.0 * (double)lls->lut_steady_count / (double)total);
+    }
     destroy_level_state(&stage->levels[lv]);
+  }
 }
 
 // --- Kick ---
@@ -331,6 +342,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
                            memcmp(pool_epochs_buf,
                                   lvl->steady_pool_epochs,
                                   (size_t)active_count * sizeof(uint32_t)) == 0;
+    if (lut_steady)
+      lvl->lut_steady_count++;
+    else
+      lvl->lut_recompute_count++;
 
     if (!lut_steady) {
       uint64_t lut_len = batch_chunk_count;

@@ -61,6 +61,11 @@ struct level_flush_state
   // when the runtime pool_epochs match this pattern (the common case for
   // single-array streams and multiscale steady state).
   uint32_t* steady_pool_epochs; // [batch_active_count] host-side
+  // Hit counters for the LUT fast path. Reported at compress_agg_destroy
+  // so workloads can be evaluated for whether the optimization pays off
+  // (single-array steady ≈ all steady; multiscale partial-batch ≈ recompute).
+  uint64_t lut_steady_count;
+  uint64_t lut_recompute_count;
   // Cross-batch tail carry-over (per-LOD persistent state, GPU-resident).
   // d_tail_bytes [num_shards] is the per-shard ragged-tail length; read by
   // compute_bias_k / copy_leading_tail_k at the start of each batch and
