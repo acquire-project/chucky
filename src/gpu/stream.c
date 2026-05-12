@@ -263,11 +263,12 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (r.error)
     return r;
 
-  // Emit partial shards for all levels
+  // Emit partial shards for all levels (unified path: shard[lv] is the
+  // shard_state read by the new kick/D2H code).
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    if (e->compress_agg.levels[lv].shard.epoch_in_shard > 0) {
+    if (e->compress_agg.shard[lv].epoch_in_shard > 0) {
       if (finalize_shards(
-            &e->compress_agg.levels[lv].shard, ctx->sink, ctx->shard_alignment))
+            &e->compress_agg.shard[lv], ctx->sink, ctx->shard_alignment))
         return writer_error();
     }
   }

@@ -240,6 +240,86 @@ Error:
 }
 
 // ---------------------------------------------------------------------------
+// Unified kernels (across all LODs)
+// ---------------------------------------------------------------------------
+
+// write_total_unified_k:
+//   One thread per LOD. Each thread writes the inclusive-sum value at its
+//   LOD's sentinel position (idx = d_lod_last_idx[lv]):
+//     d_offsets[idx] = d_offsets[idx - 1] + d_permuted_sizes[idx - 1]
+//
+//   For LODs whose sentinel idx is within [0, count) of the ExclusiveSum,
+//   this is idempotent (recomputes a value the scan already wrote correctly,
+//   since output[idx] = sum(input[0..idx-1]) = output[idx-1] + input[idx-1]).
+//   For any sentinel idx that lies at or beyond the scan's output range,
+//   this kernel writes the missing total — same role legacy write_total_k
+//   plays for the single-LOD case.
+__global__ void
+write_total_unified_k(size_t* __restrict__ d_offsets,
+                      const size_t* __restrict__ d_permuted_sizes,
+                      const uint64_t* __restrict__ d_lod_last_idx,
+                      uint8_t nlod)
+{
+  const uint32_t lv = threadIdx.x;
+  if (lv >= nlod)
+    return;
+  const uint64_t idx = d_lod_last_idx[lv];
+  d_offsets[idx] = d_offsets[idx - 1] + d_permuted_sizes[idx - 1];
+}
+
+// add_shard_bias_unified_k:
+//   Block per shard. Reads per-shard parameters (base index, run length,
+//   destination base byte offset) from device tables. Computes
+//     bias_s = d_shard_base_offsets[s] + d_tail_bytes_prev[s]
+//              - d_offsets[d_shard_offsets_base[s]]
+//   once into shared memory, then adds it across the shard's run in
+//   d_offsets. Same structure as add_shard_bias_k; per-shard parameters
+//   replace the uniform tps_group / s*shard_capacity values.
+__global__ void
+add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
+                         const size_t* __restrict__ d_tail_bytes_prev,
+                         const size_t* __restrict__ d_shard_base_offsets,
+                         const uint64_t* __restrict__ d_shard_tps_group,
+                         const uint64_t* __restrict__ d_shard_offsets_base,
+                         uint64_t num_shards)
+{
+  const uint64_t s = blockIdx.x;
+  if (s >= num_shards)
+    return;
+  const uint64_t base = d_shard_offsets_base[s];
+  const uint64_t tps_group = d_shard_tps_group[s];
+  __shared__ size_t bias_s;
+  if (threadIdx.x == 0)
+    bias_s =
+      d_shard_base_offsets[s] + d_tail_bytes_prev[s] - d_offsets[base];
+  __syncthreads();
+  for (uint64_t k = threadIdx.x; k < tps_group; k += blockDim.x)
+    d_offsets[base + k] += bias_s;
+}
+
+// copy_leading_tail_unified_k:
+//   Block per shard. Copies d_tail_bytes_prev[s] bytes from
+//   d_tail_carry + s*page_size into d_aggregated + d_shard_base_offsets[s].
+//   Same structure as copy_leading_tail_k; page_size remains uniform across
+//   shards today, while the destination base is now per-shard.
+__global__ void
+copy_leading_tail_unified_k(void* __restrict__ d_aggregated,
+                            const void* __restrict__ d_tail_carry,
+                            const size_t* __restrict__ d_tail_bytes_prev,
+                            const size_t* __restrict__ d_shard_base_offsets,
+                            size_t page_size)
+{
+  const uint64_t s = blockIdx.x;
+  const size_t nbytes = d_tail_bytes_prev[s];
+  if (nbytes == 0)
+    return;
+  const uint8_t* src = (const uint8_t*)d_tail_carry + s * page_size;
+  uint8_t* dst = (uint8_t*)d_aggregated + d_shard_base_offsets[s];
+  for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
+    dst[off] = src[off];
+}
+
+// ---------------------------------------------------------------------------
 // aggregate_batch_by_shard_async
 // ---------------------------------------------------------------------------
 
@@ -318,6 +398,120 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   }
 
   // Pass 4: gather compressed tiles using LUTs.
+  {
+    const int block = 256;
+    const int grid = (int)N;
+    gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
+                                                    slot->d_aggregated,
+                                                    d_comp_sizes,
+                                                    slot->d_offsets,
+                                                    d_batch_gather,
+                                                    d_batch_perm,
+                                                    max_comp_chunk_bytes);
+  }
+
+  // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
+  // (flush.d2h_deliver.c).
+
+  return 0;
+
+Error:
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
+// aggregate_batch_unified_async
+//   Single dispatch across all LODs. The kernel launches are identical in
+//   structure to aggregate_batch_by_shard_async, but per-LOD/per-shard
+//   parameters come from device-side tables built host-side at kick time.
+// ---------------------------------------------------------------------------
+
+extern "C" int
+aggregate_batch_unified_async(const void* d_compressed,
+                              size_t* d_comp_sizes,
+                              const uint32_t* d_batch_gather,
+                              const uint32_t* d_batch_perm,
+                              uint64_t total_batch_chunks,
+                              uint64_t total_batch_covering,
+                              uint8_t nlod,
+                              const uint64_t* d_lod_last_idx,
+                              size_t max_comp_chunk_bytes,
+                              struct aggregate_slot* slot,
+                              const size_t* d_shard_base_offsets,
+                              const size_t* d_shard_capacity,
+                              const uint64_t* d_shard_tps_group,
+                              const uint64_t* d_shard_offsets_base,
+                              const size_t* d_tail_bytes,
+                              CUdeviceptr d_tail_carry,
+                              size_t page_size,
+                              uint64_t total_shards,
+                              CUstream stream)
+{
+  (void)d_shard_capacity; // kept for symmetry/asserts; gather is offset-driven
+  const uint64_t N = total_batch_chunks;
+  const uint64_t C = total_batch_covering;
+  cudaStream_t cuda_stream = (cudaStream_t)stream;
+
+  // Zero permuted_sizes (C + nlod entries: covering plus one sentinel per LOD)
+  CU(Error,
+     cuMemsetD8Async((CUdeviceptr)slot->d_permuted_sizes,
+                     0,
+                     (C + nlod) * sizeof(size_t),
+                     stream));
+
+  // Pass 1: permute sizes using unified LUTs (perm targets already shifted
+  // by +lv per LOD inside aggregate_batch_luts_unified).
+  {
+    const int block = 256;
+    const int grid = (int)((N + block - 1) / block);
+    permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
+      d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
+  }
+
+  // Pass 2: single exclusive prefix sum across the unified covering range
+  // plus one sentinel slot per LOD.
+  {
+    size_t temp = slot->temp_bytes;
+    cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                  temp,
+                                  slot->d_permuted_sizes,
+                                  slot->d_offsets,
+                                  (int)(C + nlod),
+                                  cuda_stream);
+
+    // No write_total fixup needed: ExclusiveSum over (C + nlod) entries
+    // already writes every LOD's tail-sentinel slot (positions land within
+    // the scan's output range).
+    (void)d_lod_last_idx; // retained for ABI; unused now
+  }
+
+  if (page_size > 0 && total_shards > 0) {
+    // Pass 3a: per-shard bias. Anchors each shard's first chunk at its
+    // base byte offset + tail_in, packs subsequent chunks tightly.
+    {
+      const int block = 256;
+      add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
+        slot->d_offsets,
+        d_tail_bytes,
+        d_shard_base_offsets,
+        d_shard_tps_group,
+        d_shard_offsets_base,
+        total_shards);
+    }
+    // Pass 3b: stage prior batch's ragged tail at the head of each shard's
+    // region so chunks pack just past it.
+    {
+      const int block = 256;
+      copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
+        slot->d_aggregated,
+        (const void*)d_tail_carry,
+        d_tail_bytes,
+        d_shard_base_offsets,
+        page_size);
+    }
+  }
+
+  // Pass 4: gather compressed tiles using unified LUTs.
   {
     const int block = 256;
     const int grid = (int)N;

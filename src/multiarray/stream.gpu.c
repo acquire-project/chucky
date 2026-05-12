@@ -38,18 +38,24 @@ struct array_descriptor_gpu
   uint64_t flush_pending_seq[2];
   uint64_t flush_next_seq;
   struct flush_handoff flush_pending_handoff[2];
-  struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
-  // Per-LOD tail-carry state. GPU buffers and host shadow are descriptor-
-  // owned; bind copies the pointers into the engine. Sharing across arrays
-  // would contaminate each array's first batch with the prior array's tail.
-  struct
-  {
-    CUdeviceptr d_tail_carry;
-    size_t* d_tail_bytes;
-    size_t* h_tail_bytes;
-  } tail[LOD_MAX_LEVELS];
+
+  // Per-array unified state. total_shards = sum_lv num_shards[lv]; tail
+  // buffers contiguous over all shards in this array. Bind swaps these
+  // into compress_agg_stage.{per_lod_agg_layouts, shard, shards}.
+  uint64_t u_total_shards;
+  uint32_t u_shards_begin[LOD_MAX_LEVELS];
+  uint32_t u_n_shards[LOD_MAX_LEVELS];
+  size_t u_page_size;
+  size_t u_tail_carry_bytes;
+  size_t* u_d_tail_bytes;
+  CUdeviceptr u_d_tail_carry;
+  size_t* u_h_tail_bytes;
+  size_t* u_h_shard_capacity;
+  uint8_t* u_h_shard_lod;
+  struct shard_state u_shard[LOD_MAX_LEVELS];
+
   int flushed; // 1 once flush body has run for this array
 };
 
@@ -69,13 +75,11 @@ struct pool_maxima
   size_t lod_morton_bytes; // max across arrays
   int any_multiscale;      // 1 if any array uses multiscale
 
-  struct
-  {
-    uint64_t batch_chunks;
-    uint64_t batch_covering;
-    size_t batch_agg_bytes;
-    uint64_t lut_len;
-  } level[LOD_MAX_LEVELS];
+  // Unified-pipeline maxima (max across arrays).
+  uint64_t u_max_total_batch_chunks;
+  uint64_t u_max_total_batch_covering;
+  size_t u_max_total_data_bytes;
+  uint64_t u_max_total_shards;
 };
 
 // ---- Main struct ----
@@ -129,13 +133,14 @@ static void
 drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   cuStreamSynchronize(e->streams.d2h);
-  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    for (int fc = 0; fc < 2; ++fc) {
-      struct aggregate_slot* agg = &e->d2h_deliver.levels[lv].agg[fc];
-      if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
-        desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
-      agg->io_done.seq = 0;
-    }
+  // Drain the unified slot's io_done fence with the departing array's sink
+  // so the next-bound array doesn't wait on a fence that was issued by a
+  // different sink.
+  for (int fc = 0; fc < 2; ++fc) {
+    struct aggregate_slot* agg = &e->compress_agg.agg[fc];
+    if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
+      desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
+    agg->io_done.seq = 0;
   }
 }
 
@@ -155,17 +160,37 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
   }
   e->flush.next_seq = desc->flush_next_seq;
-  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    e->compress_agg.levels[lv].shard = desc->shard[lv];
-    e->compress_agg.levels[lv].agg_layout = desc->agg_layout[lv];
-    e->compress_agg.levels[lv].batch_active_count =
-      desc->batch_active_count[lv];
-    e->compress_agg.levels[lv].d_tail_carry = desc->tail[lv].d_tail_carry;
-    e->compress_agg.levels[lv].d_tail_bytes = desc->tail[lv].d_tail_bytes;
-    e->compress_agg.levels[lv].h_tail_bytes = desc->tail[lv].h_tail_bytes;
-  }
-  e->d2h_deliver.nlod = desc->ctx.levels.nlod;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
+
+  // Unified-pipeline bind: swap per-array state into the engine. Engine
+  // buffers (agg[2], d_batch_gather/perm, d_lod_last_idx, h_lut_* scratch,
+  // d_*_offsets/_tps_group/_capacity) are sized to max and shared.
+  e->compress_agg.nlod = (uint8_t)desc->ctx.levels.nlod;
+  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+    e->compress_agg.per_lod_agg_layouts[lv] = desc->agg_layout[lv];
+    e->compress_agg.shard[lv] = desc->u_shard[lv];
+  }
+  e->compress_agg.shards.total_shards = desc->u_total_shards;
+  e->compress_agg.shards.page_size = desc->u_page_size;
+  e->compress_agg.shards.tail_carry_bytes = desc->u_tail_carry_bytes;
+  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
+    e->compress_agg.shards.shards_begin[lv] = desc->u_shards_begin[lv];
+    e->compress_agg.shards.n_shards[lv] = desc->u_n_shards[lv];
+  }
+  e->compress_agg.shards.h_tail_bytes = desc->u_h_tail_bytes;
+  e->compress_agg.shards.d_tail_bytes = desc->u_d_tail_bytes;
+  e->compress_agg.shards.d_tail_carry = desc->u_d_tail_carry;
+  // Per-array shard_capacity table is constant; re-upload on bind so the
+  // device-side d_shard_capacity reflects the active array's shard sizes.
+  // (h_base_offsets / h_tps_group / h_offsets_base are per-batch scratch,
+  // refreshed by the kick.)
+  if (desc->u_total_shards > 0 && desc->u_h_shard_capacity) {
+    cuMemcpyHtoD((CUdeviceptr)e->compress_agg.shards.d_shard_capacity,
+                 desc->u_h_shard_capacity,
+                 desc->u_total_shards * sizeof(size_t));
+  }
+  // Invalidate the LUT cache: per-array layouts differ.
+  e->compress_agg.lut_cache_valid = 0;
 
   // Per-array LOD state is now a single struct assignment.  Shared LOD
   // resources (d_linear, d_morton, timing) live in e->lod_shared and are
@@ -187,17 +212,17 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
     desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
   }
   desc->flush_next_seq = e->flush.next_seq;
-  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    desc->shard[lv] = e->compress_agg.levels[lv].shard;
-    desc->agg_layout[lv] = e->compress_agg.levels[lv].agg_layout;
-    desc->batch_active_count[lv] =
-      e->compress_agg.levels[lv].batch_active_count;
-    // Clear engine-side aliases so any stale-pointer use crashes loudly
-    // rather than corrupting the next-bound array's tail state.
-    e->compress_agg.levels[lv].d_tail_carry = 0;
-    e->compress_agg.levels[lv].d_tail_bytes = NULL;
-    e->compress_agg.levels[lv].h_tail_bytes = NULL;
-  }
+  // Snapshot per-array state back into the descriptor. shard_state mutates
+  // over a batch (epoch_in_shard, shard_epoch, writer pointers); preserve it.
+  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv)
+    desc->u_shard[lv] = e->compress_agg.shard[lv];
+  // Clear engine-side per-array pointers so the next bind establishes them
+  // unambiguously.
+  e->compress_agg.shards.d_tail_bytes = NULL;
+  e->compress_agg.shards.d_tail_carry = 0;
+  e->compress_agg.shards.h_tail_bytes = NULL;
+  e->compress_agg.shards.total_shards = 0;
+  e->compress_agg.shards.tail_carry_bytes = 0;
 
   // Save per-array LOD state. counts[] tracks running append-accumulator
   // state across epochs; element_capacity is the fixed accumulator buffer
@@ -313,53 +338,89 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
     mx->lod_morton_bytes = max_sz(mx->lod_morton_bytes, morton_bytes);
   }
 
-  // Per-level aggregate + shard state
+  // Unified-pipeline per-array sizing.
+  desc->u_total_shards = 0;
+  desc->u_page_size = desc->cl.per_level[0].agg_layout.page_size;
+  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+    desc->u_shards_begin[lv] = (uint32_t)desc->u_total_shards;
+    desc->u_n_shards[lv] =
+      (uint32_t)desc->cl.per_level[lv].agg_layout.num_shards;
+    desc->u_total_shards += desc->cl.per_level[lv].agg_layout.num_shards;
+  }
+  if (desc->u_total_shards > 0) {
+    desc->u_h_shard_capacity =
+      (size_t*)malloc(desc->u_total_shards * sizeof(size_t));
+    desc->u_h_shard_lod =
+      (uint8_t*)malloc(desc->u_total_shards * sizeof(uint8_t));
+    desc->u_h_tail_bytes =
+      (size_t*)calloc(desc->u_total_shards, sizeof(size_t));
+    if (!desc->u_h_shard_capacity || !desc->u_h_shard_lod ||
+        !desc->u_h_tail_bytes)
+      return 1;
+    for (uint64_t i = 0; i < desc->u_total_shards; ++i) {
+      for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+        if (i >= desc->u_shards_begin[lv] &&
+            i < desc->u_shards_begin[lv] + desc->u_n_shards[lv]) {
+          desc->u_h_shard_lod[i] = (uint8_t)lv;
+          desc->u_h_shard_capacity[i] =
+            desc->cl.per_level[lv].agg_layout.shard_capacity;
+          break;
+        }
+      }
+    }
+    if (cuMemAlloc((CUdeviceptr*)&desc->u_d_tail_bytes,
+                   desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
+      return 1;
+    if (cuMemsetD8((CUdeviceptr)desc->u_d_tail_bytes,
+                   0,
+                   desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
+      return 1;
+    if (desc->u_page_size > 0) {
+      desc->u_tail_carry_bytes =
+        desc->u_total_shards * desc->u_page_size;
+      if (cuMemAlloc(&desc->u_d_tail_carry, desc->u_tail_carry_bytes) !=
+          CUDA_SUCCESS)
+        return 1;
+      if (cuMemsetD8(
+            desc->u_d_tail_carry, 0, desc->u_tail_carry_bytes) != CUDA_SUCCESS)
+        return 1;
+    }
+  }
+
+  // Pool-maxima inputs for the unified pipeline. Compute this array's
+  // max-batch layout and feed the maxima accumulator below.
+  struct batch_aggregate_layout array_max_layout;
+  {
+    struct aggregate_layout per_lod_layouts[LOD_MAX_LEVELS];
+    uint32_t per_lod_max[LOD_MAX_LEVELS] = { 0 };
+    for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
+      per_lod_layouts[lv] = desc->cl.per_level[lv].agg_layout;
+      per_lod_max[lv] = desc->cl.per_level[lv].batch_active_count;
+    }
+    if (batch_aggregate_layout_init(&array_max_layout,
+                                    per_lod_layouts,
+                                    per_lod_max,
+                                    (uint8_t)desc->ctx.levels.nlod,
+                                    desc->u_page_size))
+      return 1;
+  }
+  mx->u_max_total_batch_chunks =
+    max_u64(mx->u_max_total_batch_chunks, array_max_layout.total_batch_chunks);
+  mx->u_max_total_batch_covering =
+    max_u64(mx->u_max_total_batch_covering,
+            array_max_layout.total_batch_covering);
+  mx->u_max_total_data_bytes =
+    max_sz(mx->u_max_total_data_bytes, array_max_layout.total_data_bytes);
+  mx->u_max_total_shards =
+    max_u64(mx->u_max_total_shards, desc->u_total_shards);
+
+  // Per-LOD shard_state + agg_layout snapshot.
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
     desc->agg_layout[lv] = li->agg_layout;
     desc->batch_active_count[lv] = li->batch_active_count;
-
-    uint32_t slot_count =
-      li->batch_active_count > 0 ? li->batch_active_count : 1;
-    uint64_t chunks_lv = desc->ctx.levels.level[lv].chunk_count;
-    uint64_t batch_chunks = (uint64_t)slot_count * chunks_lv;
-    uint64_t batch_covering =
-      (uint64_t)slot_count * li->agg_layout.covering_count;
-    size_t batch_agg_bytes = agg_pool_bytes_layout(&li->agg_layout);
-
-    mx->level[lv].batch_chunks =
-      max_u64(mx->level[lv].batch_chunks, batch_chunks);
-    mx->level[lv].batch_covering =
-      max_u64(mx->level[lv].batch_covering, batch_covering);
-    mx->level[lv].batch_agg_bytes =
-      max_sz(mx->level[lv].batch_agg_bytes, batch_agg_bytes);
-    mx->level[lv].lut_len = max_u64(mx->level[lv].lut_len, batch_chunks);
-
-    if (init_shard_state(&desc->shard[lv], li))
+    if (init_shard_state(&desc->u_shard[lv], li))
       return 1;
-
-    // Per-LOD tail-carry state (descriptor-owned; bind copies pointers into
-    // the shared engine). Only allocate when alignment is required.
-    const uint64_t num_shards = li->agg_layout.num_shards;
-    const size_t page = li->agg_layout.page_size;
-    if (num_shards > 0 && page > 0) {
-      const size_t carry_bytes = num_shards * page;
-      if (cuMemAlloc(&desc->tail[lv].d_tail_carry, carry_bytes) != CUDA_SUCCESS)
-        return 1;
-      if (cuMemsetD8(desc->tail[lv].d_tail_carry, 0, carry_bytes) !=
-          CUDA_SUCCESS)
-        return 1;
-      if (cuMemAlloc((CUdeviceptr*)&desc->tail[lv].d_tail_bytes,
-                     num_shards * sizeof(size_t)) != CUDA_SUCCESS)
-        return 1;
-      if (cuMemsetD8((CUdeviceptr)desc->tail[lv].d_tail_bytes,
-                     0,
-                     num_shards * sizeof(size_t)) != CUDA_SUCCESS)
-        return 1;
-      desc->tail[lv].h_tail_bytes = (size_t*)calloc(num_shards, sizeof(size_t));
-      if (!desc->tail[lv].h_tail_bytes)
-        return 1;
-    }
   }
 
   return 0;
@@ -375,12 +436,14 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
     desc->flush_slots[fc].batch_active_masks = NULL;
   }
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    shard_state_destroy(&desc->shard[lv]);
+    shard_state_destroy(&desc->u_shard[lv]);
     aggregate_layout_destroy(&desc->agg_layout[lv]);
-    cu_mem_free(desc->tail[lv].d_tail_carry);
-    cu_mem_free((CUdeviceptr)desc->tail[lv].d_tail_bytes);
-    free(desc->tail[lv].h_tail_bytes);
   }
+  free(desc->u_h_shard_capacity);
+  free(desc->u_h_shard_lod);
+  free(desc->u_h_tail_bytes);
+  cu_mem_free((CUdeviceptr)desc->u_d_tail_bytes);
+  cu_mem_free(desc->u_d_tail_carry);
   // array_lod owns everything except d_linear/d_morton/timing (which stay 0
   // in the per-array struct). ctx.layout_gpu aliases array_lod.layout_gpu[0]
   // and is freed via array_lod destroy.
@@ -443,32 +506,76 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuEventCreate(&e->compress_agg.t_aggregate_end[fc], CU_EVENT_DEFAULT));
   }
 
-  for (int lv = 0; lv < ms->max_nlod; ++lv) {
-    struct level_flush_state* lvl = &e->compress_agg.levels[lv];
-    for (int fc = 0; fc < 2; ++fc) {
-      if (mx->level[lv].batch_covering > 0) {
-        CHECK(Fail,
-              aggregate_batch_slot_init(&lvl->agg[fc],
-                                        mx->level[lv].batch_chunks,
-                                        mx->level[lv].batch_covering,
-                                        mx->level[lv].batch_agg_bytes) == 0);
-        CU(Fail, cuEventRecord(lvl->agg[fc].ready, e->streams.compute));
-      }
-    }
-    if (mx->level[lv].lut_len > 0) {
-      size_t lut_bytes = mx->level[lv].lut_len * sizeof(uint32_t);
-      CU(Fail, cuMemAlloc(&lvl->d_batch_gather, lut_bytes));
-      CU(Fail, cuMemAlloc(&lvl->d_batch_perm, lut_bytes));
-    }
-  }
-
   CHECK(Fail,
-        d2h_deliver_init(&e->d2h_deliver,
-                         e->compress_agg.levels,
-                         ms->max_nlod,
-                         0,
-                         e->streams.compute) == 0);
+        d2h_deliver_init(&e->d2h_deliver, 0, e->streams.compute) == 0);
   e->d2h_deliver.metrics = &e->metrics;
+
+  // Unified-pipeline shared resources. Sized to maxima across arrays.
+  e->compress_agg.max_total_batch_chunks = mx->u_max_total_batch_chunks;
+  e->compress_agg.max_total_batch_covering = mx->u_max_total_batch_covering;
+  e->compress_agg.max_total_data_bytes = mx->u_max_total_data_bytes;
+  if (mx->u_max_total_batch_chunks > 0) {
+    const uint64_t C_max =
+      mx->u_max_total_batch_covering + (uint64_t)ms->max_nlod;
+    for (int fc = 0; fc < 2; ++fc) {
+      CHECK(Fail,
+            aggregate_batch_slot_init(&e->compress_agg.agg[fc],
+                                      mx->u_max_total_batch_chunks,
+                                      C_max,
+                                      mx->u_max_total_data_bytes) == 0);
+      CU(Fail, cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
+    }
+    CU(Fail,
+       cuMemAlloc(&e->compress_agg.d_batch_gather,
+                  mx->u_max_total_batch_chunks * sizeof(uint32_t)));
+    CU(Fail,
+       cuMemAlloc(&e->compress_agg.d_batch_perm,
+                  mx->u_max_total_batch_chunks * sizeof(uint32_t)));
+    e->compress_agg.h_lut_gather_scratch =
+      (uint32_t*)malloc(mx->u_max_total_batch_chunks * sizeof(uint32_t));
+    e->compress_agg.h_lut_perm_scratch =
+      (uint32_t*)malloc(mx->u_max_total_batch_chunks * sizeof(uint32_t));
+    CHECK(Fail,
+          e->compress_agg.h_lut_gather_scratch &&
+            e->compress_agg.h_lut_perm_scratch);
+  }
+  CU(Fail,
+     cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_lod_last_idx,
+                LOD_MAX_LEVELS * sizeof(uint64_t)));
+  e->compress_agg.h_lod_last_idx_scratch =
+    (uint64_t*)malloc(LOD_MAX_LEVELS * sizeof(uint64_t));
+  CHECK(Fail, e->compress_agg.h_lod_last_idx_scratch);
+  // Engine-shared per-shard scratch + device buffers, sized to max shards.
+  if (mx->u_max_total_shards > 0) {
+    e->compress_agg.shards.h_base_offsets =
+      (size_t*)malloc(mx->u_max_total_shards * sizeof(size_t));
+    e->compress_agg.shards.h_tps_group =
+      (uint64_t*)malloc(mx->u_max_total_shards * sizeof(uint64_t));
+    e->compress_agg.shards.h_offsets_base =
+      (uint64_t*)malloc(mx->u_max_total_shards * sizeof(uint64_t));
+    CHECK(Fail,
+          e->compress_agg.shards.h_base_offsets &&
+            e->compress_agg.shards.h_tps_group &&
+            e->compress_agg.shards.h_offsets_base);
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.shards.d_base_offsets,
+                  mx->u_max_total_shards * sizeof(size_t)));
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.shards.d_shard_capacity,
+                  mx->u_max_total_shards * sizeof(size_t)));
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.shards.d_tps_group,
+                  mx->u_max_total_shards * sizeof(uint64_t)));
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.shards.d_offsets_base,
+                  mx->u_max_total_shards * sizeof(uint64_t)));
+  }
+  // Override the shared scratch sized at engine-init: the unified kick
+  // needs LOD_MAX_LEVELS * max_K entries to carve per-LOD pool_epochs slices.
+  free(e->compress_agg.pool_epochs_scratch);
+  e->compress_agg.pool_epochs_scratch = (uint32_t*)malloc(
+    (size_t)LOD_MAX_LEVELS * mx->epochs_per_batch * sizeof(uint32_t));
+  CHECK(Fail, e->compress_agg.pool_epochs_scratch);
 
   CU(Fail, cuEventRecord(e->pools.ready[0], e->streams.compute));
   CU(Fail, cuEventRecord(e->pools.ready[1], e->streams.compute));
@@ -686,13 +793,24 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     cu_event_destroy(e->compress_agg.t_compress_end[fc]);
     cu_event_destroy(e->compress_agg.t_aggregate_end[fc]);
   }
-  for (int lv = 0; lv < ms->max_nlod; ++lv) {
-    struct level_flush_state* lvl = &e->compress_agg.levels[lv];
-    for (int fc = 0; fc < 2; ++fc)
-      aggregate_slot_destroy(&lvl->agg[fc]);
-    cu_mem_free(lvl->d_batch_gather);
-    cu_mem_free(lvl->d_batch_perm);
-  }
+
+  // Unified-pipeline shared resources (allocated in init_shared_resources).
+  for (int fc = 0; fc < 2; ++fc)
+    aggregate_slot_destroy(&e->compress_agg.agg[fc]);
+  cu_mem_free(e->compress_agg.d_batch_gather);
+  cu_mem_free(e->compress_agg.d_batch_perm);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_lod_last_idx);
+  free(e->compress_agg.h_lut_gather_scratch);
+  free(e->compress_agg.h_lut_perm_scratch);
+  free(e->compress_agg.h_lod_last_idx_scratch);
+  free(e->compress_agg.shards.h_base_offsets);
+  free(e->compress_agg.shards.h_tps_group);
+  free(e->compress_agg.shards.h_offsets_base);
+  cu_mem_free((CUdeviceptr)e->compress_agg.shards.d_base_offsets);
+  cu_mem_free((CUdeviceptr)e->compress_agg.shards.d_shard_capacity);
+  cu_mem_free((CUdeviceptr)e->compress_agg.shards.d_tps_group);
+  cu_mem_free((CUdeviceptr)e->compress_agg.shards.d_offsets_base);
+  memset(&e->compress_agg.shards, 0, sizeof(e->compress_agg.shards));
 
   // The per-array fields of e->lod are views of the last-bound descriptor
   // (freed above by destroy_array_descriptor).  Engine-owned shared LOD

@@ -253,8 +253,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                           out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
         d2h_deliver_init(&out->engine.d2h_deliver,
-                         out->engine.compress_agg.levels,
-                         out->ctx.levels.nlod,
                          out->ctx.shard_alignment,
                          out->engine.streams.compute) == 0);
 

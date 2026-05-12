@@ -110,8 +110,6 @@ orch_ctx_setup(struct orch_ctx* c,
   // D2H+deliver stage
   CHECK(Fail,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
-                         c->s->engine.compress_agg.levels,
-                         c->cl.levels.nlod,
                          platform_page_alignment(),
                          c->s->engine.streams.compute) == 0);
 
@@ -383,7 +381,7 @@ test_accumulated_sync_partial(void)
   // rather than on-disk size.
   CHECK(Fail, sink.open_count >= 1);
   {
-    struct shard_state* ss = &c.s->engine.compress_agg.levels[0].shard;
+    struct shard_state* ss = &c.s->engine.compress_agg.shard[0];
     struct active_shard* sh = &ss->shards[0];
     CHECK(Fail, sh->tail_bytes > 0);
   }

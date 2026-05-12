@@ -82,8 +82,6 @@ test_ctx_setup(struct test_ctx* c,
 
   CHECK(Fail,
         d2h_deliver_init(&c->d2h,
-                         c->ca.levels,
-                         c->cl.levels.nlod,
                          platform_page_alignment(),
                          c->compute) == 0);
   c->d2h_inited = 1;
@@ -310,7 +308,7 @@ test_d2h_batch_none(void)
   // Parse finalized shard: index block at end
   // chunks_per_shard_total = 8, index = 8 * 16 bytes + 4 byte CRC
   {
-    struct shard_state* ss = &c.ca.levels[0].shard;
+    struct shard_state* ss = &c.ca.shard[0];
     uint64_t tps_total = ss->chunks_per_shard_total;
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
@@ -323,8 +321,8 @@ test_d2h_batch_none(void)
 
     // Shard output layout: [num_shards, batch_count, cps_inner] row-major.
     // Slot → (si, epoch, ci) via unravel, then perm_pos = si * cps_inner + ci.
-    const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
-    uint32_t batch_count = c.ca.levels[0].batch_active_count;
+    const struct aggregate_layout* al = &c.ca.per_lod_agg_layouts[0];
+    uint32_t batch_count = c.ca.per_lod_agg_layouts[0].active_count_max;
     uint32_t cps_inner = (uint32_t)al->cps_inner;
     uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
     uint64_t chunks_lv = c.cl.levels.level[0].chunk_count;
@@ -453,7 +451,7 @@ test_d2h_zstd_single_epoch(void)
 
   // Decompress and verify chunk data via the on-disk index.
   {
-    struct shard_state* ss = &c.ca.levels[0].shard;
+    struct shard_state* ss = &c.ca.shard[0];
     uint64_t tps_total = ss->chunks_per_shard_total;
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
@@ -463,7 +461,7 @@ test_d2h_zstd_single_epoch(void)
     const uint64_t* idx =
       (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
-    const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
+    const struct aggregate_layout* al = &c.ca.per_lod_agg_layouts[0];
     uint64_t cps_inner = ss->chunks_per_shard_inner;
 
     decomp_buf = (uint8_t*)malloc(chunk_bytes);
@@ -591,7 +589,7 @@ test_d2h_double_buffer(void)
 
   // Parse finalized shard and verify both epochs' data
   {
-    struct shard_state* ss = &c.ca.levels[0].shard;
+    struct shard_state* ss = &c.ca.shard[0];
     uint64_t tps_total = ss->chunks_per_shard_total;
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
@@ -601,7 +599,7 @@ test_d2h_double_buffer(void)
     const uint64_t* idx =
       (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
-    const struct aggregate_layout* al = &c.ca.levels[0].agg_layout;
+    const struct aggregate_layout* al = &c.ca.per_lod_agg_layouts[0];
     uint64_t cps_inner = ss->chunks_per_shard_inner;
 
     int errors = 0;
