@@ -136,22 +136,20 @@ struct compress_agg_input
 
 // Per-shard layout tables, sized to total_shards = sum(num_shards_lv) across
 // all LODs. These collapse what was N per-LOD shard-bias/leading-tail launches
-// into a single launch over the flat shard list. Host arrays are uploaded to
-// device on init (or on multiarray bind, when per-array per_lod_agg_layouts
-// change). All entries are stable across batches in steady state — the
-// uploads happen once at init for single-array streams.
+// into a single launch over the flat shard list. d_base_offsets / d_tps_group
+// / d_offsets_base are rebuilt and re-uploaded every kick (depends on
+// per_lod_n_active); d_shard_capacity is constant per array and uploaded once
+// at init (or on multiarray bind).
 struct shard_tables
 {
   uint64_t total_shards;
   // Per-shard parameters used by add_shard_bias_unified_k and
   // copy_leading_tail_unified_k. Host shadows are owned; device buffers are
-  // allocated once at init sized to the max across arrays.
+  // allocated at init sized to the max across arrays.
   size_t* h_base_offsets;      // base byte offset in d_aggregated
   size_t* h_shard_capacity;    // per shard
   uint64_t* h_tps_group;       // chunks-per-shard within a batch
   uint64_t* h_offsets_base;    // base index in d_offsets / d_permuted_sizes
-  // LOD this shard belongs to (for delivery dispatch and metrics).
-  uint8_t* h_shard_lod;
 
   size_t* d_base_offsets;
   size_t* d_shard_capacity;
@@ -185,7 +183,6 @@ struct compress_agg_stage
   // Unified aggregate slot (per-fc), sized to max_batch_layout maxima. Holds:
   //   d_aggregated:     max_batch_layout.total_data_bytes
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
-  //   d_perm:           total_batch_chunks
   //   plus pinned host shadows of matching size.
   struct aggregate_slot agg[2];
   size_t max_total_batch_chunks;
@@ -193,12 +190,17 @@ struct compress_agg_stage
   size_t max_total_data_bytes;
 
   // Unified LUTs. Sized to max_total_batch_chunks. Uploaded per kick when the
-  // active-count pattern shifts; cached in steady state via h_cached_*.
+  // firing pattern shifts; cached in steady state by comparing both the
+  // per-LOD active counts AND each LOD's pool_epoch values, since the gather
+  // LUT encodes the actual pool_epoch values (mid-stream phase shifts can
+  // leave the counts unchanged while the epoch positions move).
   CUdeviceptr d_batch_gather;
   CUdeviceptr d_batch_perm;
   uint32_t* h_lut_gather_scratch; // for building unified LUT host-side
   uint32_t* h_lut_perm_scratch;
-  uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded pattern
+  uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded counts
+  uint32_t* cached_pool_epochs;   // [LOD_MAX_LEVELS * pool_epochs_stride]
+  uint32_t pool_epochs_stride;    // max K used by scratch + cache
   int lut_cache_valid;
   uint64_t lut_steady_count;
   uint64_t lut_recompute_count;
@@ -216,12 +218,6 @@ struct compress_agg_stage
   // Per-shard tables (replaces per-LOD d_tail_*, d_batch_gather/perm).
   struct shard_tables shards;
 
-  // [nlod] entries: index of each LOD's tail-sentinel in unified d_offsets.
-  // Uploaded per-kick; small (≤ LOD_MAX_LEVELS), so a fresh HtoDAsync each
-  // time is cheap.
-  uint64_t* d_lod_last_idx;
-  uint64_t* h_lod_last_idx_scratch;
-
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
   // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
   // The shard_state itself stays per-LOD because deliver_to_shards_batch and
@@ -233,9 +229,7 @@ struct compress_agg_stage
 struct d2h_deliver_stage
 {
   CUevent t_d2h_start[2];
-  CUevent
-    offsets_ready[2]; // phase 1 (offset D2H) completion; drain syncs on this
-  CUevent ready[2];   // phase 2 (bulk D2H) completion
+  CUevent ready[2]; // unified D2H completion (offsets+sizes+data)
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

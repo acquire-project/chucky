@@ -136,7 +136,6 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
     cuEventDestroy(slot->ready);
   cuMemFree((CUdeviceptr)slot->d_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_offsets);
-  cuMemFree((CUdeviceptr)slot->d_perm);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
@@ -201,7 +200,7 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
                           size_t comp_pool_bytes)
 {
   uint64_t C = batch_covering_count;
-  uint64_t M = batch_chunk_count;
+  (void)batch_chunk_count;
 
   CHECK(Error, slot);
   memset(slot, 0, sizeof(*slot));
@@ -211,7 +210,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
                 (C + 1) * sizeof(size_t)));
   CU(Error,
      cuMemAlloc((CUdeviceptr*)&slot->d_offsets, (C + 1) * sizeof(size_t)));
-  CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_perm, M * sizeof(uint32_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
   CU(Error,
@@ -242,30 +240,6 @@ Error:
 // ---------------------------------------------------------------------------
 // Unified kernels (across all LODs)
 // ---------------------------------------------------------------------------
-
-// write_total_unified_k:
-//   One thread per LOD. Each thread writes the inclusive-sum value at its
-//   LOD's sentinel position (idx = d_lod_last_idx[lv]):
-//     d_offsets[idx] = d_offsets[idx - 1] + d_permuted_sizes[idx - 1]
-//
-//   For LODs whose sentinel idx is within [0, count) of the ExclusiveSum,
-//   this is idempotent (recomputes a value the scan already wrote correctly,
-//   since output[idx] = sum(input[0..idx-1]) = output[idx-1] + input[idx-1]).
-//   For any sentinel idx that lies at or beyond the scan's output range,
-//   this kernel writes the missing total — same role legacy write_total_k
-//   plays for the single-LOD case.
-__global__ void
-write_total_unified_k(size_t* __restrict__ d_offsets,
-                      const size_t* __restrict__ d_permuted_sizes,
-                      const uint64_t* __restrict__ d_lod_last_idx,
-                      uint8_t nlod)
-{
-  const uint32_t lv = threadIdx.x;
-  if (lv >= nlod)
-    return;
-  const uint64_t idx = d_lod_last_idx[lv];
-  d_offsets[idx] = d_offsets[idx - 1] + d_permuted_sizes[idx - 1];
-}
 
 // add_shard_bias_unified_k:
 //   Block per shard. Reads per-shard parameters (base index, run length,
@@ -434,7 +408,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                               uint64_t total_batch_chunks,
                               uint64_t total_batch_covering,
                               uint8_t nlod,
-                              const uint64_t* d_lod_last_idx,
                               size_t max_comp_chunk_bytes,
                               struct aggregate_slot* slot,
                               const size_t* d_shard_base_offsets,
@@ -469,7 +442,8 @@ aggregate_batch_unified_async(const void* d_compressed,
   }
 
   // Pass 2: single exclusive prefix sum across the unified covering range
-  // plus one sentinel slot per LOD.
+  // plus one sentinel slot per LOD. The scan writes every LOD's
+  // tail-sentinel position; no separate write_total fixup needed.
   {
     size_t temp = slot->temp_bytes;
     cub::DeviceScan::ExclusiveSum(slot->d_temp,
@@ -478,11 +452,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                                   slot->d_offsets,
                                   (int)(C + nlod),
                                   cuda_stream);
-
-    // No write_total fixup needed: ExclusiveSum over (C + nlod) entries
-    // already writes every LOD's tail-sentinel slot (positions land within
-    // the scan's output range).
-    (void)d_lod_last_idx; // retained for ABI; unused now
   }
 
   if (page_size > 0 && total_shards > 0) {

@@ -20,7 +20,6 @@ extern "C"
   {
     size_t* d_permuted_sizes; // device: (C+1) size_t, zeroed each epoch
     size_t* d_offsets;        // device: (C+1) size_t
-    uint32_t* d_perm;         // device: M uint32_t
     void* d_aggregated;       // device: comp_pool_bytes
     void* h_aggregated;       // host pinned: comp_pool_bytes
     size_t* h_offsets;        // host pinned: (C+1) size_t
@@ -79,15 +78,10 @@ extern "C"
   //   total_batch_chunks   : M_total = sum_lv n_active[lv] * chunks_per_epoch[lv]
   //   total_batch_covering : C_total = sum_lv n_active[lv] * covering_count[lv]
   //   nlod                 : number of LODs
-  //   d_lod_last_idx       : [nlod] device array; entry lv = index in d_offsets
-  //                          where LOD lv's last sentinel offset should land
-  //                          (i.e. batch_covering_offset + n_active*covering + lv).
-  //                          Used by a small per-LOD write_total step.
   //   max_comp_chunk_bytes : uniform pool stride
   //   slot                 : unified aggregate_slot (d_aggregated sized to
   //                          max_total_data_bytes; d_offsets/d_permuted_sizes
-  //                          sized to max_total_batch_covering + LOD_MAX_LEVELS;
-  //                          d_perm sized to max_total_batch_chunks).
+  //                          sized to max_total_batch_covering + LOD_MAX_LEVELS).
   //   d_shard_base_offsets : [total_shards] base byte offset in d_aggregated
   //                          for each shard. Replaces uniform s*shard_capacity.
   //   d_shard_capacity     : [total_shards] each shard's capacity in bytes
@@ -113,7 +107,6 @@ extern "C"
     uint64_t total_batch_chunks,
     uint64_t total_batch_covering,
     uint8_t nlod,
-    const uint64_t* d_lod_last_idx,
     size_t max_comp_chunk_bytes,
     struct aggregate_slot* slot,
     const size_t* d_shard_base_offsets,

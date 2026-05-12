@@ -53,7 +53,6 @@ struct array_descriptor_gpu
   CUdeviceptr u_d_tail_carry;
   size_t* u_h_tail_bytes;
   size_t* u_h_shard_capacity;
-  uint8_t* u_h_shard_lod;
   struct shard_state u_shard[LOD_MAX_LEVELS];
 
   int flushed; // 1 once flush body has run for this array
@@ -163,7 +162,7 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
 
   // Unified-pipeline bind: swap per-array state into the engine. Engine
-  // buffers (agg[2], d_batch_gather/perm, d_lod_last_idx, h_lut_* scratch,
+  // buffers (agg[2], d_batch_gather/perm, h_lut_* scratch,
   // d_*_offsets/_tps_group/_capacity) are sized to max and shared.
   e->compress_agg.nlod = (uint8_t)desc->ctx.levels.nlod;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
@@ -217,12 +216,26 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv)
     desc->u_shard[lv] = e->compress_agg.shard[lv];
   // Clear engine-side per-array pointers so the next bind establishes them
-  // unambiguously.
+  // unambiguously. We zero everything that bind_context fills in so a stale
+  // pointer can't survive an unbind/destroy that isn't followed by a bind.
   e->compress_agg.shards.d_tail_bytes = NULL;
   e->compress_agg.shards.d_tail_carry = 0;
   e->compress_agg.shards.h_tail_bytes = NULL;
   e->compress_agg.shards.total_shards = 0;
   e->compress_agg.shards.tail_carry_bytes = 0;
+  e->compress_agg.shards.page_size = 0;
+  memset(e->compress_agg.shards.shards_begin,
+         0,
+         sizeof(e->compress_agg.shards.shards_begin));
+  memset(e->compress_agg.shards.n_shards,
+         0,
+         sizeof(e->compress_agg.shards.n_shards));
+  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
+    memset(&e->compress_agg.per_lod_agg_layouts[lv],
+           0,
+           sizeof(e->compress_agg.per_lod_agg_layouts[lv]));
+  }
+  e->compress_agg.nlod = 0;
 
   // Save per-array LOD state. counts[] tracks running append-accumulator
   // state across epochs; element_capacity is the fixed accumulator buffer
@@ -350,18 +363,14 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   if (desc->u_total_shards > 0) {
     desc->u_h_shard_capacity =
       (size_t*)malloc(desc->u_total_shards * sizeof(size_t));
-    desc->u_h_shard_lod =
-      (uint8_t*)malloc(desc->u_total_shards * sizeof(uint8_t));
     desc->u_h_tail_bytes =
       (size_t*)calloc(desc->u_total_shards, sizeof(size_t));
-    if (!desc->u_h_shard_capacity || !desc->u_h_shard_lod ||
-        !desc->u_h_tail_bytes)
+    if (!desc->u_h_shard_capacity || !desc->u_h_tail_bytes)
       return 1;
     for (uint64_t i = 0; i < desc->u_total_shards; ++i) {
       for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
         if (i >= desc->u_shards_begin[lv] &&
             i < desc->u_shards_begin[lv] + desc->u_n_shards[lv]) {
-          desc->u_h_shard_lod[i] = (uint8_t)lv;
           desc->u_h_shard_capacity[i] =
             desc->cl.per_level[lv].agg_layout.shard_capacity;
           break;
@@ -440,7 +449,6 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
     aggregate_layout_destroy(&desc->agg_layout[lv]);
   }
   free(desc->u_h_shard_capacity);
-  free(desc->u_h_shard_lod);
   free(desc->u_h_tail_bytes);
   cu_mem_free((CUdeviceptr)desc->u_d_tail_bytes);
   cu_mem_free(desc->u_d_tail_carry);
@@ -539,12 +547,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
           e->compress_agg.h_lut_gather_scratch &&
             e->compress_agg.h_lut_perm_scratch);
   }
-  CU(Fail,
-     cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_lod_last_idx,
-                LOD_MAX_LEVELS * sizeof(uint64_t)));
-  e->compress_agg.h_lod_last_idx_scratch =
-    (uint64_t*)malloc(LOD_MAX_LEVELS * sizeof(uint64_t));
-  CHECK(Fail, e->compress_agg.h_lod_last_idx_scratch);
   // Engine-shared per-shard scratch + device buffers, sized to max shards.
   if (mx->u_max_total_shards > 0) {
     e->compress_agg.shards.h_base_offsets =
@@ -572,10 +574,17 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   }
   // Override the shared scratch sized at engine-init: the unified kick
   // needs LOD_MAX_LEVELS * max_K entries to carve per-LOD pool_epochs slices.
+  // Allocate the cache to the same shape so the LUT-steady check can compare
+  // each LOD's slice at a stable stride.
   free(e->compress_agg.pool_epochs_scratch);
+  e->compress_agg.pool_epochs_stride = mx->epochs_per_batch;
   e->compress_agg.pool_epochs_scratch = (uint32_t*)malloc(
     (size_t)LOD_MAX_LEVELS * mx->epochs_per_batch * sizeof(uint32_t));
-  CHECK(Fail, e->compress_agg.pool_epochs_scratch);
+  e->compress_agg.cached_pool_epochs = (uint32_t*)malloc(
+    (size_t)LOD_MAX_LEVELS * mx->epochs_per_batch * sizeof(uint32_t));
+  CHECK(Fail,
+        e->compress_agg.pool_epochs_scratch &&
+          e->compress_agg.cached_pool_epochs);
 
   CU(Fail, cuEventRecord(e->pools.ready[0], e->streams.compute));
   CU(Fail, cuEventRecord(e->pools.ready[1], e->streams.compute));
@@ -786,7 +795,9 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   codec_free(&e->compress_agg.codec);
   free(e->compress_agg.pool_epochs_scratch);
+  free(e->compress_agg.cached_pool_epochs);
   e->compress_agg.pool_epochs_scratch = NULL;
+  e->compress_agg.cached_pool_epochs = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(e->compress_agg.d_compressed[fc]);
     cu_event_destroy(e->compress_agg.t_compress_start[fc]);
@@ -799,10 +810,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     aggregate_slot_destroy(&e->compress_agg.agg[fc]);
   cu_mem_free(e->compress_agg.d_batch_gather);
   cu_mem_free(e->compress_agg.d_batch_perm);
-  cu_mem_free((CUdeviceptr)e->compress_agg.d_lod_last_idx);
   free(e->compress_agg.h_lut_gather_scratch);
   free(e->compress_agg.h_lut_perm_scratch);
-  free(e->compress_agg.h_lod_last_idx_scratch);
   free(e->compress_agg.shards.h_base_offsets);
   free(e->compress_agg.shards.h_tps_group);
   free(e->compress_agg.shards.h_offsets_base);

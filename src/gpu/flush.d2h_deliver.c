@@ -21,10 +21,8 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->offsets_ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
-    CU(Fail, cuEventRecord(stage->offsets_ready[fc], compute));
     CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
@@ -42,7 +40,6 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     return;
   for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
-    cu_event_destroy(stage->offsets_ready[fc]);
     cu_event_destroy(stage->ready[fc]);
   }
 }
@@ -232,6 +229,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // segment-shifted `result.data` with segment-relative offsets, so we
     // subtract seg->data_segment_offset from each LOD's offsets here. This
     // matches src/cpu/aggregate.c:330-338 which builds the same view shape.
+    // The rebase mutates h_offsets in place; this is safe because the next
+    // kick's D2H repopulates the buffer before anything reads stale values.
     for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
       // LOD 0's segment offset is always 0; skip the no-op subtraction.
       if (lv == 0 || handoff->per_lod_n_active[lv] == 0)
@@ -383,7 +382,6 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                          n * sizeof(size_t),
                          d2h_stream));
   }
-  CU(Error, cuEventRecord(stage->offsets_ready[fc], d2h_stream));
 
   // One D2H for the unified aggregated data buffer. Sized to
   // total_data_bytes (max across all LODs' page-aligned segments).

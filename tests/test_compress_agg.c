@@ -716,6 +716,111 @@ Fail:
   return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Test 7: LUT cache must invalidate when pool_epoch positions shift even
+// though per-LOD active counts stay the same.
+//
+// This pins the regression for the "counts match but positions differ" case
+// (e.g. masks [1,0] then [0,1] both with n_active=1): the unified gather LUT
+// encodes the actual pool_epoch values, so a cache hit keyed only on counts
+// would replay the prior kick's gather indices and produce the prior kick's
+// data. Without the fix, kick 2 below would gather epoch 0 data while
+// reporting it as epoch 1 — the byte-exact check below catches that.
+// ---------------------------------------------------------------------------
+static int
+test_compress_agg_lut_cache_position_shift(void)
+{
+  log_info("=== test_compress_agg_lut_cache_position_shift ===");
+
+  struct ca_test_ctx c;
+  ca_ctx_init(&c);
+  void* h_agg = NULL;
+  int ok = 0;
+
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 2, 2) == 0);
+  CHECK(Fail, c.cl.epochs_per_batch == 2);
+
+  // Fill epoch 0 with one signature, epoch 1 with another.
+  CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
+  CHECK(Fail, ca_ctx_fill_epoch(&c, 1, fill_epoch1) == 0);
+
+  // Kick 1: only epoch 0 active (mask [1, 0]).
+  // n_active=1, pool_epochs=[0]. Populates the LUT cache.
+  c.batch_active_masks[0] = 0x1;
+  c.batch_active_masks[1] = 0x0;
+  {
+    struct compress_agg_input in = {
+      .fc = 0,
+      .n_epochs = 2,
+      .active_levels_mask = 0x1,
+      .batch_active_masks = c.batch_active_masks,
+      .pool_buf = c.d_pool,
+      .pool_ready = c.pool_ready,
+      .lod_done = 0,
+      .epochs_per_batch = c.cl.epochs_per_batch,
+    };
+    struct flush_handoff handoff;
+    memset(&handoff, 0, sizeof(handoff));
+    CHECK(Fail,
+          compress_agg_kick(&c.stage,
+                            &in,
+                            &c.cl.levels,
+                            &c.batch,
+                            &c.cl.dims,
+                            c.compute,
+                            &handoff) == 0);
+    CU(Fail, cuStreamSynchronize(c.compute));
+  }
+
+  // Kick 2: only epoch 1 active (mask [0, 1]).
+  // Same n_active=1 as kick 1, but pool_epochs=[1] — a steady-state cache
+  // keyed on counts alone would mis-hit and gather from epoch 0 instead.
+  uint64_t lut_recompute_before = c.stage.lut_recompute_count;
+  c.batch_active_masks[0] = 0x0;
+  c.batch_active_masks[1] = 0x1;
+  struct flush_handoff handoff2;
+  memset(&handoff2, 0, sizeof(handoff2));
+  {
+    struct compress_agg_input in = {
+      .fc = 1,
+      .n_epochs = 2,
+      .active_levels_mask = 0x1,
+      .batch_active_masks = c.batch_active_masks,
+      .pool_buf = c.d_pool,
+      .pool_ready = c.pool_ready,
+      .lod_done = 0,
+      .epochs_per_batch = c.cl.epochs_per_batch,
+    };
+    CHECK(Fail,
+          compress_agg_kick(&c.stage,
+                            &in,
+                            &c.cl.levels,
+                            &c.batch,
+                            &c.cl.dims,
+                            c.compute,
+                            &handoff2) == 0);
+    CU(Fail, cuStreamSynchronize(c.compute));
+  }
+
+  // The cache must have missed (recompute count incremented) because the
+  // pool_epoch values changed even though n_active didn't.
+  CHECK(Fail, c.stage.lut_recompute_count > lut_recompute_before);
+
+  // The aggregated data must reflect epoch 1, not epoch 0.
+  uint64_t C = handoff2.per_lod_agg_layouts[0].covering_count;
+  CHECK(Fail, ca_ctx_fetch_agg(&handoff2, C, &h_agg) == 0);
+  CHECK(Fail, verify_tiles_none(&handoff2, &c, h_agg, fill_epoch1) == 0);
+
+  ok = 1;
+
+Fail:
+  free(h_agg);
+  ca_ctx_destroy(&c);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS({ "compress_agg_single_epoch", test_compress_agg_single_epoch },
               { "compress_agg_batch", test_compress_agg_batch },
               { "compress_agg_partial_batch", test_compress_agg_partial_batch },
@@ -723,4 +828,6 @@ RUN_GPU_TESTS({ "compress_agg_single_epoch", test_compress_agg_single_epoch },
                 test_compress_agg_zstd_single_epoch },
               { "compress_agg_zstd_batch", test_compress_agg_zstd_batch },
               { "compress_agg_none_no_compressed_buffer",
-                test_compress_agg_none_no_compressed_buffer }, )
+                test_compress_agg_none_no_compressed_buffer },
+              { "compress_agg_lut_cache_position_shift",
+                test_compress_agg_lut_cache_position_shift }, )
