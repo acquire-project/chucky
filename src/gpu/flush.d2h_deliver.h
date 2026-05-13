@@ -4,11 +4,8 @@
 #include "stream/dim_info.h"
 
 // Initialize the D2H+deliver stage. Returns 0 on success.
-// `levels` is borrowed from compress_agg_stage — must outlive this stage.
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
-                 struct level_flush_state* levels,
-                 int nlod,
                  size_t shard_alignment,
                  CUstream compute);
 

@@ -13,22 +13,16 @@
 
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
-                 struct level_flush_state* levels,
-                 int nlod,
                  size_t shard_alignment,
                  CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
-  stage->levels = levels;
-  stage->nlod = nlod;
   stage->shard_alignment = shard_alignment;
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->offsets_ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
-    CU(Fail, cuEventRecord(stage->offsets_ready[fc], compute));
     CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
@@ -46,153 +40,43 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     return;
   for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
-    cu_event_destroy(stage->offsets_ready[fc]);
     cu_event_destroy(stage->ready[fc]);
   }
-  // levels is borrowed, not destroyed here
 }
 
 // --- Internal helpers ---
 
-// Wait for pending IO fences on aggregate slots before reuse.
-// Accumulates wall time into stage->metrics->io_fence_stall (if non-NULL).
+// Wait for any pending IO fence on the unified slot (across all LODs that
+// share it). Accumulates wall time into stage->metrics->io_fence_stall.
 static void
-wait_io_fences(const struct d2h_deliver_stage* stage,
-               int fc,
-               uint32_t level_mask,
-               struct shard_sink* sink)
+wait_io_fences(struct aggregate_slot* slot,
+               struct shard_sink* sink,
+               struct stream_metrics* metrics)
 {
   if (!sink->wait_fence)
     return;
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
-  for (int lv = 0; lv < stage->nlod; ++lv) {
-    if (!(level_mask & (1u << lv)))
-      continue;
-    struct aggregate_slot* agg = &stage->levels[lv].agg[fc];
-    if (agg->io_done.seq > 0)
-      sink->wait_fence(sink, agg->io_done);
-  }
-  if (stage->metrics) {
+  if (slot->io_done.seq > 0)
+    sink->wait_fence(sink, slot->io_done);
+  if (metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(&stage->metrics->io_fence_stall, ms, 0, 0);
+    accumulate_metric_ms(&metrics->io_fence_stall, ms, 0, 0);
   }
-}
-
-// Phase 1: D2H offsets only (non-blocking — no host sync).
-// Records offsets_ready[fc] when offsets are on the host.
-static int
-kick_offset_d2h(struct d2h_deliver_stage* stage,
-                const struct flush_handoff* handoff,
-                const struct level_geometry* levels,
-                const struct batch_state* batch,
-                const struct dim_info* dims,
-                CUstream d2h_stream)
-{
-  const int fc = handoff->fc;
-  const uint32_t level_mask = handoff->active_levels_mask;
-  (void)batch;
-  (void)dims;
-
-  for (int lv = 0; lv < levels->nlod; ++lv) {
-    if (!(level_mask & (1u << lv)))
-      continue;
-
-    struct level_flush_state* lvl = &stage->levels[lv];
-
-    uint32_t active_count = handoff->active_counts[lv];
-    if (active_count == 0)
-      continue;
-
-    struct aggregate_slot* agg = &lvl->agg[fc];
-    uint64_t covering = (uint64_t)active_count * lvl->agg_layout.covering_count;
-
-    CU(Error,
-       cuMemcpyDtoHAsync(agg->h_offsets,
-                         (CUdeviceptr)agg->d_offsets,
-                         (covering + 1) * sizeof(size_t),
-                         d2h_stream));
-    // Permuted per-chunk sizes are needed alongside offsets for delivery
-    // sizing and next-kick tail bookkeeping. Queue here so it lands together
-    // with offsets on the same d2h stream (was inline on the aggregate
-    // stream — that path is dead now).
-    CU(Error,
-       cuMemcpyDtoHAsync(agg->h_permuted_sizes,
-                         (CUdeviceptr)agg->d_permuted_sizes,
-                         covering * sizeof(size_t),
-                         d2h_stream));
-  }
-  CU(Error, cuEventRecord(stage->offsets_ready[fc], d2h_stream));
-
-  return 0;
-
-Error:
-  return 1;
-}
-
-// Phase 2: queue bulk D2H for each active level using the worst-case
-// (cap) size. Skips the offset sync so the host doesn't block waiting for
-// compress+aggregate to finish. For codec=none cap == actual. For
-// compressed codecs this wastes PCIe bandwidth up to (cap-actual) bytes
-// per level per batch, traded for keeping the main thread unblocked.
-// Delivery still uses the true bytes (from h_offsets, which lands via the
-// parallel offset D2H) to split the buffer into per-shard writes.
-static int
-queue_bulk_d2h(struct d2h_deliver_stage* stage,
-               const struct flush_handoff* handoff,
-               const struct level_geometry* levels,
-               const struct batch_state* batch,
-               const struct dim_info* dims,
-               CUstream d2h_stream)
-{
-  const int fc = handoff->fc;
-  const uint32_t level_mask = handoff->active_levels_mask;
-  (void)batch;
-  (void)dims;
-
-  for (int lv = 0; lv < levels->nlod; ++lv) {
-    if (!(level_mask & (1u << lv)))
-      continue;
-
-    struct level_flush_state* lvl = &stage->levels[lv];
-
-    uint32_t active_count = handoff->active_counts[lv];
-    if (active_count == 0)
-      continue;
-
-    struct aggregate_slot* agg = &lvl->agg[fc];
-
-    // Worst-case bytes across the aggregate buffer for this level/batch.
-    // Sized for shard-capacity reservations (one region per shard).
-    size_t cap = agg_pool_bytes_layout(&lvl->agg_layout);
-
-    CU(Error,
-       cuMemcpyDtoHAsync(
-         agg->h_aggregated, (CUdeviceptr)agg->d_aggregated, cap, d2h_stream));
-    CU(Error, cuEventRecord(agg->ready, d2h_stream));
-  }
-
-  CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
-
-  return 0;
-
-Error:
-  return 1;
 }
 
 static void
-record_flush_metrics(const struct d2h_deliver_stage* stage,
-                     const struct flush_handoff* handoff,
+record_flush_metrics(const struct flush_handoff* handoff,
                      const struct level_geometry* levels,
-                     const struct batch_state* batch,
                      const struct dim_info* dims,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
                      const struct lod_state* lod,
                      const struct lod_shared_state* lod_shared,
-                     struct stream_metrics* metrics)
+                     struct stream_metrics* metrics,
+                     CUevent t_d2h_start,
+                     CUevent t_d2h_ready)
 {
-  (void)batch;
   const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
@@ -235,19 +119,14 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
     const size_t pool_bytes = (uint64_t)n_epochs * levels->total_chunks *
                               layout->chunk_stride * dtype_bpe(config->dtype);
 
-    // Compute actual aggregated bytes first (available after D2H sync).
+    // Aggregated bytes: sum of actual compressed chunk sizes across all LODs
+    // in this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with
+    // a 0 sentinel slot inserted per LOD); summing those gives the real D2H
+    // payload regardless of the absolute/segment-relative offset semantics.
     size_t agg_bytes = 0;
-    for (int lv = 0; lv < levels->nlod; ++lv) {
-      if (!(handoff->active_levels_mask & (1u << lv)))
-        continue;
-      struct level_flush_state* lvl = &stage->levels[lv];
-      uint32_t active_count = handoff->active_counts[lv];
-      if (active_count == 0)
-        continue;
-      uint64_t batch_covering =
-        (uint64_t)active_count * lvl->agg_layout.covering_count;
-      agg_bytes += lvl->agg[fc].h_offsets[batch_covering];
-    }
+    const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
+    for (size_t i = 0; i < n_perm; ++i)
+      agg_bytes += handoff->agg->h_permuted_sizes[i];
 
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
@@ -260,21 +139,37 @@ record_flush_metrics(const struct d2h_deliver_stage* stage,
                          agg_bytes,
                          agg_bytes);
     accumulate_metric_cu(&metrics->d2h,
-                         stage->t_d2h_start[fc],
-                         stage->ready[fc],
+                         t_d2h_start,
+                         t_d2h_ready,
                          agg_bytes,
                          agg_bytes);
   }
 }
 
-// Sync on ready[fc] (near-zero in steady state because kick queued the D2H
-// long ago), record metrics, deliver to sinks. No bulk D2H here — that was
-// queued in d2h_deliver_kick.
+// Build the per-LOD aggregate_result view into the unified host buffer for
+// delivery. The unified layout places each LOD's segment at
+// `data_segment_offset` within h_aggregated, and each LOD's
+// offsets/chunk_sizes start at `batch_covering_offset + lv`.
+static struct aggregate_result
+lod_view(const struct flush_handoff* handoff, uint8_t lv)
+{
+  const struct lod_segment* seg = &handoff->layout.lods[lv];
+  struct aggregate_slot* slot = handoff->agg;
+  struct aggregate_result ar = {
+    .data = (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
+    .offsets = slot->h_offsets + seg->batch_covering_offset + lv,
+    .chunk_sizes =
+      slot->h_permuted_sizes + seg->batch_covering_offset + lv,
+  };
+  return ar;
+}
+
+// Sync on ready[fc] (near-zero in steady state), record metrics, deliver
+// to sinks.
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
                  const struct level_geometry* levels,
-                 const struct batch_state* batch,
                  const struct dim_info* dims,
                  const struct tile_stream_layout* layout,
                  const struct tile_stream_configuration* config,
@@ -285,14 +180,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
 {
   const int fc = handoff->fc;
 
-  // Fail fast if async IO encountered an error.
   if (sink->has_error && sink->has_error(sink))
     goto Error;
 
   {
-    // Poll the D2H ready event with short sleeps instead of cuEventSynchronize.
-    // The driver wakes a blocked thread via OS scheduler; polling keeps the
-    // thread runnable and lets a follow-on thread-pool ingest pattern fit.
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
     for (;;) {
@@ -300,9 +191,6 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (r == CUDA_SUCCESS)
         break;
       if (r == CUDA_ERROR_DEINITIALIZED) {
-        // Context torn down (shutdown). Data is already on host for this
-        // poll site; treat as a clean exit. Logged so the swallow is
-        // observable if it ever happens outside teardown.
         log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)",
                   fc);
         break;
@@ -311,76 +199,100 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
         goto Error;
       }
-      platform_sleep_ns(50000); // 50 µs
+      platform_sleep_ns(50000);
     }
     float kick_ms = platform_toc(&kick_clk) * 1000.0f;
     accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
   }
-  record_flush_metrics(stage,
-                       handoff,
+
+  record_flush_metrics(handoff,
                        levels,
-                       batch,
                        dims,
                        layout,
                        config,
                        lod,
                        lod_shared,
-                       metrics);
+                       metrics,
+                       stage->t_d2h_start[fc],
+                       stage->ready[fc]);
 
   {
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
+    struct shard_tables* shards = handoff->shards;
+    const size_t page_size = shards ? shards->page_size : 0;
 
-    for (int lv = 0; lv < levels->nlod; ++lv) {
-      if (!(handoff->active_levels_mask & (1u << lv)))
+    // Rebase per-LOD offsets to be segment-relative. GPU produces absolute
+    // offsets (each chunk's position in the unified d_aggregated buffer); the
+    // shard_delivery contract — shared with the CPU path — pairs a
+    // segment-shifted `result.data` with segment-relative offsets, so we
+    // subtract seg->data_segment_offset from each LOD's offsets here. This
+    // matches src/cpu/aggregate.c:330-338 which builds the same view shape.
+    // The rebase mutates h_offsets in place; this is safe because the next
+    // kick's D2H repopulates the buffer before anything reads stale values.
+    for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+      // LOD 0's segment offset is always 0; skip the no-op subtraction.
+      if (lv == 0 || handoff->per_lod_n_active[lv] == 0)
+        continue;
+      const struct lod_segment* seg = &handoff->layout.lods[lv];
+      size_t* off = handoff->agg->h_offsets + seg->batch_covering_offset + lv;
+      const uint64_t n = (uint64_t)seg->n_active * seg->covering_count + 1;
+      for (uint64_t i = 0; i < n; ++i)
+        off[i] -= seg->data_segment_offset;
+    }
+
+    for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+      if (handoff->per_lod_n_active[lv] == 0)
         continue;
 
-      struct level_flush_state* lvl = &stage->levels[lv];
-      uint32_t active_count = handoff->active_counts[lv];
-      if (active_count == 0)
-        continue;
+      struct aggregate_result ar = lod_view(handoff, lv);
+      // Per-LOD slice of the unified host tail-bytes scratch.
+      size_t* h_tail_lv = NULL;
+      if (shards && shards->h_tail_bytes && page_size > 0)
+        h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
 
       size_t level_bytes = 0;
-      struct aggregate_result ar = {
-        .data = lvl->agg[fc].h_aggregated,
-        .offsets = lvl->agg[fc].h_offsets,
-        .chunk_sizes = lvl->agg[fc].h_permuted_sizes,
-      };
       if (deliver_to_shards_batch((uint8_t)lv,
-                                  &lvl->shard,
+                                  handoff->shards_by_lod[lv],
                                   &ar,
-                                  &lvl->agg_layout,
-                                  lvl->h_tail_bytes,
-                                  active_count,
+                                  &handoff->per_lod_agg_layouts[lv],
+                                  h_tail_lv,
+                                  handoff->per_lod_n_active[lv],
                                   sink,
                                   stage->shard_alignment,
                                   &level_bytes))
         goto Error;
       sink_bytes += level_bytes;
-
-      // Push host-computed post-delivery tail state to GPU. Host owns
-      // generation-boundary bookkeeping; GPU does not see it.
-      // Two bulk transfers (lengths + densely-packed tail bytes) regardless
-      // of shard count.
-      if (lvl->d_tail_bytes && lvl->h_tail_bytes &&
-          lvl->agg_layout.page_size > 0) {
-        const uint64_t num_shards = lvl->agg_layout.num_shards;
-        CU(Error,
-           cuMemcpyHtoD((CUdeviceptr)lvl->d_tail_bytes,
-                        lvl->h_tail_bytes,
-                        num_shards * sizeof(size_t)));
-        if (lvl->shard.tail_buf_pool && lvl->shard.tail_buf_pool_bytes > 0) {
-          CU(Error,
-             cuMemcpyHtoD(lvl->d_tail_carry,
-                          lvl->shard.tail_buf_pool,
-                          lvl->shard.tail_buf_pool_bytes));
-        }
-      }
-
-      if (sink->record_fence)
-        lvl->agg[fc].io_done = sink->record_fence(sink);
     }
+
+    // Push the post-delivery tail state back to GPU in two bulk HtoDs that
+    // cover all shards across all LODs at once. Replaces the per-LOD
+    // tail-state uploads from the legacy pipeline.
+    if (shards && shards->total_shards > 0 && page_size > 0) {
+      CU(Error,
+         cuMemcpyHtoD((CUdeviceptr)shards->d_tail_bytes,
+                      shards->h_tail_bytes,
+                      shards->total_shards * sizeof(size_t)));
+      // Concatenate per-shard tail_buf slices into a single contiguous block
+      // matching d_tail_carry's [total_shards * page_size] layout. We use
+      // a simple loop instead of separate per-LOD HtoDs.
+      for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+        struct shard_state* ss = handoff->shards_by_lod[lv];
+        if (!ss || !ss->tail_buf_pool || ss->tail_buf_pool_bytes == 0)
+          continue;
+        const uint64_t begin = shards->shards_begin[lv];
+        CUdeviceptr dst =
+          shards->d_tail_carry + (CUdeviceptr)(begin * page_size);
+        CU(Error,
+           cuMemcpyHtoD(dst, ss->tail_buf_pool, ss->tail_buf_pool_bytes));
+      }
+    }
+
+    // Record an aggregate IO fence on the unified slot. wait_io_fences()
+    // checks slot->io_done at the next kick.
+    if (sink->record_fence)
+      handoff->agg->io_done = sink->record_fence(sink);
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
@@ -394,12 +306,13 @@ Error:
 
 // Periodic metadata update (append-dim extents per level).
 static int
-maybe_update_metadata(const struct d2h_deliver_stage* stage,
+maybe_update_metadata(const struct flush_handoff* handoff,
                       const struct dim_info* dims_info,
                       const struct tile_stream_configuration* config,
                       struct shard_sink* sink,
                       struct platform_clock* metadata_update_clock)
 {
+  (void)config;
   if (!sink->update_append)
     return 0;
 
@@ -410,8 +323,10 @@ maybe_update_metadata(const struct d2h_deliver_stage* stage,
 
   *metadata_update_clock = peek;
   const uint8_t na = dim_info_n_append(dims_info);
-  for (int lv = 0; lv < stage->nlod; ++lv) {
-    struct shard_state* ss = &stage->levels[lv].shard;
+  for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+    struct shard_state* ss = handoff->shards_by_lod[lv];
+    if (!ss)
+      continue;
     uint64_t flat_append_chunks =
       ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
     uint64_t append_sizes[HALF_MAX_RANK];
@@ -434,24 +349,53 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  struct shard_sink* sink,
                  CUstream d2h_stream)
 {
+  (void)levels;
+  (void)batch;
+  (void)dims;
   const int fc = handoff->fc;
+  struct aggregate_slot* slot = handoff->agg;
+  const struct batch_aggregate_layout* layout = &handoff->layout;
 
-  // Wait on prior sink IO for this fc so we don't overwrite h_aggregated
-  // while the sink is still reading it. Host-blocking if sink is behind;
-  // no-op for async/discard sinks whose fence is already retired.
-  wait_io_fences(stage, fc, handoff->active_levels_mask, sink);
+  // Block on the prior IO retiring this slot (single fence across all LODs).
+  wait_io_fences(slot, sink, stage->metrics);
 
+  // d2h stream waits for aggregate to finish writing the unified buffer.
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
-  // Phase 1: queue offset D2H on d2h stream.
-  CHECK(Error,
-        kick_offset_d2h(stage, handoff, levels, batch, dims, d2h_stream) == 0);
+  // One D2H for the unified offsets array (covers all LOD ranges). The
+  // unified prefix-sum produces total_batch_covering + nlod offsets — each
+  // LOD's tail sentinel sits at position
+  // (batch_covering_offset + n_active*covering + lv), all within the scan's
+  // output range.
+  if (layout->total_batch_covering > 0) {
+    const size_t n =
+      layout->total_batch_covering + (size_t)handoff->nlod;
+    CU(Error,
+       cuMemcpyDtoHAsync(slot->h_offsets,
+                         (CUdeviceptr)slot->d_offsets,
+                         n * sizeof(size_t),
+                         d2h_stream));
+    CU(Error,
+       cuMemcpyDtoHAsync(slot->h_permuted_sizes,
+                         (CUdeviceptr)slot->d_permuted_sizes,
+                         n * sizeof(size_t),
+                         d2h_stream));
+  }
 
-  // Phase 2: sync on offsets (tiny) and queue bulk D2H on the same stream.
-  // ready[fc] is recorded after bulk completes.
-  CHECK(Error,
-        queue_bulk_d2h(stage, handoff, levels, batch, dims, d2h_stream) == 0);
+  // One D2H for the unified aggregated data buffer. Sized to
+  // total_data_bytes (max across all LODs' page-aligned segments).
+  if (layout->total_data_bytes > 0) {
+    CU(Error,
+       cuMemcpyDtoHAsync(slot->h_aggregated,
+                         (CUdeviceptr)slot->d_aggregated,
+                         layout->total_data_bytes,
+                         d2h_stream));
+  }
+  CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+  // Also signal the slot's own ready event so the next compress that reuses
+  // this slot waits on it.
+  CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
   return 0;
 
@@ -473,10 +417,10 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   struct stream_metrics* metrics,
                   struct platform_clock* metadata_update_clock)
 {
+  (void)batch;
   struct writer_result r = sync_and_deliver(stage,
                                             handoff,
                                             levels,
-                                            batch,
                                             dims,
                                             layout,
                                             config,
@@ -485,7 +429,7 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                                             lod_shared,
                                             metrics);
   if (!r.error) {
-    if (maybe_update_metadata(stage, dims, config, sink, metadata_update_clock))
+    if (maybe_update_metadata(handoff, dims, config, sink, metadata_update_clock))
       return writer_error();
   }
   return r;

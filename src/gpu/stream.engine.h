@@ -46,40 +46,6 @@ struct flush_slot_gpu
   int batch_epoch_count;        // number of epochs accumulated in this batch
 };
 
-struct level_flush_state
-{
-  struct aggregate_layout agg_layout;
-  struct aggregate_slot agg[2]; // double-buffered, indexed by flush_current
-  struct shard_state shard;
-  CUdeviceptr
-    d_batch_gather; // [K_l * M_l] uint32: batch-chunk -> compressed idx
-  CUdeviceptr
-    d_batch_perm; // [K_l * M_l] uint32: batch-chunk -> shard-ordered pos
-  uint32_t batch_active_count; // K_l = K / 2^l for this level
-  // Steady-state pool-epoch pattern: the pool positions assumed when the
-  // init-time LUTs were computed. compress_agg_kick reuses the cached LUTs
-  // when the runtime pool_epochs match this pattern (the common case for
-  // single-array streams and multiscale steady state).
-  uint32_t* steady_pool_epochs; // [batch_active_count] host-side
-  // Hit counters for the LUT fast path. Reported at compress_agg_destroy
-  // so workloads can be evaluated for whether the optimization pays off
-  // (single-array steady ≈ all steady; multiscale partial-batch ≈ recompute).
-  uint64_t lut_steady_count;
-  uint64_t lut_recompute_count;
-  // Cross-batch tail carry-over (per-LOD persistent state, GPU-resident).
-  // d_tail_bytes [num_shards] is the per-shard ragged-tail length; read by
-  // compute_bias_k / copy_leading_tail_k at the start of each batch and
-  // uploaded by the host (from h_tail_bytes) at the end of every batch's
-  // delivery. d_tail_carry [num_shards * page_size] holds the actual tail
-  // bytes, also uploaded by the host. The host owns the per-generation
-  // bookkeeping (in deliver_to_shards_batch); the GPU has no view of where
-  // shard generations begin and end within a batch and so cannot compute
-  // the tail itself.
-  CUdeviceptr d_tail_carry;
-  size_t* d_tail_bytes;
-  size_t* h_tail_bytes;
-};
-
 // Per-frame-counter timing events (double-buffered).
 struct lod_timing
 {
@@ -168,6 +134,42 @@ struct compress_agg_input
   uint32_t epochs_per_batch;
 };
 
+// Per-shard layout tables, sized to total_shards = sum(num_shards_lv) across
+// all LODs. These collapse what was N per-LOD shard-bias/leading-tail launches
+// into a single launch over the flat shard list. d_base_offsets / d_tps_group
+// / d_offsets_base are rebuilt and re-uploaded every kick (depends on
+// per_lod_n_active); d_shard_capacity is constant per array and uploaded once
+// at init (or on multiarray bind).
+struct shard_tables
+{
+  uint64_t total_shards;
+  // Per-shard parameters used by add_shard_bias_unified_k and
+  // copy_leading_tail_unified_k. Host shadows are owned; device buffers are
+  // allocated at init sized to the max across arrays.
+  size_t* h_base_offsets;      // base byte offset in d_aggregated
+  size_t* h_shard_capacity;    // per shard
+  uint64_t* h_tps_group;       // chunks-per-shard within a batch
+  uint64_t* h_offsets_base;    // base index in d_offsets / d_permuted_sizes
+
+  size_t* d_base_offsets;
+  size_t* d_shard_capacity;
+  uint64_t* d_tps_group;
+  uint64_t* d_offsets_base;
+
+  // Persistent across-batch tail state, unified across all shards. Sized to
+  // total_shards / total_shards * page_size. d_* uploaded by host after each
+  // batch's delivery; replaces the per-LOD d_tail_bytes / d_tail_carry pair.
+  size_t page_size; // uniform: sink-required alignment, or 0 for legacy
+  size_t* h_tail_bytes;
+  size_t* d_tail_bytes;
+  CUdeviceptr d_tail_carry;
+  size_t tail_carry_bytes; // == total_shards * page_size
+
+  // Per-LOD slice info, needed by delivery to view the unified slot buffers.
+  uint32_t shards_begin[LOD_MAX_LEVELS]; // first global shard index for LOD lv
+  uint32_t n_shards[LOD_MAX_LEVELS];     // num_shards_lv
+};
+
 struct compress_agg_stage
 {
   struct codec codec;
@@ -176,20 +178,59 @@ struct compress_agg_stage
   CUevent t_compress_end[2];
   CUevent t_aggregate_end[2];
 
-  uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
+  uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
-  struct level_flush_state levels[LOD_MAX_LEVELS];
+  // Unified aggregate slot (per-fc), sized to max_batch_layout maxima. Holds:
+  //   d_aggregated:     max_batch_layout.total_data_bytes
+  //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
+  //   plus pinned host shadows of matching size.
+  struct aggregate_slot agg[2];
+  size_t max_total_batch_chunks;
+  size_t max_total_batch_covering;
+  size_t max_total_data_bytes;
+
+  // Unified LUTs. Sized to max_total_batch_chunks. Uploaded per kick when the
+  // firing pattern shifts; cached in steady state by comparing both the
+  // per-LOD active counts AND each LOD's pool_epoch values, since the gather
+  // LUT encodes the actual pool_epoch values (mid-stream phase shifts can
+  // leave the counts unchanged while the epoch positions move).
+  CUdeviceptr d_batch_gather;
+  CUdeviceptr d_batch_perm;
+  uint32_t* h_lut_gather_scratch; // for building unified LUT host-side
+  uint32_t* h_lut_perm_scratch;
+  uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded counts
+  uint32_t* cached_pool_epochs;   // [LOD_MAX_LEVELS * pool_epochs_stride]
+  uint32_t pool_epochs_stride;    // max K used by scratch + cache
+  int lut_cache_valid;
+  uint64_t lut_steady_count;
+  uint64_t lut_recompute_count;
+
+  // Per-LOD aggregate layouts (immutable per array; switched on multiarray
+  // bind). One per LOD; carries shard_capacity, num_shards, cps_inner,
+  // page_size, etc. Read by host LUT builder and at delivery time.
+  struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
+  uint8_t nlod;
+
+  // Cached "max" batch layout — segment offsets / total sizes assuming the
+  // worst-case active_count_max per LOD. Buffers are sized from this.
+  struct batch_aggregate_layout max_batch_layout;
+
+  // Per-shard tables (replaces per-LOD d_tail_*, d_batch_gather/perm).
+  struct shard_tables shards;
+
+  // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
+  // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
+  // The shard_state itself stays per-LOD because deliver_to_shards_batch and
+  // finalize_shards iterate it; the per-shard tail/carry bytes consumed by
+  // the GPU kernels live in shard_tables instead.
+  struct shard_state shard[LOD_MAX_LEVELS];
 };
 
 struct d2h_deliver_stage
 {
   CUevent t_d2h_start[2];
-  CUevent
-    offsets_ready[2]; // phase 1 (offset D2H) completion; drain syncs on this
-  CUevent ready[2];   // phase 2 (bulk D2H) completion
+  CUevent ready[2]; // unified D2H completion (offsets+sizes+data)
 
-  struct level_flush_state* levels; // borrowed
-  int nlod;
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
