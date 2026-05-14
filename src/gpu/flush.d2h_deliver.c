@@ -124,17 +124,22 @@ record_flush_metrics(const struct flush_handoff* handoff,
                               layout->chunk_stride * dtype_bpe(config->dtype);
 
     // Aggregated bytes: sum of actual compressed chunk sizes across all LODs
-    // in this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with
-    // a 0 sentinel slot inserted per LOD); summing those gives the real D2H
-    // payload regardless of the absolute/segment-relative offset semantics.
-    // TODO(phase3): with batches_per_slot > 1, sum across all slot batches
-    // (slot->slot_batches[0..batches_per_slot-1]) instead of just the
-    // current handoff->layout. handoff carries the latest batch only.
-    assert(handoff->output->batches_per_slot <= 1);
+    // and all batches in the slot. h_permuted_sizes carries pre-bias per-chunk
+    // sizes (with a 0 sentinel slot inserted per LOD); summing those gives the
+    // real D2H payload regardless of the absolute/segment-relative offset
+    // semantics. At B=1 batches_per_slot==1 so this iterates exactly one batch.
     size_t agg_bytes = 0;
-    const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
-    for (size_t i = 0; i < n_perm; ++i)
-      agg_bytes += handoff->output->h_permuted_sizes[i];
+    const struct aggregate_slot* slot = handoff->output;
+    for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+      const struct batch_slice_entry* be = &slot->slot_batches[b];
+      uint64_t batch_total_covering = 0;
+      for (uint8_t lv = 0; lv < be->nlod; ++lv)
+        batch_total_covering += (uint64_t)be->per_lod_lods[lv].n_active *
+                                be->per_lod_lods[lv].covering_count;
+      const size_t n_perm = batch_total_covering + be->nlod;
+      for (size_t i = 0; i < n_perm; ++i)
+        agg_bytes += slot->h_permuted_sizes[be->desc_base_offset + i];
+    }
 
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
