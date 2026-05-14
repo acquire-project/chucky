@@ -584,12 +584,18 @@ aggregate_batch_unified_async(const void* d_compressed,
   const uint64_t C = total_batch_covering;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
-  // Biased buffer views: kernels operate batch-locally; the slot bases
-  // hide cumulative cursor advancement across batches within a slot.
-  // Phase 2: bases are always 0 (one batch per slot).
+  // Biased descriptor views: each batch in a slot scans its own slice of
+  // d_offsets / d_permuted_sizes so prior-batch values don't clobber the
+  // prefix-scan output.
+  //
+  // d_aggregated is NOT biased: the bias kernel applies slot-relative dense
+  // offsets (computed by the host callback as slot_cursor + cum), so gather
+  // and copy_leading_tail write into d_aggregated at slot-relative positions
+  // directly. slot_data_base is consumed by the dense computation, not by a
+  // pointer bias.
+  (void)slot_data_base;
   size_t* d_perm_sizes_b = slot->d_permuted_sizes + slot_desc_base;
   size_t* d_offsets_b = slot->d_offsets + slot_desc_base;
-  void* d_aggregated_b = (void*)((uint8_t*)slot->d_aggregated + slot_data_base);
 
   // Zero permuted_sizes for this batch's slice (C + nlod entries).
   CU(Error,
@@ -684,7 +690,7 @@ aggregate_batch_unified_async(const void* d_compressed,
     {
       const int block = 256;
       copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        d_aggregated_b,
+        slot->d_aggregated,
         (const void*)d_tail_carry,
         d_tail_bytes,
         d_shard_base_offsets,
@@ -692,12 +698,13 @@ aggregate_batch_unified_async(const void* d_compressed,
     }
   }
 
-  // Pass 4: gather compressed tiles into this batch's slice.
+  // Pass 4: gather compressed tiles. d_offsets values are slot-relative
+  // post-bias, so d_aggregated must be unbiased.
   {
     const int block = 256;
     const int grid = (int)N;
     gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
-                                                    d_aggregated_b,
+                                                    slot->d_aggregated,
                                                     d_comp_sizes,
                                                     d_offsets_b,
                                                     d_batch_gather,
