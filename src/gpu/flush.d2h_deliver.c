@@ -127,6 +127,9 @@ record_flush_metrics(const struct flush_handoff* handoff,
     // in this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with
     // a 0 sentinel slot inserted per LOD); summing those gives the real D2H
     // payload regardless of the absolute/segment-relative offset semantics.
+    // TODO(phase3): with batches_per_slot > 1, sum across all slot batches
+    // (slot->slot_batches[0..batches_per_slot-1]) instead of just the
+    // current handoff->layout. handoff carries the latest batch only.
     size_t agg_bytes = 0;
     const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
     for (size_t i = 0; i < n_perm; ++i)
@@ -147,19 +150,33 @@ record_flush_metrics(const struct flush_handoff* handoff,
   }
 }
 
-// Build the per-LOD aggregate_result view into the unified host buffer for
-// delivery. The unified layout places each LOD's segment at
-// `data_segment_offset` within h_aggregated, and each LOD's
-// offsets/chunk_sizes start at `batch_covering_offset + lv`.
-static struct aggregate_result
-lod_view(const struct flush_handoff* handoff, uint8_t lv)
+// Slot-relative byte offset for batch be's LOD lv segment.
+static size_t
+slot_data_offset(const struct batch_slice_entry* be, uint8_t lv)
 {
-  const struct lod_segment* seg = &handoff->layout.lods[lv];
-  struct aggregate_slot* slot = handoff->agg;
+  return be->data_base_offset + be->per_lod_lods[lv].data_segment_offset;
+}
+
+// Slot-relative descriptor entry index for batch be's LOD lv chunks.
+static uint64_t
+slot_desc_offset(const struct batch_slice_entry* be, uint8_t lv)
+{
+  return be->desc_base_offset + be->per_lod_lods[lv].batch_covering_offset +
+         (uint64_t)lv;
+}
+
+// Per-batch / per-LOD aggregate_result view into the slot's host mirrors.
+static struct aggregate_result
+batch_lod_view(struct aggregate_slot* slot,
+               const struct batch_slice_entry* be,
+               uint8_t lv)
+{
+  const size_t off = slot_data_offset(be, lv);
+  const uint64_t desc = slot_desc_offset(be, lv);
   struct aggregate_result ar = {
-    .data = (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
-    .offsets = slot->h_offsets + seg->batch_covering_offset + lv,
-    .chunk_sizes = slot->h_permuted_sizes + seg->batch_covering_offset + lv,
+    .data = (uint8_t*)slot->h_aggregated + off,
+    .offsets = slot->h_offsets + desc,
+    .chunk_sizes = slot->h_permuted_sizes + desc,
   };
   return ar;
 }
@@ -185,22 +202,24 @@ poll_event(CUevent ev, int fc)
   }
 }
 
-// Per-LOD actual bytes in d_aggregated. End of last chunk (last shard's
-// last chunk in shard-permuted order) minus the LOD segment base. h_offsets
-// here must be the pre-rebase (absolute) values produced by the unified
-// scan + bias.
+// Per-batch / per-LOD actual bytes in d_aggregated. End of last chunk
+// (last shard's last chunk in shard-permuted order) minus the LOD segment
+// base within the slot. h_offsets here must be the pre-rebase (absolute)
+// values produced by the unified scan + bias.
 static size_t
-lod_actual_bytes(const struct flush_handoff* handoff, uint8_t lv)
+batch_lod_actual_bytes(const struct aggregate_slot* slot,
+                       const struct batch_slice_entry* be,
+                       uint8_t lv)
 {
-  const struct lod_segment* seg = &handoff->layout.lods[lv];
+  const struct lod_segment* seg = &be->per_lod_lods[lv];
   if (seg->n_active == 0)
     return 0;
-  const struct aggregate_slot* slot = handoff->agg;
   const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
-  const size_t last = seg->batch_covering_offset + (size_t)lv + total - 1;
+  const uint64_t last = slot_desc_offset(be, lv) + total - 1;
+  const size_t base = slot_data_offset(be, lv);
   const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
-  assert(slot->h_offsets[last] >= seg->data_segment_offset);
-  const size_t actual = end - seg->data_segment_offset;
+  assert(slot->h_offsets[last] >= base);
+  const size_t actual = end - base;
   assert(actual <= seg->data_segment_bytes);
   return actual;
 }
@@ -235,33 +254,43 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         goto Error;
     } else {
       // Compressed: wait for the chunk index on host, then dispatch the
-      // exact-size bulk D2H per LOD (carry-over) or once for the whole
-      // batch (contiguous).
+      // exact-size bulk D2H per batch×LOD (carry-over) or once across the
+      // slot's contiguous data (contiguous mode).
       if (poll_event(stage->h_chunk_index_ready[fc], fc))
         goto Error;
 
       if (alayout->page_size > 0) {
-        for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
-          if (handoff->per_lod_n_active[lv] == 0)
-            continue;
-          const struct lod_segment* seg = &alayout->lods[lv];
-          const size_t actual = lod_actual_bytes(handoff, lv);
-          if (actual == 0)
-            continue;
-          CU(Error,
-             cuMemcpyDtoHAsync(
-               (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
-               (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
-               actual,
-               d2h_stream));
+        for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+          const struct batch_slice_entry* be = &slot->slot_batches[b];
+          for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+            if (be->per_lod_lods[lv].n_active == 0)
+              continue;
+            const size_t off = slot_data_offset(be, lv);
+            const size_t actual = batch_lod_actual_bytes(slot, be, lv);
+            if (actual == 0)
+              continue;
+            CU(Error,
+               cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated + off,
+                                 (CUdeviceptr)slot->d_aggregated + off,
+                                 actual,
+                                 d2h_stream));
+          }
         }
-      } else if (alayout->total_batch_covering > 0) {
-        // Position n-1 is the last LOD's tail sentinel (size 0 there), so
-        // h_offsets[n-1] is the cumulative byte total. Adding
-        // h_permuted_sizes[n-1] is a no-op for the sentinel.
-        const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
+      } else if (slot->batches_per_slot > 0) {
+        // Cumulative-end index = last sentinel of the slot's last batch.
+        // Without bias (page_size==0), h_offsets there is the running sum
+        // of all chunk sizes across this batch's slice; with Phase 3
+        // macro-agg the desc_base_offset advances per batch.
+        const struct batch_slice_entry* last_be =
+          &slot->slot_batches[slot->batches_per_slot - 1];
+        uint64_t C_batch = 0;
+        for (uint8_t lv = 0; lv < last_be->nlod; ++lv)
+          C_batch += (uint64_t)last_be->per_lod_lods[lv].n_active *
+                     last_be->per_lod_lods[lv].covering_count;
+        const uint64_t last =
+          last_be->desc_base_offset + C_batch + (uint64_t)last_be->nlod - 1;
         const size_t total =
-          slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
+          slot->h_offsets[last] + slot->h_permuted_sizes[last];
         if (total > 0) {
           CU(Error,
              cuMemcpyDtoHAsync(slot->h_aggregated,
@@ -300,47 +329,53 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct shard_tables* shards = handoff->shards;
     const size_t page_size = shards ? shards->page_size : 0;
 
-    // Rebase per-LOD offsets to be segment-relative. GPU produces absolute
-    // offsets (each chunk's position in the unified d_aggregated buffer); the
-    // shard_delivery contract — shared with the CPU path — pairs a
-    // segment-shifted `result.data` with segment-relative offsets, so we
-    // subtract seg->data_segment_offset from each LOD's offsets here. This
-    // matches src/cpu/aggregate.c:330-338 which builds the same view shape.
-    // The rebase mutates h_offsets in place; this is safe because the next
-    // kick's D2H repopulates the buffer before anything reads stale values.
-    for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
-      // LOD 0's segment offset is always 0; skip the no-op subtraction.
-      if (lv == 0 || handoff->per_lod_n_active[lv] == 0)
-        continue;
-      const struct lod_segment* seg = &handoff->layout.lods[lv];
-      size_t* off = handoff->agg->h_offsets + seg->batch_covering_offset + lv;
-      const uint64_t n = (uint64_t)seg->n_active * seg->covering_count + 1;
-      for (uint64_t i = 0; i < n; ++i)
-        off[i] -= seg->data_segment_offset;
+    // Rebase per-batch / per-LOD offsets to be segment-relative. GPU
+    // produces absolute (slot-relative) offsets; the shard_delivery
+    // contract — shared with the CPU path — pairs a segment-shifted
+    // `result.data` with segment-relative offsets, so we subtract the
+    // slot-relative base from each batch × LOD's offsets. The rebase
+    // mutates h_offsets in place; safe because the next kick's D2H
+    // repopulates the buffer before anything reads stale values.
+    for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+      const struct batch_slice_entry* be = &slot->slot_batches[b];
+      for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+        const struct lod_segment* seg = &be->per_lod_lods[lv];
+        if (seg->n_active == 0)
+          continue;
+        const size_t base = slot_data_offset(be, lv);
+        if (base == 0)
+          continue;
+        size_t* off = slot->h_offsets + slot_desc_offset(be, lv);
+        const uint64_t n = (uint64_t)seg->n_active * seg->covering_count + 1;
+        for (uint64_t i = 0; i < n; ++i)
+          off[i] -= base;
+      }
     }
 
-    for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
-      if (handoff->per_lod_n_active[lv] == 0)
-        continue;
+    for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+      const struct batch_slice_entry* be = &slot->slot_batches[b];
+      for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+        if (be->per_lod_lods[lv].n_active == 0)
+          continue;
 
-      struct aggregate_result ar = lod_view(handoff, lv);
-      // Per-LOD slice of the unified host tail-bytes scratch.
-      size_t* h_tail_lv = NULL;
-      if (shards && shards->h_tail_bytes && page_size > 0)
-        h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
+        struct aggregate_result ar = batch_lod_view(slot, be, lv);
+        size_t* h_tail_lv = NULL;
+        if (shards && shards->h_tail_bytes && page_size > 0)
+          h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
 
-      size_t level_bytes = 0;
-      if (deliver_to_shards_batch((uint8_t)lv,
-                                  handoff->shards_by_lod[lv],
-                                  &ar,
-                                  &handoff->per_lod_agg_layouts[lv],
-                                  h_tail_lv,
-                                  handoff->per_lod_n_active[lv],
-                                  sink,
-                                  stage->shard_alignment,
-                                  &level_bytes))
-        goto Error;
-      sink_bytes += level_bytes;
+        size_t level_bytes = 0;
+        if (deliver_to_shards_batch((uint8_t)lv,
+                                    handoff->shards_by_lod[lv],
+                                    &ar,
+                                    &handoff->per_lod_agg_layouts[lv],
+                                    h_tail_lv,
+                                    be->per_lod_lods[lv].n_active,
+                                    sink,
+                                    stage->shard_alignment,
+                                    &level_bytes))
+          goto Error;
+        sink_bytes += level_bytes;
+      }
     }
 
     // Push the post-delivery tail state back to GPU in two bulk HtoDs that

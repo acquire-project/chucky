@@ -385,13 +385,12 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
                    desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
       return 1;
     if (desc->u_page_size > 0) {
-      desc->u_tail_carry_bytes =
-        desc->u_total_shards * desc->u_page_size;
+      desc->u_tail_carry_bytes = desc->u_total_shards * desc->u_page_size;
       if (cuMemAlloc(&desc->u_d_tail_carry, desc->u_tail_carry_bytes) !=
           CUDA_SUCCESS)
         return 1;
-      if (cuMemsetD8(
-            desc->u_d_tail_carry, 0, desc->u_tail_carry_bytes) != CUDA_SUCCESS)
+      if (cuMemsetD8(desc->u_d_tail_carry, 0, desc->u_tail_carry_bytes) !=
+          CUDA_SUCCESS)
         return 1;
     }
   }
@@ -415,9 +414,8 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   }
   mx->u_max_total_batch_chunks =
     max_u64(mx->u_max_total_batch_chunks, array_max_layout.total_batch_chunks);
-  mx->u_max_total_batch_covering =
-    max_u64(mx->u_max_total_batch_covering,
-            array_max_layout.total_batch_covering);
+  mx->u_max_total_batch_covering = max_u64(
+    mx->u_max_total_batch_covering, array_max_layout.total_batch_covering);
   mx->u_max_total_data_bytes =
     max_sz(mx->u_max_total_data_bytes, array_max_layout.total_data_bytes);
   mx->u_max_total_shards =
@@ -514,8 +512,7 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuEventCreate(&e->compress_agg.t_aggregate_end[fc], CU_EVENT_DEFAULT));
   }
 
-  CHECK(Fail,
-        d2h_deliver_init(&e->d2h_deliver, 0, e->streams.compute) == 0);
+  CHECK(Fail, d2h_deliver_init(&e->d2h_deliver, 0, e->streams.compute) == 0);
   e->d2h_deliver.metrics = &e->metrics;
 
   // Unified-pipeline shared resources. Sized to maxima across arrays.
@@ -523,15 +520,24 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   e->compress_agg.max_total_batch_covering = mx->u_max_total_batch_covering;
   e->compress_agg.max_total_data_bytes = mx->u_max_total_data_bytes;
   if (mx->u_max_total_batch_chunks > 0) {
-    const uint64_t C_max =
+    const uint64_t C_per_batch =
       mx->u_max_total_batch_covering + (uint64_t)ms->max_nlod;
+    // Conservative: multiarray binds across codecs, so size for the
+    // compressed-codec macro-agg case (W / MIN_COMPRESSED_CHUNK_BYTES).
+    const uint64_t by_min =
+      (uint64_t)(mx->u_max_total_data_bytes / MIN_COMPRESSED_CHUNK_BYTES) +
+      (uint64_t)ms->max_nlod;
+    const uint64_t slot_chunk_cap = by_min > C_per_batch ? by_min : C_per_batch;
+    const uint32_t batches_per_slot_cap = 1; // Phase 3 will raise this.
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&e->compress_agg.agg[fc],
                                       mx->u_max_total_batch_chunks,
-                                      C_max,
-                                      mx->u_max_total_data_bytes) == 0);
-      CU(Fail, cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
+                                      slot_chunk_cap,
+                                      mx->u_max_total_data_bytes,
+                                      batches_per_slot_cap) == 0);
+      CU(Fail,
+         cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
     }
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,

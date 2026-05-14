@@ -116,26 +116,30 @@ compress_agg_init(struct compress_agg_stage* stage,
     stage->max_total_data_bytes = stage->max_batch_layout.total_data_bytes;
   }
 
-  // Unified aggregate slot per fc. Sized for the max-batch case:
-  //   d_aggregated: max_total_data_bytes (page-aligned across LOD segments)
-  //   d_offsets/d_permuted_sizes/h_*: max_total_batch_covering + nlod
-  //     entries each (one sentinel slot per LOD for the +lv shift in
-  //     aggregate_batch_luts_unified). The CUB exclusive scan fills all
-  //     sentinel positions, so no per-LOD write_total fixup is needed.
+  // Unified aggregate slot per fc. Descriptor arrays (d_offsets,
+  // d_permuted_sizes, host mirrors) are sized to slot_chunk_cap so Phase 3
+  // can pack multiple compressed batches' descriptors into one slot
+  // without reallocation. For pass-through codecs we never macro-agg, so
+  // the cap stays at one batch's worth of entries.
   if (stage->max_total_batch_chunks > 0) {
-    // aggregate_batch_slot_init allocates (C+1) entries for d_offsets /
-    // d_permuted_sizes / h_offsets and C entries for h_permuted_sizes. We
-    // want all to fit total_batch_covering + nlod entries, so pass
-    // C = max_total_batch_covering + nlod (h_permuted_sizes ends up exactly
-    // matching the scan output length).
-    const uint64_t C_max =
+    const uint64_t C_per_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
+    uint64_t slot_chunk_cap = C_per_batch;
+    if (stage->codec.type != CODEC_NONE) {
+      const size_t W = stage->max_total_data_bytes;
+      const uint64_t by_min =
+        (uint64_t)(W / MIN_COMPRESSED_CHUNK_BYTES) + (uint64_t)stage->nlod;
+      if (by_min > slot_chunk_cap)
+        slot_chunk_cap = by_min;
+    }
+    const uint32_t batches_per_slot_cap = 1; // Phase 3 will raise this.
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->agg[fc],
                                       stage->max_total_batch_chunks,
-                                      C_max,
-                                      stage->max_total_data_bytes) == 0);
+                                      slot_chunk_cap,
+                                      stage->max_total_data_bytes,
+                                      batches_per_slot_cap) == 0);
       CU(Fail, cuEventRecord(stage->agg[fc].ready, compute));
     }
   }
@@ -512,6 +516,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
             nlod,
             stage->codec.max_output_size,
             &stage->agg[fc],
+            stage->agg[fc].slot_cursor,
+            stage->agg[fc].slot_desc_cursor,
             stage->shards.d_base_offsets,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
@@ -544,6 +550,20 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out->shards = &stage->shards;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->shard[lv];
+
+  // Macro-agg slot bookkeeping (Phase 2: one batch per slot at offset 0).
+  struct aggregate_slot* slot = &stage->agg[fc];
+  slot->slot_cursor = 0;
+  slot->slot_desc_cursor = 0;
+  slot->batches_per_slot = 0;
+  CHECK(Error, slot->batches_per_slot < slot->batches_per_slot_cap);
+  struct batch_slice_entry* be = &slot->slot_batches[slot->batches_per_slot];
+  be->data_base_offset = slot->slot_cursor;
+  be->desc_base_offset = slot->slot_desc_cursor;
+  be->nlod = nlod;
+  memcpy(
+    be->per_lod_lods, layout.lods, (size_t)nlod * sizeof(struct lod_segment));
+  slot->batches_per_slot = 1;
 
   return 0;
 

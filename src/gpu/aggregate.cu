@@ -141,6 +141,7 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_temp);
+  free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
 }
 
@@ -196,24 +197,23 @@ gather_batch_k(const void* __restrict__ d_compressed,
 extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_chunk_count,
-                          uint64_t batch_covering_count,
-                          size_t comp_pool_bytes)
+                          uint64_t slot_chunk_cap,
+                          size_t comp_pool_bytes,
+                          uint32_t batches_per_slot_cap)
 {
-  uint64_t C = batch_covering_count;
+  uint64_t C = slot_chunk_cap;
   (void)batch_chunk_count;
 
   CHECK(Error, slot);
+  CHECK(Error, batches_per_slot_cap >= 1);
   memset(slot, 0, sizeof(*slot));
 
   CU(Error,
-     cuMemAlloc((CUdeviceptr*)&slot->d_permuted_sizes,
-                (C + 1) * sizeof(size_t)));
-  CU(Error,
-     cuMemAlloc((CUdeviceptr*)&slot->d_offsets, (C + 1) * sizeof(size_t)));
+     cuMemAlloc((CUdeviceptr*)&slot->d_permuted_sizes, C * sizeof(size_t)));
+  CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_offsets, C * sizeof(size_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
-  CU(Error,
-     cuMemHostAlloc((void**)&slot->h_offsets, (C + 1) * sizeof(size_t), 0));
+  CU(Error, cuMemHostAlloc((void**)&slot->h_offsets, C * sizeof(size_t), 0));
   CU(Error,
      cuMemHostAlloc((void**)&slot->h_permuted_sizes, C * sizeof(size_t), 0));
 
@@ -227,6 +227,11 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
 
   if (slot->temp_bytes > 0)
     CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
+
+  slot->batches_per_slot_cap = batches_per_slot_cap;
+  slot->slot_batches = (struct batch_slice_entry*)calloc(
+    batches_per_slot_cap, sizeof(struct batch_slice_entry));
+  CHECK(Error, slot->slot_batches);
 
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
 
@@ -264,8 +269,7 @@ add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
   const uint64_t tps_group = d_shard_tps_group[s];
   __shared__ size_t bias_s;
   if (threadIdx.x == 0)
-    bias_s =
-      d_shard_base_offsets[s] + d_tail_bytes_prev[s] - d_offsets[base];
+    bias_s = d_shard_base_offsets[s] + d_tail_bytes_prev[s] - d_offsets[base];
   __syncthreads();
   for (uint64_t k = threadIdx.x; k < tps_group; k += blockDim.x)
     d_offsets[base + k] += bias_s;
@@ -410,6 +414,8 @@ aggregate_batch_unified_async(const void* d_compressed,
                               uint8_t nlod,
                               size_t max_comp_chunk_bytes,
                               struct aggregate_slot* slot,
+                              size_t slot_data_base,
+                              uint64_t slot_desc_base,
                               const size_t* d_shard_base_offsets,
                               const size_t* d_shard_capacity,
                               const uint64_t* d_shard_tps_group,
@@ -425,42 +431,47 @@ aggregate_batch_unified_async(const void* d_compressed,
   const uint64_t C = total_batch_covering;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
 
-  // Zero permuted_sizes (C + nlod entries: covering plus one sentinel per LOD)
+  // Biased buffer views: kernels operate batch-locally; the slot bases
+  // hide cumulative cursor advancement across batches within a slot.
+  // Phase 2: bases are always 0 (one batch per slot).
+  size_t* d_perm_sizes_b = slot->d_permuted_sizes + slot_desc_base;
+  size_t* d_offsets_b = slot->d_offsets + slot_desc_base;
+  void* d_aggregated_b = (void*)((uint8_t*)slot->d_aggregated + slot_data_base);
+
+  // Zero permuted_sizes for this batch's slice (C + nlod entries).
   CU(Error,
-     cuMemsetD8Async((CUdeviceptr)slot->d_permuted_sizes,
-                     0,
-                     (C + nlod) * sizeof(size_t),
-                     stream));
+     cuMemsetD8Async(
+       (CUdeviceptr)d_perm_sizes_b, 0, (C + nlod) * sizeof(size_t), stream));
 
   // Pass 1: permute sizes using unified LUTs (perm targets already shifted
-  // by +lv per LOD inside aggregate_batch_luts_unified).
+  // by +lv per LOD inside aggregate_batch_luts_unified; targets are
+  // batch-local within d_perm_sizes_b).
   {
     const int block = 256;
     const int grid = (int)((N + block - 1) / block);
     permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
-      d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
+      d_comp_sizes, d_perm_sizes_b, d_batch_gather, d_batch_perm, N);
   }
 
-  // Pass 2: single exclusive prefix sum across the unified covering range
-  // plus one sentinel slot per LOD. The scan writes every LOD's
-  // tail-sentinel position; no separate write_total fixup needed.
+  // Pass 2: exclusive prefix sum over this batch's slice only (each batch's
+  // scan is independent of prior batches' sentinels).
   {
     size_t temp = slot->temp_bytes;
     cub::DeviceScan::ExclusiveSum(slot->d_temp,
                                   temp,
-                                  slot->d_permuted_sizes,
-                                  slot->d_offsets,
+                                  d_perm_sizes_b,
+                                  d_offsets_b,
                                   (int)(C + nlod),
                                   cuda_stream);
   }
 
   if (page_size > 0 && total_shards > 0) {
     // Pass 3a: per-shard bias. Anchors each shard's first chunk at its
-    // base byte offset + tail_in, packs subsequent chunks tightly.
+    // batch-local base byte offset + tail_in.
     {
       const int block = 256;
       add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        slot->d_offsets,
+        d_offsets_b,
         d_tail_bytes,
         d_shard_base_offsets,
         d_shard_tps_group,
@@ -468,11 +479,11 @@ aggregate_batch_unified_async(const void* d_compressed,
         total_shards);
     }
     // Pass 3b: stage prior batch's ragged tail at the head of each shard's
-    // region so chunks pack just past it.
+    // region in this batch's slice.
     {
       const int block = 256;
       copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        slot->d_aggregated,
+        d_aggregated_b,
         (const void*)d_tail_carry,
         d_tail_bytes,
         d_shard_base_offsets,
@@ -480,21 +491,18 @@ aggregate_batch_unified_async(const void* d_compressed,
     }
   }
 
-  // Pass 4: gather compressed tiles using unified LUTs.
+  // Pass 4: gather compressed tiles into this batch's slice.
   {
     const int block = 256;
     const int grid = (int)N;
     gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
-                                                    slot->d_aggregated,
+                                                    d_aggregated_b,
                                                     d_comp_sizes,
-                                                    slot->d_offsets,
+                                                    d_offsets_b,
                                                     d_batch_gather,
                                                     d_batch_perm,
                                                     max_comp_chunk_bytes);
   }
-
-  // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
-  // (flush.d2h_deliver.c).
 
   return 0;
 
