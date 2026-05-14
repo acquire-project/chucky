@@ -17,3 +17,8 @@
 // One chunk per upload part, so parts-count = chunks per shard.
 #define MAX_PARTS_PER_SHARD S3_MAX_PARTS
 #define MAX_BYTES_PER_PART (5ull * 1024 * 1024 * 1024) // S3 single-part ceiling
+
+// Minimum bytes any compressed chunk could plausibly occupy. Sets the
+// upper bound on descriptors-per-slot when macro-aggregating compressed
+// batches.
+#define MIN_COMPRESSED_CHUNK_BYTES 128
