@@ -86,7 +86,7 @@ extern "C"
     CUevent host_func_done;
 
     CUevent ready; // D2H completion
-    // TODO(phase3): single io_event per slot means all K batches in a
+    // TODO(phase3): single io_event per slot means all B batches in a
     // macro-group share one IO fence. Fine for delivery serialization but
     // batches can't be retired independently. Acceptable for the planned
     // flush-on-close model.
@@ -169,7 +169,7 @@ extern "C"
   //                          Read as leading-tail for this batch's bias and
   //                          updated in place by the post-gather rollforward
   //                          kernel with this batch's trailing tail. The host
-  //                          H2D post-delivery still resyncs for K=1 (correct
+  //                          H2D post-delivery still resyncs for B=1 (correct
   //                          across mid-batch shard finalization).
   //   d_tail_carry         : [total_shards * page_size] persistent tail bytes
   //                          carry buffer. Same lifecycle as d_tail_bytes.

@@ -716,7 +716,7 @@ aggregate_batch_unified_async(const void* d_compressed,
   // reflect this batch's trailing sub-page bytes so the next batch's
   // bias/copy_leading_tail kernels see the correct leading-tail. For
   // batches_per_slot==1 the host post-delivery H2D will overwrite these
-  // values; for K>1 this kernel is the only source of truth between
+  // values; for B>1 this kernel is the only source of truth between
   // in-slot batches. Reads from d_aggregated unbiased because the dense
   // shard_base_offsets are slot-relative.
   if (page_size > 0 && total_shards > 0 && slot->d_shard_sum_bytes) {
