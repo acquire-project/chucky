@@ -165,11 +165,14 @@ extern "C"
   //                          Replaces uniform tps_group.
   //   d_shard_offsets_base : [total_shards] base index in d_offsets for each
   //                          shard's run. Replaces uniform s*tps_group.
-  //   d_tail_bytes         : [total_shards] persistent per-shard tail-bytes
-  //                          carried from prior batch. Uploaded by host
-  //                          post-delivery.
+  //   d_tail_bytes         : [total_shards] persistent per-shard tail-bytes.
+  //                          Read as leading-tail for this batch's bias and
+  //                          updated in place by the post-gather rollforward
+  //                          kernel with this batch's trailing tail. The host
+  //                          H2D post-delivery still resyncs for K=1 (correct
+  //                          across mid-batch shard finalization).
   //   d_tail_carry         : [total_shards * page_size] persistent tail bytes
-  //                          carry buffer. Uploaded post-delivery.
+  //                          carry buffer. Same lifecycle as d_tail_bytes.
   //   page_size            : uniform sink page size (one for all shards today).
   //                          0 = no carry-over path.
   //   total_shards         : sum_lv num_shards[lv]
@@ -197,7 +200,7 @@ extern "C"
                                     const size_t* d_shard_capacity,
                                     const uint64_t* d_shard_tps_group,
                                     const uint64_t* d_shard_offsets_base,
-                                    const size_t* d_tail_bytes,
+                                    size_t* d_tail_bytes,
                                     CUdeviceptr d_tail_carry,
                                     size_t page_size,
                                     uint64_t total_shards,
