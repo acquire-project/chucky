@@ -146,26 +146,43 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_shard_sum_bytes);
   if (slot->h_shard_sum_bytes)
     cuMemFreeHost((void*)slot->h_shard_sum_bytes);
+  if (slot->h_shard_base_offsets_dense)
+    cuMemFreeHost((void*)slot->h_shard_base_offsets_dense);
   cuMemFree((CUdeviceptr)slot->d_temp);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
 }
 
-// cuLaunchHostFunc body. Runs on the driver thread after the small D2H of
-// the batch's prefix-sum end has landed. May not call any CUDA APIs.
-// Phase 3 step 1: just record the value into the slot's last batch entry
-// for inspection. Subsequent Phase 3 steps will use this to drive cursor
-// advancement and slot-fit decisions.
+// cuLaunchHostFunc body. Runs on the driver thread after the per-shard
+// sums D2H has landed. Computes dense per-shard base offsets into
+// h_shard_base_offsets_dense for a subsequent H2D upload to feed the
+// bias/tail kernels. May not call any CUDA APIs.
+//
+// dense[s] = slot_cursor + sum_{i<s} (h_tail_bytes_view[i] +
+// h_shard_sum_bytes[i])
+//
+// Phase 2/2b: batches_per_slot is always 1 and slot_cursor stays 0, so the
+// computed values match what s*shard_capacity would have produced modulo
+// tail+compression — when h_shard_sum_bytes[s] + tail[s] < shard_capacity,
+// dense packing puts shards closer together than uniform packing did.
 static void CUDART_CB
 aggregate_post_batch_cb(void* userData)
 {
   struct aggregate_slot* slot = (struct aggregate_slot*)userData;
   if (!slot || slot->batches_per_slot == 0)
     return;
-  // Stash on the latest batch entry. batches_per_slot is incremented
-  // host-side in compress_agg_kick before the kernels dispatch, so by the
-  // time this callback fires the entry already exists.
   (void)*slot->h_batch_actual_bytes; // touch the pinned read
+
+  const uint64_t n = slot->total_shards_in;
+  if (n == 0 || !slot->h_shard_base_offsets_dense || !slot->h_shard_sum_bytes)
+    return;
+  const size_t* tail = slot->h_tail_bytes_view;
+  size_t cum = slot->slot_cursor;
+  for (uint64_t s = 0; s < n; ++s) {
+    ((size_t*)slot->h_shard_base_offsets_dense)[s] = cum;
+    const size_t t = tail ? tail[s] : 0;
+    cum += t + (size_t)slot->h_shard_sum_bytes[s];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,8 +287,14 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
        cuMemHostAlloc((void**)&slot->h_shard_sum_bytes,
                       max_total_shards * sizeof(size_t),
                       0));
-    for (uint64_t i = 0; i < max_total_shards; ++i)
+    CU(Error,
+       cuMemHostAlloc((void**)&slot->h_shard_base_offsets_dense,
+                      max_total_shards * sizeof(size_t),
+                      0));
+    for (uint64_t i = 0; i < max_total_shards; ++i) {
       ((size_t*)slot->h_shard_sum_bytes)[i] = 0;
+      ((size_t*)slot->h_shard_base_offsets_dense)[i] = 0;
+    }
   }
 
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));

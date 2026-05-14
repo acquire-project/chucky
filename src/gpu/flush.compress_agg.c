@@ -511,6 +511,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
   }
 
   // --- Phase 7: unified aggregate dispatch --------------------------------
+  // Set the slot's view of host-side tail-bytes / total_shards so the
+  // post-batch host callback can compute dense base offsets.
+  stage->agg[fc].h_tail_bytes_view = stage->shards.h_tail_bytes;
+  stage->agg[fc].total_shards_in = stage->shards.total_shards;
   if (layout.total_batch_chunks > 0) {
     CHECK(Error,
           aggregate_batch_unified_async(

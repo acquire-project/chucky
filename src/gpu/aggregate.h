@@ -65,6 +65,18 @@ extern "C"
     // Sized to max_total_shards (passed at slot init).
     size_t* d_shard_sum_bytes;
     volatile size_t* h_shard_sum_bytes;
+    // Dense per-shard base offsets for this batch, computed by the host
+    // callback as cumulative sum of (h_tail_bytes_view[i]+h_shard_sum_bytes[i])
+    // plus slot_cursor. Pinned so a subsequent cuMemcpyHtoDAsync can stage
+    // it to d_shard_base_offsets used by the bias kernel.
+    volatile size_t* h_shard_base_offsets_dense;
+    // Borrowed pointer to host-side tail-bytes-prev array; orchestrator
+    // sets before each kick. Read by the host callback alongside
+    // h_shard_sum_bytes. Lifetime owned by orchestrator.
+    const size_t* h_tail_bytes_view;
+    // Number of shards in the just-kicked batch (callback uses this to
+    // bound its loop). Orchestrator sets before each kick.
+    uint64_t total_shards_in;
     uint64_t shard_sum_capacity; // number of slots in the buffers above
     // Event recorded on compress_stream after the cuLaunchHostFunc
     // completes. Orchestrator waits on this before reading slot bookkeeping
