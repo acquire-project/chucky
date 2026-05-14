@@ -262,22 +262,17 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
 
-    if (handoff->passthrough) {
-      // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
-      if (poll_event(stage->ready[fc], fc))
-        goto Error;
-    } else {
-      // Compressed: wait for the chunk index on host, then dispatch the
-      // exact-size bulk D2H per batch×LOD (carry-over) or once across the
-      // slot's contiguous data (contiguous mode).
-      if (poll_event(stage->h_chunk_index_ready[fc], fc))
-        goto Error;
+    // Wait for chunk-index D2H + host_func to land. Both paths need this
+    // before the dense fixup (slot->h_shard_base_offsets_dense is populated
+    // by the host callback sequenced before the chunk-index D2H).
+    if (poll_event(stage->h_chunk_index_ready[fc], fc))
+      goto Error;
 
-      // Rewrite per-batch / per-LOD data_segment_offset to point at the
-      // dense LOD start (= dense base of first shard in lv). Mutates
-      // h_shard_base_offsets_dense in place to hold LOD-relative shard
-      // offsets, which downstream delivery passes to shard_delivery.
-      // Carry-over only; contiguous mode keeps uniform semantics.
+    // Rewrite per-batch / per-LOD data_segment_offset to the dense LOD
+    // start. Mutates h_shard_base_offsets_dense in place to hold
+    // LOD-relative shard offsets that delivery passes to shard_delivery.
+    // Carry-over only; contiguous mode keeps uniform semantics.
+    {
       struct shard_tables* dense_shards = handoff->shards;
       if (alayout->page_size > 0 && dense_shards &&
           dense_shards->total_shards > 0 && slot->h_shard_base_offsets_dense) {
@@ -298,7 +293,16 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
           }
         }
       }
+    }
 
+    if (handoff->passthrough) {
+      // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
+      if (poll_event(stage->ready[fc], fc))
+        goto Error;
+    } else {
+      // Compressed: dispatch the exact-size bulk D2H per batch×LOD
+      // (carry-over) or once across the slot's contiguous data
+      // (contiguous mode), now using the dense-adjusted data_segment_offset.
       if (alayout->page_size > 0) {
         for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
           const struct batch_slice_entry* be = &slot->slot_batches[b];
