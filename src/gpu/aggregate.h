@@ -68,8 +68,10 @@ extern "C"
     // Dense per-shard base offsets for this batch, computed by the host
     // callback as cumulative sum of (h_tail_bytes_view[i]+h_shard_sum_bytes[i])
     // plus slot_cursor. Pinned so a subsequent cuMemcpyHtoDAsync can stage
-    // it to d_shard_base_offsets used by the bias kernel.
+    // it to d_shard_base_offsets_dense; 2f will flip the bias/tail kernels
+    // to read from there instead of the uniform-packed table.
     volatile size_t* h_shard_base_offsets_dense;
+    size_t* d_shard_base_offsets_dense;
     // Borrowed pointer to host-side tail-bytes-prev array; orchestrator
     // sets before each kick. Read by the host callback alongside
     // h_shard_sum_bytes. Lifetime owned by orchestrator.

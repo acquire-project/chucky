@@ -148,6 +148,7 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
     cuMemFreeHost((void*)slot->h_shard_sum_bytes);
   if (slot->h_shard_base_offsets_dense)
     cuMemFreeHost((void*)slot->h_shard_base_offsets_dense);
+  cuMemFree((CUdeviceptr)slot->d_shard_base_offsets_dense);
   cuMemFree((CUdeviceptr)slot->d_temp);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
@@ -291,6 +292,9 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
        cuMemHostAlloc((void**)&slot->h_shard_base_offsets_dense,
                       max_total_shards * sizeof(size_t),
                       0));
+    CU(Error,
+       cuMemAlloc((CUdeviceptr*)&slot->d_shard_base_offsets_dense,
+                  max_total_shards * sizeof(size_t)));
     for (uint64_t i = 0; i < max_total_shards; ++i) {
       ((size_t*)slot->h_shard_sum_bytes)[i] = 0;
       ((size_t*)slot->h_shard_base_offsets_dense)[i] = 0;
@@ -564,8 +568,9 @@ aggregate_batch_unified_async(const void* d_compressed,
   }
 
   // Pass 2b: per-shard compressed-bytes sums for macro-agg bookkeeping.
-  // Independent of bias/gather; the result is D2H'd alongside the
-  // sum-of-all-chunks counter and consumed by the host callback below.
+  // Independent of bias/gather. Result is D2H'd to host, host callback
+  // computes dense offsets, H2D stages them to device — all sequenced on
+  // this stream so the bias kernel below sees fresh dense offsets.
   if (total_shards > 0 && slot->d_shard_sum_bytes) {
     const int block = 256;
     compute_shard_sum_bytes_k<<<(int)total_shards, block, 0, cuda_stream>>>(
@@ -574,6 +579,40 @@ aggregate_batch_unified_async(const void* d_compressed,
       d_shard_tps_group,
       slot->d_shard_sum_bytes,
       total_shards);
+  }
+
+  // Small D2H of prefix-sum end (sentinel at C+nlod-1 holds the batch's
+  // total compressed bytes — bias kernel does not touch sentinel
+  // positions so this value is stable post-scan).
+  CU(Error,
+     cuMemcpyDtoHAsync((void*)slot->h_batch_actual_bytes,
+                       (CUdeviceptr)(d_offsets_b + (C + nlod - 1)),
+                       sizeof(size_t),
+                       stream));
+
+  // Per-shard sums D2H — consumed by host callback to build dense offsets.
+  if (total_shards > 0 && slot->d_shard_sum_bytes && slot->h_shard_sum_bytes) {
+    CU(Error,
+       cuMemcpyDtoHAsync((void*)slot->h_shard_sum_bytes,
+                         (CUdeviceptr)slot->d_shard_sum_bytes,
+                         total_shards * sizeof(size_t),
+                         stream));
+  }
+
+  // Host callback writes dense per-shard base offsets into pinned mem.
+  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_cb, slot));
+  CU(Error, cuEventRecord(slot->host_func_done, stream));
+
+  // Stage dense offsets H2D for downstream bias/tail kernels (2f flips
+  // the kernels to read from d_shard_base_offsets_dense; for now this
+  // buffer is just populated and not yet consumed).
+  if (total_shards > 0 && slot->h_shard_base_offsets_dense &&
+      slot->d_shard_base_offsets_dense) {
+    CU(Error,
+       cuMemcpyHtoDAsync((CUdeviceptr)slot->d_shard_base_offsets_dense,
+                         (const void*)slot->h_shard_base_offsets_dense,
+                         total_shards * sizeof(size_t),
+                         stream));
   }
 
   if (page_size > 0 && total_shards > 0) {
@@ -614,34 +653,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                                                     d_batch_perm,
                                                     max_comp_chunk_bytes);
   }
-
-  // Pass 5: small D2H of the prefix-sum end. d_offsets_b[C + nlod - 1] is
-  // the LOD-(nlod-1) sentinel, which the unified scan leaves with the
-  // sum-of-chunk-sizes for this batch (sentinels carry 0, so the scan's
-  // value at the sentinel position is the cumulative end). The bias
-  // kernel does not touch sentinel positions, so this value is the same
-  // in carry-over and contiguous modes.
-  //
-  // Phase 3 macro-agg reads this via a cuLaunchHostFunc to update slot
-  // bookkeeping before the next batch kicks.
-  CU(Error,
-     cuMemcpyDtoHAsync((void*)slot->h_batch_actual_bytes,
-                       (CUdeviceptr)(d_offsets_b + (C + nlod - 1)),
-                       sizeof(size_t),
-                       stream));
-
-  // Per-shard compressed-bytes D2H. Consumed by the host callback to
-  // compute dense shard_base_offsets for the next batch in this slot.
-  if (total_shards > 0 && slot->d_shard_sum_bytes && slot->h_shard_sum_bytes) {
-    CU(Error,
-       cuMemcpyDtoHAsync((void*)slot->h_shard_sum_bytes,
-                         (CUdeviceptr)slot->d_shard_sum_bytes,
-                         total_shards * sizeof(size_t),
-                         stream));
-  }
-
-  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_cb, slot));
-  CU(Error, cuEventRecord(slot->host_func_done, stream));
 
   return 0;
 
