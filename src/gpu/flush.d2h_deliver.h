@@ -27,7 +27,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  CUstream d2h_stream);
 
 // Synchronize D2H, record metrics, deliver to sinks.
-// Returns writer_ok() on success.
+// Returns writer_ok() on success. d2h_stream is used to dispatch the
+// exact-size bulk D2H once h_offsets/h_permuted_sizes have landed.
 struct writer_result
 d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
@@ -40,4 +41,5 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct lod_state* lod,
                   const struct lod_shared_state* lod_shared,
                   struct stream_metrics* metrics,
-                  struct platform_clock* metadata_update_clock);
+                  struct platform_clock* metadata_update_clock,
+                  CUstream d2h_stream);

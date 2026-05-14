@@ -7,6 +7,7 @@
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
+#include <assert.h>
 #include <string.h>
 
 // --- Init / Destroy ---
@@ -21,8 +22,10 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&stage->h_chunk_index_ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
+    CU(Fail, cuEventRecord(stage->h_chunk_index_ready[fc], compute));
     CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
@@ -40,6 +43,7 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     return;
   for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
+    cu_event_destroy(stage->h_chunk_index_ready[fc]);
     cu_event_destroy(stage->ready[fc]);
   }
 }
@@ -138,11 +142,8 @@ record_flush_metrics(const struct flush_handoff* handoff,
                          handoff->t_aggregate_end,
                          agg_bytes,
                          agg_bytes);
-    accumulate_metric_cu(&metrics->d2h,
-                         t_d2h_start,
-                         t_d2h_ready,
-                         agg_bytes,
-                         agg_bytes);
+    accumulate_metric_cu(
+      &metrics->d2h, t_d2h_start, t_d2h_ready, agg_bytes, agg_bytes);
   }
 }
 
@@ -158,14 +159,52 @@ lod_view(const struct flush_handoff* handoff, uint8_t lv)
   struct aggregate_result ar = {
     .data = (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
     .offsets = slot->h_offsets + seg->batch_covering_offset + lv,
-    .chunk_sizes =
-      slot->h_permuted_sizes + seg->batch_covering_offset + lv,
+    .chunk_sizes = slot->h_permuted_sizes + seg->batch_covering_offset + lv,
   };
   return ar;
 }
 
-// Sync on ready[fc] (near-zero in steady state), record metrics, deliver
-// to sinks.
+// Poll a CUDA event with a sleep loop. Returns 0 on success / deinit,
+// 1 on error.
+static int
+poll_event(CUevent ev, int fc)
+{
+  for (;;) {
+    CUresult r = cuEventQuery(ev);
+    if (r == CUDA_SUCCESS)
+      return 0;
+    if (r == CUDA_ERROR_DEINITIALIZED) {
+      log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)", fc);
+      return 0;
+    }
+    if (r != CUDA_ERROR_NOT_READY) {
+      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+      return 1;
+    }
+    platform_sleep_ns(50000);
+  }
+}
+
+// Per-LOD actual bytes in d_aggregated. End of last chunk (last shard's
+// last chunk in shard-permuted order) minus the LOD segment base. h_offsets
+// here must be the pre-rebase (absolute) values produced by the unified
+// scan + bias.
+static size_t
+lod_actual_bytes(const struct flush_handoff* handoff, uint8_t lv)
+{
+  const struct lod_segment* seg = &handoff->layout.lods[lv];
+  if (seg->n_active == 0)
+    return 0;
+  const struct aggregate_slot* slot = handoff->agg;
+  const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
+  const size_t last = seg->batch_covering_offset + (size_t)lv + total - 1;
+  const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
+  assert(slot->h_offsets[last] >= seg->data_segment_offset);
+  const size_t actual = end - seg->data_segment_offset;
+  assert(actual <= seg->data_segment_bytes);
+  return actual;
+}
+
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
@@ -176,9 +215,12 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct shard_sink* sink,
                  const struct lod_state* lod,
                  const struct lod_shared_state* lod_shared,
-                 struct stream_metrics* metrics)
+                 struct stream_metrics* metrics,
+                 CUstream d2h_stream)
 {
   const int fc = handoff->fc;
+  struct aggregate_slot* slot = handoff->agg;
+  const struct batch_aggregate_layout* alayout = &handoff->layout;
 
   if (sink->has_error && sink->has_error(sink))
     goto Error;
@@ -186,21 +228,56 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   {
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
-    for (;;) {
-      CUresult r = cuEventQuery(stage->ready[fc]);
-      if (r == CUDA_SUCCESS)
-        break;
-      if (r == CUDA_ERROR_DEINITIALIZED) {
-        log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)",
-                  fc);
-        break;
-      }
-      if (r != CUDA_ERROR_NOT_READY) {
-        handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+
+    if (handoff->passthrough) {
+      // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
+      if (poll_event(stage->ready[fc], fc))
         goto Error;
+    } else {
+      // Compressed: wait for the chunk index on host, then dispatch the
+      // exact-size bulk D2H per LOD (carry-over) or once for the whole
+      // batch (contiguous).
+      if (poll_event(stage->h_chunk_index_ready[fc], fc))
+        goto Error;
+
+      if (alayout->page_size > 0) {
+        for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+          if (handoff->per_lod_n_active[lv] == 0)
+            continue;
+          const struct lod_segment* seg = &alayout->lods[lv];
+          const size_t actual = lod_actual_bytes(handoff, lv);
+          if (actual == 0)
+            continue;
+          CU(Error,
+             cuMemcpyDtoHAsync(
+               (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
+               (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
+               actual,
+               d2h_stream));
+        }
+      } else if (alayout->total_batch_covering > 0) {
+        // Position n-1 is the last LOD's tail sentinel (size 0 there), so
+        // h_offsets[n-1] is the cumulative byte total. Adding
+        // h_permuted_sizes[n-1] is a no-op for the sentinel.
+        const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
+        const size_t total =
+          slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
+        if (total > 0) {
+          CU(Error,
+             cuMemcpyDtoHAsync(slot->h_aggregated,
+                               (CUdeviceptr)slot->d_aggregated,
+                               total,
+                               d2h_stream));
+        }
       }
-      platform_sleep_ns(50000);
+
+      CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+      CU(Error, cuEventRecord(slot->ready, d2h_stream));
+
+      if (poll_event(stage->ready[fc], fc))
+        goto Error;
     }
+
     float kick_ms = platform_toc(&kick_clk) * 1000.0f;
     accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
   }
@@ -356,21 +433,16 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   struct aggregate_slot* slot = handoff->agg;
   const struct batch_aggregate_layout* layout = &handoff->layout;
 
-  // Block on the prior IO retiring this slot (single fence across all LODs).
   wait_io_fences(slot, sink, stage->metrics);
 
-  // d2h stream waits for aggregate to finish writing the unified buffer.
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
-  // One D2H for the unified offsets array (covers all LOD ranges). The
-  // unified prefix-sum produces total_batch_covering + nlod offsets — each
-  // LOD's tail sentinel sits at position
-  // (batch_covering_offset + n_active*covering + lv), all within the scan's
-  // output range.
+  // Offsets + permuted sizes. Compressed codecs use these in drain to size
+  // exact per-LOD transfers; pass-through copies them too so delivery's
+  // chunk-index walk works uniformly.
   if (layout->total_batch_covering > 0) {
-    const size_t n =
-      layout->total_batch_covering + (size_t)handoff->nlod;
+    const size_t n = layout->total_batch_covering + (size_t)handoff->nlod;
     CU(Error,
        cuMemcpyDtoHAsync(slot->h_offsets,
                          (CUdeviceptr)slot->d_offsets,
@@ -383,19 +455,21 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                          d2h_stream));
   }
 
-  // One D2H for the unified aggregated data buffer. Sized to
-  // total_data_bytes (max across all LODs' page-aligned segments).
-  if (layout->total_data_bytes > 0) {
+  CU(Error, cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
+
+  // Pass-through: per-LOD actual equals worst-case. Dispatch the bulk D2H
+  // now so it pipelines with the next batch's compute (matches pre-Phase-1
+  // behavior). Compressed path defers bulk dispatch to sync_and_deliver
+  // once the chunk index has landed.
+  if (handoff->passthrough && layout->total_data_bytes > 0) {
     CU(Error,
        cuMemcpyDtoHAsync(slot->h_aggregated,
                          (CUdeviceptr)slot->d_aggregated,
                          layout->total_data_bytes,
                          d2h_stream));
+    CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+    CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
-  CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
-  // Also signal the slot's own ready event so the next compress that reuses
-  // this slot waits on it.
-  CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
   return 0;
 
@@ -415,7 +489,8 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct lod_state* lod,
                   const struct lod_shared_state* lod_shared,
                   struct stream_metrics* metrics,
-                  struct platform_clock* metadata_update_clock)
+                  struct platform_clock* metadata_update_clock,
+                  CUstream d2h_stream)
 {
   (void)batch;
   struct writer_result r = sync_and_deliver(stage,
@@ -427,9 +502,11 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                                             sink,
                                             lod,
                                             lod_shared,
-                                            metrics);
+                                            metrics,
+                                            d2h_stream);
   if (!r.error) {
-    if (maybe_update_metadata(handoff, dims, config, sink, metadata_update_clock))
+    if (maybe_update_metadata(
+          handoff, dims, config, sink, metadata_update_clock))
       return writer_error();
   }
   return r;

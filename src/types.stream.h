@@ -12,9 +12,9 @@
 struct stream_metric
 {
   const char* name;
-  float ms;                 // cumulative
-  float best_ms;            // best single measurement (1e30f = not yet measured)
-  double best_input_bytes;  // input_bytes at the best-ms call (for best GiB/s)
+  float ms;                // cumulative
+  float best_ms;           // best single measurement (1e30f = not yet measured)
+  double best_input_bytes; // input_bytes at the best-ms call (for best GiB/s)
   double best_output_bytes; // output_bytes at the best-ms call
   double input_bytes;       // cumulative bytes read by stage
   double output_bytes;      // cumulative bytes written by stage
@@ -44,10 +44,11 @@ struct stream_metrics
   // flush_stall + kick_sync_stall + sink over-counts wall time. To isolate
   // the drain-side overhead not already attributed elsewhere, compute
   // flush_stall - kick_sync_stall - (sink portion inside drain).
-  struct stream_metric flush_stall; // whole d2h_deliver_drain call
-                                    // (drain_fc in stream.flush.c)
-  struct stream_metric kick_sync_stall; // cuEventSynchronize(ready[fc])
-                                        // in sync_and_deliver
+  struct stream_metric flush_stall;     // whole d2h_deliver_drain call
+                                        // (drain_fc in stream.flush.c)
+  struct stream_metric kick_sync_stall; // host wait in sync_and_deliver:
+                                        // h_chunk_index_ready poll + bulk
+                                        // D2H dispatch + ready[fc] poll
   struct stream_metric io_fence_stall;  // GPU: wait_io_fences in
                                         // d2h_deliver_kick. CPU: wait_fence
                                         // before aggregate in

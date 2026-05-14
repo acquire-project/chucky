@@ -95,7 +95,8 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
                                              &e->lod,
                                              &e->lod_shared,
                                              &e->metrics,
-                                             &e->metadata_update_clock);
+                                             &e->metadata_update_clock,
+                                             e->streams.d2h);
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 

@@ -81,9 +81,7 @@ test_ctx_setup(struct test_ctx* c,
   c->ca_inited = 1;
 
   CHECK(Fail,
-        d2h_deliver_init(&c->d2h,
-                         platform_page_alignment(),
-                         c->compute) == 0);
+        d2h_deliver_init(&c->d2h, platform_page_alignment(), c->compute) == 0);
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
@@ -175,7 +173,8 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                              &c->lod,
                                              &c->lod_shared,
                                              &c->metrics,
-                                             &c->metadata_clock);
+                                             &c->metadata_clock,
+                                             c->d2h_stream);
   CHECK(Fail, r.error == 0);
 
   return 0;
