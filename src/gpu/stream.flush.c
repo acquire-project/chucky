@@ -129,7 +129,10 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   }
 
   // Phase 2: kick compress+aggregate for the new batch (compress stream).
+  // At B=1 every kick opens a fresh slot: reset cursor/desc_cursor/
+  // batches_per_slot before the kick appends this batch's entry.
   fs->batch_epoch_count = (int)e->batch.accumulated;
+  output_slot_close_reset(&e->compress_agg.output[completed_pool]);
   struct compress_agg_input in =
     make_compress_input(e, ctx, completed_pool, e->batch.accumulated);
   struct flush_handoff new_handoff = { 0 };
@@ -232,6 +235,8 @@ flush_kick_batch(struct stream_engine* e,
                  int fc,
                  uint32_t n_epochs)
 {
+  // Open a fresh slot before kicking; mirrors drain_kick_and_swap's contract.
+  output_slot_close_reset(&e->compress_agg.output[fc]);
   struct compress_agg_input in = make_compress_input(e, ctx, fc, n_epochs);
   struct flush_handoff handoff = { 0 };
 

@@ -571,19 +571,12 @@ compress_agg_kick(struct compress_agg_stage* stage,
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->shard[lv];
 
-  // Macro-agg slot bookkeeping (Phase 2: one batch per slot at offset 0).
-  out_slot->slot_cursor = 0;
-  out_slot->slot_desc_cursor = 0;
-  out_slot->batches_per_slot = 0;
-  CHECK(Error, out_slot->batches_per_slot < out_slot->batches_per_slot_cap);
-  struct batch_slice_entry* be =
-    &out_slot->slot_batches[out_slot->batches_per_slot];
-  be->data_base_offset = out_slot->slot_cursor;
-  be->desc_base_offset = out_slot->slot_desc_cursor;
-  be->nlod = nlod;
-  memcpy(
-    be->per_lod_lods, layout.lods, (size_t)nlod * sizeof(struct lod_segment));
-  out_slot->batches_per_slot = 1;
+  // Macro-agg slot bookkeeping. Prep-2 contract: kick is append-only; the
+  // orchestrator calls output_slot_close_reset after the d2h kick (today
+  // every kick; at B>1 only on slot close). The slot enters this function
+  // with slot_cursor=0/desc_cursor=0/batches_per_slot=0 (from prior close)
+  // and exits with the just-kicked batch's entry appended.
+  CHECK(Error, output_slot_append_batch_entry(out_slot, &layout, nlod) == 0);
 
   return 0;
 

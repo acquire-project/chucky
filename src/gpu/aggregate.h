@@ -112,6 +112,21 @@ extern "C"
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
+  // Close the slot: reset slot_cursor/desc_cursor/batches_per_slot to 0 so
+  // the next kick treats the slot as fresh. At B=1 the orchestrator calls
+  // this after every kick; at B>1 it's called only on slot close (fit fail
+  // or end-of-stream).
+  void output_slot_close_reset(struct aggregate_slot* slot);
+
+  // Append a batch entry into slot_batches[batches_per_slot] capturing this
+  // batch's data/desc bases (current cursors) and per-LOD segments. Returns
+  // 0 on success, non-zero on cap overflow.
+  struct batch_aggregate_layout;
+  int output_slot_append_batch_entry(
+    struct aggregate_slot* slot,
+    const struct batch_aggregate_layout* layout,
+    uint8_t nlod);
+
   // slot_chunk_cap is the descriptor-array length (entries). Sized once at
   // init to W / min_compressed_chunk_bytes so Phase 3 macro-agg can pack
   // many batches' descriptors into the same slot without resize.
