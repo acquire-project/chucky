@@ -457,24 +457,11 @@ test_cross_validate_lod(void)
                  c ? cpu_sink.w[lv][si].size : 0);
     }
 
-  // Compare L0 shards (byte-exact). Higher LOD levels may differ because
-  // the GPU pipeline batches LOD level activity differently (e.g. L1
-  // activates every 2 epochs on GPU with append_downsample).
-  int l0_errors = 0;
-  for (int si = 0; si < MAX_SHARDS; ++si) {
-    const struct mem_writer* gw = &gpu_sink.w[0][si];
-    const struct mem_writer* cw = &cpu_sink.w[0][si];
-    int g = gw->buf && gw->size > 0;
-    int c = cw->buf && cw->size > 0;
-    if (!g && !c)
-      continue;
-    if (g != c || gw->size != cw->size ||
-        memcmp(gw->buf, cw->buf, gw->size) != 0) {
-      log_error("  L0 shard %d mismatch", si);
-      l0_errors++;
-    }
-  }
-  CHECK(Fail, l0_errors == 0);
+  // Compare all levels byte-exact. Higher LODs in contiguous mode (page_size
+  // == 0) are sensitive to the GPU lod_view base-pointer (#135): a stale
+  // base or incorrect rebase produces wrong bytes for LOD >= 1 shards.
+  int mismatches = compare_shards(&gpu_sink, &cpu_sink, "lod");
+  CHECK(Fail, mismatches == 0);
   CHECK(Fail, tile_stream_gpu_cursor(gpu) == tile_stream_cpu_cursor(cpu));
 
   free(data);
