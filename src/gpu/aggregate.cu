@@ -149,6 +149,8 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   if (slot->h_shard_base_offsets_dense)
     cuMemFreeHost((void*)slot->h_shard_base_offsets_dense);
   cuMemFree((CUdeviceptr)slot->d_shard_base_offsets_dense);
+  if (slot->h_tail_bytes_next)
+    cuMemFreeHost((void*)slot->h_tail_bytes_next);
   cuMemFree((CUdeviceptr)slot->d_temp);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
@@ -161,6 +163,17 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
 //
 // dense[s] = slot_cursor + sum_{i<s} (h_tail_bytes_view[i] +
 // h_shard_sum_bytes[i])
+//
+// Prep-1 addition (purely additive at B=1):
+//   - h_tail_bytes_next[s] = (h_tail_bytes_view[s] + h_shard_sum_bytes[s]) %
+//     page_size — future-state tail bytes for the next in-slot batch. At B=1
+//     the orchestrator's post-delivery H2D from h_tail_bytes still overwrites
+//     d_tail_bytes; this write is unconsumed but verifiable against host's
+//     post-delivery h_tail_bytes for correctness.
+//
+// slot_cursor is NOT updated by this callback. Prep-2 will factor the slot
+// lifecycle so the callback can advance it without breaking B=1 (today the
+// next kick reads slot_cursor before resetting it).
 //
 // Phase 2/2b: batches_per_slot is always 1 and slot_cursor stays 0, so the
 // computed values match what s*shard_capacity would have produced modulo
@@ -180,11 +193,16 @@ aggregate_post_batch_cb(void* userData)
   if (n == 0 || !slot->h_shard_base_offsets_dense || !slot->h_shard_sum_bytes)
     return;
   const size_t* tail = slot->h_tail_bytes_view;
+  const size_t page_size = slot->page_size;
   size_t cum = slot->slot_cursor;
   for (uint64_t s = 0; s < n; ++s) {
     ((size_t*)slot->h_shard_base_offsets_dense)[s] = cum;
     const size_t t = tail ? tail[s] : 0;
-    cum += t + (size_t)slot->h_shard_sum_bytes[s];
+    const size_t total = t + (size_t)slot->h_shard_sum_bytes[s];
+    cum += total;
+    if (slot->h_tail_bytes_next)
+      ((size_t*)slot->h_tail_bytes_next)[s] =
+        (page_size > 0) ? (total % page_size) : 0;
   }
 }
 
@@ -297,9 +315,14 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
     CU(Error,
        cuMemAlloc((CUdeviceptr*)&slot->d_shard_base_offsets_dense,
                   max_total_shards * sizeof(size_t)));
+    CU(Error,
+       cuMemHostAlloc((void**)&slot->h_tail_bytes_next,
+                      max_total_shards * sizeof(size_t),
+                      0));
     for (uint64_t i = 0; i < max_total_shards; ++i) {
       ((size_t*)slot->h_shard_sum_bytes)[i] = 0;
       ((size_t*)slot->h_shard_base_offsets_dense)[i] = 0;
+      ((size_t*)slot->h_tail_bytes_next)[i] = 0;
     }
   }
 

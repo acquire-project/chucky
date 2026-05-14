@@ -518,6 +518,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   struct aggregate_slot* out_slot = &stage->output[output_idx];
   out_slot->h_tail_bytes_view = stage->shards.h_tail_bytes;
   out_slot->total_shards_in = stage->shards.total_shards;
+  out_slot->page_size = page_size;
   if (layout.total_batch_chunks > 0) {
     // Bias/tail kernels read d_shard_base_offsets_dense, populated by
     // the in-stream H2D from the host callback's dense layout (slot's

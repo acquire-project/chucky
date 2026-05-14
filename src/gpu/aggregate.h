@@ -76,6 +76,17 @@ extern "C"
     // sets before each kick. Read by the host callback alongside
     // h_shard_sum_bytes. Lifetime owned by orchestrator.
     const size_t* h_tail_bytes_view;
+    // Future-state per-shard tail bytes for the NEXT batch. Populated by
+    // the host callback as (h_tail_bytes_view[s] + h_shard_sum_bytes[s])
+    // % page_size. For B=1 this is purely additive — orchestrator's
+    // post-delivery H2D from h_tail_bytes still overwrites GPU d_tail_bytes;
+    // for B>1 it becomes the source-of-truth handoff to the next in-slot
+    // batch. Sized shard_sum_capacity.
+    volatile size_t* h_tail_bytes_next;
+    // Uniform sink page size; orchestrator sets before each kick so the
+    // host callback can compute h_tail_bytes_next without depending on
+    // shard_tables. 0 = no carry-over path (callback skips tail compute).
+    size_t page_size;
     // Number of shards in the just-kicked batch (callback uses this to
     // bound its loop). Orchestrator sets before each kick.
     uint64_t total_shards_in;
