@@ -156,6 +156,35 @@ output_slot_append_batch_entry(struct aggregate_slot* slot,
   return 0;
 }
 
+extern "C" int
+slot_can_fit(const struct aggregate_slot* slot, size_t next_batch_bytes)
+{
+  if (!slot)
+    return 0;
+  if (slot->batches_per_slot >= slot->batches_per_slot_cap)
+    return 0;
+  if (slot->slot_capacity_bytes == 0)
+    return 1; // not-yet-initialized slot: don't block
+  return (slot->slot_cursor + next_batch_bytes) <= slot->slot_capacity_bytes;
+}
+
+extern "C" int
+no_shard_finalizes(uint8_t nlod,
+                   const uint64_t* epoch_in_shard,
+                   const uint32_t* n_active_next,
+                   const uint64_t* cps_append)
+{
+  if (!epoch_in_shard || !n_active_next || !cps_append)
+    return 0;
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    if (n_active_next[lv] == 0)
+      continue;
+    if (epoch_in_shard[lv] + (uint64_t)n_active_next[lv] >= cps_append[lv])
+      return 0;
+  }
+  return 1;
+}
+
 extern "C" void
 aggregate_slot_destroy(struct aggregate_slot* slot)
 {
@@ -303,6 +332,7 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
      cuMemAlloc((CUdeviceptr*)&slot->d_permuted_sizes, C * sizeof(size_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_offsets, C * sizeof(size_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, comp_pool_bytes));
+  slot->slot_capacity_bytes = comp_pool_bytes;
   CU(Error, cuMemHostAlloc(&slot->h_aggregated, comp_pool_bytes, 0));
   CU(Error, cuMemHostAlloc((void**)&slot->h_offsets, C * sizeof(size_t), 0));
   CU(Error,

@@ -47,6 +47,7 @@ extern "C"
     // Macro-aggregation state (Phase 2: scaffolding only).
     size_t slot_cursor;      // bytes written in d_aggregated
     size_t slot_desc_cursor; // entries written in d_offsets / d_permuted_sizes
+    size_t slot_capacity_bytes; // size of d_aggregated; fit-check budget
     uint32_t batches_per_slot;
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches; // [batches_per_slot_cap]
@@ -126,6 +127,21 @@ extern "C"
     struct aggregate_slot* slot,
     const struct batch_aggregate_layout* layout,
     uint8_t nlod);
+
+  // Returns 1 if the slot has room for next_batch_bytes additional data
+  // (slot_cursor + batches_per_slot < cap AND slot_cursor + next_batch_bytes
+  // <= slot_capacity_bytes), else 0. Pure host function.
+  int slot_can_fit(const struct aggregate_slot* slot, size_t next_batch_bytes);
+
+  // Returns 1 if no shard would finalize during the next in-slot batch
+  // (epoch_in_shard[lv] + n_active_next[lv] < cps_append[lv] for all
+  // lv < nlod), else 0. Mid-slot finalization corrupts the GPU's in-slot
+  // tail rollforward, so this must be true for B>1 stacking. Pure host
+  // function; arrays are borrowed read-only.
+  int no_shard_finalizes(uint8_t nlod,
+                         const uint64_t* epoch_in_shard,
+                         const uint32_t* n_active_next,
+                         const uint64_t* cps_append);
 
   // slot_chunk_cap is the descriptor-array length (entries). Sized once at
   // init to W / min_compressed_chunk_bytes so Phase 3 macro-agg can pack
