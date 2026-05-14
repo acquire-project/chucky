@@ -273,6 +273,32 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (poll_event(stage->h_chunk_index_ready[fc], fc))
         goto Error;
 
+      // Rewrite per-batch / per-LOD data_segment_offset to point at the
+      // dense LOD start (= dense base of first shard in lv). Mutates
+      // h_shard_base_offsets_dense in place to hold LOD-relative shard
+      // offsets, which downstream delivery passes to shard_delivery.
+      // Carry-over only; contiguous mode keeps uniform semantics.
+      struct shard_tables* dense_shards = handoff->shards;
+      if (alayout->page_size > 0 && dense_shards &&
+          dense_shards->total_shards > 0 && slot->h_shard_base_offsets_dense) {
+        volatile size_t* dense = slot->h_shard_base_offsets_dense;
+        for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+          struct batch_slice_entry* be = &slot->slot_batches[b];
+          for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+            const uint32_t lv_begin = dense_shards->shards_begin[lv];
+            const uint32_t lv_n = dense_shards->n_shards[lv];
+            if (lv_n == 0)
+              continue;
+            const size_t dense_lv_start = (size_t)dense[lv_begin];
+            be->per_lod_lods[lv].data_segment_offset =
+              dense_lv_start - be->data_base_offset;
+            for (uint32_t si = 0; si < lv_n; ++si)
+              dense[lv_begin + si] = (size_t)dense[lv_begin + si] -
+                                     dense_lv_start; // now LOD-relative
+          }
+        }
+      }
+
       if (alayout->page_size > 0) {
         for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
           const struct batch_slice_entry* be = &slot->slot_batches[b];
@@ -379,6 +405,14 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         if (shards && shards->h_tail_bytes && page_size > 0)
           h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
 
+        // Per-LOD dense rel offsets (carry-over only; NULL = uniform).
+        const size_t* shard_base_offsets_lv = NULL;
+        if (page_size > 0 && shards && shards->total_shards > 0 &&
+            slot->h_shard_base_offsets_dense) {
+          shard_base_offsets_lv =
+            (const size_t*)slot->h_shard_base_offsets_dense +
+            shards->shards_begin[lv];
+        }
         size_t level_bytes = 0;
         if (deliver_to_shards_batch((uint8_t)lv,
                                     handoff->shards_by_lod[lv],
@@ -388,7 +422,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                                     be->per_lod_lods[lv].n_active,
                                     sink,
                                     stage->shard_alignment,
-                                    /*shard_base_offsets=*/NULL,
+                                    shard_base_offsets_lv,
                                     &level_bytes))
           goto Error;
         sink_bytes += level_bytes;

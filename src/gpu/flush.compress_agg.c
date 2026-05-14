@@ -516,6 +516,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
   stage->agg[fc].h_tail_bytes_view = stage->shards.h_tail_bytes;
   stage->agg[fc].total_shards_in = stage->shards.total_shards;
   if (layout.total_batch_chunks > 0) {
+    // Bias/tail kernels read d_shard_base_offsets_dense, populated by
+    // the in-stream H2D from the host callback's dense layout (slot's
+    // h_shard_base_offsets_dense). stage->shards.d_base_offsets (uniform)
+    // is no longer consumed by aggregate.
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -529,7 +533,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
             &stage->agg[fc],
             stage->agg[fc].slot_cursor,
             stage->agg[fc].slot_desc_cursor,
-            stage->shards.d_base_offsets,
+            stage->agg[fc].d_shard_base_offsets_dense,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
             stage->shards.d_offsets_base,
