@@ -141,13 +141,13 @@ compress_agg_init(struct compress_agg_stage* stage,
     const uint32_t batches_per_slot_cap = 1; // Phase 3 will raise this.
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(&stage->agg[fc],
+            aggregate_batch_slot_init(&stage->output[fc],
                                       stage->max_total_batch_chunks,
                                       slot_chunk_cap,
                                       stage->max_total_data_bytes,
                                       batches_per_slot_cap,
                                       total_shards_init) == 0);
-      CU(Fail, cuEventRecord(stage->agg[fc].ready, compute));
+      CU(Fail, cuEventRecord(stage->output[fc].ready, compute));
     }
   }
 
@@ -290,7 +290,7 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
               100.0 * (double)stage->lut_steady_count / (double)tot);
   }
   for (int fc = 0; fc < 2; ++fc)
-    aggregate_slot_destroy(&stage->agg[fc]);
+    aggregate_slot_destroy(&stage->output[fc]);
   cu_mem_free(stage->d_batch_gather);
   cu_mem_free(stage->d_batch_perm);
   free(stage->h_lut_gather_scratch);
@@ -513,8 +513,11 @@ compress_agg_kick(struct compress_agg_stage* stage,
   // --- Phase 7: unified aggregate dispatch --------------------------------
   // Set the slot's view of host-side tail-bytes / total_shards so the
   // post-batch host callback can compute dense base offsets.
-  stage->agg[fc].h_tail_bytes_view = stage->shards.h_tail_bytes;
-  stage->agg[fc].total_shards_in = stage->shards.total_shards;
+  // Prep-0: output_idx == fc today; later prep decouples.
+  const int output_idx = fc;
+  struct aggregate_slot* out_slot = &stage->output[output_idx];
+  out_slot->h_tail_bytes_view = stage->shards.h_tail_bytes;
+  out_slot->total_shards_in = stage->shards.total_shards;
   if (layout.total_batch_chunks > 0) {
     // Bias/tail kernels read d_shard_base_offsets_dense, populated by
     // the in-stream H2D from the host callback's dense layout (slot's
@@ -530,10 +533,10 @@ compress_agg_kick(struct compress_agg_stage* stage,
             layout.total_batch_covering,
             nlod,
             stage->codec.max_output_size,
-            &stage->agg[fc],
-            stage->agg[fc].slot_cursor,
-            stage->agg[fc].slot_desc_cursor,
-            stage->agg[fc].d_shard_base_offsets_dense,
+            out_slot,
+            out_slot->slot_cursor,
+            out_slot->slot_desc_cursor,
+            out_slot->d_shard_base_offsets_dense,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
             stage->shards.d_offsets_base,
@@ -548,6 +551,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
   // --- Phase 8: fill handoff ----------------------------------------------
   out->fc = fc;
+  out->output_idx = output_idx;
   out->n_epochs = n_epochs;
   out->active_levels_mask = in->active_levels_mask;
   out->batch_active_masks = in->batch_active_masks;
@@ -559,7 +563,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out->t_compress_end = stage->t_compress_end[fc];
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
-  out->agg = &stage->agg[fc];
+  out->output = out_slot;
   out->layout = layout;
   out->per_lod_agg_layouts = stage->per_lod_agg_layouts;
   out->shards = &stage->shards;
@@ -567,18 +571,18 @@ compress_agg_kick(struct compress_agg_stage* stage,
     out->shards_by_lod[lv] = &stage->shard[lv];
 
   // Macro-agg slot bookkeeping (Phase 2: one batch per slot at offset 0).
-  struct aggregate_slot* slot = &stage->agg[fc];
-  slot->slot_cursor = 0;
-  slot->slot_desc_cursor = 0;
-  slot->batches_per_slot = 0;
-  CHECK(Error, slot->batches_per_slot < slot->batches_per_slot_cap);
-  struct batch_slice_entry* be = &slot->slot_batches[slot->batches_per_slot];
-  be->data_base_offset = slot->slot_cursor;
-  be->desc_base_offset = slot->slot_desc_cursor;
+  out_slot->slot_cursor = 0;
+  out_slot->slot_desc_cursor = 0;
+  out_slot->batches_per_slot = 0;
+  CHECK(Error, out_slot->batches_per_slot < out_slot->batches_per_slot_cap);
+  struct batch_slice_entry* be =
+    &out_slot->slot_batches[out_slot->batches_per_slot];
+  be->data_base_offset = out_slot->slot_cursor;
+  be->desc_base_offset = out_slot->slot_desc_cursor;
   be->nlod = nlod;
   memcpy(
     be->per_lod_lods, layout.lods, (size_t)nlod * sizeof(struct lod_segment));
-  slot->batches_per_slot = 1;
+  out_slot->batches_per_slot = 1;
 
   return 0;
 

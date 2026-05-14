@@ -180,11 +180,14 @@ struct compress_agg_stage
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
-  // Unified aggregate slot (per-fc), sized to max_batch_layout maxima. Holds:
+  // Output reservoir slots (Prep-0: indexed by output_idx, today output_idx
+  // == fc; later prep decouples). Sized to max_batch_layout maxima. Holds:
   //   d_aggregated:     max_batch_layout.total_data_bytes
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
   //   plus pinned host shadows of matching size.
-  struct aggregate_slot agg[2];
+  // NB: the type stays `aggregate_slot` — it already contains only output-side
+  // state. The field rename signals the role split conceptually.
+  struct aggregate_slot output[2];
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;

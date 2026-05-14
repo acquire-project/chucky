@@ -130,11 +130,11 @@ record_flush_metrics(const struct flush_handoff* handoff,
     // TODO(phase3): with batches_per_slot > 1, sum across all slot batches
     // (slot->slot_batches[0..batches_per_slot-1]) instead of just the
     // current handoff->layout. handoff carries the latest batch only.
-    assert(handoff->agg->batches_per_slot <= 1);
+    assert(handoff->output->batches_per_slot <= 1);
     size_t agg_bytes = 0;
     const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
     for (size_t i = 0; i < n_perm; ++i)
-      agg_bytes += handoff->agg->h_permuted_sizes[i];
+      agg_bytes += handoff->output->h_permuted_sizes[i];
 
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
@@ -257,7 +257,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  CUstream d2h_stream)
 {
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = handoff->agg;
+  struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* alayout = &handoff->layout;
   // Dense mode = GPU writes chunks at densely-packed positions in
   // d_aggregated, computed by the post-batch host callback. Set when
@@ -285,7 +285,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // Carry-over only; contiguous mode keeps uniform semantics.
     //
     // batches_per_slot is asserted == 1 because the callback writes a flat
-    // [num_shards] buffer per kick — for K>1 the buffer is overwritten by
+    // [num_shards] buffer per kick — for B>1 the buffer is overwritten by
     // each kick, so per-batch storage is required before Phase 3 macro-agg
     // can use this path. Order: dense fixup must precede the bulk D2H
     // sizing below, which uses the just-overwritten data_segment_offset.
@@ -470,7 +470,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // Record an aggregate IO fence on the unified slot. wait_io_fences()
     // checks slot->io_done at the next kick.
     if (sink->record_fence)
-      handoff->agg->io_done = sink->record_fence(sink);
+      handoff->output->io_done = sink->record_fence(sink);
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
@@ -531,7 +531,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   (void)batch;
   (void)dims;
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = handoff->agg;
+  struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* layout = &handoff->layout;
 
   wait_io_fences(slot, sink, stage->metrics);

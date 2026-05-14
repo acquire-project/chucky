@@ -136,7 +136,7 @@ drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
   // so the next-bound array doesn't wait on a fence that was issued by a
   // different sink.
   for (int fc = 0; fc < 2; ++fc) {
-    struct aggregate_slot* agg = &e->compress_agg.agg[fc];
+    struct aggregate_slot* agg = &e->compress_agg.output[fc];
     if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
       desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
     agg->io_done.seq = 0;
@@ -531,14 +531,14 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     const uint32_t batches_per_slot_cap = 1; // Phase 3 will raise this.
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(&e->compress_agg.agg[fc],
+            aggregate_batch_slot_init(&e->compress_agg.output[fc],
                                       mx->u_max_total_batch_chunks,
                                       slot_chunk_cap,
                                       mx->u_max_total_data_bytes,
                                       batches_per_slot_cap,
                                       mx->u_max_total_shards) == 0);
       CU(Fail,
-         cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
+         cuEventRecord(e->compress_agg.output[fc].ready, e->streams.compute));
     }
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,
@@ -814,7 +814,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   // Unified-pipeline shared resources (allocated in init_shared_resources).
   for (int fc = 0; fc < 2; ++fc)
-    aggregate_slot_destroy(&e->compress_agg.agg[fc]);
+    aggregate_slot_destroy(&e->compress_agg.output[fc]);
   cu_mem_free(e->compress_agg.d_batch_gather);
   cu_mem_free(e->compress_agg.d_batch_perm);
   free(e->compress_agg.h_lut_gather_scratch);

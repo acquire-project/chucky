@@ -23,7 +23,9 @@ struct shard_tables;
 // must read per-LOD active counts from `per_lod_n_active` instead.
 struct flush_handoff
 {
-  int fc;                                    // flush slot index
+  int fc;                                    // input pipeline slot index
+  int output_idx;                            // output reservoir slot index
+                                             // (Prep-0: today == fc)
   uint32_t n_epochs;                         // epochs in batch
   uint32_t active_levels_mask;               // which levels active
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
@@ -34,7 +36,7 @@ struct flush_handoff
   CUevent t_compress_start; // for metrics
   CUevent t_compress_end;   // for metrics
 
-  struct aggregate_slot* agg;           // borrowed: unified slot for fc
+  struct aggregate_slot* output;        // borrowed: output reservoir slot
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
