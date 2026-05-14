@@ -175,6 +175,8 @@
               awscli2
               python3
               uv
+              cudaPackages_13_2.nsight_systems
+              cudaPackages_13_2.nsight_compute
             ]);
 
           buildInputs = commonBuildInputs ++ (mkGpuBuildInputs pkgs.cudaPackages_13_2);

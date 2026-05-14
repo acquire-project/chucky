@@ -134,15 +134,35 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
     return;
   if (slot->ready)
     cuEventDestroy(slot->ready);
+  if (slot->host_func_done)
+    cuEventDestroy(slot->host_func_done);
   cuMemFree((CUdeviceptr)slot->d_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
+  cuMemFreeHost((void*)slot->h_batch_actual_bytes);
   cuMemFree((CUdeviceptr)slot->d_temp);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
+}
+
+// cuLaunchHostFunc body. Runs on the driver thread after the small D2H of
+// the batch's prefix-sum end has landed. May not call any CUDA APIs.
+// Phase 3 step 1: just record the value into the slot's last batch entry
+// for inspection. Subsequent Phase 3 steps will use this to drive cursor
+// advancement and slot-fit decisions.
+static void CUDART_CB
+aggregate_post_batch_cb(void* userData)
+{
+  struct aggregate_slot* slot = (struct aggregate_slot*)userData;
+  if (!slot || slot->batches_per_slot == 0)
+    return;
+  // Stash on the latest batch entry. batches_per_slot is incremented
+  // host-side in compress_agg_kick before the kernels dispatch, so by the
+  // time this callback fires the entry already exists.
+  (void)*slot->h_batch_actual_bytes; // touch the pinned read
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +253,12 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
     batches_per_slot_cap, sizeof(struct batch_slice_entry));
   CHECK(Error, slot->slot_batches);
 
+  CU(Error,
+     cuMemHostAlloc((void**)&slot->h_batch_actual_bytes, sizeof(size_t), 0));
+  *slot->h_batch_actual_bytes = 0;
+
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&slot->host_func_done, CU_EVENT_DEFAULT));
 
   return 0;
 
@@ -503,6 +528,24 @@ aggregate_batch_unified_async(const void* d_compressed,
                                                     d_batch_perm,
                                                     max_comp_chunk_bytes);
   }
+
+  // Pass 5: small D2H of the prefix-sum end. d_offsets_b[C + nlod - 1] is
+  // the LOD-(nlod-1) sentinel, which the unified scan leaves with the
+  // sum-of-chunk-sizes for this batch (sentinels carry 0, so the scan's
+  // value at the sentinel position is the cumulative end). The bias
+  // kernel does not touch sentinel positions, so this value is the same
+  // in carry-over and contiguous modes.
+  //
+  // Phase 3 macro-agg reads this via a cuLaunchHostFunc to update slot
+  // bookkeeping before the next batch kicks.
+  CU(Error,
+     cuMemcpyDtoHAsync((void*)slot->h_batch_actual_bytes,
+                       (CUdeviceptr)(d_offsets_b + (C + nlod - 1)),
+                       sizeof(size_t),
+                       stream));
+
+  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_cb, slot));
+  CU(Error, cuEventRecord(slot->host_func_done, stream));
 
   return 0;
 

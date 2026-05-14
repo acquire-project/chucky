@@ -51,6 +51,18 @@ extern "C"
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches; // [batches_per_slot_cap]
 
+    // Pinned per-slot counter: the just-aggregated batch's actual byte
+    // total (prefix-sum end). Filled by a small D2H on compress_stream
+    // after aggregate; cuLaunchHostFunc reads it to update slot bookkeeping
+    // before the next batch kicks. Volatile because reader (orchestrator
+    // main thread) and writer (driver thread running the host function)
+    // are different threads.
+    volatile size_t* h_batch_actual_bytes;
+    // Event recorded on compress_stream after the cuLaunchHostFunc
+    // completes. Orchestrator waits on this before reading slot bookkeeping
+    // updated by the callback.
+    CUevent host_func_done;
+
     CUevent ready; // D2H completion
     // TODO(phase3): single io_event per slot means all K batches in a
     // macro-group share one IO fence. Fine for delivery serialization but
