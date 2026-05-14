@@ -104,6 +104,74 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
   return r;
 }
 
+// Open a fresh slot on `fc` and kick compress+aggregate for n_epochs.
+// Populates *handoff_out for the caller to feed to d2h or stash.
+static int
+kick_compress_agg(struct stream_engine* e,
+                  struct stream_context* ctx,
+                  int fc,
+                  uint32_t n_epochs,
+                  struct flush_handoff* handoff_out)
+{
+  output_slot_close_reset(&e->compress_agg.output[fc]);
+  struct compress_agg_input in = make_compress_input(e, ctx, fc, n_epochs);
+  return compress_agg_kick(&e->compress_agg,
+                           &in,
+                           &ctx->levels,
+                           &e->batch,
+                           &ctx->dims,
+                           e->streams.compress,
+                           handoff_out);
+}
+
+// Kick the full D2H for `handoff` and mark its fc pending. Slot-close action:
+// once called, the slot has been handed to the d2h stage and cannot accept
+// more in-slot batches.
+static int
+kick_d2h_and_mark_pending(struct stream_engine* e,
+                          struct stream_context* ctx,
+                          int fc,
+                          struct flush_handoff handoff)
+{
+  CHECK(Error,
+        d2h_deliver_kick(&e->d2h_deliver,
+                         &handoff,
+                         &ctx->levels,
+                         &e->batch,
+                         &ctx->dims,
+                         ctx->sink,
+                         e->streams.d2h) == 0);
+  e->flush.pending_handoff[fc] = handoff;
+  e->flush.pending_seq[fc] = e->flush.next_seq++;
+  e->flush.pending[fc] = 1;
+  return 0;
+Error:
+  return 1;
+}
+
+// Swap to the other pool, zero it, reset batch accumulation. Slot-close
+// action: at B=1 paired with kick_d2h_and_mark_pending; at B>1 only fires
+// when the slot actually closes.
+static int
+pool_swap_and_reset_accum(struct stream_engine* e, struct stream_context* ctx)
+{
+  const uint32_t K = e->batch.epochs_per_batch;
+  e->pools.current ^= 1;
+  size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
+                      ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
+  CU(Error,
+     cuMemsetD8Async(
+       e->pools.buf[e->pools.current], 0, pool_bytes, e->streams.compute));
+  e->batch.accumulated = 0;
+  e->flush.slot[e->pools.current].active_levels_mask = 0;
+  memset(e->flush.slot[e->pools.current].batch_active_masks,
+         0,
+         (size_t)K * sizeof(uint32_t));
+  return 0;
+Error:
+  return 1;
+}
+
 // Pipeline the batch boundary (lazy drain model):
 //   1. Deliver the PRIOR batch at this fc (if any). In steady state that
 //      batch's D2H has long since completed, so the host-sync is near-zero.
@@ -117,7 +185,6 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
 static struct writer_result
 drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
-  const uint32_t K = e->batch.epochs_per_batch;
   const int completed_pool = e->pools.current;
   struct flush_slot_gpu* fs = &e->flush.slot[completed_pool];
 
@@ -129,51 +196,18 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   }
 
   // Phase 2: kick compress+aggregate for the new batch (compress stream).
-  // At B=1 every kick opens a fresh slot: reset cursor/desc_cursor/
-  // batches_per_slot before the kick appends this batch's entry.
   fs->batch_epoch_count = (int)e->batch.accumulated;
-  output_slot_close_reset(&e->compress_agg.output[completed_pool]);
-  struct compress_agg_input in =
-    make_compress_input(e, ctx, completed_pool, e->batch.accumulated);
   struct flush_handoff new_handoff = { 0 };
   CHECK(Error,
-        compress_agg_kick(&e->compress_agg,
-                          &in,
-                          &ctx->levels,
-                          &e->batch,
-                          &ctx->dims,
-                          e->streams.compress,
-                          &new_handoff) == 0);
+        kick_compress_agg(
+          e, ctx, completed_pool, e->batch.accumulated, &new_handoff) == 0);
 
-  // Phase 3: kick the full D2H (offset sync + bulk queue) — non-blocking.
+  // Phases 3+4: kick d2h + mark this fc pending.
   CHECK(Error,
-        d2h_deliver_kick(&e->d2h_deliver,
-                         &new_handoff,
-                         &ctx->levels,
-                         &e->batch,
-                         &ctx->dims,
-                         ctx->sink,
-                         e->streams.d2h) == 0);
+        kick_d2h_and_mark_pending(e, ctx, completed_pool, new_handoff) == 0);
 
-  // Phase 4: mark this fc pending delivery.
-  e->flush.pending_handoff[completed_pool] = new_handoff;
-  e->flush.pending_seq[completed_pool] = e->flush.next_seq++;
-  e->flush.pending[completed_pool] = 1;
-
-  // Phase 5: swap to fresh pool and zero it for next batch.
-  e->pools.current ^= 1;
-  size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
-                      ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
-  CU(Error,
-     cuMemsetD8Async(
-       e->pools.buf[e->pools.current], 0, pool_bytes, e->streams.compute));
-
-  // Reset batch accumulation.
-  e->batch.accumulated = 0;
-  e->flush.slot[e->pools.current].active_levels_mask = 0;
-  memset(e->flush.slot[e->pools.current].batch_active_masks,
-         0,
-         (size_t)K * sizeof(uint32_t));
+  // Phase 5: swap pools, zero fresh pool, reset batch accumulation.
+  CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
   return writer_ok();
 
@@ -235,34 +269,9 @@ flush_kick_batch(struct stream_engine* e,
                  int fc,
                  uint32_t n_epochs)
 {
-  // Open a fresh slot before kicking; mirrors drain_kick_and_swap's contract.
-  output_slot_close_reset(&e->compress_agg.output[fc]);
-  struct compress_agg_input in = make_compress_input(e, ctx, fc, n_epochs);
   struct flush_handoff handoff = { 0 };
-
-  CHECK(Error,
-        compress_agg_kick(&e->compress_agg,
-                          &in,
-                          &ctx->levels,
-                          &e->batch,
-                          &ctx->dims,
-                          e->streams.compress,
-                          &handoff) == 0);
-
-  CHECK(Error,
-        d2h_deliver_kick(&e->d2h_deliver,
-                         &handoff,
-                         &ctx->levels,
-                         &e->batch,
-                         &ctx->dims,
-                         ctx->sink,
-                         e->streams.d2h) == 0);
-
-  // Save handoff for drain; mark this fc pending.
-  e->flush.pending_handoff[fc] = handoff;
-  e->flush.pending_seq[fc] = e->flush.next_seq++;
-  e->flush.pending[fc] = 1;
-
+  CHECK(Error, kick_compress_agg(e, ctx, fc, n_epochs, &handoff) == 0);
+  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, fc, handoff) == 0);
   return 0;
 
 Error:
