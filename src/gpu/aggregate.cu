@@ -169,10 +169,12 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
 static void CUDART_CB
 aggregate_post_batch_cb(void* userData)
 {
+  // CUDA guarantees stream operations sequenced before this callback have
+  // completed, so the preceding D2Hs to h_batch_actual_bytes /
+  // h_shard_sum_bytes are visible without an explicit fence.
   struct aggregate_slot* slot = (struct aggregate_slot*)userData;
   if (!slot || slot->batches_per_slot == 0)
     return;
-  (void)*slot->h_batch_actual_bytes; // touch the pinned read
 
   const uint64_t n = slot->total_shards_in;
   if (n == 0 || !slot->h_shard_base_offsets_dense || !slot->h_shard_sum_bytes)
