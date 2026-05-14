@@ -143,6 +143,9 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
   cuMemFreeHost((void*)slot->h_batch_actual_bytes);
+  cuMemFree((CUdeviceptr)slot->d_shard_sum_bytes);
+  if (slot->h_shard_sum_bytes)
+    cuMemFreeHost((void*)slot->h_shard_sum_bytes);
   cuMemFree((CUdeviceptr)slot->d_temp);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
@@ -219,7 +222,8 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_chunk_count,
                           uint64_t slot_chunk_cap,
                           size_t comp_pool_bytes,
-                          uint32_t batches_per_slot_cap)
+                          uint32_t batches_per_slot_cap,
+                          uint64_t max_total_shards)
 {
   uint64_t C = slot_chunk_cap;
   (void)batch_chunk_count;
@@ -256,6 +260,19 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   CU(Error,
      cuMemHostAlloc((void**)&slot->h_batch_actual_bytes, sizeof(size_t), 0));
   *slot->h_batch_actual_bytes = 0;
+
+  slot->shard_sum_capacity = max_total_shards;
+  if (max_total_shards > 0) {
+    CU(Error,
+       cuMemAlloc((CUdeviceptr*)&slot->d_shard_sum_bytes,
+                  max_total_shards * sizeof(size_t)));
+    CU(Error,
+       cuMemHostAlloc((void**)&slot->h_shard_sum_bytes,
+                      max_total_shards * sizeof(size_t),
+                      0));
+    for (uint64_t i = 0; i < max_total_shards; ++i)
+      ((size_t*)slot->h_shard_sum_bytes)[i] = 0;
+  }
 
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&slot->host_func_done, CU_EVENT_DEFAULT));
@@ -298,6 +315,39 @@ add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
   __syncthreads();
   for (uint64_t k = threadIdx.x; k < tps_group; k += blockDim.x)
     d_offsets[base + k] += bias_s;
+}
+
+// compute_shard_sum_bytes_k:
+//   Block per shard. Sums d_permuted_sizes over the shard's run
+//   [base .. base + tps_group) and writes the per-shard byte total to
+//   d_shard_sum_bytes[s]. Called after permute_sizes_batch_k; independent
+//   of the prefix scan. The result is consumed by the host callback to
+//   compute dense shard_base_offsets for the next batch in the slot.
+__global__ void
+compute_shard_sum_bytes_k(const size_t* __restrict__ d_permuted_sizes,
+                          const uint64_t* __restrict__ d_shard_offsets_base,
+                          const uint64_t* __restrict__ d_shard_tps_group,
+                          size_t* __restrict__ d_shard_sum_bytes,
+                          uint64_t num_shards)
+{
+  const uint64_t s = blockIdx.x;
+  if (s >= num_shards)
+    return;
+  const uint64_t base = d_shard_offsets_base[s];
+  const uint64_t n = d_shard_tps_group[s];
+  __shared__ size_t sdata[256];
+  size_t local = 0;
+  for (uint64_t k = threadIdx.x; k < n; k += blockDim.x)
+    local += d_permuted_sizes[base + k];
+  sdata[threadIdx.x] = local;
+  __syncthreads();
+  for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+    if (threadIdx.x < stride)
+      sdata[threadIdx.x] += sdata[threadIdx.x + stride];
+    __syncthreads();
+  }
+  if (threadIdx.x == 0)
+    d_shard_sum_bytes[s] = sdata[0];
 }
 
 // copy_leading_tail_unified_k:
@@ -490,6 +540,19 @@ aggregate_batch_unified_async(const void* d_compressed,
                                   cuda_stream);
   }
 
+  // Pass 2b: per-shard compressed-bytes sums for macro-agg bookkeeping.
+  // Independent of bias/gather; the result is D2H'd alongside the
+  // sum-of-all-chunks counter and consumed by the host callback below.
+  if (total_shards > 0 && slot->d_shard_sum_bytes) {
+    const int block = 256;
+    compute_shard_sum_bytes_k<<<(int)total_shards, block, 0, cuda_stream>>>(
+      d_perm_sizes_b,
+      d_shard_offsets_base,
+      d_shard_tps_group,
+      slot->d_shard_sum_bytes,
+      total_shards);
+  }
+
   if (page_size > 0 && total_shards > 0) {
     // Pass 3a: per-shard bias. Anchors each shard's first chunk at its
     // batch-local base byte offset + tail_in.
@@ -543,6 +606,16 @@ aggregate_batch_unified_async(const void* d_compressed,
                        (CUdeviceptr)(d_offsets_b + (C + nlod - 1)),
                        sizeof(size_t),
                        stream));
+
+  // Per-shard compressed-bytes D2H. Consumed by the host callback to
+  // compute dense shard_base_offsets for the next batch in this slot.
+  if (total_shards > 0 && slot->d_shard_sum_bytes && slot->h_shard_sum_bytes) {
+    CU(Error,
+       cuMemcpyDtoHAsync((void*)slot->h_shard_sum_bytes,
+                         (CUdeviceptr)slot->d_shard_sum_bytes,
+                         total_shards * sizeof(size_t),
+                         stream));
+  }
 
   CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_cb, slot));
   CU(Error, cuEventRecord(slot->host_func_done, stream));

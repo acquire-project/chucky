@@ -535,7 +535,8 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                                       mx->u_max_total_batch_chunks,
                                       slot_chunk_cap,
                                       mx->u_max_total_data_bytes,
-                                      batches_per_slot_cap) == 0);
+                                      batches_per_slot_cap,
+                                      mx->u_max_total_shards) == 0);
       CU(Fail,
          cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
     }

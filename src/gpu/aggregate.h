@@ -58,6 +58,14 @@ extern "C"
     // main thread) and writer (driver thread running the host function)
     // are different threads.
     volatile size_t* h_batch_actual_bytes;
+    // Per-shard compressed-bytes sum for the just-aggregated batch.
+    // d_shard_sum_bytes is filled by compute_shard_sum_bytes_k; the D2H
+    // staging lands the values in h_shard_sum_bytes for the host callback
+    // to compute dense shard_base_offsets for the NEXT batch in the slot.
+    // Sized to max_total_shards (passed at slot init).
+    size_t* d_shard_sum_bytes;
+    volatile size_t* h_shard_sum_bytes;
+    uint64_t shard_sum_capacity; // number of slots in the buffers above
     // Event recorded on compress_stream after the cuLaunchHostFunc
     // completes. Orchestrator waits on this before reading slot bookkeeping
     // updated by the callback.
@@ -84,11 +92,15 @@ extern "C"
   // many batches' descriptors into the same slot without resize.
   // batches_per_slot_cap is the size of the slot_batches[] table. Phase 2
   // uses 1; Phase 3 will raise it.
+  // max_total_shards sizes d_shard_sum_bytes / h_shard_sum_bytes. Pass 0
+  // for codecs/configurations without per-shard aggregation; the kernel
+  // launch and D2H are skipped in that case.
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_chunk_count,
                                 uint64_t slot_chunk_cap,
                                 size_t comp_pool_bytes,
-                                uint32_t batches_per_slot_cap);
+                                uint32_t batches_per_slot_cap,
+                                uint64_t max_total_shards);
 
   // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
   //   by add_shard_bias_k for this batch's leading-tail accounting. The host

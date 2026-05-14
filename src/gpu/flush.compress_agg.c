@@ -116,6 +116,12 @@ compress_agg_init(struct compress_agg_stage* stage,
     stage->max_total_data_bytes = stage->max_batch_layout.total_data_bytes;
   }
 
+  // Total shards across LODs — needed by slot init (for per-shard sums
+  // buffer) before the per-shard tables block populates stage->shards.
+  uint64_t total_shards_init = 0;
+  for (int lv = 0; lv < cl->levels.nlod; ++lv)
+    total_shards_init += cl->per_level[lv].agg_layout.num_shards;
+
   // Unified aggregate slot per fc. Descriptor arrays (d_offsets,
   // d_permuted_sizes, host mirrors) are sized to slot_chunk_cap so Phase 3
   // can pack multiple compressed batches' descriptors into one slot
@@ -139,7 +145,8 @@ compress_agg_init(struct compress_agg_stage* stage,
                                       stage->max_total_batch_chunks,
                                       slot_chunk_cap,
                                       stage->max_total_data_bytes,
-                                      batches_per_slot_cap) == 0);
+                                      batches_per_slot_cap,
+                                      total_shards_init) == 0);
       CU(Fail, cuEventRecord(stage->agg[fc].ready, compute));
     }
   }
