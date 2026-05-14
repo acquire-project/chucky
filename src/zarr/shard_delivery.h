@@ -71,6 +71,10 @@ finalize_shards(struct shard_state* ss,
 //   layout: aggregate layout for shard_capacity / num_shards / page_size.
 //   h_tail_bytes: [num_shards] sub-page leading-tail bytes carried in;
 //                 updated in place. NULL only when page_size == 0.
+//   shard_base_offsets: optional [num_shards] per-shard byte offsets into
+//                 result->data. NULL = uniform layout (compute internally as
+//                 si * shard_capacity). Non-NULL is used by the GPU dense
+//                 path; CPU pipeline passes NULL.
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
@@ -80,4 +84,5 @@ deliver_to_shards_batch(uint8_t level,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,
+                        const size_t* shard_base_offsets,
                         size_t* out_bytes);

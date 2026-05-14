@@ -388,6 +388,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                                     be->per_lod_lods[lv].n_active,
                                     sink,
                                     stage->shard_alignment,
+                                    /*shard_base_offsets=*/NULL,
                                     &level_bytes))
           goto Error;
         sink_bytes += level_bytes;

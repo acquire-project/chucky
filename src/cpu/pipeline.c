@@ -33,6 +33,7 @@ deliver_aggregate(int lv,
                               active_count,
                               p->sink,
                               p->shard_alignment_bytes,
+                              /*shard_base_offsets=*/NULL,
                               &sink_bytes))
     return 1;
 

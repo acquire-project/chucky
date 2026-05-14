@@ -430,6 +430,7 @@ deliver_to_shards_batch(uint8_t level,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,
+                        const size_t* shard_base_offsets,
                         size_t* out_bytes)
 {
   const uint64_t cps_inner = ss->chunks_per_shard_inner;
@@ -474,12 +475,15 @@ deliver_to_shards_batch(uint8_t level,
       uint64_t j_run_end = j_run_start + (uint64_t)run_len * cps_inner;
 
       if (use_carryover) {
-        // Aggregate-result contract: shard si's region starts at
-        // (si * shard_capacity) inside result->data; leading tail (if any)
-        // sits at the head; first chunk at (+ tail_in). h_tail_bytes[si]
-        // is reset to 0 by every finalizing run, so a non-zero value here
-        // always means "carry-in from the prior batch's last run".
-        const size_t shard_base = (size_t)si * shard_capacity;
+        // Aggregate-result contract: shard si's region starts at shard_base
+        // inside result->data; leading tail (if any) sits at the head;
+        // first chunk at (+ tail_in). h_tail_bytes[si] is reset to 0 by
+        // every finalizing run, so a non-zero value here always means
+        // "carry-in from the prior batch's last run". shard_base comes
+        // from the caller-supplied table for GPU dense; otherwise uniform.
+        const size_t shard_base = shard_base_offsets
+                                    ? shard_base_offsets[si]
+                                    : (size_t)si * shard_capacity;
         const size_t tail_in = h_tail_bytes[si];
         const size_t run_real = sum_run_chunks(
           result->chunk_sizes, si, a, run_len, n_active, cps_inner);
