@@ -369,15 +369,34 @@ test_batch_multiscale_unaligned_K(void)
   // signal; we also verify all 3 L1 emissions finalized a shard.
   size_t l1_bytes = 0;
   int l1_finalized = 0;
+  size_t l1_nonzero_bytes = 0;
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     l1_bytes += css.writers[1][i].size;
     if (css.writers[1][i].finalized)
       l1_finalized++;
+    // Count non-zero bytes in the chunk-data region (precedes the footer).
+    // With CODEC_NONE and non-zero input the chunk bytes must contain real
+    // downsampled u16 values; an all-zero L1 region would indicate the
+    // delivery view pointed at uninitialized memory (#135).
+    const uint8_t* buf = css.writers[1][i].buf;
+    const size_t sz = css.writers[1][i].size;
+    for (size_t b = 0; b < sz; ++b)
+      if (buf[b] != 0)
+        l1_nonzero_bytes++;
   }
-  log_info("  L1 bytes=%zu finalized=%d", l1_bytes, l1_finalized);
+  log_info("  L1 bytes=%zu finalized=%d nonzero=%zu",
+           l1_bytes,
+           l1_finalized,
+           l1_nonzero_bytes);
   // 3 L1 emissions → 3 finalized L1 shards (chunks_per_shard_append for L1
   // is typically 1 after the period-2 halving of the append axis).
   CHECK(Fail2, l1_finalized >= 3);
+  // Guard against the contiguous-mode lod_view bug (#135): the bug routes
+  // L1 delivery through uninitialized/stale memory, so the chunk-data
+  // region of L1 shards loses correlation with the input. With the fix in
+  // place, mean-reduced L1 chunks of sequential u16 input carry real
+  // small-but-non-zero values across multiple bytes per shard.
+  CHECK(Fail2, l1_nonzero_bytes > 0);
 
   free(src);
   tile_stream_gpu_destroy(s);

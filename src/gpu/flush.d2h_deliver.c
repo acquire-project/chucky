@@ -146,17 +146,16 @@ record_flush_metrics(const struct flush_handoff* handoff,
   }
 }
 
-// Build the per-LOD aggregate_result view into the unified host buffer for
-// delivery. The unified layout places each LOD's segment at
-// `data_segment_offset` within h_aggregated, and each LOD's
-// offsets/chunk_sizes start at `batch_covering_offset + lv`.
+// `data_base` is the byte offset within h_aggregated where this LOD's first
+// chunk lives. In carry-over mode that is seg->data_segment_offset; in
+// contiguous mode it is the cumulative actual bytes of prior LODs.
 static struct aggregate_result
-lod_view(const struct flush_handoff* handoff, uint8_t lv)
+lod_view(const struct flush_handoff* handoff, uint8_t lv, size_t data_base)
 {
   const struct lod_segment* seg = &handoff->layout.lods[lv];
   struct aggregate_slot* slot = handoff->agg;
   struct aggregate_result ar = {
-    .data = (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
+    .data = (uint8_t*)slot->h_aggregated + data_base,
     .offsets = slot->h_offsets + seg->batch_covering_offset + lv,
     .chunk_sizes =
       slot->h_permuted_sizes + seg->batch_covering_offset + lv,
@@ -223,30 +222,45 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct shard_tables* shards = handoff->shards;
     const size_t page_size = shards ? shards->page_size : 0;
 
+    // In carry-over mode the bias kernel places each LOD at
+    // data_segment_offset; in contiguous mode chunks pack from 0 across all
+    // LODs, so LOD lv starts at h_offsets[batch_covering_offset + lv]
+    // (cumulative prior-LOD bytes via the zeroed per-LOD sentinel).
+    size_t data_base[LOD_MAX_LEVELS] = { 0 };
+    for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+      if (handoff->per_lod_n_active[lv] == 0)
+        continue;
+      const struct lod_segment* seg = &handoff->layout.lods[lv];
+      if (handoff->layout.page_size > 0)
+        data_base[lv] = seg->data_segment_offset;
+      else
+        data_base[lv] =
+          handoff->agg->h_offsets[seg->batch_covering_offset + lv];
+    }
+
     // Rebase per-LOD offsets to be segment-relative. GPU produces absolute
     // offsets (each chunk's position in the unified d_aggregated buffer); the
     // shard_delivery contract — shared with the CPU path — pairs a
     // segment-shifted `result.data` with segment-relative offsets, so we
-    // subtract seg->data_segment_offset from each LOD's offsets here. This
+    // subtract the per-LOD data base from each LOD's offsets here. This
     // matches src/cpu/aggregate.c:330-338 which builds the same view shape.
     // The rebase mutates h_offsets in place; this is safe because the next
     // kick's D2H repopulates the buffer before anything reads stale values.
     for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
-      // LOD 0's segment offset is always 0; skip the no-op subtraction.
-      if (lv == 0 || handoff->per_lod_n_active[lv] == 0)
+      if (handoff->per_lod_n_active[lv] == 0 || data_base[lv] == 0)
         continue;
       const struct lod_segment* seg = &handoff->layout.lods[lv];
       size_t* off = handoff->agg->h_offsets + seg->batch_covering_offset + lv;
       const uint64_t n = (uint64_t)seg->n_active * seg->covering_count + 1;
       for (uint64_t i = 0; i < n; ++i)
-        off[i] -= seg->data_segment_offset;
+        off[i] -= data_base[lv];
     }
 
     for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
       if (handoff->per_lod_n_active[lv] == 0)
         continue;
 
-      struct aggregate_result ar = lod_view(handoff, lv);
+      struct aggregate_result ar = lod_view(handoff, lv, data_base[lv]);
       // Per-LOD slice of the unified host tail-bytes scratch.
       size_t* h_tail_lv = NULL;
       if (shards && shards->h_tail_bytes && page_size > 0)
