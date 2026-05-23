@@ -115,6 +115,9 @@ kick_compress_agg(struct stream_engine* e,
                   uint32_t n_epochs,
                   struct flush_handoff* handoff_out)
 {
+  // Visibility fence for slot_cursor written by the prior in-slot callback.
+  CU(Error,
+     cuEventSynchronize(e->compress_agg.output[output_idx].host_func_done));
   struct compress_agg_input in =
     make_compress_input(e, ctx, fc, output_idx, n_epochs);
   return compress_agg_kick(&e->compress_agg,
@@ -124,6 +127,8 @@ kick_compress_agg(struct stream_engine* e,
                            &ctx->dims,
                            e->streams.compress,
                            handoff_out);
+Error:
+  return 1;
 }
 
 static int

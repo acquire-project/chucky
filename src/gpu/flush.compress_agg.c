@@ -148,6 +148,7 @@ compress_agg_init(struct compress_agg_stage* stage,
                                       batches_per_slot_cap,
                                       total_shards_init) == 0);
       CU(Fail, cuEventRecord(stage->output[fc].ready, compute));
+      CU(Fail, cuEventRecord(stage->output[fc].host_func_done, compute));
     }
   }
 
