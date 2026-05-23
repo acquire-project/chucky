@@ -542,7 +542,16 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                                       mx->u_max_total_shards) == 0);
       CU(Fail,
          cuEventRecord(e->compress_agg.output[fc].ready, e->streams.compute));
+      CU(Fail,
+         cuEventRecord(e->compress_agg.output[fc].host_func_done,
+                       e->streams.compute));
     }
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_routing,
+                  sizeof(struct d_routing)));
+    CU(Fail,
+       cuMemsetD8(
+         (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,
                   mx->u_max_total_batch_chunks * sizeof(uint32_t)));
@@ -818,6 +827,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // Unified-pipeline shared resources (allocated in init_shared_resources).
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
   cu_mem_free(e->compress_agg.d_batch_gather);
   cu_mem_free(e->compress_agg.d_batch_perm);
   free(e->compress_agg.h_lut_gather_scratch);

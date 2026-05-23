@@ -276,6 +276,81 @@ permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
   d_permuted_sizes[d_perm[i]] = d_comp_sizes[d_gather[i]];
 }
 
+// Single-thread routing decision: read active slot's runtime state, decide
+// whether the just-compressed batch fits, write the decision to d_routing,
+// and advance the chosen slot's d_runtime so the next batch sees fresh state.
+__global__ void
+fit_decision_k(struct d_routing* d_routing,
+               struct slot_dev_ptrs slot_0,
+               struct slot_dev_ptrs slot_1,
+               const size_t* __restrict__ d_actual_bytes_ptr,
+               size_t slot_capacity,
+               uint32_t batches_per_slot_cap,
+               uint64_t batch_desc_advance,
+               int active_slot_idx)
+{
+  if (threadIdx.x != 0 || blockIdx.x != 0)
+    return;
+
+  struct slot_dev_ptrs active = (active_slot_idx == 0) ? slot_0 : slot_1;
+  struct slot_runtime_state* active_rt = active.d_runtime;
+  const size_t actual_bytes = *d_actual_bytes_ptr;
+
+  const int fits = (active_rt->batches_per_slot < batches_per_slot_cap) &&
+                   (active_rt->cursor + actual_bytes <= slot_capacity);
+
+  int target_idx;
+  struct slot_dev_ptrs target;
+  if (fits) {
+    target_idx = active_slot_idx;
+    target = active;
+    d_routing->close_prior_slot_idx = -1;
+  } else {
+    target_idx = active_slot_idx ^ 1;
+    target = (target_idx == 0) ? slot_0 : slot_1;
+    target.d_runtime->cursor = 0;
+    target.d_runtime->desc_cursor = 0;
+    target.d_runtime->batches_per_slot = 0;
+    d_routing->close_prior_slot_idx = active_slot_idx;
+  }
+
+  d_routing->data_base_offset = target.d_runtime->cursor;
+  d_routing->desc_base_offset = target.d_runtime->desc_cursor;
+  d_routing->batch_idx_in_slot = target.d_runtime->batches_per_slot;
+  d_routing->target_slot_idx = target_idx;
+  d_routing->target_d_aggregated = target.d_aggregated;
+  d_routing->target_d_offsets = target.d_offsets;
+  d_routing->target_d_permuted_sizes = target.d_permuted_sizes;
+  d_routing->target_d_shard_base_offsets_dense =
+    target.d_shard_base_offsets_dense;
+
+  target.d_runtime->cursor += actual_bytes;
+  target.d_runtime->desc_cursor += batch_desc_advance;
+  target.d_runtime->batches_per_slot += 1;
+}
+
+extern "C" int
+fit_decision_launch(struct d_routing* d_routing,
+                    struct slot_dev_ptrs slot_0,
+                    struct slot_dev_ptrs slot_1,
+                    const size_t* d_actual_bytes_ptr,
+                    size_t slot_capacity,
+                    uint32_t batches_per_slot_cap,
+                    uint64_t batch_desc_advance,
+                    int active_slot_idx,
+                    CUstream stream)
+{
+  fit_decision_k<<<1, 1, 0, (cudaStream_t)stream>>>(d_routing,
+                                                    slot_0,
+                                                    slot_1,
+                                                    d_actual_bytes_ptr,
+                                                    slot_capacity,
+                                                    batches_per_slot_cap,
+                                                    batch_desc_advance,
+                                                    active_slot_idx);
+  return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
 // gather_batch_k:
 //   Block i copies compressed chunk gather[i] to output position perm[i].
 __global__ void

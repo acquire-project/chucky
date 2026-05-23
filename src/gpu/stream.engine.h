@@ -219,6 +219,9 @@ struct compress_agg_stage
   // Per-shard tables (replaces per-LOD d_tail_*, d_batch_gather/perm).
   struct shard_tables shards;
 
+  // Routing decision for the current batch, written by fit_decision_k.
+  struct d_routing* d_routing;
+
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
   // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
   // The shard_state itself stays per-LOD because deliver_to_shards_batch and

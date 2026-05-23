@@ -53,6 +53,41 @@ extern "C"
     uint32_t _pad;
   };
 
+  // Per-batch routing decision. Downstream aggregate kernels read this
+  // instead of taking slot pointers/offsets as launch args.
+  struct d_routing
+  {
+    void* target_d_aggregated;
+    size_t* target_d_offsets;
+    size_t* target_d_permuted_sizes;
+    size_t* target_d_shard_base_offsets_dense;
+    size_t data_base_offset;
+    uint64_t desc_base_offset;
+    uint32_t batch_idx_in_slot;
+    int32_t target_slot_idx;
+    int32_t close_prior_slot_idx; // -1 if no close
+    uint32_t _pad;
+  };
+
+  struct slot_dev_ptrs
+  {
+    void* d_aggregated;
+    size_t* d_offsets;
+    size_t* d_permuted_sizes;
+    size_t* d_shard_base_offsets_dense;
+    struct slot_runtime_state* d_runtime;
+  };
+
+  int fit_decision_launch(struct d_routing* d_routing,
+                          struct slot_dev_ptrs slot_0,
+                          struct slot_dev_ptrs slot_1,
+                          const size_t* d_actual_bytes_ptr,
+                          size_t slot_capacity,
+                          uint32_t batches_per_slot_cap,
+                          uint64_t batch_desc_advance,
+                          int active_slot_idx,
+                          CUstream stream);
+
   struct aggregate_slot
   {
     size_t* d_permuted_sizes; // device: slot_chunk_cap size_t
