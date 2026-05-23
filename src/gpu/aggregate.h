@@ -33,6 +33,16 @@ extern "C"
     struct lod_segment per_lod_lods[LOD_MAX_LEVELS];
   };
 
+  struct aggregate_slot;
+
+  // Each callback invocation needs to know its own batch_idx; reading
+  // slot->batches_per_slot would race against the main thread.
+  struct cb_context
+  {
+    struct aggregate_slot* slot;
+    uint32_t batch_idx;
+  };
+
   struct aggregate_slot
   {
     size_t* d_permuted_sizes; // device: slot_chunk_cap size_t
@@ -51,6 +61,7 @@ extern "C"
     uint32_t batches_per_slot;
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches; // [batches_per_slot_cap]
+    struct cb_context* cb_contexts;         // [batches_per_slot_cap]
 
     // Pinned per-slot counter: the just-aggregated batch's actual byte
     // total (prefix-sum end). Filled by a small D2H on compress_stream
