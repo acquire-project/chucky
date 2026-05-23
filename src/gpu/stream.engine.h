@@ -121,16 +121,14 @@ struct batch_state
 struct compress_agg_input
 {
   int fc;
+  int output_idx; // output reservoir slot; cycles on close, not per batch
   uint32_t n_epochs;
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
   CUdeviceptr pool_buf;
-  CUevent pool_ready; // batch-level (from batch_state.pool_ready)
+  CUevent pool_ready;
   CUevent lod_done;
-  CUevent prev_d2h_done; // prior D2H on same fc; compress waits on this so
-                         // aggregate doesn't overwrite agg[fc].d_aggregated
-                         // before the prior D2H has read it. Initialized
-                         // signaled.
+  CUevent prev_d2h_done; // initialized signaled; guards d_aggregated overwrite
   uint32_t epochs_per_batch;
 };
 
@@ -239,19 +237,19 @@ struct d2h_deliver_stage
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
-// Lazy-delivery pipeline: each fc slot can independently hold a kicked-but-
-// not-yet-delivered batch. Delivery of fc=A happens at the start of the
-// drain_kick_and_swap round that is about to reuse fc=A (two rounds after
-// that batch was kicked, in N=2 alternation). Both fcs may hold a pending
+// Lazy-delivery pipeline: each output slot can independently hold a kicked-
+// but-not-yet-delivered batch. Delivery of slot=A happens at the start of the
+// drain_kick_and_swap round that is about to reuse slot=A (two rounds after
+// that batch was kicked, in N=2 alternation). Both slots may hold a pending
 // batch simultaneously; drain order at final flush follows pending_seq.
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
-  int current;                             // fc currently being filled
-  int pending[2];                          // per-fc: batch awaiting delivery
-  uint64_t pending_seq[2];                 // monotonic kick seq per pending
-  uint64_t next_seq;                       // next seq to assign on kick
-  struct flush_handoff pending_handoff[2]; // per-fc
+  int output_current; // output reservoir index; flips on slot close
+  int pending[2];
+  uint64_t pending_seq[2];
+  uint64_t next_seq;
+  struct flush_handoff pending_handoff[2];
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,

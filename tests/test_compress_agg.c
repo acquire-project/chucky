@@ -128,6 +128,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
 
   struct compress_agg_input in = {
     .fc = 0,
+    .output_idx = 0,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
@@ -752,6 +753,7 @@ test_compress_agg_lut_cache_position_shift(void)
   {
     struct compress_agg_input in = {
       .fc = 0,
+      .output_idx = 0,
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
@@ -784,6 +786,7 @@ test_compress_agg_lut_cache_position_shift(void)
   {
     struct compress_agg_input in = {
       .fc = 1,
+      .output_idx = 1,
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,

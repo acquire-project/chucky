@@ -33,6 +33,7 @@ struct array_descriptor_gpu
   // Mutable per-array state (saved/restored via bind/unbind)
   uint32_t batch_accumulated;
   int pools_current;
+  int output_current;
   struct flush_slot_gpu flush_slots[2];
   int flush_pending[2];
   uint64_t flush_pending_seq[2];
@@ -152,6 +153,7 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
   e->batch.accumulated = desc->batch_accumulated;
   e->pools.current = desc->pools_current;
+  e->flush.output_current = desc->output_current;
   for (int i = 0; i < 2; ++i) {
     e->flush.slot[i] = desc->flush_slots[i];
     e->flush.pending[i] = desc->flush_pending[i];
@@ -204,6 +206,7 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
+  desc->output_current = e->flush.output_current;
   for (int i = 0; i < 2; ++i) {
     desc->flush_slots[i] = e->flush.slot[i];
     desc->flush_pending[i] = e->flush.pending[i];

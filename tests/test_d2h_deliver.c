@@ -133,6 +133,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
 
   struct compress_agg_input in = {
     .fc = fc,
+    .output_idx = fc,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,

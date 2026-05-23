@@ -261,7 +261,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct stream_metrics* metrics,
                  CUstream d2h_stream)
 {
-  const int fc = handoff->fc;
+  const int oi = handoff->output_idx;
   struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* alayout = &handoff->layout;
   // Dense mode = GPU writes chunks at densely-packed positions in
@@ -281,7 +281,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // Wait for chunk-index D2H + host_func to land. Both paths need this
     // before the dense fixup (slot->h_shard_base_offsets_dense is populated
     // by the host callback sequenced before the chunk-index D2H).
-    if (poll_event(stage->h_chunk_index_ready[fc], fc))
+    if (poll_event(stage->h_chunk_index_ready[oi], oi))
       goto Error;
 
     // Rewrite per-batch / per-LOD data_segment_offset to the dense LOD
@@ -315,7 +315,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
 
     if (handoff->passthrough) {
       // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
-      if (poll_event(stage->ready[fc], fc))
+      if (poll_event(stage->ready[oi], oi))
         goto Error;
     } else {
       // Compressed: dispatch the exact-size bulk D2H per batch×LOD
@@ -362,10 +362,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         }
       }
 
-      CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+      CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
       CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
-      if (poll_event(stage->ready[fc], fc))
+      if (poll_event(stage->ready[oi], oi))
         goto Error;
     }
 
@@ -381,8 +381,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                        lod,
                        lod_shared,
                        metrics,
-                       stage->t_d2h_start[fc],
-                       stage->ready[fc]);
+                       stage->t_d2h_start[oi],
+                       stage->ready[oi]);
 
   {
     struct platform_clock sink_clock = { 0 };
@@ -535,7 +535,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   (void)levels;
   (void)batch;
   (void)dims;
-  const int fc = handoff->fc;
+  const int oi = handoff->output_idx;
   struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* layout = &handoff->layout;
 
@@ -547,7 +547,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // h_chunk_index_ready in sync_and_deliver guarantees the dense pinned
   // buffer is visible to the CPU. Do not move t_aggregate_end earlier.
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
-  CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
+  CU(Error, cuEventRecord(stage->t_d2h_start[oi], d2h_stream));
 
   // Offsets + permuted sizes. Compressed codecs use these in drain to size
   // exact per-LOD transfers; pass-through copies them too so delivery's
@@ -566,7 +566,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                          d2h_stream));
   }
 
-  CU(Error, cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
+  CU(Error, cuEventRecord(stage->h_chunk_index_ready[oi], d2h_stream));
 
   // Pass-through: per-LOD actual equals worst-case. Dispatch the bulk D2H
   // now so it pipelines with the next batch's compute (matches pre-Phase-1
@@ -580,12 +580,10 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                            layout->total_data_bytes,
                            d2h_stream));
     }
-    // Record events unconditionally so the poll in sync_and_deliver sees a
-    // current-cycle signal even when this batch carries no data (all LODs
-    // inactive). Without this the poll would observe a prior-cycle signal,
-    // which happens to be harmless today but invalidates the "every kick
-    // signals slot->ready" invariant the cap-stacking paths depend on.
-    CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+    // Record events unconditionally: empty passthrough batches must still
+    // signal completion so the cap-stacking paths never observe a stale
+    // prior-cycle signal on slot->ready.
+    CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
 

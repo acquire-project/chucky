@@ -19,11 +19,13 @@ static struct compress_agg_input
 make_compress_input(struct stream_engine* e,
                     struct stream_context* ctx,
                     int fc,
+                    int output_idx,
                     uint32_t n_epochs)
 {
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
   return (struct compress_agg_input){
     .fc = fc,
+    .output_idx = output_idx,
     .n_epochs = n_epochs,
     .active_levels_mask = fs->active_levels_mask,
     .batch_active_masks = fs->batch_active_masks,
@@ -33,7 +35,7 @@ make_compress_input(struct stream_engine* e,
       (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
         ? e->lod_shared.timing[fc].t_end
         : NULL,
-    .prev_d2h_done = e->d2h_deliver.ready[fc],
+    .prev_d2h_done = e->d2h_deliver.ready[output_idx],
     .epochs_per_batch = e->batch.epochs_per_batch,
   };
 }
@@ -74,18 +76,18 @@ Error:
   return 1;
 }
 
-// Drain one pending fc slot: host-sync on ready[fc] (near-zero in steady
+// Drain one pending output slot: host-sync on ready[oi] (near-zero in steady
 // state), run delivery, clear pending. Accumulates flush_stall metric.
 static struct writer_result
-drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
+drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (!e->flush.pending[fc])
+  if (!e->flush.pending[oi])
     return writer_ok();
 
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                             &e->flush.pending_handoff[fc],
+                                             &e->flush.pending_handoff[oi],
                                              &ctx->levels,
                                              &e->batch,
                                              &ctx->dims,
@@ -100,21 +102,21 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
-  e->flush.pending[fc] = 0;
+  e->flush.pending[oi] = 0;
   return r;
 }
 
-// Open a fresh slot on `fc` and kick compress+aggregate for n_epochs.
-// Populates *handoff_out for the caller to feed to d2h or stash.
 static int
 kick_compress_agg(struct stream_engine* e,
                   struct stream_context* ctx,
                   int fc,
+                  int output_idx,
                   uint32_t n_epochs,
                   struct flush_handoff* handoff_out)
 {
-  output_slot_close_reset(&e->compress_agg.output[fc]);
-  struct compress_agg_input in = make_compress_input(e, ctx, fc, n_epochs);
+  output_slot_close_reset(&e->compress_agg.output[output_idx]);
+  struct compress_agg_input in =
+    make_compress_input(e, ctx, fc, output_idx, n_epochs);
   return compress_agg_kick(&e->compress_agg,
                            &in,
                            &ctx->levels,
@@ -124,13 +126,10 @@ kick_compress_agg(struct stream_engine* e,
                            handoff_out);
 }
 
-// Kick the full D2H for `handoff` and mark its fc pending. Slot-close action:
-// once called, the slot has been handed to the d2h stage and cannot accept
-// more in-slot batches.
 static int
 kick_d2h_and_mark_pending(struct stream_engine* e,
                           struct stream_context* ctx,
-                          int fc,
+                          int output_idx,
                           struct flush_handoff handoff)
 {
   CHECK(Error,
@@ -141,22 +140,20 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                          &ctx->dims,
                          ctx->sink,
                          e->streams.d2h) == 0);
-  e->flush.pending_handoff[fc] = handoff;
-  e->flush.pending_seq[fc] = e->flush.next_seq++;
-  e->flush.pending[fc] = 1;
+  e->flush.pending_handoff[output_idx] = handoff;
+  e->flush.pending_seq[output_idx] = e->flush.next_seq++;
+  e->flush.pending[output_idx] = 1;
   return 0;
 Error:
   return 1;
 }
 
-// Swap to the other pool, zero it, reset batch accumulation. Slot-close
-// action: at B=1 paired with kick_d2h_and_mark_pending; at B>1 only fires
-// when the slot actually closes.
 static int
 pool_swap_and_reset_accum(struct stream_engine* e, struct stream_context* ctx)
 {
   const uint32_t K = e->batch.epochs_per_batch;
   e->pools.current ^= 1;
+  e->flush.output_current ^= 1;
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
   CU(Error,
@@ -172,41 +169,28 @@ Error:
   return 1;
 }
 
-// Pipeline the batch boundary (lazy drain model):
-//   1. Deliver the PRIOR batch at this fc (if any). In steady state that
-//      batch's D2H has long since completed, so the host-sync is near-zero.
-//   2. Kick compress+aggregate for the new batch on this fc.
-//   3. Kick the full D2H (offset + bulk) on the d2h stream — non-blocking.
-//   4. Record the new handoff as pending for this fc; the drain of this
-//      batch will happen when fc is reused (typically 2 rounds later).
-//   5. Swap pools, zero the fresh one, reset batch accumulation.
-// Shard writes stay in batch order because we always deliver the fc we're
-// about to reuse, which holds the oldest undelivered batch.
+// Batch order is preserved by draining the slot we're about to reuse.
 static struct writer_result
 drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
-  const int completed_pool = e->pools.current;
-  struct flush_slot_gpu* fs = &e->flush.slot[completed_pool];
+  const int fc = e->pools.current;
+  const int oi = e->flush.output_current;
+  struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
-  // Phase 1: deliver the PRIOR batch at fc=completed_pool (if any).
   {
-    struct writer_result r = drain_fc(e, ctx, completed_pool);
+    struct writer_result r = drain_output(e, ctx, oi);
     if (r.error)
       return r;
   }
 
-  // Phase 2: kick compress+aggregate for the new batch (compress stream).
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct flush_handoff new_handoff = { 0 };
   CHECK(Error,
-        kick_compress_agg(
-          e, ctx, completed_pool, e->batch.accumulated, &new_handoff) == 0);
+        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &new_handoff) ==
+          0);
 
-  // Phases 3+4: kick d2h + mark this fc pending.
-  CHECK(Error,
-        kick_d2h_and_mark_pending(e, ctx, completed_pool, new_handoff) == 0);
+  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, oi, new_handoff) == 0);
 
-  // Phase 5: swap pools, zero fresh pool, reset batch accumulation.
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
   return writer_ok();
@@ -260,18 +244,17 @@ Error:
 
 // --- Batch flush pipeline ---
 
-// Kick compress + aggregate + full D2H for a batch of n_epochs epochs on
-// the given fc. Records the handoff as pending for this fc. Caller must
-// drain pending[fc] before calling again on the same fc.
 int
 flush_kick_batch(struct stream_engine* e,
                  struct stream_context* ctx,
                  int fc,
+                 int output_idx,
                  uint32_t n_epochs)
 {
   struct flush_handoff handoff = { 0 };
-  CHECK(Error, kick_compress_agg(e, ctx, fc, n_epochs, &handoff) == 0);
-  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, fc, handoff) == 0);
+  CHECK(Error,
+        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &handoff) == 0);
+  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, output_idx, handoff) == 0);
   return 0;
 
 Error:
@@ -280,23 +263,21 @@ Error:
 
 // --- Public interface ---
 
-// Drain all pending batches in kick order. Called at stream flush.
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
-  // Up to 2 pending fcs (one per slot); drain oldest first.
   for (int i = 0; i < 2; ++i) {
     int pick = -1;
     uint64_t pick_seq = UINT64_MAX;
-    for (int fc = 0; fc < 2; ++fc) {
-      if (e->flush.pending[fc] && e->flush.pending_seq[fc] < pick_seq) {
-        pick = fc;
-        pick_seq = e->flush.pending_seq[fc];
+    for (int oi = 0; oi < 2; ++oi) {
+      if (e->flush.pending[oi] && e->flush.pending_seq[oi] < pick_seq) {
+        pick = oi;
+        pick_seq = e->flush.pending_seq[oi];
       }
     }
     if (pick < 0)
       break;
-    struct writer_result r = drain_fc(e, ctx, pick);
+    struct writer_result r = drain_output(e, ctx, pick);
     if (r.error)
       return r;
   }
@@ -310,18 +291,18 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   const int fc = e->pools.current;
+  const int oi = e->flush.output_current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
 
-  // Record pool_ready after all scatter ops for this (possibly partial) batch.
   if (cuEventRecord(e->batch.pool_ready, e->streams.compute) != CUDA_SUCCESS)
     return writer_error();
 
-  if (flush_kick_batch(e, ctx, fc, e->batch.accumulated))
+  if (flush_kick_batch(e, ctx, fc, oi, e->batch.accumulated))
     return writer_error();
 
-  struct writer_result r = drain_fc(e, ctx, fc);
+  struct writer_result r = drain_output(e, ctx, oi);
   if (r.error)
     return r;
 
@@ -354,6 +335,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   const int fc = e->pools.current;
+  const int oi = e->flush.output_current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
@@ -414,9 +396,9 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
        cuEventRecord(e->lod_shared.timing[fc].t_end, e->streams.compute));
 
   CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
-  if (flush_kick_batch(e, ctx, fc, 1))
+  if (flush_kick_batch(e, ctx, fc, oi, 1))
     return writer_error();
-  return drain_fc(e, ctx, fc);
+  return drain_output(e, ctx, oi);
 
 Error:
   return writer_error();

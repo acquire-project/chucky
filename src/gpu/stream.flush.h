@@ -6,12 +6,11 @@
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx);
 
-// Kick compress->aggregate->D2H for a batch of n_epochs epochs.
-// fc: flush slot index (matches pool index before swap).
 int
 flush_kick_batch(struct stream_engine* e,
                  struct stream_context* ctx,
                  int fc,
+                 int output_idx,
                  uint32_t n_epochs);
 
 // Synchronously flush accumulated epochs (partial or full batch).

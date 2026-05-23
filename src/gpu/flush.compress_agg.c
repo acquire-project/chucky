@@ -513,8 +513,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   // --- Phase 7: unified aggregate dispatch --------------------------------
   // Set the slot's view of host-side tail-bytes / total_shards so the
   // post-batch host callback can compute dense base offsets.
-  // Prep-0: output_idx == fc today; later prep decouples.
-  const int output_idx = fc;
+  const int output_idx = in->output_idx;
   struct aggregate_slot* out_slot = &stage->output[output_idx];
   out_slot->h_tail_bytes_view = stage->shards.h_tail_bytes;
   out_slot->total_shards_in = stage->shards.total_shards;
