@@ -76,8 +76,8 @@ Error:
   return 1;
 }
 
-// Drain one pending output slot: host-sync on ready[oi] (near-zero in steady
-// state), run delivery, clear pending. Accumulates flush_stall metric.
+// Resets slot state on success so the next kick starts fresh. B>1 stacking
+// skips drain between in-slot batches, preserving the cursor.
 static struct writer_result
 drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
@@ -103,6 +103,7 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
   e->flush.pending[oi] = 0;
+  output_slot_close_reset(&e->compress_agg.output[oi]);
   return r;
 }
 
@@ -114,7 +115,6 @@ kick_compress_agg(struct stream_engine* e,
                   uint32_t n_epochs,
                   struct flush_handoff* handoff_out)
 {
-  output_slot_close_reset(&e->compress_agg.output[output_idx]);
   struct compress_agg_input in =
     make_compress_input(e, ctx, fc, output_idx, n_epochs);
   return compress_agg_kick(&e->compress_agg,
