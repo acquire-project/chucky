@@ -135,6 +135,9 @@ output_slot_close_reset(struct aggregate_slot* slot)
   slot->slot_cursor = 0;
   slot->slot_desc_cursor = 0;
   slot->batches_per_slot = 0;
+  if (slot->d_runtime)
+    cuMemsetD8(
+      (CUdeviceptr)slot->d_runtime, 0, sizeof(struct slot_runtime_state));
 }
 
 extern "C" int
@@ -211,6 +214,7 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   if (slot->h_tail_bytes_next)
     cuMemFreeHost((void*)slot->h_tail_bytes_next);
   cuMemFree((CUdeviceptr)slot->d_temp);
+  cuMemFree((CUdeviceptr)slot->d_runtime);
   free(slot->slot_batches);
   free(slot->cb_contexts);
   memset(slot, 0, sizeof(*slot));
@@ -385,6 +389,13 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
 
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&slot->host_func_done, CU_EVENT_DEFAULT));
+
+  CU(Error,
+     cuMemAlloc((CUdeviceptr*)&slot->d_runtime,
+                sizeof(struct slot_runtime_state)));
+  CU(Error,
+     cuMemsetD8(
+       (CUdeviceptr)slot->d_runtime, 0, sizeof(struct slot_runtime_state)));
 
   return 0;
 

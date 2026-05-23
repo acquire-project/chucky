@@ -43,6 +43,16 @@ extern "C"
     uint32_t batch_idx;
   };
 
+  // Device-resident counterpart of slot_cursor/slot_desc_cursor/
+  // batches_per_slot. Source of truth once GPU routing is active.
+  struct slot_runtime_state
+  {
+    size_t cursor;
+    uint64_t desc_cursor;
+    uint32_t batches_per_slot;
+    uint32_t _pad;
+  };
+
   struct aggregate_slot
   {
     size_t* d_permuted_sizes; // device: slot_chunk_cap size_t
@@ -62,6 +72,7 @@ extern "C"
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches; // [batches_per_slot_cap]
     struct cb_context* cb_contexts;         // [batches_per_slot_cap]
+    struct slot_runtime_state* d_runtime;   // device, 1 instance
 
     // Pinned per-slot counter: the just-aggregated batch's actual byte
     // total (prefix-sum end). Filled by a small D2H on compress_stream
