@@ -284,32 +284,26 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     if (poll_event(stage->h_chunk_index_ready[oi], oi))
       goto Error;
 
-    // Rewrite per-batch / per-LOD data_segment_offset to the dense LOD
-    // start. Mutates h_shard_base_offsets_dense in place to hold
-    // LOD-relative shard offsets that delivery passes to shard_delivery.
-    // Carry-over only; contiguous mode keeps uniform semantics.
-    //
-    // batches_per_slot is asserted == 1 because the callback writes a flat
-    // [num_shards] buffer per kick — for B>1 the buffer is overwritten by
-    // each kick, so per-batch storage is required before Phase 3 macro-agg
-    // can use this path. Order: dense fixup must precede the bulk D2H
-    // sizing below, which uses the just-overwritten data_segment_offset.
+    // Must run before the bulk D2H below, which reads data_segment_offset.
     if (dense_mode) {
-      assert(slot->batches_per_slot == 1);
-      volatile size_t* dense = slot->h_shard_base_offsets_dense;
       struct shard_tables* sh = handoff->shards;
-      struct batch_slice_entry* be = &slot->slot_batches[0];
-      for (uint8_t lv = 0; lv < be->nlod; ++lv) {
-        const uint32_t lv_begin = sh->shards_begin[lv];
-        const uint32_t lv_n = sh->n_shards[lv];
-        if (lv_n == 0)
-          continue;
-        const size_t dense_lv_start = (size_t)dense[lv_begin];
-        be->per_lod_lods[lv].data_segment_offset =
-          dense_lv_start - be->data_base_offset;
-        for (uint32_t si = 0; si < lv_n; ++si)
-          dense[lv_begin + si] =
-            (size_t)dense[lv_begin + si] - dense_lv_start; // LOD-relative
+      const uint64_t num_shards = sh->total_shards;
+      for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+        struct batch_slice_entry* be = &slot->slot_batches[b];
+        volatile size_t* dense_b =
+          slot->h_shard_base_offsets_dense + (size_t)b * num_shards;
+        for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+          const uint32_t lv_begin = sh->shards_begin[lv];
+          const uint32_t lv_n = sh->n_shards[lv];
+          if (lv_n == 0)
+            continue;
+          const size_t dense_lv_start = (size_t)dense_b[lv_begin];
+          be->per_lod_lods[lv].data_segment_offset =
+            dense_lv_start - be->data_base_offset;
+          for (uint32_t si = 0; si < lv_n; ++si)
+            dense_b[lv_begin + si] =
+              (size_t)dense_b[lv_begin + si] - dense_lv_start;
+        }
       }
     }
 
@@ -415,6 +409,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       }
     }
 
+    const uint64_t dense_num_shards =
+      dense_mode ? handoff->shards->total_shards : 0;
     for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
       const struct batch_slice_entry* be = &slot->slot_batches[b];
       for (uint8_t lv = 0; lv < be->nlod; ++lv) {
@@ -427,11 +423,9 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         if (shards && shards->h_tail_bytes && page_size > 0)
           h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
 
-        // Per-LOD dense rel offsets (populated by the fixup above; NULL =
-        // uniform layout, used by the CPU pipeline).
         const size_t* shard_base_offsets_lv =
           dense_mode ? (const size_t*)slot->h_shard_base_offsets_dense +
-                         shards->shards_begin[lv]
+                         (size_t)b * dense_num_shards + shards->shards_begin[lv]
                      : NULL;
         size_t level_bytes = 0;
         if (deliver_to_shards_batch((uint8_t)lv,
