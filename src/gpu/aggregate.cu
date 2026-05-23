@@ -153,6 +153,7 @@ output_slot_append_batch_entry(struct aggregate_slot* slot,
   memcpy(
     be->per_lod_lods, layout->lods, (size_t)nlod * sizeof(struct lod_segment));
   slot->batches_per_slot++;
+  slot->slot_desc_cursor += layout->total_batch_covering + (uint64_t)nlod;
   return 0;
 }
 
@@ -214,35 +215,16 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   memset(slot, 0, sizeof(*slot));
 }
 
-// cuLaunchHostFunc body. Runs on the driver thread after the per-shard
-// sums D2H has landed. Computes dense per-shard base offsets into
-// h_shard_base_offsets_dense for a subsequent H2D upload to feed the
-// bias/tail kernels. May not call any CUDA APIs.
+// cuLaunchHostFunc body. Runs on the driver thread after the per-shard sums
+// D2H lands. Writes dense per-shard base offsets, h_tail_bytes_next, and
+// advances slot_cursor by this batch's actual bytes. May not call CUDA APIs.
 //
-// dense[s] = slot_cursor + sum_{i<s} (h_tail_bytes_view[i] +
-// h_shard_sum_bytes[i])
-//
-// Prep-1 addition (purely additive at B=1):
-//   - h_tail_bytes_next[s] = (h_tail_bytes_view[s] + h_shard_sum_bytes[s]) %
-//     page_size — future-state tail bytes for the next in-slot batch. At B=1
-//     the orchestrator's post-delivery H2D from h_tail_bytes still overwrites
-//     d_tail_bytes; this write is unconsumed but verifiable against host's
-//     post-delivery h_tail_bytes for correctness.
-//
-// slot_cursor is NOT updated by this callback. Prep-2 will factor the slot
-// lifecycle so the callback can advance it without breaking B=1 (today the
-// next kick reads slot_cursor before resetting it).
-//
-// Phase 2/2b: batches_per_slot is always 1 and slot_cursor stays 0, so the
-// computed values match what s*shard_capacity would have produced modulo
-// tail+compression — when h_shard_sum_bytes[s] + tail[s] < shard_capacity,
-// dense packing puts shards closer together than uniform packing did.
+// Visibility: orchestrator must wait on slot->host_func_done before the next
+// in-slot kick reads slot_cursor. At B=1 close_reset zeros the cursor on the
+// next kick, so the missing wait is currently benign.
 static void CUDART_CB
 aggregate_post_batch_cb(void* userData)
 {
-  // CUDA guarantees stream operations sequenced before this callback have
-  // completed, so the preceding D2Hs to h_batch_actual_bytes /
-  // h_shard_sum_bytes are visible without an explicit fence.
   struct aggregate_slot* slot = (struct aggregate_slot*)userData;
   if (!slot || slot->batches_per_slot == 0)
     return;
@@ -262,6 +244,7 @@ aggregate_post_batch_cb(void* userData)
       ((size_t*)slot->h_tail_bytes_next)[s] =
         (page_size > 0) ? (total % page_size) : 0;
   }
+  slot->slot_cursor = cum;
 }
 
 // ---------------------------------------------------------------------------
