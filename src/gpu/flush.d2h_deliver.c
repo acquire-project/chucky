@@ -538,11 +538,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, slot->host_func_done, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[oi], d2h_stream));
 
-  // Offsets + permuted sizes. Compressed codecs use these in drain to size
-  // exact per-LOD transfers; pass-through copies them too so delivery's
-  // chunk-index walk works uniformly.
-  if (layout->total_batch_covering > 0) {
-    const size_t n = layout->total_batch_covering + (size_t)handoff->nlod;
+  if (handoff->slot_total_desc_entries > 0) {
+    const size_t n = (size_t)handoff->slot_total_desc_entries;
     CU(Error,
        cuMemcpyDtoHAsync(slot->h_offsets,
                          (CUdeviceptr)slot->d_offsets,

@@ -104,6 +104,7 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 
   e->flush.pending[oi] = 0;
   output_slot_close_reset(&e->compress_agg.output[oi]);
+  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
   return r;
 }
 

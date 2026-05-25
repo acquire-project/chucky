@@ -603,6 +603,9 @@ compress_agg_kick(struct compress_agg_stage* stage,
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
 
+  stage->slot_host_acc_desc_entries[output_idx] +=
+    layout.total_batch_covering + (uint64_t)nlod;
+
   // --- Phase 8: fill handoff ----------------------------------------------
   out->fc = fc;
   out->output_idx = output_idx;
@@ -619,6 +622,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->output = out_slot;
   out->layout = layout;
+  out->slot_total_desc_entries = stage->slot_host_acc_desc_entries[output_idx];
   out->per_lod_agg_layouts = stage->per_lod_agg_layouts;
   out->shards = &stage->shards;
   for (uint8_t lv = 0; lv < nlod; ++lv)

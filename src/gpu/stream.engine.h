@@ -227,6 +227,7 @@ struct compress_agg_stage
   volatile size_t* h_close_signal;
   struct agg_routing_cb_args cb_args_ring[4];
   uint64_t cb_args_seq;
+  uint64_t slot_host_acc_desc_entries[2];
 
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
   // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
