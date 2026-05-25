@@ -128,7 +128,10 @@ kick_compress_agg(struct stream_engine* e,
 }
 
 static int
-post_kick_review(struct stream_engine* e, int active_oi)
+post_kick_review(struct stream_engine* e,
+                 int active_oi,
+                 struct flush_handoff* scratch,
+                 int* out_target)
 {
   CU(Error,
      cuEventSynchronize(e->compress_agg.output[active_oi].host_func_done));
@@ -142,6 +145,10 @@ post_kick_review(struct stream_engine* e, int active_oi)
     CHECK(Error, e->compress_agg.h_close_signal[0] == 0);
     CHECK(Error, e->compress_agg.h_close_signal[1] == 0);
   }
+  scratch->output_idx = target;
+  scratch->output = &e->compress_agg.output[target];
+  e->flush.pending_handoff[target] = *scratch;
+  *out_target = target;
   return 0;
 Error:
   return 1;
@@ -203,15 +210,16 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   }
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
-  struct flush_handoff* new_handoff = &e->flush.pending_handoff[oi];
-  memset(new_handoff, 0, sizeof(*new_handoff));
+  struct flush_handoff scratch = { 0 };
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, new_handoff) ==
-          0);
+        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &scratch) == 0);
 
-  CHECK(Error, post_kick_review(e, oi) == 0);
+  int target = -1;
+  CHECK(Error, post_kick_review(e, oi, &scratch, &target) == 0);
 
-  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, oi, new_handoff) == 0);
+  CHECK(Error,
+        kick_d2h_and_mark_pending(
+          e, ctx, target, &e->flush.pending_handoff[target]) == 0);
 
   e->flush.output_current ^= 1;
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
@@ -274,12 +282,14 @@ flush_kick_batch(struct stream_engine* e,
                  int output_idx,
                  uint32_t n_epochs)
 {
-  struct flush_handoff* handoff = &e->flush.pending_handoff[output_idx];
-  memset(handoff, 0, sizeof(*handoff));
+  struct flush_handoff scratch = { 0 };
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, handoff) == 0);
-  CHECK(Error, post_kick_review(e, output_idx) == 0);
-  CHECK(Error, kick_d2h_and_mark_pending(e, ctx, output_idx, handoff) == 0);
+        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
+  int target = -1;
+  CHECK(Error, post_kick_review(e, output_idx, &scratch, &target) == 0);
+  CHECK(Error,
+        kick_d2h_and_mark_pending(
+          e, ctx, target, &e->flush.pending_handoff[target]) == 0);
   return 0;
 
 Error:
