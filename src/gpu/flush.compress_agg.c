@@ -138,8 +138,7 @@ compress_agg_init(struct compress_agg_stage* stage,
       if (by_min > slot_chunk_cap)
         slot_chunk_cap = by_min;
     }
-    const uint32_t batches_per_slot_cap =
-      (stage->codec.type != CODEC_NONE) ? 2 : 1;
+    const uint32_t batches_per_slot_cap = 1;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->output[fc],
