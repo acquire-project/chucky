@@ -521,11 +521,12 @@ compress_agg_kick(struct compress_agg_stage* stage,
   if (in->lod_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
 
-  // Aggregate writes to agg[fc].d_aggregated; ensure the prior D2H at this
-  // fc has finished reading from it before we overwrite. prev_d2h_done is
-  // initialized signaled, so the first kick on each fc no-ops here.
-  if (in->prev_d2h_done)
-    CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
+  // Aggregate writes may target either slot's d_aggregated (fit_decision_k
+  // picks at cap>1). Wait for BOTH slots' prior D2H. prev_d2h_done events are
+  // initialized signaled, so first kicks no-op here.
+  for (int oi = 0; oi < 2; ++oi)
+    if (in->prev_d2h_done[oi])
+      CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done[oi], 0));
 
   // --- Phase 6: compress --------------------------------------------------
   const int skip_compress = (stage->codec.type == CODEC_NONE);

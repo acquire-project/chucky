@@ -35,7 +35,7 @@ make_compress_input(struct stream_engine* e,
       (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
         ? e->lod_shared.timing[fc].t_end
         : NULL,
-    .prev_d2h_done = e->d2h_deliver.ready[output_idx],
+    .prev_d2h_done = { e->d2h_deliver.ready[0], e->d2h_deliver.ready[1] },
     .epochs_per_batch = e->batch.epochs_per_batch,
   };
 }

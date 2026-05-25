@@ -128,7 +128,10 @@ struct compress_agg_input
   CUdeviceptr pool_buf;
   CUevent pool_ready;
   CUevent lod_done;
-  CUevent prev_d2h_done; // initialized signaled; guards d_aggregated overwrite
+  // initialized signaled; guards d_aggregated overwrite. At cap>1,
+  // fit_decision_k can route this kick to either slot, so we wait on BOTH
+  // slots' d2h-done.
+  CUevent prev_d2h_done[2];
   uint32_t epochs_per_batch;
 };
 
