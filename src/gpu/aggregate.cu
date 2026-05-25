@@ -384,6 +384,38 @@ gather_batch_k(const void* __restrict__ d_compressed,
     dst[off] = src[off];
 }
 
+// Same as gather_batch_k but reads target_d_aggregated + d_offsets from
+// d_routing. Used by the unified aggregate path; the legacy
+// aggregate_batch_by_shard_async keeps using gather_batch_k.
+__global__ void
+gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
+                      const void* __restrict__ d_compressed,
+                      const size_t* __restrict__ d_comp_sizes,
+                      const uint32_t* __restrict__ d_gather,
+                      const uint32_t* __restrict__ d_perm,
+                      size_t max_comp_chunk_bytes)
+{
+  const uint64_t i = blockIdx.x;
+  const uint32_t src_idx = d_gather[i];
+  const size_t nbytes = d_comp_sizes[src_idx];
+  if (nbytes == 0)
+    return;
+  __shared__ void* d_aggregated;
+  __shared__ const size_t* d_offsets;
+  if (threadIdx.x == 0) {
+    d_aggregated = d_routing->target_d_aggregated;
+    d_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
+  }
+  __syncthreads();
+
+  const uint8_t* src =
+    (const uint8_t*)d_compressed + (uint64_t)src_idx * max_comp_chunk_bytes;
+  uint8_t* dst = (uint8_t*)d_aggregated + d_offsets[d_perm[i]];
+
+  for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
+    dst[off] = src[off];
+}
+
 // ---------------------------------------------------------------------------
 // aggregate_batch_slot_init
 // ---------------------------------------------------------------------------
@@ -560,16 +592,24 @@ compute_shard_sum_bytes_k(const size_t* __restrict__ d_permuted_sizes,
 //   Same structure as copy_leading_tail_k; page_size remains uniform across
 //   shards today, while the destination base is now per-shard.
 __global__ void
-copy_leading_tail_unified_k(void* __restrict__ d_aggregated,
+copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
                             const void* __restrict__ d_tail_carry,
                             const size_t* __restrict__ d_tail_bytes_prev,
-                            const size_t* __restrict__ d_shard_base_offsets,
+                            uint64_t num_shards,
                             size_t page_size)
 {
   const uint64_t s = blockIdx.x;
   const size_t nbytes = d_tail_bytes_prev[s];
   if (nbytes == 0)
     return;
+  __shared__ void* d_aggregated;
+  __shared__ const size_t* d_shard_base_offsets;
+  if (threadIdx.x == 0) {
+    d_aggregated = d_routing->target_d_aggregated;
+    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
+                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+  }
+  __syncthreads();
   const uint8_t* src = (const uint8_t*)d_tail_carry + s * page_size;
   uint8_t* dst = (uint8_t*)d_aggregated + d_shard_base_offsets[s];
   for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
@@ -599,8 +639,7 @@ copy_leading_tail_unified_k(void* __restrict__ d_aggregated,
 //   any finalizing run inside the batch. The orchestrator's fit check must
 //   guarantee no mid-slot finalization when macro-agg is active.
 __global__ void
-rollforward_tail_unified_k(const void* __restrict__ d_aggregated,
-                           const size_t* __restrict__ d_shard_base_offsets,
+rollforward_tail_unified_k(const struct d_routing* __restrict__ d_routing,
                            const size_t* __restrict__ d_shard_sum_bytes,
                            size_t page_size,
                            size_t* __restrict__ d_tail_bytes,
@@ -610,6 +649,14 @@ rollforward_tail_unified_k(const void* __restrict__ d_aggregated,
   const uint64_t s = blockIdx.x;
   if (s >= num_shards)
     return;
+  __shared__ const void* d_aggregated;
+  __shared__ const size_t* d_shard_base_offsets;
+  if (threadIdx.x == 0) {
+    d_aggregated = d_routing->target_d_aggregated;
+    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
+                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+  }
+  __syncthreads();
   const size_t prev_tail = d_tail_bytes[s];
   const size_t total = prev_tail + d_shard_sum_bytes[s];
   const size_t new_tail = page_size > 0 ? (total % page_size) : 0;
@@ -881,45 +928,33 @@ aggregate_batch_unified_async(const void* d_compressed,
         d_shard_offsets_base,
         total_shards);
     }
-    // Pass 3b: stage prior batch's ragged tail at the head of each shard's
-    // region in this batch's slice.
     {
       const int block = 256;
       copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        slot->d_aggregated,
+        d_routing,
         (const void*)d_tail_carry,
         d_tail_bytes,
-        d_shard_base_offsets,
+        total_shards,
         page_size);
     }
   }
 
-  // Pass 4: gather compressed tiles. d_offsets values are slot-relative
-  // post-bias, so d_aggregated must be unbiased.
   {
     const int block = 256;
     const int grid = (int)N;
-    gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
-                                                    slot->d_aggregated,
-                                                    d_comp_sizes,
-                                                    d_offsets_b,
-                                                    d_batch_gather,
-                                                    d_batch_perm,
-                                                    max_comp_chunk_bytes);
+    gather_batch_routed_k<<<grid, block, 0, cuda_stream>>>(
+      d_routing,
+      d_compressed,
+      d_comp_sizes,
+      d_batch_gather,
+      d_batch_perm,
+      max_comp_chunk_bytes);
   }
 
-  // Pass 5: tail rollforward. Updates d_tail_bytes and d_tail_carry to
-  // reflect this batch's trailing sub-page bytes so the next batch's
-  // bias/copy_leading_tail kernels see the correct leading-tail. For
-  // batches_per_slot==1 the host post-delivery H2D will overwrite these
-  // values; for B>1 this kernel is the only source of truth between
-  // in-slot batches. Reads from d_aggregated unbiased because the dense
-  // shard_base_offsets are slot-relative.
   if (page_size > 0 && total_shards > 0 && slot->d_shard_sum_bytes) {
     const int block = 256;
     rollforward_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-      slot->d_aggregated,
-      d_shard_base_offsets,
+      d_routing,
       slot->d_shard_sum_bytes,
       page_size,
       (size_t*)d_tail_bytes,
