@@ -128,7 +128,14 @@ kick_compress_agg(struct stream_engine* e,
 }
 
 static int
+kick_d2h_and_mark_pending(struct stream_engine* e,
+                          struct stream_context* ctx,
+                          int output_idx,
+                          const struct flush_handoff* handoff);
+
+static int
 post_kick_review(struct stream_engine* e,
+                 struct stream_context* ctx,
                  int active_oi,
                  struct flush_handoff* scratch,
                  int* out_target)
@@ -144,6 +151,13 @@ post_kick_review(struct stream_engine* e,
     CHECK(Error, close == -1);
     CHECK(Error, e->compress_agg.h_close_signal[0] == 0);
     CHECK(Error, e->compress_agg.h_close_signal[1] == 0);
+  }
+  if (close >= 0) {
+    CHECK(Error, close != target);
+    CHECK(Error,
+          kick_d2h_and_mark_pending(
+            e, ctx, close, &e->flush.pending_handoff[close]) == 0);
+    e->compress_agg.h_close_signal[close] = 0;
   }
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
@@ -215,7 +229,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
         kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &scratch) == 0);
 
   int target = -1;
-  CHECK(Error, post_kick_review(e, oi, &scratch, &target) == 0);
+  CHECK(Error, post_kick_review(e, ctx, oi, &scratch, &target) == 0);
 
   CHECK(Error,
         kick_d2h_and_mark_pending(
@@ -286,7 +300,7 @@ flush_kick_batch(struct stream_engine* e,
   CHECK(Error,
         kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
   int target = -1;
-  CHECK(Error, post_kick_review(e, output_idx, &scratch, &target) == 0);
+  CHECK(Error, post_kick_review(e, ctx, output_idx, &scratch, &target) == 0);
   CHECK(Error,
         kick_d2h_and_mark_pending(
           e, ctx, target, &e->flush.pending_handoff[target]) == 0);
