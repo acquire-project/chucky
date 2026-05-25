@@ -136,17 +136,16 @@ static int
 kick_d2h_and_mark_pending(struct stream_engine* e,
                           struct stream_context* ctx,
                           int output_idx,
-                          struct flush_handoff handoff)
+                          const struct flush_handoff* handoff)
 {
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
-                         &handoff,
+                         handoff,
                          &ctx->levels,
                          &e->batch,
                          &ctx->dims,
                          ctx->sink,
                          e->streams.d2h) == 0);
-  e->flush.pending_handoff[output_idx] = handoff;
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;
   e->flush.pending[output_idx] = 1;
   return 0;
@@ -189,9 +188,10 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   }
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
-  struct flush_handoff new_handoff = { 0 };
+  struct flush_handoff* new_handoff = &e->flush.pending_handoff[oi];
+  memset(new_handoff, 0, sizeof(*new_handoff));
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &new_handoff) ==
+        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, new_handoff) ==
           0);
 
   CHECK(Error, kick_d2h_and_mark_pending(e, ctx, oi, new_handoff) == 0);
@@ -257,9 +257,10 @@ flush_kick_batch(struct stream_engine* e,
                  int output_idx,
                  uint32_t n_epochs)
 {
-  struct flush_handoff handoff = { 0 };
+  struct flush_handoff* handoff = &e->flush.pending_handoff[output_idx];
+  memset(handoff, 0, sizeof(*handoff));
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &handoff) == 0);
+        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, handoff) == 0);
   CHECK(Error, kick_d2h_and_mark_pending(e, ctx, output_idx, handoff) == 0);
   return 0;
 
