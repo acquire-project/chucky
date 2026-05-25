@@ -159,7 +159,6 @@ pool_swap_and_reset_accum(struct stream_engine* e, struct stream_context* ctx)
 {
   const uint32_t K = e->batch.epochs_per_batch;
   e->pools.current ^= 1;
-  e->flush.output_current ^= 1;
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
   CU(Error,
@@ -197,6 +196,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   CHECK(Error, kick_d2h_and_mark_pending(e, ctx, oi, new_handoff) == 0);
 
+  e->flush.output_current ^= 1;
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
   return writer_ok();
