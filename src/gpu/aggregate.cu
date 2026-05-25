@@ -491,18 +491,11 @@ Error:
 // Unified kernels (across all LODs)
 // ---------------------------------------------------------------------------
 
-// add_shard_bias_unified_k:
-//   Block per shard. Reads per-shard parameters (base index, run length,
-//   destination base byte offset) from device tables. Computes
-//     bias_s = d_shard_base_offsets[s] + d_tail_bytes_prev[s]
-//              - d_offsets[d_shard_offsets_base[s]]
-//   once into shared memory, then adds it across the shard's run in
-//   d_offsets. Same structure as add_shard_bias_k; per-shard parameters
-//   replace the uniform tps_group / s*shard_capacity values.
+// Target pointers come from d_routing (loaded once per block into shared
+// mem). Per-shard tables stay as launch args.
 __global__ void
-add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
+add_shard_bias_unified_k(const struct d_routing* __restrict__ d_routing,
                          const size_t* __restrict__ d_tail_bytes_prev,
-                         const size_t* __restrict__ d_shard_base_offsets,
                          const uint64_t* __restrict__ d_shard_tps_group,
                          const uint64_t* __restrict__ d_shard_offsets_base,
                          uint64_t num_shards)
@@ -510,6 +503,14 @@ add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
   const uint64_t s = blockIdx.x;
   if (s >= num_shards)
     return;
+  __shared__ size_t* d_offsets;
+  __shared__ const size_t* d_shard_base_offsets;
+  if (threadIdx.x == 0) {
+    d_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
+    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
+                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+  }
+  __syncthreads();
   const uint64_t base = d_shard_offsets_base[s];
   const uint64_t tps_group = d_shard_tps_group[s];
   __shared__ size_t bias_s;
@@ -871,14 +872,11 @@ aggregate_batch_unified_async(const void* d_compressed,
   CU(Error, cuEventRecord(slot->host_func_done, stream));
 
   if (page_size > 0 && total_shards > 0) {
-    // Pass 3a: per-shard bias. Anchors each shard's first chunk at its
-    // batch-local base byte offset + tail_in.
     {
       const int block = 256;
       add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        d_offsets_b,
+        d_routing,
         d_tail_bytes,
-        d_shard_base_offsets,
         d_shard_tps_group,
         d_shard_offsets_base,
         total_shards);
