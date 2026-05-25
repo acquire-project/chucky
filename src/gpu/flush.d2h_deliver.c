@@ -535,12 +535,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
 
   wait_io_fences(slot, sink, stage->metrics);
 
-  // t_aggregate_end is recorded on the compress stream AFTER the
-  // post-batch host callback (which populates h_shard_base_offsets_dense).
-  // After cuStreamWaitEvent + the chunk-index D2H below, polling
-  // h_chunk_index_ready in sync_and_deliver guarantees the dense pinned
-  // buffer is visible to the CPU. Do not move t_aggregate_end earlier.
-  CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
+  CU(Error, cuStreamWaitEvent(d2h_stream, slot->host_func_done, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[oi], d2h_stream));
 
   // Offsets + permuted sizes. Compressed codecs use these in drain to size
