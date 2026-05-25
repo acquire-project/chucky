@@ -157,6 +157,17 @@ compress_agg_init(struct compress_agg_stage* stage,
   CU(Fail,
      cuMemsetD8((CUdeviceptr)stage->d_routing, 0, sizeof(struct d_routing)));
 
+  if (stage->max_total_batch_chunks > 0) {
+    const uint64_t temp_count =
+      stage->max_total_batch_covering + (uint64_t)LOD_MAX_LEVELS;
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&stage->d_temp_offsets,
+                  temp_count * sizeof(size_t)));
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&stage->d_temp_perm_sizes,
+                  temp_count * sizeof(size_t)));
+  }
+
   // Unified LUT buffers + host scratch.
   if (stage->max_total_batch_chunks > 0) {
     CU(Fail,
@@ -298,6 +309,8 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->output[fc]);
   cu_mem_free((CUdeviceptr)stage->d_routing);
+  cu_mem_free((CUdeviceptr)stage->d_temp_offsets);
+  cu_mem_free((CUdeviceptr)stage->d_temp_perm_sizes);
   cu_mem_free(stage->d_batch_gather);
   cu_mem_free(stage->d_batch_perm);
   free(stage->h_lut_gather_scratch);
@@ -560,6 +573,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
             sdp[0],
             sdp[1],
             output_idx,
+            stage->d_temp_offsets,
+            stage->d_temp_perm_sizes,
             compress_stream) == 0);
   }
 

@@ -94,6 +94,12 @@ extern "C"
                            uint64_t total_shards,
                            CUstream stream);
 
+  int copy_to_slot_launch(const struct d_routing* d_routing,
+                          const size_t* d_temp_offsets,
+                          const size_t* d_temp_perm_sizes,
+                          uint64_t count,
+                          CUstream stream);
+
   struct aggregate_slot
   {
     size_t* d_permuted_sizes; // device: slot_chunk_cap size_t
@@ -313,6 +319,8 @@ extern "C"
                                     struct slot_dev_ptrs sdp_0,
                                     struct slot_dev_ptrs sdp_1,
                                     int active_slot_idx,
+                                    size_t* d_temp_offsets,
+                                    size_t* d_temp_perm_sizes,
                                     CUstream stream);
 
 #ifdef __cplusplus

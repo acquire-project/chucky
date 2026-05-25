@@ -221,6 +221,8 @@ struct compress_agg_stage
 
   // Routing decision for the current batch, written by fit_decision_k.
   struct d_routing* d_routing;
+  size_t* d_temp_offsets;
+  size_t* d_temp_perm_sizes;
 
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
   // per-shard writers, tail/footer pools, generation-boundary bookkeeping.

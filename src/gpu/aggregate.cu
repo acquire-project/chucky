@@ -359,6 +359,42 @@ dense_offsets_launch(struct d_routing* d_routing,
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
+// Copy [0..count) from per-stage temps into target slot at desc_base_offset.
+__global__ void
+copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
+               const size_t* __restrict__ d_temp_offsets,
+               const size_t* __restrict__ d_temp_perm_sizes,
+               uint64_t count)
+{
+  const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= count)
+    return;
+  __shared__ size_t* dst_offsets;
+  __shared__ size_t* dst_perm_sizes;
+  if (threadIdx.x == 0) {
+    dst_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
+    dst_perm_sizes =
+      d_routing->target_d_permuted_sizes + d_routing->desc_base_offset;
+  }
+  __syncthreads();
+  dst_offsets[i] = d_temp_offsets[i];
+  dst_perm_sizes[i] = d_temp_perm_sizes[i];
+}
+
+extern "C" int
+copy_to_slot_launch(const struct d_routing* d_routing,
+                    const size_t* d_temp_offsets,
+                    const size_t* d_temp_perm_sizes,
+                    uint64_t count,
+                    CUstream stream)
+{
+  const int block = 256;
+  const int grid = (int)((count + block - 1) / block);
+  copy_to_slot_k<<<grid, block, 0, (cudaStream_t)stream>>>(
+    d_routing, d_temp_offsets, d_temp_perm_sizes, count);
+  return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
 // gather_batch_k:
 //   Block i copies compressed chunk gather[i] to output position perm[i].
 __global__ void
@@ -803,6 +839,8 @@ aggregate_batch_unified_async(const void* d_compressed,
                               struct slot_dev_ptrs sdp_0,
                               struct slot_dev_ptrs sdp_1,
                               int active_slot_idx,
+                              size_t* d_temp_offsets,
+                              size_t* d_temp_perm_sizes,
                               CUstream stream)
 {
   (void)d_shard_capacity; // kept for symmetry/asserts; gather is offset-driven
@@ -820,8 +858,9 @@ aggregate_batch_unified_async(const void* d_compressed,
   // directly. slot_data_base is consumed by the dense computation, not by a
   // pointer bias.
   (void)slot_data_base;
-  size_t* d_perm_sizes_b = slot->d_permuted_sizes + slot_desc_base;
-  size_t* d_offsets_b = slot->d_offsets + slot_desc_base;
+  (void)slot_desc_base;
+  size_t* d_perm_sizes_b = d_temp_perm_sizes;
+  size_t* d_offsets_b = d_temp_offsets;
   size_t* d_actual_bytes_ptr = d_offsets_b + (C + nlod - 1);
   // Pre-append batches_per_slot is the new batch's index in cb_contexts /
   // dense slice; the main thread increments it after this function returns.
@@ -912,6 +951,13 @@ aggregate_batch_unified_async(const void* d_compressed,
                            stream));
     }
   }
+
+  CHECK(Error,
+        copy_to_slot_launch(d_routing,
+                            d_temp_offsets,
+                            d_temp_perm_sizes,
+                            C + (uint64_t)nlod,
+                            stream) == 0);
 
   CU(Error,
      cuLaunchHostFunc(

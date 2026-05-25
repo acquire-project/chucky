@@ -552,6 +552,16 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     CU(Fail,
        cuMemsetD8(
          (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
+    {
+      const uint64_t temp_count =
+        mx->u_max_total_batch_covering + (uint64_t)LOD_MAX_LEVELS;
+      CU(Fail,
+         cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_temp_offsets,
+                    temp_count * sizeof(size_t)));
+      CU(Fail,
+         cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_temp_perm_sizes,
+                    temp_count * sizeof(size_t)));
+    }
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,
                   mx->u_max_total_batch_chunks * sizeof(uint32_t)));
@@ -828,6 +838,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_offsets);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_perm_sizes);
   cu_mem_free(e->compress_agg.d_batch_gather);
   cu_mem_free(e->compress_agg.d_batch_perm);
   free(e->compress_agg.h_lut_gather_scratch);
