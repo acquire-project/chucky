@@ -87,7 +87,7 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                             &e->flush.pending_handoff[oi],
+                                             &e->flush.in_flight_handoff[oi],
                                              &ctx->levels,
                                              &e->batch,
                                              &ctx->dims,
@@ -174,9 +174,10 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                           int output_idx,
                           const struct flush_handoff* handoff)
 {
+  e->flush.in_flight_handoff[output_idx] = *handoff;
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
-                         handoff,
+                         &e->flush.in_flight_handoff[output_idx],
                          &ctx->levels,
                          &e->batch,
                          &ctx->dims,

@@ -260,6 +260,7 @@ struct flush_pipeline
   uint64_t pending_seq[2];
   uint64_t next_seq;
   struct flush_handoff pending_handoff[2];
+  struct flush_handoff in_flight_handoff[2];
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,
