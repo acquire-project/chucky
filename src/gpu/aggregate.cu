@@ -204,7 +204,6 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
-  cuMemFreeHost((void*)slot->h_batch_actual_bytes);
   cuMemFree((CUdeviceptr)slot->d_shard_sum_bytes);
   if (slot->h_shard_sum_bytes)
     cuMemFreeHost((void*)slot->h_shard_sum_bytes);
@@ -216,21 +215,40 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_temp);
   cuMemFree((CUdeviceptr)slot->d_runtime);
   free(slot->slot_batches);
-  free(slot->cb_contexts);
   memset(slot, 0, sizeof(*slot));
 }
 
-// Host mirror of d_runtime->cursor. fit_decision_k authoritatively advances
-// the device cursor; the host copy is read by orchestrator helpers that pre-
-// date GPU routing. host_func_done fences this update.
+// Mirrors GPU routing to host bookkeeping. Reads h_routing (D2H'd before
+// this call on the same stream) to learn the target slot and routing
+// offsets, populates the target's slot_batches[batch_idx_in_slot] entry,
+// advances host mirrors of cursor/desc_cursor/batches_per_slot, and signals
+// h_close_signal[close_prior_slot_idx] if a slot closed.
 static void CUDART_CB
-aggregate_post_batch_cb(void* userData)
+aggregate_post_batch_routed_cb(void* userData)
 {
-  struct cb_context* cb = (struct cb_context*)userData;
-  struct aggregate_slot* slot = cb->slot;
-  if (!slot)
-    return;
-  slot->slot_cursor += *slot->h_batch_actual_bytes;
+  struct agg_routing_cb_args* args = (struct agg_routing_cb_args*)userData;
+  volatile struct d_routing* r = args->h_routing;
+  const int target_idx = r->target_slot_idx;
+  struct aggregate_slot* target = args->slots[target_idx];
+  const uint32_t bi = r->batch_idx_in_slot;
+  const uint8_t nlod = args->nlod;
+
+  struct batch_slice_entry* be = &target->slot_batches[bi];
+  be->data_base_offset = r->data_base_offset;
+  be->desc_base_offset = r->desc_base_offset;
+  be->nlod = nlod;
+  memcpy(be->per_lod_lods,
+         args->layout.lods,
+         (size_t)nlod * sizeof(struct lod_segment));
+
+  target->slot_cursor = r->data_base_offset + r->actual_bytes;
+  target->slot_desc_cursor =
+    r->desc_base_offset + args->layout.total_batch_covering + (uint64_t)nlod;
+  target->batches_per_slot = bi + 1;
+
+  const int closed = r->close_prior_slot_idx;
+  if (closed >= 0)
+    args->h_close_signal[closed] = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +311,7 @@ fit_decision_k(struct d_routing* d_routing,
 
   d_routing->data_base_offset = target.d_runtime->cursor;
   d_routing->desc_base_offset = target.d_runtime->desc_cursor;
+  d_routing->actual_bytes = actual_bytes;
   d_routing->batch_idx_in_slot = target.d_runtime->batches_per_slot;
   d_routing->target_slot_idx = target_idx;
   d_routing->target_d_aggregated = target.d_aggregated;
@@ -496,17 +515,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   slot->slot_batches = (struct batch_slice_entry*)calloc(
     batches_per_slot_cap, sizeof(struct batch_slice_entry));
   CHECK(Error, slot->slot_batches);
-  slot->cb_contexts =
-    (struct cb_context*)calloc(batches_per_slot_cap, sizeof(struct cb_context));
-  CHECK(Error, slot->cb_contexts);
-  for (uint32_t i = 0; i < batches_per_slot_cap; ++i) {
-    slot->cb_contexts[i].slot = slot;
-    slot->cb_contexts[i].batch_idx = i;
-  }
-
-  CU(Error,
-     cuMemHostAlloc((void**)&slot->h_batch_actual_bytes, sizeof(size_t), 0));
-  *slot->h_batch_actual_bytes = 0;
 
   slot->shard_sum_capacity = max_total_shards;
   if (max_total_shards > 0) {
@@ -841,32 +849,19 @@ aggregate_batch_unified_async(const void* d_compressed,
                               int active_slot_idx,
                               size_t* d_temp_offsets,
                               size_t* d_temp_perm_sizes,
+                              struct agg_routing_cb_args* cb_args,
                               CUstream stream)
 {
-  (void)d_shard_capacity; // kept for symmetry/asserts; gather is offset-driven
+  (void)d_shard_capacity;
+  (void)slot_data_base;
+  (void)slot_desc_base;
   const uint64_t N = total_batch_chunks;
   const uint64_t C = total_batch_covering;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
-
-  // Biased descriptor views: each batch in a slot scans its own slice of
-  // d_offsets / d_permuted_sizes so prior-batch values don't clobber the
-  // prefix-scan output.
-  //
-  // d_aggregated is NOT biased: the bias kernel applies slot-relative dense
-  // offsets (computed by the host callback as slot_cursor + cum), so gather
-  // and copy_leading_tail write into d_aggregated at slot-relative positions
-  // directly. slot_data_base is consumed by the dense computation, not by a
-  // pointer bias.
-  (void)slot_data_base;
-  (void)slot_desc_base;
   size_t* d_perm_sizes_b = d_temp_perm_sizes;
   size_t* d_offsets_b = d_temp_offsets;
   size_t* d_actual_bytes_ptr = d_offsets_b + (C + nlod - 1);
-  // Pre-append batches_per_slot is the new batch's index in cb_contexts /
-  // dense slice; the main thread increments it after this function returns.
-  const uint32_t cb_batch_idx = slot->batches_per_slot;
 
-  // Zero permuted_sizes for this batch's slice (C + nlod entries).
   CU(Error,
      cuMemsetD8Async(
        (CUdeviceptr)d_perm_sizes_b, 0, (C + nlod) * sizeof(size_t), stream));
@@ -907,14 +902,6 @@ aggregate_batch_unified_async(const void* d_compressed,
       total_shards);
   }
 
-  // Sentinel at C+nlod-1 holds the batch's total compressed bytes; bias
-  // does not touch sentinels so this value is stable post-scan.
-  CU(Error,
-     cuMemcpyDtoHAsync((void*)slot->h_batch_actual_bytes,
-                       (CUdeviceptr)d_actual_bytes_ptr,
-                       sizeof(size_t),
-                       stream));
-
   if (total_shards > 0 && slot->d_shard_sum_bytes && slot->h_shard_sum_bytes) {
     CU(Error,
        cuMemcpyDtoHAsync((void*)slot->h_shard_sum_bytes,
@@ -941,8 +928,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                                d_tail_bytes,
                                total_shards,
                                stream) == 0);
-    // d_shard_base_offsets_dense is sized total_shards today (one batch),
-    // so D2H copies a single batch's slice; resize when raising cap.
     if (slot->h_shard_base_offsets_dense) {
       CU(Error,
          cuMemcpyDtoHAsync((void*)slot->h_shard_base_offsets_dense,
@@ -958,11 +943,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                             d_temp_perm_sizes,
                             C + (uint64_t)nlod,
                             stream) == 0);
-
-  CU(Error,
-     cuLaunchHostFunc(
-       stream, aggregate_post_batch_cb, &slot->cb_contexts[cb_batch_idx]));
-  CU(Error, cuEventRecord(slot->host_func_done, stream));
 
   if (page_size > 0 && total_shards > 0) {
     {
@@ -1007,6 +987,14 @@ aggregate_batch_unified_async(const void* d_compressed,
       (void*)d_tail_carry,
       total_shards);
   }
+
+  CU(Error,
+     cuMemcpyDtoHAsync((void*)cb_args->h_routing,
+                       (CUdeviceptr)d_routing,
+                       sizeof(struct d_routing),
+                       stream));
+  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_routed_cb, cb_args));
+  CU(Error, cuEventRecord(slot->host_func_done, stream));
 
   return 0;
 

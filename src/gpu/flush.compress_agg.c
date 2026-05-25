@@ -156,6 +156,19 @@ compress_agg_init(struct compress_agg_stage* stage,
      cuMemAlloc((CUdeviceptr*)&stage->d_routing, sizeof(struct d_routing)));
   CU(Fail,
      cuMemsetD8((CUdeviceptr)stage->d_routing, 0, sizeof(struct d_routing)));
+  CU(Fail,
+     cuMemHostAlloc((void**)&stage->h_routing, sizeof(struct d_routing), 0));
+  memset((void*)stage->h_routing, 0, sizeof(struct d_routing));
+  CU(Fail,
+     cuMemHostAlloc((void**)&stage->h_close_signal, 2 * sizeof(size_t), 0));
+  stage->h_close_signal[0] = 0;
+  stage->h_close_signal[1] = 0;
+  for (int i = 0; i < 4; ++i) {
+    stage->cb_args_ring[i].slots[0] = &stage->output[0];
+    stage->cb_args_ring[i].slots[1] = &stage->output[1];
+    stage->cb_args_ring[i].h_routing = stage->h_routing;
+    stage->cb_args_ring[i].h_close_signal = stage->h_close_signal;
+  }
 
   if (stage->max_total_batch_chunks > 0) {
     const uint64_t temp_count =
@@ -309,6 +322,10 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->output[fc]);
   cu_mem_free((CUdeviceptr)stage->d_routing);
+  if (stage->h_routing)
+    cuMemFreeHost((void*)stage->h_routing);
+  if (stage->h_close_signal)
+    cuMemFreeHost((void*)stage->h_close_signal);
   cu_mem_free((CUdeviceptr)stage->d_temp_offsets);
   cu_mem_free((CUdeviceptr)stage->d_temp_perm_sizes);
   cu_mem_free(stage->d_batch_gather);
@@ -548,6 +565,11 @@ compress_agg_kick(struct compress_agg_stage* stage,
         stage->output[oi].d_shard_base_offsets_dense;
       sdp[oi].d_runtime = stage->output[oi].d_runtime;
     }
+    const uint32_t ring_idx = (uint32_t)(stage->cb_args_seq & 3);
+    stage->cb_args_seq++;
+    struct agg_routing_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
+    cb_args->layout = layout;
+    cb_args->nlod = nlod;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -575,6 +597,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
             output_idx,
             stage->d_temp_offsets,
             stage->d_temp_perm_sizes,
+            cb_args,
             compress_stream) == 0);
   }
 
@@ -600,13 +623,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out->shards = &stage->shards;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->shard[lv];
-
-  // Macro-agg slot bookkeeping. Prep-2 contract: kick is append-only; the
-  // orchestrator calls output_slot_close_reset after the d2h kick (today
-  // every kick; at B>1 only on slot close). The slot enters this function
-  // with slot_cursor=0/desc_cursor=0/batches_per_slot=0 (from prior close)
-  // and exits with the just-kicked batch's entry appended.
-  CHECK(Error, output_slot_append_batch_entry(out_slot, &layout, nlod) == 0);
 
   return 0;
 

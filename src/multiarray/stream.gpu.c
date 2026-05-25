@@ -552,6 +552,22 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     CU(Fail,
        cuMemsetD8(
          (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
+    CU(Fail,
+       cuMemHostAlloc(
+         (void**)&e->compress_agg.h_routing, sizeof(struct d_routing), 0));
+    memset((void*)e->compress_agg.h_routing, 0, sizeof(struct d_routing));
+    CU(Fail,
+       cuMemHostAlloc(
+         (void**)&e->compress_agg.h_close_signal, 2 * sizeof(size_t), 0));
+    e->compress_agg.h_close_signal[0] = 0;
+    e->compress_agg.h_close_signal[1] = 0;
+    for (int i = 0; i < 4; ++i) {
+      e->compress_agg.cb_args_ring[i].slots[0] = &e->compress_agg.output[0];
+      e->compress_agg.cb_args_ring[i].slots[1] = &e->compress_agg.output[1];
+      e->compress_agg.cb_args_ring[i].h_routing = e->compress_agg.h_routing;
+      e->compress_agg.cb_args_ring[i].h_close_signal =
+        e->compress_agg.h_close_signal;
+    }
     {
       const uint64_t temp_count =
         mx->u_max_total_batch_covering + (uint64_t)LOD_MAX_LEVELS;
@@ -838,6 +854,10 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
+  if (e->compress_agg.h_routing)
+    cuMemFreeHost((void*)e->compress_agg.h_routing);
+  if (e->compress_agg.h_close_signal)
+    cuMemFreeHost((void*)e->compress_agg.h_close_signal);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_offsets);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_perm_sizes);
   cu_mem_free(e->compress_agg.d_batch_gather);

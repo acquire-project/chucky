@@ -35,14 +35,6 @@ extern "C"
 
   struct aggregate_slot;
 
-  // Each callback invocation needs to know its own batch_idx; reading
-  // slot->batches_per_slot would race against the main thread.
-  struct cb_context
-  {
-    struct aggregate_slot* slot;
-    uint32_t batch_idx;
-  };
-
   // Device-resident counterpart of slot_cursor/slot_desc_cursor/
   // batches_per_slot. Source of truth once GPU routing is active.
   struct slot_runtime_state
@@ -63,10 +55,20 @@ extern "C"
     size_t* target_d_shard_base_offsets_dense;
     size_t data_base_offset;
     uint64_t desc_base_offset;
+    size_t actual_bytes;
     uint32_t batch_idx_in_slot;
     int32_t target_slot_idx;
     int32_t close_prior_slot_idx; // -1 if no close
     uint32_t _pad;
+  };
+
+  struct agg_routing_cb_args
+  {
+    struct aggregate_slot* slots[2];
+    volatile struct d_routing* h_routing;
+    volatile size_t* h_close_signal;
+    struct batch_aggregate_layout layout;
+    uint8_t nlod;
   };
 
   struct slot_dev_ptrs
@@ -118,16 +120,8 @@ extern "C"
     uint32_t batches_per_slot;
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches; // [batches_per_slot_cap]
-    struct cb_context* cb_contexts;         // [batches_per_slot_cap]
     struct slot_runtime_state* d_runtime;   // device, 1 instance
 
-    // Pinned per-slot counter: the just-aggregated batch's actual byte
-    // total (prefix-sum end). Filled by a small D2H on compress_stream
-    // after aggregate; cuLaunchHostFunc reads it to update slot bookkeeping
-    // before the next batch kicks. Volatile because reader (orchestrator
-    // main thread) and writer (driver thread running the host function)
-    // are different threads.
-    volatile size_t* h_batch_actual_bytes;
     // Per-shard compressed-bytes sum for the just-aggregated batch.
     // d_shard_sum_bytes is filled by compute_shard_sum_bytes_k; the D2H
     // staging lands the values in h_shard_sum_bytes for the host callback
@@ -321,6 +315,7 @@ extern "C"
                                     int active_slot_idx,
                                     size_t* d_temp_offsets,
                                     size_t* d_temp_perm_sizes,
+                                    struct agg_routing_cb_args* cb_args,
                                     CUstream stream);
 
 #ifdef __cplusplus
