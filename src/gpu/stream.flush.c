@@ -116,9 +116,6 @@ kick_compress_agg(struct stream_engine* e,
                   uint32_t n_epochs,
                   struct flush_handoff* handoff_out)
 {
-  // Visibility fence for slot_cursor written by the prior in-slot callback.
-  CU(Error,
-     cuEventSynchronize(e->compress_agg.output[output_idx].host_func_done));
   struct compress_agg_input in =
     make_compress_input(e, ctx, fc, output_idx, n_epochs);
   return compress_agg_kick(&e->compress_agg,
@@ -128,6 +125,24 @@ kick_compress_agg(struct stream_engine* e,
                            &ctx->dims,
                            e->streams.compress,
                            handoff_out);
+}
+
+static int
+post_kick_review(struct stream_engine* e, int active_oi)
+{
+  CU(Error,
+     cuEventSynchronize(e->compress_agg.output[active_oi].host_func_done));
+  const volatile struct d_routing* r = e->compress_agg.h_routing;
+  const int target = r->target_slot_idx;
+  const int close = r->close_prior_slot_idx;
+  const uint32_t cap = e->compress_agg.output[active_oi].batches_per_slot_cap;
+  if (cap == 1) {
+    CHECK(Error, target == active_oi);
+    CHECK(Error, close == -1);
+    CHECK(Error, e->compress_agg.h_close_signal[0] == 0);
+    CHECK(Error, e->compress_agg.h_close_signal[1] == 0);
+  }
+  return 0;
 Error:
   return 1;
 }
@@ -193,6 +208,8 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   CHECK(Error,
         kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, new_handoff) ==
           0);
+
+  CHECK(Error, post_kick_review(e, oi) == 0);
 
   CHECK(Error, kick_d2h_and_mark_pending(e, ctx, oi, new_handoff) == 0);
 
@@ -261,6 +278,7 @@ flush_kick_batch(struct stream_engine* e,
   memset(handoff, 0, sizeof(*handoff));
   CHECK(Error,
         kick_compress_agg(e, ctx, fc, output_idx, n_epochs, handoff) == 0);
+  CHECK(Error, post_kick_review(e, output_idx) == 0);
   CHECK(Error, kick_d2h_and_mark_pending(e, ctx, output_idx, handoff) == 0);
   return 0;
 
