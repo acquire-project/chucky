@@ -231,11 +231,15 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   int target = -1;
   CHECK(Error, post_kick_review(e, ctx, oi, &scratch, &target) == 0);
 
-  CHECK(Error,
-        kick_d2h_and_mark_pending(
-          e, ctx, target, &e->flush.pending_handoff[target]) == 0);
-
-  e->flush.output_current ^= 1;
+  const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
+  if (cap > 1) {
+    e->flush.output_current = target;
+  } else {
+    CHECK(Error,
+          kick_d2h_and_mark_pending(
+            e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+    e->flush.output_current ^= 1;
+  }
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
   return writer_ok();
