@@ -533,7 +533,7 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
                       0));
     CU(Error,
        cuMemAlloc((CUdeviceptr*)&slot->d_shard_base_offsets_dense,
-                  max_total_shards * sizeof(size_t)));
+                  dense_h_count * sizeof(size_t)));
     CU(Error,
        cuMemHostAlloc((void**)&slot->h_tail_bytes_next,
                       max_total_shards * sizeof(size_t),
@@ -929,10 +929,15 @@ aggregate_batch_unified_async(const void* d_compressed,
                                total_shards,
                                stream) == 0);
     if (slot->h_shard_base_offsets_dense) {
+      // Copy all cap slices: dense_offsets_k writes to
+      // slice[batch_idx_in_slot]; delivery reads each batch's slice. Only the
+      // current batch's slice is freshly written, but the unchanged slices must
+      // remain valid host-side.
       CU(Error,
          cuMemcpyDtoHAsync((void*)slot->h_shard_base_offsets_dense,
                            (CUdeviceptr)slot->d_shard_base_offsets_dense,
-                           total_shards * sizeof(size_t),
+                           (size_t)slot->batches_per_slot_cap * total_shards *
+                             sizeof(size_t),
                            stream));
     }
   }
