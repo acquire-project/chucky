@@ -103,8 +103,14 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
   e->flush.pending[oi] = 0;
-  output_slot_close_reset(&e->compress_agg.output[oi]);
-  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
+  // At cap>1, the slot may already have been reused by a later kick (target ==
+  // oi after a swap). fit_decision_k owns d_runtime reset on swap;
+  // post_kick_review owns slot_host_acc reset on close. Resetting here would
+  // wipe the reused state.
+  if (e->compress_agg.output[oi].batches_per_slot_cap == 1) {
+    output_slot_close_reset(&e->compress_agg.output[oi]);
+    e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
+  }
   return r;
 }
 
