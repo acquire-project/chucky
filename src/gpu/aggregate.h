@@ -88,6 +88,12 @@ extern "C"
                           int active_slot_idx,
                           CUstream stream);
 
+  int dense_offsets_launch(struct d_routing* d_routing,
+                           const size_t* d_shard_sum_bytes,
+                           const size_t* d_tail_bytes,
+                           uint64_t total_shards,
+                           CUstream stream);
+
   struct aggregate_slot
   {
     size_t* d_permuted_sizes; // device: slot_chunk_cap size_t
@@ -303,6 +309,10 @@ extern "C"
                                     CUdeviceptr d_tail_carry,
                                     size_t page_size,
                                     uint64_t total_shards,
+                                    struct d_routing* d_routing,
+                                    struct slot_dev_ptrs sdp_0,
+                                    struct slot_dev_ptrs sdp_1,
+                                    int active_slot_idx,
                                     CUstream stream);
 
 #ifdef __cplusplus

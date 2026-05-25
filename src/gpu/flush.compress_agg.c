@@ -526,10 +526,15 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out_slot->total_shards_in = stage->shards.total_shards;
   out_slot->page_size = page_size;
   if (layout.total_batch_chunks > 0) {
-    // Bias/tail kernels read d_shard_base_offsets_dense, populated by
-    // the in-stream H2D from the host callback's dense layout (slot's
-    // h_shard_base_offsets_dense). stage->shards.d_base_offsets (uniform)
-    // is no longer consumed by aggregate.
+    struct slot_dev_ptrs sdp[2];
+    for (int oi = 0; oi < 2; ++oi) {
+      sdp[oi].d_aggregated = stage->output[oi].d_aggregated;
+      sdp[oi].d_offsets = stage->output[oi].d_offsets;
+      sdp[oi].d_permuted_sizes = stage->output[oi].d_permuted_sizes;
+      sdp[oi].d_shard_base_offsets_dense =
+        stage->output[oi].d_shard_base_offsets_dense;
+      sdp[oi].d_runtime = stage->output[oi].d_runtime;
+    }
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -551,32 +556,11 @@ compress_agg_kick(struct compress_agg_stage* stage,
             stage->shards.d_tail_carry,
             page_size,
             stage->shards.total_shards,
+            stage->d_routing,
+            sdp[0],
+            sdp[1],
+            output_idx,
             compress_stream) == 0);
-
-    // Run fit_decision_k for validation — result is ignored at cap=1.
-    const size_t* d_actual_bytes_ptr =
-      (const size_t*)(uintptr_t)out_slot->d_offsets +
-      out_slot->slot_desc_cursor + layout.total_batch_covering +
-      (uint64_t)nlod - 1;
-    struct slot_dev_ptrs sdp[2];
-    for (int oi = 0; oi < 2; ++oi) {
-      sdp[oi].d_aggregated = stage->output[oi].d_aggregated;
-      sdp[oi].d_offsets = stage->output[oi].d_offsets;
-      sdp[oi].d_permuted_sizes = stage->output[oi].d_permuted_sizes;
-      sdp[oi].d_shard_base_offsets_dense =
-        stage->output[oi].d_shard_base_offsets_dense;
-      sdp[oi].d_runtime = stage->output[oi].d_runtime;
-    }
-    CHECK(Error,
-          fit_decision_launch(stage->d_routing,
-                              sdp[0],
-                              sdp[1],
-                              d_actual_bytes_ptr,
-                              out_slot->slot_capacity_bytes,
-                              out_slot->batches_per_slot_cap,
-                              layout.total_batch_covering + (uint64_t)nlod,
-                              output_idx,
-                              compress_stream) == 0);
   }
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
