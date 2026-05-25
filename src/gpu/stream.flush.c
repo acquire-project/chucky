@@ -319,6 +319,14 @@ Error:
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
+  for (int oi = 0; oi < 2; ++oi) {
+    if (!e->flush.pending[oi] &&
+        e->compress_agg.slot_host_acc_desc_entries[oi] > 0) {
+      if (kick_d2h_and_mark_pending(
+            e, ctx, oi, &e->flush.pending_handoff[oi]) != 0)
+        return writer_error();
+    }
+  }
   for (int i = 0; i < 2; ++i) {
     int pick = -1;
     uint64_t pick_seq = UINT64_MAX;
