@@ -159,6 +159,10 @@ post_kick_review(struct stream_engine* e,
             e, ctx, close, &e->flush.pending_handoff[close]) == 0);
     e->compress_agg.h_close_signal[close] = 0;
   }
+  const uint64_t delta = scratch->slot_total_desc_entries;
+  e->compress_agg.slot_host_acc_desc_entries[target] += delta;
+  scratch->slot_total_desc_entries =
+    e->compress_agg.slot_host_acc_desc_entries[target];
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
   e->flush.pending_handoff[target] = *scratch;
