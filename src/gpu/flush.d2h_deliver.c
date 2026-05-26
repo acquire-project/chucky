@@ -163,8 +163,6 @@ lod_view(const struct flush_handoff* handoff, uint8_t lv, size_t data_base)
   return ar;
 }
 
-// Poll a CUDA event with a sleep loop. Returns 0 on success / deinit,
-// 1 on error.
 static int
 poll_event(CUevent ev, int fc)
 {
@@ -184,10 +182,7 @@ poll_event(CUevent ev, int fc)
   }
 }
 
-// Per-LOD actual bytes in d_aggregated. End of last chunk (last shard's
-// last chunk in shard-permuted order) minus the LOD segment base. h_offsets
-// here must be the pre-rebase (absolute) values produced by the unified
-// scan + bias.
+// h_offsets must be pre-rebase (absolute, slot-relative) values here.
 static size_t
 lod_actual_bytes(const struct flush_handoff* handoff, uint8_t lv)
 {
@@ -229,50 +224,60 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     platform_toc(&kick_clk);
 
     if (handoff->passthrough) {
-      // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
       if (poll_event(stage->ready[fc], fc))
         goto Error;
     } else {
-      // Compressed: wait for the chunk index on host, then dispatch the
-      // exact-size bulk D2H per LOD (carry-over) or once for the whole
-      // batch (contiguous).
       if (poll_event(stage->h_chunk_index_ready[fc], fc))
         goto Error;
 
+      int dispatch_err = 0;
       if (alayout->page_size > 0) {
-        for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
+        for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
           if (handoff->per_lod_n_active[lv] == 0)
             continue;
           const struct lod_segment* seg = &alayout->lods[lv];
           const size_t actual = lod_actual_bytes(handoff, lv);
           if (actual == 0)
             continue;
-          CU(Error,
-             cuMemcpyDtoHAsync(
-               (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
-               (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
-               actual,
-               d2h_stream));
+          CUresult r =
+            cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated +
+                                seg->data_segment_offset,
+                              (CUdeviceptr)slot->d_aggregated +
+                                seg->data_segment_offset,
+                              actual,
+                              d2h_stream);
+          if (r != CUDA_SUCCESS) {
+            handle_curesult(LOG_ERROR, r, __FILE__, __LINE__,
+                            "cuMemcpyDtoHAsync");
+            dispatch_err = 1;
+          }
         }
       } else if (alayout->total_batch_covering > 0) {
-        // Position n-1 is the last LOD's tail sentinel (size 0 there), so
-        // h_offsets[n-1] is the cumulative byte total. Adding
-        // h_permuted_sizes[n-1] is a no-op for the sentinel.
         const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
         const size_t total =
           slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
         if (total > 0) {
-          CU(Error,
-             cuMemcpyDtoHAsync(slot->h_aggregated,
-                               (CUdeviceptr)slot->d_aggregated,
-                               total,
-                               d2h_stream));
+          CUresult r = cuMemcpyDtoHAsync(slot->h_aggregated,
+                                         (CUdeviceptr)slot->d_aggregated,
+                                         total,
+                                         d2h_stream);
+          if (r != CUDA_SUCCESS) {
+            handle_curesult(LOG_ERROR, r, __FILE__, __LINE__,
+                            "cuMemcpyDtoHAsync");
+            dispatch_err = 1;
+          }
         }
       }
 
+      // Always record completion events, even if the D2H dispatch above
+      // failed: cap-stacking waiters block on slot->ready and would hang
+      // otherwise. Record-on-error is harmless because the stream is
+      // already in an error state and the next op will short-circuit.
       CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
       CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
+      if (dispatch_err)
+        goto Error;
       if (poll_event(stage->ready[fc], fc))
         goto Error;
     }
@@ -471,10 +476,9 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
 
   CU(Error, cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
 
-  // Pass-through: per-LOD actual equals worst-case. Dispatch the bulk D2H
-  // now so it pipelines with the next batch's compute (matches pre-Phase-1
-  // behavior). Compressed path defers bulk dispatch to sync_and_deliver
-  // once the chunk index has landed.
+  // Passthrough dispatches the bulk D2H here (pipelines with next batch's
+  // compute); compressed defers it to sync_and_deliver once the chunk index
+  // has landed.
   if (handoff->passthrough) {
     if (layout->total_data_bytes > 0) {
       CU(Error,
@@ -483,11 +487,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                            layout->total_data_bytes,
                            d2h_stream));
     }
-    // Record events unconditionally so the poll in sync_and_deliver sees a
-    // current-cycle signal even when this batch carries no data (all LODs
-    // inactive). Without this the poll would observe a prior-cycle signal,
-    // which happens to be harmless today but invalidates the "every kick
-    // signals slot->ready" invariant the cap-stacking paths depend on.
+    // Record unconditionally: cap-stacking paths require "every kick signals
+    // slot->ready", and empty passthrough batches must still signal completion.
     CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }

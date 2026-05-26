@@ -651,8 +651,9 @@ Fail:
   return ok ? 0 : 1;
 }
 
-// Two-cycle compressed double-buffer: covers slot->ready reuse for the
-// compressed path (the existing double_buffer test runs codec=none only).
+// Three-cycle compressed run: cycle 3 reuses fc=0, so slot->ready
+// recorded in cycle 1 must survive into cycle 3's compress wait. Two
+// cycles would never reuse a slot.
 static int
 test_d2h_zstd_double_buffer(void)
 {
@@ -714,6 +715,25 @@ test_d2h_zstd_double_buffer(void)
                                   c.d_pool + epoch_pool_bytes,
                                   c.pool_ready,
                                   &handoff) == 0);
+  }
+
+  CHECK(Fail, sink.finalize_count == 1);
+
+  // Cycle 3: reuse fc=0. compress_agg's wait on prev_d2h_done depends on
+  // sync_and_deliver having recorded slot->ready in cycle 1.
+  CHECK(
+    Fail,
+    fill_pool_epoch(
+      c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch2) ==
+      0);
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+
+  {
+    struct flush_handoff handoff;
+    CHECK(Fail,
+          test_ctx_kick_and_drain(
+            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
+            0);
   }
 
   CHECK(Fail, sink.finalize_count == 1);
