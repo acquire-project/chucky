@@ -174,6 +174,7 @@ slot_desc_offset(const struct batch_slice_entry* be, uint8_t lv)
 
 // Mode-aware: carry-over uses the page-aligned per-LOD offset; contiguous
 // reads h_offsets where the cumulative scan already accounts for prior LODs.
+// Must be called before the rebase loop overwrites h_offsets.
 static size_t
 slot_lod_data_base(const struct batch_aggregate_layout* layout,
                    const struct batch_slice_entry* be,
@@ -187,14 +188,13 @@ slot_lod_data_base(const struct batch_aggregate_layout* layout,
 
 static struct aggregate_result
 batch_lod_view(struct aggregate_slot* slot,
-               const struct batch_aggregate_layout* layout,
                const struct batch_slice_entry* be,
-               uint8_t lv)
+               uint8_t lv,
+               size_t data_base)
 {
-  const size_t off = slot_lod_data_base(layout, be, lv, slot->h_offsets);
   const uint64_t desc = slot_desc_offset(be, lv);
   struct aggregate_result ar = {
-    .data = (uint8_t*)slot->h_aggregated + off,
+    .data = (uint8_t*)slot->h_aggregated + data_base,
     .offsets = slot->h_offsets + desc,
     .chunk_sizes = slot->h_permuted_sizes + desc,
   };
@@ -385,21 +385,32 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct shard_tables* shards = handoff->shards;
     const size_t page_size = shards ? shards->page_size : 0;
 
+    // Snapshot data bases BEFORE rebase: in contiguous mode the base for LOD
+    // lv is read from h_offsets[slot_desc_offset(be, lv)], which the rebase
+    // is about to overwrite. Cache for re-use by batch_lod_view below.
+    const uint32_t cap = slot->batches_per_slot_cap;
+    size_t data_bases[cap * LOD_MAX_LEVELS];
+    memset(data_bases, 0, sizeof(data_bases));
+    for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+      const struct batch_slice_entry* be = &slot->slot_batches[b];
+      for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+        if (be->per_lod_lods[lv].n_active == 0)
+          continue;
+        data_bases[b * LOD_MAX_LEVELS + lv] =
+          slot_lod_data_base(&handoff->layout, be, lv, slot->h_offsets);
+      }
+    }
+
     // Rebase per-batch / per-LOD offsets to be segment-relative for the
     // shard_delivery contract (which pairs segment-shifted result.data with
-    // segment-relative offsets). Mutates h_offsets in place. In contiguous
-    // mode the base for LOD lv is read from h_offsets[slot_desc_offset(be,
-    // lv)] — that value lives at the START of LOD lv's range, which the
-    // current iteration is about to overwrite, but each subsequent (batch,
-    // LOD) reads its OWN starting index which is outside the prior range.
+    // segment-relative offsets). Mutates h_offsets in place.
     for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
       const struct batch_slice_entry* be = &slot->slot_batches[b];
       for (uint8_t lv = 0; lv < be->nlod; ++lv) {
         const struct lod_segment* seg = &be->per_lod_lods[lv];
         if (seg->n_active == 0)
           continue;
-        const size_t base =
-          slot_lod_data_base(&handoff->layout, be, lv, slot->h_offsets);
+        const size_t base = data_bases[b * LOD_MAX_LEVELS + lv];
         if (base == 0)
           continue;
         size_t* off = slot->h_offsets + slot_desc_offset(be, lv);
@@ -418,7 +429,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
           continue;
 
         struct aggregate_result ar =
-          batch_lod_view(slot, &handoff->layout, be, lv);
+          batch_lod_view(slot, be, lv, data_bases[b * LOD_MAX_LEVELS + lv]);
         size_t* h_tail_lv = NULL;
         if (shards && shards->h_tail_bytes && page_size > 0)
           h_tail_lv = shards->h_tail_bytes + shards->shards_begin[lv];
