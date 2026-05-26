@@ -523,14 +523,8 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   e->compress_agg.max_total_batch_covering = mx->u_max_total_batch_covering;
   e->compress_agg.max_total_data_bytes = mx->u_max_total_data_bytes;
   if (mx->u_max_total_batch_chunks > 0) {
-    const uint64_t C_per_batch =
+    const uint64_t slot_chunk_cap =
       mx->u_max_total_batch_covering + (uint64_t)ms->max_nlod;
-    // Conservative: multiarray binds across codecs, so size for the
-    // compressed-codec macro-agg case (W / MIN_COMPRESSED_CHUNK_BYTES).
-    const uint64_t by_min =
-      (uint64_t)(mx->u_max_total_data_bytes / MIN_COMPRESSED_CHUNK_BYTES) +
-      (uint64_t)ms->max_nlod;
-    const uint64_t slot_chunk_cap = by_min > C_per_batch ? by_min : C_per_batch;
     // Multiarray binds arrays of any codec — including CODEC_NONE pass-through
     // whose slot data area is sized to one worst-case batch (W). Two batches
     // would not fit. Keep cap=1 until per-bind cap is plumbed.

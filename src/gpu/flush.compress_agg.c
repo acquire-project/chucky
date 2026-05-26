@@ -122,22 +122,15 @@ compress_agg_init(struct compress_agg_stage* stage,
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     total_shards_init += cl->per_level[lv].agg_layout.num_shards;
 
-  // Per-LOD segments are page-aligned in W, so stacked batches' summed
-  // coverings can exceed max_total_batch_covering. Bound conservatively as
-  // cap × one-batch-worst-case; for compressed also keep the chunks-by-min
-  // bound since W/MIN_COMP can dominate for hi compression ratios.
   if (stage->max_total_batch_chunks > 0) {
-    const uint32_t batches_per_slot_cap = 16;
+    // Compressed (page_size > 0) needs a no_shard_finalizes gate before
+    // stacking; until that's wired into fit_decision, keep cap=1.
+    const size_t page_size = cl->per_level[0].agg_layout.page_size;
+    const uint32_t batches_per_slot_cap =
+      (stage->codec.type == CODEC_NONE && page_size == 0) ? 16 : 1;
     const uint64_t one_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
-    uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;
-    if (stage->codec.type != CODEC_NONE) {
-      const uint64_t by_min =
-        (uint64_t)(stage->max_total_data_bytes / MIN_COMPRESSED_CHUNK_BYTES) +
-        (uint64_t)batches_per_slot_cap * stage->nlod;
-      if (by_min > slot_chunk_cap)
-        slot_chunk_cap = by_min;
-    }
+    const uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->output[fc],
@@ -547,14 +540,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
                         compress_stream) == 0);
   }
 
-  // --- Phase 7: unified aggregate dispatch --------------------------------
-  // Set the slot's view of host-side tail-bytes / total_shards so the
-  // post-batch host callback can compute dense base offsets.
   const int output_idx = in->output_idx;
   struct aggregate_slot* out_slot = &stage->output[output_idx];
-  out_slot->h_tail_bytes_view = stage->shards.h_tail_bytes;
-  out_slot->total_shards_in = stage->shards.total_shards;
-  out_slot->page_size = page_size;
   if (layout.total_batch_chunks > 0) {
     struct slot_dev_ptrs sdp[2];
     for (int oi = 0; oi < 2; ++oi) {

@@ -8,9 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ---------------------------------------------------------------------------
-// Kernel: write_total_k — write the total at d_offsets[C]
-// ---------------------------------------------------------------------------
 __global__ void
 write_total_k(size_t* __restrict__ d_offsets,
               const size_t* __restrict__ d_permuted_sizes,
@@ -19,20 +16,9 @@ write_total_k(size_t* __restrict__ d_offsets,
   d_offsets[C] = d_offsets[C - 1] + d_permuted_sizes[C - 1];
 }
 
-// ---------------------------------------------------------------------------
-// Kernel: add_shard_bias_k
-//   For each chunk j in shard s, add bias_s = s * shard_capacity +
-//   tail_bytes_prev[s] - d_offsets[s * tps_group] to d_offsets[j]. After
-//   the exclusive prefix sum, this lands shard s's first chunk at offset
-//   s*shard_capacity + tail_in (just past the leading tail copy) and packs
-//   subsequent chunks tightly. Multiple generations within one batch are
-//   contiguous; intra-batch fresh-gen runs land mid-shard and intentionally
-//   take the bounce path in delivery.
-//
-//   bias_s is read once into shared memory before any thread writes back to
-//   d_offsets — otherwise thread 0's write to d_offsets[base] would clobber
-//   the prefix-sum value other threads still need to compute their bias.
-// ---------------------------------------------------------------------------
+// bias_s is read into shared mem before any thread writes d_offsets:
+// thread 0's write to d_offsets[base] would otherwise clobber the
+// prefix-sum value other threads still need to compute their bias.
 __global__ void
 add_shard_bias_k(size_t* __restrict__ d_offsets,
                  const size_t* __restrict__ d_tail_bytes_prev,
@@ -52,12 +38,6 @@ add_shard_bias_k(size_t* __restrict__ d_offsets,
     d_offsets[base + k] += bias_s;
 }
 
-// ---------------------------------------------------------------------------
-// Kernel: copy_leading_tail_k
-//   Block s copies tail_bytes_prev[s] bytes from d_tail_carry[s * page_size]
-//   into d_aggregated[s * shard_capacity], staging the prior batch's ragged
-//   tail at the start of this shard's region. No-op when tail length is 0.
-// ---------------------------------------------------------------------------
 __global__ void
 copy_leading_tail_k(void* __restrict__ d_aggregated,
                     const void* __restrict__ d_tail_carry,
@@ -74,10 +54,6 @@ copy_leading_tail_k(void* __restrict__ d_aggregated,
   for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
     dst[off] = src[off];
 }
-
-// ---------------------------------------------------------------------------
-// Host functions
-// ---------------------------------------------------------------------------
 
 extern "C" int
 aggregate_cub_temp_bytes(uint64_t count, size_t* out_bytes)
@@ -205,24 +181,15 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_shard_sum_bytes);
-  if (slot->h_shard_sum_bytes)
-    cuMemFreeHost((void*)slot->h_shard_sum_bytes);
   if (slot->h_shard_base_offsets_dense)
     cuMemFreeHost((void*)slot->h_shard_base_offsets_dense);
   cuMemFree((CUdeviceptr)slot->d_shard_base_offsets_dense);
-  if (slot->h_tail_bytes_next)
-    cuMemFreeHost((void*)slot->h_tail_bytes_next);
   cuMemFree((CUdeviceptr)slot->d_temp);
   cuMemFree((CUdeviceptr)slot->d_runtime);
   free(slot->slot_batches);
   memset(slot, 0, sizeof(*slot));
 }
 
-// Mirrors GPU routing to host bookkeeping. Reads h_routing (D2H'd before
-// this call on the same stream) to learn the target slot and routing
-// offsets, populates the target's slot_batches[batch_idx_in_slot] entry,
-// advances host mirrors of cursor/desc_cursor/batches_per_slot, and signals
-// h_close_signal[close_prior_slot_idx] if a slot closed.
 static void CUDART_CB
 aggregate_post_batch_routed_cb(void* userData)
 {
@@ -251,13 +218,6 @@ aggregate_post_batch_routed_cb(void* userData)
     args->h_close_signal[closed] = 1;
 }
 
-// ---------------------------------------------------------------------------
-// Batch aggregate kernels (LUT-based)
-// ---------------------------------------------------------------------------
-
-// permute_sizes_batch_k:
-//   Thread i reads comp size from d_comp_sizes[gather[i]], writes to
-//   d_permuted_sizes[perm[i]].
 __global__ void
 permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
                       size_t* __restrict__ d_permuted_sizes,
@@ -271,9 +231,6 @@ permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
   d_permuted_sizes[d_perm[i]] = d_comp_sizes[d_gather[i]];
 }
 
-// Single-thread routing decision: read active slot's runtime state, decide
-// whether the just-compressed batch fits, write the decision to d_routing,
-// and advance the chosen slot's d_runtime so the next batch sees fresh state.
 __global__ void
 fit_decision_k(struct d_routing* d_routing,
                struct slot_dev_ptrs slot_0,
@@ -420,8 +377,6 @@ copy_to_slot_launch(const struct d_routing* d_routing,
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
-// gather_batch_k:
-//   Block i copies compressed chunk gather[i] to output position perm[i].
 __global__ void
 gather_batch_k(const void* __restrict__ d_compressed,
                void* __restrict__ d_aggregated,
@@ -445,9 +400,8 @@ gather_batch_k(const void* __restrict__ d_compressed,
     dst[off] = src[off];
 }
 
-// Same as gather_batch_k but reads target_d_aggregated + d_offsets from
-// d_routing. Used by the unified aggregate path; the legacy
-// aggregate_batch_by_shard_async keeps using gather_batch_k.
+// Routed variant: reads target ptrs from d_routing (the legacy
+// aggregate_batch_by_shard_async still uses gather_batch_k).
 __global__ void
 gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
                       const void* __restrict__ d_compressed,
@@ -476,10 +430,6 @@ gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
   for (size_t off = threadIdx.x; off < nbytes; off += blockDim.x)
     dst[off] = src[off];
 }
-
-// ---------------------------------------------------------------------------
-// aggregate_batch_slot_init
-// ---------------------------------------------------------------------------
 
 extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
@@ -522,7 +472,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
     batches_per_slot_cap, sizeof(struct batch_slice_entry));
   CHECK(Error, slot->slot_batches);
 
-  slot->shard_sum_capacity = max_total_shards;
   if (max_total_shards > 0) {
     const size_t dense_h_count =
       (size_t)batches_per_slot_cap * max_total_shards;
@@ -530,26 +479,14 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
        cuMemAlloc((CUdeviceptr*)&slot->d_shard_sum_bytes,
                   max_total_shards * sizeof(size_t)));
     CU(Error,
-       cuMemHostAlloc((void**)&slot->h_shard_sum_bytes,
-                      max_total_shards * sizeof(size_t),
-                      0));
-    CU(Error,
        cuMemHostAlloc((void**)&slot->h_shard_base_offsets_dense,
                       dense_h_count * sizeof(size_t),
                       0));
     CU(Error,
        cuMemAlloc((CUdeviceptr*)&slot->d_shard_base_offsets_dense,
                   dense_h_count * sizeof(size_t)));
-    CU(Error,
-       cuMemHostAlloc((void**)&slot->h_tail_bytes_next,
-                      max_total_shards * sizeof(size_t),
-                      0));
     for (size_t i = 0; i < dense_h_count; ++i)
       ((size_t*)slot->h_shard_base_offsets_dense)[i] = 0;
-    for (uint64_t i = 0; i < max_total_shards; ++i) {
-      ((size_t*)slot->h_shard_sum_bytes)[i] = 0;
-      ((size_t*)slot->h_tail_bytes_next)[i] = 0;
-    }
   }
 
   CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
@@ -569,12 +506,6 @@ Error:
   return 1;
 }
 
-// ---------------------------------------------------------------------------
-// Unified kernels (across all LODs)
-// ---------------------------------------------------------------------------
-
-// Target pointers come from d_routing (loaded once per block into shared
-// mem). Per-shard tables stay as launch args.
 __global__ void
 add_shard_bias_unified_k(const struct d_routing* __restrict__ d_routing,
                          const size_t* __restrict__ d_tail_bytes_prev,
@@ -603,12 +534,6 @@ add_shard_bias_unified_k(const struct d_routing* __restrict__ d_routing,
     d_offsets[base + k] += bias_s;
 }
 
-// compute_shard_sum_bytes_k:
-//   Block per shard. Sums d_permuted_sizes over the shard's run
-//   [base .. base + tps_group) and writes the per-shard byte total to
-//   d_shard_sum_bytes[s]. Called after permute_sizes_batch_k; independent
-//   of the prefix scan. The result is consumed by the host callback to
-//   compute dense shard_base_offsets for the next batch in the slot.
 __global__ void
 compute_shard_sum_bytes_k(const size_t* __restrict__ d_permuted_sizes,
                           const uint64_t* __restrict__ d_shard_offsets_base,
@@ -636,11 +561,6 @@ compute_shard_sum_bytes_k(const size_t* __restrict__ d_permuted_sizes,
     d_shard_sum_bytes[s] = sdata[0];
 }
 
-// copy_leading_tail_unified_k:
-//   Block per shard. Copies d_tail_bytes_prev[s] bytes from
-//   d_tail_carry + s*page_size into d_aggregated + d_shard_base_offsets[s].
-//   Same structure as copy_leading_tail_k; page_size remains uniform across
-//   shards today, while the destination base is now per-shard.
 __global__ void
 copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
                             const void* __restrict__ d_tail_carry,
@@ -666,28 +586,9 @@ copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
     dst[off] = src[off];
 }
 
-// rollforward_tail_unified_k:
-//   Block per shard. Updates d_tail_bytes in place with the new trailing-tail
-//   for the just-aggregated batch and copies those bytes into
-//   d_tail_carry + s*page_size. Each shard's region in d_aggregated spans
-//   [base, base + tail_in + sum_bytes) where base = d_shard_base_offsets[s],
-//   tail_in = prior d_tail_bytes[s], sum_bytes = d_shard_sum_bytes[s]. The
-//   new tail = total % page_size; the bytes are the last new_tail bytes of
-//   that region.
-//
-//   Read d_tail_bytes[s] BEFORE the threadIdx.x==0 write; __syncthreads
-//   guards the in-block read-then-write. Across blocks each block touches
-//   only its own shard, so no inter-block race.
-//
-//   Used between batches in a slot (macro-aggregation): the next batch's
-//   bias/copy_leading_tail kernels read the values this kernel just wrote.
-//   For batches_per_slot==1 the host post-delivery H2D into d_tail_bytes /
-//   d_tail_carry overwrites the GPU state — still correct, just redundant.
-//
-//   Correctness assumes no shard finalizes mid-batch: the GPU sees only the
-//   batch's per-shard byte total, while host-side delivery zeros the tail on
-//   any finalizing run inside the batch. The orchestrator's fit check must
-//   guarantee no mid-slot finalization when macro-agg is active.
+// Read d_tail_bytes[s] before the thread-0 write; __syncthreads guards the
+// in-block read-then-write. Correctness assumes no shard finalizes mid-slot
+// (the host-side fit gate must enforce this when macro-agg is active).
 __global__ void
 rollforward_tail_unified_k(const struct d_routing* __restrict__ d_routing,
                            const size_t* __restrict__ d_shard_sum_bytes,
@@ -721,10 +622,6 @@ rollforward_tail_unified_k(const struct d_routing* __restrict__ d_routing,
   for (size_t i = threadIdx.x; i < new_tail; i += blockDim.x)
     dst[i] = src[i];
 }
-
-// ---------------------------------------------------------------------------
-// aggregate_batch_by_shard_async
-// ---------------------------------------------------------------------------
 
 extern "C" int
 aggregate_batch_by_shard_async(const void* d_compressed,
@@ -822,13 +719,6 @@ Error:
   return 1;
 }
 
-// ---------------------------------------------------------------------------
-// aggregate_batch_unified_async
-//   Single dispatch across all LODs. The kernel launches are identical in
-//   structure to aggregate_batch_by_shard_async, but per-LOD/per-shard
-//   parameters come from device-side tables built host-side at kick time.
-// ---------------------------------------------------------------------------
-
 extern "C" int
 aggregate_batch_unified_async(const void* d_compressed,
                               size_t* d_comp_sizes,
@@ -894,10 +784,6 @@ aggregate_batch_unified_async(const void* d_compressed,
                                   cuda_stream);
   }
 
-  // Pass 2b: per-shard compressed-bytes sums for macro-agg bookkeeping.
-  // Independent of bias/gather. Result is D2H'd to host, host callback
-  // computes dense offsets, H2D stages them to device — all sequenced on
-  // this stream so the bias kernel below sees fresh dense offsets.
   if (total_shards > 0 && slot->d_shard_sum_bytes) {
     const int block = 256;
     compute_shard_sum_bytes_k<<<(int)total_shards, block, 0, cuda_stream>>>(
@@ -906,14 +792,6 @@ aggregate_batch_unified_async(const void* d_compressed,
       d_shard_tps_group,
       slot->d_shard_sum_bytes,
       total_shards);
-  }
-
-  if (total_shards > 0 && slot->d_shard_sum_bytes && slot->h_shard_sum_bytes) {
-    CU(Error,
-       cuMemcpyDtoHAsync((void*)slot->h_shard_sum_bytes,
-                         (CUdeviceptr)slot->d_shard_sum_bytes,
-                         total_shards * sizeof(size_t),
-                         stream));
   }
 
   CHECK(Error,

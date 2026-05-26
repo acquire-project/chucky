@@ -445,24 +445,23 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 2 kicked on fc=1. Lazy delivery: both batches in flight somewhere
-  // (slot stacking depends on cap and data sizes); no shard finalized yet.
-  CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
+  CHECK(Fail, c.s->engine.pools.current == 0);
   CHECK(Fail, slot_has_work(&c.s->engine, 0) || slot_has_work(&c.s->engine, 1));
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
   CHECK(Fail, sink.finalize_count == 0);
 
-  // Drain both batches
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, !slot_has_work(&c.s->engine, 0));
   CHECK(Fail, !slot_has_work(&c.s->engine, 1));
 
-  // Both shards finalized (tps_0=2, 2 epochs each → 2 shards)
   CHECK(Fail, sink.finalize_count >= 2);
 
-  // Sink drain ran at least once (cap>1 may stack both batches into one drain)
-  CHECK(Fail, c.s->engine.metrics.sink.count >= 1);
+  // At cap=1 the two batches drain separately; at cap>=2 they stack into one
+  // slot and drain together. Pick the expected count from the live cap.
+  const uint32_t cap = c.s->engine.compress_agg.output[0].batches_per_slot_cap;
+  const uint64_t expected_drains = (cap >= 2) ? 1u : 2u;
+  CHECK(Fail, c.s->engine.metrics.sink.count == expected_drains);
 
   ok = 1;
 
