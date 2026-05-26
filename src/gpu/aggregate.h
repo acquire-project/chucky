@@ -126,12 +126,6 @@ extern "C"
 
   void output_slot_close_reset(struct aggregate_slot* slot);
 
-  struct batch_aggregate_layout;
-  int output_slot_append_batch_entry(
-    struct aggregate_slot* slot,
-    const struct batch_aggregate_layout* layout,
-    uint8_t nlod);
-
   int slot_can_fit(const struct aggregate_slot* slot, size_t next_batch_bytes);
 
   // Returns 1 if no shard would finalize during the next in-slot batch.

@@ -117,26 +117,6 @@ output_slot_close_reset(struct aggregate_slot* slot)
 }
 
 extern "C" int
-output_slot_append_batch_entry(struct aggregate_slot* slot,
-                               const struct batch_aggregate_layout* layout,
-                               uint8_t nlod)
-{
-  if (!slot || !layout)
-    return 1;
-  if (slot->batches_per_slot >= slot->batches_per_slot_cap)
-    return 1;
-  struct batch_slice_entry* be = &slot->slot_batches[slot->batches_per_slot];
-  be->data_base_offset = slot->slot_cursor;
-  be->desc_base_offset = slot->slot_desc_cursor;
-  be->nlod = nlod;
-  memcpy(
-    be->per_lod_lods, layout->lods, (size_t)nlod * sizeof(struct lod_segment));
-  slot->batches_per_slot++;
-  slot->slot_desc_cursor += layout->total_batch_covering + (uint64_t)nlod;
-  return 0;
-}
-
-extern "C" int
 slot_can_fit(const struct aggregate_slot* slot, size_t next_batch_bytes)
 {
   if (!slot)
