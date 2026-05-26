@@ -379,6 +379,10 @@ dense_offsets_launch(struct d_routing* d_routing,
 }
 
 // Copy [0..count) from per-stage temps into target slot at desc_base_offset.
+// Offsets are biased by data_base_offset so batch 2+ chunks land at the
+// correct slot-absolute positions without overwriting prior batches.
+// (add_shard_bias_unified_k's formula is invariant under this shift; only
+// kicks at page_size==0 rely on this bias alone.)
 __global__ void
 copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
                const size_t* __restrict__ d_temp_offsets,
@@ -390,13 +394,15 @@ copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
     return;
   __shared__ size_t* dst_offsets;
   __shared__ size_t* dst_perm_sizes;
+  __shared__ size_t data_base;
   if (threadIdx.x == 0) {
     dst_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
     dst_perm_sizes =
       d_routing->target_d_permuted_sizes + d_routing->desc_base_offset;
+    data_base = d_routing->data_base_offset;
   }
   __syncthreads();
-  dst_offsets[i] = d_temp_offsets[i];
+  dst_offsets[i] = d_temp_offsets[i] + data_base;
   dst_perm_sizes[i] = d_temp_perm_sizes[i];
 }
 

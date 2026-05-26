@@ -164,6 +164,7 @@ post_kick_review(struct stream_engine* e,
           kick_d2h_and_mark_pending(
             e, ctx, close, &e->flush.pending_handoff[close]) == 0);
     e->compress_agg.h_close_signal[close] = 0;
+    // target's buffer is fresh after fit_decision_k's swap-reset.
     e->compress_agg.slot_host_acc_desc_entries[target] = 0;
   }
   const uint64_t delta = scratch->slot_total_desc_entries;
@@ -196,6 +197,7 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                          e->streams.d2h) == 0);
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;
   e->flush.pending[output_idx] = 1;
+  e->compress_agg.slot_host_acc_desc_entries[output_idx] = 0;
   return 0;
 Error:
   return 1;
@@ -353,6 +355,12 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
     struct writer_result r = drain_output(e, ctx, pick);
     if (r.error)
       return r;
+  }
+  // After full drain, reset both slots' d_runtime + host accumulator so any
+  // post-flush kicks (sync flush of partial batch, etc.) see fresh state.
+  for (int oi = 0; oi < 2; ++oi) {
+    output_slot_close_reset(&e->compress_agg.output[oi]);
+    e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
   }
   return writer_ok();
 }

@@ -26,6 +26,14 @@ struct orch_ctx
   struct tile_stream_gpu* s;
 };
 
+// "Slot has unfinished work": d2h queued OR data buffered (cap>1).
+static int
+slot_has_work(struct stream_engine* e, int oi)
+{
+  return e->flush.pending[oi] ||
+         e->compress_agg.slot_host_acc_desc_entries[oi] > 0;
+}
+
 static void
 orch_ctx_init(struct orch_ctx* c)
 {
@@ -271,9 +279,9 @@ test_full_batch_auto_flush(void)
 
   // After full batch: drain_kick_and_swap fired
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
-  CHECK(Fail, c.s->engine.pools.current == 1);    // swapped to pool 1
-  CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 pending at fc=0
-  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
+  CHECK(Fail, c.s->engine.pools.current == 1); // swapped to pool 1
+  CHECK(Fail, slot_has_work(&c.s->engine, 0)); // batch 1 in-flight at slot 0
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
 
   // Fresh pool slot is reset
   CHECK(Fail, c.s->engine.flush.slot[1].active_levels_mask == 0);
@@ -317,13 +325,13 @@ test_drain_delivers_data(void)
 
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
+  CHECK(Fail, slot_has_work(&c.s->engine, 0));
 
   // Drain the pending batch
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
-  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
+  CHECK(Fail, !slot_has_work(&c.s->engine, 0));
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
 
   // Data delivered: shard opened and finalized (tps_0=2, 2 epochs → complete)
   CHECK(Fail, sink.open_count >= 1);
@@ -425,10 +433,10 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 1 kicked, pool swapped to 1, batch 1 pending at fc=0
+  // Batch 1 kicked, pool swapped to 1, batch 1 in-flight at slot 0
   CHECK(Fail, c.s->engine.pools.current == 1);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
-  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
+  CHECK(Fail, slot_has_work(&c.s->engine, 0));
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
 
   // --- Batch 2: epochs 2,3 on pool 1 ---
@@ -437,24 +445,24 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 2 kicked on fc=1. Lazy delivery: batch 1 stays pending at fc=0
-  // until fc=0 is reused (batch 3) or the final flush drains it.
-  CHECK(Fail, c.s->engine.pools.current == 0);    // swapped back to pool 0
-  CHECK(Fail, c.s->engine.flush.pending[0] == 1); // batch 1 still pending
-  CHECK(Fail, c.s->engine.flush.pending[1] == 1); // batch 2 pending
+  // Batch 2 kicked on fc=1. Lazy delivery: both batches in flight somewhere
+  // (slot stacking depends on cap and data sizes); no shard finalized yet.
+  CHECK(Fail, c.s->engine.pools.current == 0); // swapped back to pool 0
+  CHECK(Fail, slot_has_work(&c.s->engine, 0) || slot_has_work(&c.s->engine, 1));
   CHECK(Fail, c.s->engine.batch.accumulated == 0);
+  CHECK(Fail, sink.finalize_count == 0);
 
-  // Drain both pending batches (in kick order: batch 1 then batch 2)
+  // Drain both batches
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
-  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
+  CHECK(Fail, !slot_has_work(&c.s->engine, 0));
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
 
   // Both shards finalized (tps_0=2, 2 epochs each → 2 shards)
   CHECK(Fail, sink.finalize_count >= 2);
 
-  // Sink metric: 2 batch drains
-  CHECK(Fail, c.s->engine.metrics.sink.count == 2);
+  // Sink drain ran at least once (cap>1 may stack both batches into one drain)
+  CHECK(Fail, c.s->engine.metrics.sink.count >= 1);
 
   ok = 1;
 

@@ -122,23 +122,22 @@ compress_agg_init(struct compress_agg_stage* stage,
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     total_shards_init += cl->per_level[lv].agg_layout.num_shards;
 
-  // Unified aggregate slot per fc. Descriptor arrays (d_offsets,
-  // d_permuted_sizes, host mirrors) are sized to slot_chunk_cap so Phase 3
-  // can pack multiple compressed batches' descriptors into one slot
-  // without reallocation. For pass-through codecs we never macro-agg, so
-  // the cap stays at one batch's worth of entries.
+  // Per-LOD segments are page-aligned in W, so stacked batches' summed
+  // coverings can exceed max_total_batch_covering. Bound conservatively as
+  // cap × one-batch-worst-case; for compressed also keep the chunks-by-min
+  // bound since W/MIN_COMP can dominate for hi compression ratios.
   if (stage->max_total_batch_chunks > 0) {
-    const uint64_t C_per_batch =
+    const uint32_t batches_per_slot_cap = 2;
+    const uint64_t one_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
-    uint64_t slot_chunk_cap = C_per_batch;
+    uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;
     if (stage->codec.type != CODEC_NONE) {
-      const size_t W = stage->max_total_data_bytes;
       const uint64_t by_min =
-        (uint64_t)(W / MIN_COMPRESSED_CHUNK_BYTES) + (uint64_t)stage->nlod;
+        (uint64_t)(stage->max_total_data_bytes / MIN_COMPRESSED_CHUNK_BYTES) +
+        (uint64_t)batches_per_slot_cap * stage->nlod;
       if (by_min > slot_chunk_cap)
         slot_chunk_cap = by_min;
     }
-    const uint32_t batches_per_slot_cap = 1;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->output[fc],
