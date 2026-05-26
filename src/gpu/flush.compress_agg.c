@@ -127,7 +127,7 @@ compress_agg_init(struct compress_agg_stage* stage,
   // cap × one-batch-worst-case; for compressed also keep the chunks-by-min
   // bound since W/MIN_COMP can dominate for hi compression ratios.
   if (stage->max_total_batch_chunks > 0) {
-    const uint32_t batches_per_slot_cap = 2;
+    const uint32_t batches_per_slot_cap = 16;
     const uint64_t one_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
     uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;

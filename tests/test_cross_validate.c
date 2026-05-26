@@ -141,7 +141,6 @@ compare_shards(const struct mem_sink* gpu_sink,
       }
 
       if (memcmp(gw->buf, cw->buf, gw->size) != 0) {
-        // Find first difference
         size_t diff_at = 0;
         for (size_t i = 0; i < gw->size; ++i) {
           if (gw->buf[i] != cw->buf[i]) {

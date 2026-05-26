@@ -559,16 +559,20 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // behavior). Compressed path defers bulk dispatch to sync_and_deliver
   // once the chunk index has landed.
   if (handoff->passthrough) {
-    if (layout->total_data_bytes > 0) {
+    if (layout->total_data_bytes > 0 || slot->slot_cursor > 0) {
+      // At cap>1, the last kick's layout undersizes the slot when prior
+      // stacked kicks had more LODs active; slot_cursor tracks cumulative
+      // actual bytes across the slot's stacked batches.
+      const size_t n = (slot->slot_cursor > layout->total_data_bytes)
+                         ? slot->slot_cursor
+                         : layout->total_data_bytes;
       CU(Error,
-         cuMemcpyDtoHAsync(slot->h_aggregated,
-                           (CUdeviceptr)slot->d_aggregated,
-                           layout->total_data_bytes,
-                           d2h_stream));
+         cuMemcpyDtoHAsync(
+           slot->h_aggregated, (CUdeviceptr)slot->d_aggregated, n, d2h_stream));
     }
-    // Record events unconditionally: empty passthrough batches must still
-    // signal completion so the cap-stacking paths never observe a stale
-    // prior-cycle signal on slot->ready.
+    // Always record completion events: empty passthrough batches still
+    // need a current-cycle signal so the cap-stacking paths never observe
+    // a stale prior-cycle signal on slot->ready.
     CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
