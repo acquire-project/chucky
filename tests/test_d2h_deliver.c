@@ -651,7 +651,146 @@ Fail:
   return ok ? 0 : 1;
 }
 
+// Two-cycle compressed double-buffer: covers slot->ready reuse for the
+// compressed path (the existing double_buffer test runs codec=none only).
+static int
+test_d2h_zstd_double_buffer(void)
+{
+  log_info("=== test_d2h_zstd_double_buffer ===");
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config;
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_ZSTD }, 1);
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
+
+  struct test_ctx c;
+  test_ctx_init(&c);
+  uint8_t* decomp_buf = NULL;
+  int ok = 0;
+
+  CHECK(Fail, test_ctx_setup(&c, &config, 2) == 0);
+
+  const uint64_t total_chunks = c.cl.levels.total_chunks;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
+  const size_t bytes_per_element = dtype_bpe(config.dtype);
+  const size_t chunk_bytes = chunk_stride * bytes_per_element;
+  size_t epoch_pool_bytes = total_chunks * chunk_stride * bytes_per_element;
+
+  CHECK(
+    Fail,
+    fill_pool_epoch(
+      c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
+      0);
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+
+  {
+    struct flush_handoff handoff;
+    CHECK(Fail,
+          test_ctx_kick_and_drain(
+            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
+            0);
+  }
+
+  CHECK(Fail, sink.finalize_count == 0);
+
+  CHECK(Fail,
+        fill_pool_epoch(c.d_pool + epoch_pool_bytes,
+                        total_chunks,
+                        chunk_stride,
+                        bytes_per_element,
+                        fill_epoch1) == 0);
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+
+  {
+    struct flush_handoff handoff;
+    CHECK(Fail,
+          test_ctx_kick_and_drain(&c,
+                                  &config,
+                                  &sink.base,
+                                  1,
+                                  1,
+                                  c.d_pool + epoch_pool_bytes,
+                                  c.pool_ready,
+                                  &handoff) == 0);
+  }
+
+  CHECK(Fail, sink.finalize_count == 1);
+
+  {
+    struct shard_state* ss = &c.ca.shard[0];
+    uint64_t tps_total = ss->chunks_per_shard_total;
+    size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
+    size_t index_total_bytes = index_data_bytes + 4;
+
+    CHECK(Fail, sink.writers[0][0].size >= index_total_bytes);
+    size_t index_start = sink.writers[0][0].size - index_total_bytes;
+    const uint64_t* idx =
+      (const uint64_t*)(sink.writers[0][0].buf + index_start);
+
+    const struct aggregate_layout* al = &c.ca.per_lod_agg_layouts[0];
+    uint64_t cps_inner = ss->chunks_per_shard_inner;
+
+    decomp_buf = (uint8_t*)malloc(chunk_bytes);
+    CHECK(Fail, decomp_buf);
+
+    int errors = 0;
+    for (int epoch = 0; epoch < 2; ++epoch) {
+      uint16_t (*fill_fn)(uint64_t) = (epoch == 0) ? fill_epoch0 : fill_epoch1;
+      for (uint64_t t = 0; t < total_chunks; ++t) {
+        uint32_t pi =
+          cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
+        uint64_t slot_idx = (uint64_t)epoch * cps_inner + pi;
+        uint64_t tile_off = idx[2 * slot_idx];
+        uint64_t tile_sz = idx[2 * slot_idx + 1];
+
+        CHECK(Fail, tile_sz > 0);
+        CHECK(Fail, tile_off + tile_sz <= sink.writers[0][0].size);
+
+        size_t result = ZSTD_decompress(
+          decomp_buf, chunk_bytes, sink.writers[0][0].buf + tile_off, tile_sz);
+        if (ZSTD_isError(result)) {
+          log_error("  epoch %d chunk %lu: ZSTD_decompress: %s",
+                    epoch,
+                    (unsigned long)t,
+                    ZSTD_getErrorName(result));
+          errors++;
+          continue;
+        }
+        CHECK(Fail, result == chunk_bytes);
+
+        uint16_t expected_val = fill_fn(t);
+        const uint16_t* got = (const uint16_t*)decomp_buf;
+        for (uint64_t e = 0; e < chunk_stride; ++e) {
+          if (got[e] != expected_val) {
+            if (errors < 5)
+              log_error("  epoch %d chunk %lu elem %lu: expected %u got %u",
+                        epoch,
+                        (unsigned long)t,
+                        (unsigned long)e,
+                        expected_val,
+                        got[e]);
+            errors++;
+          }
+        }
+      }
+    }
+    CHECK(Fail, errors == 0);
+  }
+
+  ok = 1;
+
+Fail:
+  free(decomp_buf);
+  test_ctx_destroy(&c);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS({ "d2h_single_epoch_none", test_d2h_single_epoch_none },
               { "d2h_batch_none", test_d2h_batch_none },
               { "d2h_zstd_single_epoch", test_d2h_zstd_single_epoch },
-              { "d2h_double_buffer", test_d2h_double_buffer }, )
+              { "d2h_double_buffer", test_d2h_double_buffer },
+              { "d2h_zstd_double_buffer", test_d2h_zstd_double_buffer }, )

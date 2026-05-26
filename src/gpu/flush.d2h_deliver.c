@@ -475,12 +475,19 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // now so it pipelines with the next batch's compute (matches pre-Phase-1
   // behavior). Compressed path defers bulk dispatch to sync_and_deliver
   // once the chunk index has landed.
-  if (handoff->passthrough && layout->total_data_bytes > 0) {
-    CU(Error,
-       cuMemcpyDtoHAsync(slot->h_aggregated,
-                         (CUdeviceptr)slot->d_aggregated,
-                         layout->total_data_bytes,
-                         d2h_stream));
+  if (handoff->passthrough) {
+    if (layout->total_data_bytes > 0) {
+      CU(Error,
+         cuMemcpyDtoHAsync(slot->h_aggregated,
+                           (CUdeviceptr)slot->d_aggregated,
+                           layout->total_data_bytes,
+                           d2h_stream));
+    }
+    // Record events unconditionally so the poll in sync_and_deliver sees a
+    // current-cycle signal even when this batch carries no data (all LODs
+    // inactive). Without this the poll would observe a prior-cycle signal,
+    // which happens to be harmless today but invalidates the "every kick
+    // signals slot->ready" invariant the cap-stacking paths depend on.
     CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
