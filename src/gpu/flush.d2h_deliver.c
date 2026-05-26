@@ -460,40 +460,58 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // Offsets + permuted sizes. Compressed codecs use these in drain to size
   // exact per-LOD transfers; pass-through copies them too so delivery's
   // chunk-index walk works uniformly.
+  int dispatch_err = 0;
   if (layout->total_batch_covering > 0) {
     const size_t n = layout->total_batch_covering + (size_t)handoff->nlod;
-    CU(Error,
-       cuMemcpyDtoHAsync(slot->h_offsets,
-                         (CUdeviceptr)slot->d_offsets,
-                         n * sizeof(size_t),
-                         d2h_stream));
-    CU(Error,
-       cuMemcpyDtoHAsync(slot->h_permuted_sizes,
-                         (CUdeviceptr)slot->d_permuted_sizes,
-                         n * sizeof(size_t),
-                         d2h_stream));
+    CUresult r = cuMemcpyDtoHAsync(slot->h_offsets,
+                                   (CUdeviceptr)slot->d_offsets,
+                                   n * sizeof(size_t),
+                                   d2h_stream);
+    if (r != CUDA_SUCCESS) {
+      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
+      dispatch_err = 1;
+    }
+    if (!dispatch_err) {
+      r = cuMemcpyDtoHAsync(slot->h_permuted_sizes,
+                            (CUdeviceptr)slot->d_permuted_sizes,
+                            n * sizeof(size_t),
+                            d2h_stream);
+      if (r != CUDA_SUCCESS) {
+        handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
+        dispatch_err = 1;
+      }
+    }
   }
-
-  CU(Error, cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
+  if (!dispatch_err) {
+    CUresult r = cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream);
+    if (r != CUDA_SUCCESS) {
+      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventRecord");
+      dispatch_err = 1;
+    }
+  }
 
   // Passthrough dispatches the bulk D2H here (pipelines with next batch's
   // compute); compressed defers it to sync_and_deliver once the chunk index
   // has landed.
-  if (handoff->passthrough) {
-    if (layout->total_data_bytes > 0) {
-      CU(Error,
-         cuMemcpyDtoHAsync(slot->h_aggregated,
-                           (CUdeviceptr)slot->d_aggregated,
-                           layout->total_data_bytes,
-                           d2h_stream));
+  if (!dispatch_err && handoff->passthrough && layout->total_data_bytes > 0) {
+    CUresult r = cuMemcpyDtoHAsync(slot->h_aggregated,
+                                   (CUdeviceptr)slot->d_aggregated,
+                                   layout->total_data_bytes,
+                                   d2h_stream);
+    if (r != CUDA_SUCCESS) {
+      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
+      dispatch_err = 1;
     }
-    // Record unconditionally: cap-stacking paths require "every kick signals
-    // slot->ready", and empty passthrough batches must still signal completion.
+  }
+
+  // Always record passthrough completion events even on dispatch error:
+  // cap-stacking waiters block on slot->ready and would hang otherwise.
+  if (handoff->passthrough) {
     CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
 
-  return 0;
+  return dispatch_err;
 
 Error:
   return 1;

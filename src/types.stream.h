@@ -46,9 +46,10 @@ struct stream_metrics
   // flush_stall - kick_sync_stall - (sink portion inside drain).
   struct stream_metric flush_stall;     // whole d2h_deliver_drain call
                                         // (drain_fc in stream.flush.c)
-  struct stream_metric kick_sync_stall; // host wait in sync_and_deliver:
-                                        // h_chunk_index_ready poll + bulk
-                                        // D2H dispatch + ready[fc] poll
+  // Passthrough: ready[fc] poll only. Compressed: h_chunk_index_ready
+  // poll + per-LOD bulk D2H dispatch + ready[fc] poll (the second poll
+  // now includes DMA transfer wall time).
+  struct stream_metric kick_sync_stall;
   struct stream_metric io_fence_stall;  // GPU: wait_io_fences in
                                         // d2h_deliver_kick. CPU: wait_fence
                                         // before aggregate in
