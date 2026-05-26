@@ -126,7 +126,7 @@ run_gpu_aggregate(struct gpu_run* r,
   const size_t comp_pool_bytes = N * g->max_comp;
 
   CHECK(Fail,
-        aggregate_batch_slot_init(&r->slot, N, batch_C, comp_pool_bytes) == 0);
+        aggregate_batch_slot_init(&r->slot, batch_C, comp_pool_bytes) == 0);
 
   // Synthetic compressed pool: chunk i has size (10 + i%7), filled with
   // value (i+1)&0xff. Same shape as the CPU test.

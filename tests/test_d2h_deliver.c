@@ -148,24 +148,15 @@ test_ctx_kick_and_drain(struct test_ctx* c,
         compress_agg_kick(&c->ca,
                           &in,
                           &c->cl.levels,
-                          &c->batch,
-                          &c->cl.dims,
                           c->compute,
                           handoff) == 0);
 
   CHECK(Fail,
-        d2h_deliver_kick(&c->d2h,
-                         handoff,
-                         &c->cl.levels,
-                         &c->batch,
-                         &c->cl.dims,
-                         sink,
-                         c->d2h_stream) == 0);
+        d2h_deliver_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
 
   struct writer_result r = d2h_deliver_drain(&c->d2h,
                                              handoff,
                                              &c->cl.levels,
-                                             &c->batch,
                                              &c->cl.dims,
                                              &c->cl.layouts[0],
                                              config,

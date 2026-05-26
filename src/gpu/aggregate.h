@@ -39,7 +39,6 @@ extern "C"
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
-                                uint64_t batch_chunk_count,
                                 uint64_t batch_covering_count,
                                 size_t comp_pool_bytes);
 

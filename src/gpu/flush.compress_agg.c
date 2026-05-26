@@ -123,17 +123,11 @@ compress_agg_init(struct compress_agg_stage* stage,
   //     aggregate_batch_luts_unified). The CUB exclusive scan fills all
   //     sentinel positions, so no per-LOD write_total fixup is needed.
   if (stage->max_total_batch_chunks > 0) {
-    // aggregate_batch_slot_init allocates (C+1) entries for d_offsets /
-    // d_permuted_sizes / h_offsets and C entries for h_permuted_sizes. We
-    // want all to fit total_batch_covering + nlod entries, so pass
-    // C = max_total_batch_covering + nlod (h_permuted_sizes ends up exactly
-    // matching the scan output length).
     const uint64_t C_max =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->agg[fc],
-                                      stage->max_total_batch_chunks,
                                       C_max,
                                       stage->max_total_data_bytes) == 0);
       CU(Fail, cuEventRecord(stage->agg[fc].ready, compute));
@@ -364,13 +358,9 @@ int
 compress_agg_kick(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
                   const struct level_geometry* levels,
-                  const struct batch_state* batch,
-                  const struct dim_info* dims,
                   CUstream compress_stream,
                   struct flush_handoff* out)
 {
-  (void)batch;
-  (void)dims;
   const int fc = in->fc;
   const uint32_t n_epochs = in->n_epochs;
   const uint8_t nlod = stage->nlod;

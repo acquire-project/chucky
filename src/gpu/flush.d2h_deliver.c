@@ -408,7 +408,6 @@ maybe_update_metadata(const struct flush_handoff* handoff,
                       struct shard_sink* sink,
                       struct platform_clock* metadata_update_clock)
 {
-  (void)config;
   if (!sink->update_append)
     return 0;
 
@@ -439,15 +438,9 @@ maybe_update_metadata(const struct flush_handoff* handoff,
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
-                 const struct level_geometry* levels,
-                 const struct batch_state* batch,
-                 const struct dim_info* dims,
                  struct shard_sink* sink,
                  CUstream d2h_stream)
 {
-  (void)levels;
-  (void)batch;
-  (void)dims;
   const int fc = handoff->fc;
   struct aggregate_slot* slot = handoff->agg;
   const struct batch_aggregate_layout* layout = &handoff->layout;
@@ -521,7 +514,6 @@ struct writer_result
 d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
                   const struct level_geometry* levels,
-                  const struct batch_state* batch,
                   const struct dim_info* dims,
                   const struct tile_stream_layout* layout,
                   const struct tile_stream_configuration* config,
@@ -532,7 +524,6 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   struct platform_clock* metadata_update_clock,
                   CUstream d2h_stream)
 {
-  (void)batch;
   struct writer_result r = sync_and_deliver(stage,
                                             handoff,
                                             levels,
