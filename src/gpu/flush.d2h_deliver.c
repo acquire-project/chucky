@@ -7,8 +7,16 @@
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
-#include <assert.h>
 #include <string.h>
+
+#define D2H_TRY(err_flag, name, call)                                          \
+  do {                                                                         \
+    CUresult _r = (call);                                                      \
+    if (_r != CUDA_SUCCESS) {                                                  \
+      handle_curesult(LOG_ERROR, _r, __FILE__, __LINE__, (name));              \
+      (err_flag) = 1;                                                          \
+    }                                                                          \
+  } while (0)
 
 // --- Init / Destroy ---
 
@@ -183,9 +191,12 @@ poll_event(CUevent ev, int fc)
 }
 
 // h_offsets must be pre-rebase (absolute, slot-relative) values here.
-static size_t
-lod_actual_bytes(const struct flush_handoff* handoff, uint8_t lv)
+static int
+lod_actual_bytes(const struct flush_handoff* handoff,
+                 uint8_t lv,
+                 size_t* out_bytes)
 {
+  *out_bytes = 0;
   const struct lod_segment* seg = &handoff->layout.lods[lv];
   if (seg->n_active == 0)
     return 0;
@@ -193,10 +204,14 @@ lod_actual_bytes(const struct flush_handoff* handoff, uint8_t lv)
   const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
   const size_t last = seg->batch_covering_offset + (size_t)lv + total - 1;
   const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
-  assert(slot->h_offsets[last] >= seg->data_segment_offset);
+  CHECK(Error, slot->h_offsets[last] >= seg->data_segment_offset);
   const size_t actual = end - seg->data_segment_offset;
-  assert(actual <= seg->data_segment_bytes);
-  return actual;
+  CHECK(Error, actual <= seg->data_segment_bytes);
+  *out_bytes = actual;
+  return 0;
+
+Error:
+  return 1;
 }
 
 static struct writer_result
@@ -236,37 +251,30 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
           if (handoff->per_lod_n_active[lv] == 0)
             continue;
           const struct lod_segment* seg = &alayout->lods[lv];
-          const size_t actual = lod_actual_bytes(handoff, lv);
+          size_t actual = 0;
+          if (lod_actual_bytes(handoff, lv, &actual))
+            goto Error;
           if (actual == 0)
             continue;
-          CUresult r =
-            cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated +
-                                seg->data_segment_offset,
-                              (CUdeviceptr)slot->d_aggregated +
-                                seg->data_segment_offset,
-                              actual,
-                              d2h_stream);
-          if (r != CUDA_SUCCESS) {
-            handle_curesult(LOG_ERROR, r, __FILE__, __LINE__,
-                            "cuMemcpyDtoHAsync");
-            dispatch_err = 1;
-          }
+          D2H_TRY(dispatch_err,
+                  "cuMemcpyDtoHAsync",
+                  cuMemcpyDtoHAsync(
+                    (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
+                    (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
+                    actual,
+                    d2h_stream));
         }
       } else if (alayout->total_batch_covering > 0) {
         const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
         const size_t total =
           slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
-        if (total > 0) {
-          CUresult r = cuMemcpyDtoHAsync(slot->h_aggregated,
-                                         (CUdeviceptr)slot->d_aggregated,
-                                         total,
-                                         d2h_stream);
-          if (r != CUDA_SUCCESS) {
-            handle_curesult(LOG_ERROR, r, __FILE__, __LINE__,
-                            "cuMemcpyDtoHAsync");
-            dispatch_err = 1;
-          }
-        }
+        if (total > 0)
+          D2H_TRY(dispatch_err,
+                  "cuMemcpyDtoHAsync",
+                  cuMemcpyDtoHAsync(slot->h_aggregated,
+                                    (CUdeviceptr)slot->d_aggregated,
+                                    total,
+                                    d2h_stream));
       }
 
       // Always record completion events, even if the D2H dispatch above
@@ -450,52 +458,38 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
-  // Offsets + permuted sizes. Compressed codecs use these in drain to size
-  // exact per-LOD transfers; pass-through copies them too so delivery's
-  // chunk-index walk works uniformly.
+  // Compressed codecs use these in drain to size exact per-LOD transfers;
+  // pass-through copies them too so delivery's chunk-index walk is uniform.
   int dispatch_err = 0;
   if (layout->total_batch_covering > 0) {
     const size_t n = layout->total_batch_covering + (size_t)handoff->nlod;
-    CUresult r = cuMemcpyDtoHAsync(slot->h_offsets,
-                                   (CUdeviceptr)slot->d_offsets,
-                                   n * sizeof(size_t),
-                                   d2h_stream);
-    if (r != CUDA_SUCCESS) {
-      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
-      dispatch_err = 1;
-    }
-    if (!dispatch_err) {
-      r = cuMemcpyDtoHAsync(slot->h_permuted_sizes,
-                            (CUdeviceptr)slot->d_permuted_sizes,
-                            n * sizeof(size_t),
-                            d2h_stream);
-      if (r != CUDA_SUCCESS) {
-        handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
-        dispatch_err = 1;
-      }
-    }
+    D2H_TRY(dispatch_err,
+            "cuMemcpyDtoHAsync",
+            cuMemcpyDtoHAsync(slot->h_offsets,
+                              (CUdeviceptr)slot->d_offsets,
+                              n * sizeof(size_t),
+                              d2h_stream));
+    if (!dispatch_err)
+      D2H_TRY(dispatch_err,
+              "cuMemcpyDtoHAsync",
+              cuMemcpyDtoHAsync(slot->h_permuted_sizes,
+                                (CUdeviceptr)slot->d_permuted_sizes,
+                                n * sizeof(size_t),
+                                d2h_stream));
   }
-  if (!dispatch_err) {
-    CUresult r = cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream);
-    if (r != CUDA_SUCCESS) {
-      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventRecord");
-      dispatch_err = 1;
-    }
-  }
+  if (!dispatch_err)
+    D2H_TRY(dispatch_err,
+            "cuEventRecord",
+            cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
 
-  // Passthrough dispatches the bulk D2H here (pipelines with next batch's
-  // compute); compressed defers it to sync_and_deliver once the chunk index
-  // has landed.
-  if (!dispatch_err && handoff->passthrough && layout->total_data_bytes > 0) {
-    CUresult r = cuMemcpyDtoHAsync(slot->h_aggregated,
-                                   (CUdeviceptr)slot->d_aggregated,
-                                   layout->total_data_bytes,
-                                   d2h_stream);
-    if (r != CUDA_SUCCESS) {
-      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuMemcpyDtoHAsync");
-      dispatch_err = 1;
-    }
-  }
+  // Compressed defers bulk D2H to sync_and_deliver once the chunk index lands.
+  if (!dispatch_err && handoff->passthrough && layout->total_data_bytes > 0)
+    D2H_TRY(dispatch_err,
+            "cuMemcpyDtoHAsync",
+            cuMemcpyDtoHAsync(slot->h_aggregated,
+                              (CUdeviceptr)slot->d_aggregated,
+                              layout->total_data_bytes,
+                              d2h_stream));
 
   // Always record passthrough completion events even on dispatch error:
   // cap-stacking waiters block on slot->ready and would hang otherwise.

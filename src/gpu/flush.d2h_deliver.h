@@ -11,8 +11,8 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 void
 d2h_deliver_destroy(struct d2h_deliver_stage* stage);
 
-// Compressed defers the bulk D2H to drain (exact-size needs the chunk index).
-// Passthrough records ready[fc] and slot->ready here; compressed defers them.
+// Pass-through codecs complete the D2H here; compressed codecs only land
+// the chunk index and finish in drain (bulk D2H is sized by actual bytes).
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
