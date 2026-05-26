@@ -23,21 +23,26 @@ struct shard_tables;
 // must read per-LOD active counts from `per_lod_n_active` instead.
 struct flush_handoff
 {
-  int fc;                                     // flush slot index
-  uint32_t n_epochs;                          // epochs in batch
-  uint32_t active_levels_mask;                // which levels active
-  const uint32_t* batch_active_masks;         // borrowed [K] per-epoch masks
-  uint32_t per_lod_n_active[LOD_MAX_LEVELS];  // owned, for delivery sizing
+  int fc;                                    // flush slot index
+  uint32_t n_epochs;                         // epochs in batch
+  uint32_t active_levels_mask;               // which levels active
+  const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
+  uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;
 
   CUevent t_aggregate_end;  // D2H waits on this
   CUevent t_compress_start; // for metrics
   CUevent t_compress_end;   // for metrics
 
-  struct aggregate_slot* agg;                 // borrowed: unified slot for fc
-  struct batch_aggregate_layout layout;       // owned (by-value snapshot)
+  struct aggregate_slot* agg;           // borrowed: unified slot for fc
+  struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
-  struct shard_tables* shards;                // borrowed (for tail HtoD)
-  size_t max_output_size;                     // codec bound
+  struct shard_tables* shards; // borrowed (for tail HtoD)
+  size_t max_output_size;      // codec bound
+
+  // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so
+  // delivery skips the exact-size sync and keeps the kick-time bulk D2H
+  // path that overlaps with the next batch's compute.
+  uint8_t passthrough;
 };

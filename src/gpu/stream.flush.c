@@ -87,7 +87,6 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
                                              &e->flush.pending_handoff[fc],
                                              &ctx->levels,
-                                             &e->batch,
                                              &ctx->dims,
                                              &ctx->layout,
                                              &ctx->config,
@@ -95,7 +94,8 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
                                              &e->lod,
                                              &e->lod_shared,
                                              &e->metrics,
-                                             &e->metadata_update_clock);
+                                             &e->metadata_update_clock,
+                                             e->streams.d2h);
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
@@ -127,7 +127,6 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
       return r;
   }
 
-  // Phase 2: kick compress+aggregate for the new batch (compress stream).
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct compress_agg_input in =
     make_compress_input(e, ctx, completed_pool, e->batch.accumulated);
@@ -136,18 +135,12 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
         compress_agg_kick(&e->compress_agg,
                           &in,
                           &ctx->levels,
-                          &e->batch,
-                          &ctx->dims,
                           e->streams.compress,
                           &new_handoff) == 0);
 
-  // Phase 3: kick the full D2H (offset sync + bulk queue) — non-blocking.
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
                          &new_handoff,
-                         &ctx->levels,
-                         &e->batch,
-                         &ctx->dims,
                          ctx->sink,
                          e->streams.d2h) == 0);
 
@@ -238,17 +231,12 @@ flush_kick_batch(struct stream_engine* e,
         compress_agg_kick(&e->compress_agg,
                           &in,
                           &ctx->levels,
-                          &e->batch,
-                          &ctx->dims,
                           e->streams.compress,
                           &handoff) == 0);
 
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
                          &handoff,
-                         &ctx->levels,
-                         &e->batch,
-                         &ctx->dims,
                          ctx->sink,
                          e->streams.d2h) == 0);
 

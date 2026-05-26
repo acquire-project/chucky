@@ -146,10 +146,10 @@ struct shard_tables
   // Per-shard parameters used by add_shard_bias_unified_k and
   // copy_leading_tail_unified_k. Host shadows are owned; device buffers are
   // allocated at init sized to the max across arrays.
-  size_t* h_base_offsets;      // base byte offset in d_aggregated
-  size_t* h_shard_capacity;    // per shard
-  uint64_t* h_tps_group;       // chunks-per-shard within a batch
-  uint64_t* h_offsets_base;    // base index in d_offsets / d_permuted_sizes
+  size_t* h_base_offsets;   // base byte offset in d_aggregated
+  size_t* h_shard_capacity; // per shard
+  uint64_t* h_tps_group;    // chunks-per-shard within a batch
+  uint64_t* h_offsets_base; // base index in d_offsets / d_permuted_sizes
 
   size_t* d_base_offsets;
   size_t* d_shard_capacity;
@@ -199,8 +199,8 @@ struct compress_agg_stage
   uint32_t* h_lut_gather_scratch; // for building unified LUT host-side
   uint32_t* h_lut_perm_scratch;
   uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded counts
-  uint32_t* cached_pool_epochs;   // [LOD_MAX_LEVELS * pool_epochs_stride]
-  uint32_t pool_epochs_stride;    // max K used by scratch + cache
+  uint32_t* cached_pool_epochs; // [LOD_MAX_LEVELS * pool_epochs_stride]
+  uint32_t pool_epochs_stride;  // max K used by scratch + cache
   int lut_cache_valid;
   uint64_t lut_steady_count;
   uint64_t lut_recompute_count;
@@ -229,7 +229,8 @@ struct compress_agg_stage
 struct d2h_deliver_stage
 {
   CUevent t_d2h_start[2];
-  CUevent ready[2]; // unified D2H completion (offsets+sizes+data)
+  CUevent h_chunk_index_ready[2]; // h_offsets + h_permuted_sizes on host
+  CUevent ready[2];               // full D2H done; gates slot reuse
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

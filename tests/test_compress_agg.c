@@ -143,8 +143,6 @@ ca_ctx_kick(struct ca_test_ctx* c,
         compress_agg_kick(&c->stage,
                           &in,
                           &c->cl.levels,
-                          &c->batch,
-                          &c->cl.dims,
                           c->compute,
                           handoff) == 0);
   CU(Fail, cuStreamSynchronize(c->compute));
@@ -766,8 +764,6 @@ test_compress_agg_lut_cache_position_shift(void)
           compress_agg_kick(&c.stage,
                             &in,
                             &c.cl.levels,
-                            &c.batch,
-                            &c.cl.dims,
                             c.compute,
                             &handoff) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
@@ -796,8 +792,6 @@ test_compress_agg_lut_cache_position_shift(void)
           compress_agg_kick(&c.stage,
                             &in,
                             &c.cl.levels,
-                            &c.batch,
-                            &c.cl.dims,
                             c.compute,
                             &handoff2) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));

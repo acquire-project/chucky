@@ -195,12 +195,10 @@ gather_batch_k(const void* __restrict__ d_compressed,
 
 extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
-                          uint64_t batch_chunk_count,
                           uint64_t batch_covering_count,
                           size_t comp_pool_bytes)
 {
   uint64_t C = batch_covering_count;
-  (void)batch_chunk_count;
 
   CHECK(Error, slot);
   memset(slot, 0, sizeof(*slot));
