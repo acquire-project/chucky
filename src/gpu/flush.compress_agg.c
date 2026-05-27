@@ -123,11 +123,13 @@ compress_agg_init(struct compress_agg_stage* stage,
     total_shards_init += cl->per_level[lv].agg_layout.num_shards;
 
   if (stage->max_total_batch_chunks > 0) {
-    // Compressed (page_size > 0) needs a no_shard_finalizes gate before
-    // stacking; until that's wired into fit_decision, keep cap=1.
-    const size_t page_size = cl->per_level[0].agg_layout.page_size;
-    const uint32_t batches_per_slot_cap =
-      (stage->codec.type == CODEC_NONE && page_size == 0) ? 16 : 1;
+    // Passthrough with paged shards (page_size > 0) sizes each batch to its
+    // worst-case envelope, so only one fits in the per-batch slot capacity.
+    // Compressed codecs and contiguous-mode passthrough can actually stack.
+    const size_t page_size_init = cl->per_level[0].agg_layout.page_size;
+    const int can_stack =
+      (stage->codec.type != CODEC_NONE) || (page_size_init == 0);
+    const uint32_t batches_per_slot_cap = can_stack ? 16 : 1;
     const uint64_t one_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
     const uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;
@@ -552,6 +554,30 @@ compress_agg_kick(struct compress_agg_stage* stage,
     struct agg_routing_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
     cb_args->layout = layout;
     cb_args->nlod = nlod;
+    memcpy(cb_args->per_lod_n_active,
+           per_lod_n_active,
+           (size_t)nlod * sizeof(uint32_t));
+
+    // The gate only matters when shards have per-page tails (page_size > 0):
+    // rollforward_tail_unified_k corrupts in-slot if a shard finalizes
+    // mid-slot. page_size == 0 has no tail rollforward, so stacking is safe.
+    int would_finalize_stay = 0;
+    int would_finalize_alone = 0;
+    if (page_size > 0) {
+      uint64_t epoch_stay[LOD_MAX_LEVELS] = { 0 };
+      uint64_t epoch_alone[LOD_MAX_LEVELS] = { 0 };
+      uint64_t cps_append[LOD_MAX_LEVELS] = { 0 };
+      for (uint8_t lv = 0; lv < nlod; ++lv) {
+        epoch_alone[lv] = stage->shard[lv].epoch_in_shard;
+        epoch_stay[lv] = epoch_alone[lv] + out_slot->stacked_n_active[lv];
+        cps_append[lv] = stage->shard[lv].chunks_per_shard_append;
+      }
+      would_finalize_stay =
+        !no_shard_finalizes(nlod, epoch_stay, per_lod_n_active, cps_append);
+      would_finalize_alone =
+        !no_shard_finalizes(nlod, epoch_alone, per_lod_n_active, cps_append);
+    }
+
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -577,6 +603,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
             sdp[0],
             sdp[1],
             output_idx,
+            would_finalize_stay,
+            would_finalize_alone,
             stage->d_temp_offsets,
             stage->d_temp_perm_sizes,
             cb_args,

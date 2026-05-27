@@ -55,6 +55,7 @@ extern "C"
     volatile size_t* h_close_signal;
     struct batch_aggregate_layout layout;
     uint8_t nlod;
+    uint32_t per_lod_n_active[LOD_MAX_LEVELS];
   };
 
   struct slot_dev_ptrs
@@ -74,6 +75,8 @@ extern "C"
                           uint32_t batches_per_slot_cap,
                           uint64_t batch_desc_advance,
                           int active_slot_idx,
+                          int would_finalize_stay,
+                          int would_finalize_alone,
                           CUstream stream);
 
   int dense_offsets_launch(struct d_routing* d_routing,
@@ -111,6 +114,9 @@ extern "C"
     volatile size_t* h_shard_base_offsets_dense;
     size_t* d_shard_base_offsets_dense;
     CUevent host_func_done;
+
+    // Reset on close and on swap (callback sees bi==0).
+    uint64_t stacked_n_active[LOD_MAX_LEVELS];
 
     CUevent ready;
     // All cap-stacked batches share one io_event — fine for FIFO delivery,
@@ -178,6 +184,8 @@ extern "C"
                                     struct slot_dev_ptrs sdp_0,
                                     struct slot_dev_ptrs sdp_1,
                                     int active_slot_idx,
+                                    int would_finalize_stay,
+                                    int would_finalize_alone,
                                     size_t* d_temp_offsets,
                                     size_t* d_temp_perm_sizes,
                                     struct agg_routing_cb_args* cb_args,

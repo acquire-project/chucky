@@ -111,6 +111,7 @@ output_slot_close_reset(struct aggregate_slot* slot)
   slot->slot_cursor = 0;
   slot->slot_desc_cursor = 0;
   slot->batches_per_slot = 0;
+  memset(slot->stacked_n_active, 0, sizeof(slot->stacked_n_active));
   if (slot->d_runtime)
     cuMemsetD8(
       (CUdeviceptr)slot->d_runtime, 0, sizeof(struct slot_runtime_state));
@@ -193,6 +194,13 @@ aggregate_post_batch_routed_cb(void* userData)
     r->desc_base_offset + args->layout.total_batch_covering + (uint64_t)nlod;
   target->batches_per_slot = bi + 1;
 
+  // bi==0 means this is the first batch in the target slot (fresh or after
+  // swap-reset on device). Mirror that reset on the host accumulator.
+  if (bi == 0)
+    memset(target->stacked_n_active, 0, sizeof(target->stacked_n_active));
+  for (uint8_t lv = 0; lv < nlod; ++lv)
+    target->stacked_n_active[lv] += args->per_lod_n_active[lv];
+
   const int closed = r->close_prior_slot_idx;
   if (closed >= 0)
     args->h_close_signal[closed] = 1;
@@ -219,7 +227,9 @@ fit_decision_k(struct d_routing* d_routing,
                size_t slot_capacity,
                uint32_t batches_per_slot_cap,
                uint64_t batch_desc_advance,
-               int active_slot_idx)
+               int active_slot_idx,
+               int would_finalize_stay,
+               int would_finalize_alone)
 {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
@@ -228,8 +238,13 @@ fit_decision_k(struct d_routing* d_routing,
   struct slot_runtime_state* active_rt = active.d_runtime;
   const size_t actual_bytes = *d_actual_bytes_ptr;
 
+  // Stacking onto a non-empty slot when this batch would finalize a shard
+  // mid-slot is forbidden (corrupts in-slot tail rollforward). Force swap.
+  const int stack_blocked =
+    would_finalize_stay && (active_rt->batches_per_slot > 0);
   const int fits = (active_rt->batches_per_slot < batches_per_slot_cap) &&
-                   (active_rt->cursor + actual_bytes <= slot_capacity);
+                   (active_rt->cursor + actual_bytes <= slot_capacity) &&
+                   !stack_blocked;
 
   int target_idx;
   struct slot_dev_ptrs target;
@@ -260,6 +275,11 @@ fit_decision_k(struct d_routing* d_routing,
   target.d_runtime->cursor += actual_bytes;
   target.d_runtime->desc_cursor += batch_desc_advance;
   target.d_runtime->batches_per_slot += 1;
+
+  // This batch finalizes a shard even when solo: must be the last in its
+  // slot. Force a swap on the next kick by pinning to cap.
+  if (would_finalize_alone)
+    target.d_runtime->batches_per_slot = batches_per_slot_cap;
 }
 
 extern "C" int
@@ -271,6 +291,8 @@ fit_decision_launch(struct d_routing* d_routing,
                     uint32_t batches_per_slot_cap,
                     uint64_t batch_desc_advance,
                     int active_slot_idx,
+                    int would_finalize_stay,
+                    int would_finalize_alone,
                     CUstream stream)
 {
   fit_decision_k<<<1, 1, 0, (cudaStream_t)stream>>>(d_routing,
@@ -280,7 +302,9 @@ fit_decision_launch(struct d_routing* d_routing,
                                                     slot_capacity,
                                                     batches_per_slot_cap,
                                                     batch_desc_advance,
-                                                    active_slot_idx);
+                                                    active_slot_idx,
+                                                    would_finalize_stay,
+                                                    would_finalize_alone);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -721,6 +745,8 @@ aggregate_batch_unified_async(const void* d_compressed,
                               struct slot_dev_ptrs sdp_0,
                               struct slot_dev_ptrs sdp_1,
                               int active_slot_idx,
+                              int would_finalize_stay,
+                              int would_finalize_alone,
                               size_t* d_temp_offsets,
                               size_t* d_temp_perm_sizes,
                               struct agg_routing_cb_args* cb_args,
@@ -781,6 +807,8 @@ aggregate_batch_unified_async(const void* d_compressed,
                             slot->batches_per_slot_cap,
                             C + (uint64_t)nlod,
                             active_slot_idx,
+                            would_finalize_stay,
+                            would_finalize_alone,
                             stream) == 0);
 
   if (total_shards > 0 && slot->d_shard_sum_bytes) {
