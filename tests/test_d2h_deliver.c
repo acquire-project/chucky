@@ -1,3 +1,4 @@
+#include "gpu/aggregate.h"
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
 #include "platform/platform.h"
@@ -164,6 +165,11 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                              &c->metadata_clock,
                                              c->d2h_stream);
   CHECK(Fail, r.error == 0);
+
+  // Mirror the engine's cap=1 drain: reset the slot's bookkeeping so the
+  // next kick with the same output_idx fits without swapping. Tests
+  // bypass drain_output where the engine does this.
+  output_slot_close_reset(&c->ca.output[handoff->output_idx]);
 
   return 0;
 
