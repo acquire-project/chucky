@@ -25,7 +25,6 @@ struct flush_handoff
 {
   int fc;                                    // input pipeline slot index
   int output_idx;                            // output reservoir slot index
-                                             // (Prep-0: today == fc)
   uint32_t n_epochs;                         // epochs in batch
   uint32_t active_levels_mask;               // which levels active
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks

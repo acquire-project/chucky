@@ -413,14 +413,12 @@ gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
 
 extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
-                          uint64_t batch_chunk_count,
                           uint64_t slot_chunk_cap,
                           size_t comp_pool_bytes,
                           uint32_t batches_per_slot_cap,
                           uint64_t max_total_shards)
 {
   uint64_t C = slot_chunk_cap;
-  (void)batch_chunk_count;
 
   CHECK(Error, slot);
   CHECK(Error, batches_per_slot_cap >= 1);

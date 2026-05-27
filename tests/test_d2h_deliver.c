@@ -146,27 +146,14 @@ test_ctx_kick_and_drain(struct test_ctx* c,
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(&c->ca,
-                          &in,
-                          &c->cl.levels,
-                          &c->batch,
-                          &c->cl.dims,
-                          c->compute,
-                          handoff) == 0);
+        compress_agg_kick(&c->ca, &in, &c->cl.levels, c->compute, handoff) ==
+          0);
 
-  CHECK(Fail,
-        d2h_deliver_kick(&c->d2h,
-                         handoff,
-                         &c->cl.levels,
-                         &c->batch,
-                         &c->cl.dims,
-                         sink,
-                         c->d2h_stream) == 0);
+  CHECK(Fail, d2h_deliver_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
 
   struct writer_result r = d2h_deliver_drain(&c->d2h,
                                              handoff,
                                              &c->cl.levels,
-                                             &c->batch,
                                              &c->cl.dims,
                                              &c->cl.layouts[0],
                                              config,
@@ -652,8 +639,9 @@ Fail:
   return ok ? 0 : 1;
 }
 
-// Two-cycle compressed double-buffer: covers slot->ready reuse for the
-// compressed path (the existing double_buffer test runs codec=none only).
+// Three-cycle compressed run: cycle 3 reuses fc=0, so slot->ready
+// recorded in cycle 1 must survive into cycle 3's compress wait. Two
+// cycles would never reuse a slot.
 static int
 test_d2h_zstd_double_buffer(void)
 {
@@ -719,16 +707,55 @@ test_d2h_zstd_double_buffer(void)
 
   CHECK(Fail, sink.finalize_count == 1);
 
+  // Cycle 3: reuse fc=0. compress_agg's wait on prev_d2h_done depends on
+  // sync_and_deliver having recorded slot->ready in cycle 1.
+  CHECK(
+    Fail,
+    fill_pool_epoch(
+      c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch2) ==
+      0);
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+
+  {
+    struct flush_handoff handoff;
+    CHECK(Fail,
+          test_ctx_kick_and_drain(
+            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
+            0);
+  }
+
+  CHECK(Fail, sink.finalize_count == 1);
+
+  // Cycle 4 finalizes shard 1 so cycle 3's data lands on disk and can be
+  // verified — without this, cycle 3 corruption would pass silently.
+  CHECK(Fail,
+        fill_pool_epoch(c.d_pool + epoch_pool_bytes,
+                        total_chunks,
+                        chunk_stride,
+                        bytes_per_element,
+                        fill_epoch3) == 0);
+  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+
+  {
+    struct flush_handoff handoff;
+    CHECK(Fail,
+          test_ctx_kick_and_drain(&c,
+                                  &config,
+                                  &sink.base,
+                                  1,
+                                  1,
+                                  c.d_pool + epoch_pool_bytes,
+                                  c.pool_ready,
+                                  &handoff) == 0);
+  }
+
+  CHECK(Fail, sink.finalize_count == 2);
+
   {
     struct shard_state* ss = &c.ca.shard[0];
     uint64_t tps_total = ss->chunks_per_shard_total;
     size_t index_data_bytes = tps_total * 2 * sizeof(uint64_t);
     size_t index_total_bytes = index_data_bytes + 4;
-
-    CHECK(Fail, sink.writers[0][0].size >= index_total_bytes);
-    size_t index_start = sink.writers[0][0].size - index_total_bytes;
-    const uint64_t* idx =
-      (const uint64_t*)(sink.writers[0][0].buf + index_start);
 
     const struct aggregate_layout* al = &c.ca.per_lod_agg_layouts[0];
     uint64_t cps_inner = ss->chunks_per_shard_inner;
@@ -736,43 +763,58 @@ test_d2h_zstd_double_buffer(void)
     decomp_buf = (uint8_t*)malloc(chunk_bytes);
     CHECK(Fail, decomp_buf);
 
+    uint16_t (*fills[4])(
+      uint64_t) = { fill_epoch0, fill_epoch1, fill_epoch2, fill_epoch3 };
     int errors = 0;
-    for (int epoch = 0; epoch < 2; ++epoch) {
-      uint16_t (*fill_fn)(uint64_t) = (epoch == 0) ? fill_epoch0 : fill_epoch1;
-      for (uint64_t t = 0; t < total_chunks; ++t) {
-        uint32_t pi =
-          cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
-        uint64_t slot_idx = (uint64_t)epoch * cps_inner + pi;
-        uint64_t tile_off = idx[2 * slot_idx];
-        uint64_t tile_sz = idx[2 * slot_idx + 1];
+    for (int shard = 0; shard < 2; ++shard) {
+      CHECK(Fail, sink.writers[0][shard].size >= index_total_bytes);
+      size_t index_start = sink.writers[0][shard].size - index_total_bytes;
+      const uint64_t* idx =
+        (const uint64_t*)(sink.writers[0][shard].buf + index_start);
 
-        CHECK(Fail, tile_sz > 0);
-        CHECK(Fail, tile_off + tile_sz <= sink.writers[0][0].size);
+      for (int local_epoch = 0; local_epoch < 2; ++local_epoch) {
+        const int global_epoch = shard * 2 + local_epoch;
+        uint16_t (*fill_fn)(uint64_t) = fills[global_epoch];
+        for (uint64_t t = 0; t < total_chunks; ++t) {
+          uint32_t pi =
+            cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
+          uint64_t slot_idx = (uint64_t)local_epoch * cps_inner + pi;
+          uint64_t tile_off = idx[2 * slot_idx];
+          uint64_t tile_sz = idx[2 * slot_idx + 1];
 
-        size_t result = ZSTD_decompress(
-          decomp_buf, chunk_bytes, sink.writers[0][0].buf + tile_off, tile_sz);
-        if (ZSTD_isError(result)) {
-          log_error("  epoch %d chunk %lu: ZSTD_decompress: %s",
-                    epoch,
-                    (unsigned long)t,
-                    ZSTD_getErrorName(result));
-          errors++;
-          continue;
-        }
-        CHECK(Fail, result == chunk_bytes);
+          CHECK(Fail, tile_sz > 0);
+          CHECK(Fail, tile_off + tile_sz <= sink.writers[0][shard].size);
 
-        uint16_t expected_val = fill_fn(t);
-        const uint16_t* got = (const uint16_t*)decomp_buf;
-        for (uint64_t e = 0; e < chunk_stride; ++e) {
-          if (got[e] != expected_val) {
-            if (errors < 5)
-              log_error("  epoch %d chunk %lu elem %lu: expected %u got %u",
-                        epoch,
-                        (unsigned long)t,
-                        (unsigned long)e,
-                        expected_val,
-                        got[e]);
+          size_t result = ZSTD_decompress(decomp_buf,
+                                          chunk_bytes,
+                                          sink.writers[0][shard].buf + tile_off,
+                                          tile_sz);
+          if (ZSTD_isError(result)) {
+            log_error("  shard %d epoch %d chunk %lu: ZSTD_decompress: %s",
+                      shard,
+                      global_epoch,
+                      (unsigned long)t,
+                      ZSTD_getErrorName(result));
             errors++;
+            continue;
+          }
+          CHECK(Fail, result == chunk_bytes);
+
+          uint16_t expected_val = fill_fn(t);
+          const uint16_t* got = (const uint16_t*)decomp_buf;
+          for (uint64_t e = 0; e < chunk_stride; ++e) {
+            if (got[e] != expected_val) {
+              if (errors < 5)
+                log_error("  shard %d epoch %d chunk %lu elem %lu: "
+                          "expected %u got %u",
+                          shard,
+                          global_epoch,
+                          (unsigned long)t,
+                          (unsigned long)e,
+                          expected_val,
+                          got[e]);
+              errors++;
+            }
           }
         }
       }

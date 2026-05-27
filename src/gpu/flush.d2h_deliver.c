@@ -10,6 +10,15 @@
 #include <assert.h>
 #include <string.h>
 
+#define D2H_TRY(err_flag, name, call)                                          \
+  do {                                                                         \
+    CUresult _r = (call);                                                      \
+    if (_r != CUDA_SUCCESS) {                                                  \
+      handle_curesult(LOG_ERROR, _r, __FILE__, __LINE__, (name));              \
+      (err_flag) = 1;                                                          \
+    }                                                                          \
+  } while (0)
+
 // --- Init / Destroy ---
 
 int
@@ -201,8 +210,6 @@ batch_lod_view(struct aggregate_slot* slot,
   return ar;
 }
 
-// Poll a CUDA event with a sleep loop. Returns 0 on success / deinit,
-// 1 on error.
 static int
 poll_event(CUevent ev, int fc)
 {
@@ -222,19 +229,18 @@ poll_event(CUevent ev, int fc)
   }
 }
 
-// Per-batch / per-LOD actual bytes in d_aggregated. End of last chunk
-// (last shard's last chunk in shard-permuted order) minus the LOD segment
-// base within the slot. h_offsets here must be the pre-rebase (absolute)
-// values produced by the unified scan + bias.
-//
-// Order dependency: caller must overwrite be->per_lod_lods[lv]
-// .data_segment_offset to the dense LOD start BEFORE calling this in
-// dense_mode, since slot_data_offset() reads data_segment_offset.
-static size_t
+// h_offsets here must be the pre-rebase (absolute) values produced by the
+// unified scan + bias. Order dependency: caller must overwrite
+// be->per_lod_lods[lv].data_segment_offset to the dense LOD start BEFORE
+// calling this in dense_mode, since slot_data_offset() reads
+// data_segment_offset.
+static int
 batch_lod_actual_bytes(const struct aggregate_slot* slot,
                        const struct batch_slice_entry* be,
-                       uint8_t lv)
+                       uint8_t lv,
+                       size_t* out_bytes)
 {
+  *out_bytes = 0;
   const struct lod_segment* seg = &be->per_lod_lods[lv];
   if (seg->n_active == 0)
     return 0;
@@ -242,10 +248,14 @@ batch_lod_actual_bytes(const struct aggregate_slot* slot,
   const uint64_t last = slot_desc_offset(be, lv) + total - 1;
   const size_t base = slot_data_offset(be, lv);
   const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
-  assert(slot->h_offsets[last] >= base);
+  CHECK(Error, slot->h_offsets[last] >= base);
   const size_t actual = end - base;
-  assert(actual <= seg->data_segment_bytes);
-  return actual;
+  CHECK(Error, actual <= seg->data_segment_bytes);
+  *out_bytes = actual;
+  return 0;
+
+Error:
+  return 1;
 }
 
 static struct writer_result
@@ -264,9 +274,9 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   const int oi = handoff->output_idx;
   struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* alayout = &handoff->layout;
-  // Dense mode = GPU writes chunks at densely-packed positions in
-  // d_aggregated, computed by the post-batch host callback. Set when
-  // carry-over is in use and per-shard sums are populated.
+  // Dense mode: GPU writes chunks at densely-packed positions in d_aggregated,
+  // computed by the post-batch host callback. Set when carry-over is in use
+  // and per-shard sums are populated.
   const int dense_mode =
     (alayout->page_size > 0 && handoff->shards &&
      handoff->shards->total_shards > 0 && slot->h_shard_base_offsets_dense);
@@ -278,9 +288,9 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
 
-    // Wait for chunk-index D2H + host_func to land. Both paths need this
-    // before the dense fixup (slot->h_shard_base_offsets_dense is populated
-    // by the host callback sequenced before the chunk-index D2H).
+    // Both paths need the chunk-index D2H + host_func to land before the
+    // dense fixup (h_shard_base_offsets_dense is populated by the host
+    // callback sequenced before the chunk-index D2H).
     if (poll_event(stage->h_chunk_index_ready[oi], oi))
       goto Error;
 
@@ -308,35 +318,32 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     }
 
     if (handoff->passthrough) {
-      // Bulk D2H was queued in d2h_deliver_kick; just wait for it.
       if (poll_event(stage->ready[oi], oi))
         goto Error;
     } else {
-      // Compressed: dispatch the exact-size bulk D2H per batch×LOD
-      // (carry-over) or once across the slot's contiguous data
-      // (contiguous mode), now using the dense-adjusted data_segment_offset.
+      int dispatch_err = 0;
       if (alayout->page_size > 0) {
-        for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
+        for (uint32_t b = 0; b < slot->batches_per_slot && !dispatch_err; ++b) {
           const struct batch_slice_entry* be = &slot->slot_batches[b];
-          for (uint8_t lv = 0; lv < be->nlod; ++lv) {
+          for (uint8_t lv = 0; lv < be->nlod && !dispatch_err; ++lv) {
             if (be->per_lod_lods[lv].n_active == 0)
               continue;
             const size_t off = slot_data_offset(be, lv);
-            const size_t actual = batch_lod_actual_bytes(slot, be, lv);
+            size_t actual = 0;
+            if (batch_lod_actual_bytes(slot, be, lv, &actual))
+              goto Error;
             if (actual == 0)
               continue;
-            CU(Error,
-               cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated + off,
-                                 (CUdeviceptr)slot->d_aggregated + off,
-                                 actual,
-                                 d2h_stream));
+            D2H_TRY(dispatch_err,
+                    "cuMemcpyDtoHAsync",
+                    cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated + off,
+                                      (CUdeviceptr)slot->d_aggregated + off,
+                                      actual,
+                                      d2h_stream));
           }
         }
       } else if (slot->batches_per_slot > 0) {
         // Cumulative-end index = last sentinel of the slot's last batch.
-        // Without bias (page_size==0), h_offsets there is the running sum
-        // of all chunk sizes across this batch's slice; with Phase 3
-        // macro-agg the desc_base_offset advances per batch.
         const struct batch_slice_entry* last_be =
           &slot->slot_batches[slot->batches_per_slot - 1];
         uint64_t C_batch = 0;
@@ -347,18 +354,22 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
           last_be->desc_base_offset + C_batch + (uint64_t)last_be->nlod - 1;
         const size_t total =
           slot->h_offsets[last] + slot->h_permuted_sizes[last];
-        if (total > 0) {
-          CU(Error,
-             cuMemcpyDtoHAsync(slot->h_aggregated,
-                               (CUdeviceptr)slot->d_aggregated,
-                               total,
-                               d2h_stream));
-        }
+        if (total > 0)
+          D2H_TRY(dispatch_err,
+                  "cuMemcpyDtoHAsync",
+                  cuMemcpyDtoHAsync(slot->h_aggregated,
+                                    (CUdeviceptr)slot->d_aggregated,
+                                    total,
+                                    d2h_stream));
       }
 
+      // Always record completion events even on dispatch error: cap-stacking
+      // waiters block on slot->ready and would hang otherwise.
       CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
       CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
+      if (dispatch_err)
+        goto Error;
       if (poll_event(stage->ready[oi], oi))
         goto Error;
     }
@@ -500,7 +511,6 @@ maybe_update_metadata(const struct flush_handoff* handoff,
                       struct shard_sink* sink,
                       struct platform_clock* metadata_update_clock)
 {
-  (void)config;
   if (!sink->update_append)
     return 0;
 
@@ -531,15 +541,9 @@ maybe_update_metadata(const struct flush_handoff* handoff,
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
-                 const struct level_geometry* levels,
-                 const struct batch_state* batch,
-                 const struct dim_info* dims,
                  struct shard_sink* sink,
                  CUstream d2h_stream)
 {
-  (void)levels;
-  (void)batch;
-  (void)dims;
   const int oi = handoff->output_idx;
   struct aggregate_slot* slot = handoff->output;
   const struct batch_aggregate_layout* layout = &handoff->layout;
@@ -549,46 +553,52 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, slot->host_func_done, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[oi], d2h_stream));
 
+  // Compressed codecs use these in drain to size exact per-LOD transfers;
+  // pass-through copies them too so delivery's chunk-index walk is uniform.
+  int dispatch_err = 0;
   if (handoff->slot_total_desc_entries > 0) {
     const size_t n = (size_t)handoff->slot_total_desc_entries;
-    CU(Error,
-       cuMemcpyDtoHAsync(slot->h_offsets,
-                         (CUdeviceptr)slot->d_offsets,
-                         n * sizeof(size_t),
-                         d2h_stream));
-    CU(Error,
-       cuMemcpyDtoHAsync(slot->h_permuted_sizes,
-                         (CUdeviceptr)slot->d_permuted_sizes,
-                         n * sizeof(size_t),
-                         d2h_stream));
+    D2H_TRY(dispatch_err,
+            "cuMemcpyDtoHAsync",
+            cuMemcpyDtoHAsync(slot->h_offsets,
+                              (CUdeviceptr)slot->d_offsets,
+                              n * sizeof(size_t),
+                              d2h_stream));
+    if (!dispatch_err)
+      D2H_TRY(dispatch_err,
+              "cuMemcpyDtoHAsync",
+              cuMemcpyDtoHAsync(slot->h_permuted_sizes,
+                                (CUdeviceptr)slot->d_permuted_sizes,
+                                n * sizeof(size_t),
+                                d2h_stream));
+  }
+  if (!dispatch_err)
+    D2H_TRY(dispatch_err,
+            "cuEventRecord",
+            cuEventRecord(stage->h_chunk_index_ready[oi], d2h_stream));
+
+  // At cap>1, the last kick's layout undersizes the slot when prior stacked
+  // kicks had more LODs active; slot_cursor tracks cumulative actual bytes.
+  if (!dispatch_err && handoff->passthrough &&
+      (layout->total_data_bytes > 0 || slot->slot_cursor > 0)) {
+    const size_t n = (slot->slot_cursor > layout->total_data_bytes)
+                       ? slot->slot_cursor
+                       : layout->total_data_bytes;
+    D2H_TRY(
+      dispatch_err,
+      "cuMemcpyDtoHAsync",
+      cuMemcpyDtoHAsync(
+        slot->h_aggregated, (CUdeviceptr)slot->d_aggregated, n, d2h_stream));
   }
 
-  CU(Error, cuEventRecord(stage->h_chunk_index_ready[oi], d2h_stream));
-
-  // Pass-through: per-LOD actual equals worst-case. Dispatch the bulk D2H
-  // now so it pipelines with the next batch's compute (matches pre-Phase-1
-  // behavior). Compressed path defers bulk dispatch to sync_and_deliver
-  // once the chunk index has landed.
+  // Always record passthrough completion events even on dispatch error:
+  // cap-stacking waiters block on slot->ready and would hang otherwise.
   if (handoff->passthrough) {
-    if (layout->total_data_bytes > 0 || slot->slot_cursor > 0) {
-      // At cap>1, the last kick's layout undersizes the slot when prior
-      // stacked kicks had more LODs active; slot_cursor tracks cumulative
-      // actual bytes across the slot's stacked batches.
-      const size_t n = (slot->slot_cursor > layout->total_data_bytes)
-                         ? slot->slot_cursor
-                         : layout->total_data_bytes;
-      CU(Error,
-         cuMemcpyDtoHAsync(
-           slot->h_aggregated, (CUdeviceptr)slot->d_aggregated, n, d2h_stream));
-    }
-    // Always record completion events: empty passthrough batches still
-    // need a current-cycle signal so the cap-stacking paths never observe
-    // a stale prior-cycle signal on slot->ready.
     CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
 
-  return 0;
+  return dispatch_err;
 
 Error:
   return 1;
@@ -598,7 +608,6 @@ struct writer_result
 d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
                   const struct level_geometry* levels,
-                  const struct batch_state* batch,
                   const struct dim_info* dims,
                   const struct tile_stream_layout* layout,
                   const struct tile_stream_configuration* config,
@@ -609,7 +618,6 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   struct platform_clock* metadata_update_clock,
                   CUstream d2h_stream)
 {
-  (void)batch;
   struct writer_result r = sync_and_deliver(stage,
                                             handoff,
                                             levels,

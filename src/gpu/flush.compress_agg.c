@@ -134,7 +134,6 @@ compress_agg_init(struct compress_agg_stage* stage,
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&stage->output[fc],
-                                      stage->max_total_batch_chunks,
                                       slot_chunk_cap,
                                       stage->max_total_data_bytes,
                                       batches_per_slot_cap,
@@ -404,13 +403,9 @@ int
 compress_agg_kick(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
                   const struct level_geometry* levels,
-                  const struct batch_state* batch,
-                  const struct dim_info* dims,
                   CUstream compress_stream,
                   struct flush_handoff* out)
 {
-  (void)batch;
-  (void)dims;
   const int fc = in->fc;
   const uint32_t n_epochs = in->n_epochs;
   const uint8_t nlod = stage->nlod;

@@ -141,13 +141,8 @@ ca_ctx_kick(struct ca_test_ctx* c,
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(&c->stage,
-                          &in,
-                          &c->cl.levels,
-                          &c->batch,
-                          &c->cl.dims,
-                          c->compute,
-                          handoff) == 0);
+        compress_agg_kick(&c->stage, &in, &c->cl.levels, c->compute, handoff) ==
+          0);
   CU(Fail, cuStreamSynchronize(c->compute));
   return 0;
 
@@ -765,13 +760,8 @@ test_compress_agg_lut_cache_position_shift(void)
     struct flush_handoff handoff;
     memset(&handoff, 0, sizeof(handoff));
     CHECK(Fail,
-          compress_agg_kick(&c.stage,
-                            &in,
-                            &c.cl.levels,
-                            &c.batch,
-                            &c.cl.dims,
-                            c.compute,
-                            &handoff) == 0);
+          compress_agg_kick(&c.stage, &in, &c.cl.levels, c.compute, &handoff) ==
+            0);
     CU(Fail, cuStreamSynchronize(c.compute));
   }
 
@@ -796,13 +786,8 @@ test_compress_agg_lut_cache_position_shift(void)
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     CHECK(Fail,
-          compress_agg_kick(&c.stage,
-                            &in,
-                            &c.cl.levels,
-                            &c.batch,
-                            &c.cl.dims,
-                            c.compute,
-                            &handoff2) == 0);
+          compress_agg_kick(
+            &c.stage, &in, &c.cl.levels, c.compute, &handoff2) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
   }
 

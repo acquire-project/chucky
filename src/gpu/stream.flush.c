@@ -89,7 +89,6 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
                                              &e->flush.in_flight_handoff[oi],
                                              &ctx->levels,
-                                             &e->batch,
                                              &ctx->dims,
                                              &ctx->layout,
                                              &ctx->config,
@@ -124,13 +123,8 @@ kick_compress_agg(struct stream_engine* e,
 {
   struct compress_agg_input in =
     make_compress_input(e, ctx, fc, output_idx, n_epochs);
-  return compress_agg_kick(&e->compress_agg,
-                           &in,
-                           &ctx->levels,
-                           &e->batch,
-                           &ctx->dims,
-                           e->streams.compress,
-                           handoff_out);
+  return compress_agg_kick(
+    &e->compress_agg, &in, &ctx->levels, e->streams.compress, handoff_out);
 }
 
 static int
@@ -190,9 +184,6 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
                          &e->flush.in_flight_handoff[output_idx],
-                         &ctx->levels,
-                         &e->batch,
-                         &ctx->dims,
                          ctx->sink,
                          e->streams.d2h) == 0);
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;

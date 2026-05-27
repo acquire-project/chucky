@@ -532,7 +532,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
             aggregate_batch_slot_init(&e->compress_agg.output[fc],
-                                      mx->u_max_total_batch_chunks,
                                       slot_chunk_cap,
                                       mx->u_max_total_data_bytes,
                                       batches_per_slot_cap,

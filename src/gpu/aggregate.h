@@ -137,7 +137,6 @@ extern "C"
                          const uint64_t* cps_append);
 
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
-                                uint64_t batch_chunk_count,
                                 uint64_t slot_chunk_cap,
                                 size_t comp_pool_bytes,
                                 uint32_t batches_per_slot_cap,
