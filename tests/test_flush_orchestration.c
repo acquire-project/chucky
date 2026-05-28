@@ -30,8 +30,7 @@ struct orch_ctx
 static int
 slot_has_work(struct stream_engine* e, int oi)
 {
-  return e->flush.pending[oi] ||
-         e->compress_agg.slot_host_acc_desc_entries[oi] > 0;
+  return e->flush.output_state[oi] != OUTPUT_SLOT_EMPTY;
 }
 
 static void
@@ -460,8 +459,69 @@ test_two_batch_cycle(void)
   // At cap=1 the two batches drain separately; at cap>=2 they stack into one
   // slot and drain together. Pick the expected count from the live cap.
   const uint32_t cap = c.s->engine.compress_agg.output[0].batches_per_slot_cap;
-  const uint64_t expected_drains = (cap >= 2) ? 1u : 2u;
+  const int expected_drains = (cap >= 2) ? 1 : 2;
   CHECK(Fail, c.s->engine.metrics.sink.count == expected_drains);
+
+  ok = 1;
+
+Fail:
+  orch_ctx_destroy(&c);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: compressed cap-stacking must retire the alternate slot before reuse
+// ---------------------------------------------------------------------------
+static int
+test_compressed_alt_slot_retired_before_reuse(void)
+{
+  log_info("=== test_compressed_alt_slot_retired_before_reuse ===");
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config;
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_ZSTD }, 1);
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
+
+  struct orch_ctx c;
+  orch_ctx_init(&c);
+  int ok = 0;
+
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
+  CHECK(Fail, c.s->engine.compress_agg.output[0].batches_per_slot_cap > 1);
+
+  uint16_t (*fills[4])(uint64_t) = {
+    fill_epoch0,
+    fill_epoch1,
+    fill_epoch2,
+    fill_epoch3,
+  };
+
+  for (int i = 0; i < 3; ++i) {
+    CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[i]) == 0);
+    CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  }
+
+  // The third kick closes slot 0 and opens slot 1. Slot 0 is now immutable
+  // pending delivery; the next kick must retire it before any possible swap
+  // can target it.
+  CHECK(Fail, c.s->engine.flush.output_current == 1);
+  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
+
+  CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[3]) == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+
+  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_EMPTY);
+  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
+
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, !slot_has_work(&c.s->engine, 0));
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
 
   ok = 1;
 
@@ -476,4 +536,6 @@ RUN_GPU_TESTS({ "accumulate_one_epoch", test_accumulate_one_epoch },
               { "full_batch_auto_flush", test_full_batch_auto_flush },
               { "drain_delivers_data", test_drain_delivers_data },
               { "accumulated_sync_partial", test_accumulated_sync_partial },
-              { "two_batch_cycle", test_two_batch_cycle }, )
+              { "two_batch_cycle", test_two_batch_cycle },
+              { "compressed_alt_slot_retired_before_reuse",
+                test_compressed_alt_slot_retired_before_reuse }, )

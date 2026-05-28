@@ -34,6 +34,7 @@ struct array_descriptor_gpu
   uint32_t batch_accumulated;
   int pools_current;
   int output_current;
+  enum output_slot_state output_state[2];
   struct flush_slot_gpu flush_slots[2];
   int flush_pending[2];
   uint64_t flush_pending_seq[2];
@@ -155,6 +156,7 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->pools.current = desc->pools_current;
   e->flush.output_current = desc->output_current;
   for (int i = 0; i < 2; ++i) {
+    e->flush.output_state[i] = desc->output_state[i];
     e->flush.slot[i] = desc->flush_slots[i];
     e->flush.pending[i] = desc->flush_pending[i];
     e->flush.pending_seq[i] = desc->flush_pending_seq[i];
@@ -208,6 +210,7 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   desc->pools_current = e->pools.current;
   desc->output_current = e->flush.output_current;
   for (int i = 0; i < 2; ++i) {
+    desc->output_state[i] = e->flush.output_state[i];
     desc->flush_slots[i] = e->flush.slot[i];
     desc->flush_pending[i] = e->flush.pending[i];
     desc->flush_pending_seq[i] = e->flush.pending_seq[i];

@@ -250,15 +250,23 @@ struct d2h_deliver_stage
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
-// Lazy-delivery pipeline: each output slot can independently hold a kicked-
-// but-not-yet-delivered batch. Delivery of slot=A happens at the start of the
-// drain_kick_and_swap round that is about to reuse slot=A (two rounds after
-// that batch was kicked, in N=2 alternation). Both slots may hold a pending
-// batch simultaneously; drain order at final flush follows pending_seq.
+enum output_slot_state
+{
+  OUTPUT_SLOT_EMPTY = 0,     // may be selected for aggregate writes
+  OUTPUT_SLOT_OPEN = 1,      // accumulating one or more stacked batches
+  OUTPUT_SLOT_CLOSED = 2,    // D2H was kicked; host delivery not complete
+  OUTPUT_SLOT_DELIVERING = 3 // sink delivery owns/reads host buffers
+};
+
+// Output-slot lifecycle is host-owned. Aggregate may write only to EMPTY or
+// the current OPEN slot; CLOSED/DELIVERING slots are immutable until drained
+// and reset to EMPTY. The CUDA routing kernel can compute placement, but it
+// must never be allowed to swap into a non-EMPTY alternate slot.
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
   int output_current; // output reservoir index; flips on slot close
+  enum output_slot_state output_state[2];
   int pending[2];
   uint64_t pending_seq[2];
   uint64_t next_seq;

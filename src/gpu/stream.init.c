@@ -346,13 +346,9 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
     .codec_batch_size = s->engine.compress_agg.codec.batch_size,
     .batch_accumulated = s->engine.batch.accumulated,
     .pool_current = s->engine.pools.current,
-    // True if any data is ingested but not yet delivered to sink: either
-    // a d2h is queued (pending[]) or a slot holds buffered batches awaiting
-    // close (slot_host_acc_desc_entries[]). The latter matters at cap>1.
-    .flush_pending =
-      (s->engine.flush.pending[0] || s->engine.flush.pending[1] ||
-       s->engine.compress_agg.slot_host_acc_desc_entries[0] > 0 ||
-       s->engine.compress_agg.slot_host_acc_desc_entries[1] > 0),
+    // True if any output slot owns data that has not been fully delivered.
+    .flush_pending = (s->engine.flush.output_state[0] != OUTPUT_SLOT_EMPTY ||
+                      s->engine.flush.output_state[1] != OUTPUT_SLOT_EMPTY),
   };
 }
 

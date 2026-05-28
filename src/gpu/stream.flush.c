@@ -76,14 +76,28 @@ Error:
   return 1;
 }
 
-// Resets slot state on success so the next kick starts fresh. B>1 stacking
-// skips drain between in-slot batches, preserving the cursor.
+static int
+output_slot_has_buffered_batches(struct stream_engine* e, int oi)
+{
+  return e->compress_agg.slot_host_acc_desc_entries[oi] > 0 ||
+         e->compress_agg.output[oi].batches_per_slot > 0;
+}
+
+static void
+mark_output_open(struct stream_engine* e, int oi)
+{
+  e->flush.output_state[oi] = OUTPUT_SLOT_OPEN;
+}
+
+// Resets slot state on success so the next kick starts fresh. A slot is not
+// reused while pending delivery; host state, not the CUDA router, owns reuse.
 static struct writer_result
 drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
   if (!e->flush.pending[oi])
     return writer_ok();
 
+  e->flush.output_state[oi] = OUTPUT_SLOT_DELIVERING;
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
@@ -101,15 +115,13 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
+  if (r.error)
+    return r;
+
   e->flush.pending[oi] = 0;
-  // At cap>1, the slot may already have been reused by a later kick (target ==
-  // oi after a swap). fit_decision_k owns d_runtime reset on swap;
-  // post_kick_review owns slot_host_acc reset on close. Resetting here would
-  // wipe the reused state.
-  if (e->compress_agg.output[oi].batches_per_slot_cap == 1) {
-    output_slot_close_reset(&e->compress_agg.output[oi]);
-    e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
-  }
+  output_slot_close_reset(&e->compress_agg.output[oi]);
+  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
+  e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   return r;
 }
 
@@ -132,6 +144,49 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                           struct stream_context* ctx,
                           int output_idx,
                           const struct flush_handoff* handoff);
+
+static struct writer_result
+retire_output_slot(struct stream_engine* e, struct stream_context* ctx, int oi)
+{
+  if (e->flush.pending[oi])
+    return drain_output(e, ctx, oi);
+
+  if (output_slot_has_buffered_batches(e, oi)) {
+    if (kick_d2h_and_mark_pending(e, ctx, oi, &e->flush.pending_handoff[oi]) !=
+        0)
+      return writer_error();
+    return drain_output(e, ctx, oi);
+  }
+
+  output_slot_close_reset(&e->compress_agg.output[oi]);
+  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
+  e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
+  return writer_ok();
+}
+
+static struct writer_result
+prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
+{
+  if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED ||
+      e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING ||
+      e->flush.pending[oi]) {
+    struct writer_result r = retire_output_slot(e, ctx, oi);
+    if (r.error)
+      return r;
+  }
+
+  const int other = oi ^ 1;
+  const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
+  if (cap > 1 && e->flush.output_state[other] != OUTPUT_SLOT_EMPTY) {
+    struct writer_result r = retire_output_slot(e, ctx, other);
+    if (r.error)
+      return r;
+  }
+
+  if (e->flush.output_state[oi] == OUTPUT_SLOT_EMPTY)
+    mark_output_open(e, oi);
+  return writer_ok();
+}
 
 static int
 post_kick_review(struct stream_engine* e,
@@ -160,6 +215,7 @@ post_kick_review(struct stream_engine* e,
     e->compress_agg.h_close_signal[close] = 0;
     // target's buffer is fresh after fit_decision_k's swap-reset.
     e->compress_agg.slot_host_acc_desc_entries[target] = 0;
+    e->flush.output_state[target] = OUTPUT_SLOT_EMPTY;
   }
   const uint64_t delta = scratch->slot_total_desc_entries;
   e->compress_agg.slot_host_acc_desc_entries[target] += delta;
@@ -168,6 +224,7 @@ post_kick_review(struct stream_engine* e,
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
   e->flush.pending_handoff[target] = *scratch;
+  mark_output_open(e, target);
   *out_target = target;
   return 0;
 Error:
@@ -189,6 +246,7 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;
   e->flush.pending[output_idx] = 1;
   e->compress_agg.slot_host_acc_desc_entries[output_idx] = 0;
+  e->flush.output_state[output_idx] = OUTPUT_SLOT_CLOSED;
   return 0;
 Error:
   return 1;
@@ -223,7 +281,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
   {
-    struct writer_result r = drain_output(e, ctx, oi);
+    struct writer_result r = prepare_output_kick(e, ctx, oi);
     if (r.error)
       return r;
   }
@@ -306,6 +364,11 @@ flush_kick_batch(struct stream_engine* e,
                  uint32_t n_epochs)
 {
   struct flush_handoff scratch = { 0 };
+  {
+    struct writer_result r = prepare_output_kick(e, ctx, output_idx);
+    if (r.error)
+      return 1;
+  }
   CHECK(Error,
         kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
   int target = -1;
@@ -325,8 +388,7 @@ struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
   for (int oi = 0; oi < 2; ++oi) {
-    if (!e->flush.pending[oi] &&
-        e->compress_agg.slot_host_acc_desc_entries[oi] > 0) {
+    if (!e->flush.pending[oi] && output_slot_has_buffered_batches(e, oi)) {
       if (kick_d2h_and_mark_pending(
             e, ctx, oi, &e->flush.pending_handoff[oi]) != 0)
         return writer_error();
@@ -352,6 +414,7 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
   for (int oi = 0; oi < 2; ++oi) {
     output_slot_close_reset(&e->compress_agg.output[oi]);
     e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
+    e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   }
   return writer_ok();
 }
@@ -374,7 +437,7 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
   if (flush_kick_batch(e, ctx, fc, oi, e->batch.accumulated))
     return writer_error();
 
-  struct writer_result r = drain_output(e, ctx, oi);
+  struct writer_result r = flush_drain_pending(e, ctx);
   if (r.error)
     return r;
 
@@ -470,7 +533,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
   CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
   if (flush_kick_batch(e, ctx, fc, oi, 1))
     return writer_error();
-  return drain_output(e, ctx, oi);
+  return flush_drain_pending(e, ctx);
 
 Error:
   return writer_error();
