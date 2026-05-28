@@ -79,8 +79,7 @@ Error:
 static int
 output_slot_has_buffered_batches(struct stream_engine* e, int oi)
 {
-  return e->compress_agg.slot_host_acc_desc_entries[oi] > 0 ||
-         e->compress_agg.output[oi].batches_per_slot > 0;
+  return e->compress_agg.output[oi].batches_per_slot > 0;
 }
 
 static void
@@ -101,7 +100,7 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                             &e->flush.in_flight_handoff[oi],
+                                             &e->flush.pending_handoff[oi],
                                              &ctx->levels,
                                              &ctx->dims,
                                              &ctx->layout,
@@ -120,7 +119,6 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 
   e->flush.pending[oi] = 0;
   output_slot_close_reset(&e->compress_agg.output[oi]);
-  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
   e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   return r;
 }
@@ -159,7 +157,6 @@ retire_output_slot(struct stream_engine* e, struct stream_context* ctx, int oi)
   }
 
   output_slot_close_reset(&e->compress_agg.output[oi]);
-  e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
   e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   return writer_ok();
 }
@@ -213,16 +210,12 @@ post_kick_review(struct stream_engine* e,
           kick_d2h_and_mark_pending(
             e, ctx, close, &e->flush.pending_handoff[close]) == 0);
     e->compress_agg.h_close_signal[close] = 0;
-    // target's buffer is fresh after fit_decision_k's swap-reset.
-    e->compress_agg.slot_host_acc_desc_entries[target] = 0;
     e->flush.output_state[target] = OUTPUT_SLOT_EMPTY;
   }
-  const uint64_t delta = scratch->slot_total_desc_entries;
-  e->compress_agg.slot_host_acc_desc_entries[target] += delta;
-  scratch->slot_total_desc_entries =
-    e->compress_agg.slot_host_acc_desc_entries[target];
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
+  scratch->slot_total_desc_entries =
+    e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *scratch;
   mark_output_open(e, target);
   *out_target = target;
@@ -237,15 +230,14 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                           int output_idx,
                           const struct flush_handoff* handoff)
 {
-  e->flush.in_flight_handoff[output_idx] = *handoff;
+  e->flush.pending_handoff[output_idx] = *handoff;
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,
-                         &e->flush.in_flight_handoff[output_idx],
+                         &e->flush.pending_handoff[output_idx],
                          ctx->sink,
                          e->streams.d2h) == 0);
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;
   e->flush.pending[output_idx] = 1;
-  e->compress_agg.slot_host_acc_desc_entries[output_idx] = 0;
   e->flush.output_state[output_idx] = OUTPUT_SLOT_CLOSED;
   return 0;
 Error:
@@ -413,7 +405,6 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
   // post-flush kicks (sync flush of partial batch, etc.) see fresh state.
   for (int oi = 0; oi < 2; ++oi) {
     output_slot_close_reset(&e->compress_agg.output[oi]);
-    e->compress_agg.slot_host_acc_desc_entries[oi] = 0;
     e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   }
   return writer_ok();

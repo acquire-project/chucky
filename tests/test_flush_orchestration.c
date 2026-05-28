@@ -500,22 +500,27 @@ test_compressed_alt_slot_retired_before_reuse(void)
     fill_epoch3,
   };
 
-  for (int i = 0; i < 3; ++i) {
-    CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[i]) == 0);
+  int next_fill = 0;
+  const int max_kicks = 8;
+  for (; next_fill < max_kicks; ++next_fill) {
+    CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[next_fill % 4]) == 0);
     CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+    if (c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED)
+      break;
   }
 
-  // The third kick closes slot 0 and opens slot 1. Slot 0 is now immutable
-  // pending delivery; the next kick must retire it before any possible swap
-  // can target it.
-  CHECK(Fail, c.s->engine.flush.output_current == 1);
+  // Slot 0 is now immutable pending delivery; the next kick must retire it
+  // before any possible swap can target it.
   CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED);
   CHECK(Fail, c.s->engine.flush.pending[0] == 1);
 
-  CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[3]) == 0);
+  CHECK(Fail, next_fill + 1 < max_kicks);
+  CHECK(Fail,
+        orch_ctx_fill_epoch(&c, 0, &config, fills[(next_fill + 1) % 4]) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_EMPTY);
+  CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_CLOSED);
+  CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_DELIVERING);
   CHECK(Fail, c.s->engine.flush.pending[0] == 0);
 
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);

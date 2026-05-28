@@ -230,7 +230,6 @@ struct compress_agg_stage
   volatile size_t* h_close_signal;
   struct agg_routing_cb_args cb_args_ring[4];
   uint64_t cb_args_seq;
-  uint64_t slot_host_acc_desc_entries[2];
 
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
   // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
@@ -271,7 +270,6 @@ struct flush_pipeline
   uint64_t pending_seq[2];
   uint64_t next_seq;
   struct flush_handoff pending_handoff[2];
-  struct flush_handoff in_flight_handoff[2];
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,
