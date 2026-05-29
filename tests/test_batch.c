@@ -175,9 +175,9 @@ test_batch_multi_cycle(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  // After 2 batches: swapped twice → back to pool 0, both pending (lazy
-  // delivery: pending[0] = batch 1, pending[1] = batch 2, until either
-  // a 3rd batch reuses fc=0 or the stream is flushed).
+  // After 2 batches: swapped twice -> back to pool 0, and output slots still
+  // own undelivered data until either a 3rd batch reuses a slot or the stream
+  // is flushed.
   {
     struct tile_stream_status st = tile_stream_gpu_status(s);
     CHECK(Fail2, st.pool_current == 0);

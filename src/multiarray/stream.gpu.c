@@ -36,7 +36,6 @@ struct array_descriptor_gpu
   int output_current;
   enum output_slot_state output_state[2];
   struct flush_slot_gpu flush_slots[2];
-  int flush_pending[2];
   uint64_t flush_pending_seq[2];
   uint64_t flush_next_seq;
   struct flush_handoff flush_pending_handoff[2];
@@ -158,7 +157,6 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   for (int i = 0; i < 2; ++i) {
     e->flush.output_state[i] = desc->output_state[i];
     e->flush.slot[i] = desc->flush_slots[i];
-    e->flush.pending[i] = desc->flush_pending[i];
     e->flush.pending_seq[i] = desc->flush_pending_seq[i];
     e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
   }
@@ -212,7 +210,6 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   for (int i = 0; i < 2; ++i) {
     desc->output_state[i] = e->flush.output_state[i];
     desc->flush_slots[i] = e->flush.slot[i];
-    desc->flush_pending[i] = e->flush.pending[i];
     desc->flush_pending_seq[i] = e->flush.pending_seq[i];
     desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
   }
@@ -555,17 +552,10 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuMemHostAlloc(
          (void**)&e->compress_agg.h_routing, sizeof(struct d_routing), 0));
     memset((void*)e->compress_agg.h_routing, 0, sizeof(struct d_routing));
-    CU(Fail,
-       cuMemHostAlloc(
-         (void**)&e->compress_agg.h_close_signal, 2 * sizeof(size_t), 0));
-    e->compress_agg.h_close_signal[0] = 0;
-    e->compress_agg.h_close_signal[1] = 0;
     for (int i = 0; i < 4; ++i) {
       e->compress_agg.cb_args_ring[i].slots[0] = &e->compress_agg.output[0];
       e->compress_agg.cb_args_ring[i].slots[1] = &e->compress_agg.output[1];
       e->compress_agg.cb_args_ring[i].h_routing = e->compress_agg.h_routing;
-      e->compress_agg.cb_args_ring[i].h_close_signal =
-        e->compress_agg.h_close_signal;
     }
     {
       const uint64_t temp_count =
@@ -855,8 +845,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
   if (e->compress_agg.h_routing)
     cuMemFreeHost((void*)e->compress_agg.h_routing);
-  if (e->compress_agg.h_close_signal)
-    cuMemFreeHost((void*)e->compress_agg.h_close_signal);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_offsets);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_perm_sizes);
   cu_mem_free(e->compress_agg.d_batch_gather);

@@ -52,7 +52,6 @@ extern "C"
   {
     struct aggregate_slot* slots[2];
     volatile struct d_routing* h_routing;
-    volatile size_t* h_close_signal;
     struct batch_aggregate_layout layout;
     uint8_t nlod;
     uint32_t per_lod_n_active[LOD_MAX_LEVELS];

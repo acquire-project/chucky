@@ -93,7 +93,7 @@ mark_output_open(struct stream_engine* e, int oi)
 static struct writer_result
 drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (!e->flush.pending[oi])
+  if (e->flush.output_state[oi] != OUTPUT_SLOT_CLOSED)
     return writer_ok();
 
   e->flush.output_state[oi] = OUTPUT_SLOT_DELIVERING;
@@ -117,7 +117,6 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
   if (r.error)
     return r;
 
-  e->flush.pending[oi] = 0;
   output_slot_close_reset(&e->compress_agg.output[oi]);
   e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
   return r;
@@ -146,8 +145,10 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
 static struct writer_result
 retire_output_slot(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (e->flush.pending[oi])
+  if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED)
     return drain_output(e, ctx, oi);
+  if (e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING)
+    return writer_error();
 
   if (output_slot_has_buffered_batches(e, oi)) {
     if (kick_d2h_and_mark_pending(e, ctx, oi, &e->flush.pending_handoff[oi]) !=
@@ -165,8 +166,7 @@ static struct writer_result
 prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
   if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED ||
-      e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING ||
-      e->flush.pending[oi]) {
+      e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING) {
     struct writer_result r = retire_output_slot(e, ctx, oi);
     if (r.error)
       return r;
@@ -201,15 +201,12 @@ post_kick_review(struct stream_engine* e,
   if (cap == 1) {
     CHECK(Error, target == active_oi);
     CHECK(Error, close == -1);
-    CHECK(Error, e->compress_agg.h_close_signal[0] == 0);
-    CHECK(Error, e->compress_agg.h_close_signal[1] == 0);
   }
   if (close >= 0) {
     CHECK(Error, close != target);
     CHECK(Error,
           kick_d2h_and_mark_pending(
             e, ctx, close, &e->flush.pending_handoff[close]) == 0);
-    e->compress_agg.h_close_signal[close] = 0;
     e->flush.output_state[target] = OUTPUT_SLOT_EMPTY;
   }
   scratch->output_idx = target;
@@ -237,7 +234,6 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                          ctx->sink,
                          e->streams.d2h) == 0);
   e->flush.pending_seq[output_idx] = e->flush.next_seq++;
-  e->flush.pending[output_idx] = 1;
   e->flush.output_state[output_idx] = OUTPUT_SLOT_CLOSED;
   return 0;
 Error:
@@ -380,7 +376,8 @@ struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
   for (int oi = 0; oi < 2; ++oi) {
-    if (!e->flush.pending[oi] && output_slot_has_buffered_batches(e, oi)) {
+    if (e->flush.output_state[oi] != OUTPUT_SLOT_CLOSED &&
+        output_slot_has_buffered_batches(e, oi)) {
       if (kick_d2h_and_mark_pending(
             e, ctx, oi, &e->flush.pending_handoff[oi]) != 0)
         return writer_error();
@@ -390,7 +387,8 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
     int pick = -1;
     uint64_t pick_seq = UINT64_MAX;
     for (int oi = 0; oi < 2; ++oi) {
-      if (e->flush.pending[oi] && e->flush.pending_seq[oi] < pick_seq) {
+      if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED &&
+          e->flush.pending_seq[oi] < pick_seq) {
         pick = oi;
         pick_seq = e->flush.pending_seq[oi];
       }

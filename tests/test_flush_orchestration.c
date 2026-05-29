@@ -227,8 +227,8 @@ test_accumulate_one_epoch(void)
   // Verify: mid-batch, no flush triggered
   CHECK(Fail, c.s->engine.batch.accumulated == 1);
   CHECK(Fail, c.s->engine.pools.current == 0);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
-  CHECK(Fail, c.s->engine.flush.pending[1] == 0);
+  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_EMPTY);
+  CHECK(Fail, c.s->engine.flush.output_state[1] == OUTPUT_SLOT_EMPTY);
 
   // Epoch mask recorded
   CHECK(Fail, c.s->engine.flush.slot[0].batch_active_masks[0] == 0x1);
@@ -512,7 +512,6 @@ test_compressed_alt_slot_retired_before_reuse(void)
   // Slot 0 is now immutable pending delivery; the next kick must retire it
   // before any possible swap can target it.
   CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 1);
 
   CHECK(Fail, next_fill + 1 < max_kicks);
   CHECK(Fail,
@@ -521,7 +520,6 @@ test_compressed_alt_slot_retired_before_reuse(void)
 
   CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_CLOSED);
   CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_DELIVERING);
-  CHECK(Fail, c.s->engine.flush.pending[0] == 0);
 
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);

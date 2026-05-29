@@ -152,15 +152,10 @@ compress_agg_init(struct compress_agg_stage* stage,
   CU(Fail,
      cuMemHostAlloc((void**)&stage->h_routing, sizeof(struct d_routing), 0));
   memset((void*)stage->h_routing, 0, sizeof(struct d_routing));
-  CU(Fail,
-     cuMemHostAlloc((void**)&stage->h_close_signal, 2 * sizeof(size_t), 0));
-  stage->h_close_signal[0] = 0;
-  stage->h_close_signal[1] = 0;
   for (int i = 0; i < 4; ++i) {
     stage->cb_args_ring[i].slots[0] = &stage->output[0];
     stage->cb_args_ring[i].slots[1] = &stage->output[1];
     stage->cb_args_ring[i].h_routing = stage->h_routing;
-    stage->cb_args_ring[i].h_close_signal = stage->h_close_signal;
   }
 
   if (stage->max_total_batch_chunks > 0) {
@@ -317,8 +312,6 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   cu_mem_free((CUdeviceptr)stage->d_routing);
   if (stage->h_routing)
     cuMemFreeHost((void*)stage->h_routing);
-  if (stage->h_close_signal)
-    cuMemFreeHost((void*)stage->h_close_signal);
   cu_mem_free((CUdeviceptr)stage->d_temp_offsets);
   cu_mem_free((CUdeviceptr)stage->d_temp_perm_sizes);
   cu_mem_free(stage->d_batch_gather);

@@ -227,7 +227,6 @@ struct compress_agg_stage
   size_t* d_temp_offsets;
   size_t* d_temp_perm_sizes;
   volatile struct d_routing* h_routing;
-  volatile size_t* h_close_signal;
   struct agg_routing_cb_args cb_args_ring[4];
   uint64_t cb_args_seq;
 
@@ -266,7 +265,6 @@ struct flush_pipeline
   struct flush_slot_gpu slot[2];
   int output_current; // output reservoir index; flips on slot close
   enum output_slot_state output_state[2];
-  int pending[2];
   uint64_t pending_seq[2];
   uint64_t next_seq;
   struct flush_handoff pending_handoff[2];

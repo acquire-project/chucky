@@ -200,10 +200,6 @@ aggregate_post_batch_routed_cb(void* userData)
     memset(target->stacked_n_active, 0, sizeof(target->stacked_n_active));
   for (uint8_t lv = 0; lv < nlod; ++lv)
     target->stacked_n_active[lv] += args->per_lod_n_active[lv];
-
-  const int closed = r->close_prior_slot_idx;
-  if (closed >= 0)
-    args->h_close_signal[closed] = 1;
 }
 
 __global__ void
