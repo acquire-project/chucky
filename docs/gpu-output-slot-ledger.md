@@ -349,6 +349,24 @@ The initial ledger test should be CPU-only and cover:
 
 ## Implementation Stages
 
+### Current Status
+
+The ledger module and initial integration are in place, but the implementation
+is still transitional:
+
+- `output_slot_ledger` owns host-side append state progression.
+- The GPU path now computes an `aggregate_append_measurement` as a distinct
+  device result.
+- The transitional CUDA router still chooses the target slot and writes a
+  routing record.
+- `post_kick_review()` synchronizes on `host_func_done`, checks the router
+  result against the host ledger plan, then commits the ledger plan.
+
+That checkpoint proves the ledger and existing router agree, but it does not
+yet provide the intended overlap. The current synchronization waits after the
+aggregate path has completed, before the writer swaps pools and starts work on
+the next batch.
+
 ### Stage 1: Extract the Ledger
 
 Add a small module, likely `src/gpu/output_slot.{h,c}`, with focused unit tests.
@@ -381,12 +399,27 @@ Success criteria:
 
 ### Stage 3: Reserve Before Aggregate Write
 
-Split measurement from writing without adding a foreground host sync:
+Split measurement from writing without adding a foreground host sync. This
+stage has two substeps.
+
+First, split the measurement result from routing:
+
+- compute exact byte and descriptor requirements on the GPU
+- store them in a device `aggregate_append_measurement`
+- keep the existing router only as a transitional consumer
+
+This substep is complete.
+
+Next, make the host handoff asynchronous and move ledger planning ahead of the
+aggregate write:
 
 1. Compression and sizing produce exact byte and descriptor requirements.
 2. A tiny measurement record is copied to pinned host memory asynchronously.
-3. The CPU coordinator reserves `(slot, data_base, desc_base, batch_index)`.
-4. Aggregation kernels write only into the reserved range.
+3. A `measurement_ready` event is recorded.
+4. The writer can swap pools and begin filling/compressing the next batch.
+5. A CPU coordinator waits or polls `measurement_ready`, plans the ledger
+   reservation, and commits it.
+6. Aggregation kernels write only into the reserved range.
 
 At this point the CUDA routing kernel should no longer select target slots.
 
@@ -396,6 +429,8 @@ Success criteria:
 - kernels receive an already-reserved destination
 - alternate slot reuse is controlled only by ledger state
 - measurement/ledger handoff does not require a third compressed batch buffer
+- the measurement host wait overlaps later batch work instead of blocking
+  before the pool swap
 
 ### Stage 4: Close-Time Compressed D2H
 
