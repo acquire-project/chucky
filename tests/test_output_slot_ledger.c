@@ -312,6 +312,25 @@ Fail:
 }
 
 static int
+test_begin_delivery_requires_host_ready(void)
+{
+  struct output_slot_ledger ledger;
+  CHECK(Fail, output_slot_ledger_init(&ledger, capacity()) == OUTPUT_LEDGER_OK);
+  CHECK(Fail, plan_and_commit(&ledger, request(20, 1), NULL) == 0);
+  CHECK(Fail, output_slot_ledger_close(&ledger, 0, NULL) == OUTPUT_LEDGER_OK);
+  CHECK(Fail,
+        output_slot_ledger_begin_delivery(&ledger, 0) == OUTPUT_LEDGER_INVALID);
+  CHECK(Fail, ledger.slot[0].state == OUTPUT_LEDGER_D2H_IN_FLIGHT);
+  CHECK(Fail,
+        output_slot_ledger_mark_host_ready(&ledger, 0) == OUTPUT_LEDGER_OK);
+  CHECK(Fail,
+        output_slot_ledger_begin_delivery(&ledger, 0) == OUTPUT_LEDGER_OK);
+  return 0;
+Fail:
+  return 1;
+}
+
+static int
 test_delivery_completion_reuses_slot(void)
 {
   struct output_slot_ledger ledger;
@@ -363,6 +382,8 @@ main(void)
     { "close_sequence_ordering", test_close_sequence_ordering },
     { "close_after_append_moves_current_to_empty_alternate",
       test_close_after_append_moves_current_to_empty_alternate },
+    { "begin_delivery_requires_host_ready",
+      test_begin_delivery_requires_host_ready },
     { "delivery_completion_reuses_slot", test_delivery_completion_reuses_slot },
   };
 

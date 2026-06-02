@@ -181,8 +181,7 @@ output_slot_ledger_begin_delivery(struct output_slot_ledger* ledger, int slot)
     return OUTPUT_LEDGER_INVALID;
 
   struct output_slot_entry* entry = &ledger->slot[slot];
-  if (entry->state != OUTPUT_LEDGER_D2H_IN_FLIGHT &&
-      entry->state != OUTPUT_LEDGER_HOST_READY)
+  if (entry->state != OUTPUT_LEDGER_HOST_READY)
     return OUTPUT_LEDGER_INVALID;
 
   entry->state = OUTPUT_LEDGER_DELIVERING;

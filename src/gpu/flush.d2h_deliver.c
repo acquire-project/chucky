@@ -8,6 +8,7 @@
 #include "zarr/shard_delivery.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define D2H_TRY(err_flag, name, call)                                          \
@@ -250,6 +251,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   const int dense_mode =
     (alayout->page_size > 0 && handoff->shards &&
      handoff->shards->total_shards > 0 && slot->h_shard_base_offsets_dense);
+  size_t* data_bases = NULL;
 
   if (sink->has_error && sink->has_error(sink))
     goto Error;
@@ -315,9 +317,14 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // Snapshot data bases BEFORE rebase: in contiguous mode the base for LOD
     // lv is read from h_offsets[slot_desc_offset(be, lv)], which the rebase
     // is about to overwrite. Cache for re-use by batch_lod_view below.
-    const uint32_t cap = slot->batches_per_slot_cap;
-    size_t data_bases[cap * LOD_MAX_LEVELS];
-    memset(data_bases, 0, sizeof(data_bases));
+    CHECK_MUL_OVERFLOW(
+      Error, (size_t)slot->batches_per_slot, (size_t)LOD_MAX_LEVELS, SIZE_MAX);
+    const size_t data_base_count =
+      (size_t)slot->batches_per_slot * (size_t)LOD_MAX_LEVELS;
+    if (data_base_count > 0) {
+      data_bases = (size_t*)calloc(data_base_count, sizeof(size_t));
+      CHECK(Error, data_bases);
+    }
     for (uint32_t b = 0; b < slot->batches_per_slot; ++b) {
       const struct batch_slice_entry* be = &slot->slot_batches[b];
       for (uint8_t lv = 0; lv < be->nlod; ++lv) {
@@ -413,9 +420,11 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
+  free(data_bases);
   return writer_ok();
 
 Error:
+  free(data_bases);
   return writer_error();
 }
 
