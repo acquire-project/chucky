@@ -179,17 +179,21 @@ compress_agg_init(struct compress_agg_stage* stage,
   }
 
   CU(Fail,
-     cuMemAlloc((CUdeviceptr*)&stage->d_routing, sizeof(struct d_routing)));
+     cuMemAlloc((CUdeviceptr*)&stage->d_write_desc,
+                sizeof(struct aggregate_write_desc)));
   CU(Fail,
-     cuMemsetD8((CUdeviceptr)stage->d_routing, 0, sizeof(struct d_routing)));
+     cuMemsetD8((CUdeviceptr)stage->d_write_desc,
+                0,
+                sizeof(struct aggregate_write_desc)));
   CU(Fail, cuMemAlloc((CUdeviceptr*)&stage->d_tail_sum_bytes, sizeof(size_t)));
   CU(Fail,
-     cuMemHostAlloc((void**)&stage->h_routing, sizeof(struct d_routing), 0));
-  memset((void*)stage->h_routing, 0, sizeof(struct d_routing));
+     cuMemHostAlloc(
+       (void**)&stage->h_write_desc, sizeof(struct aggregate_write_desc), 0));
+  memset((void*)stage->h_write_desc, 0, sizeof(struct aggregate_write_desc));
   for (int i = 0; i < 4; ++i) {
     stage->cb_args_ring[i].slots[0] = &stage->output[0];
     stage->cb_args_ring[i].slots[1] = &stage->output[1];
-    stage->cb_args_ring[i].h_routing = stage->h_routing;
+    stage->cb_args_ring[i].h_write_desc = stage->h_write_desc;
   }
 
   if (stage->max_total_batch_chunks > 0) {
@@ -347,10 +351,10 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   }
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->output[fc]);
-  cu_mem_free((CUdeviceptr)stage->d_routing);
+  cu_mem_free((CUdeviceptr)stage->d_write_desc);
   cu_mem_free((CUdeviceptr)stage->d_tail_sum_bytes);
-  if (stage->h_routing)
-    cuMemFreeHost((void*)stage->h_routing);
+  if (stage->h_write_desc)
+    cuMemFreeHost((void*)stage->h_write_desc);
   cu_mem_free((CUdeviceptr)stage->d_temp_offsets);
   cu_mem_free((CUdeviceptr)stage->d_temp_perm_sizes);
   cu_mem_free(stage->d_batch_gather);
@@ -683,7 +687,7 @@ compress_agg_write_reserved(struct compress_agg_stage* stage,
   if (layout->total_batch_chunks > 0) {
     const uint32_t ring_idx = (uint32_t)(stage->cb_args_seq & 3);
     stage->cb_args_seq++;
-    struct agg_routing_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
+    struct aggregate_write_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
     cb_args->layout = *layout;
     cb_args->nlod = nlod;
     memcpy(cb_args->per_lod_n_active,
@@ -718,7 +722,7 @@ compress_agg_write_reserved(struct compress_agg_stage* stage,
             stage->shards.d_tail_carry,
             work->page_size,
             stage->shards.total_shards,
-            stage->d_routing,
+            stage->d_write_desc,
             stage->d_measurement[fc],
             stage->d_temp_offsets,
             stage->d_temp_perm_sizes,

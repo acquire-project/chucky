@@ -288,10 +288,9 @@ Host-ready and delivery transitions are explicit:
 OPEN -> D2H_IN_FLIGHT -> HOST_READY -> DELIVERING -> EMPTY
 ```
 
-During the transitional integration before close-time compressed D2H exists,
-delivery may begin from `D2H_IN_FLIGHT`; the drain step performs the sync and
-payload copy. Once close-time D2H is implemented, delivery should begin from
-`HOST_READY`.
+Close-time D2H queues both metadata and payload copies. Delivery begins from
+`HOST_READY`; the drain step waits for the ready event and then transitions the
+slot into `DELIVERING`.
 
 `oldest_closed` returns the lowest `close_seq` among slots in
 `D2H_IN_FLIGHT`, `HOST_READY`, or `DELIVERING`, depending on the integration
@@ -351,8 +350,7 @@ The initial ledger test should be CPU-only and cover:
 
 ### Current Status
 
-The ledger module and initial integration are in place, but the implementation
-is still transitional:
+The ledger module and compressed-output integration are in place:
 
 - `output_slot_ledger` owns host-side append state progression.
 - The GPU path now computes an `aggregate_append_measurement` as a distinct
@@ -370,8 +368,8 @@ is still transitional:
   during sync flush, or during final drain.
 - If the reservation has `close_after_append`, finalization immediately queues
   D2H for that slot using the completed handoff.
-- CUDA no longer decides the target output slot. A small routing descriptor is
-  still used by aggregate kernels, but it is filled from the host reservation.
+- CUDA no longer decides the target output slot. A small write descriptor is
+  used by aggregate kernels, and it is filled from the host reservation.
 - Closing a slot now queues both chunk-index D2H and payload D2H; sink delivery
   waits for `HOST_READY` rather than dispatching the payload copy itself.
 - `batches_per_slot_cap` is derived from slot payload capacity and the
@@ -381,9 +379,8 @@ is still transitional:
 That checkpoint gives the intended pool-swap overlap for compressed cap-stacked
 slots: the writer returns after measurement planning, swaps to the next pool,
 and can fill/decompress the next batch while the prior aggregate callback
-finishes on the compress stream. The remaining work in this area is cleanup:
-retire transitional naming around `d_routing` and reduce direct stage tests'
-compatibility wrapper once the split API is covered directly.
+finishes on the compress stream. The remaining cleanup is to reduce direct
+stage tests' compatibility wrapper once the split API is covered directly.
 
 ### Stage 1: Extract the Ledger
 
@@ -428,11 +425,11 @@ Success criteria:
 Split measurement from writing without adding a foreground host sync. This
 stage has two substeps.
 
-First, split the measurement result from routing:
+First, split the measurement result from the aggregate write destination:
 
 - compute exact byte and descriptor requirements on the GPU
 - store them in a device `aggregate_append_measurement`
-- keep the existing router only as a transitional consumer
+- fill an aggregate write descriptor from the host ledger reservation
 
 This substep is complete.
 
@@ -447,7 +444,7 @@ aggregate write:
    reservation, and commits it.
 6. Aggregation kernels write only into the reserved range.
 
-At this point the CUDA routing kernel should no longer select target slots.
+At this point CUDA should no longer select target slots.
 
 Current progress:
 

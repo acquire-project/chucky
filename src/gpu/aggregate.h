@@ -50,7 +50,7 @@ extern "C"
     uint32_t batch_index;
   };
 
-  struct d_routing
+  struct aggregate_write_desc
   {
     void* target_d_aggregated;
     size_t* target_d_offsets;
@@ -65,10 +65,10 @@ extern "C"
     struct aggregate_append_measurement measurement;
   };
 
-  struct agg_routing_cb_args
+  struct aggregate_write_cb_args
   {
     struct aggregate_slot* slots[2];
-    volatile struct d_routing* h_routing;
+    volatile struct aggregate_write_desc* h_write_desc;
     struct batch_aggregate_layout layout;
     uint8_t nlod;
     uint32_t per_lod_n_active[LOD_MAX_LEVELS];
@@ -83,8 +83,8 @@ extern "C"
     struct slot_runtime_state* d_runtime;
   };
 
-  int route_reservation_launch(
-    struct d_routing* d_routing,
+  int write_desc_from_reservation_launch(
+    struct aggregate_write_desc* desc,
     struct slot_dev_ptrs target,
     const struct aggregate_append_measurement* d_measurement,
     const struct aggregate_slot_reservation* reservation,
@@ -100,13 +100,13 @@ extern "C"
     int tail_rollforward_blocked,
     CUstream stream);
 
-  int dense_offsets_launch(struct d_routing* d_routing,
+  int dense_offsets_launch(struct aggregate_write_desc* desc,
                            const size_t* d_shard_sum_bytes,
                            const size_t* d_tail_bytes,
                            uint64_t total_shards,
                            CUstream stream);
 
-  int copy_to_slot_launch(const struct d_routing* d_routing,
+  int copy_to_slot_launch(const struct aggregate_write_desc* desc,
                           const size_t* d_temp_offsets,
                           const size_t* d_temp_perm_sizes,
                           uint64_t count,
@@ -228,11 +228,11 @@ extern "C"
     CUdeviceptr d_tail_carry,
     size_t page_size,
     uint64_t total_shards,
-    struct d_routing* d_routing,
+    struct aggregate_write_desc* desc,
     struct aggregate_append_measurement* d_measurement,
     size_t* d_temp_offsets,
     size_t* d_temp_perm_sizes,
-    struct agg_routing_cb_args* cb_args,
+    struct aggregate_write_cb_args* cb_args,
     CUstream stream);
 
 #ifdef __cplusplus

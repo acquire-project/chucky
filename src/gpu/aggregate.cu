@@ -172,10 +172,11 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
 }
 
 static void CUDART_CB
-aggregate_post_batch_routed_cb(void* userData)
+aggregate_post_batch_write_cb(void* userData)
 {
-  struct agg_routing_cb_args* args = (struct agg_routing_cb_args*)userData;
-  volatile struct d_routing* r = args->h_routing;
+  struct aggregate_write_cb_args* args =
+    (struct aggregate_write_cb_args*)userData;
+  volatile struct aggregate_write_desc* r = args->h_write_desc;
   const int target_idx = r->target_slot_idx;
   struct aggregate_slot* target = args->slots[target_idx];
   const uint32_t bi = r->batch_idx_in_slot;
@@ -216,8 +217,8 @@ permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
 }
 
 __global__ void
-route_reservation_k(
-  struct d_routing* d_routing,
+write_desc_from_reservation_k(
+  struct aggregate_write_desc* desc,
   struct slot_dev_ptrs target,
   const struct aggregate_append_measurement* __restrict__ d_measurement,
   struct aggregate_slot_reservation reservation)
@@ -226,18 +227,17 @@ route_reservation_k(
     return;
 
   const struct aggregate_append_measurement measurement = *d_measurement;
-  d_routing->data_base_offset = reservation.data_base;
-  d_routing->desc_base_offset = reservation.desc_base;
-  d_routing->actual_bytes = measurement.data_bytes;
-  d_routing->batch_idx_in_slot = reservation.batch_index;
-  d_routing->target_slot_idx = reservation.slot;
-  d_routing->close_prior_slot_idx = reservation.close_slot;
-  d_routing->target_d_aggregated = target.d_aggregated;
-  d_routing->target_d_offsets = target.d_offsets;
-  d_routing->target_d_permuted_sizes = target.d_permuted_sizes;
-  d_routing->target_d_shard_base_offsets_dense =
-    target.d_shard_base_offsets_dense;
-  d_routing->measurement = measurement;
+  desc->data_base_offset = reservation.data_base;
+  desc->desc_base_offset = reservation.desc_base;
+  desc->actual_bytes = measurement.data_bytes;
+  desc->batch_idx_in_slot = reservation.batch_index;
+  desc->target_slot_idx = reservation.slot;
+  desc->close_prior_slot_idx = reservation.close_slot;
+  desc->target_d_aggregated = target.d_aggregated;
+  desc->target_d_offsets = target.d_offsets;
+  desc->target_d_permuted_sizes = target.d_permuted_sizes;
+  desc->target_d_shard_base_offsets_dense = target.d_shard_base_offsets_dense;
+  desc->measurement = measurement;
 
   if (target.d_runtime) {
     target.d_runtime->cursor = reservation.data_base + measurement.data_bytes;
@@ -248,8 +248,8 @@ route_reservation_k(
 }
 
 extern "C" int
-route_reservation_launch(
-  struct d_routing* d_routing,
+write_desc_from_reservation_launch(
+  struct aggregate_write_desc* desc,
   struct slot_dev_ptrs target,
   const struct aggregate_append_measurement* d_measurement,
   const struct aggregate_slot_reservation* reservation,
@@ -257,8 +257,8 @@ route_reservation_launch(
 {
   if (!reservation)
     return 1;
-  route_reservation_k<<<1, 1, 0, (cudaStream_t)stream>>>(
-    d_routing, target, d_measurement, *reservation);
+  write_desc_from_reservation_k<<<1, 1, 0, (cudaStream_t)stream>>>(
+    desc, target, d_measurement, *reservation);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -308,16 +308,17 @@ aggregate_measurement_launch(struct aggregate_append_measurement* d_measurement,
 // Serial: total_shards is small (<= a few hundred); a parallel scan would
 // cost more in launch + sync than the per-shard work saved.
 __global__ void
-dense_offsets_k(struct d_routing* d_routing,
+dense_offsets_k(struct aggregate_write_desc* aggregate_write_desc,
                 const size_t* __restrict__ d_shard_sum_bytes,
                 const size_t* __restrict__ d_tail_bytes,
                 uint64_t total_shards)
 {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
-  size_t* dense_slice = d_routing->target_d_shard_base_offsets_dense +
-                        (uint64_t)d_routing->batch_idx_in_slot * total_shards;
-  size_t cum = d_routing->data_base_offset;
+  size_t* dense_slice =
+    aggregate_write_desc->target_d_shard_base_offsets_dense +
+    (uint64_t)aggregate_write_desc->batch_idx_in_slot * total_shards;
+  size_t cum = aggregate_write_desc->data_base_offset;
   for (uint64_t s = 0; s < total_shards; ++s) {
     dense_slice[s] = cum;
     cum += d_tail_bytes[s] + d_shard_sum_bytes[s];
@@ -325,14 +326,14 @@ dense_offsets_k(struct d_routing* d_routing,
 }
 
 extern "C" int
-dense_offsets_launch(struct d_routing* d_routing,
+dense_offsets_launch(struct aggregate_write_desc* aggregate_write_desc,
                      const size_t* d_shard_sum_bytes,
                      const size_t* d_tail_bytes,
                      uint64_t total_shards,
                      CUstream stream)
 {
   dense_offsets_k<<<1, 1, 0, (cudaStream_t)stream>>>(
-    d_routing, d_shard_sum_bytes, d_tail_bytes, total_shards);
+    aggregate_write_desc, d_shard_sum_bytes, d_tail_bytes, total_shards);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -342,10 +343,11 @@ dense_offsets_launch(struct d_routing* d_routing,
 // (add_shard_bias_unified_k's formula is invariant under this shift; only
 // kicks at page_size==0 rely on this bias alone.)
 __global__ void
-copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
-               const size_t* __restrict__ d_temp_offsets,
-               const size_t* __restrict__ d_temp_perm_sizes,
-               uint64_t count)
+copy_to_slot_k(
+  const struct aggregate_write_desc* __restrict__ aggregate_write_desc,
+  const size_t* __restrict__ d_temp_offsets,
+  const size_t* __restrict__ d_temp_perm_sizes,
+  uint64_t count)
 {
   const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= count)
@@ -354,10 +356,11 @@ copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
   __shared__ size_t* dst_perm_sizes;
   __shared__ size_t data_base;
   if (threadIdx.x == 0) {
-    dst_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
-    dst_perm_sizes =
-      d_routing->target_d_permuted_sizes + d_routing->desc_base_offset;
-    data_base = d_routing->data_base_offset;
+    dst_offsets = aggregate_write_desc->target_d_offsets +
+                  aggregate_write_desc->desc_base_offset;
+    dst_perm_sizes = aggregate_write_desc->target_d_permuted_sizes +
+                     aggregate_write_desc->desc_base_offset;
+    data_base = aggregate_write_desc->data_base_offset;
   }
   __syncthreads();
   dst_offsets[i] = d_temp_offsets[i] + data_base;
@@ -365,7 +368,7 @@ copy_to_slot_k(const struct d_routing* __restrict__ d_routing,
 }
 
 extern "C" int
-copy_to_slot_launch(const struct d_routing* d_routing,
+copy_to_slot_launch(const struct aggregate_write_desc* aggregate_write_desc,
                     const size_t* d_temp_offsets,
                     const size_t* d_temp_perm_sizes,
                     uint64_t count,
@@ -374,7 +377,7 @@ copy_to_slot_launch(const struct d_routing* d_routing,
   const int block = 256;
   const int grid = (int)((count + block - 1) / block);
   copy_to_slot_k<<<grid, block, 0, (cudaStream_t)stream>>>(
-    d_routing, d_temp_offsets, d_temp_perm_sizes, count);
+    aggregate_write_desc, d_temp_offsets, d_temp_perm_sizes, count);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -401,15 +404,17 @@ gather_batch_k(const void* __restrict__ d_compressed,
     dst[off] = src[off];
 }
 
-// Routed variant: reads target ptrs from d_routing (the legacy
+// Descriptor variant: reads target pointers from the host-ledger write
+// descriptor (the legacy
 // aggregate_batch_by_shard_async still uses gather_batch_k).
 __global__ void
-gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
-                      const void* __restrict__ d_compressed,
-                      const size_t* __restrict__ d_comp_sizes,
-                      const uint32_t* __restrict__ d_gather,
-                      const uint32_t* __restrict__ d_perm,
-                      size_t max_comp_chunk_bytes)
+gather_batch_write_desc_k(
+  const struct aggregate_write_desc* __restrict__ aggregate_write_desc,
+  const void* __restrict__ d_compressed,
+  const size_t* __restrict__ d_comp_sizes,
+  const uint32_t* __restrict__ d_gather,
+  const uint32_t* __restrict__ d_perm,
+  size_t max_comp_chunk_bytes)
 {
   const uint64_t i = blockIdx.x;
   const uint32_t src_idx = d_gather[i];
@@ -419,8 +424,9 @@ gather_batch_routed_k(const struct d_routing* __restrict__ d_routing,
   __shared__ void* d_aggregated;
   __shared__ const size_t* d_offsets;
   if (threadIdx.x == 0) {
-    d_aggregated = d_routing->target_d_aggregated;
-    d_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
+    d_aggregated = aggregate_write_desc->target_d_aggregated;
+    d_offsets = aggregate_write_desc->target_d_offsets +
+                aggregate_write_desc->desc_base_offset;
   }
   __syncthreads();
 
@@ -517,11 +523,12 @@ Error:
 }
 
 __global__ void
-add_shard_bias_unified_k(const struct d_routing* __restrict__ d_routing,
-                         const size_t* __restrict__ d_tail_bytes_prev,
-                         const uint64_t* __restrict__ d_shard_tps_group,
-                         const uint64_t* __restrict__ d_shard_offsets_base,
-                         uint64_t num_shards)
+add_shard_bias_unified_k(
+  const struct aggregate_write_desc* __restrict__ aggregate_write_desc,
+  const size_t* __restrict__ d_tail_bytes_prev,
+  const uint64_t* __restrict__ d_shard_tps_group,
+  const uint64_t* __restrict__ d_shard_offsets_base,
+  uint64_t num_shards)
 {
   const uint64_t s = blockIdx.x;
   if (s >= num_shards)
@@ -529,9 +536,11 @@ add_shard_bias_unified_k(const struct d_routing* __restrict__ d_routing,
   __shared__ size_t* d_offsets;
   __shared__ const size_t* d_shard_base_offsets;
   if (threadIdx.x == 0) {
-    d_offsets = d_routing->target_d_offsets + d_routing->desc_base_offset;
-    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
-                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+    d_offsets = aggregate_write_desc->target_d_offsets +
+                aggregate_write_desc->desc_base_offset;
+    d_shard_base_offsets =
+      aggregate_write_desc->target_d_shard_base_offsets_dense +
+      (uint64_t)aggregate_write_desc->batch_idx_in_slot * num_shards;
   }
   __syncthreads();
   const uint64_t base = d_shard_offsets_base[s];
@@ -590,11 +599,12 @@ tail_sum_launch(void* d_temp,
 }
 
 __global__ void
-copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
-                            const void* __restrict__ d_tail_carry,
-                            const size_t* __restrict__ d_tail_bytes_prev,
-                            uint64_t num_shards,
-                            size_t page_size)
+copy_leading_tail_unified_k(
+  const struct aggregate_write_desc* __restrict__ aggregate_write_desc,
+  const void* __restrict__ d_tail_carry,
+  const size_t* __restrict__ d_tail_bytes_prev,
+  uint64_t num_shards,
+  size_t page_size)
 {
   const uint64_t s = blockIdx.x;
   const size_t nbytes = d_tail_bytes_prev[s];
@@ -603,9 +613,10 @@ copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
   __shared__ void* d_aggregated;
   __shared__ const size_t* d_shard_base_offsets;
   if (threadIdx.x == 0) {
-    d_aggregated = d_routing->target_d_aggregated;
-    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
-                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+    d_aggregated = aggregate_write_desc->target_d_aggregated;
+    d_shard_base_offsets =
+      aggregate_write_desc->target_d_shard_base_offsets_dense +
+      (uint64_t)aggregate_write_desc->batch_idx_in_slot * num_shards;
   }
   __syncthreads();
   const uint8_t* src = (const uint8_t*)d_tail_carry + s * page_size;
@@ -618,12 +629,13 @@ copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
 // in-block read-then-write. Correctness assumes no shard finalizes mid-slot
 // (the host-side fit gate must enforce this when macro-agg is active).
 __global__ void
-rollforward_tail_unified_k(const struct d_routing* __restrict__ d_routing,
-                           const size_t* __restrict__ d_shard_sum_bytes,
-                           size_t page_size,
-                           size_t* __restrict__ d_tail_bytes,
-                           void* __restrict__ d_tail_carry,
-                           uint64_t num_shards)
+rollforward_tail_unified_k(
+  const struct aggregate_write_desc* __restrict__ aggregate_write_desc,
+  const size_t* __restrict__ d_shard_sum_bytes,
+  size_t page_size,
+  size_t* __restrict__ d_tail_bytes,
+  void* __restrict__ d_tail_carry,
+  uint64_t num_shards)
 {
   const uint64_t s = blockIdx.x;
   if (s >= num_shards)
@@ -631,9 +643,10 @@ rollforward_tail_unified_k(const struct d_routing* __restrict__ d_routing,
   __shared__ const void* d_aggregated;
   __shared__ const size_t* d_shard_base_offsets;
   if (threadIdx.x == 0) {
-    d_aggregated = d_routing->target_d_aggregated;
-    d_shard_base_offsets = d_routing->target_d_shard_base_offsets_dense +
-                           (uint64_t)d_routing->batch_idx_in_slot * num_shards;
+    d_aggregated = aggregate_write_desc->target_d_aggregated;
+    d_shard_base_offsets =
+      aggregate_write_desc->target_d_shard_base_offsets_dense +
+      (uint64_t)aggregate_write_desc->batch_idx_in_slot * num_shards;
   }
   __syncthreads();
   const size_t prev_tail = d_tail_bytes[s];
@@ -879,11 +892,11 @@ aggregate_batch_write_reserved_unified_async(
   CUdeviceptr d_tail_carry,
   size_t page_size,
   uint64_t total_shards,
-  struct d_routing* d_routing,
+  struct aggregate_write_desc* aggregate_write_desc,
   struct aggregate_append_measurement* d_measurement,
   size_t* d_temp_offsets,
   size_t* d_temp_perm_sizes,
-  struct agg_routing_cb_args* cb_args,
+  struct aggregate_write_cb_args* cb_args,
   CUstream stream)
 {
   const uint64_t N = total_batch_chunks;
@@ -898,12 +911,13 @@ aggregate_batch_write_reserved_unified_async(
   };
 
   CHECK(Error,
-        route_reservation_launch(
-          d_routing, target, d_measurement, reservation, stream) == 0);
+        write_desc_from_reservation_launch(
+          aggregate_write_desc, target, d_measurement, reservation, stream) ==
+          0);
 
   if (total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
     CHECK(Error,
-          dense_offsets_launch(d_routing,
+          dense_offsets_launch(aggregate_write_desc,
                                scratch_slot->d_shard_sum_bytes,
                                d_tail_bytes,
                                total_shards,
@@ -923,7 +937,7 @@ aggregate_batch_write_reserved_unified_async(
   }
 
   CHECK(Error,
-        copy_to_slot_launch(d_routing,
+        copy_to_slot_launch(aggregate_write_desc,
                             d_temp_offsets,
                             d_temp_perm_sizes,
                             C + (uint64_t)nlod,
@@ -933,7 +947,7 @@ aggregate_batch_write_reserved_unified_async(
     {
       const int block = 256;
       add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        d_routing,
+        aggregate_write_desc,
         d_tail_bytes,
         d_shard_tps_group,
         d_shard_offsets_base,
@@ -942,7 +956,7 @@ aggregate_batch_write_reserved_unified_async(
     {
       const int block = 256;
       copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        d_routing,
+        aggregate_write_desc,
         (const void*)d_tail_carry,
         d_tail_bytes,
         total_shards,
@@ -953,8 +967,8 @@ aggregate_batch_write_reserved_unified_async(
   {
     const int block = 256;
     const int grid = (int)N;
-    gather_batch_routed_k<<<grid, block, 0, cuda_stream>>>(
-      d_routing,
+    gather_batch_write_desc_k<<<grid, block, 0, cuda_stream>>>(
+      aggregate_write_desc,
       d_compressed,
       d_comp_sizes,
       d_batch_gather,
@@ -965,7 +979,7 @@ aggregate_batch_write_reserved_unified_async(
   if (page_size > 0 && total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
     const int block = 256;
     rollforward_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-      d_routing,
+      aggregate_write_desc,
       scratch_slot->d_shard_sum_bytes,
       page_size,
       (size_t*)d_tail_bytes,
@@ -974,11 +988,11 @@ aggregate_batch_write_reserved_unified_async(
   }
 
   CU(Error,
-     cuMemcpyDtoHAsync((void*)cb_args->h_routing,
-                       (CUdeviceptr)d_routing,
-                       sizeof(struct d_routing),
+     cuMemcpyDtoHAsync((void*)cb_args->h_write_desc,
+                       (CUdeviceptr)aggregate_write_desc,
+                       sizeof(struct aggregate_write_desc),
                        stream));
-  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_routed_cb, cb_args));
+  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_write_cb, cb_args));
   CU(Error, cuEventRecord(scratch_slot->host_func_done, stream));
 
   return 0;

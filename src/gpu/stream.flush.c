@@ -239,7 +239,7 @@ finish_pending_aggregate(struct stream_engine* e, struct stream_context* ctx)
   CU(Error,
      cuEventSynchronize(
        e->compress_agg.output[pending->active_oi].host_func_done));
-  const volatile struct d_routing* r = e->compress_agg.h_routing;
+  const volatile struct aggregate_write_desc* r = e->compress_agg.h_write_desc;
   const int target = r->target_slot_idx;
   const int close = r->close_prior_slot_idx;
   CHECK(Error, pending->target == target);

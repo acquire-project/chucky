@@ -558,22 +558,27 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                        e->streams.compute));
     }
     CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_routing,
-                  sizeof(struct d_routing)));
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_write_desc,
+                  sizeof(struct aggregate_write_desc)));
     CU(Fail,
-       cuMemsetD8(
-         (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
+       cuMemsetD8((CUdeviceptr)e->compress_agg.d_write_desc,
+                  0,
+                  sizeof(struct aggregate_write_desc)));
     CU(Fail,
        cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_tail_sum_bytes,
                   sizeof(size_t)));
     CU(Fail,
-       cuMemHostAlloc(
-         (void**)&e->compress_agg.h_routing, sizeof(struct d_routing), 0));
-    memset((void*)e->compress_agg.h_routing, 0, sizeof(struct d_routing));
+       cuMemHostAlloc((void**)&e->compress_agg.h_write_desc,
+                      sizeof(struct aggregate_write_desc),
+                      0));
+    memset((void*)e->compress_agg.h_write_desc,
+           0,
+           sizeof(struct aggregate_write_desc));
     for (int i = 0; i < 4; ++i) {
       e->compress_agg.cb_args_ring[i].slots[0] = &e->compress_agg.output[0];
       e->compress_agg.cb_args_ring[i].slots[1] = &e->compress_agg.output[1];
-      e->compress_agg.cb_args_ring[i].h_routing = e->compress_agg.h_routing;
+      e->compress_agg.cb_args_ring[i].h_write_desc =
+        e->compress_agg.h_write_desc;
     }
     {
       const uint64_t temp_count =
@@ -864,10 +869,10 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // Unified-pipeline shared resources (allocated in init_shared_resources).
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
-  cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_write_desc);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_tail_sum_bytes);
-  if (e->compress_agg.h_routing)
-    cuMemFreeHost((void*)e->compress_agg.h_routing);
+  if (e->compress_agg.h_write_desc)
+    cuMemFreeHost((void*)e->compress_agg.h_write_desc);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_offsets);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_perm_sizes);
   cu_mem_free(e->compress_agg.d_batch_gather);

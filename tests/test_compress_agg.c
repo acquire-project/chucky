@@ -713,13 +713,13 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: paged-shard routing reserves leading tail bytes without corrupting
-// descriptor offsets.
+// Test 7: paged-shard write descriptor reserves leading tail bytes without
+// corrupting descriptor offsets.
 // ---------------------------------------------------------------------------
 static int
-test_compress_agg_routing_reserves_tail_bytes(void)
+test_compress_agg_write_desc_reserves_tail_bytes(void)
 {
-  log_info("=== test_compress_agg_routing_reserves_tail_bytes ===");
+  log_info("=== test_compress_agg_write_desc_reserves_tail_bytes ===");
 
   struct ca_test_ctx c;
   ca_ctx_init(&c);
@@ -754,7 +754,7 @@ test_compress_agg_routing_reserves_tail_bytes(void)
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
   const size_t descriptor_bytes = total_chunks * chunk_bytes;
   const size_t reservation_bytes = descriptor_bytes + tail_sum;
-  CHECK(Fail, c.stage.h_routing->actual_bytes == reservation_bytes);
+  CHECK(Fail, c.stage.h_write_desc->actual_bytes == reservation_bytes);
   CHECK(Fail, handoff.output->slot_cursor == reservation_bytes);
 
   const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
@@ -882,7 +882,7 @@ RUN_GPU_TESTS({ "compress_agg_single_epoch", test_compress_agg_single_epoch },
               { "compress_agg_zstd_batch", test_compress_agg_zstd_batch },
               { "compress_agg_none_no_compressed_buffer",
                 test_compress_agg_none_no_compressed_buffer },
-              { "compress_agg_routing_reserves_tail_bytes",
-                test_compress_agg_routing_reserves_tail_bytes },
+              { "compress_agg_write_desc_reserves_tail_bytes",
+                test_compress_agg_write_desc_reserves_tail_bytes },
               { "compress_agg_lut_cache_position_shift",
                 test_compress_agg_lut_cache_position_shift }, )

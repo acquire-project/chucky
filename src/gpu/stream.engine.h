@@ -225,15 +225,15 @@ struct compress_agg_stage
 
   // Write descriptor for the current batch, filled from the host ledger
   // reservation and then consumed by aggregate kernels.
-  struct d_routing* d_routing;
+  struct aggregate_write_desc* d_write_desc;
   struct aggregate_append_measurement* d_measurement[2];
   volatile struct aggregate_append_measurement* h_measurement[2];
   CUevent measurement_ready[2];
   size_t* d_tail_sum_bytes;
   size_t* d_temp_offsets;
   size_t* d_temp_perm_sizes;
-  volatile struct d_routing* h_routing;
-  struct agg_routing_cb_args cb_args_ring[4];
+  volatile struct aggregate_write_desc* h_write_desc;
+  struct aggregate_write_cb_args cb_args_ring[4];
   uint64_t cb_args_seq;
 
   // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
@@ -267,8 +267,9 @@ struct pending_aggregate_handoff
 
 // Output-slot lifecycle is host-owned. Aggregate may write only to EMPTY or
 // the current OPEN slot; CLOSED/DELIVERING slots are immutable until drained
-// and reset to EMPTY. The CUDA routing kernel can compute placement, but it
-// must never be allowed to swap into a non-EMPTY alternate slot.
+// and reset to EMPTY. The host ledger computes placement; CUDA consumes the
+// resulting write descriptor and must never be allowed to swap into a
+// non-EMPTY alternate slot.
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
