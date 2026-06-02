@@ -374,6 +374,9 @@ is still transitional:
   still used by aggregate kernels, but it is filled from the host reservation.
 - Closing a slot now queues both chunk-index D2H and payload D2H; sink delivery
   waits for `HOST_READY` rather than dispatching the payload copy itself.
+- `batches_per_slot_cap` is derived from slot payload capacity and the
+  descriptor-pair footprint of one worst-case batch; it is no longer a fixed
+  compressed-path constant.
 
 That checkpoint gives the intended pool-swap overlap for compressed cap-stacked
 slots: the writer returns after measurement planning, swaps to the next pool,
@@ -405,6 +408,14 @@ Replace the fixed compressed `batches_per_slot_cap` policy with capacities:
 
 Keep a conservative batch-record capacity if needed for allocation, but close
 because a real resource is exhausted, not because a fixed batch count was hit.
+
+Current progress:
+
+- Payload and descriptor cursors are ledger-owned and capacity-checked per
+  measured append.
+- Batch-record capacity is still a metadata allocation bound, but it is derived
+  from the output slot's payload capacity and per-batch descriptor footprint
+  instead of a fixed compressed batch count.
 
 Success criteria:
 

@@ -38,6 +38,25 @@ Error:
   return 1;
 }
 
+static uint32_t
+derive_batches_per_slot_cap(int can_stack,
+                            size_t slot_data_bytes,
+                            uint64_t desc_entries_per_batch)
+{
+  if (!can_stack)
+    return 1;
+  const uint64_t desc_pair_bytes =
+    desc_entries_per_batch * (uint64_t)(2 * sizeof(size_t));
+  if (slot_data_bytes == 0 || desc_pair_bytes == 0)
+    return 1;
+  uint64_t cap = (uint64_t)slot_data_bytes / desc_pair_bytes;
+  if (cap < 1)
+    cap = 1;
+  if (cap > UINT32_MAX)
+    cap = UINT32_MAX;
+  return (uint32_t)cap;
+}
+
 // --- Init / Destroy ---
 
 int
@@ -140,9 +159,12 @@ compress_agg_init(struct compress_agg_stage* stage,
     const size_t page_size_init = cl->per_level[0].agg_layout.page_size;
     const int can_stack =
       (stage->codec.type != CODEC_NONE) || (page_size_init == 0);
-    const uint32_t batches_per_slot_cap = can_stack ? 16 : 1;
     const uint64_t one_batch =
       stage->max_total_batch_covering + (uint64_t)stage->nlod;
+    const uint32_t batches_per_slot_cap = derive_batches_per_slot_cap(
+      can_stack, stage->max_total_data_bytes, one_batch);
+    CHECK_MUL_OVERFLOW(
+      Fail, (uint64_t)batches_per_slot_cap, one_batch, UINT64_MAX);
     const uint64_t slot_chunk_cap = (uint64_t)batches_per_slot_cap * one_batch;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
