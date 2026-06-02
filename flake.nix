@@ -7,6 +7,9 @@
     claude-code.url = "github:sadjow/claude-code-nix";
     claude-code.inputs.nixpkgs.follows = "nixpkgs";
     claude-code.inputs.flake-utils.follows = "flake-utils";
+    codex-nix.url = "github:SecBear/codex-nix";
+    codex-nix.inputs.nixpkgs.follows = "nixpkgs";
+    codex-nix.inputs.flake-utils.follows = "flake-utils";
     git-hooks.url = "github:cachix/git-hooks.nix";
     git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -17,6 +20,7 @@
       nixpkgs,
       flake-utils,
       claude-code,
+      codex-nix,
       git-hooks,
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -161,6 +165,7 @@
             commonNativeBuildInputs
             ++ (with pkgs; [
               claude-code.packages.${system}.default
+              codex-nix.packages.${system}.default
               docker
               gdb
               gh

@@ -85,6 +85,7 @@ add_test_exe(test_threadpool test_threadpool.c threadpool platform)
 
 # Index operations unit tests (pure CPU)
 add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
+add_test_exe(test_output_slot_ledger test_output_slot_ledger.c output_slot_ledger chucky_log)
 
 # Standalone transpose kernel test
 add_gpu_test_exe(test_transpose test_transpose.c LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)

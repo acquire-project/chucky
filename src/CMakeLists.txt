@@ -57,6 +57,7 @@ add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts
     stream/types.aggregate.c types.stream.h stream/types.aggregate.h types.lod.h defs.limits.h
     LINKS codec_types lod_plan index_ops platform chucky_log
 )
+add_src_lib(output_slot_ledger SOURCES gpu/output_slot.c gpu/output_slot.h)
 
 # --- Backend subdirectories ---
 
