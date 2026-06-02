@@ -372,6 +372,8 @@ is still transitional:
   D2H for that slot using the completed handoff.
 - CUDA no longer decides the target output slot. A small routing descriptor is
   still used by aggregate kernels, but it is filled from the host reservation.
+- Closing a slot now queues both chunk-index D2H and payload D2H; sink delivery
+  waits for `HOST_READY` rather than dispatching the payload copy itself.
 
 That checkpoint gives the intended pool-swap overlap for compressed cap-stacked
 slots: the writer returns after measurement planning, swaps to the next pool,
@@ -461,6 +463,14 @@ Move compressed payload D2H to the slot close transition. Closing a compressed
 slot should queue metadata D2H, determine exact payload ranges, queue payload
 D2H, and record a host-ready event. Draining should wait for host readiness and
 perform sink delivery in close sequence order.
+
+Current progress:
+
+- Close queues chunk-index D2H and a single payload D2H sized by the slot's
+  exact ledger/aggregate cursor.
+- `drain_output()` waits for the D2H ready event and transitions the ledger to
+  `HOST_READY` before sink delivery.
+- Sink delivery no longer dispatches compressed payload D2H.
 
 Success criteria:
 

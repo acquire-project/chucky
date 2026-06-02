@@ -570,6 +570,7 @@ test_compressed_alt_slot_retired_before_reuse(void)
   // before any possible swap can target it.
   CHECK(Fail,
         c.s->engine.flush.output.slot[0].state == OUTPUT_LEDGER_D2H_IN_FLIGHT);
+  CU(Fail, cuEventSynchronize(c.s->engine.d2h_deliver.ready[0]));
 
   CHECK(Fail, next_fill + 1 < max_kicks);
   CHECK(Fail,

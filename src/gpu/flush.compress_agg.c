@@ -616,6 +616,7 @@ compress_agg_measure(struct compress_agg_stage* stage,
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->output = out_slot;
   out->layout = layout;
+  out->slot_total_data_bytes = layout.total_data_bytes;
   out->slot_total_desc_entries = layout.total_batch_covering + (uint64_t)nlod;
   out->per_lod_agg_layouts = stage->per_lod_agg_layouts;
   out->shards = &stage->shards;
@@ -738,6 +739,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
     .close_slot = -1,
     .close_after_append = m->closes_after_append,
   };
+  out->slot_total_data_bytes = reservation.data_base + m->data_bytes;
 
   CHECK(Error,
         compress_agg_write_reserved(

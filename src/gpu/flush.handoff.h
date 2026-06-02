@@ -37,6 +37,7 @@ struct flush_handoff
 
   struct aggregate_slot* output;        // borrowed: output reservoir slot
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
+  uint64_t slot_total_data_bytes;
   uint64_t slot_total_desc_entries;
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed

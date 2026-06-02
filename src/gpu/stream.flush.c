@@ -117,6 +117,14 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
       output_state(e, oi) != OUTPUT_LEDGER_HOST_READY)
     return writer_ok();
 
+  if (output_state(e, oi) == OUTPUT_LEDGER_D2H_IN_FLIGHT) {
+    if (d2h_deliver_wait_ready(&e->d2h_deliver, oi) != 0)
+      return writer_error();
+    if (output_slot_ledger_mark_host_ready(&e->flush.output, oi) !=
+        OUTPUT_LEDGER_OK)
+      return writer_error();
+  }
+
   if (output_slot_ledger_begin_delivery(&e->flush.output, oi) !=
       OUTPUT_LEDGER_OK)
     return writer_error();
@@ -263,6 +271,7 @@ finish_pending_aggregate(struct stream_engine* e, struct stream_context* ctx)
   struct flush_handoff* handoff = &pending->handoff;
   handoff->output_idx = target;
   handoff->output = &e->compress_agg.output[target];
+  handoff->slot_total_data_bytes = e->compress_agg.output[target].slot_cursor;
   handoff->slot_total_desc_entries =
     e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *handoff;

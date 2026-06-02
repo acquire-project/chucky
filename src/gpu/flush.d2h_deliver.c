@@ -229,35 +229,6 @@ poll_event(CUevent ev, int fc)
   }
 }
 
-// h_offsets here must be the pre-rebase (absolute) values produced by the
-// unified scan + bias. Order dependency: caller must overwrite
-// be->per_lod_lods[lv].data_segment_offset to the dense LOD start BEFORE
-// calling this in dense_mode, since slot_data_offset() reads
-// data_segment_offset.
-static int
-batch_lod_actual_bytes(const struct aggregate_slot* slot,
-                       const struct batch_slice_entry* be,
-                       uint8_t lv,
-                       size_t* out_bytes)
-{
-  *out_bytes = 0;
-  const struct lod_segment* seg = &be->per_lod_lods[lv];
-  if (seg->n_active == 0)
-    return 0;
-  const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
-  const uint64_t last = slot_desc_offset(be, lv) + total - 1;
-  const size_t base = slot_data_offset(be, lv);
-  const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
-  CHECK(Error, slot->h_offsets[last] >= base);
-  const size_t actual = end - base;
-  CHECK(Error, actual <= seg->data_segment_bytes);
-  *out_bytes = actual;
-  return 0;
-
-Error:
-  return 1;
-}
-
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
@@ -268,8 +239,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct shard_sink* sink,
                  const struct lod_state* lod,
                  const struct lod_shared_state* lod_shared,
-                 struct stream_metrics* metrics,
-                 CUstream d2h_stream)
+                 struct stream_metrics* metrics)
 {
   const int oi = handoff->output_idx;
   struct aggregate_slot* slot = handoff->output;
@@ -294,7 +264,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     if (poll_event(stage->h_chunk_index_ready[oi], oi))
       goto Error;
 
-    // Must run before the bulk D2H below, which reads data_segment_offset.
+    // Must run before delivery, which reads data_segment_offset.
     if (dense_mode) {
       struct shard_tables* sh = handoff->shards;
       const uint64_t num_shards = sh->total_shards;
@@ -317,62 +287,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       }
     }
 
-    if (handoff->passthrough) {
-      if (poll_event(stage->ready[oi], oi))
-        goto Error;
-    } else {
-      int dispatch_err = 0;
-      if (alayout->page_size > 0) {
-        for (uint32_t b = 0; b < slot->batches_per_slot && !dispatch_err; ++b) {
-          const struct batch_slice_entry* be = &slot->slot_batches[b];
-          for (uint8_t lv = 0; lv < be->nlod && !dispatch_err; ++lv) {
-            if (be->per_lod_lods[lv].n_active == 0)
-              continue;
-            const size_t off = slot_data_offset(be, lv);
-            size_t actual = 0;
-            if (batch_lod_actual_bytes(slot, be, lv, &actual))
-              goto Error;
-            if (actual == 0)
-              continue;
-            D2H_TRY(dispatch_err,
-                    "cuMemcpyDtoHAsync",
-                    cuMemcpyDtoHAsync((uint8_t*)slot->h_aggregated + off,
-                                      (CUdeviceptr)slot->d_aggregated + off,
-                                      actual,
-                                      d2h_stream));
-          }
-        }
-      } else if (slot->batches_per_slot > 0) {
-        // Cumulative-end index = last sentinel of the slot's last batch.
-        const struct batch_slice_entry* last_be =
-          &slot->slot_batches[slot->batches_per_slot - 1];
-        uint64_t C_batch = 0;
-        for (uint8_t lv = 0; lv < last_be->nlod; ++lv)
-          C_batch += (uint64_t)last_be->per_lod_lods[lv].n_active *
-                     last_be->per_lod_lods[lv].covering_count;
-        const uint64_t last =
-          last_be->desc_base_offset + C_batch + (uint64_t)last_be->nlod - 1;
-        const size_t total =
-          slot->h_offsets[last] + slot->h_permuted_sizes[last];
-        if (total > 0)
-          D2H_TRY(dispatch_err,
-                  "cuMemcpyDtoHAsync",
-                  cuMemcpyDtoHAsync(slot->h_aggregated,
-                                    (CUdeviceptr)slot->d_aggregated,
-                                    total,
-                                    d2h_stream));
-      }
-
-      // Always record completion events even on dispatch error: cap-stacking
-      // waiters block on slot->ready and would hang otherwise.
-      CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
-      CU(Error, cuEventRecord(slot->ready, d2h_stream));
-
-      if (dispatch_err)
-        goto Error;
-      if (poll_event(stage->ready[oi], oi))
-        goto Error;
-    }
+    if (poll_event(stage->ready[oi], oi))
+      goto Error;
 
     float kick_ms = platform_toc(&kick_clk) * 1000.0f;
     accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
@@ -553,8 +469,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   CU(Error, cuStreamWaitEvent(d2h_stream, slot->host_func_done, 0));
   CU(Error, cuEventRecord(stage->t_d2h_start[oi], d2h_stream));
 
-  // Compressed codecs use these in drain to size exact per-LOD transfers;
-  // pass-through copies them too so delivery's chunk-index walk is uniform.
+  // Delivery needs the chunk index on host for shard writes and metrics.
   int dispatch_err = 0;
   if (handoff->slot_total_desc_entries > 0) {
     const size_t n = (size_t)handoff->slot_total_desc_entries;
@@ -577,31 +492,37 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
             "cuEventRecord",
             cuEventRecord(stage->h_chunk_index_ready[oi], d2h_stream));
 
-  // At cap>1, the last kick's layout undersizes the slot when prior stacked
-  // kicks had more LODs active; slot_cursor tracks cumulative actual bytes.
-  if (!dispatch_err && handoff->passthrough &&
-      (layout->total_data_bytes > 0 || slot->slot_cursor > 0)) {
-    const size_t n = (slot->slot_cursor > layout->total_data_bytes)
-                       ? slot->slot_cursor
-                       : layout->total_data_bytes;
-    D2H_TRY(
-      dispatch_err,
-      "cuMemcpyDtoHAsync",
-      cuMemcpyDtoHAsync(
-        slot->h_aggregated, (CUdeviceptr)slot->d_aggregated, n, d2h_stream));
+  if (!dispatch_err) {
+    size_t n = (size_t)handoff->slot_total_data_bytes;
+    // Passthrough with page-aligned shards uses the full per-batch layout
+    // envelope; cap-stacked compressed slots use the exact ledger cursor.
+    if (handoff->passthrough && layout->total_data_bytes > n)
+      n = layout->total_data_bytes;
+    if (n > 0)
+      D2H_TRY(
+        dispatch_err,
+        "cuMemcpyDtoHAsync",
+        cuMemcpyDtoHAsync(
+          slot->h_aggregated, (CUdeviceptr)slot->d_aggregated, n, d2h_stream));
   }
 
-  // Always record passthrough completion events even on dispatch error:
-  // cap-stacking waiters block on slot->ready and would hang otherwise.
-  if (handoff->passthrough) {
-    CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
-    CU(Error, cuEventRecord(slot->ready, d2h_stream));
-  }
+  // Always record completion events even on dispatch error: cap-stacking
+  // waiters block on slot->ready and would hang otherwise.
+  CU(Error, cuEventRecord(stage->ready[oi], d2h_stream));
+  CU(Error, cuEventRecord(slot->ready, d2h_stream));
 
   return dispatch_err;
 
 Error:
   return 1;
+}
+
+int
+d2h_deliver_wait_ready(struct d2h_deliver_stage* stage, int output_idx)
+{
+  if (!stage || output_idx < 0 || output_idx > 1)
+    return 1;
+  return poll_event(stage->ready[output_idx], output_idx);
 }
 
 struct writer_result
@@ -618,6 +539,7 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   struct platform_clock* metadata_update_clock,
                   CUstream d2h_stream)
 {
+  (void)d2h_stream;
   struct writer_result r = sync_and_deliver(stage,
                                             handoff,
                                             levels,
@@ -627,8 +549,7 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                                             sink,
                                             lod,
                                             lod_shared,
-                                            metrics,
-                                            d2h_stream);
+                                            metrics);
   if (!r.error) {
     if (maybe_update_metadata(
           handoff, dims, config, sink, metadata_update_clock))
