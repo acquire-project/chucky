@@ -216,51 +216,22 @@ permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
 }
 
 __global__ void
-fit_decision_k(
+route_reservation_k(
   struct d_routing* d_routing,
-  struct slot_dev_ptrs slot_0,
-  struct slot_dev_ptrs slot_1,
+  struct slot_dev_ptrs target,
   const struct aggregate_append_measurement* __restrict__ d_measurement,
-  size_t slot_capacity,
-  uint32_t batches_per_slot_cap,
-  int active_slot_idx)
+  struct aggregate_slot_reservation reservation)
 {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
 
   const struct aggregate_append_measurement measurement = *d_measurement;
-  struct slot_dev_ptrs active = (active_slot_idx == 0) ? slot_0 : slot_1;
-  struct slot_runtime_state* active_rt = active.d_runtime;
-  const size_t actual_bytes = measurement.data_bytes;
-
-  // Stacking onto a non-empty slot when this batch would finalize a shard
-  // mid-slot is forbidden (corrupts in-slot tail rollforward). Force swap.
-  const int stack_blocked =
-    measurement.tail_rollforward_blocked && active_rt->batches_per_slot > 0;
-  const int fits = (active_rt->batches_per_slot < batches_per_slot_cap) &&
-                   (active_rt->cursor + actual_bytes <= slot_capacity) &&
-                   !stack_blocked;
-
-  int target_idx;
-  struct slot_dev_ptrs target;
-  if (fits) {
-    target_idx = active_slot_idx;
-    target = active;
-    d_routing->close_prior_slot_idx = -1;
-  } else {
-    target_idx = active_slot_idx ^ 1;
-    target = (target_idx == 0) ? slot_0 : slot_1;
-    target.d_runtime->cursor = 0;
-    target.d_runtime->desc_cursor = 0;
-    target.d_runtime->batches_per_slot = 0;
-    d_routing->close_prior_slot_idx = active_slot_idx;
-  }
-
-  d_routing->data_base_offset = target.d_runtime->cursor;
-  d_routing->desc_base_offset = target.d_runtime->desc_cursor;
-  d_routing->actual_bytes = actual_bytes;
-  d_routing->batch_idx_in_slot = target.d_runtime->batches_per_slot;
-  d_routing->target_slot_idx = target_idx;
+  d_routing->data_base_offset = reservation.data_base;
+  d_routing->desc_base_offset = reservation.desc_base;
+  d_routing->actual_bytes = measurement.data_bytes;
+  d_routing->batch_idx_in_slot = reservation.batch_index;
+  d_routing->target_slot_idx = reservation.slot;
+  d_routing->close_prior_slot_idx = reservation.close_slot;
   d_routing->target_d_aggregated = target.d_aggregated;
   d_routing->target_d_offsets = target.d_offsets;
   d_routing->target_d_permuted_sizes = target.d_permuted_sizes;
@@ -268,33 +239,26 @@ fit_decision_k(
     target.d_shard_base_offsets_dense;
   d_routing->measurement = measurement;
 
-  target.d_runtime->cursor += actual_bytes;
-  target.d_runtime->desc_cursor += measurement.desc_entries;
-  target.d_runtime->batches_per_slot += 1;
-
-  // This batch finalizes a shard even when solo: must be the last in its
-  // slot. Force a swap on the next kick by pinning to cap.
-  if (measurement.closes_after_append)
-    target.d_runtime->batches_per_slot = batches_per_slot_cap;
+  if (target.d_runtime) {
+    target.d_runtime->cursor = reservation.data_base + measurement.data_bytes;
+    target.d_runtime->desc_cursor =
+      reservation.desc_base + measurement.desc_entries;
+    target.d_runtime->batches_per_slot = reservation.batch_index + 1;
+  }
 }
 
 extern "C" int
-fit_decision_launch(struct d_routing* d_routing,
-                    struct slot_dev_ptrs slot_0,
-                    struct slot_dev_ptrs slot_1,
-                    const struct aggregate_append_measurement* d_measurement,
-                    size_t slot_capacity,
-                    uint32_t batches_per_slot_cap,
-                    int active_slot_idx,
-                    CUstream stream)
+route_reservation_launch(
+  struct d_routing* d_routing,
+  struct slot_dev_ptrs target,
+  const struct aggregate_append_measurement* d_measurement,
+  const struct aggregate_slot_reservation* reservation,
+  CUstream stream)
 {
-  fit_decision_k<<<1, 1, 0, (cudaStream_t)stream>>>(d_routing,
-                                                    slot_0,
-                                                    slot_1,
-                                                    d_measurement,
-                                                    slot_capacity,
-                                                    batches_per_slot_cap,
-                                                    active_slot_idx);
+  if (!reservation)
+    return 1;
+  route_reservation_k<<<1, 1, 0, (cudaStream_t)stream>>>(
+    d_routing, target, d_measurement, *reservation);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -784,7 +748,7 @@ Error:
 }
 
 extern "C" int
-aggregate_batch_unified_async(
+aggregate_batch_measure_unified_async(
   const void* d_compressed,
   size_t* d_comp_sizes,
   const uint32_t* d_batch_gather,
@@ -794,9 +758,6 @@ aggregate_batch_unified_async(
   uint8_t nlod,
   size_t max_comp_chunk_bytes,
   struct aggregate_slot* slot,
-  size_t slot_data_base,
-  uint64_t slot_desc_base,
-  const size_t* d_shard_base_offsets,
   const size_t* d_shard_capacity,
   const uint64_t* d_shard_tps_group,
   const uint64_t* d_shard_offsets_base,
@@ -804,10 +765,6 @@ aggregate_batch_unified_async(
   CUdeviceptr d_tail_carry,
   size_t page_size,
   uint64_t total_shards,
-  struct d_routing* d_routing,
-  struct slot_dev_ptrs sdp_0,
-  struct slot_dev_ptrs sdp_1,
-  int active_slot_idx,
   int would_finalize_stay,
   int would_finalize_alone,
   struct aggregate_append_measurement* d_measurement,
@@ -816,12 +773,12 @@ aggregate_batch_unified_async(
   size_t* d_tail_sum_bytes,
   size_t* d_temp_offsets,
   size_t* d_temp_perm_sizes,
-  struct agg_routing_cb_args* cb_args,
   CUstream stream)
 {
+  (void)d_compressed;
   (void)d_shard_capacity;
-  (void)slot_data_base;
-  (void)slot_desc_base;
+  (void)max_comp_chunk_bytes;
+  (void)d_tail_carry;
   const uint64_t N = total_batch_chunks;
   const uint64_t C = total_batch_covering;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
@@ -897,33 +854,70 @@ aggregate_batch_unified_async(
   if (measurement_ready)
     CU(Error, cuEventRecord(measurement_ready, stream));
 
-  CHECK(Error,
-        fit_decision_launch(d_routing,
-                            sdp_0,
-                            sdp_1,
-                            d_measurement,
-                            slot->slot_capacity_bytes,
-                            slot->batches_per_slot_cap,
-                            active_slot_idx,
-                            stream) == 0);
+  return 0;
 
-  if (total_shards > 0 && slot->d_shard_sum_bytes) {
+Error:
+  return 1;
+}
+
+extern "C" int
+aggregate_batch_write_reserved_unified_async(
+  const void* d_compressed,
+  size_t* d_comp_sizes,
+  const uint32_t* d_batch_gather,
+  const uint32_t* d_batch_perm,
+  uint64_t total_batch_chunks,
+  uint64_t total_batch_covering,
+  uint8_t nlod,
+  size_t max_comp_chunk_bytes,
+  struct aggregate_slot* scratch_slot,
+  struct aggregate_slot* target_slot,
+  const struct aggregate_slot_reservation* reservation,
+  const uint64_t* d_shard_tps_group,
+  const uint64_t* d_shard_offsets_base,
+  size_t* d_tail_bytes,
+  CUdeviceptr d_tail_carry,
+  size_t page_size,
+  uint64_t total_shards,
+  struct d_routing* d_routing,
+  struct aggregate_append_measurement* d_measurement,
+  size_t* d_temp_offsets,
+  size_t* d_temp_perm_sizes,
+  struct agg_routing_cb_args* cb_args,
+  CUstream stream)
+{
+  const uint64_t N = total_batch_chunks;
+  const uint64_t C = total_batch_covering;
+  cudaStream_t cuda_stream = (cudaStream_t)stream;
+  struct slot_dev_ptrs target = {
+    .d_aggregated = target_slot->d_aggregated,
+    .d_offsets = target_slot->d_offsets,
+    .d_permuted_sizes = target_slot->d_permuted_sizes,
+    .d_shard_base_offsets_dense = target_slot->d_shard_base_offsets_dense,
+    .d_runtime = target_slot->d_runtime,
+  };
+
+  CHECK(Error,
+        route_reservation_launch(
+          d_routing, target, d_measurement, reservation, stream) == 0);
+
+  if (total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
     CHECK(Error,
           dense_offsets_launch(d_routing,
-                               slot->d_shard_sum_bytes,
+                               scratch_slot->d_shard_sum_bytes,
                                d_tail_bytes,
                                total_shards,
                                stream) == 0);
-    if (slot->h_shard_base_offsets_dense) {
+    if (target_slot->h_shard_base_offsets_dense) {
       // Copy all cap slices: dense_offsets_k writes to
       // slice[batch_idx_in_slot]; delivery reads each batch's slice. Only the
       // current batch's slice is freshly written, but the unchanged slices must
       // remain valid host-side.
       CU(Error,
-         cuMemcpyDtoHAsync((void*)slot->h_shard_base_offsets_dense,
-                           (CUdeviceptr)slot->d_shard_base_offsets_dense,
-                           (size_t)slot->batches_per_slot_cap * total_shards *
-                             sizeof(size_t),
+         cuMemcpyDtoHAsync((void*)target_slot->h_shard_base_offsets_dense,
+                           (CUdeviceptr)target_slot->d_shard_base_offsets_dense,
+                           (size_t)target_slot->batches_per_slot_cap *
+                             total_shards * sizeof(size_t),
                            stream));
     }
   }
@@ -968,11 +962,11 @@ aggregate_batch_unified_async(
       max_comp_chunk_bytes);
   }
 
-  if (page_size > 0 && total_shards > 0 && slot->d_shard_sum_bytes) {
+  if (page_size > 0 && total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
     const int block = 256;
     rollforward_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
       d_routing,
-      slot->d_shard_sum_bytes,
+      scratch_slot->d_shard_sum_bytes,
       page_size,
       (size_t*)d_tail_bytes,
       (void*)d_tail_carry,
@@ -985,7 +979,7 @@ aggregate_batch_unified_async(
                        sizeof(struct d_routing),
                        stream));
   CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_routed_cb, cb_args));
-  CU(Error, cuEventRecord(slot->host_func_done, stream));
+  CU(Error, cuEventRecord(scratch_slot->host_func_done, stream));
 
   return 0;
 

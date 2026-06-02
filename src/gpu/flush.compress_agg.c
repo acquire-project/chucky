@@ -412,11 +412,12 @@ Error:
 }
 
 int
-compress_agg_kick(struct compress_agg_stage* stage,
-                  const struct compress_agg_input* in,
-                  const struct level_geometry* levels,
-                  CUstream compress_stream,
-                  struct flush_handoff* out)
+compress_agg_measure(struct compress_agg_stage* stage,
+                     const struct compress_agg_input* in,
+                     const struct level_geometry* levels,
+                     CUstream compress_stream,
+                     struct flush_handoff* out,
+                     struct compress_agg_work* work)
 {
   const int fc = in->fc;
   const uint32_t n_epochs = in->n_epochs;
@@ -520,9 +521,9 @@ compress_agg_kick(struct compress_agg_stage* stage,
   if (in->lod_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
 
-  // Aggregate writes may target either slot's d_aggregated (fit_decision_k
-  // picks at cap>1). Wait for BOTH slots' prior D2H. prev_d2h_done events are
-  // initialized signaled, so first kicks no-op here.
+  // The host ledger may reserve either output slot after measurement. Wait for
+  // both slots' prior D2H before producing temp offsets that the reserved write
+  // will later consume on this stream.
   for (int oi = 0; oi < 2; ++oi)
     if (in->prev_d2h_done[oi])
       CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done[oi], 0));
@@ -550,24 +551,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
   const int output_idx = in->output_idx;
   struct aggregate_slot* out_slot = &stage->output[output_idx];
   if (layout.total_batch_chunks > 0) {
-    struct slot_dev_ptrs sdp[2];
-    for (int oi = 0; oi < 2; ++oi) {
-      sdp[oi].d_aggregated = stage->output[oi].d_aggregated;
-      sdp[oi].d_offsets = stage->output[oi].d_offsets;
-      sdp[oi].d_permuted_sizes = stage->output[oi].d_permuted_sizes;
-      sdp[oi].d_shard_base_offsets_dense =
-        stage->output[oi].d_shard_base_offsets_dense;
-      sdp[oi].d_runtime = stage->output[oi].d_runtime;
-    }
-    const uint32_t ring_idx = (uint32_t)(stage->cb_args_seq & 3);
-    stage->cb_args_seq++;
-    struct agg_routing_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
-    cb_args->layout = layout;
-    cb_args->nlod = nlod;
-    memcpy(cb_args->per_lod_n_active,
-           per_lod_n_active,
-           (size_t)nlod * sizeof(uint32_t));
-
     // The gate only matters when shards have per-page tails (page_size > 0):
     // rollforward_tail_unified_k corrupts in-slot if a shard finalizes
     // mid-slot. page_size == 0 has no tail rollforward, so stacking is safe.
@@ -589,7 +572,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
     }
 
     CHECK(Error,
-          aggregate_batch_unified_async(
+          aggregate_batch_measure_unified_async(
             (const void*)d_aggregate_src,
             stage->codec.d_comp_sizes,
             (const uint32_t*)(uintptr_t)stage->d_batch_gather,
@@ -599,9 +582,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
             nlod,
             stage->codec.max_output_size,
             out_slot,
-            out_slot->slot_cursor,
-            out_slot->slot_desc_cursor,
-            out_slot->d_shard_base_offsets_dense,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
             stage->shards.d_offsets_base,
@@ -609,10 +589,6 @@ compress_agg_kick(struct compress_agg_stage* stage,
             stage->shards.d_tail_carry,
             page_size,
             stage->shards.total_shards,
-            stage->d_routing,
-            sdp[0],
-            sdp[1],
-            output_idx,
             would_finalize_stay,
             would_finalize_alone,
             stage->d_measurement[fc],
@@ -621,11 +597,8 @@ compress_agg_kick(struct compress_agg_stage* stage,
             stage->d_tail_sum_bytes,
             stage->d_temp_offsets,
             stage->d_temp_perm_sizes,
-            cb_args,
             compress_stream) == 0);
   }
-
-  CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
 
   // --- Phase 8: fill handoff ----------------------------------------------
   out->fc = fc;
@@ -649,6 +622,126 @@ compress_agg_kick(struct compress_agg_stage* stage,
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->shard[lv];
 
+  if (work) {
+    *work = (struct compress_agg_work){
+      .fc = fc,
+      .active_output_idx = output_idx,
+      .d_aggregate_src = (const void*)d_aggregate_src,
+      .scratch_slot = out_slot,
+      .layout = layout,
+      .page_size = page_size,
+    };
+    memcpy(work->per_lod_n_active,
+           per_lod_n_active,
+           (size_t)nlod * sizeof(uint32_t));
+  }
+
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+compress_agg_write_reserved(struct compress_agg_stage* stage,
+                            const struct compress_agg_work* work,
+                            const struct output_slot_reservation* reservation,
+                            CUstream compress_stream)
+{
+  CHECK(Error, stage);
+  CHECK(Error, work);
+  CHECK(Error, reservation);
+
+  const int fc = work->fc;
+  const uint8_t nlod = stage->nlod;
+  const struct batch_aggregate_layout* layout = &work->layout;
+  struct aggregate_slot* target = &stage->output[reservation->slot];
+
+  if (layout->total_batch_chunks > 0) {
+    const uint32_t ring_idx = (uint32_t)(stage->cb_args_seq & 3);
+    stage->cb_args_seq++;
+    struct agg_routing_cb_args* cb_args = &stage->cb_args_ring[ring_idx];
+    cb_args->layout = *layout;
+    cb_args->nlod = nlod;
+    memcpy(cb_args->per_lod_n_active,
+           work->per_lod_n_active,
+           (size_t)nlod * sizeof(uint32_t));
+
+    const struct aggregate_slot_reservation agg_reservation = {
+      .slot = reservation->slot,
+      .close_slot =
+        reservation->close_before_append ? reservation->close_slot : -1,
+      .data_base = reservation->data_base,
+      .desc_base = reservation->desc_base,
+      .batch_index = reservation->batch_index,
+    };
+
+    CHECK(Error,
+          aggregate_batch_write_reserved_unified_async(
+            work->d_aggregate_src,
+            stage->codec.d_comp_sizes,
+            (const uint32_t*)(uintptr_t)stage->d_batch_gather,
+            (const uint32_t*)(uintptr_t)stage->d_batch_perm,
+            layout->total_batch_chunks,
+            layout->total_batch_covering,
+            nlod,
+            stage->codec.max_output_size,
+            work->scratch_slot,
+            target,
+            &agg_reservation,
+            stage->shards.d_tps_group,
+            stage->shards.d_offsets_base,
+            stage->shards.d_tail_bytes,
+            stage->shards.d_tail_carry,
+            work->page_size,
+            stage->shards.total_shards,
+            stage->d_routing,
+            stage->d_measurement[fc],
+            stage->d_temp_offsets,
+            stage->d_temp_perm_sizes,
+            cb_args,
+            compress_stream) == 0);
+  } else {
+    CU(Error,
+       cuEventRecord(work->scratch_slot->host_func_done, compress_stream));
+  }
+
+  CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+compress_agg_kick(struct compress_agg_stage* stage,
+                  const struct compress_agg_input* in,
+                  const struct level_geometry* levels,
+                  CUstream compress_stream,
+                  struct flush_handoff* out)
+{
+  struct compress_agg_work work = { 0 };
+  CHECK(Error,
+        compress_agg_measure(stage, in, levels, compress_stream, out, &work) ==
+          0);
+  CU(Error, cuEventSynchronize(stage->measurement_ready[in->fc]));
+
+  struct aggregate_slot* target = &stage->output[in->output_idx];
+  const volatile struct aggregate_append_measurement* m =
+    stage->h_measurement[in->fc];
+  const struct output_slot_reservation reservation = {
+    .slot = in->output_idx,
+    .data_base = target->slot_cursor,
+    .desc_base = target->slot_desc_cursor,
+    .batch_index = target->batches_per_slot,
+    .close_before_append = 0,
+    .close_slot = -1,
+    .close_after_append = m->closes_after_append,
+  };
+
+  CHECK(Error,
+        compress_agg_write_reserved(
+          stage, &work, &reservation, compress_stream) == 0);
   return 0;
 
 Error:

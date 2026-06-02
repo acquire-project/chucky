@@ -362,18 +362,21 @@ is still transitional:
 - `plan_pending_aggregate()` waits only for `measurement_ready`, plans and
   commits the host ledger append, closes a prior slot if needed, and records a
   pending aggregate handoff.
+- The aggregate path is split into measurement and reserved-write phases:
+  `compress_agg_measure()` produces the measurement and temp scan results,
+  then `compress_agg_write_reserved()` writes into the host ledger reservation.
 - `finish_pending_aggregate()` waits for the aggregate callback only when the
   host slot accumulator is actually needed: before the next aggregate kick,
   during sync flush, or during final drain.
-- The transitional CUDA router still chooses the target slot and writes a
-  routing record; finalization checks that record against the host ledger plan.
+- CUDA no longer decides the target output slot. A small routing descriptor is
+  still used by aggregate kernels, but it is filled from the host reservation.
 
 That checkpoint gives the intended pool-swap overlap for compressed cap-stacked
 slots: the writer returns after measurement planning, swaps to the next pool,
 and can fill/decompress the next batch while the prior aggregate callback
-finishes on the compress stream. The remaining transition is to make aggregate
-kernels consume the host reservation directly so the CUDA router no longer owns
-target selection.
+finishes on the compress stream. The remaining work in this area is cleanup:
+retire transitional naming around `d_routing` and reduce direct stage tests'
+compatibility wrapper once the split API is covered directly.
 
 ### Stage 1: Extract the Ledger
 
@@ -436,10 +439,10 @@ Current progress:
 - Steps 1-3 are implemented.
 - Step 4 is implemented for compressed cap-stacked auto-flush: the writer swaps
   pools after measurement planning, before waiting for the aggregate callback.
-- Step 5 is partially implemented: the host plans and commits from the
-  measurement result, but still validates against the transitional router.
-- Step 6 remains: aggregate kernels still use the CUDA router instead of an
-  already-reserved host destination.
+- Step 5 is implemented: the host plans and commits from the measurement
+  result.
+- Step 6 is implemented: aggregate kernels consume a descriptor filled from the
+  host reservation.
 
 Success criteria:
 

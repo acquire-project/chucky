@@ -129,9 +129,9 @@ struct compress_agg_input
   CUdeviceptr pool_buf;
   CUevent pool_ready;
   CUevent lod_done;
-  // initialized signaled; guards d_aggregated overwrite. At cap>1,
-  // fit_decision_k can route this kick to either slot, so we wait on BOTH
-  // slots' d2h-done.
+  // Initialized signaled; guards d_aggregated overwrite. The host ledger may
+  // reserve either output slot after measurement, so the measurement phase
+  // waits on both slots' prior D2H before producing aggregate-write temps.
   CUevent prev_d2h_done[2];
   uint32_t epochs_per_batch;
 };
@@ -223,7 +223,8 @@ struct compress_agg_stage
   // Per-shard tables (replaces per-LOD d_tail_*, d_batch_gather/perm).
   struct shard_tables shards;
 
-  // Routing decision for the current batch, written by fit_decision_k.
+  // Write descriptor for the current batch, filled from the host ledger
+  // reservation and then consumed by aggregate kernels.
   struct d_routing* d_routing;
   struct aggregate_append_measurement* d_measurement[2];
   volatile struct aggregate_append_measurement* h_measurement[2];

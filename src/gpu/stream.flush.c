@@ -109,7 +109,7 @@ output_request_from_measurement(
 }
 
 // Resets slot state on success so the next kick starts fresh. A slot is not
-// reused while pending delivery; host state, not the CUDA router, owns reuse.
+// reused while pending delivery; host slot state owns reuse.
 static struct writer_result
 drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
@@ -154,12 +154,17 @@ kick_compress_agg(struct stream_engine* e,
                   int fc,
                   int output_idx,
                   uint32_t n_epochs,
-                  struct flush_handoff* handoff_out)
+                  struct flush_handoff* handoff_out,
+                  struct compress_agg_work* work_out)
 {
   struct compress_agg_input in =
     make_compress_input(e, ctx, fc, output_idx, n_epochs);
-  return compress_agg_kick(
-    &e->compress_agg, &in, &ctx->levels, e->streams.compress, handoff_out);
+  return compress_agg_measure(&e->compress_agg,
+                              &in,
+                              &ctx->levels,
+                              e->streams.compress,
+                              handoff_out,
+                              work_out);
 }
 
 static int
@@ -372,11 +377,18 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct flush_handoff scratch = { 0 };
+  struct compress_agg_work work = { 0 };
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &scratch) == 0);
+        kick_compress_agg(
+          e, ctx, fc, oi, e->batch.accumulated, &scratch, &work) == 0);
 
   int target = -1;
   CHECK(Error, plan_pending_aggregate(e, ctx, fc, oi, &scratch, &target) == 0);
+  CHECK(Error,
+        compress_agg_write_reserved(&e->compress_agg,
+                                    &work,
+                                    &e->flush.aggregate_pending.plan,
+                                    e->streams.compress) == 0);
 
   const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
   if (cap > 1) {
@@ -448,6 +460,7 @@ flush_kick_batch(struct stream_engine* e,
                  uint32_t n_epochs)
 {
   struct flush_handoff scratch = { 0 };
+  struct compress_agg_work work = { 0 };
   CHECK(Error, finish_pending_aggregate(e) == 0);
   {
     struct writer_result r = prepare_output_kick(e, ctx, output_idx);
@@ -455,10 +468,16 @@ flush_kick_batch(struct stream_engine* e,
       return 1;
   }
   CHECK(Error,
-        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
+        kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch, &work) ==
+          0);
   int target = -1;
   CHECK(Error,
         plan_pending_aggregate(e, ctx, fc, output_idx, &scratch, &target) == 0);
+  CHECK(Error,
+        compress_agg_write_reserved(&e->compress_agg,
+                                    &work,
+                                    &e->flush.aggregate_pending.plan,
+                                    e->streams.compress) == 0);
   CHECK(Error, finish_pending_aggregate(e) == 0);
   CHECK(Error,
         kick_d2h_and_mark_pending(
