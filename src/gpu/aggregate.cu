@@ -560,6 +560,32 @@ compute_shard_sum_bytes_k(const size_t* __restrict__ d_permuted_sizes,
 }
 
 __global__ void
+reservation_bytes_k(size_t* __restrict__ d_reservation_bytes,
+                    const size_t* __restrict__ d_shard_sum_bytes,
+                    const size_t* __restrict__ d_tail_bytes,
+                    uint64_t num_shards)
+{
+  if (threadIdx.x != 0 || blockIdx.x != 0)
+    return;
+  size_t total = 0;
+  for (uint64_t s = 0; s < num_shards; ++s)
+    total += d_tail_bytes[s] + d_shard_sum_bytes[s];
+  *d_reservation_bytes = total;
+}
+
+static int
+reservation_bytes_launch(size_t* d_reservation_bytes,
+                         const size_t* d_shard_sum_bytes,
+                         const size_t* d_tail_bytes,
+                         uint64_t num_shards,
+                         CUstream stream)
+{
+  reservation_bytes_k<<<1, 1, 0, (cudaStream_t)stream>>>(
+    d_reservation_bytes, d_shard_sum_bytes, d_tail_bytes, num_shards);
+  return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
+__global__ void
 copy_leading_tail_unified_k(const struct d_routing* __restrict__ d_routing,
                             const void* __restrict__ d_tail_carry,
                             const size_t* __restrict__ d_tail_bytes_prev,
@@ -743,6 +769,7 @@ aggregate_batch_unified_async(const void* d_compressed,
                               int active_slot_idx,
                               int would_finalize_stay,
                               int would_finalize_alone,
+                              size_t* d_reservation_bytes,
                               size_t* d_temp_offsets,
                               size_t* d_temp_perm_sizes,
                               struct agg_routing_cb_args* cb_args,
@@ -757,6 +784,7 @@ aggregate_batch_unified_async(const void* d_compressed,
   size_t* d_perm_sizes_b = d_temp_perm_sizes;
   size_t* d_offsets_b = d_temp_offsets;
   size_t* d_actual_bytes_ptr = d_offsets_b + (C + nlod - 1);
+  const size_t* d_fit_bytes_ptr = d_actual_bytes_ptr;
 
   CU(Error,
      cuMemsetD8Async(
@@ -793,12 +821,22 @@ aggregate_batch_unified_async(const void* d_compressed,
       slot->d_shard_sum_bytes,
       total_shards);
   }
+  if (page_size > 0 && total_shards > 0 && slot->d_shard_sum_bytes) {
+    CHECK(Error, d_reservation_bytes);
+    CHECK(Error,
+          reservation_bytes_launch(d_reservation_bytes,
+                                   slot->d_shard_sum_bytes,
+                                   d_tail_bytes,
+                                   total_shards,
+                                   stream) == 0);
+    d_fit_bytes_ptr = d_reservation_bytes;
+  }
 
   CHECK(Error,
         fit_decision_launch(d_routing,
                             sdp_0,
                             sdp_1,
-                            d_actual_bytes_ptr,
+                            d_fit_bytes_ptr,
                             slot->slot_capacity_bytes,
                             slot->batches_per_slot_cap,
                             C + (uint64_t)nlod,

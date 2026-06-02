@@ -713,7 +713,72 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: LUT cache must invalidate when pool_epoch positions shift even
+// Test 7: paged-shard routing reserves leading tail bytes without corrupting
+// descriptor offsets.
+// ---------------------------------------------------------------------------
+static int
+test_compress_agg_routing_reserves_tail_bytes(void)
+{
+  log_info("=== test_compress_agg_routing_reserves_tail_bytes ===");
+
+  struct ca_test_ctx c;
+  ca_ctx_init(&c);
+  size_t* h_tail = NULL;
+  int ok = 0;
+
+  CHECK(Fail,
+        ca_ctx_setup(&c, (struct codec_config){ .id = CODEC_NONE }, 1, 1) == 0);
+  CHECK(Fail, c.stage.shards.page_size > 0);
+  CHECK(Fail, c.stage.shards.total_shards > 0);
+  CHECK(Fail, c.stage.shards.d_tail_bytes != NULL);
+
+  h_tail = (size_t*)calloc(c.stage.shards.total_shards, sizeof(size_t));
+  CHECK(Fail, h_tail);
+  size_t tail_sum = 0;
+  for (uint64_t s = 0; s < c.stage.shards.total_shards; ++s) {
+    h_tail[s] = 7 + (size_t)s;
+    tail_sum += h_tail[s];
+  }
+  CU(Fail,
+     cuMemcpyHtoD((CUdeviceptr)c.stage.shards.d_tail_bytes,
+                  h_tail,
+                  c.stage.shards.total_shards * sizeof(size_t)));
+
+  CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
+
+  struct flush_handoff handoff;
+  CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
+
+  const uint64_t total_chunks = c.cl.levels.total_chunks;
+  const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
+  const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
+  const size_t descriptor_bytes = total_chunks * chunk_bytes;
+  const size_t reservation_bytes = descriptor_bytes + tail_sum;
+  CHECK(Fail, c.stage.h_routing->actual_bytes == reservation_bytes);
+  CHECK(Fail, handoff.output->slot_cursor == reservation_bytes);
+
+  const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
+  const struct lod_segment* seg = &handoff.layout.lods[0];
+  size_t sentinel = 0;
+  CU(
+    Fail,
+    cuMemcpyDtoH(&sentinel,
+                 (CUdeviceptr)(handoff.output->d_offsets +
+                               seg->batch_covering_offset + al->covering_count),
+                 sizeof(sentinel)));
+  CHECK(Fail, sentinel == descriptor_bytes);
+
+  ok = 1;
+
+Fail:
+  free(h_tail);
+  ca_ctx_destroy(&c);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: LUT cache must invalidate when pool_epoch positions shift even
 // though per-LOD active counts stay the same.
 //
 // This pins the regression for the "counts match but positions differ" case
@@ -817,5 +882,7 @@ RUN_GPU_TESTS({ "compress_agg_single_epoch", test_compress_agg_single_epoch },
               { "compress_agg_zstd_batch", test_compress_agg_zstd_batch },
               { "compress_agg_none_no_compressed_buffer",
                 test_compress_agg_none_no_compressed_buffer },
+              { "compress_agg_routing_reserves_tail_bytes",
+                test_compress_agg_routing_reserves_tail_bytes },
               { "compress_agg_lut_cache_position_shift",
                 test_compress_agg_lut_cache_position_shift }, )

@@ -185,6 +185,7 @@ extern "C"
                                     int active_slot_idx,
                                     int would_finalize_stay,
                                     int would_finalize_alone,
+                                    size_t* d_reservation_bytes,
                                     size_t* d_temp_offsets,
                                     size_t* d_temp_perm_sizes,
                                     struct agg_routing_cb_args* cb_args,
