@@ -118,6 +118,18 @@ max_u32(uint32_t a, uint32_t b)
   return a > b ? a : b;
 }
 
+static int
+init_output_ledger(struct output_slot_ledger* ledger,
+                   const struct aggregate_slot* slot)
+{
+  struct output_slot_capacity capacity = {
+    .data_bytes = slot->slot_capacity_bytes,
+    .desc_entries = slot->slot_desc_capacity,
+    .batch_records = slot->batches_per_slot_cap,
+  };
+  return output_slot_ledger_init(ledger, capacity) == OUTPUT_LEDGER_OK ? 0 : 1;
+}
+
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
@@ -935,6 +947,10 @@ multiarray_tile_stream_gpu_create(
   // (Per-array L0 layout_gpu is aliased from array_lod.layout_gpu[0], which
   // was uploaded during lod_state_init in init_array_descriptor.)
   CHECK(Fail, init_shared_resources(ms, &mx) == 0);
+  for (int a = 0; a < n_arrays; ++a)
+    CHECK(Fail,
+          init_output_ledger(&ms->arrays[a].output,
+                             &ms->engine.compress_agg.output[0]) == 0);
 
   // Use synchronous flush path — the double-buffered pipeline doesn't
   // compose across array switches.

@@ -109,6 +109,18 @@ adopt_output_slot(struct stream_engine* e, int oi)
   e->flush.output.current = oi;
 }
 
+static struct output_slot_request
+output_request_from_measurement(
+  const volatile struct aggregate_append_measurement* m)
+{
+  return (struct output_slot_request){
+    .data_bytes = m->data_bytes,
+    .desc_entries = m->desc_entries,
+    .closes_after_append = m->closes_after_append,
+    .tail_rollforward_blocked = m->tail_rollforward_blocked,
+  };
+}
+
 // Resets slot state on success so the next kick starts fresh. A slot is not
 // reused while pending delivery; host state, not the CUDA router, owns reuse.
 static struct writer_result
@@ -227,6 +239,20 @@ post_kick_review(struct stream_engine* e,
   const volatile struct d_routing* r = e->compress_agg.h_routing;
   const int target = r->target_slot_idx;
   const int close = r->close_prior_slot_idx;
+  const struct output_slot_request request =
+    output_request_from_measurement(&r->measurement);
+  struct output_slot_reservation plan;
+  CHECK(Error,
+        output_slot_ledger_plan_append(&e->flush.output, &request, &plan) ==
+          OUTPUT_LEDGER_OK);
+  CHECK(Error, plan.slot == target);
+  CHECK(Error, plan.data_base == r->data_base_offset);
+  CHECK(Error, plan.desc_base == r->desc_base_offset);
+  CHECK(Error, plan.batch_index == r->batch_idx_in_slot);
+  CHECK(Error, plan.close_slot == close);
+  CHECK(Error, plan.close_before_append == (close >= 0));
+  CHECK(Error, plan.close_after_append == request.closes_after_append);
+
   const uint32_t cap = e->compress_agg.output[active_oi].batches_per_slot_cap;
   if (cap == 1) {
     CHECK(Error, target == active_oi);

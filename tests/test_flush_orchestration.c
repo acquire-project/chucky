@@ -150,6 +150,17 @@ orch_ctx_setup(struct orch_ctx* c,
       (uint32_t*)calloc(K, sizeof(uint32_t));
     CHECK(Fail, c->s->engine.flush.slot[fc].batch_active_masks);
   }
+  {
+    const struct aggregate_slot* slot = &c->s->engine.compress_agg.output[0];
+    const struct output_slot_capacity capacity = {
+      .data_bytes = slot->slot_capacity_bytes,
+      .desc_entries = slot->slot_desc_capacity,
+      .batch_records = slot->batches_per_slot_cap,
+    };
+    CHECK(Fail,
+          output_slot_ledger_init(&c->s->engine.flush.output, capacity) ==
+            OUTPUT_LEDGER_OK);
+  }
 
   // Non-multiscale: zeroed lod
   memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));

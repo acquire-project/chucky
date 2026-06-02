@@ -150,6 +150,18 @@ init_flush_pipeline(struct flush_pipeline* fp, uint32_t K)
   return 0;
 }
 
+static int
+init_output_ledger(struct flush_pipeline* fp, const struct aggregate_slot* slot)
+{
+  struct output_slot_capacity capacity = {
+    .data_bytes = slot->slot_capacity_bytes,
+    .desc_entries = slot->slot_desc_capacity,
+    .batch_records = slot->batches_per_slot_cap,
+  };
+  return output_slot_ledger_init(&fp->output, capacity) == OUTPUT_LEDGER_OK ? 0
+                                                                            : 1;
+}
+
 static void
 destroy_flush_pipeline(struct flush_pipeline* fp)
 {
@@ -251,6 +263,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                           &cl,
                           config,
                           out->engine.streams.compute) == 0);
+  CHECK(FailPhase2,
+        init_output_ledger(&out->engine.flush,
+                           &out->engine.compress_agg.output[0]) == 0);
   CHECK(FailPhase2,
         d2h_deliver_init(&out->engine.d2h_deliver,
                          out->ctx.shard_alignment,

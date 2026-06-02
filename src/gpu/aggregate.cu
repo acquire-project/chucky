@@ -271,6 +271,12 @@ fit_decision_k(struct d_routing* d_routing,
   d_routing->target_d_permuted_sizes = target.d_permuted_sizes;
   d_routing->target_d_shard_base_offsets_dense =
     target.d_shard_base_offsets_dense;
+  d_routing->measurement = (struct aggregate_append_measurement){
+    .data_bytes = actual_bytes,
+    .desc_entries = batch_desc_advance,
+    .closes_after_append = would_finalize_alone ? 1 : 0,
+    .tail_rollforward_blocked = would_finalize_stay ? 1 : 0,
+  };
 
   target.d_runtime->cursor += actual_bytes;
   target.d_runtime->desc_cursor += batch_desc_advance;
@@ -461,6 +467,7 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   CU(Error, cuMemHostAlloc((void**)&slot->h_offsets, C * sizeof(size_t), 0));
   CU(Error,
      cuMemHostAlloc((void**)&slot->h_permuted_sizes, C * sizeof(size_t), 0));
+  slot->slot_desc_capacity = C;
 
   slot->temp_bytes = 0;
   cub::DeviceScan::ExclusiveSum(nullptr,

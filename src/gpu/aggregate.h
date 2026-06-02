@@ -33,6 +33,14 @@ extern "C"
     uint32_t _pad;
   };
 
+  struct aggregate_append_measurement
+  {
+    size_t data_bytes;
+    uint64_t desc_entries;
+    int32_t closes_after_append;
+    int32_t tail_rollforward_blocked;
+  };
+
   struct d_routing
   {
     void* target_d_aggregated;
@@ -45,7 +53,7 @@ extern "C"
     uint32_t batch_idx_in_slot;
     int32_t target_slot_idx;
     int32_t close_prior_slot_idx; // -1 if no close
-    uint32_t _pad;
+    struct aggregate_append_measurement measurement;
   };
 
   struct agg_routing_cb_args
@@ -106,6 +114,7 @@ extern "C"
     size_t slot_cursor;
     size_t slot_desc_cursor;
     size_t slot_capacity_bytes;
+    uint64_t slot_desc_capacity;
     uint32_t batches_per_slot;
     uint32_t batches_per_slot_cap;
     struct batch_slice_entry* slot_batches;
