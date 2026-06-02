@@ -368,6 +368,8 @@ is still transitional:
 - `finish_pending_aggregate()` waits for the aggregate callback only when the
   host slot accumulator is actually needed: before the next aggregate kick,
   during sync flush, or during final drain.
+- If the reservation has `close_after_append`, finalization immediately queues
+  D2H for that slot using the completed handoff.
 - CUDA no longer decides the target output slot. A small routing descriptor is
   still used by aggregate kernels, but it is filled from the host reservation.
 

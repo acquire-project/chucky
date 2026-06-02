@@ -220,7 +220,7 @@ prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 }
 
 static int
-finish_pending_aggregate(struct stream_engine* e)
+finish_pending_aggregate(struct stream_engine* e, struct stream_context* ctx)
 {
   struct pending_aggregate_handoff* pending = &e->flush.aggregate_pending;
   if (!pending->active)
@@ -266,6 +266,11 @@ finish_pending_aggregate(struct stream_engine* e)
   handoff->slot_total_desc_entries =
     e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *handoff;
+  if (plan->close_after_append) {
+    CHECK(Error,
+          kick_d2h_and_mark_pending(
+            e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+  }
   pending->active = 0;
   return 0;
 
@@ -367,7 +372,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   const int oi = e->flush.output.current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
-  CHECK(Error, finish_pending_aggregate(e) == 0);
+  CHECK(Error, finish_pending_aggregate(e, ctx) == 0);
 
   {
     struct writer_result r = prepare_output_kick(e, ctx, oi);
@@ -394,10 +399,12 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   if (cap > 1) {
     e->flush.output.current = target;
   } else {
-    CHECK(Error, finish_pending_aggregate(e) == 0);
-    CHECK(Error,
-          kick_d2h_and_mark_pending(
-            e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+    CHECK(Error, finish_pending_aggregate(e, ctx) == 0);
+    if (output_state(e, target) == OUTPUT_LEDGER_OPEN) {
+      CHECK(Error,
+            kick_d2h_and_mark_pending(
+              e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+    }
   }
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
@@ -461,7 +468,7 @@ flush_kick_batch(struct stream_engine* e,
 {
   struct flush_handoff scratch = { 0 };
   struct compress_agg_work work = { 0 };
-  CHECK(Error, finish_pending_aggregate(e) == 0);
+  CHECK(Error, finish_pending_aggregate(e, ctx) == 0);
   {
     struct writer_result r = prepare_output_kick(e, ctx, output_idx);
     if (r.error)
@@ -478,10 +485,12 @@ flush_kick_batch(struct stream_engine* e,
                                     &work,
                                     &e->flush.aggregate_pending.plan,
                                     e->streams.compress) == 0);
-  CHECK(Error, finish_pending_aggregate(e) == 0);
-  CHECK(Error,
-        kick_d2h_and_mark_pending(
-          e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+  CHECK(Error, finish_pending_aggregate(e, ctx) == 0);
+  if (output_state(e, target) == OUTPUT_LEDGER_OPEN) {
+    CHECK(Error,
+          kick_d2h_and_mark_pending(
+            e, ctx, target, &e->flush.pending_handoff[target]) == 0);
+  }
   return 0;
 
 Error:
@@ -493,7 +502,7 @@ Error:
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
-  if (finish_pending_aggregate(e) != 0)
+  if (finish_pending_aggregate(e, ctx) != 0)
     return writer_error();
 
   for (int oi = 0; oi < 2; ++oi) {
