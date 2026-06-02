@@ -227,17 +227,20 @@ write_desc_from_reservation_k(
     return;
 
   const struct aggregate_append_measurement measurement = *d_measurement;
-  desc->data_base_offset = reservation.data_base;
-  desc->desc_base_offset = reservation.desc_base;
-  desc->actual_bytes = measurement.data_bytes;
-  desc->batch_idx_in_slot = reservation.batch_index;
-  desc->target_slot_idx = reservation.slot;
-  desc->close_prior_slot_idx = reservation.close_slot;
-  desc->target_d_aggregated = target.d_aggregated;
-  desc->target_d_offsets = target.d_offsets;
-  desc->target_d_permuted_sizes = target.d_permuted_sizes;
-  desc->target_d_shard_base_offsets_dense = target.d_shard_base_offsets_dense;
-  desc->measurement = measurement;
+  const struct aggregate_write_desc write_desc = {
+    .target_d_aggregated = target.d_aggregated,
+    .target_d_offsets = target.d_offsets,
+    .target_d_permuted_sizes = target.d_permuted_sizes,
+    .target_d_shard_base_offsets_dense = target.d_shard_base_offsets_dense,
+    .data_base_offset = reservation.data_base,
+    .desc_base_offset = reservation.desc_base,
+    .actual_bytes = measurement.data_bytes,
+    .batch_idx_in_slot = reservation.batch_index,
+    .target_slot_idx = reservation.slot,
+    .close_prior_slot_idx = reservation.close_slot,
+    .measurement = measurement,
+  };
+  *desc = write_desc;
 
   if (target.d_runtime) {
     target.d_runtime->cursor = reservation.data_base + measurement.data_bytes;
