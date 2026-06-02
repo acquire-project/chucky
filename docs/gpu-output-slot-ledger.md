@@ -414,6 +414,9 @@ Current progress:
 - Batch-record capacity is still a metadata allocation bound, but it is derived
   from the output slot's payload capacity and per-batch descriptor footprint
   instead of a fixed compressed batch count.
+- The focused ledger tests cover byte-full, descriptor-full, and
+  batch-record-full slot transitions; flush orchestration tests cover explicit
+  flush behavior.
 
 Success criteria:
 
@@ -456,6 +459,8 @@ Current progress:
   result.
 - Step 6 is implemented: aggregate kernels consume a descriptor filled from the
   host reservation.
+- Direct compress-aggregate stage tests exercise the split measure/reserve/write
+  API.
 
 Success criteria:
 
@@ -480,6 +485,8 @@ Current progress:
 - `drain_output()` waits for the D2H ready event and transitions the ledger to
   `HOST_READY` before sink delivery.
 - Sink delivery no longer dispatches compressed payload D2H.
+- Focused D2H and flush orchestration tests cover close-time payload D2H and
+  host-ready delivery ordering.
 
 Success criteria:
 
