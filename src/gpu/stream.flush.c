@@ -222,17 +222,33 @@ post_kick_review(struct stream_engine* e,
                  struct flush_handoff* scratch,
                  int* out_target)
 {
-  CU(Error,
-     cuEventSynchronize(e->compress_agg.output[active_oi].host_func_done));
-  const volatile struct d_routing* r = e->compress_agg.h_routing;
-  const int target = r->target_slot_idx;
-  const int close = r->close_prior_slot_idx;
+  CU(Error, cuEventSynchronize(e->compress_agg.measurement_ready[fc]));
   const struct output_slot_request request =
     output_request_from_measurement(e->compress_agg.h_measurement[fc]);
   struct output_slot_reservation plan;
   CHECK(Error,
         output_slot_ledger_plan_append(&e->flush.output, &request, &plan) ==
           OUTPUT_LEDGER_OK);
+  if (plan.close_before_append) {
+    CHECK(Error, plan.close_slot != plan.slot);
+    CHECK(
+      Error,
+      kick_d2h_and_mark_pending(
+        e, ctx, plan.close_slot, &e->flush.pending_handoff[plan.close_slot]) ==
+        0);
+    CHECK(Error,
+          output_slot_ledger_reset_empty(&e->flush.output, plan.slot) ==
+            OUTPUT_LEDGER_OK);
+  }
+  CHECK(Error,
+        output_slot_ledger_commit_append(&e->flush.output, &request, &plan) ==
+          OUTPUT_LEDGER_OK);
+
+  CU(Error,
+     cuEventSynchronize(e->compress_agg.output[active_oi].host_func_done));
+  const volatile struct d_routing* r = e->compress_agg.h_routing;
+  const int target = r->target_slot_idx;
+  const int close = r->close_prior_slot_idx;
   CHECK(Error, plan.slot == target);
   CHECK(Error, plan.data_base == r->data_base_offset);
   CHECK(Error, plan.desc_base == r->desc_base_offset);
@@ -255,21 +271,12 @@ post_kick_review(struct stream_engine* e,
   }
   if (close >= 0) {
     CHECK(Error, close != target);
-    CHECK(Error,
-          kick_d2h_and_mark_pending(
-            e, ctx, close, &e->flush.pending_handoff[close]) == 0);
-    CHECK(Error,
-          output_slot_ledger_reset_empty(&e->flush.output, target) ==
-            OUTPUT_LEDGER_OK);
   }
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
   scratch->slot_total_desc_entries =
     e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *scratch;
-  CHECK(Error,
-        output_slot_ledger_commit_append(&e->flush.output, &request, &plan) ==
-          OUTPUT_LEDGER_OK);
   *out_target = target;
   return 0;
 Error:
