@@ -341,14 +341,6 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
     cu_event_destroy(stage->t_compress_end[fc]);
     cu_event_destroy(stage->t_aggregate_end[fc]);
   }
-  if (stage->lut_steady_count + stage->lut_recompute_count > 0) {
-    const uint64_t tot = stage->lut_steady_count + stage->lut_recompute_count;
-    log_debug("compress_agg unified lut_steady=%llu lut_recompute=%llu "
-              "(steady=%.1f%%)",
-              (unsigned long long)stage->lut_steady_count,
-              (unsigned long long)stage->lut_recompute_count,
-              100.0 * (double)stage->lut_steady_count / (double)tot);
-  }
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->output[fc]);
   cu_mem_free((CUdeviceptr)stage->d_write_desc);
