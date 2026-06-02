@@ -37,10 +37,3 @@ compress_agg_write_reserved(struct compress_agg_stage* stage,
                             const struct compress_agg_work* work,
                             const struct output_slot_reservation* reservation,
                             CUstream compress_stream);
-
-int
-compress_agg_kick(struct compress_agg_stage* stage,
-                  const struct compress_agg_input* in,
-                  const struct level_geometry* levels,
-                  CUstream compress_stream,
-                  struct flush_handoff* out);

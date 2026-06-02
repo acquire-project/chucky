@@ -184,7 +184,6 @@ add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platfo
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 add_gpu_test_exe(test_compress_agg test_compress_agg.c LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_gpu_helpers index_ops_util test_shard_verify)
 add_gpu_test_exe(test_batch        test_batch.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
-add_gpu_test_exe(test_d2h_deliver  test_d2h_deliver.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink test_gpu_helpers index_ops_util)
 add_gpu_test_exe(test_flush_orch  test_flush_orchestration.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_log)
 add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension platform chucky_log)

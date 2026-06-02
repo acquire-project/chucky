@@ -90,9 +90,9 @@ compress_agg_init(struct compress_agg_stage* stage,
   CHECK(Fail, stage->pool_epochs_scratch && stage->cached_pool_epochs);
 
   CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
-  // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf
-  // (see compress_agg_kick), so the d_compressed buffer is unused — skip its
-  // M * chunk_bytes allocation per fc. Destroy is NULL-safe.
+  // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf,
+  // so the d_compressed buffer is unused — skip its M * chunk_bytes allocation
+  // per fc. Destroy is NULL-safe.
   const int need_compressed = (stage->codec.type != CODEC_NONE);
   for (int fc = 0; fc < 2; ++fc) {
     if (need_compressed)
@@ -750,42 +750,6 @@ compress_agg_write_reserved(struct compress_agg_stage* stage,
   }
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
-  return 0;
-
-Error:
-  return 1;
-}
-
-int
-compress_agg_kick(struct compress_agg_stage* stage,
-                  const struct compress_agg_input* in,
-                  const struct level_geometry* levels,
-                  CUstream compress_stream,
-                  struct flush_handoff* out)
-{
-  struct compress_agg_work work = { 0 };
-  CHECK(Error,
-        compress_agg_measure(stage, in, levels, compress_stream, out, &work) ==
-          0);
-  CU(Error, cuEventSynchronize(stage->measurement_ready[in->fc]));
-
-  struct aggregate_slot* target = &stage->output[in->output_idx];
-  const volatile struct aggregate_append_measurement* m =
-    stage->h_measurement[in->fc];
-  const struct output_slot_reservation reservation = {
-    .slot = in->output_idx,
-    .data_base = target->slot_cursor,
-    .desc_base = target->slot_desc_cursor,
-    .batch_index = target->batches_per_slot,
-    .close_before_append = 0,
-    .close_slot = -1,
-    .close_after_append = m->closes_after_append,
-  };
-  out->slot_total_data_bytes = reservation.data_base + m->data_bytes;
-
-  CHECK(Error,
-        compress_agg_write_reserved(
-          stage, &work, &reservation, compress_stream) == 0);
   return 0;
 
 Error:
