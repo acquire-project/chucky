@@ -470,8 +470,8 @@ test_two_batch_cycle(void)
   // At cap=1 the two batches drain separately; at cap>=2 they stack into one
   // slot and drain together. Pick the expected count from the live cap.
   const uint32_t cap = c.s->engine.compress_agg.output[0].batches_per_slot_cap;
-  const int expected_drains = (cap >= 2) ? 1 : 2;
-  CHECK(Fail, c.s->engine.metrics.sink.count == expected_drains);
+  const uint64_t expected_drains = (cap >= 2) ? 1u : 2u;
+  CHECK(Fail, (uint64_t)c.s->engine.metrics.sink.count == expected_drains);
 
   ok = 1;
 
