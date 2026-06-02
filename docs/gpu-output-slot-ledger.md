@@ -379,8 +379,9 @@ The ledger module and compressed-output integration are in place:
 That checkpoint gives the intended pool-swap overlap for compressed cap-stacked
 slots: the writer returns after measurement planning, swaps to the next pool,
 and can fill/decompress the next batch while the prior aggregate callback
-finishes on the compress stream. The remaining cleanup is to reduce direct
-stage tests' compatibility wrapper once the split API is covered directly.
+finishes on the compress stream. Direct compress-aggregate stage tests now
+exercise the split measure/reserve/write API; the compatibility wrapper remains
+for tests that focus on downstream D2H delivery.
 
 ### Stage 1: Extract the Ledger
 

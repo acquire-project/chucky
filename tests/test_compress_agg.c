@@ -117,11 +117,49 @@ Fail:
   return 1;
 }
 
-// Build input, kick compress_agg, sync.
+// Drive the split API directly: measure, wait for the tiny host measurement,
+// build a same-slot reservation, write into that reservation, then sync.
 static int
-ca_ctx_kick(struct ca_test_ctx* c,
-            uint32_t n_epochs,
-            struct flush_handoff* handoff)
+ca_ctx_measure_write_input(struct ca_test_ctx* c,
+                           const struct compress_agg_input* in,
+                           struct flush_handoff* handoff)
+{
+  struct compress_agg_work work = { 0 };
+  memset(handoff, 0, sizeof(*handoff));
+
+  CHECK(Fail,
+        compress_agg_measure(
+          &c->stage, in, &c->cl.levels, c->compute, handoff, &work) == 0);
+  CU(Fail, cuEventSynchronize(c->stage.measurement_ready[in->fc]));
+
+  struct aggregate_slot* target = &c->stage.output[in->output_idx];
+  const volatile struct aggregate_append_measurement* m =
+    c->stage.h_measurement[in->fc];
+  const struct output_slot_reservation reservation = {
+    .slot = in->output_idx,
+    .data_base = target->slot_cursor,
+    .desc_base = target->slot_desc_cursor,
+    .batch_index = target->batches_per_slot,
+    .close_before_append = 0,
+    .close_slot = -1,
+    .close_after_append = m->closes_after_append,
+  };
+  handoff->slot_total_data_bytes = reservation.data_base + m->data_bytes;
+
+  CHECK(Fail,
+        compress_agg_write_reserved(
+          &c->stage, &work, &reservation, c->compute) == 0);
+  CU(Fail, cuStreamSynchronize(c->compute));
+  return 0;
+
+Fail:
+  return 1;
+}
+
+static int
+ca_ctx_measure_write(struct ca_test_ctx* c,
+                     uint32_t n_epochs,
+                     struct flush_handoff* handoff)
 {
   for (uint32_t i = 0; i < n_epochs; ++i)
     c->batch_active_masks[i] = 0x1;
@@ -138,16 +176,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
-  memset(handoff, 0, sizeof(*handoff));
-
-  CHECK(Fail,
-        compress_agg_kick(&c->stage, &in, &c->cl.levels, c->compute, handoff) ==
-          0);
-  CU(Fail, cuStreamSynchronize(c->compute));
-  return 0;
-
-Fail:
-  return 1;
+  return ca_ctx_measure_write_input(c, &in, handoff);
 }
 
 // D2H aggregate offsets and data for level 0. Caller frees *out_agg_data.
@@ -174,7 +203,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                   (CUdeviceptr)(agg->d_offsets + base),
                   (n_covering + 1) * sizeof(size_t)));
   // Production fetches h_permuted_sizes via d2h_deliver_kick on d2h_stream;
-  // tests that drive compress_agg_kick directly do the D2H here.
+  // tests that drive the compress-aggregate stage directly do the D2H here.
   CU(Fail,
      cuMemcpyDtoH(agg->h_permuted_sizes + base,
                   (CUdeviceptr)(agg->d_permuted_sizes + base),
@@ -263,7 +292,7 @@ test_compress_agg_single_epoch(void)
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 1, &handoff) == 0);
 
   // Verify handoff
   const size_t chunk_bytes =
@@ -330,7 +359,7 @@ test_compress_agg_batch(void)
   CHECK(Fail, ca_ctx_fill_epoch(&c, 1, fill_epoch1) == 0);
 
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 2, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 2, &handoff) == 0);
 
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
@@ -436,7 +465,7 @@ test_compress_agg_partial_batch(void)
 
   // Kick with n_epochs=1 even though K=2 -> partial batch
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 1, &handoff) == 0);
   CHECK(Fail, handoff.n_epochs == 1);
 
   const size_t chunk_bytes =
@@ -490,7 +519,7 @@ test_compress_agg_zstd_single_epoch(void)
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 1, &handoff) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
@@ -578,7 +607,7 @@ test_compress_agg_zstd_batch(void)
   CHECK(Fail, ca_ctx_fill_epoch(&c, 1, fill_epoch1) == 0);
 
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 2, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 2, &handoff) == 0);
 
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
@@ -747,7 +776,7 @@ test_compress_agg_write_desc_reserves_tail_bytes(void)
   CHECK(Fail, ca_ctx_fill_epoch(&c, 0, fill_epoch0) == 0);
 
   struct flush_handoff handoff;
-  CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
+  CHECK(Fail, ca_ctx_measure_write(&c, 1, &handoff) == 0);
 
   const uint64_t total_chunks = c.cl.levels.total_chunks;
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
@@ -824,10 +853,7 @@ test_compress_agg_lut_cache_position_shift(void)
     };
     struct flush_handoff handoff;
     memset(&handoff, 0, sizeof(handoff));
-    CHECK(Fail,
-          compress_agg_kick(&c.stage, &in, &c.cl.levels, c.compute, &handoff) ==
-            0);
-    CU(Fail, cuStreamSynchronize(c.compute));
+    CHECK(Fail, ca_ctx_measure_write_input(&c, &in, &handoff) == 0);
   }
 
   // Kick 2: only epoch 1 active (mask [0, 1]).
@@ -850,10 +876,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .lod_done = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
-    CHECK(Fail,
-          compress_agg_kick(
-            &c.stage, &in, &c.cl.levels, c.compute, &handoff2) == 0);
-    CU(Fail, cuStreamSynchronize(c.compute));
+    CHECK(Fail, ca_ctx_measure_write_input(&c, &in, &handoff2) == 0);
   }
 
   // The cache must have missed (recompute count incremented) because the
