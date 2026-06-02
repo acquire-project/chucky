@@ -82,10 +82,31 @@ output_slot_has_buffered_batches(struct stream_engine* e, int oi)
   return e->compress_agg.output[oi].batches_per_slot > 0;
 }
 
+static enum output_ledger_state
+output_state(struct stream_engine* e, int oi)
+{
+  return e->flush.output.slot[oi].state;
+}
+
 static void
 mark_output_open(struct stream_engine* e, int oi)
 {
-  e->flush.output_state[oi] = OUTPUT_SLOT_OPEN;
+  struct output_slot_entry* entry = &e->flush.output.slot[oi];
+  entry->state = OUTPUT_LEDGER_OPEN;
+  e->flush.output.current = oi;
+}
+
+static void
+adopt_output_slot(struct stream_engine* e, int oi)
+{
+  struct aggregate_slot* slot = &e->compress_agg.output[oi];
+  struct output_slot_entry* entry = &e->flush.output.slot[oi];
+  entry->state = OUTPUT_LEDGER_OPEN;
+  entry->data_cursor = slot->slot_cursor;
+  entry->desc_cursor = slot->slot_desc_cursor;
+  entry->batch_count = slot->batches_per_slot;
+  entry->close_seq = 0;
+  e->flush.output.current = oi;
 }
 
 // Resets slot state on success so the next kick starts fresh. A slot is not
@@ -93,10 +114,14 @@ mark_output_open(struct stream_engine* e, int oi)
 static struct writer_result
 drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (e->flush.output_state[oi] != OUTPUT_SLOT_CLOSED)
+  if (output_state(e, oi) != OUTPUT_LEDGER_D2H_IN_FLIGHT &&
+      output_state(e, oi) != OUTPUT_LEDGER_HOST_READY)
     return writer_ok();
 
-  e->flush.output_state[oi] = OUTPUT_SLOT_DELIVERING;
+  if (output_slot_ledger_begin_delivery(&e->flush.output, oi) !=
+      OUTPUT_LEDGER_OK)
+    return writer_error();
+
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
   struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
@@ -118,7 +143,9 @@ drain_output(struct stream_engine* e, struct stream_context* ctx, int oi)
     return r;
 
   output_slot_close_reset(&e->compress_agg.output[oi]);
-  e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
+  if (output_slot_ledger_finish_delivery(&e->flush.output, oi) !=
+      OUTPUT_LEDGER_OK)
+    return writer_error();
   return r;
 }
 
@@ -145,9 +172,10 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
 static struct writer_result
 retire_output_slot(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED)
+  if (output_state(e, oi) == OUTPUT_LEDGER_D2H_IN_FLIGHT ||
+      output_state(e, oi) == OUTPUT_LEDGER_HOST_READY)
     return drain_output(e, ctx, oi);
-  if (e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING)
+  if (output_state(e, oi) == OUTPUT_LEDGER_DELIVERING)
     return writer_error();
 
   if (output_slot_has_buffered_batches(e, oi)) {
@@ -158,15 +186,17 @@ retire_output_slot(struct stream_engine* e, struct stream_context* ctx, int oi)
   }
 
   output_slot_close_reset(&e->compress_agg.output[oi]);
-  e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
+  if (output_slot_ledger_reset_empty(&e->flush.output, oi) != OUTPUT_LEDGER_OK)
+    return writer_error();
   return writer_ok();
 }
 
 static struct writer_result
 prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 {
-  if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED ||
-      e->flush.output_state[oi] == OUTPUT_SLOT_DELIVERING) {
+  if (output_state(e, oi) == OUTPUT_LEDGER_D2H_IN_FLIGHT ||
+      output_state(e, oi) == OUTPUT_LEDGER_HOST_READY ||
+      output_state(e, oi) == OUTPUT_LEDGER_DELIVERING) {
     struct writer_result r = retire_output_slot(e, ctx, oi);
     if (r.error)
       return r;
@@ -174,13 +204,13 @@ prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 
   const int other = oi ^ 1;
   const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
-  if (cap > 1 && e->flush.output_state[other] != OUTPUT_SLOT_EMPTY) {
+  if (cap > 1 && output_state(e, other) != OUTPUT_LEDGER_EMPTY) {
     struct writer_result r = retire_output_slot(e, ctx, other);
     if (r.error)
       return r;
   }
 
-  if (e->flush.output_state[oi] == OUTPUT_SLOT_EMPTY)
+  if (output_state(e, oi) == OUTPUT_LEDGER_EMPTY)
     mark_output_open(e, oi);
   return writer_ok();
 }
@@ -207,14 +237,16 @@ post_kick_review(struct stream_engine* e,
     CHECK(Error,
           kick_d2h_and_mark_pending(
             e, ctx, close, &e->flush.pending_handoff[close]) == 0);
-    e->flush.output_state[target] = OUTPUT_SLOT_EMPTY;
+    CHECK(Error,
+          output_slot_ledger_reset_empty(&e->flush.output, target) ==
+            OUTPUT_LEDGER_OK);
   }
   scratch->output_idx = target;
   scratch->output = &e->compress_agg.output[target];
   scratch->slot_total_desc_entries =
     e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *scratch;
-  mark_output_open(e, target);
+  adopt_output_slot(e, target);
   *out_target = target;
   return 0;
 Error:
@@ -233,8 +265,9 @@ kick_d2h_and_mark_pending(struct stream_engine* e,
                          &e->flush.pending_handoff[output_idx],
                          ctx->sink,
                          e->streams.d2h) == 0);
-  e->flush.pending_seq[output_idx] = e->flush.next_seq++;
-  e->flush.output_state[output_idx] = OUTPUT_SLOT_CLOSED;
+  CHECK(Error,
+        output_slot_ledger_close(&e->flush.output, output_idx, NULL) ==
+          OUTPUT_LEDGER_OK);
   return 0;
 Error:
   return 1;
@@ -265,7 +298,7 @@ static struct writer_result
 drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
   const int fc = e->pools.current;
-  const int oi = e->flush.output_current;
+  const int oi = e->flush.output.current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
   {
@@ -284,12 +317,11 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
   if (cap > 1) {
-    e->flush.output_current = target;
+    e->flush.output.current = target;
   } else {
     CHECK(Error,
           kick_d2h_and_mark_pending(
             e, ctx, target, &e->flush.pending_handoff[target]) == 0);
-    e->flush.output_current ^= 1;
   }
   CHECK(Error, pool_swap_and_reset_accum(e, ctx) == 0);
 
@@ -376,7 +408,7 @@ struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
   for (int oi = 0; oi < 2; ++oi) {
-    if (e->flush.output_state[oi] != OUTPUT_SLOT_CLOSED &&
+    if (output_state(e, oi) == OUTPUT_LEDGER_OPEN &&
         output_slot_has_buffered_batches(e, oi)) {
       if (kick_d2h_and_mark_pending(
             e, ctx, oi, &e->flush.pending_handoff[oi]) != 0)
@@ -385,14 +417,9 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
   }
   for (int i = 0; i < 2; ++i) {
     int pick = -1;
-    uint64_t pick_seq = UINT64_MAX;
-    for (int oi = 0; oi < 2; ++oi) {
-      if (e->flush.output_state[oi] == OUTPUT_SLOT_CLOSED &&
-          e->flush.pending_seq[oi] < pick_seq) {
-        pick = oi;
-        pick_seq = e->flush.pending_seq[oi];
-      }
-    }
+    if (output_slot_ledger_oldest_closed(&e->flush.output, &pick) !=
+        OUTPUT_LEDGER_OK)
+      return writer_error();
     if (pick < 0)
       break;
     struct writer_result r = drain_output(e, ctx, pick);
@@ -403,8 +430,11 @@ flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
   // post-flush kicks (sync flush of partial batch, etc.) see fresh state.
   for (int oi = 0; oi < 2; ++oi) {
     output_slot_close_reset(&e->compress_agg.output[oi]);
-    e->flush.output_state[oi] = OUTPUT_SLOT_EMPTY;
+    if (output_slot_ledger_reset_empty(&e->flush.output, oi) !=
+        OUTPUT_LEDGER_OK)
+      return writer_error();
   }
+  e->flush.output.current = 0;
   return writer_ok();
 }
 
@@ -415,7 +445,7 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   const int fc = e->pools.current;
-  const int oi = e->flush.output_current;
+  const int oi = e->flush.output.current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
@@ -459,7 +489,7 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   const int fc = e->pools.current;
-  const int oi = e->flush.output_current;
+  const int oi = e->flush.output.current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;

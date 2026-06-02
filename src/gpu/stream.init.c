@@ -347,8 +347,7 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
     .batch_accumulated = s->engine.batch.accumulated,
     .pool_current = s->engine.pools.current,
     // True if any output slot owns data that has not been fully delivered.
-    .flush_pending = (s->engine.flush.output_state[0] != OUTPUT_SLOT_EMPTY ||
-                      s->engine.flush.output_state[1] != OUTPUT_SLOT_EMPTY),
+    .flush_pending = output_slot_ledger_has_work(&s->engine.flush.output),
   };
 }
 

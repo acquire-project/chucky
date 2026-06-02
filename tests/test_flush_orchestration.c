@@ -30,7 +30,7 @@ struct orch_ctx
 static int
 slot_has_work(struct stream_engine* e, int oi)
 {
-  return e->flush.output_state[oi] != OUTPUT_SLOT_EMPTY;
+  return e->flush.output.slot[oi].state != OUTPUT_LEDGER_EMPTY;
 }
 
 static void
@@ -227,8 +227,8 @@ test_accumulate_one_epoch(void)
   // Verify: mid-batch, no flush triggered
   CHECK(Fail, c.s->engine.batch.accumulated == 1);
   CHECK(Fail, c.s->engine.pools.current == 0);
-  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_EMPTY);
-  CHECK(Fail, c.s->engine.flush.output_state[1] == OUTPUT_SLOT_EMPTY);
+  CHECK(Fail, c.s->engine.flush.output.slot[0].state == OUTPUT_LEDGER_EMPTY);
+  CHECK(Fail, c.s->engine.flush.output.slot[1].state == OUTPUT_LEDGER_EMPTY);
 
   // Epoch mask recorded
   CHECK(Fail, c.s->engine.flush.slot[0].batch_active_masks[0] == 0x1);
@@ -505,21 +505,24 @@ test_compressed_alt_slot_retired_before_reuse(void)
   for (; next_fill < max_kicks; ++next_fill) {
     CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fills[next_fill % 4]) == 0);
     CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
-    if (c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED)
+    if (c.s->engine.flush.output.slot[0].state == OUTPUT_LEDGER_D2H_IN_FLIGHT)
       break;
   }
 
   // Slot 0 is now immutable pending delivery; the next kick must retire it
   // before any possible swap can target it.
-  CHECK(Fail, c.s->engine.flush.output_state[0] == OUTPUT_SLOT_CLOSED);
+  CHECK(Fail,
+        c.s->engine.flush.output.slot[0].state == OUTPUT_LEDGER_D2H_IN_FLIGHT);
 
   CHECK(Fail, next_fill + 1 < max_kicks);
   CHECK(Fail,
         orch_ctx_fill_epoch(&c, 0, &config, fills[(next_fill + 1) % 4]) == 0);
   CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_CLOSED);
-  CHECK(Fail, c.s->engine.flush.output_state[0] != OUTPUT_SLOT_DELIVERING);
+  CHECK(Fail,
+        c.s->engine.flush.output.slot[0].state != OUTPUT_LEDGER_D2H_IN_FLIGHT);
+  CHECK(Fail,
+        c.s->engine.flush.output.slot[0].state != OUTPUT_LEDGER_DELIVERING);
 
   struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);

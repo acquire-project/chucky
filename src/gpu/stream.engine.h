@@ -3,6 +3,7 @@
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
+#include "gpu/output_slot.h"
 #include "gpu/reduce_csr_gpu.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
@@ -248,14 +249,6 @@ struct d2h_deliver_stage
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
-enum output_slot_state
-{
-  OUTPUT_SLOT_EMPTY = 0,     // may be selected for aggregate writes
-  OUTPUT_SLOT_OPEN = 1,      // accumulating one or more stacked batches
-  OUTPUT_SLOT_CLOSED = 2,    // D2H was kicked; host delivery not complete
-  OUTPUT_SLOT_DELIVERING = 3 // sink delivery owns/reads host buffers
-};
-
 // Output-slot lifecycle is host-owned. Aggregate may write only to EMPTY or
 // the current OPEN slot; CLOSED/DELIVERING slots are immutable until drained
 // and reset to EMPTY. The CUDA routing kernel can compute placement, but it
@@ -263,10 +256,7 @@ enum output_slot_state
 struct flush_pipeline
 {
   struct flush_slot_gpu slot[2];
-  int output_current; // output reservoir index; flips on slot close
-  enum output_slot_state output_state[2];
-  uint64_t pending_seq[2];
-  uint64_t next_seq;
+  struct output_slot_ledger output;
   struct flush_handoff pending_handoff[2];
 };
 

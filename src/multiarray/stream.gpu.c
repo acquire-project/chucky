@@ -33,11 +33,8 @@ struct array_descriptor_gpu
   // Mutable per-array state (saved/restored via bind/unbind)
   uint32_t batch_accumulated;
   int pools_current;
-  int output_current;
-  enum output_slot_state output_state[2];
+  struct output_slot_ledger output;
   struct flush_slot_gpu flush_slots[2];
-  uint64_t flush_pending_seq[2];
-  uint64_t flush_next_seq;
   struct flush_handoff flush_pending_handoff[2];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
   uint32_t batch_active_count[LOD_MAX_LEVELS];
@@ -153,14 +150,11 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
   e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
   e->batch.accumulated = desc->batch_accumulated;
   e->pools.current = desc->pools_current;
-  e->flush.output_current = desc->output_current;
+  e->flush.output = desc->output;
   for (int i = 0; i < 2; ++i) {
-    e->flush.output_state[i] = desc->output_state[i];
     e->flush.slot[i] = desc->flush_slots[i];
-    e->flush.pending_seq[i] = desc->flush_pending_seq[i];
     e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
   }
-  e->flush.next_seq = desc->flush_next_seq;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
 
   // Unified-pipeline bind: swap per-array state into the engine. Engine
@@ -206,14 +200,11 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 
   desc->batch_accumulated = e->batch.accumulated;
   desc->pools_current = e->pools.current;
-  desc->output_current = e->flush.output_current;
+  desc->output = e->flush.output;
   for (int i = 0; i < 2; ++i) {
-    desc->output_state[i] = e->flush.output_state[i];
     desc->flush_slots[i] = e->flush.slot[i];
-    desc->flush_pending_seq[i] = e->flush.pending_seq[i];
     desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
   }
-  desc->flush_next_seq = e->flush.next_seq;
   // Snapshot per-array state back into the descriptor. shard_state mutates
   // over a batch (epoch_in_shard, shard_epoch, writer pointers); preserve it.
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv)
