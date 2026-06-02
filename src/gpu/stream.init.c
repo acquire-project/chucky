@@ -531,25 +531,23 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     }
   }
 
-  // FIXME: use designated initializers here
-  info->staging_bytes = staging_bytes;
-  info->chunk_pool_bytes = chunk_pool_bytes;
-  info->compressed_pool_bytes = compressed_pool_bytes;
-  info->aggregate_bytes = aggregate_device;
-  info->lod_bytes = lod_device;
-  info->codec_bytes = codec_bytes;
-  info->shard_bytes = shard_heap;
-
-  info->device_bytes = staging_bytes + chunk_pool_bytes +
-                       compressed_pool_bytes + aggregate_device + lod_device +
-                       codec_bytes;
-  info->host_pinned_bytes = staging_host + aggregate_host;
-
-  info->chunks_per_epoch = chunks_per_epoch;
-  info->total_chunks = total_chunks;
-  info->max_output_size = max_output_size;
-  info->nlod = nlod;
-  info->epochs_per_batch = K;
+  *info = (struct tile_stream_memory_info){
+    .device_bytes = staging_bytes + chunk_pool_bytes + compressed_pool_bytes +
+                    aggregate_device + lod_device + codec_bytes,
+    .host_pinned_bytes = staging_host + aggregate_host,
+    .staging_bytes = staging_bytes,
+    .chunk_pool_bytes = chunk_pool_bytes,
+    .compressed_pool_bytes = compressed_pool_bytes,
+    .aggregate_bytes = aggregate_device,
+    .lod_bytes = lod_device,
+    .codec_bytes = codec_bytes,
+    .shard_bytes = shard_heap,
+    .chunks_per_epoch = chunks_per_epoch,
+    .total_chunks = total_chunks,
+    .max_output_size = max_output_size,
+    .nlod = nlod,
+    .epochs_per_batch = K,
+  };
 
   computed_stream_layouts_free(&cl);
   return 0;
