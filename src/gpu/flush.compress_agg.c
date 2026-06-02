@@ -597,33 +597,39 @@ compress_agg_measure(struct compress_agg_stage* stage,
         !no_shard_finalizes(nlod, epoch_alone, per_lod_n_active, cps_append);
     }
 
-    CHECK(Error,
-          aggregate_batch_measure_unified_async(
-            (const void*)d_aggregate_src,
-            stage->codec.d_comp_sizes,
-            (const uint32_t*)(uintptr_t)stage->d_batch_gather,
-            (const uint32_t*)(uintptr_t)stage->d_batch_perm,
-            layout.total_batch_chunks,
-            layout.total_batch_covering,
-            nlod,
-            stage->codec.max_output_size,
-            out_slot,
-            stage->shards.d_shard_capacity,
-            stage->shards.d_tps_group,
-            stage->shards.d_offsets_base,
-            stage->shards.d_tail_bytes,
-            stage->shards.d_tail_carry,
-            page_size,
-            stage->shards.total_shards,
-            would_finalize_stay,
-            would_finalize_alone,
-            stage->d_measurement[fc],
-            stage->h_measurement[fc],
-            stage->measurement_ready[fc],
-            stage->d_tail_sum_bytes,
-            stage->d_temp_offsets,
-            stage->d_temp_perm_sizes,
-            compress_stream) == 0);
+    const struct aggregate_batch_measure_params measure_params = {
+      .indices = {
+        .d_comp_sizes = stage->codec.d_comp_sizes,
+        .d_batch_gather = (const uint32_t*)(uintptr_t)stage->d_batch_gather,
+        .d_batch_perm = (const uint32_t*)(uintptr_t)stage->d_batch_perm,
+      },
+      .shape = {
+        .total_batch_chunks = layout.total_batch_chunks,
+        .total_batch_covering = layout.total_batch_covering,
+        .nlod = nlod,
+      },
+      .slot = out_slot,
+      .shards = {
+        .d_shard_tps_group = stage->shards.d_tps_group,
+        .d_shard_offsets_base = stage->shards.d_offsets_base,
+        .d_tail_bytes = stage->shards.d_tail_bytes,
+        .d_tail_carry = stage->shards.d_tail_carry,
+        .page_size = page_size,
+        .total_shards = stage->shards.total_shards,
+      },
+      .would_finalize_stay = would_finalize_stay,
+      .would_finalize_alone = would_finalize_alone,
+      .outputs = {
+        .d_measurement = stage->d_measurement[fc],
+        .h_measurement = stage->h_measurement[fc],
+        .measurement_ready = stage->measurement_ready[fc],
+        .d_tail_sum_bytes = stage->d_tail_sum_bytes,
+        .d_temp_offsets = stage->d_temp_offsets,
+        .d_temp_perm_sizes = stage->d_temp_perm_sizes,
+      },
+      .stream = compress_stream,
+    };
+    CHECK(Error, aggregate_batch_measure_unified_async(&measure_params) == 0);
   }
 
   // --- Phase 8: fill handoff ----------------------------------------------
@@ -703,31 +709,41 @@ compress_agg_write_reserved(struct compress_agg_stage* stage,
       .batch_index = reservation->batch_index,
     };
 
+    const struct aggregate_batch_write_reserved_params write_params = {
+      .batch = {
+        .indices = {
+          .d_comp_sizes = stage->codec.d_comp_sizes,
+          .d_batch_gather = (const uint32_t*)(uintptr_t)stage->d_batch_gather,
+          .d_batch_perm = (const uint32_t*)(uintptr_t)stage->d_batch_perm,
+        },
+        .d_compressed = work->d_aggregate_src,
+        .max_comp_chunk_bytes = stage->codec.max_output_size,
+      },
+      .shape = {
+        .total_batch_chunks = layout->total_batch_chunks,
+        .total_batch_covering = layout->total_batch_covering,
+        .nlod = nlod,
+      },
+      .scratch_slot = work->scratch_slot,
+      .target_slot = target,
+      .reservation = &agg_reservation,
+      .shards = {
+        .d_shard_tps_group = stage->shards.d_tps_group,
+        .d_shard_offsets_base = stage->shards.d_offsets_base,
+        .d_tail_bytes = stage->shards.d_tail_bytes,
+        .d_tail_carry = stage->shards.d_tail_carry,
+        .page_size = work->page_size,
+        .total_shards = stage->shards.total_shards,
+      },
+      .desc = stage->d_write_desc,
+      .d_measurement = stage->d_measurement[fc],
+      .d_temp_offsets = stage->d_temp_offsets,
+      .d_temp_perm_sizes = stage->d_temp_perm_sizes,
+      .cb_args = cb_args,
+      .stream = compress_stream,
+    };
     CHECK(Error,
-          aggregate_batch_write_reserved_unified_async(
-            work->d_aggregate_src,
-            stage->codec.d_comp_sizes,
-            (const uint32_t*)(uintptr_t)stage->d_batch_gather,
-            (const uint32_t*)(uintptr_t)stage->d_batch_perm,
-            layout->total_batch_chunks,
-            layout->total_batch_covering,
-            nlod,
-            stage->codec.max_output_size,
-            work->scratch_slot,
-            target,
-            &agg_reservation,
-            stage->shards.d_tps_group,
-            stage->shards.d_offsets_base,
-            stage->shards.d_tail_bytes,
-            stage->shards.d_tail_carry,
-            work->page_size,
-            stage->shards.total_shards,
-            stage->d_write_desc,
-            stage->d_measurement[fc],
-            stage->d_temp_offsets,
-            stage->d_temp_perm_sizes,
-            cb_args,
-            compress_stream) == 0);
+          aggregate_batch_write_reserved_unified_async(&write_params) == 0);
   } else {
     CU(Error,
        cuEventRecord(work->scratch_slot->host_func_done, compress_stream));

@@ -668,40 +668,39 @@ rollforward_tail_unified_k(
 }
 
 extern "C" int
-aggregate_batch_by_shard_async(const void* d_compressed,
-                               size_t* d_comp_sizes,
-                               const uint32_t* d_batch_gather,
-                               const uint32_t* d_batch_perm,
-                               uint64_t batch_chunk_count,
-                               uint64_t batch_covering_count,
-                               size_t max_comp_chunk_bytes,
-                               const struct aggregate_layout* layout,
-                               struct aggregate_slot* slot,
-                               size_t* d_tail_bytes,
-                               CUdeviceptr d_tail_carry,
-                               CUstream stream)
+aggregate_batch_by_shard_async(
+  const struct aggregate_batch_by_shard_params* params)
 {
-  const uint64_t N = batch_chunk_count;
-  const uint64_t C = batch_covering_count;
+  if (!params)
+    return 1;
+  const struct aggregate_batch_buffers* batch = &params->batch;
+  const struct aggregate_layout* layout = params->layout;
+  struct aggregate_slot* slot = params->slot;
+  const uint64_t N = params->batch_chunk_count;
+  const uint64_t C = params->batch_covering_count;
   const uint64_t num_shards = layout->num_shards;
   const size_t page_size = layout->page_size;
   const size_t shard_capacity = layout->shard_capacity;
   const uint64_t tps_group = num_shards > 0 ? C / num_shards : 0;
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
+  cudaStream_t cuda_stream = (cudaStream_t)params->stream;
 
   // Zero permuted_sizes (C+1 entries)
   CU(Error,
      cuMemsetD8Async((CUdeviceptr)slot->d_permuted_sizes,
                      0,
                      (C + 1) * sizeof(size_t),
-                     stream));
+                     params->stream));
 
   // Pass 1: permute sizes using LUTs
   {
     const int block = 256;
     const int grid = (int)((N + block - 1) / block);
     permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
-      d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N);
+      batch->indices.d_comp_sizes,
+      slot->d_permuted_sizes,
+      batch->indices.d_batch_gather,
+      batch->indices.d_batch_perm,
+      N);
   }
 
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
@@ -726,7 +725,11 @@ aggregate_batch_by_shard_async(const void* d_compressed,
     {
       const int block = 256;
       add_shard_bias_k<<<(int)num_shards, block, 0, cuda_stream>>>(
-        slot->d_offsets, d_tail_bytes, tps_group, num_shards, shard_capacity);
+        slot->d_offsets,
+        params->d_tail_bytes,
+        tps_group,
+        num_shards,
+        shard_capacity);
     }
     // Pass 3b: stage prior batch's ragged tail at the head of each shard's
     // region so chunks pack just past it.
@@ -734,8 +737,8 @@ aggregate_batch_by_shard_async(const void* d_compressed,
       const int block = 256;
       copy_leading_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
         slot->d_aggregated,
-        (const void*)d_tail_carry,
-        d_tail_bytes,
+        (const void*)params->d_tail_carry,
+        params->d_tail_bytes,
         shard_capacity,
         page_size);
     }
@@ -745,13 +748,14 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   {
     const int block = 256;
     const int grid = (int)N;
-    gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
-                                                    slot->d_aggregated,
-                                                    d_comp_sizes,
-                                                    slot->d_offsets,
-                                                    d_batch_gather,
-                                                    d_batch_perm,
-                                                    max_comp_chunk_bytes);
+    gather_batch_k<<<grid, block, 0, cuda_stream>>>(
+      batch->d_compressed,
+      slot->d_aggregated,
+      batch->indices.d_comp_sizes,
+      slot->d_offsets,
+      batch->indices.d_batch_gather,
+      batch->indices.d_batch_perm,
+      batch->max_comp_chunk_bytes);
   }
 
   // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
@@ -765,47 +769,29 @@ Error:
 
 extern "C" int
 aggregate_batch_measure_unified_async(
-  const void* d_compressed,
-  size_t* d_comp_sizes,
-  const uint32_t* d_batch_gather,
-  const uint32_t* d_batch_perm,
-  uint64_t total_batch_chunks,
-  uint64_t total_batch_covering,
-  uint8_t nlod,
-  size_t max_comp_chunk_bytes,
-  struct aggregate_slot* slot,
-  const size_t* d_shard_capacity,
-  const uint64_t* d_shard_tps_group,
-  const uint64_t* d_shard_offsets_base,
-  size_t* d_tail_bytes,
-  CUdeviceptr d_tail_carry,
-  size_t page_size,
-  uint64_t total_shards,
-  int would_finalize_stay,
-  int would_finalize_alone,
-  struct aggregate_append_measurement* d_measurement,
-  volatile struct aggregate_append_measurement* h_measurement,
-  CUevent measurement_ready,
-  size_t* d_tail_sum_bytes,
-  size_t* d_temp_offsets,
-  size_t* d_temp_perm_sizes,
-  CUstream stream)
+  const struct aggregate_batch_measure_params* params)
 {
-  (void)d_compressed;
-  (void)d_shard_capacity;
-  (void)max_comp_chunk_bytes;
-  (void)d_tail_carry;
-  const uint64_t N = total_batch_chunks;
-  const uint64_t C = total_batch_covering;
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
-  size_t* d_perm_sizes_b = d_temp_perm_sizes;
-  size_t* d_offsets_b = d_temp_offsets;
+  if (!params)
+    return 1;
+  const struct aggregate_batch_indices* indices = &params->indices;
+  const struct aggregate_batch_shape* shape = &params->shape;
+  const struct aggregate_shard_tail_state* shards = &params->shards;
+  const struct aggregate_measurement_outputs* outputs = &params->outputs;
+  (void)shards->d_tail_carry;
+  const uint64_t N = shape->total_batch_chunks;
+  const uint64_t C = shape->total_batch_covering;
+  const uint8_t nlod = shape->nlod;
+  cudaStream_t cuda_stream = (cudaStream_t)params->stream;
+  size_t* d_perm_sizes_b = outputs->d_temp_perm_sizes;
+  size_t* d_offsets_b = outputs->d_temp_offsets;
   size_t* d_actual_bytes_ptr = d_offsets_b + (C + nlod - 1);
   int include_tail_sum = 0;
 
   CU(Error,
-     cuMemsetD8Async(
-       (CUdeviceptr)d_perm_sizes_b, 0, (C + nlod) * sizeof(size_t), stream));
+     cuMemsetD8Async((CUdeviceptr)d_perm_sizes_b,
+                     0,
+                     (C + nlod) * sizeof(size_t),
+                     params->stream));
 
   // Pass 1: permute sizes using unified LUTs (perm targets already shifted
   // by +lv per LOD inside aggregate_batch_luts_unified; targets are
@@ -814,14 +800,18 @@ aggregate_batch_measure_unified_async(
     const int block = 256;
     const int grid = (int)((N + block - 1) / block);
     permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
-      d_comp_sizes, d_perm_sizes_b, d_batch_gather, d_batch_perm, N);
+      indices->d_comp_sizes,
+      d_perm_sizes_b,
+      indices->d_batch_gather,
+      indices->d_batch_perm,
+      N);
   }
 
   // Pass 2: exclusive prefix sum over this batch's slice only (each batch's
   // scan is independent of prior batches' sentinels).
   {
-    size_t temp = slot->temp_bytes;
-    cub::DeviceScan::ExclusiveSum(slot->d_temp,
+    size_t temp = params->slot->temp_bytes;
+    cub::DeviceScan::ExclusiveSum(params->slot->d_temp,
                                   temp,
                                   d_perm_sizes_b,
                                   d_offsets_b,
@@ -829,46 +819,49 @@ aggregate_batch_measure_unified_async(
                                   cuda_stream);
   }
 
-  if (total_shards > 0 && slot->d_shard_sum_bytes) {
+  if (shards->total_shards > 0 && params->slot->d_shard_sum_bytes) {
     const int block = 256;
-    compute_shard_sum_bytes_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-      d_perm_sizes_b,
-      d_shard_offsets_base,
-      d_shard_tps_group,
-      slot->d_shard_sum_bytes,
-      total_shards);
+    compute_shard_sum_bytes_k<<<(int)shards->total_shards,
+                                block,
+                                0,
+                                cuda_stream>>>(d_perm_sizes_b,
+                                               shards->d_shard_offsets_base,
+                                               shards->d_shard_tps_group,
+                                               params->slot->d_shard_sum_bytes,
+                                               shards->total_shards);
   }
-  if (page_size > 0 && total_shards > 0 && slot->d_shard_sum_bytes) {
-    CHECK(Error, d_tail_sum_bytes);
+  if (shards->page_size > 0 && shards->total_shards > 0 &&
+      params->slot->d_shard_sum_bytes) {
+    CHECK(Error, outputs->d_tail_sum_bytes);
     CHECK(Error,
-          tail_sum_launch(slot->d_temp,
-                          slot->temp_bytes,
-                          d_tail_bytes,
-                          d_tail_sum_bytes,
-                          total_shards,
-                          stream) == 0);
+          tail_sum_launch(params->slot->d_temp,
+                          params->slot->temp_bytes,
+                          shards->d_tail_bytes,
+                          outputs->d_tail_sum_bytes,
+                          shards->total_shards,
+                          params->stream) == 0);
     include_tail_sum = 1;
   }
 
-  CHECK(Error, d_measurement);
+  CHECK(Error, outputs->d_measurement);
   CHECK(Error,
-        aggregate_measurement_launch(d_measurement,
+        aggregate_measurement_launch(outputs->d_measurement,
                                      d_actual_bytes_ptr,
-                                     d_tail_sum_bytes,
+                                     outputs->d_tail_sum_bytes,
                                      include_tail_sum,
                                      C + (uint64_t)nlod,
-                                     would_finalize_alone,
-                                     would_finalize_stay,
-                                     stream) == 0);
-  if (h_measurement) {
+                                     params->would_finalize_alone,
+                                     params->would_finalize_stay,
+                                     params->stream) == 0);
+  if (outputs->h_measurement) {
     CU(Error,
-       cuMemcpyDtoHAsync((void*)h_measurement,
-                         (CUdeviceptr)d_measurement,
+       cuMemcpyDtoHAsync((void*)outputs->h_measurement,
+                         (CUdeviceptr)outputs->d_measurement,
                          sizeof(struct aggregate_append_measurement),
-                         stream));
+                         params->stream));
   }
-  if (measurement_ready)
-    CU(Error, cuEventRecord(measurement_ready, stream));
+  if (outputs->measurement_ready)
+    CU(Error, cuEventRecord(outputs->measurement_ready, params->stream));
 
   return 0;
 
@@ -878,92 +871,85 @@ Error:
 
 extern "C" int
 aggregate_batch_write_reserved_unified_async(
-  const void* d_compressed,
-  size_t* d_comp_sizes,
-  const uint32_t* d_batch_gather,
-  const uint32_t* d_batch_perm,
-  uint64_t total_batch_chunks,
-  uint64_t total_batch_covering,
-  uint8_t nlod,
-  size_t max_comp_chunk_bytes,
-  struct aggregate_slot* scratch_slot,
-  struct aggregate_slot* target_slot,
-  const struct aggregate_slot_reservation* reservation,
-  const uint64_t* d_shard_tps_group,
-  const uint64_t* d_shard_offsets_base,
-  size_t* d_tail_bytes,
-  CUdeviceptr d_tail_carry,
-  size_t page_size,
-  uint64_t total_shards,
-  struct aggregate_write_desc* aggregate_write_desc,
-  struct aggregate_append_measurement* d_measurement,
-  size_t* d_temp_offsets,
-  size_t* d_temp_perm_sizes,
-  struct aggregate_write_cb_args* cb_args,
-  CUstream stream)
+  const struct aggregate_batch_write_reserved_params* params)
 {
-  const uint64_t N = total_batch_chunks;
-  const uint64_t C = total_batch_covering;
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
+  if (!params)
+    return 1;
+  const struct aggregate_batch_buffers* batch = &params->batch;
+  const struct aggregate_batch_shape* shape = &params->shape;
+  const struct aggregate_shard_tail_state* shards = &params->shards;
+  const uint64_t N = shape->total_batch_chunks;
+  const uint64_t C = shape->total_batch_covering;
+  const uint8_t nlod = shape->nlod;
+  cudaStream_t cuda_stream = (cudaStream_t)params->stream;
   struct slot_dev_ptrs target = {
-    .d_aggregated = target_slot->d_aggregated,
-    .d_offsets = target_slot->d_offsets,
-    .d_permuted_sizes = target_slot->d_permuted_sizes,
-    .d_shard_base_offsets_dense = target_slot->d_shard_base_offsets_dense,
-    .d_runtime = target_slot->d_runtime,
+    .d_aggregated = params->target_slot->d_aggregated,
+    .d_offsets = params->target_slot->d_offsets,
+    .d_permuted_sizes = params->target_slot->d_permuted_sizes,
+    .d_shard_base_offsets_dense =
+      params->target_slot->d_shard_base_offsets_dense,
+    .d_runtime = params->target_slot->d_runtime,
   };
 
   CHECK(Error,
-        write_desc_from_reservation_launch(
-          aggregate_write_desc, target, d_measurement, reservation, stream) ==
-          0);
+        write_desc_from_reservation_launch(params->desc,
+                                           target,
+                                           params->d_measurement,
+                                           params->reservation,
+                                           params->stream) == 0);
 
-  if (total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
+  if (shards->total_shards > 0 && params->scratch_slot->d_shard_sum_bytes) {
     CHECK(Error,
-          dense_offsets_launch(aggregate_write_desc,
-                               scratch_slot->d_shard_sum_bytes,
-                               d_tail_bytes,
-                               total_shards,
-                               stream) == 0);
-    if (target_slot->h_shard_base_offsets_dense) {
+          dense_offsets_launch(params->desc,
+                               params->scratch_slot->d_shard_sum_bytes,
+                               shards->d_tail_bytes,
+                               shards->total_shards,
+                               params->stream) == 0);
+    if (params->target_slot->h_shard_base_offsets_dense) {
       // Copy all cap slices: dense_offsets_k writes to
       // slice[batch_idx_in_slot]; delivery reads each batch's slice. Only the
       // current batch's slice is freshly written, but the unchanged slices must
       // remain valid host-side.
       CU(Error,
-         cuMemcpyDtoHAsync((void*)target_slot->h_shard_base_offsets_dense,
-                           (CUdeviceptr)target_slot->d_shard_base_offsets_dense,
-                           (size_t)target_slot->batches_per_slot_cap *
-                             total_shards * sizeof(size_t),
-                           stream));
+         cuMemcpyDtoHAsync(
+           (void*)params->target_slot->h_shard_base_offsets_dense,
+           (CUdeviceptr)params->target_slot->d_shard_base_offsets_dense,
+           (size_t)params->target_slot->batches_per_slot_cap *
+             shards->total_shards * sizeof(size_t),
+           params->stream));
     }
   }
 
   CHECK(Error,
-        copy_to_slot_launch(aggregate_write_desc,
-                            d_temp_offsets,
-                            d_temp_perm_sizes,
+        copy_to_slot_launch(params->desc,
+                            params->d_temp_offsets,
+                            params->d_temp_perm_sizes,
                             C + (uint64_t)nlod,
-                            stream) == 0);
+                            params->stream) == 0);
 
-  if (page_size > 0 && total_shards > 0) {
+  if (shards->page_size > 0 && shards->total_shards > 0) {
     {
       const int block = 256;
-      add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        aggregate_write_desc,
-        d_tail_bytes,
-        d_shard_tps_group,
-        d_shard_offsets_base,
-        total_shards);
+      add_shard_bias_unified_k<<<(int)shards->total_shards,
+                                 block,
+                                 0,
+                                 cuda_stream>>>(params->desc,
+                                                shards->d_tail_bytes,
+                                                shards->d_shard_tps_group,
+                                                shards->d_shard_offsets_base,
+                                                shards->total_shards);
     }
     {
       const int block = 256;
-      copy_leading_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-        aggregate_write_desc,
-        (const void*)d_tail_carry,
-        d_tail_bytes,
-        total_shards,
-        page_size);
+      copy_leading_tail_unified_k<<<(int)shards->total_shards,
+                                    block,
+                                    0,
+                                    cuda_stream>>>(
+        params->desc,
+        (const void*)shards->d_tail_carry,
+        shards->d_tail_bytes,
+        shards->total_shards,
+        shards->page_size);
     }
   }
 
@@ -971,32 +957,39 @@ aggregate_batch_write_reserved_unified_async(
     const int block = 256;
     const int grid = (int)N;
     gather_batch_write_desc_k<<<grid, block, 0, cuda_stream>>>(
-      aggregate_write_desc,
-      d_compressed,
-      d_comp_sizes,
-      d_batch_gather,
-      d_batch_perm,
-      max_comp_chunk_bytes);
+      params->desc,
+      batch->d_compressed,
+      batch->indices.d_comp_sizes,
+      batch->indices.d_batch_gather,
+      batch->indices.d_batch_perm,
+      batch->max_comp_chunk_bytes);
   }
 
-  if (page_size > 0 && total_shards > 0 && scratch_slot->d_shard_sum_bytes) {
+  if (shards->page_size > 0 && shards->total_shards > 0 &&
+      params->scratch_slot->d_shard_sum_bytes) {
     const int block = 256;
-    rollforward_tail_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
-      aggregate_write_desc,
-      scratch_slot->d_shard_sum_bytes,
-      page_size,
-      (size_t*)d_tail_bytes,
-      (void*)d_tail_carry,
-      total_shards);
+    rollforward_tail_unified_k<<<(int)shards->total_shards,
+                                 block,
+                                 0,
+                                 cuda_stream>>>(
+      params->desc,
+      params->scratch_slot->d_shard_sum_bytes,
+      shards->page_size,
+      (size_t*)shards->d_tail_bytes,
+      (void*)shards->d_tail_carry,
+      shards->total_shards);
   }
 
   CU(Error,
-     cuMemcpyDtoHAsync((void*)cb_args->h_write_desc,
-                       (CUdeviceptr)aggregate_write_desc,
+     cuMemcpyDtoHAsync((void*)params->cb_args->h_write_desc,
+                       (CUdeviceptr)params->desc,
                        sizeof(struct aggregate_write_desc),
-                       stream));
-  CU(Error, cuLaunchHostFunc(stream, aggregate_post_batch_write_cb, cb_args));
-  CU(Error, cuEventRecord(scratch_slot->host_func_done, stream));
+                       params->stream));
+  CU(Error,
+     cuLaunchHostFunc(
+       params->stream, aggregate_post_batch_write_cb, params->cb_args));
+  CU(Error,
+     cuEventRecord(params->scratch_slot->host_func_done, params->stream));
 
   return 0;
 

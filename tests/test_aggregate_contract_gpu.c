@@ -194,19 +194,25 @@ run_gpu_aggregate(struct gpu_run* r,
   h_sizes = NULL;
 
   // Kick the per-shard aggregate.
-  CHECK(Fail,
-        aggregate_batch_by_shard_async((const void*)r->d_compressed,
-                                       r->d_comp_sizes,
-                                       r->d_gather,
-                                       r->d_perm,
-                                       N,
-                                       batch_C,
-                                       g->max_comp,
-                                       &r->layout,
-                                       &r->slot,
-                                       r->d_tail_bytes,
-                                       r->d_tail_carry,
-                                       r->stream) == 0);
+  const struct aggregate_batch_by_shard_params aggregate_params = {
+    .batch = {
+      .indices = {
+        .d_comp_sizes = r->d_comp_sizes,
+        .d_batch_gather = r->d_gather,
+        .d_batch_perm = r->d_perm,
+      },
+      .d_compressed = (const void*)r->d_compressed,
+      .max_comp_chunk_bytes = g->max_comp,
+    },
+    .batch_chunk_count = N,
+    .batch_covering_count = batch_C,
+    .layout = &r->layout,
+    .slot = &r->slot,
+    .d_tail_bytes = r->d_tail_bytes,
+    .d_tail_carry = r->d_tail_carry,
+    .stream = r->stream,
+  };
+  CHECK(Fail, aggregate_batch_by_shard_async(&aggregate_params) == 0);
 
   CU(Fail, cuStreamSynchronize(r->stream));
 

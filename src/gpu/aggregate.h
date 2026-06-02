@@ -83,6 +83,87 @@ extern "C"
     struct slot_runtime_state* d_runtime;
   };
 
+  struct aggregate_batch_indices
+  {
+    size_t* d_comp_sizes;
+    const uint32_t* d_batch_gather;
+    const uint32_t* d_batch_perm;
+  };
+
+  struct aggregate_batch_buffers
+  {
+    struct aggregate_batch_indices indices;
+    const void* d_compressed;
+    size_t max_comp_chunk_bytes;
+  };
+
+  struct aggregate_batch_shape
+  {
+    uint64_t total_batch_chunks;
+    uint64_t total_batch_covering;
+    uint8_t nlod;
+  };
+
+  struct aggregate_shard_tail_state
+  {
+    const uint64_t* d_shard_tps_group;
+    const uint64_t* d_shard_offsets_base;
+    size_t* d_tail_bytes;
+    CUdeviceptr d_tail_carry;
+    size_t page_size;
+    uint64_t total_shards;
+  };
+
+  struct aggregate_measurement_outputs
+  {
+    struct aggregate_append_measurement* d_measurement;
+    volatile struct aggregate_append_measurement* h_measurement;
+    CUevent measurement_ready;
+    size_t* d_tail_sum_bytes;
+    size_t* d_temp_offsets;
+    size_t* d_temp_perm_sizes;
+  };
+
+  struct aggregate_batch_by_shard_params
+  {
+    struct aggregate_batch_buffers batch;
+    uint64_t batch_chunk_count;
+    uint64_t batch_covering_count;
+    const struct aggregate_layout* layout;
+    struct aggregate_slot* slot;
+    size_t* d_tail_bytes;
+    CUdeviceptr d_tail_carry;
+    CUstream stream;
+  };
+
+  struct aggregate_batch_measure_params
+  {
+    struct aggregate_batch_indices indices;
+    struct aggregate_batch_shape shape;
+    struct aggregate_slot* slot;
+    struct aggregate_shard_tail_state shards;
+    int would_finalize_stay;
+    int would_finalize_alone;
+    struct aggregate_measurement_outputs outputs;
+    CUstream stream;
+  };
+
+  struct aggregate_batch_write_reserved_params
+  {
+    struct aggregate_batch_buffers batch;
+    struct aggregate_batch_shape shape;
+    struct aggregate_slot* scratch_slot;
+    struct aggregate_slot* target_slot;
+    const struct aggregate_slot_reservation* reservation;
+    struct aggregate_shard_tail_state shards;
+    struct aggregate_write_desc* desc;
+    struct aggregate_append_measurement* d_measurement;
+    size_t* d_temp_offsets;
+    size_t* d_temp_perm_sizes;
+    struct aggregate_write_cb_args* cb_args;
+    CUstream stream;
+  };
+
   int write_desc_from_reservation_launch(
     struct aggregate_write_desc* desc,
     struct slot_dev_ptrs target,
@@ -170,70 +251,14 @@ extern "C"
                                 uint32_t batches_per_slot_cap,
                                 uint64_t max_total_shards);
 
-  int aggregate_batch_by_shard_async(const void* d_compressed,
-                                     size_t* d_comp_sizes,
-                                     const uint32_t* d_batch_gather,
-                                     const uint32_t* d_batch_perm,
-                                     uint64_t batch_chunk_count,
-                                     uint64_t batch_covering_count,
-                                     size_t max_comp_chunk_bytes,
-                                     const struct aggregate_layout* layout,
-                                     struct aggregate_slot* slot,
-                                     size_t* d_tail_bytes,
-                                     CUdeviceptr d_tail_carry,
-                                     CUstream stream);
+  int aggregate_batch_by_shard_async(
+    const struct aggregate_batch_by_shard_params* params);
 
   int aggregate_batch_measure_unified_async(
-    const void* d_compressed,
-    size_t* d_comp_sizes,
-    const uint32_t* d_batch_gather,
-    const uint32_t* d_batch_perm,
-    uint64_t total_batch_chunks,
-    uint64_t total_batch_covering,
-    uint8_t nlod,
-    size_t max_comp_chunk_bytes,
-    struct aggregate_slot* slot,
-    const size_t* d_shard_capacity,
-    const uint64_t* d_shard_tps_group,
-    const uint64_t* d_shard_offsets_base,
-    size_t* d_tail_bytes,
-    CUdeviceptr d_tail_carry,
-    size_t page_size,
-    uint64_t total_shards,
-    int would_finalize_stay,
-    int would_finalize_alone,
-    struct aggregate_append_measurement* d_measurement,
-    volatile struct aggregate_append_measurement* h_measurement,
-    CUevent measurement_ready,
-    size_t* d_tail_sum_bytes,
-    size_t* d_temp_offsets,
-    size_t* d_temp_perm_sizes,
-    CUstream stream);
+    const struct aggregate_batch_measure_params* params);
 
   int aggregate_batch_write_reserved_unified_async(
-    const void* d_compressed,
-    size_t* d_comp_sizes,
-    const uint32_t* d_batch_gather,
-    const uint32_t* d_batch_perm,
-    uint64_t total_batch_chunks,
-    uint64_t total_batch_covering,
-    uint8_t nlod,
-    size_t max_comp_chunk_bytes,
-    struct aggregate_slot* scratch_slot,
-    struct aggregate_slot* target_slot,
-    const struct aggregate_slot_reservation* reservation,
-    const uint64_t* d_shard_tps_group,
-    const uint64_t* d_shard_offsets_base,
-    size_t* d_tail_bytes,
-    CUdeviceptr d_tail_carry,
-    size_t page_size,
-    uint64_t total_shards,
-    struct aggregate_write_desc* desc,
-    struct aggregate_append_measurement* d_measurement,
-    size_t* d_temp_offsets,
-    size_t* d_temp_perm_sizes,
-    struct aggregate_write_cb_args* cb_args,
-    CUstream stream);
+    const struct aggregate_batch_write_reserved_params* params);
 
 #ifdef __cplusplus
 }
