@@ -96,19 +96,6 @@ mark_output_open(struct stream_engine* e, int oi)
   e->flush.output.current = oi;
 }
 
-static void
-adopt_output_slot(struct stream_engine* e, int oi)
-{
-  struct aggregate_slot* slot = &e->compress_agg.output[oi];
-  struct output_slot_entry* entry = &e->flush.output.slot[oi];
-  entry->state = OUTPUT_LEDGER_OPEN;
-  entry->data_cursor = slot->slot_cursor;
-  entry->desc_cursor = slot->slot_desc_cursor;
-  entry->batch_count = slot->batches_per_slot;
-  entry->close_seq = 0;
-  e->flush.output.current = oi;
-}
-
 static struct output_slot_request
 output_request_from_measurement(
   const volatile struct aggregate_append_measurement* m)
@@ -272,7 +259,9 @@ post_kick_review(struct stream_engine* e,
   scratch->slot_total_desc_entries =
     e->compress_agg.output[target].slot_desc_cursor;
   e->flush.pending_handoff[target] = *scratch;
-  adopt_output_slot(e, target);
+  CHECK(Error,
+        output_slot_ledger_commit_append(&e->flush.output, &request, &plan) ==
+          OUTPUT_LEDGER_OK);
   *out_target = target;
   return 0;
 Error:
