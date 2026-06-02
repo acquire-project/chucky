@@ -253,6 +253,17 @@ struct d2h_deliver_stage
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
+struct pending_aggregate_handoff
+{
+  int active;
+  int fc;
+  int active_oi;
+  int target;
+  struct flush_handoff handoff;
+  struct output_slot_request request;
+  struct output_slot_reservation plan;
+};
+
 // Output-slot lifecycle is host-owned. Aggregate may write only to EMPTY or
 // the current OPEN slot; CLOSED/DELIVERING slots are immutable until drained
 // and reset to EMPTY. The CUDA routing kernel can compute placement, but it
@@ -262,6 +273,7 @@ struct flush_pipeline
   struct flush_slot_gpu slot[2];
   struct output_slot_ledger output;
   struct flush_handoff pending_handoff[2];
+  struct pending_aggregate_handoff aggregate_pending;
 };
 
 _Static_assert(LOD_MAX_LEVELS <= 32,

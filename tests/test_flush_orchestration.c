@@ -483,7 +483,53 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: compressed cap-stacking must retire the alternate slot before reuse
+// Test 6: compressed auto-flush defers callback finalization
+// ---------------------------------------------------------------------------
+static int
+test_compressed_auto_flush_defers_aggregate_callback(void)
+{
+  log_info("=== test_compressed_auto_flush_defers_aggregate_callback ===");
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config;
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_ZSTD }, 1);
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
+
+  struct orch_ctx c;
+  orch_ctx_init(&c);
+  int ok = 0;
+
+  CHECK(Fail, orch_ctx_setup(&c, &config, &sink.base) == 0);
+  CHECK(Fail, c.s->engine.compress_agg.output[0].batches_per_slot_cap > 1);
+
+  CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
+  CHECK(Fail, flush_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+
+  CHECK(Fail, c.s->engine.batch.accumulated == 0);
+  CHECK(Fail, c.s->engine.pools.current == 1);
+  CHECK(Fail, c.s->engine.flush.aggregate_pending.active);
+  CHECK(Fail, c.s->engine.flush.output.slot[0].state == OUTPUT_LEDGER_OPEN);
+  CHECK(Fail, c.s->engine.flush.pending_handoff[0].output == NULL);
+
+  struct writer_result r = flush_drain_pending(&c.s->engine, &c.s->ctx);
+  CHECK(Fail, r.error == 0);
+  CHECK(Fail, !c.s->engine.flush.aggregate_pending.active);
+  CHECK(Fail, !slot_has_work(&c.s->engine, 0));
+  CHECK(Fail, !slot_has_work(&c.s->engine, 1));
+
+  ok = 1;
+
+Fail:
+  orch_ctx_destroy(&c);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: compressed cap-stacking must retire the alternate slot before reuse
 // ---------------------------------------------------------------------------
 static int
 test_compressed_alt_slot_retired_before_reuse(void)
@@ -554,5 +600,7 @@ RUN_GPU_TESTS({ "accumulate_one_epoch", test_accumulate_one_epoch },
               { "drain_delivers_data", test_drain_delivers_data },
               { "accumulated_sync_partial", test_accumulated_sync_partial },
               { "two_batch_cycle", test_two_batch_cycle },
+              { "compressed_auto_flush_defers_aggregate_callback",
+                test_compressed_auto_flush_defers_aggregate_callback },
               { "compressed_alt_slot_retired_before_reuse",
                 test_compressed_alt_slot_retired_before_reuse }, )

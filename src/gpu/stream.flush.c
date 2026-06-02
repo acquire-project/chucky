@@ -215,13 +215,68 @@ prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 }
 
 static int
-post_kick_review(struct stream_engine* e,
-                 struct stream_context* ctx,
-                 int fc,
-                 int active_oi,
-                 struct flush_handoff* scratch,
-                 int* out_target)
+finish_pending_aggregate(struct stream_engine* e)
 {
+  struct pending_aggregate_handoff* pending = &e->flush.aggregate_pending;
+  if (!pending->active)
+    return 0;
+
+  const struct output_slot_request* request = &pending->request;
+  const struct output_slot_reservation* plan = &pending->plan;
+  CU(Error,
+     cuEventSynchronize(
+       e->compress_agg.output[pending->active_oi].host_func_done));
+  const volatile struct d_routing* r = e->compress_agg.h_routing;
+  const int target = r->target_slot_idx;
+  const int close = r->close_prior_slot_idx;
+  CHECK(Error, pending->target == target);
+  CHECK(Error, plan->slot == target);
+  CHECK(Error, plan->data_base == r->data_base_offset);
+  CHECK(Error, plan->desc_base == r->desc_base_offset);
+  CHECK(Error, plan->batch_index == r->batch_idx_in_slot);
+  CHECK(Error, plan->close_slot == close);
+  CHECK(Error, plan->close_before_append == (close >= 0));
+  CHECK(Error, plan->close_after_append == request->closes_after_append);
+  CHECK(Error, r->measurement.data_bytes == request->data_bytes);
+  CHECK(Error, r->measurement.desc_entries == request->desc_entries);
+  CHECK(Error,
+        r->measurement.closes_after_append == request->closes_after_append);
+  CHECK(Error,
+        r->measurement.tail_rollforward_blocked ==
+          request->tail_rollforward_blocked);
+
+  const uint32_t cap =
+    e->compress_agg.output[pending->active_oi].batches_per_slot_cap;
+  if (cap == 1) {
+    CHECK(Error, target == pending->active_oi);
+    CHECK(Error, close == -1);
+  }
+  if (close >= 0) {
+    CHECK(Error, close != target);
+  }
+
+  struct flush_handoff* handoff = &pending->handoff;
+  handoff->output_idx = target;
+  handoff->output = &e->compress_agg.output[target];
+  handoff->slot_total_desc_entries =
+    e->compress_agg.output[target].slot_desc_cursor;
+  e->flush.pending_handoff[target] = *handoff;
+  pending->active = 0;
+  return 0;
+
+Error:
+  return 1;
+}
+
+static int
+plan_pending_aggregate(struct stream_engine* e,
+                       struct stream_context* ctx,
+                       int fc,
+                       int active_oi,
+                       struct flush_handoff* scratch,
+                       int* out_target)
+{
+  CHECK(Error, !e->flush.aggregate_pending.active);
   CU(Error, cuEventSynchronize(e->compress_agg.measurement_ready[fc]));
   const struct output_slot_request request =
     output_request_from_measurement(e->compress_agg.h_measurement[fc]);
@@ -244,40 +299,16 @@ post_kick_review(struct stream_engine* e,
         output_slot_ledger_commit_append(&e->flush.output, &request, &plan) ==
           OUTPUT_LEDGER_OK);
 
-  CU(Error,
-     cuEventSynchronize(e->compress_agg.output[active_oi].host_func_done));
-  const volatile struct d_routing* r = e->compress_agg.h_routing;
-  const int target = r->target_slot_idx;
-  const int close = r->close_prior_slot_idx;
-  CHECK(Error, plan.slot == target);
-  CHECK(Error, plan.data_base == r->data_base_offset);
-  CHECK(Error, plan.desc_base == r->desc_base_offset);
-  CHECK(Error, plan.batch_index == r->batch_idx_in_slot);
-  CHECK(Error, plan.close_slot == close);
-  CHECK(Error, plan.close_before_append == (close >= 0));
-  CHECK(Error, plan.close_after_append == request.closes_after_append);
-  CHECK(Error, r->measurement.data_bytes == request.data_bytes);
-  CHECK(Error, r->measurement.desc_entries == request.desc_entries);
-  CHECK(Error,
-        r->measurement.closes_after_append == request.closes_after_append);
-  CHECK(Error,
-        r->measurement.tail_rollforward_blocked ==
-          request.tail_rollforward_blocked);
-
-  const uint32_t cap = e->compress_agg.output[active_oi].batches_per_slot_cap;
-  if (cap == 1) {
-    CHECK(Error, target == active_oi);
-    CHECK(Error, close == -1);
-  }
-  if (close >= 0) {
-    CHECK(Error, close != target);
-  }
-  scratch->output_idx = target;
-  scratch->output = &e->compress_agg.output[target];
-  scratch->slot_total_desc_entries =
-    e->compress_agg.output[target].slot_desc_cursor;
-  e->flush.pending_handoff[target] = *scratch;
-  *out_target = target;
+  e->flush.aggregate_pending = (struct pending_aggregate_handoff){
+    .active = 1,
+    .fc = fc,
+    .active_oi = active_oi,
+    .target = plan.slot,
+    .handoff = *scratch,
+    .request = request,
+    .plan = plan,
+  };
+  *out_target = plan.slot;
   return 0;
 Error:
   return 1;
@@ -331,6 +362,8 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   const int oi = e->flush.output.current;
   struct flush_slot_gpu* fs = &e->flush.slot[fc];
 
+  CHECK(Error, finish_pending_aggregate(e) == 0);
+
   {
     struct writer_result r = prepare_output_kick(e, ctx, oi);
     if (r.error)
@@ -343,12 +376,13 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
         kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &scratch) == 0);
 
   int target = -1;
-  CHECK(Error, post_kick_review(e, ctx, fc, oi, &scratch, &target) == 0);
+  CHECK(Error, plan_pending_aggregate(e, ctx, fc, oi, &scratch, &target) == 0);
 
   const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
   if (cap > 1) {
     e->flush.output.current = target;
   } else {
+    CHECK(Error, finish_pending_aggregate(e) == 0);
     CHECK(Error,
           kick_d2h_and_mark_pending(
             e, ctx, target, &e->flush.pending_handoff[target]) == 0);
@@ -414,6 +448,7 @@ flush_kick_batch(struct stream_engine* e,
                  uint32_t n_epochs)
 {
   struct flush_handoff scratch = { 0 };
+  CHECK(Error, finish_pending_aggregate(e) == 0);
   {
     struct writer_result r = prepare_output_kick(e, ctx, output_idx);
     if (r.error)
@@ -423,7 +458,8 @@ flush_kick_batch(struct stream_engine* e,
         kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
   int target = -1;
   CHECK(Error,
-        post_kick_review(e, ctx, fc, output_idx, &scratch, &target) == 0);
+        plan_pending_aggregate(e, ctx, fc, output_idx, &scratch, &target) == 0);
+  CHECK(Error, finish_pending_aggregate(e) == 0);
   CHECK(Error,
         kick_d2h_and_mark_pending(
           e, ctx, target, &e->flush.pending_handoff[target]) == 0);
@@ -438,6 +474,9 @@ Error:
 struct writer_result
 flush_drain_pending(struct stream_engine* e, struct stream_context* ctx)
 {
+  if (finish_pending_aggregate(e) != 0)
+    return writer_error();
+
   for (int oi = 0; oi < 2; ++oi) {
     if (output_state(e, oi) == OUTPUT_LEDGER_OPEN &&
         output_slot_has_buffered_batches(e, oi)) {
