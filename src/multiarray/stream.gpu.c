@@ -540,7 +540,7 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuMemsetD8(
          (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
     CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_reservation_bytes,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_tail_sum_bytes,
                   sizeof(size_t)));
     CU(Fail,
        cuMemHostAlloc(
@@ -837,7 +837,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
-  cu_mem_free((CUdeviceptr)e->compress_agg.d_reservation_bytes);
+  cu_mem_free((CUdeviceptr)e->compress_agg.d_tail_sum_bytes);
   if (e->compress_agg.h_routing)
     cuMemFreeHost((void*)e->compress_agg.h_routing);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_temp_offsets);
