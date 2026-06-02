@@ -216,32 +216,27 @@ permute_sizes_batch_k(const size_t* __restrict__ d_comp_sizes,
 }
 
 __global__ void
-fit_decision_k(struct d_routing* d_routing,
-               struct slot_dev_ptrs slot_0,
-               struct slot_dev_ptrs slot_1,
-               const size_t* __restrict__ d_actual_bytes_ptr,
-               const size_t* __restrict__ d_tail_sum_bytes_ptr,
-               int include_tail_sum,
-               size_t slot_capacity,
-               uint32_t batches_per_slot_cap,
-               uint64_t batch_desc_advance,
-               int active_slot_idx,
-               int would_finalize_stay,
-               int would_finalize_alone)
+fit_decision_k(
+  struct d_routing* d_routing,
+  struct slot_dev_ptrs slot_0,
+  struct slot_dev_ptrs slot_1,
+  const struct aggregate_append_measurement* __restrict__ d_measurement,
+  size_t slot_capacity,
+  uint32_t batches_per_slot_cap,
+  int active_slot_idx)
 {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
 
+  const struct aggregate_append_measurement measurement = *d_measurement;
   struct slot_dev_ptrs active = (active_slot_idx == 0) ? slot_0 : slot_1;
   struct slot_runtime_state* active_rt = active.d_runtime;
-  size_t actual_bytes = *d_actual_bytes_ptr;
-  if (include_tail_sum)
-    actual_bytes += *d_tail_sum_bytes_ptr;
+  const size_t actual_bytes = measurement.data_bytes;
 
   // Stacking onto a non-empty slot when this batch would finalize a shard
   // mid-slot is forbidden (corrupts in-slot tail rollforward). Force swap.
   const int stack_blocked =
-    would_finalize_stay && (active_rt->batches_per_slot > 0);
+    measurement.tail_rollforward_blocked && active_rt->batches_per_slot > 0;
   const int fits = (active_rt->batches_per_slot < batches_per_slot_cap) &&
                    (active_rt->cursor + actual_bytes <= slot_capacity) &&
                    !stack_blocked;
@@ -271,20 +266,15 @@ fit_decision_k(struct d_routing* d_routing,
   d_routing->target_d_permuted_sizes = target.d_permuted_sizes;
   d_routing->target_d_shard_base_offsets_dense =
     target.d_shard_base_offsets_dense;
-  d_routing->measurement = (struct aggregate_append_measurement){
-    .data_bytes = actual_bytes,
-    .desc_entries = batch_desc_advance,
-    .closes_after_append = would_finalize_alone ? 1 : 0,
-    .tail_rollforward_blocked = would_finalize_stay ? 1 : 0,
-  };
+  d_routing->measurement = measurement;
 
   target.d_runtime->cursor += actual_bytes;
-  target.d_runtime->desc_cursor += batch_desc_advance;
+  target.d_runtime->desc_cursor += measurement.desc_entries;
   target.d_runtime->batches_per_slot += 1;
 
   // This batch finalizes a shard even when solo: must be the last in its
   // slot. Force a swap on the next kick by pinning to cap.
-  if (would_finalize_alone)
+  if (measurement.closes_after_append)
     target.d_runtime->batches_per_slot = batches_per_slot_cap;
 }
 
@@ -292,29 +282,62 @@ extern "C" int
 fit_decision_launch(struct d_routing* d_routing,
                     struct slot_dev_ptrs slot_0,
                     struct slot_dev_ptrs slot_1,
-                    const size_t* d_actual_bytes_ptr,
-                    const size_t* d_tail_sum_bytes_ptr,
-                    int include_tail_sum,
+                    const struct aggregate_append_measurement* d_measurement,
                     size_t slot_capacity,
                     uint32_t batches_per_slot_cap,
-                    uint64_t batch_desc_advance,
                     int active_slot_idx,
-                    int would_finalize_stay,
-                    int would_finalize_alone,
                     CUstream stream)
 {
   fit_decision_k<<<1, 1, 0, (cudaStream_t)stream>>>(d_routing,
                                                     slot_0,
                                                     slot_1,
-                                                    d_actual_bytes_ptr,
-                                                    d_tail_sum_bytes_ptr,
-                                                    include_tail_sum,
+                                                    d_measurement,
                                                     slot_capacity,
                                                     batches_per_slot_cap,
-                                                    batch_desc_advance,
-                                                    active_slot_idx,
-                                                    would_finalize_stay,
-                                                    would_finalize_alone);
+                                                    active_slot_idx);
+  return cudaGetLastError() == cudaSuccess ? 0 : 1;
+}
+
+__global__ void
+aggregate_measurement_k(struct aggregate_append_measurement* d_measurement,
+                        const size_t* __restrict__ d_actual_bytes_ptr,
+                        const size_t* __restrict__ d_tail_sum_bytes_ptr,
+                        int include_tail_sum,
+                        uint64_t desc_entries,
+                        int closes_after_append,
+                        int tail_rollforward_blocked)
+{
+  if (threadIdx.x != 0 || blockIdx.x != 0)
+    return;
+  size_t data_bytes = *d_actual_bytes_ptr;
+  if (include_tail_sum)
+    data_bytes += *d_tail_sum_bytes_ptr;
+  *d_measurement = (struct aggregate_append_measurement){
+    .data_bytes = data_bytes,
+    .desc_entries = desc_entries,
+    .closes_after_append = closes_after_append ? 1 : 0,
+    .tail_rollforward_blocked = tail_rollforward_blocked ? 1 : 0,
+  };
+}
+
+extern "C" int
+aggregate_measurement_launch(struct aggregate_append_measurement* d_measurement,
+                             const size_t* d_actual_bytes_ptr,
+                             const size_t* d_tail_sum_bytes_ptr,
+                             int include_tail_sum,
+                             uint64_t desc_entries,
+                             int closes_after_append,
+                             int tail_rollforward_blocked,
+                             CUstream stream)
+{
+  aggregate_measurement_k<<<1, 1, 0, (cudaStream_t)stream>>>(
+    d_measurement,
+    d_actual_bytes_ptr,
+    d_tail_sum_bytes_ptr,
+    include_tail_sum,
+    desc_entries,
+    closes_after_append,
+    tail_rollforward_blocked);
   return cudaGetLastError() == cudaSuccess ? 0 : 1;
 }
 
@@ -761,36 +784,38 @@ Error:
 }
 
 extern "C" int
-aggregate_batch_unified_async(const void* d_compressed,
-                              size_t* d_comp_sizes,
-                              const uint32_t* d_batch_gather,
-                              const uint32_t* d_batch_perm,
-                              uint64_t total_batch_chunks,
-                              uint64_t total_batch_covering,
-                              uint8_t nlod,
-                              size_t max_comp_chunk_bytes,
-                              struct aggregate_slot* slot,
-                              size_t slot_data_base,
-                              uint64_t slot_desc_base,
-                              const size_t* d_shard_base_offsets,
-                              const size_t* d_shard_capacity,
-                              const uint64_t* d_shard_tps_group,
-                              const uint64_t* d_shard_offsets_base,
-                              size_t* d_tail_bytes,
-                              CUdeviceptr d_tail_carry,
-                              size_t page_size,
-                              uint64_t total_shards,
-                              struct d_routing* d_routing,
-                              struct slot_dev_ptrs sdp_0,
-                              struct slot_dev_ptrs sdp_1,
-                              int active_slot_idx,
-                              int would_finalize_stay,
-                              int would_finalize_alone,
-                              size_t* d_tail_sum_bytes,
-                              size_t* d_temp_offsets,
-                              size_t* d_temp_perm_sizes,
-                              struct agg_routing_cb_args* cb_args,
-                              CUstream stream)
+aggregate_batch_unified_async(
+  const void* d_compressed,
+  size_t* d_comp_sizes,
+  const uint32_t* d_batch_gather,
+  const uint32_t* d_batch_perm,
+  uint64_t total_batch_chunks,
+  uint64_t total_batch_covering,
+  uint8_t nlod,
+  size_t max_comp_chunk_bytes,
+  struct aggregate_slot* slot,
+  size_t slot_data_base,
+  uint64_t slot_desc_base,
+  const size_t* d_shard_base_offsets,
+  const size_t* d_shard_capacity,
+  const uint64_t* d_shard_tps_group,
+  const uint64_t* d_shard_offsets_base,
+  size_t* d_tail_bytes,
+  CUdeviceptr d_tail_carry,
+  size_t page_size,
+  uint64_t total_shards,
+  struct d_routing* d_routing,
+  struct slot_dev_ptrs sdp_0,
+  struct slot_dev_ptrs sdp_1,
+  int active_slot_idx,
+  int would_finalize_stay,
+  int would_finalize_alone,
+  struct aggregate_append_measurement* d_measurement,
+  size_t* d_tail_sum_bytes,
+  size_t* d_temp_offsets,
+  size_t* d_temp_perm_sizes,
+  struct agg_routing_cb_args* cb_args,
+  CUstream stream)
 {
   (void)d_shard_capacity;
   (void)slot_data_base;
@@ -850,19 +875,24 @@ aggregate_batch_unified_async(const void* d_compressed,
     include_tail_sum = 1;
   }
 
+  CHECK(Error, d_measurement);
+  CHECK(Error,
+        aggregate_measurement_launch(d_measurement,
+                                     d_actual_bytes_ptr,
+                                     d_tail_sum_bytes,
+                                     include_tail_sum,
+                                     C + (uint64_t)nlod,
+                                     would_finalize_alone,
+                                     would_finalize_stay,
+                                     stream) == 0);
   CHECK(Error,
         fit_decision_launch(d_routing,
                             sdp_0,
                             sdp_1,
-                            d_actual_bytes_ptr,
-                            d_tail_sum_bytes,
-                            include_tail_sum,
+                            d_measurement,
                             slot->slot_capacity_bytes,
                             slot->batches_per_slot_cap,
-                            C + (uint64_t)nlod,
                             active_slot_idx,
-                            would_finalize_stay,
-                            would_finalize_alone,
                             stream) == 0);
 
   if (total_shards > 0 && slot->d_shard_sum_bytes) {

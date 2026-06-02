@@ -225,6 +225,7 @@ struct compress_agg_stage
 
   // Routing decision for the current batch, written by fit_decision_k.
   struct d_routing* d_routing;
+  struct aggregate_append_measurement* d_measurement;
   size_t* d_tail_sum_bytes;
   size_t* d_temp_offsets;
   size_t* d_temp_perm_sizes;
