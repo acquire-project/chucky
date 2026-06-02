@@ -217,6 +217,7 @@ prepare_output_kick(struct stream_engine* e, struct stream_context* ctx, int oi)
 static int
 post_kick_review(struct stream_engine* e,
                  struct stream_context* ctx,
+                 int fc,
                  int active_oi,
                  struct flush_handoff* scratch,
                  int* out_target)
@@ -227,7 +228,7 @@ post_kick_review(struct stream_engine* e,
   const int target = r->target_slot_idx;
   const int close = r->close_prior_slot_idx;
   const struct output_slot_request request =
-    output_request_from_measurement(&r->measurement);
+    output_request_from_measurement(e->compress_agg.h_measurement[fc]);
   struct output_slot_reservation plan;
   CHECK(Error,
         output_slot_ledger_plan_append(&e->flush.output, &request, &plan) ==
@@ -239,6 +240,13 @@ post_kick_review(struct stream_engine* e,
   CHECK(Error, plan.close_slot == close);
   CHECK(Error, plan.close_before_append == (close >= 0));
   CHECK(Error, plan.close_after_append == request.closes_after_append);
+  CHECK(Error, r->measurement.data_bytes == request.data_bytes);
+  CHECK(Error, r->measurement.desc_entries == request.desc_entries);
+  CHECK(Error,
+        r->measurement.closes_after_append == request.closes_after_append);
+  CHECK(Error,
+        r->measurement.tail_rollforward_blocked ==
+          request.tail_rollforward_blocked);
 
   const uint32_t cap = e->compress_agg.output[active_oi].batches_per_slot_cap;
   if (cap == 1) {
@@ -328,7 +336,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
         kick_compress_agg(e, ctx, fc, oi, e->batch.accumulated, &scratch) == 0);
 
   int target = -1;
-  CHECK(Error, post_kick_review(e, ctx, oi, &scratch, &target) == 0);
+  CHECK(Error, post_kick_review(e, ctx, fc, oi, &scratch, &target) == 0);
 
   const uint32_t cap = e->compress_agg.output[oi].batches_per_slot_cap;
   if (cap > 1) {
@@ -407,7 +415,8 @@ flush_kick_batch(struct stream_engine* e,
   CHECK(Error,
         kick_compress_agg(e, ctx, fc, output_idx, n_epochs, &scratch) == 0);
   int target = -1;
-  CHECK(Error, post_kick_review(e, ctx, output_idx, &scratch, &target) == 0);
+  CHECK(Error,
+        post_kick_review(e, ctx, fc, output_idx, &scratch, &target) == 0);
   CHECK(Error,
         kick_d2h_and_mark_pending(
           e, ctx, target, &e->flush.pending_handoff[target]) == 0);

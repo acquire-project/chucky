@@ -511,6 +511,18 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     if (comp_sz > 0)
       CU(Fail, cuMemAlloc(&e->compress_agg.d_compressed[fc], comp_sz));
     CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_measurement[fc],
+                  sizeof(struct aggregate_append_measurement)));
+    CU(Fail,
+       cuMemHostAlloc((void**)&e->compress_agg.h_measurement[fc],
+                      sizeof(struct aggregate_append_measurement),
+                      0));
+    memset((void*)e->compress_agg.h_measurement[fc],
+           0,
+           sizeof(struct aggregate_append_measurement));
+    CU(Fail,
+       cuEventCreate(&e->compress_agg.measurement_ready[fc], CU_EVENT_DEFAULT));
+    CU(Fail,
        cuEventCreate(&e->compress_agg.t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail,
        cuEventCreate(&e->compress_agg.t_compress_end[fc], CU_EVENT_DEFAULT));
@@ -551,9 +563,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
     CU(Fail,
        cuMemsetD8(
          (CUdeviceptr)e->compress_agg.d_routing, 0, sizeof(struct d_routing)));
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_measurement,
-                  sizeof(struct aggregate_append_measurement)));
     CU(Fail,
        cuMemAlloc((CUdeviceptr*)&e->compress_agg.d_tail_sum_bytes,
                   sizeof(size_t)));
@@ -843,6 +852,10 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   e->compress_agg.cached_pool_epochs = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(e->compress_agg.d_compressed[fc]);
+    cu_mem_free((CUdeviceptr)e->compress_agg.d_measurement[fc]);
+    if (e->compress_agg.h_measurement[fc])
+      cuMemFreeHost((void*)e->compress_agg.h_measurement[fc]);
+    cu_event_destroy(e->compress_agg.measurement_ready[fc]);
     cu_event_destroy(e->compress_agg.t_compress_start[fc]);
     cu_event_destroy(e->compress_agg.t_compress_end[fc]);
     cu_event_destroy(e->compress_agg.t_aggregate_end[fc]);
@@ -852,7 +865,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&e->compress_agg.output[fc]);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_routing);
-  cu_mem_free((CUdeviceptr)e->compress_agg.d_measurement);
   cu_mem_free((CUdeviceptr)e->compress_agg.d_tail_sum_bytes);
   if (e->compress_agg.h_routing)
     cuMemFreeHost((void*)e->compress_agg.h_routing);

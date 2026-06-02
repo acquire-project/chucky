@@ -80,6 +80,17 @@ compress_agg_init(struct compress_agg_stage* stage,
       CU(
         Fail,
         cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
+    CU(Fail,
+       cuMemAlloc((CUdeviceptr*)&stage->d_measurement[fc],
+                  sizeof(struct aggregate_append_measurement)));
+    CU(Fail,
+       cuMemHostAlloc((void**)&stage->h_measurement[fc],
+                      sizeof(struct aggregate_append_measurement),
+                      0));
+    memset((void*)stage->h_measurement[fc],
+           0,
+           sizeof(struct aggregate_append_measurement));
+    CU(Fail, cuEventCreate(&stage->measurement_ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_aggregate_end[fc], CU_EVENT_DEFAULT));
@@ -149,9 +160,6 @@ compress_agg_init(struct compress_agg_stage* stage,
      cuMemAlloc((CUdeviceptr*)&stage->d_routing, sizeof(struct d_routing)));
   CU(Fail,
      cuMemsetD8((CUdeviceptr)stage->d_routing, 0, sizeof(struct d_routing)));
-  CU(Fail,
-     cuMemAlloc((CUdeviceptr*)&stage->d_measurement,
-                sizeof(struct aggregate_append_measurement)));
   CU(Fail, cuMemAlloc((CUdeviceptr*)&stage->d_tail_sum_bytes, sizeof(size_t)));
   CU(Fail,
      cuMemHostAlloc((void**)&stage->h_routing, sizeof(struct d_routing), 0));
@@ -299,6 +307,10 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   stage->cached_pool_epochs = NULL;
   for (int fc = 0; fc < 2; ++fc) {
     cu_mem_free(stage->d_compressed[fc]);
+    cu_mem_free((CUdeviceptr)stage->d_measurement[fc]);
+    if (stage->h_measurement[fc])
+      cuMemFreeHost((void*)stage->h_measurement[fc]);
+    cu_event_destroy(stage->measurement_ready[fc]);
     cu_event_destroy(stage->t_compress_start[fc]);
     cu_event_destroy(stage->t_compress_end[fc]);
     cu_event_destroy(stage->t_aggregate_end[fc]);
@@ -314,7 +326,6 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->output[fc]);
   cu_mem_free((CUdeviceptr)stage->d_routing);
-  cu_mem_free((CUdeviceptr)stage->d_measurement);
   cu_mem_free((CUdeviceptr)stage->d_tail_sum_bytes);
   if (stage->h_routing)
     cuMemFreeHost((void*)stage->h_routing);
@@ -604,7 +615,9 @@ compress_agg_kick(struct compress_agg_stage* stage,
             output_idx,
             would_finalize_stay,
             would_finalize_alone,
-            stage->d_measurement,
+            stage->d_measurement[fc],
+            stage->h_measurement[fc],
+            stage->measurement_ready[fc],
             stage->d_tail_sum_bytes,
             stage->d_temp_offsets,
             stage->d_temp_perm_sizes,

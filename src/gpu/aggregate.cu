@@ -811,6 +811,8 @@ aggregate_batch_unified_async(
   int would_finalize_stay,
   int would_finalize_alone,
   struct aggregate_append_measurement* d_measurement,
+  volatile struct aggregate_append_measurement* h_measurement,
+  CUevent measurement_ready,
   size_t* d_tail_sum_bytes,
   size_t* d_temp_offsets,
   size_t* d_temp_perm_sizes,
@@ -885,6 +887,16 @@ aggregate_batch_unified_async(
                                      would_finalize_alone,
                                      would_finalize_stay,
                                      stream) == 0);
+  if (h_measurement) {
+    CU(Error,
+       cuMemcpyDtoHAsync((void*)h_measurement,
+                         (CUdeviceptr)d_measurement,
+                         sizeof(struct aggregate_append_measurement),
+                         stream));
+  }
+  if (measurement_ready)
+    CU(Error, cuEventRecord(measurement_ready, stream));
+
   CHECK(Error,
         fit_decision_launch(d_routing,
                             sdp_0,

@@ -204,6 +204,8 @@ extern "C"
     int would_finalize_stay,
     int would_finalize_alone,
     struct aggregate_append_measurement* d_measurement,
+    volatile struct aggregate_append_measurement* h_measurement,
+    CUevent measurement_ready,
     size_t* d_tail_sum_bytes,
     size_t* d_temp_offsets,
     size_t* d_temp_perm_sizes,
