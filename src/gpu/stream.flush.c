@@ -151,6 +151,16 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   // Phase 5: swap to fresh pool and zero it for next batch.
   e->pools.current ^= 1;
+  // The pool being reused was the compress input of the batch kicked one
+  // round ago at fc == pools.current; compress (and, for CODEC_NONE,
+  // aggregate) may still be reading it on the compress stream. Order the
+  // zero + the next batch's scatters (all later compute-stream work)
+  // behind that read. Device-side wait only — the producer thread does
+  // not block. Seeded signaled at init, so the first swap is a no-op.
+  CU(Error,
+     cuStreamWaitEvent(e->streams.compute,
+                       e->compress_agg.t_aggregate_end[e->pools.current],
+                       0));
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
   CU(Error,
