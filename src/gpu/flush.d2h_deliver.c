@@ -37,6 +37,9 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
     CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
+  // Drain-time copies must not share the d2h stream (see d2h_deliver_stage).
+  CU(Fail, cuStreamCreate(&stage->drain_stream, CU_STREAM_NON_BLOCKING));
+
   return 0;
 
 Fail:
@@ -54,6 +57,8 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     cu_event_destroy(stage->h_chunk_index_ready[fc]);
     cu_event_destroy(stage->ready[fc]);
   }
+  cu_stream_destroy(stage->drain_stream);
+  stage->drain_stream = NULL;
 }
 
 // --- Internal helpers ---
@@ -224,8 +229,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct shard_sink* sink,
                  const struct lod_state* lod,
                  const struct lod_shared_state* lod_shared,
-                 struct stream_metrics* metrics,
-                 CUstream d2h_stream)
+                 struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
   struct aggregate_slot* slot = handoff->agg;
@@ -245,6 +249,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (poll_event(stage->h_chunk_index_ready[fc], fc))
         goto Error;
 
+      // Bulk copies go on drain_stream, never d2h_stream — sharing
+      // deadlocks against the tail gate (see d2h_deliver_stage).
       int dispatch_err = 0;
       if (alayout->page_size > 0) {
         for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
@@ -262,7 +268,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                     (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
                     (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
                     actual,
-                    d2h_stream));
+                    stage->drain_stream));
         }
       } else if (alayout->total_batch_covering > 0) {
         const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
@@ -274,15 +280,15 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                   cuMemcpyDtoHAsync(slot->h_aggregated,
                                     (CUdeviceptr)slot->d_aggregated,
                                     total,
-                                    d2h_stream));
+                                    stage->drain_stream));
       }
 
       // Always record completion events, even if the D2H dispatch above
       // failed: cap-stacking waiters block on slot->ready and would hang
       // otherwise. Record-on-error is harmless because the stream is
       // already in an error state and the next op will short-circuit.
-      CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
-      CU(Error, cuEventRecord(slot->ready, d2h_stream));
+      CU(Error, cuEventRecord(stage->ready[fc], stage->drain_stream));
+      CU(Error, cuEventRecord(slot->ready, stage->drain_stream));
 
       if (dispatch_err)
         goto Error;
@@ -390,6 +396,14 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
           shards->d_tail_carry + (CUdeviceptr)(begin * page_size);
         CU(Error,
            cuMemcpyHtoD(dst, ss->tail_buf_pool, ss->tail_buf_pool_bytes));
+      }
+
+      // Publish to the tail gate (shard_tables). The copies above are
+      // synchronous, so a gated reader sees the complete generation; this
+      // batch's own readers already retired (h_chunk_index_ready polled).
+      if (shards->h_tail_seq_flag) {
+        shards->tail_seq++;
+        *shards->h_tail_seq_flag = shards->tail_seq;
       }
     }
 
@@ -518,6 +532,7 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                   struct platform_clock* metadata_update_clock,
                   CUstream d2h_stream)
 {
+  (void)d2h_stream; // drain-time copies use stage->drain_stream
   struct writer_result r = sync_and_deliver(stage,
                                             handoff,
                                             levels,
@@ -527,8 +542,7 @@ d2h_deliver_drain(struct d2h_deliver_stage* stage,
                                             sink,
                                             lod,
                                             lod_shared,
-                                            metrics,
-                                            d2h_stream);
+                                            metrics);
   if (!r.error) {
     if (maybe_update_metadata(
           handoff, dims, config, sink, metadata_update_clock))

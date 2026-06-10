@@ -165,6 +165,19 @@ struct shard_tables
   CUdeviceptr d_tail_carry;
   size_t tail_carry_bytes; // == total_shards * page_size
 
+  // Tail-generation gate (page-aligned lazy pipeline). Kick #k's tail reads
+  // consume the d_tail_bytes/d_tail_carry upload made by kick #k-1's
+  // delivery, which on the lazy path runs AFTER kick #k is enqueued;
+  // nothing else orders that host upload against the queued kernels. Kick
+  // #k waits d_tail_seq >= k, the delivery publishes after each upload
+  // (flush.d2h_deliver.c), and drains are oldest-first, so tail_seq counts
+  // delivered kicks.
+  volatile uint64_t* h_tail_seq_flag; // pinned + device-mapped; host-written
+  CUdeviceptr d_tail_seq;             // device view of h_tail_seq_flag
+  uint64_t kick_seq;                  // kicks enqueued (gate threshold)
+  uint64_t tail_seq;                  // uploads published (host mirror)
+  int tail_gate_supported;            // stream memops may be unsupported
+
   // Per-LOD slice info, needed by delivery to view the unified slot buffers.
   uint32_t shards_begin[LOD_MAX_LEVELS]; // first global shard index for LOD lv
   uint32_t n_shards[LOD_MAX_LEVELS];     // num_shards_lv
@@ -231,6 +244,13 @@ struct d2h_deliver_stage
   CUevent t_d2h_start[2];
   CUevent h_chunk_index_ready[2]; // h_offsets + h_permuted_sizes on host
   CUevent ready[2];               // full D2H done; gates slot reuse
+
+  // Drain-time copies must not share the d2h stream: by drain time it can
+  // already hold the next kick's t_aggregate_end wait, which the tail gate
+  // (shard_tables) keeps parked until THIS drain publishes — sharing would
+  // deadlock. The drain's host poll of h_chunk_index_ready already proves
+  // the copy source is stable, so no device-side ordering is needed here.
+  CUstream drain_stream;
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

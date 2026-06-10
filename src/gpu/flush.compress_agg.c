@@ -225,6 +225,29 @@ compress_agg_init(struct compress_agg_stage* stage,
         CU(Fail,
            cuMemsetD8(
              stage->shards.d_tail_carry, 0, stage->shards.tail_carry_bytes));
+
+        // Tail-generation gate (shard_tables in stream.engine.h). The
+        // support probe is an already-satisfied wait; without stream
+        // memops the lazy path host-drains instead (stream.flush.c).
+        CU(Fail,
+           cuMemHostAlloc((void**)&stage->shards.h_tail_seq_flag,
+                          sizeof(uint64_t),
+                          CU_MEMHOSTALLOC_DEVICEMAP));
+        *stage->shards.h_tail_seq_flag = 0;
+        CU(Fail,
+           cuMemHostGetDevicePointer(&stage->shards.d_tail_seq,
+                                     (void*)stage->shards.h_tail_seq_flag,
+                                     0));
+        {
+          CUresult pr = cuStreamWaitValue64(
+            compute, stage->shards.d_tail_seq, 0, CU_STREAM_WAIT_VALUE_GEQ);
+          stage->shards.tail_gate_supported = (pr == CUDA_SUCCESS);
+          if (pr != CUDA_SUCCESS && pr != CUDA_ERROR_NOT_SUPPORTED)
+            CU(Fail, pr);
+          if (!stage->shards.tail_gate_supported)
+            log_warn("compress_agg: stream memops unsupported; page-aligned "
+                     "pipeline degrades to host-ordered tail uploads");
+        }
       }
     }
   }
@@ -249,10 +272,25 @@ Fail:
 }
 
 void
+compress_agg_release_tail_gate(struct compress_agg_stage* stage)
+{
+  // kick_seq satisfies every threshold ever enqueued; UINT64_MAX would not
+  // (CU_STREAM_WAIT_VALUE_GEQ is a signed ring compare).
+  if (stage->shards.h_tail_seq_flag)
+    *stage->shards.h_tail_seq_flag = stage->shards.kick_seq;
+}
+
+void
 compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
 {
   if (!stage)
     return;
+  if (stage->shards.h_tail_seq_flag) {
+    // An undrained kick (failed flush) parks work on the compress stream;
+    // the frees below can block on pending work, so release first.
+    compress_agg_release_tail_gate(stage);
+    CUWARN(cuCtxSynchronize());
+  }
   codec_free(&stage->codec);
   free(stage->pool_epochs_scratch);
   free(stage->cached_pool_epochs);
@@ -283,6 +321,11 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   for (int lv = 0; lv < nlod; ++lv) {
     aggregate_layout_destroy(&stage->per_lod_agg_layouts[lv]);
     shard_state_destroy(&stage->shard[lv]);
+  }
+  if (stage->shards.h_tail_seq_flag) {
+    cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
+    stage->shards.h_tail_seq_flag = NULL;
+    stage->shards.d_tail_seq = 0;
   }
   free(stage->shards.h_base_offsets);
   free(stage->shards.h_shard_capacity);
@@ -487,6 +530,23 @@ compress_agg_kick(struct compress_agg_stage* stage,
                         batch_chunks,
                         stage->codec.chunk_bytes,
                         compress_stream) == 0);
+  }
+
+  // --- Phase 6.5: tail-generation gate (page-aligned path only) -----------
+  // The dispatch below reads tail state that the previous kick's delivery
+  // uploads AFTER this enqueue (shard_tables in stream.engine.h). The wait
+  // goes after compress, which reads no tail state.
+  if (stage->shards.d_tail_seq) {
+    if (stage->shards.tail_gate_supported && layout.total_batch_chunks > 0 &&
+        stage->shards.total_shards > 0 && page_size > 0)
+      CU(Error,
+         cuStreamWaitValue64(compress_stream,
+                             stage->shards.d_tail_seq,
+                             stage->shards.kick_seq,
+                             CU_STREAM_WAIT_VALUE_GEQ));
+    // Counts even chunk-less kicks: every kick is drained exactly once, so
+    // the count stays the next kick's threshold.
+    stage->shards.kick_seq++;
   }
 
   // --- Phase 7: unified aggregate dispatch --------------------------------
