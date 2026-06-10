@@ -1,8 +1,6 @@
 #include "stream/layouts.h"
 // Cross-validate GPU and CPU pipelines: feed identical input, compare
 // byte-exact shard output. Uses CODEC_NONE so chunk data is uncompressed.
-// Also validates the GPU zstd path: decompressed round-trip against the
-// CPU pipeline and the fill pattern, and run-to-run determinism.
 
 #include "stream.cpu.h"
 #include "stream.gpu.h"
@@ -613,16 +611,9 @@ Fail:
 }
 
 // ---- GPU zstd round trip ----
-// Full GPU pipeline with CODEC_ZSTD vs the CPU pipeline on identical input.
-// nvcomp and libzstd produce different frame bytes, so shards cannot be
-// byte-compared; instead walk each finalized shard's index, decompress every
-// chunk on both sides, and compare decompressed VALUES (and check them
-// against the fill pattern directly). Regression test for the pool-reuse
-// race where compress read a chunk pool that was being zeroed/refilled for
-// the next batch (mid-compress overwrite -> valid frames, wrong contents).
+// nvcomp and libzstd emit different frame bytes for the same input, so
+// shards cannot be byte-compared; compare decompressed values instead.
 
-// Geometry: zyx u16, chunk 1x128x128 (32 KiB), 16 chunks/epoch,
-// 4 epochs/batch, 4 batches, 4 shards (one per 4 epochs).
 #define RT_Z 16
 #define RT_YX 512
 #define RT_CHUNK_YX 128
@@ -675,20 +666,17 @@ test_gpu_zstd_round_trip(void)
   const size_t chunk_elems = (size_t)RT_CHUNK_YX * RT_CHUNK_YX;
   const size_t chunk_bytes = chunk_elems * sizeof(uint16_t);
   const uint64_t tps_total = (uint64_t)RT_CPS * RT_CPS * RT_CPS;
-  const int n_shards = RT_Z / RT_CPS; // shard grid is 4x1x1
+  const int n_shards = RT_Z / RT_CPS;
   const uint64_t total_elements = (uint64_t)RT_Z * RT_YX * RT_YX;
 
-  // Same xor coordinate pattern the benches stream (deterministic).
   xor_pattern_init(dims, 3, RT_Z);
   pattern_inited = 1;
 
-  // GPU pipeline (zstd)
   gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
   CHECK(Fail, gpu);
   CHECK(Fail,
         pump_data(tile_stream_gpu_writer(gpu), total_elements, fill_xor) == 0);
 
-  // CPU pipeline (zstd, libzstd) on identical input
   cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
   CHECK(Fail, cpu);
   CHECK(Fail,
@@ -735,7 +723,6 @@ test_gpu_zstd_round_trip(void)
               chunk_decompress(
                 cw->buf + c_off[slot], c_sz[slot], c_dec, chunk_bytes) == 0);
 
-        // GPU decompressed values == CPU decompressed values.
         if (memcmp(g_dec, c_dec, chunk_bytes) != 0) {
           if (errors < 5)
             log_error("  shard %d slot %lu: GPU != CPU decompressed values",
@@ -744,7 +731,6 @@ test_gpu_zstd_round_trip(void)
           errors++;
         }
 
-        // And both match the fill pattern: v(z,y,x) = z ^ y ^ x.
         for (uint64_t r = 0; r < RT_CHUNK_YX; ++r)
           for (uint64_t c = 0; c < RT_CHUNK_YX; ++c)
             expect[r * RT_CHUNK_YX + c] =
@@ -795,10 +781,8 @@ Fail:
 }
 
 // ---- GPU zstd determinism ----
-// Stream the same input through the GPU pipeline twice and require identical
-// delivered output: same total bytes and same order-insensitive content hash
-// (XOR of per-write FNV-1a hashes, each seeded with level/shard/offset).
-// Pre-fix, the pool-reuse race made compressed sizes vary run to run.
+// Write order across shards is not deterministic, so the content hash must
+// be order-insensitive.
 
 struct hash_writer
 {
@@ -877,9 +861,8 @@ hs_init(struct hash_sink* s)
   s->base.open = hs_open;
 }
 
-// Geometry: medfmt-like ratio at reduced scale. 32 MiB epochs (4096^2 u16),
-// 64 chunks/epoch of 512 KiB, 2 epochs/batch, 12 batches. Large enough that
-// compress (the slow stage) is still running while the next batches fill.
+// Sized so compress is still running while later batches fill; smaller and
+// the test stops exercising pool reuse under load.
 #define DET_Z 24
 #define DET_YX 4096
 #define DET_CHUNK_YX 512
