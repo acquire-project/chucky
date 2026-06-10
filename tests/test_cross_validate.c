@@ -30,6 +30,7 @@ struct mem_writer
 struct mem_sink
 {
   struct shard_sink base;
+  size_t alignment; // 0 = none; >0 reported as required_shard_alignment
   struct mem_writer w[MAX_LEVELS][MAX_SHARDS];
 };
 
@@ -72,11 +73,18 @@ ms_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return &w->base;
 }
 
+static size_t
+ms_alignment(const struct shard_sink* self)
+{
+  return ((const struct mem_sink*)self)->alignment;
+}
+
 static void
 ms_init(struct mem_sink* s)
 {
   memset(s, 0, sizeof(*s));
   s->base.open = ms_open;
+  s->base.required_shard_alignment = ms_alignment;
 }
 
 static void
@@ -610,6 +618,110 @@ Fail:
   return 1;
 }
 
+// ---- Page-aligned tail carry (lazy pipeline) ----
+// A sink alignment requirement activates the carry-over delivery path,
+// whose tail kernels consume an upload the host makes only after the
+// previous batch delivers — later than the kernels are enqueued.
+// CODEC_NONE keeps the race window open (aggregate runs as soon as it is
+// enqueued); the CPU pipeline is the byte-exact oracle.
+#define TC_Z 32  // 32 epochs (chunk_size 1), one shard generation
+#define TC_Y 144 // 2 chunks of 72
+#define TC_X 80  // 2 chunks of 40
+
+static int
+test_gpu_page_aligned_tail_carry(void)
+{
+  log_info("=== test_gpu_page_aligned_tail_carry ===");
+
+  struct mem_sink gpu_sink, cpu_sink;
+  ms_init(&gpu_sink);
+  ms_init(&cpu_sink);
+  gpu_sink.alignment = 4096;
+  cpu_sink.alignment = 4096;
+
+  struct tile_stream_gpu* gpu = NULL;
+  struct tile_stream_cpu* cpu = NULL;
+  uint16_t* data = NULL;
+
+  struct dimension dims[] = {
+    { .size = TC_Z,
+      .chunk_size = 1,
+      .chunks_per_shard = TC_Z,
+      .storage_position = 0 },
+    { .size = TC_Y,
+      .chunk_size = 72,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+    { .size = TC_X,
+      .chunk_size = 40,
+      .chunks_per_shard = 2,
+      .storage_position = 2 },
+  };
+
+  // chunk = 72*40 u16 = 5760 B; 4 chunks/epoch, 2 epochs/batch => 46080 B
+  // per shard per batch = 11*4096 + 1024, so every batch moves the ragged
+  // tail and a one-generation-stale read is wrong from batch 2 onward.
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 1 << 16,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 2,
+  };
+
+  const uint64_t total_elements = (uint64_t)TC_Z * TC_Y * TC_X;
+
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
+  CHECK(Fail, gpu);
+  data = make_input(total_elements);
+  CHECK(Fail, data);
+
+  {
+    struct writer* w = tile_stream_gpu_writer(gpu);
+    size_t bytes = total_elements * sizeof(uint16_t);
+    struct slice sl = { .beg = data, .end = (const char*)data + bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == 0);
+    r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
+  CHECK(Fail, cpu);
+
+  {
+    struct writer* w = tile_stream_cpu_writer(cpu);
+    size_t bytes = total_elements * sizeof(uint16_t);
+    struct slice sl = { .beg = data, .end = (const char*)data + bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == 0);
+    r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  int mismatches = compare_shards(&gpu_sink, &cpu_sink, "page_tail_carry");
+  CHECK(Fail, mismatches == 0);
+  CHECK(Fail, tile_stream_gpu_cursor(gpu) == tile_stream_cpu_cursor(cpu));
+
+  free(data);
+  tile_stream_gpu_destroy(gpu);
+  tile_stream_cpu_destroy(cpu);
+  ms_free(&gpu_sink);
+  ms_free(&cpu_sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_gpu_destroy(gpu);
+  tile_stream_cpu_destroy(cpu);
+  ms_free(&gpu_sink);
+  ms_free(&cpu_sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- GPU zstd round trip ----
 // nvcomp and libzstd emit different frame bytes for the same input, so
 // shards cannot be byte-compared; compare decompressed values instead.
@@ -956,5 +1068,6 @@ RUN_GPU_TESTS({ "cross_validate_basic", test_cross_validate_basic },
               { "cross_validate_multishard", test_cross_validate_multishard },
               { "cross_validate_lod", test_cross_validate_lod },
               { "cross_validate_lod_dim0", test_cross_validate_lod_dim0 },
+              { "gpu_page_aligned_tail_carry", test_gpu_page_aligned_tail_carry },
               { "gpu_zstd_round_trip", test_gpu_zstd_round_trip },
               { "gpu_zstd_determinism", test_gpu_zstd_determinism }, )
