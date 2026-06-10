@@ -26,7 +26,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # MinIO for S3 tests
-RUN curl -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio \
+RUN curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio \
     && chmod +x /usr/local/bin/minio
 
 # AWS CLI for S3 test bucket setup
