@@ -391,12 +391,9 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       sink_bytes += level_bytes;
     }
 
-    // Push the post-delivery tail state back to GPU in two bulk HtoDs that
-    // cover all shards across all LODs at once. Replaces the per-LOD
-    // tail-state uploads from the legacy pipeline. SYNC_MEMOPS on the
-    // destinations guarantees these copies have completed at the device
-    // before they return, so the tail-gate publish in finish_drain cannot
-    // outrun them.
+    // SYNC_MEMOPS on the destinations guarantees these copies have
+    // completed at the device before they return, so the tail-gate publish
+    // in finish_drain cannot outrun them.
     if (shards && shards->total_shards > 0 && page_size > 0) {
       CU(Error,
          cuMemcpyHtoD((CUdeviceptr)shards->d_tail_bytes,
