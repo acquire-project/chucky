@@ -207,6 +207,18 @@ compress_agg_init(struct compress_agg_stage* stage,
                     0,
                     total_shards * sizeof(size_t)));
 
+      // Delivery's tail upload is a synchronous HtoD from pageable memory,
+      // which may return before the DMA reaches the device; SYNC_MEMOPS
+      // makes it complete at the device first, so the tail-gate publish
+      // that follows it cannot outrun the copy (flush.d2h_deliver.c).
+      {
+        unsigned int sync_memops = 1;
+        CU(Fail,
+           cuPointerSetAttribute(&sync_memops,
+                                 CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                 (CUdeviceptr)stage->shards.d_tail_bytes));
+      }
+
       // d_shard_capacity stays constant across batches in steady state; upload
       // it once now. d_base_offsets / d_tps_group / d_offsets_base depend on
       // per-batch active counts and are uploaded by the kick.
@@ -225,6 +237,14 @@ compress_agg_init(struct compress_agg_stage* stage,
         CU(Fail,
            cuMemsetD8(
              stage->shards.d_tail_carry, 0, stage->shards.tail_carry_bytes));
+        // Same pageable-HtoD constraint as d_tail_bytes above.
+        {
+          unsigned int sync_memops = 1;
+          CU(Fail,
+             cuPointerSetAttribute(&sync_memops,
+                                   CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                   stage->shards.d_tail_carry));
+        }
 
         // Tail-generation gate (shard_tables in stream.engine.h). The
         // support probe is an already-satisfied wait; without stream

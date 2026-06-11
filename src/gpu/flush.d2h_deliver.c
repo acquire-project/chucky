@@ -219,6 +219,21 @@ Error:
   return 1;
 }
 
+// Publishes the drained kick's tail generation; must run exactly once per
+// drain, on failure exits too — the gate threshold counts kicks
+// (shard_tables in stream.engine.h), so a skipped publish leaves the gate
+// unsatisfiable and destroy's auto-flush hangs in poll_event. Tail-state
+// content is moot once the drain has failed.
+static struct writer_result
+finish_drain(struct shard_tables* shards, int err)
+{
+  if (shards && shards->h_tail_seq_flag) {
+    shards->tail_seq++;
+    *shards->h_tail_seq_flag = shards->tail_seq;
+  }
+  return err ? writer_error() : writer_ok();
+}
+
 static struct writer_result
 sync_and_deliver(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
@@ -378,7 +393,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
 
     // Push the post-delivery tail state back to GPU in two bulk HtoDs that
     // cover all shards across all LODs at once. Replaces the per-LOD
-    // tail-state uploads from the legacy pipeline.
+    // tail-state uploads from the legacy pipeline. SYNC_MEMOPS on the
+    // destinations guarantees these copies have completed at the device
+    // before they return, so the tail-gate publish in finish_drain cannot
+    // outrun them.
     if (shards && shards->total_shards > 0 && page_size > 0) {
       CU(Error,
          cuMemcpyHtoD((CUdeviceptr)shards->d_tail_bytes,
@@ -397,14 +415,6 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
         CU(Error,
            cuMemcpyHtoD(dst, ss->tail_buf_pool, ss->tail_buf_pool_bytes));
       }
-
-      // Publish to the tail gate (shard_tables). The copies above are
-      // synchronous, so a gated reader sees the complete generation; this
-      // batch's own readers already retired (h_chunk_index_ready polled).
-      if (shards->h_tail_seq_flag) {
-        shards->tail_seq++;
-        *shards->h_tail_seq_flag = shards->tail_seq;
-      }
     }
 
     // Record an aggregate IO fence on the unified slot. wait_io_fences()
@@ -416,10 +426,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
-  return writer_ok();
+  return finish_drain(handoff->shards, 0);
 
 Error:
-  return writer_error();
+  return finish_drain(handoff->shards, 1);
 }
 
 // Periodic metadata update (append-dim extents per level).
