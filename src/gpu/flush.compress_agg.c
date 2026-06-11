@@ -248,26 +248,32 @@ compress_agg_init(struct compress_agg_stage* stage,
 
         // Tail-generation gate (shard_tables in stream.engine.h). The
         // support probe is an already-satisfied wait; without stream
-        // memops the lazy path host-drains instead (stream.flush.c).
-        CU(Fail,
-           cuMemHostAlloc((void**)&stage->shards.h_tail_seq_flag,
-                          sizeof(uint64_t),
-                          CU_MEMHOSTALLOC_DEVICEMAP));
-        *stage->shards.h_tail_seq_flag = 0;
-        CU(Fail,
-           cuMemHostGetDevicePointer(&stage->shards.d_tail_seq,
-                                     (void*)stage->shards.h_tail_seq_flag,
-                                     0));
-        {
+        // memops — or when the counter can't be allocated or mapped —
+        // the lazy path host-drains instead (stream.flush.c).
+        if (cuMemHostAlloc((void**)&stage->shards.h_tail_seq_flag,
+                           sizeof(uint64_t),
+                           CU_MEMHOSTALLOC_DEVICEMAP) != CUDA_SUCCESS) {
+          stage->shards.h_tail_seq_flag = NULL;
+        } else {
+          *stage->shards.h_tail_seq_flag = 0;
+          if (cuMemHostGetDevicePointer(&stage->shards.d_tail_seq,
+                                        (void*)stage->shards.h_tail_seq_flag,
+                                        0) != CUDA_SUCCESS) {
+            cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
+            stage->shards.h_tail_seq_flag = NULL;
+            stage->shards.d_tail_seq = 0;
+          }
+        }
+        if (stage->shards.d_tail_seq) {
           CUresult pr = cuStreamWaitValue64(
             compute, stage->shards.d_tail_seq, 0, CU_STREAM_WAIT_VALUE_GEQ);
           stage->shards.tail_gate_supported = (pr == CUDA_SUCCESS);
           if (pr != CUDA_SUCCESS && pr != CUDA_ERROR_NOT_SUPPORTED)
             CU(Fail, pr);
-          if (!stage->shards.tail_gate_supported)
-            log_warn("compress_agg: stream memops unsupported; page-aligned "
-                     "pipeline degrades to host-ordered tail uploads");
         }
+        if (!stage->shards.tail_gate_supported)
+          log_warn("compress_agg: tail gate unavailable; page-aligned "
+                   "pipeline degrades to host-ordered tail uploads");
       }
     }
   }
