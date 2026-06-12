@@ -285,8 +285,11 @@ gpu_edge_wait(struct gpu_ordering* ord, enum gpu_edge e, int i, CUstream stream)
 {
   CUevent ev = ord->edge[owner_of(e)].ev[i];
   if (!ev) {
+    // Returning success here would silently drop an ordering rule; callers
+    // must gate on the binding (e.g. lod_active), so fail in release too.
+    log_error("gpu_ordering: wait on unbound edge %s[%d]", DESC[e].name, i);
     assert(!"gpu_ordering: wait on unbound edge");
-    return 0;
+    return 1;
   }
 #ifndef NDEBUG
   assert(DESC[e].kind == GPU_EDGE_EVENT);
@@ -338,9 +341,10 @@ gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i)
     }
     platform_sleep_ns(50000); // 50 us
   }
-  if (m)
-    accumulate_metric_ms(m, timed ? (float)(platform_toc(&clk) * 1000.0) : 0.0f,
-                         0, 0);
+  // Only blocked polls become samples — a zero sample per call would turn
+  // the stall rows into poll counts rather than stall time.
+  if (m && timed)
+    accumulate_metric_ms(m, (float)(platform_toc(&clk) * 1000.0), 0, 0);
   return 0;
 }
 
