@@ -4,6 +4,7 @@
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
 #include "gpu/ordering.h"
+#include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
@@ -20,7 +21,8 @@ struct pool_state
 };
 
 // Ordering events (h2d-done, scatter-done) live in gpu_ordering, instanced
-// by staging slot; only timing-interval starts stay here.
+// by staging slot; only timing-interval starts stay here. h_in/d_in are the
+// pool payloads — non-init code reaches them through d_pool/h_pool only.
 struct staging_slot
 {
   void* h_in;              // pinned host WC, size = buffer_capacity_bytes
@@ -33,9 +35,12 @@ struct staging_slot
 struct staging_state
 {
   struct staging_slot slot[2];
-  int current;          // 0 or 1: which buffer the host is filling
-  size_t bytes_written; // bytes written to current slot's h_in so far
-  struct gpu_ordering* ord; // borrowed
+  struct gpu_pool d_pool; // d_in: ready=STAGING_H2D_DONE,
+                          //       consumed=STAGING_SCATTER_DONE
+  struct gpu_pool h_pool; // h_in: consumed=STAGING_FREE; ready is host call
+                          //       order (fill precedes dispatch)
+  int current;            // 0 or 1: which buffer the host is filling
+  size_t bytes_written;   // bytes written to current slot's h_in so far
 };
 
 // Per flush-slot: mutable batch state (masks + epoch count).

@@ -139,7 +139,7 @@ stream_append_body(struct stream_engine* e,
           struct staging_slot* ss = &e->stage.slot[si];
           // Poll instead of cuEventSynchronize to keep the producer thread
           // hot — it has memcpy work queued up immediately after.
-          if (gpu_edge_host_wait(&e->ord, GPU_EDGE_STAGING_FREE, si))
+          if (gpu_pool_host_acquire_produce(&e->stage.h_pool, si, NULL))
             goto Error;
 
           if (ctx->cursor_elements > 0) {
@@ -161,8 +161,11 @@ stream_append_body(struct stream_engine* e,
         {
           struct platform_clock mc = { 0 };
           platform_toc(&mc);
-          memcpy((uint8_t*)e->stage.slot[e->stage.current].h_in +
-                   e->stage.bytes_written,
+          // Same h_in generation as the bytes_written==0 acquire above.
+          memcpy(gpu_pool_at(&e->stage.h_pool,
+                             e->stage.current,
+                             e->stage.bytes_written)
+                   .p,
                  src + written,
                  payload);
           accumulate_metric_ms(&e->metrics.memcpy,

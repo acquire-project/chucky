@@ -13,12 +13,18 @@ ingest_init(struct staging_state* stage,
             CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
-  stage->ord = ord;
   // Ordering events (h2d-done, scatter-done) are owned and seeded by ord;
   // only the timing-interval starts are created here.
+  gpu_pool_init(&stage->d_pool,
+                ord,
+                GPU_EDGE_STAGING_H2D_DONE,
+                GPU_EDGE_STAGING_SCATTER_DONE);
+  gpu_pool_init(&stage->h_pool, ord, GPU_EDGE_COUNT, GPU_EDGE_STAGING_FREE);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemHostAlloc(&stage->slot[i].h_in, buffer_capacity_bytes, 0));
     CU(Fail, cuMemAlloc(&stage->slot[i].d_in, buffer_capacity_bytes));
+    gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
+    gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
     CU(Fail, cuEventCreate(&stage->slot[i].t_h2d_start, CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->slot[i].t_scatter_start, CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->slot[i].t_h2d_start, compute));
@@ -40,6 +46,30 @@ ingest_destroy(struct staging_state* stage)
     cu_event_destroy(ss->t_h2d_start);
     cu_event_destroy(ss->t_scatter_start);
   }
+}
+
+// H2D into the slot's d_in. The produce-acquire keeps the copy from
+// overwriting d_in while the prior generation's scatter still reads it; the
+// release also frees h_in for host refill (STAGING_FREE aliases it).
+static int
+dispatch_h2d(struct staging_state* stage,
+             int idx,
+             CUstream h2d,
+             struct gpu_pool_view* d_in)
+{
+  struct gpu_pool_view h_in;
+  // h_in consume: ready is host call order (filled before this dispatch).
+  CHECK(Error, gpu_pool_acquire_consume(&stage->h_pool, idx, h2d, &h_in) == 0);
+  CHECK(Error, gpu_pool_acquire_produce(&stage->d_pool, idx, h2d, d_in) == 0);
+  CU(Error, cuEventRecord(stage->slot[idx].t_h2d_start, h2d));
+  CU(Error,
+     cuMemcpyHtoDAsync(
+       gpu_pool_view_d(*d_in), h_in.p, stage->bytes_written, h2d));
+  CHECK(Error, gpu_pool_release_produce(&stage->d_pool, idx, h2d) == 0);
+  return 0;
+
+Error:
+  return 1;
 }
 
 int
@@ -64,22 +94,15 @@ ingest_dispatch_scatter(struct staging_state* stage,
 
   ss->dispatched_bytes = stage->bytes_written;
 
-  // H2D — wait for prior scatter to finish reading d_in before overwriting
-  CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_STAGING_SCATTER_DONE, idx, h2d) == 0);
-  CU(Error, cuEventRecord(ss->t_h2d_start, h2d));
-  CU(Error, cuMemcpyHtoDAsync(ss->d_in, ss->h_in, stage->bytes_written, h2d));
-  CHECK(Error,
-        gpu_edge_record(stage->ord, GPU_EDGE_STAGING_H2D_DONE, idx, h2d) == 0);
+  struct gpu_pool_view d_in;
+  CHECK(Error, dispatch_h2d(stage, idx, h2d, &d_in) == 0);
 
   // Scatter into chunk pool
   CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_STAGING_H2D_DONE, idx, compute) == 0);
+        gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   CU(Error, cuEventRecord(ss->t_scatter_start, compute));
   transpose((CUdeviceptr)pool_epoch,
-            ss->d_in,
+            gpu_pool_view_d(d_in),
             stage->bytes_written,
             (uint8_t)bpe,
             *cursor,
@@ -87,9 +110,7 @@ ingest_dispatch_scatter(struct staging_state* stage,
             layout_gpu->d_lifted_shape,
             layout_gpu->d_lifted_strides,
             compute);
-  CHECK(Error,
-        gpu_edge_record(
-          stage->ord, GPU_EDGE_STAGING_SCATTER_DONE, idx, compute) == 0);
+  CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
   *cursor += elements;
   stage->current ^= 1;
@@ -120,29 +141,22 @@ ingest_dispatch_multiscale(struct staging_state* stage,
 
   ss->dispatched_bytes = stage->bytes_written;
 
-  // H2D — wait for prior d_linear copy to finish reading d_in
-  CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_STAGING_SCATTER_DONE, idx, h2d) == 0);
-  CU(Error, cuEventRecord(ss->t_h2d_start, h2d));
-  CU(Error, cuMemcpyHtoDAsync(ss->d_in, ss->h_in, stage->bytes_written, h2d));
-  CHECK(Error,
-        gpu_edge_record(stage->ord, GPU_EDGE_STAGING_H2D_DONE, idx, h2d) == 0);
+  struct gpu_pool_view d_in;
+  CHECK(Error, dispatch_h2d(stage, idx, h2d, &d_in) == 0);
 
   // Copy raw input to linear epoch buffer for LOD downsampling
   CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_STAGING_H2D_DONE, idx, compute) == 0);
+        gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   CU(Error, cuEventRecord(ss->t_scatter_start, compute));
   {
     uint64_t epoch_offset = (*cursor % epoch_elements) * bpe;
     CU(Error,
-       cuMemcpyDtoDAsync(
-         d_linear + epoch_offset, ss->d_in, elements * bpe, compute));
+       cuMemcpyDtoDAsync(d_linear + epoch_offset,
+                         gpu_pool_view_d(d_in),
+                         elements * bpe,
+                         compute));
   }
-  CHECK(Error,
-        gpu_edge_record(
-          stage->ord, GPU_EDGE_STAGING_SCATTER_DONE, idx, compute) == 0);
+  CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
   *cursor += elements;
   stage->current ^= 1;
