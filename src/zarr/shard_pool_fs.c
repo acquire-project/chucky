@@ -21,7 +21,9 @@ struct shard_pool_fs
   uint64_t nslots;
   int unbuffered;
   struct strbuf root; // owned
-  uint64_t queued_bytes;
+  // Writes land on whichever thread runs sink delivery while the producer
+  // samples pending_bytes for backpressure.
+  _Atomic uint64_t queued_bytes;
   _Atomic uint64_t retired_bytes;
   _Atomic int io_error;
 };
@@ -35,7 +37,7 @@ struct fs_slot
   struct io_queue* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
   _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
-  uint64_t* queued_bytes;          // points to shard_pool_fs.queued_bytes
+  _Atomic uint64_t* queued_bytes;  // points to shard_pool_fs.queued_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
 };
 
@@ -102,7 +104,7 @@ fs_slot_write(struct shard_writer* self,
       job_free(j);
       goto Error;
     }
-    *w->queued_bytes += nbytes;
+    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -159,7 +161,7 @@ fs_slot_write_direct(struct shard_writer* self,
       free(j);
       goto Error;
     }
-    *w->queued_bytes += nbytes;
+    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -328,7 +330,7 @@ pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  return p->queued_bytes - atomic_load(&p->retired_bytes);
+  return atomic_load(&p->queued_bytes) - atomic_load(&p->retired_bytes);
 }
 
 static size_t

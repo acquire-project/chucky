@@ -48,7 +48,7 @@ throttled_post(struct throttled_shard_sink* s, size_t nbytes)
     free(j);
     goto Error;
   }
-  s->queued_bytes += nbytes;
+  atomic_fetch_add(&s->queued_bytes, nbytes);
   return 0;
 
 Error:
@@ -124,9 +124,10 @@ throttled_shard_pending_bytes(const struct shard_sink* self)
   const struct throttled_shard_sink* s =
     (const struct throttled_shard_sink*)self;
   uint64_t retired = atomic_load(&s->retired_bytes);
-  if (s->queued_bytes <= retired)
+  uint64_t queued = atomic_load(&s->queued_bytes);
+  if (queued <= retired)
     return 0;
-  return (size_t)(s->queued_bytes - retired);
+  return (size_t)(queued - retired);
 }
 
 int
