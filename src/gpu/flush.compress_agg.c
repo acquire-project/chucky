@@ -207,6 +207,18 @@ compress_agg_init(struct compress_agg_stage* stage,
                     0,
                     total_shards * sizeof(size_t)));
 
+      // Delivery's tail upload is a synchronous HtoD from pageable memory,
+      // which may return before the DMA reaches the device; SYNC_MEMOPS
+      // makes it complete at the device first, so the tail-gate publish
+      // that follows it cannot outrun the copy (flush.d2h_deliver.c).
+      {
+        unsigned int sync_memops = 1;
+        CU(Fail,
+           cuPointerSetAttribute(&sync_memops,
+                                 CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                 (CUdeviceptr)stage->shards.d_tail_bytes));
+      }
+
       // d_shard_capacity stays constant across batches in steady state; upload
       // it once now. d_base_offsets / d_tps_group / d_offsets_base depend on
       // per-batch active counts and are uploaded by the kick.
@@ -225,6 +237,43 @@ compress_agg_init(struct compress_agg_stage* stage,
         CU(Fail,
            cuMemsetD8(
              stage->shards.d_tail_carry, 0, stage->shards.tail_carry_bytes));
+        // Same pageable-HtoD constraint as d_tail_bytes above.
+        {
+          unsigned int sync_memops = 1;
+          CU(Fail,
+             cuPointerSetAttribute(&sync_memops,
+                                   CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                   stage->shards.d_tail_carry));
+        }
+
+        // Tail-generation gate (shard_tables in stream.engine.h). The
+        // support probe is an already-satisfied wait; without stream
+        // memops — or when the counter can't be allocated or mapped —
+        // the lazy path host-drains instead (stream.flush.c).
+        if (cuMemHostAlloc((void**)&stage->shards.h_tail_seq_flag,
+                           sizeof(uint64_t),
+                           CU_MEMHOSTALLOC_DEVICEMAP) != CUDA_SUCCESS) {
+          stage->shards.h_tail_seq_flag = NULL;
+        } else {
+          *stage->shards.h_tail_seq_flag = 0;
+          if (cuMemHostGetDevicePointer(&stage->shards.d_tail_seq,
+                                        (void*)stage->shards.h_tail_seq_flag,
+                                        0) != CUDA_SUCCESS) {
+            cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
+            stage->shards.h_tail_seq_flag = NULL;
+            stage->shards.d_tail_seq = 0;
+          }
+        }
+        if (stage->shards.d_tail_seq) {
+          CUresult pr = cuStreamWaitValue64(
+            compute, stage->shards.d_tail_seq, 0, CU_STREAM_WAIT_VALUE_GEQ);
+          stage->shards.tail_gate_supported = (pr == CUDA_SUCCESS);
+          if (pr != CUDA_SUCCESS && pr != CUDA_ERROR_NOT_SUPPORTED)
+            CU(Fail, pr);
+        }
+        if (!stage->shards.tail_gate_supported)
+          log_warn("compress_agg: tail gate unavailable; page-aligned "
+                   "pipeline degrades to host-ordered tail uploads");
       }
     }
   }
@@ -249,10 +298,25 @@ Fail:
 }
 
 void
+compress_agg_release_tail_gate(struct compress_agg_stage* stage)
+{
+  // kick_seq satisfies every threshold ever enqueued; UINT64_MAX would not
+  // (CU_STREAM_WAIT_VALUE_GEQ is a signed ring compare).
+  if (stage->shards.h_tail_seq_flag)
+    *stage->shards.h_tail_seq_flag = stage->shards.kick_seq;
+}
+
+void
 compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
 {
   if (!stage)
     return;
+  if (stage->shards.h_tail_seq_flag) {
+    // An undrained kick (failed flush) parks work on the compress stream;
+    // the frees below can block on pending work, so release first.
+    compress_agg_release_tail_gate(stage);
+    CUWARN(cuCtxSynchronize());
+  }
   codec_free(&stage->codec);
   free(stage->pool_epochs_scratch);
   free(stage->cached_pool_epochs);
@@ -284,6 +348,11 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
     aggregate_layout_destroy(&stage->per_lod_agg_layouts[lv]);
     shard_state_destroy(&stage->shard[lv]);
   }
+  if (stage->shards.h_tail_seq_flag) {
+    cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
+    stage->shards.h_tail_seq_flag = NULL;
+    stage->shards.d_tail_seq = 0;
+  }
   free(stage->shards.h_base_offsets);
   free(stage->shards.h_shard_capacity);
   free(stage->shards.h_tps_group);
@@ -302,7 +371,8 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
 
 // Build per-shard tables for this batch's `layout`. Populates host shadows
 // and uploads to device on `stream`. tables.h_shard_capacity is constant and
-// uploaded at init; not re-uploaded here.
+// uploaded at init; not re-uploaded here. The rest is rebuilt every kick:
+// it depends on per_lod_n_active, which can shift mid-stream.
 static int
 build_and_upload_shard_tables(struct compress_agg_stage* stage,
                               const struct batch_aggregate_layout* layout,
@@ -354,55 +424,64 @@ Error:
   return 1;
 }
 
-int
-compress_agg_kick(struct compress_agg_stage* stage,
+static void
+scan_active_masks(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
-                  const struct level_geometry* levels,
-                  CUstream compress_stream,
-                  struct flush_handoff* out)
+                  uint32_t* per_lod_n_active,
+                  const uint32_t** per_lod_pool_epochs)
 {
-  const int fc = in->fc;
-  const uint32_t n_epochs = in->n_epochs;
-  const uint8_t nlod = stage->nlod;
-
-  // --- Phase 1: mask scan (LOD-aware ends here) ----------------------------
-  // Per-LOD pool_epochs slices from the [LOD_MAX_LEVELS * K] scratch.
-  // Stride is the configured K (pool_epochs_stride), so the cache (same
-  // layout) can compare each LOD's slice at a stable offset.
   const uint32_t stride = stage->pool_epochs_stride;
-  uint32_t per_lod_n_active[LOD_MAX_LEVELS] = { 0 };
-  const uint32_t* per_lod_pool_epochs[LOD_MAX_LEVELS] = { 0 };
-  for (uint8_t lv = 0; lv < nlod; ++lv) {
+  for (uint8_t lv = 0; lv < stage->nlod; ++lv) {
     uint32_t* dst = stage->pool_epochs_scratch + (size_t)lv * stride;
     uint32_t k = 0;
-    for (uint32_t e = 0; e < n_epochs; ++e)
+    for (uint32_t e = 0; e < in->n_epochs; ++e)
       if (in->batch_active_masks[e] & (1u << lv))
         dst[k++] = e;
     per_lod_n_active[lv] = k;
     per_lod_pool_epochs[lv] = dst;
   }
+}
 
-  // --- Phase 2: build the per-kick unified batch layout --------------------
+static int
+build_batch_layout(struct compress_agg_stage* stage,
+                   const uint32_t* per_lod_n_active,
+                   struct batch_aggregate_layout* layout)
+{
   // Page size is uniform across LODs (sink-driven); read from LOD 0.
-  struct batch_aggregate_layout layout;
   const size_t page_size = stage->per_lod_agg_layouts[0].page_size;
-  CHECK(
-    Error,
-    batch_aggregate_layout_init(
-      &layout, stage->per_lod_agg_layouts, per_lod_n_active, nlod, page_size) ==
-      0);
+  CHECK(Error,
+        batch_aggregate_layout_init(layout,
+                                    stage->per_lod_agg_layouts,
+                                    per_lod_n_active,
+                                    stage->nlod,
+                                    page_size) == 0);
 
-  CHECK(Error, layout.total_data_bytes <= stage->max_total_data_bytes);
-  CHECK(Error, layout.total_batch_chunks <= stage->max_total_batch_chunks);
-  CHECK(Error, layout.total_batch_covering <= stage->max_total_batch_covering);
+  CHECK(Error, layout->total_data_bytes <= stage->max_total_data_bytes);
+  CHECK(Error, layout->total_batch_chunks <= stage->max_total_batch_chunks);
+  CHECK(Error, layout->total_batch_covering <= stage->max_total_batch_covering);
+  return 0;
 
-  // --- Phase 3: build & upload unified LUTs (cached in steady state) -------
-  // Cache key: per-LOD active count AND each LOD's pool_epoch values. Counts
-  // alone are insufficient — the gather LUT encodes the actual epoch indices,
-  // so two batches with identical counts but different active-epoch positions
-  // (mid-stream phase shifts when K doesn't divide an LOD's append period)
-  // would mis-hit and reuse stale gather indices. See
-  // [[ok-let-s-make-a-curious-prism]].
+Error:
+  return 1;
+}
+
+// Cache key: per-LOD active count AND each LOD's pool_epoch values. Counts
+// alone are insufficient — the gather LUT encodes the actual epoch indices,
+// so two batches with identical counts but different active-epoch positions
+// (mid-stream phase shifts when K doesn't divide an LOD's append period)
+// would mis-hit and reuse stale gather indices. See
+// [[ok-let-s-make-a-curious-prism]].
+static int
+build_and_upload_luts(struct compress_agg_stage* stage,
+                      const struct batch_aggregate_layout* layout,
+                      const struct level_geometry* levels,
+                      const uint32_t* per_lod_n_active,
+                      const uint32_t* const* per_lod_pool_epochs,
+                      CUstream compress_stream)
+{
+  const uint8_t nlod = stage->nlod;
+  const uint32_t stride = stage->pool_epochs_stride;
+
   int lut_steady =
     stage->lut_cache_valid && memcmp(stage->cached_per_lod_n_active,
                                      per_lod_n_active,
@@ -418,68 +497,79 @@ compress_agg_kick(struct compress_agg_stage* stage,
   }
   if (lut_steady) {
     stage->lut_steady_count++;
-  } else {
-    stage->lut_recompute_count++;
-    if (layout.total_batch_chunks > 0) {
-      aggregate_batch_luts_unified(&layout,
-                                   stage->per_lod_agg_layouts,
-                                   levels,
-                                   per_lod_pool_epochs,
-                                   stage->h_lut_gather_scratch,
-                                   stage->h_lut_perm_scratch);
-      CU(Error,
-         cuMemcpyHtoDAsync(stage->d_batch_gather,
-                           stage->h_lut_gather_scratch,
-                           layout.total_batch_chunks * sizeof(uint32_t),
-                           compress_stream));
-      CU(Error,
-         cuMemcpyHtoDAsync(stage->d_batch_perm,
-                           stage->h_lut_perm_scratch,
-                           layout.total_batch_chunks * sizeof(uint32_t),
-                           compress_stream));
-    }
-    memcpy(stage->cached_per_lod_n_active,
-           per_lod_n_active,
-           (size_t)nlod * sizeof(uint32_t));
-    for (uint8_t lv = 0; lv < nlod; ++lv) {
-      const uint32_t n_lv = per_lod_n_active[lv];
-      if (n_lv > 0)
-        memcpy(stage->cached_pool_epochs + (size_t)lv * stride,
-               per_lod_pool_epochs[lv],
-               (size_t)n_lv * sizeof(uint32_t));
-    }
-    stage->lut_cache_valid = 1;
+    return 0;
   }
 
-  // --- Phase 4: per-shard tables ------------------------------------------
-  // Always rebuild + upload; the runtime cost is small (≤ a few KB) and the
-  // values depend on per_lod_n_active which can shift mid-stream. We do it
-  // unconditionally so any layout drift is reflected immediately.
-  CHECK(Error,
-        build_and_upload_shard_tables(stage, &layout, compress_stream) == 0);
+  stage->lut_recompute_count++;
+  if (layout->total_batch_chunks > 0) {
+    aggregate_batch_luts_unified(layout,
+                                 stage->per_lod_agg_layouts,
+                                 levels,
+                                 per_lod_pool_epochs,
+                                 stage->h_lut_gather_scratch,
+                                 stage->h_lut_perm_scratch);
+    CU(Error,
+       cuMemcpyHtoDAsync(stage->d_batch_gather,
+                         stage->h_lut_gather_scratch,
+                         layout->total_batch_chunks * sizeof(uint32_t),
+                         compress_stream));
+    CU(Error,
+       cuMemcpyHtoDAsync(stage->d_batch_perm,
+                         stage->h_lut_perm_scratch,
+                         layout->total_batch_chunks * sizeof(uint32_t),
+                         compress_stream));
+  }
+  memcpy(stage->cached_per_lod_n_active,
+         per_lod_n_active,
+         (size_t)nlod * sizeof(uint32_t));
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const uint32_t n_lv = per_lod_n_active[lv];
+    if (n_lv > 0)
+      memcpy(stage->cached_pool_epochs + (size_t)lv * stride,
+             per_lod_pool_epochs[lv],
+             (size_t)n_lv * sizeof(uint32_t));
+  }
+  stage->lut_cache_valid = 1;
+  return 0;
 
-  // --- Phase 5: synchronization ------------------------------------------
+Error:
+  return 1;
+}
+
+static int
+wait_upstream_events(const struct compress_agg_input* in,
+                     CUstream compress_stream)
+{
   CU(Error, cuStreamWaitEvent(compress_stream, in->pool_ready, 0));
   if (in->lod_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
-
-  // Aggregate writes to agg[fc].d_aggregated; ensure the prior D2H at this
-  // fc has finished reading from it before we overwrite. prev_d2h_done is
-  // initialized signaled, so the first kick on each fc no-ops here.
   if (in->prev_d2h_done)
     CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
+  return 0;
 
-  // --- Phase 6: compress --------------------------------------------------
+Error:
+  return 1;
+}
+
+// Selects the aggregate source: CODEC_NONE aggregates straight from the
+// pool buffer, skipping compress (events still recorded for timing).
+static int
+kick_compress_phase(struct compress_agg_stage* stage,
+                    const struct compress_agg_input* in,
+                    const struct level_geometry* levels,
+                    CUstream compress_stream,
+                    CUdeviceptr* d_aggregate_src)
+{
+  const int fc = in->fc;
   const int skip_compress = (stage->codec.type == CODEC_NONE);
-  const CUdeviceptr d_aggregate_src =
-    skip_compress ? in->pool_buf : stage->d_compressed[fc];
+  *d_aggregate_src = skip_compress ? in->pool_buf : stage->d_compressed[fc];
 
   if (skip_compress) {
     CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
     CU(Error, cuEventRecord(stage->t_compress_end[fc], compress_stream));
   } else {
-    CHECK_MUL_OVERFLOW(Error, n_epochs, levels->total_chunks, UINT64_MAX);
-    uint64_t batch_chunks = (uint64_t)n_epochs * levels->total_chunks;
+    CHECK_MUL_OVERFLOW(Error, in->n_epochs, levels->total_chunks, UINT64_MAX);
+    uint64_t batch_chunks = (uint64_t)in->n_epochs * levels->total_chunks;
     CHECK(Error,
           kick_compress(stage,
                         fc,
@@ -488,18 +578,57 @@ compress_agg_kick(struct compress_agg_stage* stage,
                         stage->codec.chunk_bytes,
                         compress_stream) == 0);
   }
+  return 0;
 
-  // --- Phase 7: unified aggregate dispatch --------------------------------
-  if (layout.total_batch_chunks > 0) {
+Error:
+  return 1;
+}
+
+// Page-aligned path only. The aggregate dispatch reads tail state that the
+// previous kick's delivery uploads AFTER this enqueue (shard_tables in
+// stream.engine.h). The wait goes after compress, which reads no tail state.
+static int
+arm_tail_gate(struct compress_agg_stage* stage,
+              const struct batch_aggregate_layout* layout,
+              CUstream compress_stream)
+{
+  if (!stage->shards.d_tail_seq)
+    return 0;
+  const size_t page_size = stage->per_lod_agg_layouts[0].page_size;
+  if (stage->shards.tail_gate_supported && layout->total_batch_chunks > 0 &&
+      stage->shards.total_shards > 0 && page_size > 0)
+    CU(Error,
+       cuStreamWaitValue64(compress_stream,
+                           stage->shards.d_tail_seq,
+                           stage->shards.kick_seq,
+                           CU_STREAM_WAIT_VALUE_GEQ));
+  // Counts even chunk-less kicks: every kick is drained exactly once, so
+  // the count stays the next kick's threshold.
+  stage->shards.kick_seq++;
+  return 0;
+
+Error:
+  return 1;
+}
+
+static int
+dispatch_aggregate(struct compress_agg_stage* stage,
+                   const struct batch_aggregate_layout* layout,
+                   int fc,
+                   CUdeviceptr d_aggregate_src,
+                   CUstream compress_stream)
+{
+  if (layout->total_batch_chunks > 0) {
+    const size_t page_size = stage->per_lod_agg_layouts[0].page_size;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
             stage->codec.d_comp_sizes,
             (const uint32_t*)(uintptr_t)stage->d_batch_gather,
             (const uint32_t*)(uintptr_t)stage->d_batch_perm,
-            layout.total_batch_chunks,
-            layout.total_batch_covering,
-            nlod,
+            layout->total_batch_chunks,
+            layout->total_batch_covering,
+            stage->nlod,
             stage->codec.max_output_size,
             &stage->agg[fc],
             stage->shards.d_base_offsets,
@@ -514,10 +643,23 @@ compress_agg_kick(struct compress_agg_stage* stage,
   }
 
   CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
+  return 0;
 
-  // --- Phase 8: fill handoff ----------------------------------------------
+Error:
+  return 1;
+}
+
+static void
+fill_handoff(struct compress_agg_stage* stage,
+             const struct compress_agg_input* in,
+             const struct batch_aggregate_layout* layout,
+             const uint32_t* per_lod_n_active,
+             struct flush_handoff* out)
+{
+  const int fc = in->fc;
+  const uint8_t nlod = stage->nlod;
   out->fc = fc;
-  out->n_epochs = n_epochs;
+  out->n_epochs = in->n_epochs;
   out->active_levels_mask = in->active_levels_mask;
   out->batch_active_masks = in->batch_active_masks;
   out->nlod = nlod;
@@ -529,12 +671,46 @@ compress_agg_kick(struct compress_agg_stage* stage,
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->agg = &stage->agg[fc];
-  out->layout = layout;
+  out->layout = *layout;
   out->per_lod_agg_layouts = stage->per_lod_agg_layouts;
   out->shards = &stage->shards;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->shard[lv];
+}
 
+int
+compress_agg_kick(struct compress_agg_stage* stage,
+                  const struct compress_agg_input* in,
+                  const struct level_geometry* levels,
+                  CUstream compress_stream,
+                  struct flush_handoff* out)
+{
+  uint32_t per_lod_n_active[LOD_MAX_LEVELS] = { 0 };
+  const uint32_t* per_lod_pool_epochs[LOD_MAX_LEVELS] = { 0 };
+  scan_active_masks(stage, in, per_lod_n_active, per_lod_pool_epochs);
+
+  struct batch_aggregate_layout layout;
+  CHECK(Error, build_batch_layout(stage, per_lod_n_active, &layout) == 0);
+  CHECK(Error,
+        build_and_upload_luts(stage,
+                              &layout,
+                              levels,
+                              per_lod_n_active,
+                              per_lod_pool_epochs,
+                              compress_stream) == 0);
+  CHECK(Error,
+        build_and_upload_shard_tables(stage, &layout, compress_stream) == 0);
+  CHECK(Error, wait_upstream_events(in, compress_stream) == 0);
+
+  CUdeviceptr d_aggregate_src = 0;
+  CHECK(Error,
+        kick_compress_phase(
+          stage, in, levels, compress_stream, &d_aggregate_src) == 0);
+  CHECK(Error, arm_tail_gate(stage, &layout, compress_stream) == 0);
+  CHECK(Error,
+        dispatch_aggregate(
+          stage, &layout, in->fc, d_aggregate_src, compress_stream) == 0);
+  fill_handoff(stage, in, &layout, per_lod_n_active, out);
   return 0;
 
 Error:

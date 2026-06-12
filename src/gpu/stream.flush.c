@@ -127,6 +127,19 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
       return r;
   }
 
+  // Tail-gate fallback: without the gate (stream memops unsupported, or
+  // the counter failed to map at init) the tail upload cannot be ordered
+  // device-side (shard_tables in stream.engine.h), so also drain the
+  // other, newer pending batch — order stays oldest-first, pipeline
+  // degrades to depth 1 — and the kick below sees published tail state.
+  if (e->compress_agg.shards.page_size > 0 &&
+      e->compress_agg.shards.total_shards > 0 &&
+      !e->compress_agg.shards.tail_gate_supported) {
+    struct writer_result r = drain_fc(e, ctx, completed_pool ^ 1);
+    if (r.error)
+      return r;
+  }
+
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct compress_agg_input in =
     make_compress_input(e, ctx, completed_pool, e->batch.accumulated);

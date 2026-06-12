@@ -384,6 +384,16 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
                    0,
                    desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
       return 1;
+    // Delivery's tail upload is a synchronous HtoD from pageable memory,
+    // which may return before the DMA reaches the device; SYNC_MEMOPS makes
+    // it complete at the device first, so work enqueued after the drain
+    // cannot read a stale tail (flush.d2h_deliver.c).
+    unsigned int sync_memops = 1;
+    if (cuPointerSetAttribute(&sync_memops,
+                              CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                              (CUdeviceptr)desc->u_d_tail_bytes) !=
+        CUDA_SUCCESS)
+      return 1;
     if (desc->u_page_size > 0) {
       desc->u_tail_carry_bytes =
         desc->u_total_shards * desc->u_page_size;
@@ -392,6 +402,11 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
         return 1;
       if (cuMemsetD8(
             desc->u_d_tail_carry, 0, desc->u_tail_carry_bytes) != CUDA_SUCCESS)
+        return 1;
+      // Same pageable-HtoD constraint as u_d_tail_bytes above.
+      if (cuPointerSetAttribute(&sync_memops,
+                                CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                                desc->u_d_tail_carry) != CUDA_SUCCESS)
         return 1;
     }
   }

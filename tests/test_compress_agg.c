@@ -117,6 +117,17 @@ Fail:
   return 1;
 }
 
+// Stand in for delivery's tail publish (flush.d2h_deliver.c): tests drive
+// compress_agg_kick without the delivery loop, and an unpublished
+// generation parks the next kick's tail gate forever.
+static void
+ca_ctx_publish_tail(struct ca_test_ctx* c)
+{
+  struct shard_tables* sh = &c->stage.shards;
+  if (sh->h_tail_seq_flag)
+    *sh->h_tail_seq_flag = ++sh->tail_seq;
+}
+
 // Build input, kick compress_agg, sync.
 static int
 ca_ctx_kick(struct ca_test_ctx* c,
@@ -146,6 +157,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
                           c->compute,
                           handoff) == 0);
   CU(Fail, cuStreamSynchronize(c->compute));
+  ca_ctx_publish_tail(c);
   return 0;
 
 Fail:
@@ -767,6 +779,7 @@ test_compress_agg_lut_cache_position_shift(void)
                             c.compute,
                             &handoff) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
+    ca_ctx_publish_tail(&c);
   }
 
   // Kick 2: only epoch 1 active (mask [0, 1]).
@@ -795,6 +808,7 @@ test_compress_agg_lut_cache_position_shift(void)
                             c.compute,
                             &handoff2) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
+    ca_ctx_publish_tail(&c);
   }
 
   // The cache must have missed (recompute count incremented) because the
