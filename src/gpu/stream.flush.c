@@ -27,7 +27,7 @@ make_compress_input(struct stream_engine* e,
     .n_epochs = n_epochs,
     .active_levels_mask = fs->active_levels_mask,
     .batch_active_masks = fs->batch_active_masks,
-    .pool_buf = e->pools.buf[fc],
+    .pool = &e->pools.p,
     .lod_active = ctx->levels.enable_multiscale &&
                   gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc) != NULL,
     .epochs_per_batch = e->batch.epochs_per_batch,
@@ -173,16 +173,14 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   e->pools.current ^= 1;
   // The aggregate's last pool read gates reuse; re-zeroing any earlier
   // corrupts the in-flight batch (#140).
+  struct gpu_pool_view fresh;
   CHECK(Error,
-        gpu_edge_wait(&e->ord,
-                      GPU_EDGE_POOL_CONSUMED,
-                      e->pools.current,
-                      e->streams.compute) == 0);
+        gpu_pool_acquire_produce(
+          &e->pools.p, e->pools.current, e->streams.compute, &fresh) == 0);
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
   CU(Error,
-     cuMemsetD8Async(
-       e->pools.buf[e->pools.current], 0, pool_bytes, e->streams.compute));
+     cuMemsetD8Async(gpu_pool_view_d(fresh), 0, pool_bytes, e->streams.compute));
 
   // Reset batch accumulation.
   e->batch.accumulated = 0;
@@ -210,18 +208,19 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   if (e->batch.accumulated < e->batch.epochs_per_batch)
     return writer_ok();
 
-  // Record pool-filled once after the last epoch's scatter; compute-stream
+  // Release pool-filled once after the last epoch's scatter; compute-stream
   // ordering means this subsumes per-epoch ready signals.
   CHECK(Error,
-        gpu_edge_record(
-          &e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute) == 0);
+        gpu_pool_release_produce(
+          &e->pools.p, e->pools.current, e->streams.compute) == 0);
 
   if (e->sync_flush) {
     // Synchronous path: flush the full batch immediately (no pool swap).
     // Used by multiarray where double-buffered pipeline state doesn't
     // compose across array switches.
     struct writer_result r = flush_accumulated_sync(e, ctx);
-    // Zero pool for next batch.
+    // Zero pool for next batch. Host-ordered re-acquire: the sync drain
+    // above host-completed this fc's D2H, so no device wait is queued.
     if (!r.error) {
       size_t bpe = dtype_bpe(ctx->config.dtype);
       size_t pool_bytes = (uint64_t)e->batch.epochs_per_batch *
@@ -229,7 +228,10 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
                           bpe;
       CU(SyncError,
          cuMemsetD8Async(
-           e->pools.buf[e->pools.current], 0, pool_bytes, e->streams.compute));
+           gpu_pool_view_d(gpu_pool_at(&e->pools.p, e->pools.current, 0)),
+           0,
+           pool_bytes,
+           e->streams.compute));
     }
     return r;
   SyncError:
@@ -318,9 +320,9 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
 
-  // Record pool-filled after all scatter ops for this (possibly partial)
+  // Release pool-filled after all scatter ops for this (possibly partial)
   // batch.
-  if (gpu_edge_record(&e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute))
+  if (gpu_pool_release_produce(&e->pools.p, e->pools.current, e->streams.compute))
     return writer_error();
 
   if (flush_kick_batch(e, ctx, fc, e->batch.accumulated))
@@ -395,9 +397,14 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
 
     e->lod.append_accum.counts[lv] = 0;
 
-    CUdeviceptr dst = e->pools.buf[e->pools.current] +
-                      ctx->levels.level[lv].chunk_offset *
-                        ctx->layout.chunk_stride * bytes_per_element;
+    // Produce-phase write within the generation acquired at the last swap
+    // (the current pool is still being filled).
+    CUdeviceptr dst =
+      gpu_pool_view_d(gpu_pool_at(&e->pools.p,
+                                  e->pools.current,
+                                  ctx->levels.level[lv].chunk_offset *
+                                    ctx->layout.chunk_stride *
+                                    bytes_per_element));
     size_t lv_pool_bytes = ctx->levels.level[lv].chunk_count *
                            ctx->layout.chunk_stride * bytes_per_element;
     CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, e->streams.compute));
@@ -419,8 +426,8 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
             &e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) == 0);
 
   CHECK(Error,
-        gpu_edge_record(
-          &e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute) == 0);
+        gpu_pool_release_produce(
+          &e->pools.p, e->pools.current, e->streams.compute) == 0);
   if (flush_kick_batch(e, ctx, fc, 1))
     return writer_error();
   return drain_fc(e, ctx, fc);

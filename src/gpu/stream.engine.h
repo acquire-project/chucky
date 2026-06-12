@@ -16,8 +16,10 @@
 
 struct pool_state
 {
-  CUdeviceptr buf[2];
-  int current; // 0 or 1
+  struct gpu_pool p;  // buf generations: ready=POOL_FILLED,
+                      //                  consumed=POOL_CONSUMED (#140)
+  CUdeviceptr buf[2]; // payloads; non-init code goes through p
+  int current;        // 0 or 1
 };
 
 // Ordering events (h2d-done, scatter-done) live in gpu_ordering, instanced
@@ -129,7 +131,7 @@ struct compress_agg_input
   uint32_t n_epochs;
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
-  CUdeviceptr pool_buf;
+  struct gpu_pool* pool; // chunk pool; the kick acquires slot fc's batch
   int lod_active; // wait GPU_EDGE_LOD_DONE (multiscale with bound edge only)
   uint32_t epochs_per_batch;
 };
@@ -384,8 +386,9 @@ stream_engine_bind_array(struct stream_engine* e,
 
 // --- Engine operations ---
 
-// Pointer to the given epoch's chunk region in the current pool.
-void*
+// View of the given epoch's chunk region in the current pool — within the
+// produce generation acquired at the last swap.
+struct gpu_pool_view
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,
                          uint32_t epoch_in_batch);

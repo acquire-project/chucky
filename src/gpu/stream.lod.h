@@ -54,16 +54,16 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
                        const struct tile_stream_configuration* config);
 
 // Run LOD pipeline for one epoch: gather -> reduce -> append fold ->
-// morton-to-chunks. pool_epoch: pointer to this epoch's chunk pool region (all
-// levels). *out_active_mask: set to bitmask of active LOD levels for this
-// epoch. Returns 0 on success, non-zero on error.
+// morton-to-chunks. pool_epoch: acquired view of this epoch's chunk pool
+// region (all levels). *out_active_mask: set to bitmask of active LOD levels
+// for this epoch. Returns 0 on success, non-zero on error.
 int
 lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
               struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
-              void* pool_epoch,
+              struct gpu_pool_view pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method append_reduce_method,

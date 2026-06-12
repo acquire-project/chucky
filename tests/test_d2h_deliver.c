@@ -28,7 +28,8 @@ struct test_ctx
   CUstream compute;
   CUstream d2h_stream;
   CUdeviceptr d_pool;
-  struct gpu_ordering ord; // pool-filled record stands in for the engine
+  struct gpu_ordering ord; // edge registry the harness pools draw from
+  struct gpu_pool pool;    // chunk pool; slots rebound per kick's pool_buf
   uint32_t* batch_active_masks;
   struct stream_metrics metrics;
   struct lod_state lod;
@@ -95,6 +96,7 @@ test_ctx_setup(struct test_ctx* c,
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
                       c->cl.layouts[0].chunk_stride * dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
+  gpu_pool_init(&c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
 
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
@@ -130,12 +132,13 @@ test_ctx_kick_and_drain(struct test_ctx* c,
   for (uint32_t i = 0; i < n_epochs; ++i)
     c->batch_active_masks[i] = 0x1;
 
+  gpu_pool_bind(&c->pool, fc, (void*)(uintptr_t)pool_buf);
   struct compress_agg_input in = {
     .fc = fc,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool_buf = pool_buf,
+    .pool = &c->pool,
     .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
@@ -211,8 +214,7 @@ test_d2h_single_epoch_none(void)
       0);
 
   // Record pool-filled after the fill
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   // Kick compress_agg + D2H + drain
   struct flush_handoff handoff;
@@ -281,8 +283,7 @@ test_d2h_batch_none(void)
                         bytes_per_element,
                         fill_epoch1) == 0);
 
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   // Kick with 2 epochs
   struct flush_handoff handoff;
@@ -426,8 +427,7 @@ test_d2h_zstd_single_epoch(void)
                         bytes_per_element,
                         fill_epoch0) == 0);
 
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   struct flush_handoff handoff;
   CHECK(Fail,
@@ -539,8 +539,7 @@ test_d2h_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -558,8 +557,7 @@ test_d2h_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch1) == 0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -673,8 +671,7 @@ test_d2h_zstd_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -691,8 +688,7 @@ test_d2h_zstd_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch1) == 0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -715,8 +711,7 @@ test_d2h_zstd_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch2) ==
       0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -735,8 +730,7 @@ test_d2h_zstd_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch3) == 0);
-  CHECK(Fail,
-        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
+  CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;

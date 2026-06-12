@@ -76,7 +76,7 @@ int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
                         const struct tile_stream_layout_gpu* layout_gpu,
-                        void* pool_epoch,
+                        struct gpu_pool_view pool_epoch,
                         uint64_t* cursor,
                         size_t bpe,
                         CUstream h2d,
@@ -101,7 +101,7 @@ ingest_dispatch_scatter(struct staging_state* stage,
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   CU(Error, cuEventRecord(ss->t_scatter_start, compute));
-  transpose((CUdeviceptr)pool_epoch,
+  transpose(gpu_pool_view_d(pool_epoch),
             gpu_pool_view_d(d_in),
             stage->bytes_written,
             (uint8_t)bpe,

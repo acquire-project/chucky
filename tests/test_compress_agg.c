@@ -26,7 +26,8 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  struct gpu_ordering ord;      // pool-filled record stands in for the engine
+  struct gpu_ordering ord; // edge registry the harness pools draw from
+  struct gpu_pool pool;    // chunk pool faked over d_pool (both slots)
   uint32_t* batch_active_masks; // [K] owned scratch for tests
   int ord_inited;
   int stage_inited;
@@ -78,6 +79,9 @@ ca_ctx_setup(struct ca_test_ctx* c,
                       c->cl.layouts[0].chunk_stride *
                       dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
+  gpu_pool_init(&c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
+  for (int fc = 0; fc < 2; ++fc)
+    gpu_pool_bind(&c->pool, fc, (void*)(uintptr_t)c->d_pool);
 
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
@@ -104,10 +108,9 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
           epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
           0);
 
-  // Re-record pool-filled on the compute stream after every fill so the
-  // kick's wait sees batch-level readiness.
-  CHECK(Fail,
-        gpu_edge_record(&c->ord, GPU_EDGE_POOL_FILLED, 0, c->compute) == 0);
+  // Re-release pool-filled on the compute stream after every fill so the
+  // kick's acquire sees batch-level readiness.
+  CHECK(Fail, gpu_pool_release_produce(&c->pool, 0, c->compute) == 0);
   return 0;
 
 Fail:
@@ -137,7 +140,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool_buf = c->d_pool,
+    .pool = &c->pool,
     .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
@@ -759,7 +762,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool_buf = c.d_pool,
+      .pool = &c.pool,
       .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
@@ -789,7 +792,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool_buf = c.d_pool,
+      .pool = &c.pool,
       .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };

@@ -124,8 +124,15 @@ orch_ctx_setup(struct orch_ctx* c,
                          c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools
+  gpu_pool_init(&c->s->engine.pools.p,
+                &c->s->engine.ord,
+                GPU_EDGE_POOL_FILLED,
+                GPU_EDGE_POOL_CONSUMED);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&c->s->engine.pools.buf[i], pool_bytes));
+    gpu_pool_bind(&c->s->engine.pools.p,
+                  i,
+                  (void*)(uintptr_t)c->s->engine.pools.buf[i]);
     CU(Fail,
        cuMemsetD8Async(c->s->engine.pools.buf[i],
                        0,

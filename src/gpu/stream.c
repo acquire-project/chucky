@@ -55,15 +55,16 @@ stream_engine_attach_edge_stalls(struct stream_engine* e)
     &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
 }
 
-void*
+struct gpu_pool_view
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,
                          uint32_t epoch_in_batch)
 {
   const size_t bpe = dtype_bpe(ctx->config.dtype);
-  return (char*)e->pools.buf[e->pools.current] +
-         (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
-           ctx->layout.chunk_stride * bpe;
+  return gpu_pool_at(&e->pools.p,
+                     e->pools.current,
+                     (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
+                       ctx->layout.chunk_stride * bpe);
 }
 
 static int

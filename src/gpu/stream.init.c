@@ -151,8 +151,11 @@ stream_engine_init(struct stream_engine* e,
           &e->stage, lim->buffer_capacity, &e->ord, e->streams.compute) == 0);
 
   e->pool_bytes = lim->pool_bytes;
+  gpu_pool_init(
+    &e->pools.p, &e->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&e->pools.buf[i], lim->pool_bytes));
+    gpu_pool_bind(&e->pools.p, i, (void*)(uintptr_t)e->pools.buf[i]);
     CU(Fail,
        cuMemsetD8Async(e->pools.buf[i], 0, lim->pool_bytes, e->streams.compute));
   }

@@ -180,9 +180,14 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   // the per-array portion of the current pool as an optimization for the
   // common batch-boundary case, but that only covers one pool and only the
   // per-array size — this full zero covers both pools at the max size.)
+  // Host-ordered access: the departing array's sync flush drained every
+  // batch, so no produce wait is queued.
   for (int i = 0; i < 2; ++i)
     CU(Fail,
-       cuMemsetD8Async(e->pools.buf[i], 0, e->pool_bytes, e->streams.compute));
+       cuMemsetD8Async(gpu_pool_view_d(gpu_pool_at(&e->pools.p, i, 0)),
+                       0,
+                       e->pool_bytes,
+                       e->streams.compute));
 
   return 0;
 

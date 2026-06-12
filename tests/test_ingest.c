@@ -119,7 +119,8 @@ test_ingest_single_epoch(void)
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -249,7 +250,8 @@ test_ingest_incremental(void)
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -266,7 +268,8 @@ test_ingest_incremental(void)
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
