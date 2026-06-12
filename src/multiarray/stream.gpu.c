@@ -488,11 +488,17 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   CU(Fail, cuStreamCreate(&e->streams.compress, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&e->streams.d2h, CU_STREAM_NON_BLOCKING));
 
-  for (int i = 0; i < 2; ++i)
-    CU(Fail, cuEventCreate(&e->pools.ready[i], CU_EVENT_DEFAULT));
+  CHECK(Fail, gpu_ordering_init(&e->ord, e->streams.compute) == 0);
+  gpu_ordering_register_stream(&e->ord, GPU_STREAM_H2D, e->streams.h2d);
+  gpu_ordering_register_stream(&e->ord, GPU_STREAM_COMPUTE, e->streams.compute);
+  gpu_ordering_register_stream(
+    &e->ord, GPU_STREAM_COMPRESS, e->streams.compress);
+  gpu_ordering_register_stream(&e->ord, GPU_STREAM_D2H, e->streams.d2h);
+  e->compress_agg.ord = &e->ord;
 
   CHECK(Fail,
-        ingest_init(&e->stage, mx->buffer_capacity, e->streams.compute) == 0);
+        ingest_init(&e->stage, mx->buffer_capacity, &e->ord,
+                    e->streams.compute) == 0);
 
   e->pool_bytes = mx->pool_bytes;
   for (int i = 0; i < 2; ++i) {
@@ -502,8 +508,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   }
 
   e->batch.epochs_per_batch = mx->epochs_per_batch;
-  CU(Fail, cuEventCreate(&e->batch.pool_ready, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(e->batch.pool_ready, e->streams.compute));
 
   // Per-slot batch_active_masks live on each array descriptor (bind/unbind
   // copies them in). Stage scratch is shared and sized to the max K.
@@ -525,12 +529,11 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
        cuEventCreate(&e->compress_agg.t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail,
        cuEventCreate(&e->compress_agg.t_compress_end[fc], CU_EVENT_DEFAULT));
-    CU(Fail,
-       cuEventCreate(&e->compress_agg.t_aggregate_end[fc], CU_EVENT_DEFAULT));
   }
 
   CHECK(Fail,
-        d2h_deliver_init(&e->d2h_deliver, 0, e->streams.compute) == 0);
+        d2h_deliver_init(&e->d2h_deliver, 0, &e->ord, e->streams.compute) ==
+          0);
   e->d2h_deliver.metrics = &e->metrics;
 
   // Unified-pipeline shared resources. Sized to maxima across arrays.
@@ -545,7 +548,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
             aggregate_batch_slot_init(&e->compress_agg.agg[fc],
                                       C_max,
                                       mx->u_max_total_data_bytes) == 0);
-      CU(Fail, cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
     }
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,
@@ -600,16 +602,11 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
         e->compress_agg.pool_epochs_scratch &&
           e->compress_agg.cached_pool_epochs);
 
-  CU(Fail, cuEventRecord(e->pools.ready[0], e->streams.compute));
-  CU(Fail, cuEventRecord(e->pools.ready[1], e->streams.compute));
-
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail,
        cuEventRecord(e->compress_agg.t_compress_start[fc], e->streams.compute));
     CU(Fail,
        cuEventRecord(e->compress_agg.t_compress_end[fc], e->streams.compute));
-    CU(Fail,
-       cuEventRecord(e->compress_agg.t_aggregate_end[fc], e->streams.compute));
   }
 
   // Shared LOD buffers (sized to max across arrays). Only allocated if any
@@ -622,6 +619,10 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
                                 mx->lod_linear_bytes,
                                 mx->lod_morton_bytes,
                                 e->streams.compute) == 0);
+    // t_end doubles as GPU_EDGE_LOD_DONE; already seeded by the init above.
+    for (int fc = 0; fc < 2; ++fc)
+      gpu_ordering_bind(
+        &e->ord, GPU_EDGE_LOD_DONE, fc, e->lod_shared.timing[fc].t_end);
   }
 
   CU(Fail, cuStreamSynchronize(e->streams.compute));
@@ -803,8 +804,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   struct stream_engine* e = &ms->engine;
 
-  cu_event_destroy(e->batch.pool_ready);
-
   d2h_deliver_destroy(&e->d2h_deliver);
 
   codec_free(&e->compress_agg.codec);
@@ -816,7 +815,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     cu_mem_free(e->compress_agg.d_compressed[fc]);
     cu_event_destroy(e->compress_agg.t_compress_start[fc]);
     cu_event_destroy(e->compress_agg.t_compress_end[fc]);
-    cu_event_destroy(e->compress_agg.t_aggregate_end[fc]);
   }
 
   // Unified-pipeline shared resources (allocated in init_shared_resources).
@@ -840,12 +838,12 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // resources live in e->lod_shared.
   lod_shared_state_destroy(&e->lod_shared);
 
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2; ++i)
     cu_mem_free(e->pools.buf[i]);
-    cu_event_destroy(e->pools.ready[i]);
-  }
 
   ingest_destroy(&e->stage);
+
+  gpu_ordering_destroy(&e->ord);
 
   cu_stream_destroy(e->streams.h2d);
   cu_stream_destroy(e->streams.compute);
@@ -931,6 +929,7 @@ multiarray_tile_stream_gpu_create(
     }
   }
   ms->engine.metrics = stream_engine_init_metrics(all_multiscale);
+  stream_engine_attach_edge_stalls(&ms->engine);
   ms->engine.metadata_update_clock = (struct platform_clock){ 0 };
   platform_toc(&ms->engine.metadata_update_clock);
 

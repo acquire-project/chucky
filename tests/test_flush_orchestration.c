@@ -36,8 +36,6 @@ static void
 orch_ctx_destroy(struct orch_ctx* c)
 {
   if (c->s) {
-    cu_event_destroy(c->s->engine.batch.pool_ready);
-
     for (int fc = 0; fc < 2; ++fc) {
       free(c->s->engine.flush.slot[fc].batch_active_masks);
       c->s->engine.flush.slot[fc].batch_active_masks = NULL;
@@ -47,10 +45,10 @@ orch_ctx_destroy(struct orch_ctx* c)
     compress_agg_destroy(&c->s->engine.compress_agg, c->cl.levels.nlod);
 
     // Pools
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 2; ++i)
       cu_mem_free(c->s->engine.pools.buf[i]);
-      cu_event_destroy(c->s->engine.pools.ready[i]);
-    }
+
+    gpu_ordering_destroy(&c->s->engine.ord);
 
     cu_stream_destroy(c->s->engine.streams.compute);
     cu_stream_destroy(c->s->engine.streams.compress);
@@ -100,17 +98,29 @@ orch_ctx_setup(struct orch_ctx* c,
      cuStreamCreate(&c->s->engine.streams.compress, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->s->engine.streams.d2h, CU_STREAM_NON_BLOCKING));
 
+  CHECK(Fail,
+        gpu_ordering_init(&c->s->engine.ord, c->s->engine.streams.compute) ==
+          0);
+  gpu_ordering_register_stream(
+    &c->s->engine.ord, GPU_STREAM_COMPUTE, c->s->engine.streams.compute);
+  gpu_ordering_register_stream(
+    &c->s->engine.ord, GPU_STREAM_COMPRESS, c->s->engine.streams.compress);
+  gpu_ordering_register_stream(
+    &c->s->engine.ord, GPU_STREAM_D2H, c->s->engine.streams.d2h);
+
   // Compress+aggregate stage
   CHECK(Fail,
         compress_agg_init(&c->s->engine.compress_agg,
                           &c->cl,
                           config,
+                          &c->s->engine.ord,
                           c->s->engine.streams.compute) == 0);
 
   // D2H+deliver stage
   CHECK(Fail,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
                          platform_page_alignment(),
+                         &c->s->engine.ord,
                          c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools
@@ -121,20 +131,12 @@ orch_ctx_setup(struct orch_ctx* c,
                        0,
                        pool_bytes,
                        c->s->engine.streams.compute));
-    CU(Fail, cuEventCreate(&c->s->engine.pools.ready[i], CU_EVENT_DEFAULT));
-    CU(
-      Fail,
-      cuEventRecord(c->s->engine.pools.ready[i], c->s->engine.streams.compute));
   }
   c->s->engine.pools.current = 0;
 
-  // Batch state + pool_ready event
+  // Batch state
   c->s->engine.batch.epochs_per_batch = K;
   c->s->engine.batch.accumulated = 0;
-  CU(Fail, cuEventCreate(&c->s->engine.batch.pool_ready, CU_EVENT_DEFAULT));
-  CU(
-    Fail,
-    cuEventRecord(c->s->engine.batch.pool_ready, c->s->engine.streams.compute));
 
   // Flush pipeline state
   memset(&c->s->engine.flush, 0, sizeof(c->s->engine.flush));

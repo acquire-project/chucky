@@ -26,9 +26,9 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  CUevent pool_ready;           // recorded after last fill_epoch call
+  struct gpu_ordering ord;      // pool-filled record stands in for the engine
   uint32_t* batch_active_masks; // [K] owned scratch for tests
-  struct batch_state batch;
+  int ord_inited;
   int stage_inited;
 };
 
@@ -43,9 +43,10 @@ ca_ctx_destroy(struct ca_test_ctx* c)
 {
   if (c->stage_inited)
     compress_agg_destroy(&c->stage, c->cl.levels.nlod);
+  if (c->ord_inited)
+    gpu_ordering_destroy(&c->ord);
   computed_stream_layouts_free(&c->cl);
   cu_mem_free(c->d_pool);
-  cu_event_destroy(c->pool_ready);
   free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
 }
@@ -66,8 +67,11 @@ ca_ctx_setup(struct ca_test_ctx* c,
                                &c->cl) == 0);
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
+  CHECK(Fail, gpu_ordering_init(&c->ord, c->compute) == 0);
+  c->ord_inited = 1;
   CHECK(Fail,
-        compress_agg_init(&c->stage, &c->cl, &c->config, c->compute) == 0);
+        compress_agg_init(&c->stage, &c->cl, &c->config, &c->ord, c->compute) ==
+          0);
   c->stage_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
@@ -75,17 +79,9 @@ ca_ctx_setup(struct ca_test_ctx* c,
                       dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
-  CU(Fail, cuEventCreate(&c->pool_ready, CU_EVENT_DEFAULT));
-
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
   CHECK(Fail, c->batch_active_masks);
-
-  c->batch = (struct batch_state){
-    .epochs_per_batch = c->cl.epochs_per_batch,
-    .accumulated = 0,
-    .pool_ready = c->pool_ready,
-  };
   return 0;
 
 Fail:
@@ -108,9 +104,10 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
           epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
           0);
 
-  // Re-record pool_ready on the compute stream after every fill so the test
-  // can rely on the latest event signaling batch-level readiness.
-  CU(Fail, cuEventRecord(c->pool_ready, c->compute));
+  // Re-record pool-filled on the compute stream after every fill so the
+  // kick's wait sees batch-level readiness.
+  CHECK(Fail,
+        gpu_edge_record(&c->ord, GPU_EDGE_POOL_FILLED, 0, c->compute) == 0);
   return 0;
 
 Fail:
@@ -123,9 +120,7 @@ Fail:
 static void
 ca_ctx_publish_tail(struct ca_test_ctx* c)
 {
-  struct shard_tables* sh = &c->stage.shards;
-  if (sh->h_tail_seq_flag)
-    *sh->h_tail_seq_flag = ++sh->tail_seq;
+  gpu_edge_publish(&c->ord, GPU_EDGE_TAIL_PUBLISHED);
 }
 
 // Build input, kick compress_agg, sync.
@@ -143,8 +138,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
     .pool_buf = c->d_pool,
-    .pool_ready = c->pool_ready,
-    .lod_done = 0,
+    .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
@@ -766,8 +760,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
       .pool_buf = c.d_pool,
-      .pool_ready = c.pool_ready,
-      .lod_done = 0,
+      .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     struct flush_handoff handoff;
@@ -797,8 +790,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
       .pool_buf = c.d_pool,
-      .pool_ready = c.pool_ready,
-      .lod_done = 0,
+      .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     CHECK(Fail,

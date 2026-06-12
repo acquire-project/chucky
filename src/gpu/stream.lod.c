@@ -657,6 +657,7 @@ Error:
 int
 lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
+              struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
               void* pool_epoch,
@@ -731,7 +732,8 @@ lod_run_epoch(struct lod_state* lod,
           lod, sh, levels, pool_epoch, dtype, active_levels_mask, compute) ==
           0);
 
-  CU(Error, cuEventRecord(t->t_end, compute));
+  // t_end doubles as GPU_EDGE_LOD_DONE (bound at engine init).
+  CHECK(Error, gpu_edge_record(ord, GPU_EDGE_LOD_DONE, fc, compute) == 0);
 
   *out_active_mask = active_levels_mask;
   return 0;

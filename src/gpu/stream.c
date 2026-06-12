@@ -41,6 +41,20 @@ stream_engine_init_metrics(int enable_multiscale)
   };
 }
 
+void
+stream_engine_attach_edge_stalls(struct stream_engine* e)
+{
+  e->metrics.edge_stall[0] = mk_stream_metric("StagingFree");
+  e->metrics.edge_stall[1] = mk_stream_metric("ChunkIndex");
+  e->metrics.edge_stall[2] = mk_stream_metric("D2HDone");
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_STAGING_FREE, &e->metrics.edge_stall[0]);
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_CHUNK_INDEX_READY, &e->metrics.edge_stall[1]);
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
+}
+
 void*
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,
@@ -69,7 +83,6 @@ engine_dispatch_ingest(struct stream_engine* e, struct stream_context* ctx)
       &ctx->layout,
       &ctx->layout_gpu,
       stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
-      e->pools.ready[e->pools.current],
       &ctx->cursor_elements,
       dtype_bpe(ctx->config.dtype),
       e->streams.h2d,
@@ -126,37 +139,22 @@ stream_append_body(struct stream_engine* e,
           struct staging_slot* ss = &e->stage.slot[si];
           // Poll instead of cuEventSynchronize to keep the producer thread
           // hot — it has memcpy work queued up immediately after.
-          for (;;) {
-            CUresult r = cuEventQuery(ss->t_h2d_end);
-            if (r == CUDA_SUCCESS)
-              break;
-            if (r == CUDA_ERROR_DEINITIALIZED) {
-              // Context torn down (shutdown). Data is already on host for
-              // this poll site; clean exit is correct. Logged so the
-              // swallow is observable outside teardown.
-              log_debug("stream.append: cuEventQuery returned DEINITIALIZED "
-                        "(slot=%d)",
-                        si);
-              break;
-            }
-            if (r != CUDA_ERROR_NOT_READY) {
-              handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
-              goto Error;
-            }
-            platform_sleep_ns(50000); // 50 µs
-          }
+          if (gpu_edge_host_wait(&e->ord, GPU_EDGE_STAGING_FREE, si))
+            goto Error;
 
           if (ctx->cursor_elements > 0) {
-            accumulate_metric_cu(&e->metrics.h2d,
-                                 ss->t_h2d_start,
-                                 ss->t_h2d_end,
-                                 ss->dispatched_bytes,
-                                 ss->dispatched_bytes);
-            accumulate_metric_cu(&e->metrics.scatter,
-                                 ss->t_scatter_start,
-                                 ss->t_scatter_end,
-                                 ss->dispatched_bytes,
-                                 ss->dispatched_bytes);
+            accumulate_metric_cu(
+              &e->metrics.h2d,
+              ss->t_h2d_start,
+              gpu_ordering_event(&e->ord, GPU_EDGE_STAGING_H2D_DONE, si),
+              ss->dispatched_bytes,
+              ss->dispatched_bytes);
+            accumulate_metric_cu(
+              &e->metrics.scatter,
+              ss->t_scatter_start,
+              gpu_ordering_event(&e->ord, GPU_EDGE_STAGING_SCATTER_DONE, si),
+              ss->dispatched_bytes,
+              ss->dispatched_bytes);
           }
         }
 

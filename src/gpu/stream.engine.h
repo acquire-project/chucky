@@ -3,6 +3,7 @@
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
+#include "gpu/ordering.h"
 #include "gpu/reduce_csr_gpu.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
@@ -15,18 +16,17 @@
 struct pool_state
 {
   CUdeviceptr buf[2];
-  CUevent ready[2];
   int current; // 0 or 1
 };
 
+// Ordering events (h2d-done, scatter-done) live in gpu_ordering, instanced
+// by staging slot; only timing-interval starts stay here.
 struct staging_slot
 {
   void* h_in;              // pinned host WC, size = buffer_capacity_bytes
   CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
-  CUevent t_h2d_end;       // recorded after H2D memcpy completes
-  CUevent t_h2d_start;     // recorded before H2D memcpy
-  CUevent t_scatter_start; // recorded before scatter kernel
-  CUevent t_scatter_end;   // recorded after scatter kernel
+  CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
+  CUevent t_scatter_start; // recorded before scatter kernel (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
 };
 
@@ -35,6 +35,7 @@ struct staging_state
   struct staging_slot slot[2];
   int current;          // 0 or 1: which buffer the host is filling
   size_t bytes_written; // bytes written to current slot's h_in so far
+  struct gpu_ordering* ord; // borrowed
 };
 
 // Per flush-slot: mutable batch state (masks + epoch count).
@@ -106,14 +107,13 @@ struct gpu_streams
   CUstream h2d, compute, compress, d2h;
 };
 
-// Batch accumulation: config + mutable counter + single pool-ready event.
-// All K scatter ops run on the compute stream in order, so a single event
-// recorded after the K-th scatter subsumes all per-epoch ready signals.
+// Batch accumulation. Pool readiness is GPU_EDGE_POOL_FILLED: all K scatter
+// ops run on the compute stream in order, so one record after the K-th
+// scatter subsumes all per-epoch ready signals.
 struct batch_state
 {
   uint32_t epochs_per_batch; // K (immutable after create)
   uint32_t accumulated;      // mutable: 0..K-1
-  CUevent pool_ready;        // recorded on compute after last accumulated epoch
 };
 
 // --- Stage types ---
@@ -125,12 +125,7 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
   CUdeviceptr pool_buf;
-  CUevent pool_ready; // batch-level (from batch_state.pool_ready)
-  CUevent lod_done;
-  CUevent prev_d2h_done; // prior D2H on same fc; compress waits on this so
-                         // aggregate doesn't overwrite agg[fc].d_aggregated
-                         // before the prior D2H has read it. Initialized
-                         // signaled.
+  int lod_active; // wait GPU_EDGE_LOD_DONE (multiscale with bound edge only)
   uint32_t epochs_per_batch;
 };
 
@@ -169,14 +164,10 @@ struct shard_tables
   // consume the d_tail_bytes/d_tail_carry upload made by kick #k-1's
   // delivery, which on the lazy path runs AFTER kick #k is enqueued;
   // nothing else orders that host upload against the queued kernels. Kick
-  // #k waits d_tail_seq >= k, the delivery publishes after each upload
-  // (flush.d2h_deliver.c), and drains are oldest-first, so tail_seq counts
-  // delivered kicks.
-  volatile uint64_t* h_tail_seq_flag; // pinned + device-mapped; host-written
-  CUdeviceptr d_tail_seq;             // device view of h_tail_seq_flag
-  uint64_t kick_seq;                  // kicks enqueued (gate threshold)
-  uint64_t tail_seq;                  // uploads published (host mirror)
-  int tail_gate_supported;            // stream memops may be unsupported
+  // #k waits the generation counter >= k, the delivery publishes after each
+  // upload (flush.d2h_deliver.c), and drains are oldest-first, so the
+  // published count tracks delivered kicks. Counter state lives in
+  // gpu_ordering (GPU_EDGE_TAIL_PUBLISHED).
 
   // Per-LOD slice info, needed by delivery to view the unified slot buffers.
   uint32_t shards_begin[LOD_MAX_LEVELS]; // first global shard index for LOD lv
@@ -185,11 +176,11 @@ struct shard_tables
 
 struct compress_agg_stage
 {
+  struct gpu_ordering* ord; // borrowed
   struct codec codec;
   CUdeviceptr d_compressed[2];
-  CUevent t_compress_start[2];
-  CUevent t_compress_end[2];
-  CUevent t_aggregate_end[2];
+  CUevent t_compress_start[2]; // timing
+  CUevent t_compress_end[2];   // timing
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
@@ -241,15 +232,14 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  CUevent t_d2h_start[2];
-  CUevent h_chunk_index_ready[2]; // h_offsets + h_permuted_sizes on host
-  CUevent ready[2];               // full D2H done; gates slot reuse
+  struct gpu_ordering* ord; // borrowed
+  CUevent t_d2h_start[2];   // timing
 
   // Drain-time copies must not share the d2h stream: by drain time it can
-  // already hold the next kick's t_aggregate_end wait, which the tail gate
-  // (shard_tables) keeps parked until THIS drain publishes — sharing would
-  // deadlock. The drain's host poll of h_chunk_index_ready already proves
-  // the copy source is stable, so no device-side ordering is needed here.
+  // already hold the next kick's GPU_EDGE_AGG_DONE wait, which the tail
+  // gate keeps parked until THIS drain publishes — sharing would deadlock.
+  // The drain's host poll of GPU_EDGE_CHUNK_INDEX_READY already proves the
+  // copy source is stable, so no device-side ordering is needed here.
   CUstream drain_stream;
 
   size_t shard_alignment;         // from sink; 0 = no alignment
@@ -300,6 +290,7 @@ struct stream_engine
 {
   int sync_flush; // 1 = synchronous batch flush (multiarray); 0 = pipelined
   struct gpu_streams streams;
+  struct gpu_ordering ord;
   struct pool_state pools;
   size_t pool_bytes;
   struct staging_state stage;
@@ -326,6 +317,11 @@ stream_engine_pool_epoch(struct stream_engine* e,
 // the scatter/copy stage ("Copy" when multiscale, "Scatter" otherwise).
 struct stream_metrics
 stream_engine_init_metrics(int enable_multiscale);
+
+// Point the ordering host-poll edges at this engine's edge_stall metrics.
+// Call after assigning engine.metrics; the bench prints the rows.
+void
+stream_engine_attach_edge_stalls(struct stream_engine* e);
 
 // Append data to the stream. Handles staging, dispatch, epoch boundaries,
 // batch flush, and backpressure. Used by both single-array and multiarray.

@@ -52,6 +52,7 @@ lod_state_destroy(struct lod_state* lod);
 int
 lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
+              struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
               void* pool_epoch,

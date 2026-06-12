@@ -28,12 +28,8 @@ make_compress_input(struct stream_engine* e,
     .active_levels_mask = fs->active_levels_mask,
     .batch_active_masks = fs->batch_active_masks,
     .pool_buf = e->pools.buf[fc],
-    .pool_ready = e->batch.pool_ready,
-    .lod_done =
-      (ctx->levels.enable_multiscale && e->lod_shared.timing[fc].t_end)
-        ? e->lod_shared.timing[fc].t_end
-        : NULL,
-    .prev_d2h_done = e->d2h_deliver.ready[fc],
+    .lod_active = ctx->levels.enable_multiscale &&
+                  gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc) != NULL,
     .epochs_per_batch = e->batch.epochs_per_batch,
   };
 }
@@ -55,6 +51,7 @@ flush_run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
     CHECK(Error,
           lod_run_epoch(&e->lod,
                         &e->lod_shared,
+                        &e->ord,
                         e->pools.current,
                         &ctx->levels,
                         stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
@@ -81,6 +78,12 @@ drain_fc(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
   if (!e->flush.pending[fc])
     return writer_ok();
+
+  // The tail gate's GEQ threshold assumes drains follow kick order.
+  gpu_edge_host_rule(&e->ord,
+                     GPU_EDGE_DELIVER_OLDEST_FIRST,
+                     !e->flush.pending[fc ^ 1] ||
+                       e->flush.pending_seq[fc] < e->flush.pending_seq[fc ^ 1]);
 
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
@@ -134,12 +137,15 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   // degrades to depth 1 — and the kick below sees published tail state.
   if (e->compress_agg.shards.page_size > 0 &&
       e->compress_agg.shards.total_shards > 0 &&
-      !e->compress_agg.shards.tail_gate_supported) {
+      !gpu_ordering_gate_supported(&e->ord)) {
     struct writer_result r = drain_fc(e, ctx, completed_pool ^ 1);
     if (r.error)
       return r;
   }
 
+  gpu_edge_host_rule(&e->ord,
+                     GPU_EDGE_DRAIN_BEFORE_REKICK,
+                     !e->flush.pending[completed_pool]);
   fs->batch_epoch_count = (int)e->batch.accumulated;
   struct compress_agg_input in =
     make_compress_input(e, ctx, completed_pool, e->batch.accumulated);
@@ -164,12 +170,13 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   // Phase 5: swap to fresh pool and zero it for next batch.
   e->pools.current ^= 1;
-  // t_aggregate_end[current] marks the last read of this pool; reusing it
-  // any earlier corrupts the in-flight batch.
-  CU(Error,
-     cuStreamWaitEvent(e->streams.compute,
-                       e->compress_agg.t_aggregate_end[e->pools.current],
-                       0));
+  // The aggregate's last pool read gates reuse; re-zeroing any earlier
+  // corrupts the in-flight batch (#140).
+  CHECK(Error,
+        gpu_edge_wait(&e->ord,
+                      GPU_EDGE_POOL_CONSUMED,
+                      e->pools.current,
+                      e->streams.compute) == 0);
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
   CU(Error,
@@ -202,9 +209,11 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   if (e->batch.accumulated < e->batch.epochs_per_batch)
     return writer_ok();
 
-  // Record pool_ready once after the last epoch's scatter; compute-stream
+  // Record pool-filled once after the last epoch's scatter; compute-stream
   // ordering means this subsumes per-epoch ready signals.
-  CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
+  CHECK(Error,
+        gpu_edge_record(
+          &e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute) == 0);
 
   if (e->sync_flush) {
     // Synchronous path: flush the full batch immediately (no pool swap).
@@ -243,6 +252,8 @@ flush_kick_batch(struct stream_engine* e,
                  int fc,
                  uint32_t n_epochs)
 {
+  gpu_edge_host_rule(&e->ord, GPU_EDGE_DRAIN_BEFORE_REKICK,
+                     !e->flush.pending[fc]);
   struct compress_agg_input in = make_compress_input(e, ctx, fc, n_epochs);
   struct flush_handoff handoff = { 0 };
 
@@ -306,8 +317,9 @@ flush_accumulated_sync(struct stream_engine* e, struct stream_context* ctx)
 
   fs->batch_epoch_count = (int)e->batch.accumulated;
 
-  // Record pool_ready after all scatter ops for this (possibly partial) batch.
-  if (cuEventRecord(e->batch.pool_ready, e->streams.compute) != CUDA_SUCCESS)
+  // Record pool-filled after all scatter ops for this (possibly partial)
+  // batch.
+  if (gpu_edge_record(&e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute))
     return writer_error();
 
   if (flush_kick_batch(e, ctx, fc, e->batch.accumulated))
@@ -400,12 +412,14 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
                                    e->streams.compute) == 0);
   }
 
-  CU(Error, cuEventRecord(e->pools.ready[fc], e->streams.compute));
-  if (e->lod_shared.timing[fc].t_end)
-    CU(Error,
-       cuEventRecord(e->lod_shared.timing[fc].t_end, e->streams.compute));
+  if (gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc))
+    CHECK(Error,
+          gpu_edge_record(
+            &e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) == 0);
 
-  CU(Error, cuEventRecord(e->batch.pool_ready, e->streams.compute));
+  CHECK(Error,
+        gpu_edge_record(
+          &e->ord, GPU_EDGE_POOL_FILLED, 0, e->streams.compute) == 0);
   if (flush_kick_batch(e, ctx, fc, 1))
     return writer_error();
   return drain_fc(e, ctx, fc);

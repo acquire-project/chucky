@@ -6,6 +6,7 @@
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
+                 struct gpu_ordering* ord,
                  CUstream compute);
 
 void
