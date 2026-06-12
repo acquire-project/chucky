@@ -135,8 +135,8 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
   // device-side (shard_tables in stream.engine.h), so also drain the
   // other, newer pending batch — order stays oldest-first, pipeline
   // degrades to depth 1 — and the kick below sees published tail state.
-  if (e->compress_agg.shards.page_size > 0 &&
-      e->compress_agg.shards.total_shards > 0 &&
+  if (e->compress_agg.ar.page_size > 0 &&
+      e->compress_agg.ar.total_shards > 0 &&
       !gpu_ordering_gate_supported(&e->ord)) {
     struct writer_result r = drain_fc(e, ctx, completed_pool ^ 1);
     if (r.error)

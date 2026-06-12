@@ -12,7 +12,7 @@ compress_agg_init(struct compress_agg_stage* stage,
                   CUstream compute);
 
 void
-compress_agg_destroy(struct compress_agg_stage* stage, int nlod);
+compress_agg_destroy(struct compress_agg_stage* stage);
 
 int
 compress_agg_kick(struct compress_agg_stage* stage,

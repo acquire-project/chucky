@@ -17,7 +17,7 @@
 #include <string.h>
 
 // ---- Per-array descriptor ----
-// Extends stream_context with mutable per-array state that is swapped
+// Extends stream_context with the per-array engine state that is swapped
 // into/out of the engine on array switch.
 
 struct array_descriptor_gpu
@@ -25,35 +25,11 @@ struct array_descriptor_gpu
   struct stream_context ctx;
   struct computed_stream_layouts cl; // owned, freed on destroy
 
-  // Per-array LOD state (owns plan, layouts[], layout_gpu[], CSRs, append
-  // accumulator device memory, and LOD LUTs — but NOT d_linear/d_morton/timing,
-  // which are shared and owned by the engine).
-  struct lod_state array_lod;
-
-  // Mutable per-array state (saved/restored via bind/unbind)
-  uint32_t batch_accumulated;
-  int pools_current;
-  struct flush_slot_gpu flush_slots[2];
-  int flush_pending[2];
-  uint64_t flush_pending_seq[2];
-  uint64_t flush_next_seq;
-  struct flush_handoff flush_pending_handoff[2];
-  struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
-  uint32_t batch_active_count[LOD_MAX_LEVELS];
-
-  // Per-array unified state. total_shards = sum_lv num_shards[lv]; tail
-  // buffers contiguous over all shards in this array. Bind swaps these
-  // into compress_agg_stage.{per_lod_agg_layouts, shard, shards}.
-  uint64_t u_total_shards;
-  uint32_t u_shards_begin[LOD_MAX_LEVELS];
-  uint32_t u_n_shards[LOD_MAX_LEVELS];
-  size_t u_page_size;
-  size_t u_tail_carry_bytes;
-  size_t* u_d_tail_bytes;
-  CUdeviceptr u_d_tail_carry;
-  size_t* u_h_tail_bytes;
-  size_t* u_h_shard_capacity;
-  struct shard_state u_shard[LOD_MAX_LEVELS];
+  // Whole-struct swapped on bind/unbind. st.lod owns plan, layouts[],
+  // layout_gpu[], CSRs, append accumulator device memory, and LOD LUTs — but
+  // NOT d_linear/d_morton/timing, which are shared and owned by the engine.
+  // st.agg owns per-LOD layouts, shard_state, and the per-array tail buffers.
+  struct engine_array_state st;
 
   int flushed; // 1 once flush body has run for this array
 };
@@ -146,55 +122,28 @@ drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
 static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
-  // Set batch K from the array's own config, not the engine max.
-  // Shared buffers are sized to max K, but each array should fill/flush at
-  // its own K so that batch_active_count and active_count agree.
-  e->batch.epochs_per_batch = desc->cl.epochs_per_batch;
-  e->batch.accumulated = desc->batch_accumulated;
-  e->pools.current = desc->pools_current;
-  for (int i = 0; i < 2; ++i) {
-    e->flush.slot[i] = desc->flush_slots[i];
-    e->flush.pending[i] = desc->flush_pending[i];
-    e->flush.pending_seq[i] = desc->flush_pending_seq[i];
-    e->flush.pending_handoff[i] = desc->flush_pending_handoff[i];
-  }
-  e->flush.next_seq = desc->flush_next_seq;
+  // Whole-struct handoff. Shared engine resources (pools.buf, staging,
+  // agg[2], d_batch_gather/perm, lut scratch, shards.*, lod_shared) are
+  // sized to maxima and untouched. st.batch carries the array's own K so
+  // each array fills/flushes at its own batch size.
+  e->batch = desc->st.batch;
+  e->pools.current = desc->st.pool_current;
+  e->flush = desc->st.flush;
+  e->lod = desc->st.lod;
+  e->compress_agg.ar = desc->st.agg;
   e->d2h_deliver.shard_alignment = desc->ctx.shard_alignment;
 
-  // Unified-pipeline bind: swap per-array state into the engine. Engine
-  // buffers (agg[2], d_batch_gather/perm, h_lut_* scratch,
-  // d_*_offsets/_tps_group/_capacity) are sized to max and shared.
-  e->compress_agg.nlod = (uint8_t)desc->ctx.levels.nlod;
-  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    e->compress_agg.per_lod_agg_layouts[lv] = desc->agg_layout[lv];
-    e->compress_agg.shard[lv] = desc->u_shard[lv];
-  }
-  e->compress_agg.shards.total_shards = desc->u_total_shards;
-  e->compress_agg.shards.page_size = desc->u_page_size;
-  e->compress_agg.shards.tail_carry_bytes = desc->u_tail_carry_bytes;
-  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    e->compress_agg.shards.shards_begin[lv] = desc->u_shards_begin[lv];
-    e->compress_agg.shards.n_shards[lv] = desc->u_n_shards[lv];
-  }
-  e->compress_agg.shards.h_tail_bytes = desc->u_h_tail_bytes;
-  e->compress_agg.shards.d_tail_bytes = desc->u_d_tail_bytes;
-  e->compress_agg.shards.d_tail_carry = desc->u_d_tail_carry;
   // Per-array shard_capacity table is constant; re-upload on bind so the
   // device-side d_shard_capacity reflects the active array's shard sizes.
   // (h_base_offsets / h_tps_group / h_offsets_base are per-batch scratch,
   // refreshed by the kick.)
-  if (desc->u_total_shards > 0 && desc->u_h_shard_capacity) {
+  if (desc->st.agg.total_shards > 0 && desc->st.agg.h_shard_capacity) {
     cuMemcpyHtoD((CUdeviceptr)e->compress_agg.shards.d_shard_capacity,
-                 desc->u_h_shard_capacity,
-                 desc->u_total_shards * sizeof(size_t));
+                 desc->st.agg.h_shard_capacity,
+                 desc->st.agg.total_shards * sizeof(size_t));
   }
   // Invalidate the LUT cache: per-array layouts differ.
   e->compress_agg.lut_cache_valid = 0;
-
-  // Per-array LOD state is now a single struct assignment.  Shared LOD
-  // resources (d_linear, d_morton, timing) live in e->lod_shared and are
-  // untouched by bind/unbind — the type system enforces this.
-  e->lod = desc->array_lod;
 }
 
 static void
@@ -202,51 +151,18 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   drain_d2h_for_array(e, desc);
 
-  desc->batch_accumulated = e->batch.accumulated;
-  desc->pools_current = e->pools.current;
-  for (int i = 0; i < 2; ++i) {
-    desc->flush_slots[i] = e->flush.slot[i];
-    desc->flush_pending[i] = e->flush.pending[i];
-    desc->flush_pending_seq[i] = e->flush.pending_seq[i];
-    desc->flush_pending_handoff[i] = e->flush.pending_handoff[i];
-  }
-  desc->flush_next_seq = e->flush.next_seq;
-  // Snapshot per-array state back into the descriptor. shard_state mutates
-  // over a batch (epoch_in_shard, shard_epoch, writer pointers); preserve it.
-  for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv)
-    desc->u_shard[lv] = e->compress_agg.shard[lv];
-  // Clear engine-side per-array pointers so the next bind establishes them
-  // unambiguously. We zero everything that bind_context fills in so a stale
-  // pointer can't survive an unbind/destroy that isn't followed by a bind.
-  e->compress_agg.shards.d_tail_bytes = NULL;
-  e->compress_agg.shards.d_tail_carry = 0;
-  e->compress_agg.shards.h_tail_bytes = NULL;
-  e->compress_agg.shards.total_shards = 0;
-  e->compress_agg.shards.tail_carry_bytes = 0;
-  e->compress_agg.shards.page_size = 0;
-  memset(e->compress_agg.shards.shards_begin,
-         0,
-         sizeof(e->compress_agg.shards.shards_begin));
-  memset(e->compress_agg.shards.n_shards,
-         0,
-         sizeof(e->compress_agg.shards.n_shards));
-  for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
-    memset(&e->compress_agg.per_lod_agg_layouts[lv],
-           0,
-           sizeof(e->compress_agg.per_lod_agg_layouts[lv]));
-  }
-  e->compress_agg.nlod = 0;
+  // Snapshot the per-array state back wholesale (shard_state, append
+  // accumulator counts, flush pipeline, and batch bookkeeping all mutate
+  // over a batch).
+  desc->st.batch = e->batch;
+  desc->st.pool_current = e->pools.current;
+  desc->st.flush = e->flush;
+  desc->st.lod = e->lod;
+  desc->st.agg = e->compress_agg.ar;
 
-  // Save per-array LOD state. counts[] tracks running append-accumulator
-  // state across epochs; element_capacity is the fixed accumulator buffer
-  // size set at init.
-  if (desc->ctx.levels.enable_multiscale) {
-    memcpy(desc->array_lod.append_accum.counts,
-           e->lod.append_accum.counts,
-           sizeof(desc->array_lod.append_accum.counts));
-    desc->array_lod.append_accum.element_capacity =
-      e->lod.append_accum.element_capacity;
-  }
+  // Clear the engine-side per-array slice so a stale pointer can't survive
+  // an unbind/destroy that isn't followed by a bind.
+  memset(&e->compress_agg.ar, 0, sizeof(e->compress_agg.ar));
 }
 
 // ---- Per-array init ----
@@ -278,19 +194,19 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   // Initialize per-array LOD state: transfer plan from cl, copy layouts,
   // upload level layouts + LUTs + CSRs. Does NOT allocate d_linear/d_morton
   // or timing events — those are engine-owned shared resources.
-  desc->array_lod.plan = desc->cl.plan;
+  desc->st.lod.plan = desc->cl.plan;
   desc->cl.plan = (struct lod_plan){ 0 }; // ownership transferred
   for (int lv = 0; lv < desc->cl.levels.nlod; ++lv)
-    desc->array_lod.layouts[lv] = desc->cl.layouts[lv];
+    desc->st.lod.layouts[lv] = desc->cl.layouts[lv];
 
-  if (lod_state_init(&desc->array_lod, &desc->ctx.levels, &desc->ctx.config))
+  if (lod_state_init(&desc->st.lod, &desc->ctx.levels, &desc->ctx.config))
     return 1;
 
-  // Alias L0 layout GPU pointers from array_lod into ctx (for scatter).
-  desc->ctx.layout_gpu = desc->array_lod.layout_gpu[0];
+  // Alias L0 layout GPU pointers from st.lod into ctx (for scatter).
+  desc->ctx.layout_gpu = desc->st.lod.layout_gpu[0];
 
   if (desc->ctx.levels.enable_multiscale && desc->ctx.dims.append_downsample) {
-    if (lod_state_init_accumulators(&desc->array_lod, &desc->ctx.config))
+    if (lod_state_init_accumulators(&desc->st.lod, &desc->ctx.config))
       return 1;
   }
 
@@ -299,13 +215,19 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   const uint64_t total_chunks = desc->ctx.levels.total_chunks;
   const uint64_t chunk_stride = desc->ctx.layout.chunk_stride;
 
+  // Batch K from the array's own config, not the engine max. Shared buffers
+  // are sized to max K, but each array fills/flushes at its own K so that
+  // batch_active_count and active_count agree.
+  desc->st.batch.epochs_per_batch = K;
+  desc->st.agg.nlod = (uint8_t)desc->ctx.levels.nlod;
+
   // Per-array, per-slot batch_active_masks. Bind/unbind copies the pointer
   // into the engine's flush slots; the storage lives here for the array's
   // lifetime.
   for (int fc = 0; fc < 2; ++fc) {
-    desc->flush_slots[fc].batch_active_masks =
+    desc->st.flush.slot[fc].batch_active_masks =
       (uint32_t*)calloc(K, sizeof(uint32_t));
-    if (!desc->flush_slots[fc].batch_active_masks)
+    if (!desc->st.flush.slot[fc].batch_active_masks)
       return 1;
   }
 
@@ -345,44 +267,44 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
     mx->any_multiscale = 1;
     size_t linear_bytes = desc->ctx.layout.epoch_elements * bpe;
     mx->lod_linear_bytes = max_sz(mx->lod_linear_bytes, linear_bytes);
-    uint64_t total_vals = desc->array_lod.plan.level_spans
-                            .ends[desc->array_lod.plan.levels.nlod - 1];
+    uint64_t total_vals = desc->st.lod.plan.level_spans
+                            .ends[desc->st.lod.plan.levels.nlod - 1];
     size_t morton_bytes = total_vals * bpe;
     mx->lod_morton_bytes = max_sz(mx->lod_morton_bytes, morton_bytes);
   }
 
   // Unified-pipeline per-array sizing.
-  desc->u_total_shards = 0;
-  desc->u_page_size = desc->cl.per_level[0].agg_layout.page_size;
+  desc->st.agg.total_shards = 0;
+  desc->st.agg.page_size = desc->cl.per_level[0].agg_layout.page_size;
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    desc->u_shards_begin[lv] = (uint32_t)desc->u_total_shards;
-    desc->u_n_shards[lv] =
+    desc->st.agg.shards_begin[lv] = (uint32_t)desc->st.agg.total_shards;
+    desc->st.agg.n_shards[lv] =
       (uint32_t)desc->cl.per_level[lv].agg_layout.num_shards;
-    desc->u_total_shards += desc->cl.per_level[lv].agg_layout.num_shards;
+    desc->st.agg.total_shards += desc->cl.per_level[lv].agg_layout.num_shards;
   }
-  if (desc->u_total_shards > 0) {
-    desc->u_h_shard_capacity =
-      (size_t*)malloc(desc->u_total_shards * sizeof(size_t));
-    desc->u_h_tail_bytes =
-      (size_t*)calloc(desc->u_total_shards, sizeof(size_t));
-    if (!desc->u_h_shard_capacity || !desc->u_h_tail_bytes)
+  if (desc->st.agg.total_shards > 0) {
+    desc->st.agg.h_shard_capacity =
+      (size_t*)malloc(desc->st.agg.total_shards * sizeof(size_t));
+    desc->st.agg.h_tail_bytes =
+      (size_t*)calloc(desc->st.agg.total_shards, sizeof(size_t));
+    if (!desc->st.agg.h_shard_capacity || !desc->st.agg.h_tail_bytes)
       return 1;
-    for (uint64_t i = 0; i < desc->u_total_shards; ++i) {
+    for (uint64_t i = 0; i < desc->st.agg.total_shards; ++i) {
       for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-        if (i >= desc->u_shards_begin[lv] &&
-            i < desc->u_shards_begin[lv] + desc->u_n_shards[lv]) {
-          desc->u_h_shard_capacity[i] =
+        if (i >= desc->st.agg.shards_begin[lv] &&
+            i < desc->st.agg.shards_begin[lv] + desc->st.agg.n_shards[lv]) {
+          desc->st.agg.h_shard_capacity[i] =
             desc->cl.per_level[lv].agg_layout.shard_capacity;
           break;
         }
       }
     }
-    if (cuMemAlloc((CUdeviceptr*)&desc->u_d_tail_bytes,
-                   desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
+    if (cuMemAlloc((CUdeviceptr*)&desc->st.agg.d_tail_bytes,
+                   desc->st.agg.total_shards * sizeof(size_t)) != CUDA_SUCCESS)
       return 1;
-    if (cuMemsetD8((CUdeviceptr)desc->u_d_tail_bytes,
+    if (cuMemsetD8((CUdeviceptr)desc->st.agg.d_tail_bytes,
                    0,
-                   desc->u_total_shards * sizeof(size_t)) != CUDA_SUCCESS)
+                   desc->st.agg.total_shards * sizeof(size_t)) != CUDA_SUCCESS)
       return 1;
     // Delivery's tail upload is a synchronous HtoD from pageable memory,
     // which may return before the DMA reaches the device; SYNC_MEMOPS makes
@@ -391,22 +313,22 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
     unsigned int sync_memops = 1;
     if (cuPointerSetAttribute(&sync_memops,
                               CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-                              (CUdeviceptr)desc->u_d_tail_bytes) !=
+                              (CUdeviceptr)desc->st.agg.d_tail_bytes) !=
         CUDA_SUCCESS)
       return 1;
-    if (desc->u_page_size > 0) {
-      desc->u_tail_carry_bytes =
-        desc->u_total_shards * desc->u_page_size;
-      if (cuMemAlloc(&desc->u_d_tail_carry, desc->u_tail_carry_bytes) !=
+    if (desc->st.agg.page_size > 0) {
+      desc->st.agg.tail_carry_bytes =
+        desc->st.agg.total_shards * desc->st.agg.page_size;
+      if (cuMemAlloc(&desc->st.agg.d_tail_carry, desc->st.agg.tail_carry_bytes) !=
           CUDA_SUCCESS)
         return 1;
       if (cuMemsetD8(
-            desc->u_d_tail_carry, 0, desc->u_tail_carry_bytes) != CUDA_SUCCESS)
+            desc->st.agg.d_tail_carry, 0, desc->st.agg.tail_carry_bytes) != CUDA_SUCCESS)
         return 1;
-      // Same pageable-HtoD constraint as u_d_tail_bytes above.
+      // Same pageable-HtoD constraint as d_tail_bytes above.
       if (cuPointerSetAttribute(&sync_memops,
                                 CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-                                desc->u_d_tail_carry) != CUDA_SUCCESS)
+                                desc->st.agg.d_tail_carry) != CUDA_SUCCESS)
         return 1;
     }
   }
@@ -425,7 +347,7 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
                                     per_lod_layouts,
                                     per_lod_max,
                                     (uint8_t)desc->ctx.levels.nlod,
-                                    desc->u_page_size))
+                                    desc->st.agg.page_size))
       return 1;
   }
   mx->u_max_total_batch_chunks =
@@ -436,14 +358,13 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   mx->u_max_total_data_bytes =
     max_sz(mx->u_max_total_data_bytes, array_max_layout.total_data_bytes);
   mx->u_max_total_shards =
-    max_u64(mx->u_max_total_shards, desc->u_total_shards);
+    max_u64(mx->u_max_total_shards, desc->st.agg.total_shards);
 
   // Per-LOD shard_state + agg_layout snapshot.
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
-    desc->agg_layout[lv] = li->agg_layout;
-    desc->batch_active_count[lv] = li->batch_active_count;
-    if (init_shard_state(&desc->u_shard[lv], li))
+    desc->st.agg.per_lod_agg_layouts[lv] = li->agg_layout;
+    if (init_shard_state(&desc->st.agg.shard[lv], li))
       return 1;
   }
 
@@ -456,21 +377,21 @@ destroy_array_descriptor(struct array_descriptor_gpu* desc)
   if (!desc)
     return;
   for (int fc = 0; fc < 2; ++fc) {
-    free(desc->flush_slots[fc].batch_active_masks);
-    desc->flush_slots[fc].batch_active_masks = NULL;
+    free(desc->st.flush.slot[fc].batch_active_masks);
+    desc->st.flush.slot[fc].batch_active_masks = NULL;
   }
   for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv) {
-    shard_state_destroy(&desc->u_shard[lv]);
-    aggregate_layout_destroy(&desc->agg_layout[lv]);
+    shard_state_destroy(&desc->st.agg.shard[lv]);
+    aggregate_layout_destroy(&desc->st.agg.per_lod_agg_layouts[lv]);
   }
-  free(desc->u_h_shard_capacity);
-  free(desc->u_h_tail_bytes);
-  cu_mem_free((CUdeviceptr)desc->u_d_tail_bytes);
-  cu_mem_free(desc->u_d_tail_carry);
-  // array_lod owns everything except d_linear/d_morton/timing (which stay 0
-  // in the per-array struct). ctx.layout_gpu aliases array_lod.layout_gpu[0]
-  // and is freed via array_lod destroy.
-  lod_state_destroy(&desc->array_lod);
+  free(desc->st.agg.h_shard_capacity);
+  free(desc->st.agg.h_tail_bytes);
+  cu_mem_free((CUdeviceptr)desc->st.agg.d_tail_bytes);
+  cu_mem_free(desc->st.agg.d_tail_carry);
+  // st.lod owns everything except d_linear/d_morton/timing (which stay 0
+  // in the per-array struct). ctx.layout_gpu aliases st.lod.layout_gpu[0]
+  // and is freed via st.lod destroy.
+  lod_state_destroy(&desc->st.lod);
   computed_stream_layouts_free(&desc->cl);
 }
 
@@ -734,7 +655,7 @@ flush_impl(struct multiarray_writer* self)
     // arrives.
     if (desc->flushed)
       continue;
-    if (desc->ctx.cursor_elements == 0 && desc->batch_accumulated == 0) {
+    if (desc->ctx.cursor_elements == 0 && desc->st.batch.accumulated == 0) {
       desc->flushed = 1;
       continue;
     }
@@ -906,7 +827,7 @@ multiarray_tile_stream_gpu_create(
   for (int a = 0; a < n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
     for (int lv = 0; lv < desc->ctx.levels.nlod; ++lv)
-      CHECK(Fail, aggregate_layout_upload(&desc->agg_layout[lv]) == 0);
+      CHECK(Fail, aggregate_layout_upload(&desc->st.agg.per_lod_agg_layouts[lv]) == 0);
   }
 
   // Phase 3: allocate shared GPU resources

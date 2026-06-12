@@ -70,7 +70,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 
   destroy_flush_pipeline(&s->engine.flush);
   d2h_deliver_destroy(&s->engine.d2h_deliver);
-  compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
+  compress_agg_destroy(&s->engine.compress_agg);
   destroy_chunk_pools(&s->engine.pools);
   lod_state_destroy(&s->engine.lod);
   lod_shared_state_destroy(&s->engine.lod_shared);
