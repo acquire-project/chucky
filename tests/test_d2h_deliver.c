@@ -28,13 +28,13 @@ struct test_ctx
   CUstream compute;
   CUstream d2h_stream;
   CUdeviceptr d_pool;
-  CUevent pool_ready;
+  struct gpu_ordering ord; // pool-filled record stands in for the engine
   uint32_t* batch_active_masks;
-  struct batch_state batch;
   struct stream_metrics metrics;
   struct lod_state lod;
   struct lod_shared_state lod_shared;
   struct platform_clock metadata_clock;
+  int ord_inited;
   int ca_inited;
   int d2h_inited;
 };
@@ -52,9 +52,10 @@ test_ctx_destroy(struct test_ctx* c)
     d2h_deliver_destroy(&c->d2h);
   if (c->ca_inited)
     compress_agg_destroy(&c->ca, c->cl.levels.nlod);
+  if (c->ord_inited)
+    gpu_ordering_destroy(&c->ord);
   computed_stream_layouts_free(&c->cl);
   cu_mem_free(c->d_pool);
-  cu_event_destroy(c->pool_ready);
   free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
   cu_stream_destroy(c->d2h_stream);
@@ -77,28 +78,27 @@ test_ctx_setup(struct test_ctx* c,
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->d2h_stream, CU_STREAM_NON_BLOCKING));
 
-  CHECK(Fail, compress_agg_init(&c->ca, &c->cl, config, c->compute) == 0);
+  CHECK(Fail, gpu_ordering_init(&c->ord, c->compute) == 0);
+  c->ord_inited = 1;
+  gpu_ordering_register_stream(&c->ord, GPU_STREAM_COMPUTE, c->compute);
+  gpu_ordering_register_stream(&c->ord, GPU_STREAM_D2H, c->d2h_stream);
+
+  CHECK(Fail,
+        compress_agg_init(&c->ca, &c->cl, config, &c->ord, c->compute) == 0);
   c->ca_inited = 1;
 
   CHECK(Fail,
-        d2h_deliver_init(&c->d2h, platform_page_alignment(), c->compute) == 0);
+        d2h_deliver_init(
+          &c->d2h, platform_page_alignment(), &c->ord, c->compute) == 0);
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
                       c->cl.layouts[0].chunk_stride * dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
 
-  CU(Fail, cuEventCreate(&c->pool_ready, CU_EVENT_DEFAULT));
-
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
   CHECK(Fail, c->batch_active_masks);
-
-  c->batch = (struct batch_state){
-    .epochs_per_batch = c->cl.epochs_per_batch,
-    .accumulated = 0,
-    .pool_ready = c->pool_ready,
-  };
 
   memset(&c->metrics, 0, sizeof(c->metrics));
   c->metrics.compress = mk_stream_metric("Compress");
@@ -125,7 +125,6 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                         int fc,
                         uint32_t n_epochs,
                         CUdeviceptr pool_buf,
-                        CUevent pool_ready,
                         struct flush_handoff* handoff)
 {
   for (uint32_t i = 0; i < n_epochs; ++i)
@@ -137,8 +136,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
     .pool_buf = pool_buf,
-    .pool_ready = pool_ready,
-    .lod_done = 0,
+    .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
@@ -212,15 +210,15 @@ test_d2h_single_epoch_none(void)
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
 
-  // Record pool_ready after the fill
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  // Record pool-filled after the fill
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   // Kick compress_agg + D2H + drain
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
-          0);
+          &c, &config, &sink.base, 0, 1, c.d_pool, &handoff) == 0);
 
   // Verify sink state
   CHECK(Fail, sink.open_count == 1);     // shard_inner_count=1
@@ -283,14 +281,14 @@ test_d2h_batch_none(void)
                         bytes_per_element,
                         fill_epoch1) == 0);
 
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   // Kick with 2 epochs
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 2, c.d_pool, c.pool_ready, &handoff) ==
-          0);
+          &c, &config, &sink.base, 0, 2, c.d_pool, &handoff) == 0);
 
   // tps_0=2, 2 epochs → shard complete
   CHECK(Fail, sink.finalize_count == 1);
@@ -428,13 +426,13 @@ test_d2h_zstd_single_epoch(void)
                         bytes_per_element,
                         fill_epoch0) == 0);
 
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
-          &c, &config, &sink.base, 0, 2, c.d_pool, c.pool_ready, &handoff) ==
-          0);
+          &c, &config, &sink.base, 0, 2, c.d_pool, &handoff) == 0);
 
   CHECK(Fail, sink.finalize_count == 1);
   CHECK(Fail, sink.writers[0][0].size > 0);
@@ -541,14 +539,14 @@ test_d2h_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
     CHECK(Fail,
           test_ctx_kick_and_drain(
-            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
-            0);
+            &c, &config, &sink.base, 0, 1, c.d_pool, &handoff) == 0);
   }
 
   CHECK(Fail, sink.finalize_count == 0); // 1 of 2 epochs
@@ -560,7 +558,8 @@ test_d2h_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch1) == 0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -571,7 +570,6 @@ test_d2h_double_buffer(void)
                                   1,
                                   1,
                                   c.d_pool + epoch_pool_bytes,
-                                  c.pool_ready,
                                   &handoff) == 0);
   }
 
@@ -642,9 +640,9 @@ Fail:
   return ok ? 0 : 1;
 }
 
-// Three-cycle compressed run: cycle 3 reuses fc=0, so slot->ready
-// recorded in cycle 1 must survive into cycle 3's compress wait. Two
-// cycles would never reuse a slot.
+// Three-cycle compressed run: cycle 3 reuses fc=0, so the slot-drained
+// edge recorded in cycle 1 must survive into cycle 3's compress wait.
+// Two cycles would never reuse a slot.
 static int
 test_d2h_zstd_double_buffer(void)
 {
@@ -675,14 +673,14 @@ test_d2h_zstd_double_buffer(void)
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch0) ==
       0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
     CHECK(Fail,
           test_ctx_kick_and_drain(
-            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
-            0);
+            &c, &config, &sink.base, 0, 1, c.d_pool, &handoff) == 0);
   }
 
   CHECK(Fail, sink.finalize_count == 0);
@@ -693,7 +691,8 @@ test_d2h_zstd_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch1) == 0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -704,27 +703,26 @@ test_d2h_zstd_double_buffer(void)
                                   1,
                                   1,
                                   c.d_pool + epoch_pool_bytes,
-                                  c.pool_ready,
                                   &handoff) == 0);
   }
 
   CHECK(Fail, sink.finalize_count == 1);
 
-  // Cycle 3: reuse fc=0. compress_agg's wait on prev_d2h_done depends on
-  // sync_and_deliver having recorded slot->ready in cycle 1.
+  // Cycle 3: reuse fc=0. compress_agg's GPU_EDGE_SLOT_DRAINED wait depends
+  // on sync_and_deliver having recorded the edge in cycle 1.
   CHECK(
     Fail,
     fill_pool_epoch(
       c.d_pool, total_chunks, chunk_stride, bytes_per_element, fill_epoch2) ==
       0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
     CHECK(Fail,
           test_ctx_kick_and_drain(
-            &c, &config, &sink.base, 0, 1, c.d_pool, c.pool_ready, &handoff) ==
-            0);
+            &c, &config, &sink.base, 0, 1, c.d_pool, &handoff) == 0);
   }
 
   CHECK(Fail, sink.finalize_count == 1);
@@ -737,7 +735,8 @@ test_d2h_zstd_double_buffer(void)
                         chunk_stride,
                         bytes_per_element,
                         fill_epoch3) == 0);
-  CU(Fail, cuEventRecord(c.pool_ready, c.compute));
+  CHECK(Fail,
+        gpu_edge_record(&c.ord, GPU_EDGE_POOL_FILLED, 0, c.compute) == 0);
 
   {
     struct flush_handoff handoff;
@@ -748,7 +747,6 @@ test_d2h_zstd_double_buffer(void)
                                   1,
                                   1,
                                   c.d_pool + epoch_pool_bytes,
-                                  c.pool_ready,
                                   &handoff) == 0);
   }
 

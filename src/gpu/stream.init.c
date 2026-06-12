@@ -37,12 +37,6 @@ destroy_chunk_pools(struct pool_state* pools)
 }
 
 static void
-destroy_batch_events(struct batch_state* batch)
-{
-  cu_event_destroy(batch->pool_ready);
-}
-
-static void
 destroy_flush_pipeline(struct flush_pipeline* fp);
 
 static void
@@ -70,7 +64,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 
   // A failed flush can leave a kick parked on the tail gate; release it or
   // the syncs below never return.
-  compress_agg_release_tail_gate(&s->engine.compress_agg);
+  gpu_edge_release_all(&s->engine.ord);
 
   // Ensure all GPU work completes before tearing down events/memory.
   sync(s->engine.streams.h2d);
@@ -78,7 +72,6 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
 
-  destroy_batch_events(&s->engine.batch);
   destroy_flush_pipeline(&s->engine.flush);
   d2h_deliver_destroy(&s->engine.d2h_deliver);
   compress_agg_destroy(&s->engine.compress_agg, s->ctx.levels.nlod);
@@ -86,6 +79,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   lod_state_destroy(&s->engine.lod);
   lod_shared_state_destroy(&s->engine.lod_shared);
   ingest_destroy(&s->engine.stage);
+  gpu_ordering_destroy(&s->engine.ord);
   destroy_cuda_streams_and_events(&s->engine.streams, &s->engine.pools);
   free(s);
 }
@@ -126,17 +120,6 @@ init_chunk_pools(struct pool_state* pools,
     CU(Fail, cuMemsetD8Async(pools->buf[i], 0, pool_bytes, compute));
   }
 
-  return 0;
-Fail:
-  return 1;
-}
-
-// Create and seed the batch pool-ready event.
-static int
-init_batch_events(struct batch_state* batch, CUstream compute)
-{
-  CU(Fail, cuEventCreate(&batch->pool_ready, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(batch->pool_ready, compute));
   return 0;
 Fail:
   return 1;
@@ -233,8 +216,19 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         init_cuda_streams_and_events(&out->engine.streams,
                                      &out->engine.pools) == 0);
   CHECK(FailPhase2,
+        gpu_ordering_init(&out->engine.ord, out->engine.streams.compute) == 0);
+  gpu_ordering_register_stream(
+    &out->engine.ord, GPU_STREAM_H2D, out->engine.streams.h2d);
+  gpu_ordering_register_stream(
+    &out->engine.ord, GPU_STREAM_COMPUTE, out->engine.streams.compute);
+  gpu_ordering_register_stream(
+    &out->engine.ord, GPU_STREAM_COMPRESS, out->engine.streams.compress);
+  gpu_ordering_register_stream(
+    &out->engine.ord, GPU_STREAM_D2H, out->engine.streams.d2h);
+  CHECK(FailPhase2,
         ingest_init(&out->engine.stage,
                     out->ctx.config.buffer_capacity_bytes,
+                    &out->engine.ord,
                     out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
         lod_state_init(&out->engine.lod, &out->ctx.levels, &out->ctx.config) ==
@@ -254,15 +248,14 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         compress_agg_init(&out->engine.compress_agg,
                           &cl,
                           config,
+                          &out->engine.ord,
                           out->engine.streams.compute) == 0);
   CHECK(FailPhase2,
         d2h_deliver_init(&out->engine.d2h_deliver,
                          out->ctx.shard_alignment,
+                         &out->engine.ord,
                          out->engine.streams.compute) == 0);
 
-  CHECK(FailPhase2,
-        init_batch_events(&out->engine.batch, out->engine.streams.compute) ==
-          0);
   if (out->ctx.levels.enable_multiscale) {
     const size_t bpe = dtype_bpe(out->ctx.config.dtype);
     const size_t linear_bytes = out->engine.lod.layouts[0].epoch_elements * bpe;
@@ -275,6 +268,12 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                                 linear_bytes,
                                 morton_bytes,
                                 out->engine.streams.compute) == 0);
+    // t_end doubles as GPU_EDGE_LOD_DONE; already seeded by the init above.
+    for (int fc = 0; fc < 2; ++fc)
+      gpu_ordering_bind(&out->engine.ord,
+                        GPU_EDGE_LOD_DONE,
+                        fc,
+                        out->engine.lod_shared.timing[fc].t_end);
     if (out->ctx.dims.append_downsample)
       CHECK(FailPhase2,
             lod_state_init_accumulators(&out->engine.lod, &out->ctx.config) ==

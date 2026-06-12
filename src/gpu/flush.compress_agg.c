@@ -44,9 +44,11 @@ int
 compress_agg_init(struct compress_agg_stage* stage,
                   const struct computed_stream_layouts* cl,
                   const struct tile_stream_configuration* config,
+                  struct gpu_ordering* ord,
                   CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
+  stage->ord = ord;
 
   const size_t bytes_per_element = dtype_bpe(config->dtype);
   const uint32_t K = cl->epochs_per_batch;
@@ -82,7 +84,6 @@ compress_agg_init(struct compress_agg_stage* stage,
         cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->t_aggregate_end[fc], CU_EVENT_DEFAULT));
   }
 
   // --- Unified across-LODs aggregate state ---------------------------------
@@ -246,32 +247,11 @@ compress_agg_init(struct compress_agg_stage* stage,
                                    stage->shards.d_tail_carry));
         }
 
-        // Tail-generation gate (shard_tables in stream.engine.h). The
-        // support probe is an already-satisfied wait; without stream
-        // memops — or when the counter can't be allocated or mapped —
-        // the lazy path host-drains instead (stream.flush.c).
-        if (cuMemHostAlloc((void**)&stage->shards.h_tail_seq_flag,
-                           sizeof(uint64_t),
-                           CU_MEMHOSTALLOC_DEVICEMAP) != CUDA_SUCCESS) {
-          stage->shards.h_tail_seq_flag = NULL;
-        } else {
-          *stage->shards.h_tail_seq_flag = 0;
-          if (cuMemHostGetDevicePointer(&stage->shards.d_tail_seq,
-                                        (void*)stage->shards.h_tail_seq_flag,
-                                        0) != CUDA_SUCCESS) {
-            cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
-            stage->shards.h_tail_seq_flag = NULL;
-            stage->shards.d_tail_seq = 0;
-          }
-        }
-        if (stage->shards.d_tail_seq) {
-          CUresult pr = cuStreamWaitValue64(
-            compute, stage->shards.d_tail_seq, 0, CU_STREAM_WAIT_VALUE_GEQ);
-          stage->shards.tail_gate_supported = (pr == CUDA_SUCCESS);
-          if (pr != CUDA_SUCCESS && pr != CUDA_ERROR_NOT_SUPPORTED)
-            CU(Fail, pr);
-        }
-        if (!stage->shards.tail_gate_supported)
+        // Tail-generation gate (shard_tables in stream.engine.h). Without
+        // stream memops — or when the counter can't be allocated or mapped
+        // — the lazy path host-drains instead (stream.flush.c).
+        CHECK(Fail, gpu_ordering_gate_init(ord, compute) == 0);
+        if (!gpu_ordering_gate_supported(ord))
           log_warn("compress_agg: tail gate unavailable; page-aligned "
                    "pipeline degrades to host-ordered tail uploads");
       }
@@ -283,11 +263,10 @@ compress_agg_init(struct compress_agg_stage* stage,
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     CHECK(Fail, init_shard_state(&stage->shard[lv], &cl->per_level[lv]) == 0);
 
-  // Seed events
+  // Seed timing events so the first metric reads see a valid interval.
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventRecord(stage->t_compress_start[fc], compute));
     CU(Fail, cuEventRecord(stage->t_compress_end[fc], compute));
-    CU(Fail, cuEventRecord(stage->t_aggregate_end[fc], compute));
   }
 
   return 0;
@@ -298,23 +277,14 @@ Fail:
 }
 
 void
-compress_agg_release_tail_gate(struct compress_agg_stage* stage)
-{
-  // kick_seq satisfies every threshold ever enqueued; UINT64_MAX would not
-  // (CU_STREAM_WAIT_VALUE_GEQ is a signed ring compare).
-  if (stage->shards.h_tail_seq_flag)
-    *stage->shards.h_tail_seq_flag = stage->shards.kick_seq;
-}
-
-void
 compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
 {
   if (!stage)
     return;
-  if (stage->shards.h_tail_seq_flag) {
+  if (stage->ord && gpu_ordering_gate_active(stage->ord)) {
     // An undrained kick (failed flush) parks work on the compress stream;
     // the frees below can block on pending work, so release first.
-    compress_agg_release_tail_gate(stage);
+    gpu_edge_release_all(stage->ord);
     CUWARN(cuCtxSynchronize());
   }
   codec_free(&stage->codec);
@@ -326,7 +296,6 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
     cu_mem_free(stage->d_compressed[fc]);
     cu_event_destroy(stage->t_compress_start[fc]);
     cu_event_destroy(stage->t_compress_end[fc]);
-    cu_event_destroy(stage->t_aggregate_end[fc]);
   }
   if (stage->lut_steady_count + stage->lut_recompute_count > 0) {
     const uint64_t tot = stage->lut_steady_count + stage->lut_recompute_count;
@@ -347,11 +316,6 @@ compress_agg_destroy(struct compress_agg_stage* stage, int nlod)
   for (int lv = 0; lv < nlod; ++lv) {
     aggregate_layout_destroy(&stage->per_lod_agg_layouts[lv]);
     shard_state_destroy(&stage->shard[lv]);
-  }
-  if (stage->shards.h_tail_seq_flag) {
-    cuMemFreeHost((void*)stage->shards.h_tail_seq_flag);
-    stage->shards.h_tail_seq_flag = NULL;
-    stage->shards.d_tail_seq = 0;
   }
   free(stage->shards.h_base_offsets);
   free(stage->shards.h_shard_capacity);
@@ -536,15 +500,23 @@ Error:
   return 1;
 }
 
+// GPU_EDGE_SLOT_DRAINED: aggregate must not overwrite agg[fc].d_aggregated
+// before the prior D2H on the same fc has read it (seeded at init).
 static int
-wait_upstream_events(const struct compress_agg_input* in,
+wait_upstream_events(struct compress_agg_stage* stage,
+                     const struct compress_agg_input* in,
                      CUstream compress_stream)
 {
-  CU(Error, cuStreamWaitEvent(compress_stream, in->pool_ready, 0));
-  if (in->lod_done)
-    CU(Error, cuStreamWaitEvent(compress_stream, in->lod_done, 0));
-  if (in->prev_d2h_done)
-    CU(Error, cuStreamWaitEvent(compress_stream, in->prev_d2h_done, 0));
+  CHECK(Error,
+        gpu_edge_wait(
+          stage->ord, GPU_EDGE_POOL_FILLED, 0, compress_stream) == 0);
+  if (in->lod_active)
+    CHECK(Error,
+          gpu_edge_wait(
+            stage->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
+  CHECK(Error,
+        gpu_edge_wait(
+          stage->ord, GPU_EDGE_SLOT_DRAINED, in->fc, compress_stream) == 0);
   return 0;
 
 Error:
@@ -592,23 +564,11 @@ arm_tail_gate(struct compress_agg_stage* stage,
               const struct batch_aggregate_layout* layout,
               CUstream compress_stream)
 {
-  if (!stage->shards.d_tail_seq)
-    return 0;
   const size_t page_size = stage->per_lod_agg_layouts[0].page_size;
-  if (stage->shards.tail_gate_supported && layout->total_batch_chunks > 0 &&
-      stage->shards.total_shards > 0 && page_size > 0)
-    CU(Error,
-       cuStreamWaitValue64(compress_stream,
-                           stage->shards.d_tail_seq,
-                           stage->shards.kick_seq,
-                           CU_STREAM_WAIT_VALUE_GEQ));
-  // Counts even chunk-less kicks: every kick is drained exactly once, so
-  // the count stays the next kick's threshold.
-  stage->shards.kick_seq++;
-  return 0;
-
-Error:
-  return 1;
+  const int enable = layout->total_batch_chunks > 0 &&
+                     stage->shards.total_shards > 0 && page_size > 0;
+  return gpu_edge_wait_gen(
+    stage->ord, GPU_EDGE_TAIL_PUBLISHED, compress_stream, enable);
 }
 
 static int
@@ -642,7 +602,9 @@ dispatch_aggregate(struct compress_agg_stage* stage,
             compress_stream) == 0);
   }
 
-  CU(Error, cuEventRecord(stage->t_aggregate_end[fc], compress_stream));
+  CHECK(Error,
+        gpu_edge_record(stage->ord, GPU_EDGE_AGG_DONE, fc, compress_stream) ==
+          0);
   return 0;
 
 Error:
@@ -665,7 +627,7 @@ fill_handoff(struct compress_agg_stage* stage,
   out->nlod = nlod;
   memcpy(
     out->per_lod_n_active, per_lod_n_active, (size_t)nlod * sizeof(uint32_t));
-  out->t_aggregate_end = stage->t_aggregate_end[fc];
+  out->t_aggregate_end = gpu_ordering_event(stage->ord, GPU_EDGE_AGG_DONE, fc);
   out->t_compress_start = stage->t_compress_start[fc];
   out->t_compress_end = stage->t_compress_end[fc];
   out->max_output_size = stage->codec.max_output_size;
@@ -700,7 +662,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
                               compress_stream) == 0);
   CHECK(Error,
         build_and_upload_shard_tables(stage, &layout, compress_stream) == 0);
-  CHECK(Error, wait_upstream_events(in, compress_stream) == 0);
+  CHECK(Error, wait_upstream_events(stage, in, compress_stream) == 0);
 
   CUdeviceptr d_aggregate_src = 0;
   CHECK(Error,

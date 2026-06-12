@@ -75,6 +75,7 @@ test_ingest_single_epoch(void)
            (unsigned long)pool_bytes);
 
   struct staging_state stage = { 0 };
+  struct gpu_ordering ord = { 0 };
   struct tile_stream_layout layout = { 0 };
   struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
@@ -86,7 +87,10 @@ test_ingest_single_epoch(void)
 
   CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
-  CHECK(Fail, ingest_init(&stage, src_bytes, compute) == 0);
+  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
+  CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
@@ -162,6 +166,7 @@ Fail:
   free(h_src);
   free(h_pool);
   ingest_destroy(&stage);
+  gpu_ordering_destroy(&ord);
   destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_event_destroy(pool_ready);
@@ -205,6 +210,7 @@ test_ingest_incremental(void)
   const size_t half = src_bytes / 2;
 
   struct staging_state stage = { 0 };
+  struct gpu_ordering ord = { 0 };
   struct tile_stream_layout layout = { 0 };
   struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
@@ -216,7 +222,10 @@ test_ingest_incremental(void)
 
   CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
-  CHECK(Fail, ingest_init(&stage, half, compute) == 0);
+  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
+  CHECK(Fail, ingest_init(&stage, half, &ord, compute) == 0);
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
@@ -256,7 +265,9 @@ test_ingest_incremental(void)
                                   compute) == 0);
     CHECK(Fail, cursor == epoch_elements / 2);
 
-    CU(Fail, cuEventSynchronize(stage.slot[stage.current].t_h2d_end));
+    CU(Fail,
+       cuEventSynchronize(gpu_ordering_event(
+         &ord, GPU_EDGE_STAGING_H2D_DONE, stage.current)));
     memcpy(stage.slot[stage.current].h_in, (uint8_t*)h_src + half, half);
     stage.bytes_written = half;
     CHECK(Fail,
@@ -307,6 +318,7 @@ Fail:
   free(h_src);
   free(h_pool);
   ingest_destroy(&stage);
+  gpu_ordering_destroy(&ord);
   destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_event_destroy(pool_ready);
@@ -328,6 +340,7 @@ test_ingest_multiscale(void)
   const size_t src_bytes = epoch_elements * bytes_per_element;
 
   struct staging_state stage = { 0 };
+  struct gpu_ordering ord = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_linear = 0;
   uint16_t* h_src = NULL;
@@ -336,7 +349,10 @@ test_ingest_multiscale(void)
 
   CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
-  CHECK(Fail, ingest_init(&stage, src_bytes, compute) == 0);
+  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
+  CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
 
   CU(Fail, cuMemAlloc(&d_linear, src_bytes));
   CU(Fail, cuMemsetD8(d_linear, 0, src_bytes));
@@ -377,6 +393,7 @@ Fail:
   free(h_src);
   free(h_out);
   ingest_destroy(&stage);
+  gpu_ordering_destroy(&ord);
   cu_mem_free(d_linear);
   cu_stream_destroy(h2d);
   cu_stream_destroy(compute);

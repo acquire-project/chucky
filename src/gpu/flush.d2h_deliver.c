@@ -23,22 +23,22 @@
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
+                 struct gpu_ordering* ord,
                  CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
+  stage->ord = ord;
   stage->shard_alignment = shard_alignment;
 
+  // Seed timing events so the first metric reads see a valid interval.
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->h_chunk_index_ready[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->ready[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
-    CU(Fail, cuEventRecord(stage->h_chunk_index_ready[fc], compute));
-    CU(Fail, cuEventRecord(stage->ready[fc], compute));
   }
 
   // Drain-time copies must not share the d2h stream (see d2h_deliver_stage).
   CU(Fail, cuStreamCreate(&stage->drain_stream, CU_STREAM_NON_BLOCKING));
+  gpu_ordering_register_stream(ord, GPU_STREAM_DRAIN, stage->drain_stream);
 
   return 0;
 
@@ -52,11 +52,8 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 {
   if (!stage)
     return;
-  for (int fc = 0; fc < 2; ++fc) {
+  for (int fc = 0; fc < 2; ++fc)
     cu_event_destroy(stage->t_d2h_start[fc]);
-    cu_event_destroy(stage->h_chunk_index_ready[fc]);
-    cu_event_destroy(stage->ready[fc]);
-  }
   cu_stream_destroy(stage->drain_stream);
   stage->drain_stream = NULL;
 }
@@ -176,25 +173,6 @@ lod_view(const struct flush_handoff* handoff, uint8_t lv, size_t data_base)
   return ar;
 }
 
-static int
-poll_event(CUevent ev, int fc)
-{
-  for (;;) {
-    CUresult r = cuEventQuery(ev);
-    if (r == CUDA_SUCCESS)
-      return 0;
-    if (r == CUDA_ERROR_DEINITIALIZED) {
-      log_debug("d2h_deliver: cuEventQuery returned DEINITIALIZED (fc=%d)", fc);
-      return 0;
-    }
-    if (r != CUDA_ERROR_NOT_READY) {
-      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
-      return 1;
-    }
-    platform_sleep_ns(50000);
-  }
-}
-
 // h_offsets must be pre-rebase (absolute, slot-relative) values here.
 static int
 lod_actual_bytes(const struct flush_handoff* handoff,
@@ -220,17 +198,13 @@ Error:
 }
 
 // Publishes the drained kick's tail generation; must run exactly once per
-// drain, on failure exits too — the gate threshold counts kicks
-// (shard_tables in stream.engine.h), so a skipped publish leaves the gate
-// unsatisfiable and destroy's auto-flush hangs in poll_event. Tail-state
-// content is moot once the drain has failed.
+// drain, on failure exits too — the gate threshold counts kicks, so a
+// skipped publish leaves the gate unsatisfiable and destroy's auto-flush
+// hangs polling. Tail-state content is moot once the drain has failed.
 static struct writer_result
-finish_drain(struct shard_tables* shards, int err)
+finish_drain(struct gpu_ordering* ord, int err)
 {
-  if (shards && shards->h_tail_seq_flag) {
-    shards->tail_seq++;
-    *shards->h_tail_seq_flag = shards->tail_seq;
-  }
+  gpu_edge_publish(ord, GPU_EDGE_TAIL_PUBLISHED);
   return err ? writer_error() : writer_ok();
 }
 
@@ -258,10 +232,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     platform_toc(&kick_clk);
 
     if (handoff->passthrough) {
-      if (poll_event(stage->ready[fc], fc))
+      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_D2H_DONE, fc))
         goto Error;
     } else {
-      if (poll_event(stage->h_chunk_index_ready[fc], fc))
+      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_CHUNK_INDEX_READY, fc))
         goto Error;
 
       // Bulk copies go on drain_stream, never d2h_stream — sharing
@@ -302,12 +276,15 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       // failed: cap-stacking waiters block on slot->ready and would hang
       // otherwise. Record-on-error is harmless because the stream is
       // already in an error state and the next op will short-circuit.
-      CU(Error, cuEventRecord(stage->ready[fc], stage->drain_stream));
+      CHECK(Error,
+            gpu_edge_record(
+              stage->ord, GPU_EDGE_SLOT_DRAINED, fc, stage->drain_stream) ==
+              0);
       CU(Error, cuEventRecord(slot->ready, stage->drain_stream));
 
       if (dispatch_err)
         goto Error;
-      if (poll_event(stage->ready[fc], fc))
+      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_D2H_DONE, fc))
         goto Error;
     }
 
@@ -324,7 +301,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                        lod_shared,
                        metrics,
                        stage->t_d2h_start[fc],
-                       stage->ready[fc]);
+                       gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED,
+                                          fc));
 
   {
     struct platform_clock sink_clock = { 0 };
@@ -423,10 +401,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
-  return finish_drain(handoff->shards, 0);
+  return finish_drain(stage->ord, 0);
 
 Error:
-  return finish_drain(handoff->shards, 1);
+  return finish_drain(stage->ord, 1);
 }
 
 // Periodic metadata update (append-dim extents per level).
@@ -476,7 +454,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
 
   wait_io_fences(slot, sink, stage->metrics);
 
-  CU(Error, cuStreamWaitEvent(d2h_stream, handoff->t_aggregate_end, 0));
+  CHECK(Error,
+        gpu_edge_wait(stage->ord, GPU_EDGE_AGG_DONE, fc, d2h_stream) == 0);
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
   // Compressed codecs use these in drain to size exact per-LOD transfers;
@@ -498,10 +477,9 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                                 n * sizeof(size_t),
                                 d2h_stream));
   }
-  if (!dispatch_err)
-    D2H_TRY(dispatch_err,
-            "cuEventRecord",
-            cuEventRecord(stage->h_chunk_index_ready[fc], d2h_stream));
+  if (!dispatch_err &&
+      gpu_edge_record(stage->ord, GPU_EDGE_CHUNK_INDEX_READY, fc, d2h_stream))
+    dispatch_err = 1;
 
   // Compressed defers bulk D2H to sync_and_deliver once the chunk index lands.
   if (!dispatch_err && handoff->passthrough && layout->total_data_bytes > 0)
@@ -515,7 +493,9 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // Always record passthrough completion events even on dispatch error:
   // cap-stacking waiters block on slot->ready and would hang otherwise.
   if (handoff->passthrough) {
-    CU(Error, cuEventRecord(stage->ready[fc], d2h_stream));
+    CHECK(Error,
+          gpu_edge_record(stage->ord, GPU_EDGE_SLOT_DRAINED, fc, d2h_stream) ==
+            0);
     CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
 

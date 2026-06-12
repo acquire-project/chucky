@@ -2,10 +2,12 @@
 
 #include "gpu/stream.internal.h"
 
-// Allocate double-buffered staging buffers and events. Returns 0 on success.
+// Allocate double-buffered staging buffers and timing events; ordering
+// events live in ord. Returns 0 on success.
 int
 ingest_init(struct staging_state* stage,
             size_t buffer_capacity_bytes,
+            struct gpu_ordering* ord,
             CUstream compute);
 
 // Free staging buffers and events.
