@@ -4,6 +4,7 @@
 #include "gpu/compress.h"
 #include "gpu/flush.handoff.h"
 #include "gpu/ordering.h"
+#include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
@@ -15,12 +16,15 @@
 
 struct pool_state
 {
-  CUdeviceptr buf[2];
-  int current; // 0 or 1
+  struct gpu_pool p;  // buf generations: ready=POOL_FILLED,
+                      //                  consumed=POOL_CONSUMED (#140)
+  CUdeviceptr buf[2]; // payloads; non-init code goes through p
+  int current;        // 0 or 1
 };
 
 // Ordering events (h2d-done, scatter-done) live in gpu_ordering, instanced
-// by staging slot; only timing-interval starts stay here.
+// by staging slot; only timing-interval starts stay here. h_in/d_in are the
+// pool payloads — non-init code reaches them through d_pool/h_pool only.
 struct staging_slot
 {
   void* h_in;              // pinned host WC, size = buffer_capacity_bytes
@@ -33,9 +37,12 @@ struct staging_slot
 struct staging_state
 {
   struct staging_slot slot[2];
-  int current;          // 0 or 1: which buffer the host is filling
-  size_t bytes_written; // bytes written to current slot's h_in so far
-  struct gpu_ordering* ord; // borrowed
+  struct gpu_pool d_pool; // d_in: ready=STAGING_H2D_DONE,
+                          //       consumed=STAGING_SCATTER_DONE
+  struct gpu_pool h_pool; // h_in: consumed=STAGING_FREE; ready is host call
+                          //       order (fill precedes dispatch)
+  int current;            // 0 or 1: which buffer the host is filling
+  size_t bytes_written;   // bytes written to current slot's h_in so far
 };
 
 // Per flush-slot: mutable batch state (masks + epoch count).
@@ -124,7 +131,7 @@ struct compress_agg_input
   uint32_t n_epochs;
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
-  CUdeviceptr pool_buf;
+  struct gpu_pool* pool; // chunk pool; the kick acquires slot fc's batch
   int lod_active; // wait GPU_EDGE_LOD_DONE (multiscale with bound edge only)
   uint32_t epochs_per_batch;
 };
@@ -199,7 +206,19 @@ struct compress_agg_stage
   //   d_aggregated:     max_batch_layout.total_data_bytes
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
   //   plus pinned host shadows of matching size.
+  // Non-init code reaches a slot through the pools below; each guards a
+  // different facet of the same payload for a different consumer.
   struct aggregate_slot agg[2];
+  struct gpu_pool agg_pool;  // device facet: ready=AGG_DONE,
+                             //               consumed=SLOT_DRAINED
+  struct gpu_pool agg_host;  // h_aggregated facet: ready=D2H_DONE (alias);
+                             // consumed is the drain-before-rekick host rule
+  struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
+                             // ready=CHUNK_INDEX_READY (compressed only)
+  struct gpu_pool tail; // d_tail_bytes/d_tail_carry generations (#142):
+                        // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
+                        // the deliver-oldest-first host rule. Payload is
+                        // the bound compress_agg_array (ar below).
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;
@@ -379,8 +398,9 @@ stream_engine_bind_array(struct stream_engine* e,
 
 // --- Engine operations ---
 
-// Pointer to the given epoch's chunk region in the current pool.
-void*
+// View of the given epoch's chunk region in the current pool — within the
+// produce generation acquired at the last swap.
+struct gpu_pool_view
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,
                          uint32_t epoch_in_batch);

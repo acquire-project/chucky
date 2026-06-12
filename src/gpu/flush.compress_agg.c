@@ -49,6 +49,19 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
 {
   memset(stage, 0, sizeof(*stage));
   stage->ord = ord;
+  gpu_pool_init(
+    &stage->agg_pool, ord, GPU_EDGE_AGG_DONE, GPU_EDGE_SLOT_DRAINED);
+  gpu_pool_init(&stage->agg_host, ord, GPU_EDGE_D2H_DONE, GPU_EDGE_COUNT);
+  gpu_pool_init(
+    &stage->agg_index, ord, GPU_EDGE_CHUNK_INDEX_READY, GPU_EDGE_COUNT);
+  for (int fc = 0; fc < 2; ++fc) {
+    gpu_pool_bind(&stage->agg_pool, fc, &stage->agg[fc]);
+    gpu_pool_bind(&stage->agg_host, fc, &stage->agg[fc]);
+    gpu_pool_bind(&stage->agg_index, fc, &stage->agg[fc]);
+  }
+  gpu_pool_init(&stage->tail, ord, GPU_EDGE_TAIL_PUBLISHED, GPU_EDGE_COUNT);
+  // &stage->ar is stable across multiarray binds (swapped by value).
+  gpu_pool_bind(&stage->tail, 0, &stage->ar);
 
   const uint32_t K = lim->epochs_per_batch;
   const uint64_t M = lim->codec_batch;
@@ -159,7 +172,7 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
   if (stage->ord && gpu_ordering_gate_active(stage->ord)) {
     // An undrained kick (failed flush) parks work on the compress stream;
     // the frees below can block on pending work, so release first.
-    gpu_edge_release_all(stage->ord);
+    gpu_pool_release_all(&stage->tail);
     CUWARN(cuCtxSynchronize());
   }
   codec_free(&stage->codec);
@@ -589,23 +602,28 @@ Error:
   return 1;
 }
 
-// GPU_EDGE_SLOT_DRAINED: aggregate must not overwrite agg[fc].d_aggregated
-// before the prior D2H on the same fc has read it (seeded at init).
+// Aggregate must not overwrite agg[fc] before the prior D2H on the same fc
+// has read it.
 static int
-wait_upstream_events(struct compress_agg_stage* stage,
-                     const struct compress_agg_input* in,
-                     CUstream compress_stream)
+acquire_inputs(struct compress_agg_stage* stage,
+               const struct compress_agg_input* in,
+               CUstream compress_stream,
+               struct gpu_pool_view* pool_buf,
+               struct aggregate_slot** slot)
 {
   CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_POOL_FILLED, 0, compress_stream) == 0);
+        gpu_pool_acquire_consume(in->pool, in->fc, compress_stream, pool_buf) ==
+          0);
+  // LOD chunks land in the pool through a second producer edge.
   if (in->lod_active)
     CHECK(Error,
           gpu_edge_wait(
             stage->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
+  struct gpu_pool_view v;
   CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_SLOT_DRAINED, in->fc, compress_stream) == 0);
+        gpu_pool_acquire_produce(
+          &stage->agg_pool, in->fc, compress_stream, &v) == 0);
+  *slot = v.p;
   return 0;
 
 Error:
@@ -618,12 +636,14 @@ static int
 kick_compress_phase(struct compress_agg_stage* stage,
                     const struct compress_agg_input* in,
                     const struct level_geometry* levels,
+                    struct gpu_pool_view pool_buf,
                     CUstream compress_stream,
                     CUdeviceptr* d_aggregate_src)
 {
   const int fc = in->fc;
   const int skip_compress = (stage->codec.type == CODEC_NONE);
-  *d_aggregate_src = skip_compress ? in->pool_buf : stage->d_compressed[fc];
+  *d_aggregate_src =
+    skip_compress ? gpu_pool_view_d(pool_buf) : stage->d_compressed[fc];
 
   if (skip_compress) {
     CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
@@ -634,7 +654,7 @@ kick_compress_phase(struct compress_agg_stage* stage,
     CHECK(Error,
           kick_compress(stage,
                         fc,
-                        (void*)in->pool_buf,
+                        pool_buf.p,
                         batch_chunks,
                         stage->codec.chunk_bytes,
                         compress_stream) == 0);
@@ -657,14 +677,14 @@ arm_tail_gate(struct compress_agg_stage* stage,
   const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
   const int enable = layout->total_batch_chunks > 0 &&
                      stage->ar.total_shards > 0 && page_size > 0;
-  return gpu_edge_wait_gen(
-    stage->ord, GPU_EDGE_TAIL_PUBLISHED, compress_stream, enable);
+  return gpu_pool_acquire_consume_gen(&stage->tail, compress_stream, enable);
 }
 
 static int
 dispatch_aggregate(struct compress_agg_stage* stage,
                    const struct batch_aggregate_layout* layout,
                    int fc,
+                   struct aggregate_slot* slot,
                    CUdeviceptr d_aggregate_src,
                    CUstream compress_stream)
 {
@@ -680,7 +700,7 @@ dispatch_aggregate(struct compress_agg_stage* stage,
             layout->total_batch_covering,
             stage->ar.nlod,
             stage->codec.max_output_size,
-            &stage->agg[fc],
+            slot,
             stage->shards.d_base_offsets,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
@@ -692,9 +712,10 @@ dispatch_aggregate(struct compress_agg_stage* stage,
             compress_stream) == 0);
   }
 
+  // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
+  // record (#140).
   CHECK(Error,
-        gpu_edge_record(stage->ord, GPU_EDGE_AGG_DONE, fc, compress_stream) ==
-          0);
+        gpu_pool_release_produce(&stage->agg_pool, fc, compress_stream) == 0);
   return 0;
 
 Error:
@@ -722,10 +743,12 @@ fill_handoff(struct compress_agg_stage* stage,
   out->t_compress_end = stage->t_compress_end[fc];
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
-  out->agg = &stage->agg[fc];
+  out->agg_pool = &stage->agg_pool;
+  out->agg_host = &stage->agg_host;
+  out->agg_index = &stage->agg_index;
+  out->tail = &stage->tail;
   out->layout = *layout;
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
-  out->shards = &stage->ar;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->ar.shard[lv];
 }
@@ -752,16 +775,19 @@ compress_agg_kick(struct compress_agg_stage* stage,
                               compress_stream) == 0);
   CHECK(Error,
         build_and_upload_shard_tables(stage, &layout, compress_stream) == 0);
-  CHECK(Error, wait_upstream_events(stage, in, compress_stream) == 0);
+  struct gpu_pool_view pool_buf;
+  struct aggregate_slot* slot = NULL;
+  CHECK(Error,
+        acquire_inputs(stage, in, compress_stream, &pool_buf, &slot) == 0);
 
   CUdeviceptr d_aggregate_src = 0;
   CHECK(Error,
         kick_compress_phase(
-          stage, in, levels, compress_stream, &d_aggregate_src) == 0);
+          stage, in, levels, pool_buf, compress_stream, &d_aggregate_src) == 0);
   CHECK(Error, arm_tail_gate(stage, &layout, compress_stream) == 0);
   CHECK(Error,
         dispatch_aggregate(
-          stage, &layout, in->fc, d_aggregate_src, compress_stream) == 0);
+          stage, &layout, in->fc, slot, d_aggregate_src, compress_stream) == 0);
   fill_handoff(stage, in, &layout, per_lod_n_active, out);
   return 0;
 

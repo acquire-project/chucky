@@ -13,6 +13,7 @@ add_src_lib(stream
         stream.lod.c stream.lod.h
         stream.internal.h
         ordering.c ordering.h
+        pool.c pool.h
         flush.compress_agg.c flush.compress_agg.h
         flush.d2h_deliver.c flush.d2h_deliver.h
         flush.handoff.h flush.helpers.h

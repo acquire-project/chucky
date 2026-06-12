@@ -691,7 +691,7 @@ static int
 scatter_morton_to_chunks(struct lod_state* lod,
                          struct lod_shared_state* sh,
                          const struct level_geometry* levels,
-                         void* pool_epoch,
+                         struct gpu_pool_view pool_epoch,
                          enum dtype dtype,
                          uint32_t active_levels_mask,
                          CUstream compute)
@@ -705,9 +705,9 @@ scatter_morton_to_chunks(struct lod_state* lod,
       continue;
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr dst = (CUdeviceptr)pool_epoch + levels->level[lv].chunk_offset *
-                                                  chunk_stride *
-                                                  bytes_per_element;
+    CUdeviceptr dst = gpu_pool_view_d(pool_epoch) +
+                      levels->level[lv].chunk_offset * chunk_stride *
+                        bytes_per_element;
 
     CHECK(Error,
           lod_morton_to_chunks_lut(dst,
@@ -732,7 +732,7 @@ lod_run_epoch(struct lod_state* lod,
               struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
-              void* pool_epoch,
+              struct gpu_pool_view pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
               enum lod_reduce_method append_reduce_method,

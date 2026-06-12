@@ -110,7 +110,7 @@ test_ingest_single_epoch(void)
   for (uint64_t i = 0; i < epoch_elements; ++i)
     h_src[i] = (uint16_t)(i & 0xFFFF);
 
-  memcpy(stage.slot[0].h_in, h_src, src_bytes);
+  memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
   stage.bytes_written = src_bytes;
 
   {
@@ -119,7 +119,8 @@ test_ingest_single_epoch(void)
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -243,29 +244,32 @@ test_ingest_incremental(void)
   {
     uint64_t cursor = 0;
 
-    memcpy(stage.slot[stage.current].h_in, h_src, half);
+    memcpy(gpu_pool_at(&stage.h_pool, stage.current, 0).p, h_src, half);
     stage.bytes_written = half;
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
                                   compute) == 0);
     CHECK(Fail, cursor == epoch_elements / 2);
 
-    CU(Fail,
-       cuEventSynchronize(gpu_ordering_event(
-         &ord, GPU_EDGE_STAGING_H2D_DONE, stage.current)));
-    memcpy(stage.slot[stage.current].h_in, (uint8_t*)h_src + half, half);
+    struct gpu_pool_view h_in;
+    CHECK(Fail,
+          gpu_pool_host_acquire_produce(&stage.h_pool, stage.current, &h_in) ==
+            0);
+    memcpy(h_in.p, (uint8_t*)h_src + half, half);
     stage.bytes_written = half;
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
                                   &layout_gpu,
-                                  (void*)d_pool,
+                                  (struct gpu_pool_view){
+                                    .p = (void*)(uintptr_t)d_pool },
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -351,7 +355,7 @@ test_ingest_multiscale(void)
   for (uint64_t i = 0; i < epoch_elements; ++i)
     h_src[i] = (uint16_t)(i + 1);
 
-  memcpy(stage.slot[0].h_in, h_src, src_bytes);
+  memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
   stage.bytes_written = src_bytes;
 
   {

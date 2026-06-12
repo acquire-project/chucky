@@ -55,15 +55,16 @@ stream_engine_attach_edge_stalls(struct stream_engine* e)
     &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
 }
 
-void*
+struct gpu_pool_view
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,
                          uint32_t epoch_in_batch)
 {
   const size_t bpe = dtype_bpe(ctx->config.dtype);
-  return (char*)e->pools.buf[e->pools.current] +
-         (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
-           ctx->layout.chunk_stride * bpe;
+  return gpu_pool_at(&e->pools.p,
+                     e->pools.current,
+                     (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
+                       ctx->layout.chunk_stride * bpe);
 }
 
 static int
@@ -139,7 +140,7 @@ stream_append_body(struct stream_engine* e,
           struct staging_slot* ss = &e->stage.slot[si];
           // Poll instead of cuEventSynchronize to keep the producer thread
           // hot — it has memcpy work queued up immediately after.
-          if (gpu_edge_host_wait(&e->ord, GPU_EDGE_STAGING_FREE, si))
+          if (gpu_pool_host_acquire_produce(&e->stage.h_pool, si, NULL))
             goto Error;
 
           if (ctx->cursor_elements > 0) {
@@ -161,8 +162,11 @@ stream_append_body(struct stream_engine* e,
         {
           struct platform_clock mc = { 0 };
           platform_toc(&mc);
-          memcpy((uint8_t*)e->stage.slot[e->stage.current].h_in +
-                   e->stage.bytes_written,
+          // Same h_in generation as the bytes_written==0 acquire above.
+          memcpy(gpu_pool_at(&e->stage.h_pool,
+                             e->stage.current,
+                             e->stage.bytes_written)
+                   .p,
                  src + written,
                  payload);
           accumulate_metric_ms(&e->metrics.memcpy,

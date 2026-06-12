@@ -26,7 +26,8 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  struct gpu_ordering ord;      // pool-filled record stands in for the engine
+  struct gpu_ordering ord; // edge registry the harness pools draw from
+  struct gpu_pool pool;    // chunk pool faked over d_pool (both slots)
   uint32_t* batch_active_masks; // [K] owned scratch for tests
   int ord_inited;
   int stage_inited;
@@ -78,6 +79,9 @@ ca_ctx_setup(struct ca_test_ctx* c,
                       c->cl.layouts[0].chunk_stride *
                       dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
+  gpu_pool_init(&c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
+  for (int fc = 0; fc < 2; ++fc)
+    gpu_pool_bind(&c->pool, fc, (void*)(uintptr_t)c->d_pool);
 
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
@@ -104,23 +108,22 @@ ca_ctx_fill_epoch(struct ca_test_ctx* c,
           epoch_ptr, total_chunks, chunk_stride, bytes_per_element, fill_fn) ==
           0);
 
-  // Re-record pool-filled on the compute stream after every fill so the
-  // kick's wait sees batch-level readiness.
-  CHECK(Fail,
-        gpu_edge_record(&c->ord, GPU_EDGE_POOL_FILLED, 0, c->compute) == 0);
+  // Re-release pool-filled on the compute stream after every fill so the
+  // kick's acquire sees batch-level readiness.
+  CHECK(Fail, gpu_pool_release_produce(&c->pool, 0, c->compute) == 0);
   return 0;
 
 Fail:
   return 1;
 }
 
-// Stand in for delivery's tail publish (flush.d2h_deliver.c): tests drive
-// compress_agg_kick without the delivery loop, and an unpublished
+// Stand in for delivery's tail release (flush.d2h_deliver.c): tests drive
+// compress_agg_kick without the delivery loop, and an unreleased
 // generation parks the next kick's tail gate forever.
 static void
 ca_ctx_publish_tail(struct ca_test_ctx* c)
 {
-  gpu_edge_publish(&c->ord, GPU_EDGE_TAIL_PUBLISHED);
+  gpu_pool_release_produce_gen(&c->stage.tail);
 }
 
 // Build input, kick compress_agg, sync.
@@ -137,7 +140,7 @@ ca_ctx_kick(struct ca_test_ctx* c,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool_buf = c->d_pool,
+    .pool = &c->pool,
     .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
@@ -158,6 +161,14 @@ Fail:
   return 1;
 }
 
+// Tests host-sync the compute stream before reading slot contents, so the
+// host-ordered peek is the right acquire.
+static struct aggregate_slot*
+handoff_slot(const struct flush_handoff* handoff)
+{
+  return gpu_pool_at(handoff->agg_host, handoff->fc, 0).p;
+}
+
 // D2H aggregate offsets and data for level 0. Caller frees *out_agg_data.
 // Copies the full d_aggregated pool because the new tail-carryover layout
 // places each shard's chunks at fixed `s * shard_capacity` offsets — not
@@ -172,7 +183,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                  uint64_t n_covering,
                  void** out_agg_data)
 {
-  struct aggregate_slot* agg = handoff->agg;
+  struct aggregate_slot* agg = handoff_slot(handoff);
   const struct lod_segment* seg = &handoff->layout.lods[0];
   const uint64_t base = seg->batch_covering_offset + 0; // lv=0
 
@@ -212,7 +223,7 @@ verify_tiles_none(const struct flush_handoff* handoff,
                   uint16_t (*fill_fn)(uint64_t))
 {
   const struct aggregate_layout* al = &handoff->per_lod_agg_layouts[0];
-  const struct aggregate_slot* agg = handoff->agg;
+  const struct aggregate_slot* agg = handoff_slot(handoff);
   const struct lod_segment* seg = &handoff->layout.lods[0];
   const size_t* lv_offsets = agg->h_offsets + seg->batch_covering_offset + 0;
   const uint64_t total_chunks = c->cl.levels.total_chunks;
@@ -283,13 +294,13 @@ test_compress_agg_single_epoch(void)
   CHECK(Fail, handoff.t_compress_start != 0);
   CHECK(Fail, handoff.t_compress_end != 0);
   CHECK(Fail, handoff.max_output_size == chunk_bytes);
-  CHECK(Fail, handoff.agg != NULL);
+  CHECK(Fail, handoff.agg_pool != NULL);
   CHECK(Fail, handoff.per_lod_agg_layouts != NULL);
 
   // D2H and verify
   const struct lod_segment* seg0 = &handoff.layout.lods[0];
   const size_t* lv_offsets =
-    handoff.agg->h_offsets + seg0->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_offsets + seg0->batch_covering_offset + 0;
   uint64_t C = handoff.per_lod_agg_layouts[0].covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
@@ -349,7 +360,7 @@ test_compress_agg_batch(void)
   const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
   const struct lod_segment* seg = &handoff.layout.lods[0];
   const size_t* lv_offsets =
-    handoff.agg->h_offsets + seg->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
   uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
   uint64_t batch_covering = (uint64_t)batch_count * C;
@@ -451,7 +462,7 @@ test_compress_agg_partial_batch(void)
     c.cl.layouts[0].chunk_stride * dtype_bpe(c.config.dtype);
   const struct lod_segment* seg = &handoff.layout.lods[0];
   const size_t* lv_offsets =
-    handoff.agg->h_offsets + seg->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = handoff.per_lod_agg_layouts[0].covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
@@ -507,9 +518,9 @@ test_compress_agg_zstd_single_epoch(void)
   const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
   const struct lod_segment* seg = &handoff.layout.lods[0];
   const size_t* lv_offsets =
-    handoff.agg->h_offsets + seg->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   const size_t* lv_sizes =
-    handoff.agg->h_permuted_sizes + seg->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_permuted_sizes + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
@@ -593,7 +604,7 @@ test_compress_agg_zstd_batch(void)
   const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
   const struct lod_segment* seg = &handoff.layout.lods[0];
   const size_t* lv_offsets =
-    handoff.agg->h_offsets + seg->batch_covering_offset + 0;
+    handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
   uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
   uint64_t batch_covering = (uint64_t)batch_count * C;
@@ -759,7 +770,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool_buf = c.d_pool,
+      .pool = &c.pool,
       .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
@@ -789,7 +800,7 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool_buf = c.d_pool,
+      .pool = &c.pool,
       .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };

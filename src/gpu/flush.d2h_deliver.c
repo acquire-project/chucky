@@ -81,6 +81,7 @@ wait_io_fences(struct aggregate_slot* slot,
 
 static void
 record_flush_metrics(const struct flush_handoff* handoff,
+                     const struct aggregate_slot* slot,
                      const struct level_geometry* levels,
                      const struct dim_info* dims,
                      const struct tile_stream_layout* layout,
@@ -140,7 +141,7 @@ record_flush_metrics(const struct flush_handoff* handoff,
     size_t agg_bytes = 0;
     const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
     for (size_t i = 0; i < n_perm; ++i)
-      agg_bytes += handoff->agg->h_permuted_sizes[i];
+      agg_bytes += slot->h_permuted_sizes[i];
 
     accumulate_metric_cu(&metrics->compress,
                          handoff->t_compress_start,
@@ -161,10 +162,12 @@ record_flush_metrics(const struct flush_handoff* handoff,
 // chunk lives. In carry-over mode that is seg->data_segment_offset; in
 // contiguous mode it is the cumulative actual bytes of prior LODs.
 static struct aggregate_result
-lod_view(const struct flush_handoff* handoff, uint8_t lv, size_t data_base)
+lod_view(const struct flush_handoff* handoff,
+         struct aggregate_slot* slot,
+         uint8_t lv,
+         size_t data_base)
 {
   const struct lod_segment* seg = &handoff->layout.lods[lv];
-  struct aggregate_slot* slot = handoff->agg;
   struct aggregate_result ar = {
     .data = (uint8_t*)slot->h_aggregated + data_base,
     .offsets = slot->h_offsets + seg->batch_covering_offset + lv,
@@ -176,6 +179,7 @@ lod_view(const struct flush_handoff* handoff, uint8_t lv, size_t data_base)
 // h_offsets must be pre-rebase (absolute, slot-relative) values here.
 static int
 lod_actual_bytes(const struct flush_handoff* handoff,
+                 const struct aggregate_slot* slot,
                  uint8_t lv,
                  size_t* out_bytes)
 {
@@ -183,7 +187,6 @@ lod_actual_bytes(const struct flush_handoff* handoff,
   const struct lod_segment* seg = &handoff->layout.lods[lv];
   if (seg->n_active == 0)
     return 0;
-  const struct aggregate_slot* slot = handoff->agg;
   const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
   const size_t last = seg->batch_covering_offset + (size_t)lv + total - 1;
   const size_t end = slot->h_offsets[last] + slot->h_permuted_sizes[last];
@@ -197,14 +200,14 @@ Error:
   return 1;
 }
 
-// Publishes the drained kick's tail generation; must run exactly once per
+// Releases the drained kick's tail generation; must run exactly once per
 // drain, on failure exits too — the gate threshold counts kicks, so a
-// skipped publish leaves the gate unsatisfiable and destroy's auto-flush
+// skipped release leaves the gate unsatisfiable and destroy's auto-flush
 // hangs polling. Tail-state content is moot once the drain has failed.
 static struct writer_result
-finish_drain(struct gpu_ordering* ord, int err)
+finish_drain(struct gpu_pool* tail, int err)
 {
-  gpu_edge_publish(ord, GPU_EDGE_TAIL_PUBLISHED);
+  gpu_pool_release_produce_gen(tail);
   return err ? writer_error() : writer_ok();
 }
 
@@ -221,7 +224,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                  struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = handoff->agg;
+  struct aggregate_slot* slot = NULL;
   const struct batch_aggregate_layout* alayout = &handoff->layout;
 
   if (sink->has_error && sink->has_error(sink))
@@ -232,11 +235,15 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     platform_toc(&kick_clk);
 
     if (handoff->passthrough) {
-      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_D2H_DONE, fc))
+      struct gpu_pool_view hv;
+      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, &hv))
         goto Error;
+      slot = hv.p;
     } else {
-      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_CHUNK_INDEX_READY, fc))
+      struct gpu_pool_view iv;
+      if (gpu_pool_host_acquire_consume(handoff->agg_index, fc, &iv))
         goto Error;
+      slot = iv.p;
 
       // Bulk copies go on drain_stream, never d2h_stream — sharing
       // deadlocks against the tail gate (see d2h_deliver_stage).
@@ -247,7 +254,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
             continue;
           const struct lod_segment* seg = &alayout->lods[lv];
           size_t actual = 0;
-          if (lod_actual_bytes(handoff, lv, &actual))
+          if (lod_actual_bytes(handoff, slot, lv, &actual))
             goto Error;
           if (actual == 0)
             continue;
@@ -272,19 +279,18 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                                     stage->drain_stream));
       }
 
-      // Always record the slot-drained edge, even if the D2H dispatch above
-      // failed: the host poll below and the next kick's wait block on it
-      // and would hang otherwise. Record-on-error is harmless because the
-      // stream is already in an error state and the next op will
-      // short-circuit.
+      // Always release the slot (SLOT_DRAINED), even if the D2H dispatch
+      // above failed: the host poll below and the next kick's acquire block
+      // on it and would hang otherwise. Release-on-error is harmless
+      // because the stream is already in an error state and the next op
+      // will short-circuit.
       CHECK(Error,
-            gpu_edge_record(
-              stage->ord, GPU_EDGE_SLOT_DRAINED, fc, stage->drain_stream) ==
-              0);
+            gpu_pool_release_consume(
+              handoff->agg_pool, fc, stage->drain_stream) == 0);
 
       if (dispatch_err)
         goto Error;
-      if (gpu_edge_host_wait(stage->ord, GPU_EDGE_D2H_DONE, fc))
+      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, NULL))
         goto Error;
     }
 
@@ -293,6 +299,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
   }
 
   record_flush_metrics(handoff,
+                       slot,
                        levels,
                        dims,
                        layout,
@@ -308,7 +315,13 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    struct compress_agg_array* shards = handoff->shards;
+    // The consumed direction is the deliver-oldest-first host rule, so no
+    // device wait is queued; the acquire hands out the array whose tail
+    // buffers this delivery uploads.
+    struct gpu_pool_view tv = { 0 };
+    if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
+      goto Error;
+    struct compress_agg_array* shards = tv.p;
     const size_t page_size = shards ? shards->page_size : 0;
 
     // In carry-over mode the bias kernel places each LOD at
@@ -323,8 +336,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (handoff->layout.page_size > 0)
         data_base[lv] = seg->data_segment_offset;
       else
-        data_base[lv] =
-          handoff->agg->h_offsets[seg->batch_covering_offset + lv];
+        data_base[lv] = slot->h_offsets[seg->batch_covering_offset + lv];
     }
 
     // Rebase per-LOD offsets to be segment-relative. GPU produces absolute
@@ -339,7 +351,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (handoff->per_lod_n_active[lv] == 0 || data_base[lv] == 0)
         continue;
       const struct lod_segment* seg = &handoff->layout.lods[lv];
-      size_t* off = handoff->agg->h_offsets + seg->batch_covering_offset + lv;
+      size_t* off = slot->h_offsets + seg->batch_covering_offset + lv;
       const uint64_t n = (uint64_t)seg->n_active * seg->covering_count + 1;
       for (uint64_t i = 0; i < n; ++i)
         off[i] -= data_base[lv];
@@ -349,7 +361,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       if (handoff->per_lod_n_active[lv] == 0)
         continue;
 
-      struct aggregate_result ar = lod_view(handoff, lv, data_base[lv]);
+      struct aggregate_result ar = lod_view(handoff, slot, lv, data_base[lv]);
       // Per-LOD slice of the unified host tail-bytes scratch.
       size_t* h_tail_lv = NULL;
       if (shards && shards->h_tail_bytes && page_size > 0)
@@ -395,16 +407,16 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     // Record an aggregate IO fence on the unified slot. wait_io_fences()
     // checks slot->io_done at the next kick.
     if (sink->record_fence)
-      handoff->agg->io_done = sink->record_fence(sink);
+      slot->io_done = sink->record_fence(sink);
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
-  return finish_drain(stage->ord, 0);
+  return finish_drain(handoff->tail, 0);
 
 Error:
-  return finish_drain(stage->ord, 1);
+  return finish_drain(handoff->tail, 1);
 }
 
 // Periodic metadata update (append-dim extents per level).
@@ -449,13 +461,16 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  CUstream d2h_stream)
 {
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = handoff->agg;
   const struct batch_aggregate_layout* layout = &handoff->layout;
 
-  wait_io_fences(slot, sink, stage->metrics);
+  // io_done is host-owned slot bookkeeping; its fence must retire before
+  // any device acquire, so peek rather than acquire here.
+  wait_io_fences(gpu_pool_at(handoff->agg_host, fc, 0).p, sink, stage->metrics);
 
+  struct gpu_pool_view v;
   CHECK(Error,
-        gpu_edge_wait(stage->ord, GPU_EDGE_AGG_DONE, fc, d2h_stream) == 0);
+        gpu_pool_acquire_consume(handoff->agg_pool, fc, d2h_stream, &v) == 0);
+  struct aggregate_slot* slot = v.p;
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
   // Compressed codecs use these in drain to size exact per-LOD transfers;
@@ -480,7 +495,7 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
   // Passthrough never polls the chunk index (its drain waits on the
   // slot-drained edge recorded after the bulk copy below).
   if (!dispatch_err && !handoff->passthrough &&
-      gpu_edge_record(stage->ord, GPU_EDGE_CHUNK_INDEX_READY, fc, d2h_stream))
+      gpu_pool_release_produce(handoff->agg_index, fc, d2h_stream))
     dispatch_err = 1;
 
   // Compressed defers bulk D2H to sync_and_deliver once the chunk index lands.
@@ -492,12 +507,11 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                               layout->total_data_bytes,
                               d2h_stream));
 
-  // Always record the passthrough slot-drained edge even on dispatch
+  // Always release the passthrough slot (SLOT_DRAINED) even on dispatch
   // error: the drain's host poll blocks on it and would hang otherwise.
   if (handoff->passthrough) {
     CHECK(Error,
-          gpu_edge_record(stage->ord, GPU_EDGE_SLOT_DRAINED, fc, d2h_stream) ==
-            0);
+          gpu_pool_release_consume(handoff->agg_pool, fc, d2h_stream) == 0);
   }
 
   return dispatch_err;

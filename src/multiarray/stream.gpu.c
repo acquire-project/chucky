@@ -66,9 +66,9 @@ drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
   cuStreamSynchronize(e->streams.d2h);
   // Drain the unified slot's io_done fence with the departing array's sink
   // so the next-bound array doesn't wait on a fence that was issued by a
-  // different sink.
+  // different sink. Host-ordered access: the sync above quiesced the slot.
   for (int fc = 0; fc < 2; ++fc) {
-    struct aggregate_slot* agg = &e->compress_agg.agg[fc];
+    struct aggregate_slot* agg = gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
     if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
       desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
     agg->io_done.seq = 0;
@@ -180,9 +180,14 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   // the per-array portion of the current pool as an optimization for the
   // common batch-boundary case, but that only covers one pool and only the
   // per-array size — this full zero covers both pools at the max size.)
+  // Host-ordered access: the departing array's sync flush drained every
+  // batch, so no produce wait is queued.
   for (int i = 0; i < 2; ++i)
     CU(Fail,
-       cuMemsetD8Async(e->pools.buf[i], 0, e->pool_bytes, e->streams.compute));
+       cuMemsetD8Async(gpu_pool_view_d(gpu_pool_at(&e->pools.p, i, 0)),
+                       0,
+                       e->pool_bytes,
+                       e->streams.compute));
 
   return 0;
 
