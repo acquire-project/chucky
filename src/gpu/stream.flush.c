@@ -412,7 +412,6 @@ flush_partial_append(struct stream_engine* e, struct stream_context* ctx)
                                    e->streams.compute) == 0);
   }
 
-  CU(Error, cuEventRecord(e->pools.ready[fc], e->streams.compute));
   if (gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc))
     CHECK(Error,
           gpu_edge_record(

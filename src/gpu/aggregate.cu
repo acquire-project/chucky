@@ -132,8 +132,6 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
 {
   if (!slot)
     return;
-  if (slot->ready)
-    cuEventDestroy(slot->ready);
   cuMemFree((CUdeviceptr)slot->d_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
@@ -225,8 +223,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
 
   if (slot->temp_bytes > 0)
     CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
-
-  CU(Error, cuEventCreate(&slot->ready, CU_EVENT_DEFAULT));
 
   return 0;
 

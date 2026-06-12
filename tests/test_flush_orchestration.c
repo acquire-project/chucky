@@ -45,10 +45,8 @@ orch_ctx_destroy(struct orch_ctx* c)
     compress_agg_destroy(&c->s->engine.compress_agg, c->cl.levels.nlod);
 
     // Pools
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 2; ++i)
       cu_mem_free(c->s->engine.pools.buf[i]);
-      cu_event_destroy(c->s->engine.pools.ready[i]);
-    }
 
     gpu_ordering_destroy(&c->s->engine.ord);
 
@@ -133,10 +131,6 @@ orch_ctx_setup(struct orch_ctx* c,
                        0,
                        pool_bytes,
                        c->s->engine.streams.compute));
-    CU(Fail, cuEventCreate(&c->s->engine.pools.ready[i], CU_EVENT_DEFAULT));
-    CU(
-      Fail,
-      cuEventRecord(c->s->engine.pools.ready[i], c->s->engine.streams.compute));
   }
   c->s->engine.pools.current = 0;
 

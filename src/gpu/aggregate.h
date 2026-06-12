@@ -26,7 +26,6 @@ extern "C"
     size_t* h_permuted_sizes; // host pinned: C size_t (real compressed sizes)
     void* d_temp;             // CUB scratch
     size_t temp_bytes;
-    CUevent ready;           // D2H completion
     struct io_event io_done; // tracks IO completion from this slot's data
   };
 

@@ -272,15 +272,15 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
                                     stage->drain_stream));
       }
 
-      // Always record completion events, even if the D2H dispatch above
-      // failed: cap-stacking waiters block on slot->ready and would hang
-      // otherwise. Record-on-error is harmless because the stream is
-      // already in an error state and the next op will short-circuit.
+      // Always record the slot-drained edge, even if the D2H dispatch above
+      // failed: the host poll below and the next kick's wait block on it
+      // and would hang otherwise. Record-on-error is harmless because the
+      // stream is already in an error state and the next op will
+      // short-circuit.
       CHECK(Error,
             gpu_edge_record(
               stage->ord, GPU_EDGE_SLOT_DRAINED, fc, stage->drain_stream) ==
               0);
-      CU(Error, cuEventRecord(slot->ready, stage->drain_stream));
 
       if (dispatch_err)
         goto Error;
@@ -477,7 +477,9 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                                 n * sizeof(size_t),
                                 d2h_stream));
   }
-  if (!dispatch_err &&
+  // Passthrough never polls the chunk index (its drain waits on the
+  // slot-drained edge recorded after the bulk copy below).
+  if (!dispatch_err && !handoff->passthrough &&
       gpu_edge_record(stage->ord, GPU_EDGE_CHUNK_INDEX_READY, fc, d2h_stream))
     dispatch_err = 1;
 
@@ -490,13 +492,12 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                               layout->total_data_bytes,
                               d2h_stream));
 
-  // Always record passthrough completion events even on dispatch error:
-  // cap-stacking waiters block on slot->ready and would hang otherwise.
+  // Always record the passthrough slot-drained edge even on dispatch
+  // error: the drain's host poll blocks on it and would hang otherwise.
   if (handoff->passthrough) {
     CHECK(Error,
           gpu_edge_record(stage->ord, GPU_EDGE_SLOT_DRAINED, fc, d2h_stream) ==
             0);
-    CU(Error, cuEventRecord(slot->ready, d2h_stream));
   }
 
   return dispatch_err;

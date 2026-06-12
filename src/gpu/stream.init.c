@@ -17,16 +17,12 @@
 #include <string.h>
 
 static void
-destroy_cuda_streams_and_events(struct gpu_streams* streams,
-                                struct pool_state* pools)
+destroy_cuda_streams(struct gpu_streams* streams)
 {
   cu_stream_destroy(streams->h2d);
   cu_stream_destroy(streams->compute);
   cu_stream_destroy(streams->compress);
   cu_stream_destroy(streams->d2h);
-
-  for (int i = 0; i < 2; ++i)
-    cu_event_destroy(pools->ready[i]);
 }
 
 static void
@@ -80,24 +76,19 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   lod_shared_state_destroy(&s->engine.lod_shared);
   ingest_destroy(&s->engine.stage);
   gpu_ordering_destroy(&s->engine.ord);
-  destroy_cuda_streams_and_events(&s->engine.streams, &s->engine.pools);
+  destroy_cuda_streams(&s->engine.streams);
   free(s);
 }
 
 // --- Create ---
 
 static int
-init_cuda_streams_and_events(struct gpu_streams* streams,
-                             struct pool_state* pools)
+init_cuda_streams(struct gpu_streams* streams)
 {
   CU(Fail, cuStreamCreate(&streams->h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&streams->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&streams->compress, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&streams->d2h, CU_STREAM_NON_BLOCKING));
-
-  for (int i = 0; i < 2; ++i) {
-    CU(Fail, cuEventCreate(&pools->ready[i], CU_EVENT_DEFAULT));
-  }
 
   return 0;
 Fail:
@@ -144,16 +135,6 @@ destroy_flush_pipeline(struct flush_pipeline* fp)
     free(fp->slot[fc].batch_active_masks);
     fp->slot[fc].batch_active_masks = NULL;
   }
-}
-
-static int
-seed_events(const struct pool_state* pools, CUstream compute)
-{
-  CU(Fail, cuEventRecord(pools->ready[0], compute));
-  CU(Fail, cuEventRecord(pools->ready[1], compute));
-  return 0;
-Fail:
-  return 1;
 }
 
 struct tile_stream_gpu*
@@ -212,9 +193,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         init_flush_pipeline(&out->engine.flush, cl.epochs_per_batch) == 0);
 
   // GPU allocation and init.
-  CHECK(FailPhase2,
-        init_cuda_streams_and_events(&out->engine.streams,
-                                     &out->engine.pools) == 0);
+  CHECK(FailPhase2, init_cuda_streams(&out->engine.streams) == 0);
   CHECK(FailPhase2,
         gpu_ordering_init(&out->engine.ord, out->engine.streams.compute) == 0);
   gpu_ordering_register_stream(
@@ -279,9 +258,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
             lod_state_init_accumulators(&out->engine.lod, &out->ctx.config) ==
               0);
   }
-  CHECK(FailPhase2,
-        seed_events(&out->engine.pools, out->engine.streams.compute) == 0);
-
   CU(FailPhase2, cuStreamSynchronize(out->engine.streams.compute));
 
   // Precompute total_element_limit (configured stream length) so the body can

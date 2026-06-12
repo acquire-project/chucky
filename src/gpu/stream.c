@@ -83,7 +83,6 @@ engine_dispatch_ingest(struct stream_engine* e, struct stream_context* ctx)
       &ctx->layout,
       &ctx->layout_gpu,
       stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
-      e->pools.ready[e->pools.current],
       &ctx->cursor_elements,
       dtype_bpe(ctx->config.dtype),
       e->streams.h2d,

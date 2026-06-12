@@ -16,7 +16,6 @@
 struct pool_state
 {
   CUdeviceptr buf[2];
-  CUevent ready[2];
   int current; // 0 or 1
 };
 

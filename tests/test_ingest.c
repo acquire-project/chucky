@@ -80,7 +80,6 @@ test_ingest_single_epoch(void)
   struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
-  CUevent pool_ready = 0;
   void* h_pool = NULL;
   uint16_t* h_src = NULL;
   int ok = 0;
@@ -94,8 +93,6 @@ test_ingest_single_epoch(void)
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
-  CU(Fail, cuEventCreate(&pool_ready, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(pool_ready, compute));
 
   layout.lifted_rank = lifted_rank;
   memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
@@ -123,7 +120,6 @@ test_ingest_single_epoch(void)
                                   &layout,
                                   &layout_gpu,
                                   (void*)d_pool,
-                                  pool_ready,
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -169,7 +165,6 @@ Fail:
   gpu_ordering_destroy(&ord);
   destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
-  cu_event_destroy(pool_ready);
   cu_stream_destroy(h2d);
   cu_stream_destroy(compute);
 
@@ -215,7 +210,6 @@ test_ingest_incremental(void)
   struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
-  CUevent pool_ready = 0;
   void* h_pool = NULL;
   uint16_t* h_src = NULL;
   int ok = 0;
@@ -229,8 +223,6 @@ test_ingest_incremental(void)
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
-  CU(Fail, cuEventCreate(&pool_ready, CU_EVENT_DEFAULT));
-  CU(Fail, cuEventRecord(pool_ready, compute));
 
   layout.lifted_rank = lifted_rank;
   memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
@@ -258,7 +250,6 @@ test_ingest_incremental(void)
                                   &layout,
                                   &layout_gpu,
                                   (void*)d_pool,
-                                  pool_ready,
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -275,7 +266,6 @@ test_ingest_incremental(void)
                                   &layout,
                                   &layout_gpu,
                                   (void*)d_pool,
-                                  pool_ready,
                                   &cursor,
                                   bytes_per_element,
                                   h2d,
@@ -321,7 +311,6 @@ Fail:
   gpu_ordering_destroy(&ord);
   destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
-  cu_event_destroy(pool_ready);
   cu_stream_destroy(h2d);
   cu_stream_destroy(compute);
 

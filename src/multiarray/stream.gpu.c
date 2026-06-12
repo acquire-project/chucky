@@ -488,9 +488,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   CU(Fail, cuStreamCreate(&e->streams.compress, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&e->streams.d2h, CU_STREAM_NON_BLOCKING));
 
-  for (int i = 0; i < 2; ++i)
-    CU(Fail, cuEventCreate(&e->pools.ready[i], CU_EVENT_DEFAULT));
-
   CHECK(Fail, gpu_ordering_init(&e->ord, e->streams.compute) == 0);
   gpu_ordering_register_stream(&e->ord, GPU_STREAM_H2D, e->streams.h2d);
   gpu_ordering_register_stream(&e->ord, GPU_STREAM_COMPUTE, e->streams.compute);
@@ -551,7 +548,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
             aggregate_batch_slot_init(&e->compress_agg.agg[fc],
                                       C_max,
                                       mx->u_max_total_data_bytes) == 0);
-      CU(Fail, cuEventRecord(e->compress_agg.agg[fc].ready, e->streams.compute));
     }
     CU(Fail,
        cuMemAlloc(&e->compress_agg.d_batch_gather,
@@ -605,9 +601,6 @@ init_shared_resources(struct multiarray_tile_stream_gpu* ms,
   CHECK(Fail,
         e->compress_agg.pool_epochs_scratch &&
           e->compress_agg.cached_pool_epochs);
-
-  CU(Fail, cuEventRecord(e->pools.ready[0], e->streams.compute));
-  CU(Fail, cuEventRecord(e->pools.ready[1], e->streams.compute));
 
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail,
@@ -845,10 +838,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // resources live in e->lod_shared.
   lod_shared_state_destroy(&e->lod_shared);
 
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2; ++i)
     cu_mem_free(e->pools.buf[i]);
-    cu_event_destroy(e->pools.ready[i]);
-  }
 
   ingest_destroy(&e->stage);
 

@@ -47,7 +47,6 @@ ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
                         const struct tile_stream_layout_gpu* layout_gpu,
                         void* pool_epoch,
-                        CUevent pool_ready,
                         uint64_t* cursor,
                         size_t bpe,
                         CUstream h2d,
@@ -91,8 +90,6 @@ ingest_dispatch_scatter(struct staging_state* stage,
   CHECK(Error,
         gpu_edge_record(
           stage->ord, GPU_EDGE_STAGING_SCATTER_DONE, idx, compute) == 0);
-
-  CU(Error, cuEventRecord(pool_ready, compute));
 
   *cursor += elements;
   stage->current ^= 1;

@@ -131,7 +131,6 @@ compress_agg_init(struct compress_agg_stage* stage,
             aggregate_batch_slot_init(&stage->agg[fc],
                                       C_max,
                                       stage->max_total_data_bytes) == 0);
-      CU(Fail, cuEventRecord(stage->agg[fc].ready, compute));
     }
   }
 
