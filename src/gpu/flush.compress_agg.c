@@ -101,7 +101,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
                                       stage->max_total_data_bytes) == 0);
     }
 
-    // Unified LUT buffers + host scratch.
     CU(Fail,
        cuMemAlloc(&stage->d_batch_gather,
                   stage->max_total_batch_chunks * sizeof(uint32_t)));
@@ -115,8 +114,8 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
     CHECK(Fail, stage->h_lut_gather_scratch && stage->h_lut_perm_scratch);
   }
 
-  // Shared per-shard tables, sized to the max total_shards. The active
-  // array's slice is rebuilt and re-uploaded by every kick.
+  // Sized to the max total_shards; the active array's slice is re-uploaded
+  // by every kick.
   if (lim->max_total_shards > 0) {
     const uint64_t ts = lim->max_total_shards;
     stage->shards.h_base_offsets = (size_t*)malloc(ts * sizeof(size_t));
@@ -217,15 +216,12 @@ compress_agg_array_init(struct compress_agg_array* ar,
 
   ar->nlod = (uint8_t)cl->levels.nlod;
 
-  // Per-LOD aggregate_layouts: own copy so multiarray bind/unbind can swap
-  // them per-array. Each layout's GPU-side d_lifted_shape/strides are
-  // uploaded.
+  // Own copy so multiarray bind/unbind can swap them per-array.
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     ar->per_lod_agg_layouts[lv] = cl->per_level[lv].agg_layout;
     CHECK(Fail, aggregate_layout_upload(&ar->per_lod_agg_layouts[lv]) == 0);
   }
 
-  // Per-shard tables. total_shards = sum_lv num_shards[lv].
   uint64_t total_shards = 0;
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
     ar->shards_begin[lv] = (uint32_t)total_shards;
@@ -268,8 +264,7 @@ compress_agg_array_init(struct compress_agg_array* ar,
                                (CUdeviceptr)ar->d_tail_bytes));
     }
 
-    // Tail-carry buffer: total_shards * page_size bytes; uniform layout
-    // across LODs (sink page size is uniform).
+    // One layout across LODs: the sink page size is uniform.
     if (ar->page_size > 0) {
       ar->tail_carry_bytes = total_shards * ar->page_size;
       CU(Fail, cuMemAlloc(&ar->d_tail_carry, ar->tail_carry_bytes));
@@ -283,7 +278,6 @@ compress_agg_array_init(struct compress_agg_array* ar,
                                  ar->d_tail_carry));
       }
 
-      // Tail-generation gate (compress_agg_array in stream.engine.h).
       // Without stream memops — or when the counter can't be allocated or
       // mapped — the lazy path host-drains instead (stream.flush.c).
       if (gate_ord) {
@@ -295,8 +289,6 @@ compress_agg_array_init(struct compress_agg_array* ar,
     }
   }
 
-  // Per-LOD shard_state (writers + tail/footer pools + generation
-  // bookkeeping). The unified kick/D2H path iterates this directly.
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     CHECK(Fail, init_shard_state(&ar->shard[lv], &cl->per_level[lv]) == 0);
 
@@ -337,9 +329,8 @@ compress_agg_init(struct compress_agg_stage* stage,
         compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
           0);
   CHECK(Fail, compress_agg_array_init(&stage->ar, cl, ord, compute) == 0);
-  // d_shard_capacity stays constant across batches in steady state; upload
-  // it once now. d_base_offsets / d_tps_group / d_offsets_base depend on
-  // per-batch active counts and are uploaded by the kick.
+  // d_shard_capacity is constant per array — upload once; the other shard
+  // tables depend on per-batch active counts and are uploaded by the kick.
   if (stage->ar.total_shards > 0)
     CU(Fail,
        cuMemcpyHtoD((CUdeviceptr)stage->shards.d_shard_capacity,
@@ -363,9 +354,8 @@ compress_agg_destroy(struct compress_agg_stage* stage)
 
 // --- Memory estimate ---
 
-// Mirrors compress_agg_init_shared + compress_agg_array_init for one array:
-// every term below corresponds to an allocation above, derived from the same
-// engine_limits the real init consumes.
+// Mirrors compress_agg_init_shared + compress_agg_array_init for one array,
+// from the same engine_limits the real init consumes.
 int
 compress_agg_memory_estimate(const struct engine_limits* lim,
                              const struct computed_stream_layouts* cl,

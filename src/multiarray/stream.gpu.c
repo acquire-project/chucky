@@ -89,9 +89,8 @@ unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   drain_d2h_for_array(e, desc);
 
-  // Snapshot the per-array state back wholesale (shard_state, append
-  // accumulator counts, flush pipeline, and batch bookkeeping all mutate
-  // over a batch).
+  // Wholesale: shard_state, accumulator counts, flush pipeline, and batch
+  // bookkeeping all mutate over a batch.
   desc->st.batch = e->batch;
   desc->st.pool_current = e->pools.current;
   desc->st.flush = e->flush;
@@ -350,8 +349,6 @@ multiarray_tile_stream_gpu_create(
     n_arrays, sizeof(struct array_descriptor_gpu));
   CHECK(Fail, ms->arrays);
 
-  // Phase 1: per-array layouts, LOD state, shard state, and the
-  // shared-resource maxima.
   struct engine_limits lim;
   memset(&lim, 0, sizeof(lim));
 
@@ -380,7 +377,6 @@ multiarray_tile_stream_gpu_create(
     }
   }
 
-  // Phase 2: allocate shared engine resources at the accumulated maxima.
   CHECK(Fail,
         stream_engine_init(&ms->engine,
                            &lim,

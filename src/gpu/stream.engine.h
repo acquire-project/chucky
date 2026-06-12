@@ -130,16 +130,11 @@ struct compress_agg_input
 };
 
 // Per-shard layout tables shared across arrays, sized to the max
-// total_shards = sum(num_shards_lv). These collapse what was N per-LOD
-// shard-bias/leading-tail launches into a single launch over the flat shard
-// list. d_base_offsets / d_tps_group / d_offsets_base are rebuilt and
-// re-uploaded every kick (depends on per_lod_n_active); d_shard_capacity is
-// constant per array and uploaded at bind.
+// total_shards. d_base_offsets / d_tps_group / d_offsets_base depend on
+// per-batch active counts and are re-uploaded every kick; d_shard_capacity
+// is constant per array and uploaded at bind.
 struct shard_tables
 {
-  // Per-shard parameters used by add_shard_bias_unified_k and
-  // copy_leading_tail_unified_k. Host shadows are owned; device buffers are
-  // allocated at init sized to the max across arrays.
   size_t* h_base_offsets;   // base byte offset in d_aggregated
   uint64_t* h_tps_group;    // chunks-per-shard within a batch
   uint64_t* h_offsets_base; // base index in d_offsets / d_permuted_sizes
@@ -155,17 +150,13 @@ struct shard_tables
 // rides along with that single assignment.
 struct compress_agg_array
 {
-  // Per-LOD aggregate layouts (immutable per array). One per LOD; carries
-  // shard_capacity, num_shards, cps_inner, page_size, etc. Read by host LUT
-  // builder and at delivery time.
+  // Immutable per array; read by the host LUT builder and at delivery.
   struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
   uint8_t nlod;
 
-  // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
-  // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
-  // The shard_state itself stays per-LOD because deliver_to_shards_batch and
-  // finalize_shards iterate it; the per-shard tail/carry bytes consumed by
-  // the GPU kernels live below instead.
+  // Stays per-LOD because deliver_to_shards_batch and finalize_shards
+  // iterate it; the per-shard tail/carry bytes the GPU kernels consume
+  // live below instead.
   struct shard_state shard[LOD_MAX_LEVELS];
 
   uint64_t total_shards;    // sum_lv num_shards[lv]
@@ -350,8 +341,6 @@ engine_limits_accumulate(struct engine_limits* lim,
                          const struct computed_stream_layouts* cl,
                          const struct tile_stream_configuration* config);
 
-// Allocate all shared engine resources (streams, ordering, staging, pools,
-// compress/aggregate shared buffers, d2h, shared LOD buffers, metrics).
 // scatter_is_copy selects the ingest metric label only. On failure the
 // engine is left partially initialized; stream_engine_destroy handles it.
 int

@@ -234,13 +234,13 @@ engine_array_state_init(struct engine_array_state* st,
     st->lod.layouts[lv] = cl->layouts[lv];
 
   CHECK(Fail, lod_state_init(&st->lod, &ctx->levels, &ctx->config) == 0);
-  // Alias L0 layout GPU pointers from LOD state into context (for scatter).
+  // View, not owned — freed with st->lod.
   ctx->layout_gpu = st->lod.layout_gpu[0];
 
   if (ctx->levels.enable_multiscale && ctx->dims.append_downsample)
     CHECK(Fail, lod_state_init_accumulators(&st->lod, &ctx->config) == 0);
 
-  // Per-slot batch_active_masks sized to this array's K.
+  // Sized to this array's K, not the shared maxima.
   for (int fc = 0; fc < 2; ++fc) {
     st->flush.slot[fc].batch_active_masks =
       (uint32_t*)calloc(cl->epochs_per_batch, sizeof(uint32_t));
@@ -376,7 +376,6 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                                shard_sink_required_shard_alignment(sink),
                                &cl) == 0);
 
-  // Phase 2: allocate engine (shared) + array state, then bind.
   struct tile_stream_gpu* out =
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
