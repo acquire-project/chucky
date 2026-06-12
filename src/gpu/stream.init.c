@@ -454,6 +454,10 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
 
 // --- Memory estimate ---
 
+// Derived, not duplicated: every term comes from the same engine_limits and
+// per-module sizing mirrors (compress_agg_memory_estimate,
+// lod_state_device_bytes, shard_state_heap_bytes) that the real init
+// consumes, so the estimate tracks the allocations by construction.
 int
 tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                 size_t shard_alignment,
@@ -472,173 +476,55 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                              &cl))
     return 1;
 
-  const uint8_t rank = config->rank;
-  const size_t bytes_per_element = dtype_bpe(config->dtype);
-  const size_t buffer_capacity_bytes =
-    (config->buffer_capacity_bytes + 4095) & ~(size_t)4095;
-  const uint64_t chunk_stride = cl.layouts[0].chunk_stride;
-  const uint64_t chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
-  const uint64_t total_chunks = cl.levels.total_chunks;
-  const uint32_t K = cl.epochs_per_batch;
-  const int nlod = cl.levels.nlod;
-  const size_t max_output_size = cl.max_output_size;
+  struct engine_limits lim;
+  memset(&lim, 0, sizeof(lim));
+  if (engine_limits_accumulate(&lim, &cl, config))
+    goto Fail;
 
-  const size_t chunk_bytes = chunk_stride * bytes_per_element;
-  const uint64_t codec_batch = (uint64_t)K * total_chunks;
-  const size_t nvcomp_temp =
-    codec_temp_bytes(config->codec.id, chunk_bytes, codec_batch);
+  // Staging (ingest_init): 2 slots, device + pinned host each.
+  info->staging_bytes = 2 * lim.buffer_capacity;
+  const size_t staging_host = 2 * lim.buffer_capacity;
 
-  const size_t staging_bytes = 2 * buffer_capacity_bytes;
-  const size_t staging_host = 2 * buffer_capacity_bytes;
+  // Chunk pools (stream_engine_init): 2 buffers.
+  info->chunk_pool_bytes = 2 * lim.pool_bytes;
 
-  const size_t chunk_pool_bytes =
-    2 * (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
-
-  // CODEC_NONE skips the d_compressed[fc] allocation (aggregate reads pool
-  // directly); see compress_agg_init / compress_agg_kick.
-  const size_t compressed_pool_bytes =
-    (config->codec.id == CODEC_NONE)
-      ? 0
-      : 2 * (uint64_t)K * total_chunks * max_output_size;
-
-  size_t codec_bytes = 0;
-  codec_bytes += codec_batch * sizeof(size_t); // d_comp_sizes
-  codec_bytes += codec_batch * sizeof(size_t); // d_uncomp_sizes
-  if (config->codec.id != CODEC_NONE)
-    codec_bytes += 2 * codec_batch * sizeof(void*); // d_ptrs
-  codec_bytes += nvcomp_temp;
-
-  size_t aggregate_device = 0;
+  // Compress + aggregate stage (shared + per-array slices).
   size_t aggregate_host = 0;
+  if (compress_agg_memory_estimate(&lim,
+                                   &cl,
+                                   config->codec.id,
+                                   &info->compressed_pool_bytes,
+                                   &info->codec_bytes,
+                                   &info->aggregate_bytes,
+                                   &aggregate_host))
+    goto Fail;
 
-  for (int lv = 0; lv < nlod; ++lv) {
-    const struct level_layout_info* li = &cl.per_level[lv];
-    uint64_t covering_count = li->agg_layout.covering_count;
-    uint64_t cps_inner_lv = li->agg_layout.cps_inner;
+  // LOD: per-array state plus the engine-shared linear/morton buffers.
+  info->lod_bytes = lod_state_device_bytes(&cl, config);
+  if (cl.levels.enable_multiscale)
+    info->lod_bytes += lim.lod_linear_bytes + lim.lod_morton_bytes;
 
-    uint32_t batch_count = li->batch_active_count;
-    if (batch_count == 0)
-      batch_count = 1;
+  // Shard state: host heap (init_shard_state per level).
+  for (int lv = 0; lv < cl.levels.nlod; ++lv)
+    info->shard_bytes += shard_state_heap_bytes(&cl.per_level[lv]);
 
-    uint64_t batch_chunks =
-      (uint64_t)batch_count * cl.levels.level[lv].chunk_count;
-    uint64_t batch_covering = (uint64_t)batch_count * covering_count;
-    size_t batch_agg_bytes = agg_pool_bytes(batch_chunks,
-                                            max_output_size,
-                                            covering_count,
-                                            cps_inner_lv,
-                                            shard_alignment);
-
-    size_t agg_layout_dev =
-      2 * (rank - 1) * sizeof(uint64_t) + 2 * (rank - 1) * sizeof(int64_t);
-
-    size_t cub_temp = 0;
-    aggregate_cub_temp_bytes(batch_covering, &cub_temp);
-
-    size_t slot_dev = (batch_covering + 1) * sizeof(size_t) +
-                      (batch_covering + 1) * sizeof(size_t) +
-                      batch_chunks * sizeof(uint32_t) + batch_agg_bytes +
-                      cub_temp;
-
-    size_t slot_host = batch_agg_bytes + (batch_covering + 1) * sizeof(size_t) +
-                       batch_covering * sizeof(size_t);
-
-    size_t lut_dev = 0;
-    if (K > 1)
-      lut_dev = batch_chunks * sizeof(uint32_t) * 2;
-
-    aggregate_device += agg_layout_dev + 2 * slot_dev + lut_dev;
-    aggregate_host += 2 * slot_host;
-  }
-
-  // Shard state: active_shard arrays + index buffers (host heap).
-  size_t shard_heap = 0;
-  for (int lv = 0; lv < nlod; ++lv) {
-    const struct level_layout_info* li = &cl.per_level[lv];
-    shard_heap += li->shard_inner_count *
-                  (sizeof(struct active_shard) +
-                   2 * li->chunks_per_shard_total * sizeof(uint64_t));
-  }
-
-  size_t lod_device = 0;
-
-  lod_device += 2 * rank * sizeof(uint64_t);
-  lod_device += 2 * rank * sizeof(int64_t);
-
-  if (cl.levels.enable_multiscale) {
-    const struct lod_plan* plan = &cl.plan;
-
-    lod_device += cl.layouts[0].epoch_elements * bytes_per_element;
-    uint64_t total_lod_vals = plan->level_spans.ends[plan->levels.nlod - 1];
-    lod_device += total_lod_vals * bytes_per_element;
-
-    lod_device += rank * sizeof(uint64_t);
-    if (plan->lod_ndim > 0)
-      lod_device += plan->lod_ndim * sizeof(uint64_t);
-
-    if (plan->lod_ndim > 0) {
-      lod_device += plan->levels.level[0].lod_nelem * sizeof(uint32_t);
-      lod_device += plan->fixed_dims_count * sizeof(uint32_t);
-    }
-
-    for (int l = 0; l < plan->levels.nlod - 1; ++l) {
-      // CSR reduce LUTs (computed from level_dims; actual alloc happens later
-      // via reduce_csr_gpu_alloc).
-      const struct level_dims* src_ld = &plan->levels.level[l];
-      const struct level_dims* dst_ld = &plan->levels.level[l + 1];
-      uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
-      uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
-      if (src_total == 0 || dst_total == 0)
-        continue;
-      lod_device += (dst_total + 1) * sizeof(uint64_t);
-      lod_device += src_total * sizeof(uint64_t);
-    }
-
-    for (int lv = 1; lv < plan->levels.nlod; ++lv) {
-      // Per-level morton scatter LUTs (level 0 already counted above)
-      lod_device += plan->levels.level[lv].lod_nelem * sizeof(uint32_t);
-      lod_device += plan->levels.level[lv].fixed_dims_count * sizeof(uint32_t);
-    }
-
-    for (int lv = 1; lv < plan->levels.nlod; ++lv) {
-      lod_device += 2 * rank * sizeof(uint64_t);
-      lod_device += 2 * rank * sizeof(int64_t);
-    }
-
-    if (cl.dims.append_downsample) {
-      size_t accum_bpe = dtype_bpe(config->dtype);
-      uint64_t total_elems = 0;
-      for (int lv = 1; lv < plan->levels.nlod; ++lv)
-        total_elems += plan->levels.level[lv].fixed_dims_count *
-                       plan->levels.level[lv].lod_nelem;
-      lod_device += total_elems * accum_bpe;
-      lod_device += total_elems;
-      lod_device += (uint64_t)plan->levels.nlod * sizeof(uint32_t);
-    }
-  }
-
-  // FIXME: use designated initializers here
-  info->staging_bytes = staging_bytes;
-  info->chunk_pool_bytes = chunk_pool_bytes;
-  info->compressed_pool_bytes = compressed_pool_bytes;
-  info->aggregate_bytes = aggregate_device;
-  info->lod_bytes = lod_device;
-  info->codec_bytes = codec_bytes;
-  info->shard_bytes = shard_heap;
-
-  info->device_bytes = staging_bytes + chunk_pool_bytes +
-                       compressed_pool_bytes + aggregate_device + lod_device +
-                       codec_bytes;
+  info->device_bytes = info->staging_bytes + info->chunk_pool_bytes +
+                       info->compressed_pool_bytes + info->aggregate_bytes +
+                       info->lod_bytes + info->codec_bytes;
   info->host_pinned_bytes = staging_host + aggregate_host;
 
-  info->chunks_per_epoch = chunks_per_epoch;
-  info->total_chunks = total_chunks;
-  info->max_output_size = max_output_size;
-  info->nlod = nlod;
-  info->epochs_per_batch = K;
+  info->chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
+  info->total_chunks = cl.levels.total_chunks;
+  info->max_output_size = cl.max_output_size;
+  info->nlod = cl.levels.nlod;
+  info->epochs_per_batch = cl.epochs_per_batch;
 
   computed_stream_layouts_free(&cl);
   return 0;
+
+Fail:
+  computed_stream_layouts_free(&cl);
+  return 1;
 }
 
 int

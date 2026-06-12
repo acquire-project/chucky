@@ -45,6 +45,14 @@ lod_state_init_accumulators(struct lod_state* lod,
 void
 lod_state_destroy(struct lod_state* lod);
 
+struct computed_stream_layouts;
+
+// Sizing mirror of lod_state_init + lod_state_init_accumulators, for the
+// memory estimate.
+size_t
+lod_state_device_bytes(const struct computed_stream_layouts* cl,
+                       const struct tile_stream_configuration* config);
+
 // Run LOD pipeline for one epoch: gather -> reduce -> append fold ->
 // morton-to-chunks. pool_epoch: pointer to this epoch's chunk pool region (all
 // levels). *out_active_mask: set to bitmask of active LOD levels for this

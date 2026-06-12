@@ -32,6 +32,10 @@ extern "C"
   size_t codec_max_output_size(enum compression_codec type, size_t chunk_bytes);
 
   // Query nvcomp workspace temp bytes (no GPU allocation).
+  size_t codec_device_bytes(enum compression_codec type,
+                            size_t chunk_bytes,
+                            size_t batch_size);
+
   size_t codec_temp_bytes(enum compression_codec type,
                           size_t chunk_bytes,
                           size_t batch_size);

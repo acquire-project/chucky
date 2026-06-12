@@ -361,6 +361,74 @@ compress_agg_destroy(struct compress_agg_stage* stage)
   compress_agg_array_destroy(&stage->ar);
 }
 
+// --- Memory estimate ---
+
+// Mirrors compress_agg_init_shared + compress_agg_array_init for one array:
+// every term below corresponds to an allocation above, derived from the same
+// engine_limits the real init consumes.
+int
+compress_agg_memory_estimate(const struct engine_limits* lim,
+                             const struct computed_stream_layouts* cl,
+                             enum compression_codec codec_id,
+                             size_t* compressed_pool_bytes,
+                             size_t* codec_bytes,
+                             size_t* aggregate_device_bytes,
+                             size_t* aggregate_host_bytes)
+{
+  // d_compressed[2]; skipped for CODEC_NONE (kick aggregates from the pool).
+  *compressed_pool_bytes =
+    (codec_id == CODEC_NONE)
+      ? 0
+      : 2 * (size_t)lim->codec_batch * cl->max_output_size;
+
+  *codec_bytes =
+    codec_device_bytes(codec_id, lim->chunk_bytes, lim->codec_batch);
+
+  size_t dev = 0;
+  size_t host = 0;
+
+  if (lim->max_total_batch_chunks > 0) {
+    const uint64_t C_max =
+      lim->max_total_batch_covering + (uint64_t)lim->max_nlod;
+    size_t slot_dev = 0;
+    size_t slot_host = 0;
+    CHECK(Error,
+          aggregate_batch_slot_memory(
+            C_max, lim->max_total_data_bytes, &slot_dev, &slot_host) == 0);
+    dev += 2 * slot_dev;  // agg[2]
+    host += 2 * slot_host;
+    dev += 2 * lim->max_total_batch_chunks *
+           sizeof(uint32_t); // d_batch_gather + d_batch_perm
+  }
+
+  // Shared per-shard device tables: d_base_offsets, d_shard_capacity,
+  // d_tps_group, d_offsets_base.
+  dev +=
+    lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
+
+  // Per-array slice (compress_agg_array_init).
+  {
+    uint64_t total_shards = 0;
+    for (int lv = 0; lv < cl->levels.nlod; ++lv) {
+      dev += aggregate_layout_device_bytes(&cl->per_level[lv].agg_layout);
+      total_shards += cl->per_level[lv].agg_layout.num_shards;
+    }
+    if (total_shards > 0) {
+      dev += total_shards * sizeof(size_t); // d_tail_bytes
+      const size_t page_size = cl->per_level[0].agg_layout.page_size;
+      if (page_size > 0)
+        dev += total_shards * page_size; // d_tail_carry
+    }
+  }
+
+  *aggregate_device_bytes = dev;
+  *aggregate_host_bytes = host;
+  return 0;
+
+Error:
+  return 1;
+}
+
 // --- Kick ---
 
 // Build per-shard tables for this batch's `layout`. Populates host shadows

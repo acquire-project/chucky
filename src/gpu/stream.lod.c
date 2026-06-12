@@ -498,6 +498,75 @@ Fail:
   return 1;
 }
 
+// --- Memory estimate ---
+
+// Device bytes lod_state_init + lod_state_init_accumulators allocate for
+// this layout (build-time temporaries, freed before return, excluded). Must
+// mirror the allocations above exactly — tile_stream_gpu_memory_estimate
+// sums this.
+size_t
+lod_state_device_bytes(const struct computed_stream_layouts* cl,
+                       const struct tile_stream_configuration* config)
+{
+  const struct lod_plan* p = &cl->plan;
+  size_t bytes = 0;
+
+  // upload_lod_level_layouts: every level, L0 included.
+  for (int lv = 0; lv < p->levels.nlod; ++lv)
+    bytes += cl->layouts[lv].lifted_rank * (sizeof(uint64_t) + sizeof(int64_t));
+
+  if (!cl->levels.enable_multiscale)
+    return bytes;
+
+  const struct level_dims* l0 = &p->levels.level[0];
+
+  // upload_plan_shapes
+  bytes += config->rank * sizeof(uint64_t); // d_full_shape
+  if (l0->lod_ndim > 0)
+    bytes += l0->lod_ndim * sizeof(uint64_t); // d_lod_shape
+
+  // init_gather_lut
+  if (l0->lod_ndim > 0) {
+    bytes += l0->lod_nelem * sizeof(uint32_t);       // d_gather_lut
+    bytes += p->fixed_dims_count * sizeof(uint32_t); // d_fixed_dims_offsets
+  }
+
+  // init_csr_reduce_luts (reduce_csr_gpu_alloc per level transition)
+  for (int l = 0; l < p->levels.nlod - 1; ++l) {
+    const struct level_dims* src = &p->levels.level[l];
+    const struct level_dims* dst = &p->levels.level[l + 1];
+    const uint64_t src_total = src->fixed_dims_count * src->lod_nelem;
+    const uint64_t dst_total = dst->fixed_dims_count * dst->lod_nelem;
+    if (src_total == 0 || dst_total == 0)
+      continue;
+    bytes += (dst_total + 1) * sizeof(uint64_t); // csr starts
+    bytes += src_total * sizeof(uint64_t);       // csr indices
+  }
+
+  // init_morton_scatter_luts: every level, L0 included.
+  if (p->lod_ndim > 0) {
+    for (int lv = 0; lv < p->levels.nlod; ++lv) {
+      bytes += p->levels.level[lv].lod_nelem * sizeof(uint32_t);
+      bytes += p->levels.level[lv].fixed_dims_count * sizeof(uint32_t);
+    }
+  }
+
+  // lod_state_init_accumulators
+  if (cl->dims.append_downsample) {
+    uint64_t total = 0;
+    for (int lv = 1; lv < p->levels.nlod; ++lv)
+      total += p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
+    if (total > 0) {
+      const size_t bpe = dtype_bpe(config->dtype);
+      bytes += total * bpe;                                  // d_accum
+      bytes += total;                                        // d_level_ids
+      bytes += (uint64_t)p->levels.nlod * sizeof(uint32_t);  // d_counts
+    }
+  }
+
+  return bytes;
+}
+
 // --- LOD destroy ---
 
 void

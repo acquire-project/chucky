@@ -188,6 +188,38 @@ gather_batch_k(const void* __restrict__ d_compressed,
 }
 
 // ---------------------------------------------------------------------------
+// Sizing (must mirror aggregate_layout_upload / aggregate_batch_slot_init
+// exactly — tile_stream_gpu_memory_estimate sums these)
+// ---------------------------------------------------------------------------
+
+extern "C" size_t
+aggregate_layout_device_bytes(const struct aggregate_layout* layout)
+{
+  if (layout->lifted_rank == 0)
+    return 0;
+  return layout->lifted_rank * (sizeof(uint64_t) + sizeof(int64_t));
+}
+
+extern "C" int
+aggregate_batch_slot_memory(uint64_t batch_covering_count,
+                            size_t comp_pool_bytes,
+                            size_t* device_bytes,
+                            size_t* host_bytes)
+{
+  const uint64_t C = batch_covering_count;
+  size_t temp = 0;
+  if (aggregate_cub_temp_bytes(C, &temp))
+    return 1;
+  *device_bytes = 2 * (C + 1) * sizeof(size_t) // d_permuted_sizes + d_offsets
+                  + comp_pool_bytes            // d_aggregated
+                  + temp;                      // d_temp
+  *host_bytes = comp_pool_bytes                // h_aggregated
+                + (C + 1) * sizeof(size_t)     // h_offsets
+                + C * sizeof(size_t);          // h_permuted_sizes
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // aggregate_batch_slot_init
 // ---------------------------------------------------------------------------
 

@@ -41,6 +41,17 @@ compress_agg_init(struct compress_agg_stage* stage,
 void
 compress_agg_destroy(struct compress_agg_stage* stage);
 
+// Sizing mirror of compress_agg_init_shared + compress_agg_array_init for
+// one array, for the memory estimate.
+int
+compress_agg_memory_estimate(const struct engine_limits* lim,
+                             const struct computed_stream_layouts* cl,
+                             enum compression_codec codec_id,
+                             size_t* compressed_pool_bytes,
+                             size_t* codec_bytes,
+                             size_t* aggregate_device_bytes,
+                             size_t* aggregate_host_bytes);
+
 int
 compress_agg_kick(struct compress_agg_stage* stage,
                   const struct compress_agg_input* in,
