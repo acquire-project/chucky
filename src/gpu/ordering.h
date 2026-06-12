@@ -106,7 +106,7 @@ struct gpu_ordering
   // GEN_COUNTER runtime (GPU_EDGE_TAIL_PUBLISHED). Pinned + device-mapped;
   // absent (NULL/0) when the gate was never initialized or could not be
   // allocated/mapped — the lazy flush path then host-drains instead
-  // (stream.flush.c).
+  // (SCHEDULE_DRAIN_BEFORE_KICK, schedule.h).
   volatile uint64_t* h_tail_seq_flag;
   CUdeviceptr d_tail_seq;
   uint64_t kick_seq; // kicks enqueued (gate threshold)

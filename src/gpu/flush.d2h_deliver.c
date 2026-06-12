@@ -243,7 +243,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       slot = iv.p;
 
       // Bulk copies go on drain_stream, never d2h_stream — sharing
-      // deadlocks against the tail gate (see d2h_deliver_stage).
+      // deadlocks against the tail gate (see gpu_streams.drain).
       int dispatch_err = 0;
       if (alayout->page_size > 0) {
         for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {

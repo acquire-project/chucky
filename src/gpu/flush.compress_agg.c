@@ -292,7 +292,7 @@ compress_agg_array_init(struct compress_agg_array* ar,
       }
 
       // Without stream memops — or when the counter can't be allocated or
-      // mapped — the lazy path host-drains instead (stream.flush.c).
+      // mapped — the lazy path host-drains instead (SCHEDULE_DRAIN_BEFORE_KICK).
       if (gate_ord) {
         CHECK(Fail, gpu_ordering_gate_init(gate_ord, gate_stream) == 0);
         if (!gpu_ordering_gate_supported(gate_ord))

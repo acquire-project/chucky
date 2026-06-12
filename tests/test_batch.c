@@ -231,7 +231,7 @@ test_batch_partial_flush(void)
   CHECK(Fail2, r.error == 0);
   CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 1);
 
-  // Flush exercises the partial batch path (flush_accumulated_sync)
+  // Flush exercises the partial batch path (schedule_flush_accumulated)
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
 

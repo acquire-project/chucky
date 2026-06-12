@@ -45,7 +45,7 @@ struct stream_metrics
   // the drain-side overhead not already attributed elsewhere, compute
   // flush_stall - kick_sync_stall - (sink portion inside drain).
   struct stream_metric flush_stall;     // whole d2h_deliver_drain call
-                                        // (drain_fc in stream.flush.c)
+                                        // (drain_slot in schedule.c)
   // Passthrough: GPU_EDGE_D2H_DONE poll only. Compressed:
   // GPU_EDGE_CHUNK_INDEX_READY poll + per-LOD bulk D2H dispatch +
   // GPU_EDGE_D2H_DONE poll (the second poll includes DMA transfer wall

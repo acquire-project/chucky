@@ -1,6 +1,5 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
-#include "gpu/stream.flush.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
 
@@ -134,7 +133,7 @@ stream_engine_init(struct stream_engine* e,
        cuMemsetD8Async(e->pools.buf[i], 0, lim->pool_bytes, e->streams.compute));
   }
 
-  e->batch.epochs_per_batch = lim->epochs_per_batch;
+  e->sched.epochs_per_batch = lim->epochs_per_batch;
 
   CHECK(Fail,
         compress_agg_init_shared(
@@ -202,7 +201,7 @@ engine_array_state_init(struct engine_array_state* st,
   ctx->config.buffer_capacity_bytes =
     (ctx->config.buffer_capacity_bytes + 4095) & ~(size_t)4095;
 
-  st->batch.epochs_per_batch = cl->epochs_per_batch;
+  st->sched.epochs_per_batch = cl->epochs_per_batch;
 
   // Move LOD plan and level layouts (always, including L0). st->lod owns
   // plan, layouts[], layout_gpu[], CSRs, accumulators, and LOD LUTs — but
@@ -221,12 +220,14 @@ engine_array_state_init(struct engine_array_state* st,
 
   // Sized to this array's K, not the shared maxima.
   for (int fc = 0; fc < 2; ++fc) {
-    st->flush.slot[fc].batch_active_masks =
+    st->sched.slot[fc].batch_active_masks =
       (uint32_t*)calloc(cl->epochs_per_batch, sizeof(uint32_t));
-    CHECK(Fail, st->flush.slot[fc].batch_active_masks);
+    CHECK(Fail, st->sched.slot[fc].batch_active_masks);
   }
 
   CHECK(Fail, compress_agg_array_init(&st->agg, cl, gate_ord, gate_stream) == 0);
+  // After the gate is armed, so support is known.
+  schedule_select(&st->sched, &st->agg, gate_ord);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
   // append body detect the at-capacity case without recomputing each call.
@@ -253,8 +254,8 @@ engine_array_state_destroy(struct engine_array_state* st)
   if (!st)
     return;
   for (int fc = 0; fc < 2; ++fc) {
-    free(st->flush.slot[fc].batch_active_masks);
-    st->flush.slot[fc].batch_active_masks = NULL;
+    free(st->sched.slot[fc].batch_active_masks);
+    st->sched.slot[fc].batch_active_masks = NULL;
   }
   compress_agg_array_destroy(&st->agg);
   lod_state_destroy(&st->lod);
@@ -265,9 +266,9 @@ stream_engine_bind_array(struct stream_engine* e,
                          const struct engine_array_state* st,
                          const struct stream_context* ctx)
 {
-  e->batch = st->batch;
-  e->pools.current = st->pool_current;
-  e->flush = st->flush;
+  e->sched = st->sched;
+  e->sched.lod_active =
+    schedule_lod_active(&e->ord, ctx->levels.enable_multiscale);
   e->lod = st->lod;
   e->compress_agg.ar = st->agg;
   e->d2h_deliver.shard_alignment = ctx->shard_alignment;
@@ -419,14 +420,15 @@ tile_stream_gpu_status(const struct tile_stream_gpu* s)
   return (struct tile_stream_status){
     .nlod = s->ctx.levels.nlod,
     .append_downsample = s->ctx.dims.append_downsample,
-    .epochs_per_batch = s->engine.batch.epochs_per_batch,
+    .epochs_per_batch = s->engine.sched.epochs_per_batch,
     .max_compressed_size = s->engine.compress_agg.codec.max_output_size,
     .dtype = s->ctx.config.dtype,
     .codec = s->ctx.config.codec,
     .codec_batch_size = s->engine.compress_agg.codec.batch_size,
-    .batch_accumulated = s->engine.batch.accumulated,
-    .pool_current = s->engine.pools.current,
-    .flush_pending = s->engine.flush.pending[0] || s->engine.flush.pending[1],
+    .batch_accumulated = s->engine.sched.accumulated,
+    .pool_current = s->engine.sched.fill,
+    .flush_pending =
+      s->engine.sched.slot[0].kicked || s->engine.sched.slot[1].kicked,
   };
 }
 
