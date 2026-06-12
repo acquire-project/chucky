@@ -1,6 +1,6 @@
 # GPU stream orchestration: target design and migration plan
 
-Status: accepted direction, migration in progress (step 1).
+Status: accepted direction, migration in progress (step 2).
 Base: main + #142. Related: #140, #141, PR #142, `gpu-output-slot-ledger.md`.
 
 ## Why

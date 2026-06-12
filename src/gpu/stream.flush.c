@@ -132,9 +132,10 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   // Tail-gate fallback: without the gate (stream memops unsupported, or
   // the counter failed to map at init) the tail upload cannot be ordered
-  // device-side (shard_tables in stream.engine.h), so also drain the
-  // other, newer pending batch — order stays oldest-first, pipeline
-  // degrades to depth 1 — and the kick below sees published tail state.
+  // device-side (gate state in gpu_ordering, src/gpu/ordering.h), so also
+  // drain the other, newer pending batch — order stays oldest-first,
+  // pipeline degrades to depth 1 — and the kick below sees published tail
+  // state.
   if (e->compress_agg.ar.page_size > 0 &&
       e->compress_agg.ar.total_shards > 0 &&
       !gpu_ordering_gate_supported(&e->ord)) {

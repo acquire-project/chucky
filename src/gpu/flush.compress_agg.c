@@ -656,8 +656,9 @@ Error:
 }
 
 // Page-aligned path only. The aggregate dispatch reads tail state that the
-// previous kick's delivery uploads AFTER this enqueue (shard_tables in
-// stream.engine.h). The wait goes after compress, which reads no tail state.
+// previous kick's delivery uploads AFTER this enqueue (gate state in
+// gpu_ordering, src/gpu/ordering.h). The wait goes after compress, which
+// reads no tail state.
 static int
 arm_tail_gate(struct compress_agg_stage* stage,
               const struct batch_aggregate_layout* layout,

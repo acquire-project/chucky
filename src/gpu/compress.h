@@ -31,7 +31,8 @@ extern "C"
   // Query max compressed output size per chunk (no GPU allocation).
   size_t codec_max_output_size(enum compression_codec type, size_t chunk_bytes);
 
-  // Query nvcomp workspace temp bytes (no GPU allocation).
+  // Total device bytes codec_init allocates (size arrays, ptr table, nvcomp
+  // temp) — sizing mirror for the memory estimate (no GPU allocation).
   size_t codec_device_bytes(enum compression_codec type,
                             size_t chunk_bytes,
                             size_t batch_size);
