@@ -597,6 +597,9 @@ lod_state_destroy(struct lod_state* lod)
     CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_strides));
   }
   lod_plan_free(&lod->plan);
+  // Zero so a second destroy (init-failure cleanup, then owner teardown)
+  // can't re-free stale device handles.
+  *lod = (struct lod_state){ 0 };
 }
 
 // --- LOD runtime ---
