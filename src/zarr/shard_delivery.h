@@ -59,6 +59,10 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li);
 void
 shard_state_destroy(struct shard_state* ss);
 
+// Sizing mirror of init_shard_state, for the memory estimate.
+size_t
+shard_state_heap_bytes(const struct level_layout_info* li);
+
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to
 // keep the footer_buf reuse cycle correct.

@@ -42,7 +42,7 @@ orch_ctx_destroy(struct orch_ctx* c)
     }
 
     d2h_deliver_destroy(&c->s->engine.d2h_deliver);
-    compress_agg_destroy(&c->s->engine.compress_agg, c->cl.levels.nlod);
+    compress_agg_destroy(&c->s->engine.compress_agg);
 
     // Pools
     for (int i = 0; i < 2; ++i)
@@ -383,7 +383,7 @@ test_accumulated_sync_partial(void)
   // rather than on-disk size.
   CHECK(Fail, sink.open_count >= 1);
   {
-    struct shard_state* ss = &c.s->engine.compress_agg.shard[0];
+    struct shard_state* ss = &c.s->engine.compress_agg.ar.shard[0];
     struct active_shard* sh = &ss->shards[0];
     CHECK(Fail, sh->tail_bytes > 0);
   }

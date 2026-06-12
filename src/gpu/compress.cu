@@ -152,6 +152,23 @@ Fail:
   return 0;
 }
 
+// --- codec_device_bytes ---
+
+// Device bytes codec_init allocates for this configuration. Must mirror the
+// allocations below exactly — tile_stream_gpu_memory_estimate sums this.
+extern "C" size_t
+codec_device_bytes(enum compression_codec type,
+                   size_t chunk_bytes,
+                   size_t batch_size)
+{
+  size_t bytes = batch_size * sizeof(size_t); // d_comp_sizes
+  bytes += batch_size * sizeof(size_t);       // d_uncomp_sizes
+  if (type != CODEC_NONE)
+    bytes += 2 * batch_size * sizeof(void*); // d_ptrs
+  bytes += codec_temp_bytes(type, chunk_bytes, batch_size); // d_temp
+  return bytes;
+}
+
 // --- codec_init ---
 
 extern "C" int

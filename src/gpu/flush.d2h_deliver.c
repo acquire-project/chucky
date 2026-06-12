@@ -308,7 +308,7 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    struct shard_tables* shards = handoff->shards;
+    struct compress_agg_array* shards = handoff->shards;
     const size_t page_size = shards ? shards->page_size : 0;
 
     // In carry-over mode the bias kernel places each LOD at

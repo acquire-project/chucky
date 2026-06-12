@@ -129,20 +129,13 @@ struct compress_agg_input
   uint32_t epochs_per_batch;
 };
 
-// Per-shard layout tables, sized to total_shards = sum(num_shards_lv) across
-// all LODs. These collapse what was N per-LOD shard-bias/leading-tail launches
-// into a single launch over the flat shard list. d_base_offsets / d_tps_group
-// / d_offsets_base are rebuilt and re-uploaded every kick (depends on
-// per_lod_n_active); d_shard_capacity is constant per array and uploaded once
-// at init (or on multiarray bind).
+// Per-shard layout tables shared across arrays, sized to the max
+// total_shards. d_base_offsets / d_tps_group / d_offsets_base depend on
+// per-batch active counts and are re-uploaded every kick; d_shard_capacity
+// is constant per array and uploaded at bind.
 struct shard_tables
 {
-  uint64_t total_shards;
-  // Per-shard parameters used by add_shard_bias_unified_k and
-  // copy_leading_tail_unified_k. Host shadows are owned; device buffers are
-  // allocated at init sized to the max across arrays.
   size_t* h_base_offsets;   // base byte offset in d_aggregated
-  size_t* h_shard_capacity; // per shard
   uint64_t* h_tps_group;    // chunks-per-shard within a batch
   uint64_t* h_offsets_base; // base index in d_offsets / d_permuted_sizes
 
@@ -150,6 +143,24 @@ struct shard_tables
   size_t* d_shard_capacity;
   uint64_t* d_tps_group;
   uint64_t* d_offsets_base;
+};
+
+// Per-array slice of compress+aggregate state. Multiarray swaps this into
+// the engine wholesale on array switch; any new per-array field added here
+// rides along with that single assignment.
+struct compress_agg_array
+{
+  // Immutable per array; read by the host LUT builder and at delivery.
+  struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
+  uint8_t nlod;
+
+  // Stays per-LOD because deliver_to_shards_batch and finalize_shards
+  // iterate it; the per-shard tail/carry bytes the GPU kernels consume
+  // live below instead.
+  struct shard_state shard[LOD_MAX_LEVELS];
+
+  uint64_t total_shards;    // sum_lv num_shards[lv]
+  size_t* h_shard_capacity; // per shard; uploaded to shards.d_shard_capacity
 
   // Persistent across-batch tail state, unified across all shards. Sized to
   // total_shards / total_shards * page_size. d_* uploaded by host after each
@@ -209,25 +220,11 @@ struct compress_agg_stage
   uint64_t lut_steady_count;
   uint64_t lut_recompute_count;
 
-  // Per-LOD aggregate layouts (immutable per array; switched on multiarray
-  // bind). One per LOD; carries shard_capacity, num_shards, cps_inner,
-  // page_size, etc. Read by host LUT builder and at delivery time.
-  struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
-  uint8_t nlod;
-
-  // Cached "max" batch layout — segment offsets / total sizes assuming the
-  // worst-case active_count_max per LOD. Buffers are sized from this.
-  struct batch_aggregate_layout max_batch_layout;
-
-  // Per-shard tables (replaces per-LOD d_tail_*, d_batch_gather/perm).
+  // Per-shard tables shared across arrays (sized to maxima).
   struct shard_tables shards;
 
-  // Per-LOD shard_state (one shard_state per LOD, mirrors CPU). Carries
-  // per-shard writers, tail/footer pools, generation-boundary bookkeeping.
-  // The shard_state itself stays per-LOD because deliver_to_shards_batch and
-  // finalize_shards iterate it; the per-shard tail/carry bytes consumed by
-  // the GPU kernels live in shard_tables instead.
-  struct shard_state shard[LOD_MAX_LEVELS];
+  // Per-array state; swapped on multiarray bind.
+  struct compress_agg_array ar;
 };
 
 struct d2h_deliver_stage
@@ -263,6 +260,17 @@ struct flush_pipeline
 
 _Static_assert(LOD_MAX_LEVELS <= 32,
                "active_levels_mask is uint32_t; LOD_MAX_LEVELS > 32 overflows");
+
+// All per-array mutable engine state, grouped so a multiarray array switch
+// is whole-struct assignment in each direction — never a field checklist.
+struct engine_array_state
+{
+  struct batch_state batch;
+  int pool_current;
+  struct flush_pipeline flush;
+  struct lod_state lod;
+  struct compress_agg_array agg;
+};
 
 // --- Engine / Context ---
 
@@ -303,6 +311,71 @@ struct stream_engine
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
+
+// --- Engine init / teardown (shared by single-array and multiarray) ---
+
+// Sizing for the engine's shared resources. Single-array fills this from its
+// one layout; multiarray accumulates the max across arrays — shared buffers
+// are sized to the maxima while each array still runs at its own geometry.
+struct engine_limits
+{
+  size_t buffer_capacity; // page-aligned staging slot size
+  size_t pool_bytes;      // one chunk-pool buffer
+  size_t chunk_bytes;     // codec chunk stride in bytes
+  uint64_t codec_batch;   // K * total_chunks
+  uint32_t epochs_per_batch;
+  int max_nlod;
+  uint64_t max_total_batch_chunks;
+  uint64_t max_total_batch_covering;
+  size_t max_total_data_bytes;
+  uint64_t max_total_shards;
+  size_t lod_linear_bytes;
+  size_t lod_morton_bytes;
+  int any_multiscale;
+};
+
+// Fold one array's requirements into *lim (max per field). Call once per
+// array on a zeroed struct before stream_engine_init.
+int
+engine_limits_accumulate(struct engine_limits* lim,
+                         const struct computed_stream_layouts* cl,
+                         const struct tile_stream_configuration* config);
+
+// scatter_is_copy selects the ingest metric label only. On failure the
+// engine is left partially initialized; stream_engine_destroy handles it.
+int
+stream_engine_init(struct stream_engine* e,
+                   const struct engine_limits* lim,
+                   enum compression_codec codec_id,
+                   int scatter_is_copy);
+
+// Free shared engine resources. Per-array state (engine_array_state) is
+// destroyed separately by its owner. Caller must have synchronized all
+// engine streams first.
+void
+stream_engine_destroy(struct stream_engine* e);
+
+// Initialize one array's engine state. ctx->config/sink/shard_alignment
+// must be set; fills the remaining ctx fields and takes ownership of
+// cl->plan. gate_ord arms the tail-generation gate (pipelined single-array
+// path); pass NULL on the multiarray sync-flush path, whose immediate
+// drains host-order the tail uploads instead.
+int
+engine_array_state_init(struct engine_array_state* st,
+                        struct stream_context* ctx,
+                        struct computed_stream_layouts* cl,
+                        struct gpu_ordering* gate_ord,
+                        CUstream gate_stream);
+
+void
+engine_array_state_destroy(struct engine_array_state* st);
+
+// Make *st the engine's active array (whole-struct handoff + per-array
+// shard-capacity upload + LUT-cache invalidation).
+int
+stream_engine_bind_array(struct stream_engine* e,
+                         const struct engine_array_state* st,
+                         const struct stream_context* ctx);
 
 // --- Engine operations ---
 

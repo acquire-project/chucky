@@ -54,6 +54,23 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
   return 0;
 }
 
+// Host heap bytes init_shard_state allocates for this level. Must mirror
+// the allocations above exactly — tile_stream_gpu_memory_estimate sums this.
+size_t
+shard_state_heap_bytes(const struct level_layout_info* li)
+{
+  size_t bytes = li->shard_inner_count * sizeof(struct active_shard);
+  const size_t page = li->agg_layout.page_size;
+  if (page > 0 && li->shard_inner_count > 0) {
+    bytes += (size_t)li->shard_inner_count * page; // tail_buf_pool
+    bytes += (size_t)li->shard_inner_count *
+             footer_capacity_for(li->chunks_per_shard_total, page);
+  }
+  bytes +=
+    li->shard_inner_count * (li->chunks_per_shard_total * 2 * sizeof(uint64_t));
+  return bytes;
+}
+
 void
 shard_state_destroy(struct shard_state* ss)
 {

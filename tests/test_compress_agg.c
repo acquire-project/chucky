@@ -42,7 +42,7 @@ static void
 ca_ctx_destroy(struct ca_test_ctx* c)
 {
   if (c->stage_inited)
-    compress_agg_destroy(&c->stage, c->cl.levels.nlod);
+    compress_agg_destroy(&c->stage);
   if (c->ord_inited)
     gpu_ordering_destroy(&c->ord);
   computed_stream_layouts_free(&c->cl);
@@ -300,7 +300,7 @@ test_compress_agg_single_epoch(void)
     // Each shard's data starts at s * shard_capacity in h_agg.
     const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
     uint64_t num_shards = C / al->cps_inner;
-    uint64_t N = (uint64_t)c.stage.per_lod_agg_layouts[0].active_count_max *
+    uint64_t N = (uint64_t)c.stage.ar.per_lod_agg_layouts[0].active_count_max *
                  c.cl.levels.level[0].chunk_count;
     CHECK(Fail, lv_offsets[C] == N * chunk_bytes);
     for (uint64_t s = 0; s < num_shards; ++s)
@@ -351,7 +351,7 @@ test_compress_agg_batch(void)
   const size_t* lv_offsets =
     handoff.agg->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
-  uint32_t batch_count = c.stage.per_lod_agg_layouts[0].active_count_max;
+  uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
   uint64_t batch_covering = (uint64_t)batch_count * C;
 
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, batch_covering, &h_agg) == 0);
@@ -595,7 +595,7 @@ test_compress_agg_zstd_batch(void)
   const size_t* lv_offsets =
     handoff.agg->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
-  uint32_t batch_count = c.stage.per_lod_agg_layouts[0].active_count_max;
+  uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
   uint64_t batch_covering = (uint64_t)batch_count * C;
 
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, batch_covering, &h_agg) == 0);

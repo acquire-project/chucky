@@ -41,6 +41,15 @@ extern "C"
                                 uint64_t batch_covering_count,
                                 size_t comp_pool_bytes);
 
+  // Sizing mirrors of aggregate_layout_upload / aggregate_batch_slot_init,
+  // for the memory estimate.
+  size_t aggregate_layout_device_bytes(const struct aggregate_layout* layout);
+
+  int aggregate_batch_slot_memory(uint64_t batch_covering_count,
+                                  size_t comp_pool_bytes,
+                                  size_t* device_bytes,
+                                  size_t* host_bytes);
+
   // d_tail_bytes: persistent per-LOD device array of size_t[num_shards]; read
   //   by add_shard_bias_k for this batch's leading-tail accounting. The host
   //   uploads the post-delivery values after every batch.

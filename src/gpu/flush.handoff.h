@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 struct shard_state;
-struct shard_tables;
+struct compress_agg_array;
 
 // Handoff from compress+aggregate to D2H+deliver.
 //
@@ -38,7 +38,7 @@ struct flush_handoff
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
-  struct shard_tables* shards; // borrowed (for tail HtoD)
+  struct compress_agg_array* shards; // borrowed (for tail HtoD)
   size_t max_output_size;      // codec bound
 
   // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so
