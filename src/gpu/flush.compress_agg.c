@@ -602,8 +602,8 @@ Error:
   return 1;
 }
 
-// The aggregate slot's produce-acquire (SLOT_DRAINED): aggregate must not
-// overwrite agg[fc] before the prior D2H on the same fc has read it.
+// Aggregate must not overwrite agg[fc] before the prior D2H on the same fc
+// has read it.
 static int
 acquire_inputs(struct compress_agg_stage* stage,
                const struct compress_agg_input* in,

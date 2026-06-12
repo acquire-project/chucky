@@ -315,9 +315,9 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    // Tail-state produce-acquire: the consumed direction is the
-    // deliver-oldest-first host rule, so nothing is waited; the acquire
-    // hands out the array whose tail buffers this delivery uploads.
+    // The consumed direction is the deliver-oldest-first host rule, so no
+    // device wait is queued; the acquire hands out the array whose tail
+    // buffers this delivery uploads.
     struct gpu_pool_view tv = { 0 };
     if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
       goto Error;

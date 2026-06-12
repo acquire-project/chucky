@@ -48,9 +48,9 @@ ingest_destroy(struct staging_state* stage)
   }
 }
 
-// H2D into the slot's d_in. The produce-acquire keeps the copy from
-// overwriting d_in while the prior generation's scatter still reads it; the
-// release also frees h_in for host refill (STAGING_FREE aliases it).
+// The produce-acquire keeps the H2D copy from overwriting d_in while the
+// prior generation's scatter still reads it; the release also frees h_in
+// for host refill (STAGING_FREE aliases it).
 static int
 dispatch_h2d(struct staging_state* stage,
              int idx,

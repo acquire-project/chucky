@@ -219,8 +219,8 @@ flush_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
     // Used by multiarray where double-buffered pipeline state doesn't
     // compose across array switches.
     struct writer_result r = flush_accumulated_sync(e, ctx);
-    // Zero pool for next batch. Host-ordered re-acquire: the sync drain
-    // above host-completed this fc's D2H, so no device wait is queued.
+    // Host-ordered re-acquire: the sync drain above host-completed this
+    // fc's D2H, so no device wait is queued.
     if (!r.error) {
       size_t bpe = dtype_bpe(ctx->config.dtype);
       size_t pool_bytes = (uint64_t)e->batch.epochs_per_batch *
