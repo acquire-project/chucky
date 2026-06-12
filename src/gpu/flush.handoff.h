@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu/aggregate.h"
+#include "gpu/pool.h"
 #include "lod/lod_plan.h"
 #include "stream/types.aggregate.h"
 
@@ -34,7 +35,11 @@ struct flush_handoff
   CUevent t_compress_start; // for metrics
   CUevent t_compress_end;   // for metrics
 
-  struct aggregate_slot* agg;           // borrowed: unified slot for fc
+  // The unified slot for fc travels as pool handles, never a raw pointer;
+  // delivery acquires the facet it consumes (stream.engine.h).
+  struct gpu_pool* agg_pool;            // borrowed
+  struct gpu_pool* agg_host;            // borrowed
+  struct gpu_pool* agg_index;           // borrowed
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed

@@ -206,7 +206,15 @@ struct compress_agg_stage
   //   d_aggregated:     max_batch_layout.total_data_bytes
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
   //   plus pinned host shadows of matching size.
+  // Non-init code reaches a slot through the pools below; each guards a
+  // different facet of the same payload for a different consumer.
   struct aggregate_slot agg[2];
+  struct gpu_pool agg_pool;  // device facet: ready=AGG_DONE,
+                             //               consumed=SLOT_DRAINED
+  struct gpu_pool agg_host;  // h_aggregated facet: ready=D2H_DONE (alias);
+                             // consumed is the drain-before-rekick host rule
+  struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
+                             // ready=CHUNK_INDEX_READY (compressed only)
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;

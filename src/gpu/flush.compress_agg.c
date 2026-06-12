@@ -49,6 +49,16 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
 {
   memset(stage, 0, sizeof(*stage));
   stage->ord = ord;
+  gpu_pool_init(
+    &stage->agg_pool, ord, GPU_EDGE_AGG_DONE, GPU_EDGE_SLOT_DRAINED);
+  gpu_pool_init(&stage->agg_host, ord, GPU_EDGE_D2H_DONE, GPU_EDGE_COUNT);
+  gpu_pool_init(
+    &stage->agg_index, ord, GPU_EDGE_CHUNK_INDEX_READY, GPU_EDGE_COUNT);
+  for (int fc = 0; fc < 2; ++fc) {
+    gpu_pool_bind(&stage->agg_pool, fc, &stage->agg[fc]);
+    gpu_pool_bind(&stage->agg_host, fc, &stage->agg[fc]);
+    gpu_pool_bind(&stage->agg_index, fc, &stage->agg[fc]);
+  }
 
   const uint32_t K = lim->epochs_per_batch;
   const uint64_t M = lim->codec_batch;
@@ -589,13 +599,14 @@ Error:
   return 1;
 }
 
-// GPU_EDGE_SLOT_DRAINED: aggregate must not overwrite agg[fc].d_aggregated
-// before the prior D2H on the same fc has read it (seeded at init).
+// The aggregate slot's produce-acquire (SLOT_DRAINED): aggregate must not
+// overwrite agg[fc] before the prior D2H on the same fc has read it.
 static int
 acquire_inputs(struct compress_agg_stage* stage,
                const struct compress_agg_input* in,
                CUstream compress_stream,
-               struct gpu_pool_view* pool_buf)
+               struct gpu_pool_view* pool_buf,
+               struct aggregate_slot** slot)
 {
   CHECK(Error,
         gpu_pool_acquire_consume(in->pool, in->fc, compress_stream, pool_buf) ==
@@ -605,9 +616,11 @@ acquire_inputs(struct compress_agg_stage* stage,
     CHECK(Error,
           gpu_edge_wait(
             stage->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
+  struct gpu_pool_view v;
   CHECK(Error,
-        gpu_edge_wait(
-          stage->ord, GPU_EDGE_SLOT_DRAINED, in->fc, compress_stream) == 0);
+        gpu_pool_acquire_produce(
+          &stage->agg_pool, in->fc, compress_stream, &v) == 0);
+  *slot = v.p;
   return 0;
 
 Error:
@@ -669,6 +682,7 @@ static int
 dispatch_aggregate(struct compress_agg_stage* stage,
                    const struct batch_aggregate_layout* layout,
                    int fc,
+                   struct aggregate_slot* slot,
                    CUdeviceptr d_aggregate_src,
                    CUstream compress_stream)
 {
@@ -684,7 +698,7 @@ dispatch_aggregate(struct compress_agg_stage* stage,
             layout->total_batch_covering,
             stage->ar.nlod,
             stage->codec.max_output_size,
-            &stage->agg[fc],
+            slot,
             stage->shards.d_base_offsets,
             stage->shards.d_shard_capacity,
             stage->shards.d_tps_group,
@@ -699,8 +713,7 @@ dispatch_aggregate(struct compress_agg_stage* stage,
   // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
   // record (#140).
   CHECK(Error,
-        gpu_edge_record(stage->ord, GPU_EDGE_AGG_DONE, fc, compress_stream) ==
-          0);
+        gpu_pool_release_produce(&stage->agg_pool, fc, compress_stream) == 0);
   return 0;
 
 Error:
@@ -728,7 +741,9 @@ fill_handoff(struct compress_agg_stage* stage,
   out->t_compress_end = stage->t_compress_end[fc];
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
-  out->agg = &stage->agg[fc];
+  out->agg_pool = &stage->agg_pool;
+  out->agg_host = &stage->agg_host;
+  out->agg_index = &stage->agg_index;
   out->layout = *layout;
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
   out->shards = &stage->ar;
@@ -759,7 +774,9 @@ compress_agg_kick(struct compress_agg_stage* stage,
   CHECK(Error,
         build_and_upload_shard_tables(stage, &layout, compress_stream) == 0);
   struct gpu_pool_view pool_buf;
-  CHECK(Error, acquire_inputs(stage, in, compress_stream, &pool_buf) == 0);
+  struct aggregate_slot* slot = NULL;
+  CHECK(Error,
+        acquire_inputs(stage, in, compress_stream, &pool_buf, &slot) == 0);
 
   CUdeviceptr d_aggregate_src = 0;
   CHECK(Error,
@@ -768,7 +785,7 @@ compress_agg_kick(struct compress_agg_stage* stage,
   CHECK(Error, arm_tail_gate(stage, &layout, compress_stream) == 0);
   CHECK(Error,
         dispatch_aggregate(
-          stage, &layout, in->fc, d_aggregate_src, compress_stream) == 0);
+          stage, &layout, in->fc, slot, d_aggregate_src, compress_stream) == 0);
   fill_handoff(stage, in, &layout, per_lod_n_active, out);
   return 0;
 

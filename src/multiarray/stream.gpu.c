@@ -66,9 +66,9 @@ drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
   cuStreamSynchronize(e->streams.d2h);
   // Drain the unified slot's io_done fence with the departing array's sink
   // so the next-bound array doesn't wait on a fence that was issued by a
-  // different sink.
+  // different sink. Host-ordered access: the sync above quiesced the slot.
   for (int fc = 0; fc < 2; ++fc) {
-    struct aggregate_slot* agg = &e->compress_agg.agg[fc];
+    struct aggregate_slot* agg = gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
     if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
       desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
     agg->io_done.seq = 0;
