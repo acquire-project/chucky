@@ -95,6 +95,7 @@ void
 gpu_pool_release_produce_gen(struct gpu_pool* p);
 
 // Force-satisfy every parked acquire. Required before any blocking stream/
-// context sync when a generation may be undrained (#142 teardown).
+// context sync when a generation may be undrained (#142 teardown). Releases
+// through the whole ordering table, not just this pool's edges.
 void
 gpu_pool_release_all(struct gpu_pool* p);

@@ -75,9 +75,8 @@ lod_run_epoch(struct lod_state* lod,
 uint32_t
 lod_partial_append_mask(const struct lod_state* lod);
 
-// Emit the accumulated append-dim data into the pool: per level, fold the
-// accumulator, zero the level's pool region, scatter morton-ordered values
-// into chunks. pool0 is the base of the caller-acquired fill generation.
+// Emit accumulated append-dim LOD data into the pool. pool0 is the base of
+// the caller-acquired fill generation.
 int
 lod_emit_partial_append(struct lod_state* lod,
                         struct lod_shared_state* sh,

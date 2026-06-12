@@ -323,8 +323,6 @@ reset_fill_slot(struct stream_engine* e)
          (size_t)e->sched.epochs_per_batch * sizeof(uint32_t));
 }
 
-// Run LOD for the current epoch (multiscale), or mark L0 active; fold the
-// epoch's mask into the fill slot.
 static int
 run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
 {
@@ -357,8 +355,8 @@ Error:
   return 1;
 }
 
-// Drain one kicked slot: host-sync on its handoff (near-zero in steady
-// state), run delivery, clear. Accumulates flush_stall.
+// The handoff host-sync is near-zero in steady state; the whole call
+// accumulates flush_stall.
 static struct writer_result
 drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
@@ -392,8 +390,6 @@ drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
   return r;
 }
 
-// Kick compress -> aggregate -> D2H for n_epochs on slot fc and record the
-// handoff for the later drain.
 static int
 kick_batch(struct stream_engine* e,
            struct stream_context* ctx,
@@ -430,9 +426,8 @@ Error:
   return 1;
 }
 
-// Pipelined batch boundary: drain the slot about to be refilled (it holds
-// the oldest undelivered batch, so shard writes stay in batch order), kick
-// the new batch on it, swap, zero the fresh slot.
+// The slot about to be refilled holds the oldest undelivered batch, so
+// draining it first keeps shard writes in batch order.
 static struct writer_result
 drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
