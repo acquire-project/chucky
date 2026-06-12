@@ -341,7 +341,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 
   // A failed flush can leave a kick parked on the tail gate; release it or
   // the syncs below never return.
-  gpu_edge_release_all(&s->engine.ord);
+  gpu_pool_release_all(&s->engine.compress_agg.tail);
 
   // Ensure all GPU work completes before tearing down events/memory.
   sync(s->engine.streams.h2d);

@@ -118,5 +118,7 @@ gpu_pool_release_produce_gen(struct gpu_pool* p)
 void
 gpu_pool_release_all(struct gpu_pool* p)
 {
-  gpu_edge_release_all(p->ord);
+  // Callable on a never-initialized pool (failed engine init teardown).
+  if (p->ord)
+    gpu_edge_release_all(p->ord);
 }

@@ -117,13 +117,13 @@ Fail:
   return 1;
 }
 
-// Stand in for delivery's tail publish (flush.d2h_deliver.c): tests drive
-// compress_agg_kick without the delivery loop, and an unpublished
+// Stand in for delivery's tail release (flush.d2h_deliver.c): tests drive
+// compress_agg_kick without the delivery loop, and an unreleased
 // generation parks the next kick's tail gate forever.
 static void
 ca_ctx_publish_tail(struct ca_test_ctx* c)
 {
-  gpu_edge_publish(&c->ord, GPU_EDGE_TAIL_PUBLISHED);
+  gpu_pool_release_produce_gen(&c->stage.tail);
 }
 
 // Build input, kick compress_agg, sync.

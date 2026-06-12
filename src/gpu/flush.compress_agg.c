@@ -59,6 +59,9 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
     gpu_pool_bind(&stage->agg_host, fc, &stage->agg[fc]);
     gpu_pool_bind(&stage->agg_index, fc, &stage->agg[fc]);
   }
+  gpu_pool_init(&stage->tail, ord, GPU_EDGE_TAIL_PUBLISHED, GPU_EDGE_COUNT);
+  // &stage->ar is stable across multiarray binds (swapped by value).
+  gpu_pool_bind(&stage->tail, 0, &stage->ar);
 
   const uint32_t K = lim->epochs_per_batch;
   const uint64_t M = lim->codec_batch;
@@ -169,7 +172,7 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
   if (stage->ord && gpu_ordering_gate_active(stage->ord)) {
     // An undrained kick (failed flush) parks work on the compress stream;
     // the frees below can block on pending work, so release first.
-    gpu_edge_release_all(stage->ord);
+    gpu_pool_release_all(&stage->tail);
     CUWARN(cuCtxSynchronize());
   }
   codec_free(&stage->codec);
@@ -674,8 +677,7 @@ arm_tail_gate(struct compress_agg_stage* stage,
   const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
   const int enable = layout->total_batch_chunks > 0 &&
                      stage->ar.total_shards > 0 && page_size > 0;
-  return gpu_edge_wait_gen(
-    stage->ord, GPU_EDGE_TAIL_PUBLISHED, compress_stream, enable);
+  return gpu_pool_acquire_consume_gen(&stage->tail, compress_stream, enable);
 }
 
 static int
@@ -744,9 +746,9 @@ fill_handoff(struct compress_agg_stage* stage,
   out->agg_pool = &stage->agg_pool;
   out->agg_host = &stage->agg_host;
   out->agg_index = &stage->agg_index;
+  out->tail = &stage->tail;
   out->layout = *layout;
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
-  out->shards = &stage->ar;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->ar.shard[lv];
 }

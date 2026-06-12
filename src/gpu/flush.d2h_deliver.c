@@ -200,14 +200,14 @@ Error:
   return 1;
 }
 
-// Publishes the drained kick's tail generation; must run exactly once per
+// Releases the drained kick's tail generation; must run exactly once per
 // drain, on failure exits too — the gate threshold counts kicks, so a
-// skipped publish leaves the gate unsatisfiable and destroy's auto-flush
+// skipped release leaves the gate unsatisfiable and destroy's auto-flush
 // hangs polling. Tail-state content is moot once the drain has failed.
 static struct writer_result
-finish_drain(struct gpu_ordering* ord, int err)
+finish_drain(struct gpu_pool* tail, int err)
 {
-  gpu_edge_publish(ord, GPU_EDGE_TAIL_PUBLISHED);
+  gpu_pool_release_produce_gen(tail);
   return err ? writer_error() : writer_ok();
 }
 
@@ -315,7 +315,13 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    struct compress_agg_array* shards = handoff->shards;
+    // Tail-state produce-acquire: the consumed direction is the
+    // deliver-oldest-first host rule, so nothing is waited; the acquire
+    // hands out the array whose tail buffers this delivery uploads.
+    struct gpu_pool_view tv = { 0 };
+    if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
+      goto Error;
+    struct compress_agg_array* shards = tv.p;
     const size_t page_size = shards ? shards->page_size : 0;
 
     // In carry-over mode the bias kernel places each LOD at
@@ -407,10 +413,10 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
-  return finish_drain(stage->ord, 0);
+  return finish_drain(handoff->tail, 0);
 
 Error:
-  return finish_drain(stage->ord, 1);
+  return finish_drain(handoff->tail, 1);
 }
 
 // Periodic metadata update (append-dim extents per level).
