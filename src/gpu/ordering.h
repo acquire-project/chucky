@@ -221,5 +221,6 @@ gpu_edge_host_rule_check(struct gpu_ordering* ord,
 #define gpu_edge_host_rule(ord, e, cond)                                       \
   do {                                                                         \
     (void)(ord);                                                               \
+    (void)(cond);                                                              \
   } while (0)
 #endif

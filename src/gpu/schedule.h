@@ -13,6 +13,9 @@
 struct gpu_ordering;
 struct stream_engine;
 struct stream_context;
+struct platform_thread;
+struct platform_mutex;
+struct platform_cond;
 struct compress_agg_array;
 struct compress_agg_stage;
 struct compress_agg_input;
@@ -90,6 +93,61 @@ struct gpu_scheduler
   uint64_t next_seq;
   struct schedule_slot slot[2];
 };
+
+// Delivery worker: the pipelined schedule queues each kicked batch's drain
+// here at kick time and joins it before refilling the slot, so polls and
+// sink delivery run off the producer thread. One job slot per fc, queued in
+// kick order and run oldest-first (the tail gate's GEQ threshold and the
+// GPU_EDGE_DELIVER_OLDEST_FIRST rule). Ownership: the producer writes a job
+// between kick and enqueue and reads it after join; the worker owns it in
+// between — the same single-writer-per-generation discipline as the pools.
+// Engine/ctx pointers stay valid from enqueue to join (single-array only;
+// depth-1 schedules and multiarray drain inline and never queue here).
+struct delivery_job
+{
+  int queued;
+  int done;
+  uint64_t seq;
+  struct stream_engine* e;
+  struct stream_context* ctx;
+  struct writer_result result;
+};
+
+struct gpu_delivery
+{
+  struct platform_thread* thread; // NULL = drains run inline on the producer
+  struct platform_mutex* mu;
+  struct platform_cond* cv;
+  CUcontext cuda; // captured at init; made current on the worker
+  int stop;
+  struct delivery_job job[2]; // by fc
+};
+
+// Captures the calling thread's CUDA context and starts the worker.
+// Failure leaves the worker absent (drains run inline) — callers may
+// degrade rather than abort.
+int
+gpu_delivery_init(struct gpu_delivery* d);
+
+void
+gpu_delivery_enqueue(struct gpu_delivery* d,
+                     struct stream_engine* e,
+                     struct stream_context* ctx,
+                     int fc,
+                     uint64_t seq);
+
+int
+gpu_delivery_pending(struct gpu_delivery* d, int fc);
+
+struct writer_result
+gpu_delivery_join(struct gpu_delivery* d, int fc);
+
+// Runs every queued job to completion (each publishes its tail generation,
+// failure or not), then joins the thread. Idempotent; call before any
+// forced gate release — a worker publish after release_all would regress
+// the published count below parked thresholds.
+void
+gpu_delivery_stop_join(struct gpu_delivery* d);
 
 // Depth selection from the array's configuration. gate_ord NULL means
 // drains host-order the tail uploads (multiarray); call after the array's

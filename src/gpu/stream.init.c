@@ -139,6 +139,9 @@ stream_engine_init(struct stream_engine* e,
       log_warn("staging copy pool unavailable; copies run on the producer");
   }
 
+  if (gpu_delivery_init(&e->delivery))
+    log_warn("delivery worker unavailable; drains run on the producer");
+
   e->pool_bytes = lim->pool_bytes;
   gpu_pool_init(
     &e->pools.p, &e->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
@@ -191,6 +194,8 @@ Fail:
 void
 stream_engine_destroy(struct stream_engine* e)
 {
+  // Before any stage teardown: queued jobs reference the stages and pools.
+  gpu_delivery_stop_join(&e->delivery);
   threadpool_free(e->copy_pool);
   e->copy_pool = NULL;
   d2h_deliver_destroy(&e->d2h_deliver);
@@ -333,6 +338,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
       log_error("GPU stream auto-flush failed during destroy");
     s->flushed = 1;
   }
+
+  // A failed flush can leave delivery jobs queued; run them out before the
+  // forced gate release below — a worker publish after release_all would
+  // regress the published count and re-park the gate.
+  gpu_delivery_stop_join(&s->engine.delivery);
 
   // A failed flush can leave a kick parked on the tail gate; release it or
   // the syncs below never return.
