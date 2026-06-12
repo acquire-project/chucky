@@ -112,27 +112,47 @@ different stage implementations; multiarray becomes composition (N pipelines
 sharing pools) instead of the bind/copy checklist in
 `src/multiarray/stream.gpu.c`.
 
-## Current edge inventory (2026-06 audits)
+## Edge table (as implemented in step 1, `src/gpu/ordering.{h,c}`)
 
-Known load-bearing edges (full table with file:line is step 1's first
-deliverable; counts below from grep of main + #142):
+| enum | producer → consumer | guards | kind | inst | backing |
+|---|---|---|---|---|---|
+| `GPU_EDGE_STAGING_SCATTER_DONE` | compute → h2d | staging `d_in` reuse (scatter read before H2D overwrite) | EVENT, seeded | ×2 slot | owned |
+| `GPU_EDGE_STAGING_H2D_DONE` | h2d → compute | staging `d_in` contents | EVENT, seeded | ×2 slot | owned |
+| `GPU_EDGE_STAGING_FREE` | h2d → HOST poll (`stream.c` append) | staging `h_in` refill | EVENT | ×2 slot | alias of STAGING_H2D_DONE |
+| `GPU_EDGE_POOL_FILLED` | compute → compress | chunk-pool batch contents | EVENT, seeded | ×1 | owned |
+| `GPU_EDGE_LOD_DONE` | compute → compress | LOD chunks in pool | EVENT, seeded | ×2 fc | bound to `lod_shared.timing[fc].t_end` |
+| `GPU_EDGE_AGG_DONE` | compress → d2h | aggregate slot outputs | EVENT, seeded | ×2 fc | owned |
+| `GPU_EDGE_POOL_CONSUMED` | compress → compute | chunk pool `buf[fc]` reuse/re-zero (#140) | EVENT | ×2 fc | alias of AGG_DONE |
+| `GPU_EDGE_SLOT_DRAINED` | d2h\|drain → compress | `agg[fc]` slot reuse | EVENT, seeded | ×2 fc | owned |
+| `GPU_EDGE_D2H_DONE` | d2h\|drain → HOST poll | `h_aggregated` stable for delivery | EVENT | ×2 fc | alias of SLOT_DRAINED |
+| `GPU_EDGE_CHUNK_INDEX_READY` | d2h → HOST poll | `h_offsets`/`h_permuted_sizes`; drain-copy source | EVENT, seeded; compressed-only | ×2 fc | owned |
+| `GPU_EDGE_TAIL_PUBLISHED` | HOST → compress | `d_tail_bytes`/`d_tail_carry` generation (#142) | GEN_COUNTER | ×1 | ordering-owned pinned devicemap counter |
+| `GPU_EDGE_DRAIN_BEFORE_REKICK` | HOST rule | pending handoff + agg host buffers per fc | HOST_RULE | per fc | debug assert in kick/swap |
+| `GPU_EDGE_DELIVER_OLDEST_FIRST` | HOST rule | tail-gate GEQ monotonicity, shard write order | HOST_RULE | per fc | debug assert in drain |
 
-| edge (name to assign)   | producer → consumer            | guards            | kind        |
-|-------------------------|--------------------------------|-------------------|-------------|
-| pool_filled (`pool_ready`)       | h2d/compute → compress | chunk pool epoch  | EVENT       |
-| pool_consumed (`t_aggregate_end`)| compress → compute     | chunk pool epoch  | EVENT (#140)|
-| agg_done (`t_aggregate_end`)     | compress → d2h         | aggregate slot    | EVENT       |
-| slot_drained (`ready`/`prev_d2h_done`) | d2h → compress  | aggregate slot    | EVENT       |
-| chunk_index_ready (`h_chunk_index_ready`) | d2h → HOST poll | drain copy source | EVENT+poll |
-| staging_free (`t_h2d_end`)       | h2d → HOST poll        | staging slot      | EVENT+poll (unmetered busy-wait) |
-| tail_published (`d_tail_seq`)    | HOST → compress        | tail state        | GEN_COUNTER (#142) |
-| ingest cross-waits (stream.ingest.c ×4) | h2d ↔ compute | staging/pool      | EVENT       |
-| drain-before-rekick; oldest-first delivery | HOST order  | slots, gate GEQ   | HOST_RULE (undeclared) |
+TIMING events stay outside the table (metric intervals only): staging
+`t_h2d_start`/`t_scatter_start`, `t_compress_start/end`, `t_d2h_start`, lod
+`t_start/t_scatter_end/t_reduce_end/t_append_end`.
 
-~30 `cuEventRecord` sites, ~9 `cuStreamWaitEvent` sites, 2
-`cuStreamWaitValue64`, 3 `cuEventQuery` poll loops, plus multiarray's own
-record sites. Dead-edge candidates from the c3885f9 review (`pools.ready[2]`
-et al.) must be re-verified against current main before deletion.
+Deleted as verified-dead in step 1: `pool_state.ready[2]`,
+`aggregate_slot.ready` (only waiter was #139's abandoned cap-stacking), and
+the passthrough-path CHUNK_INDEX_READY record (never polled there).
+
+Design notes from implementation:
+- **Bind, not own, for dual-use events** (`gpu_ordering_bind`): lod `t_end`
+  serves timing and EDGE_LOD_DONE with one record; test harnesses use bind
+  to fake producers.
+- **Aliases**: one event may back several named edges guarding different
+  resources for different consumers (`alias_of`) — each stays separately
+  declared, asserted, and metered.
+- The wait-without-record assert is weak for EVENT edges (all are seeded at
+  init); the #141-class protection in practice is GEN_COUNTER publish
+  discipline plus end-of-run dead-edge accounting — which mutation testing
+  confirmed catches a removed wait.
+- Some edges are config-dependent (POOL_CONSUMED idle on sync/multiarray
+  paths; CHUNK_INDEX_READY compressed-only): debug dead-edge warnings fire
+  by design there. Per-config expected-edge sets are a candidate refinement
+  for steps 2–4.
 
 ## Migration: five steps, shippable at every point
 
