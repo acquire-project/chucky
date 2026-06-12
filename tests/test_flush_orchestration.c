@@ -49,10 +49,7 @@ orch_ctx_destroy(struct orch_ctx* c)
       cu_mem_free(c->s->engine.pools.buf[i]);
 
     gpu_ordering_destroy(&c->s->engine.ord);
-
-    cu_stream_destroy(c->s->engine.streams.compute);
-    cu_stream_destroy(c->s->engine.streams.compress);
-    cu_stream_destroy(c->s->engine.streams.d2h);
+    gpu_streams_destroy(&c->s->engine.streams);
 
     free(c->s);
     c->s = NULL;
@@ -91,22 +88,11 @@ orch_ctx_setup(struct orch_ctx* c,
   const size_t pool_bytes =
     (uint64_t)K * total_chunks * chunk_stride * bytes_per_element;
 
-  // GPU streams
-  CU(Fail,
-     cuStreamCreate(&c->s->engine.streams.compute, CU_STREAM_NON_BLOCKING));
-  CU(Fail,
-     cuStreamCreate(&c->s->engine.streams.compress, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&c->s->engine.streams.d2h, CU_STREAM_NON_BLOCKING));
-
+  CHECK(Fail, gpu_streams_init(&c->s->engine.streams) == 0);
   CHECK(Fail,
         gpu_ordering_init(&c->s->engine.ord, c->s->engine.streams.compute) ==
           0);
-  gpu_ordering_register_stream(
-    &c->s->engine.ord, GPU_STREAM_COMPUTE, c->s->engine.streams.compute);
-  gpu_ordering_register_stream(
-    &c->s->engine.ord, GPU_STREAM_COMPRESS, c->s->engine.streams.compress);
-  gpu_ordering_register_stream(
-    &c->s->engine.ord, GPU_STREAM_D2H, c->s->engine.streams.d2h);
+  gpu_streams_register(&c->s->engine.streams, &c->s->engine.ord);
 
   // Compress+aggregate stage
   CHECK(Fail,
@@ -121,6 +107,7 @@ orch_ctx_setup(struct orch_ctx* c,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
                          platform_page_alignment(),
                          &c->s->engine.ord,
+                         c->s->engine.streams.drain,
                          c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools

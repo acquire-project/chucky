@@ -103,28 +103,6 @@ Fail:
 
 // --- Shared engine init / teardown ---
 
-static int
-init_cuda_streams(struct gpu_streams* streams)
-{
-  CU(Fail, cuStreamCreate(&streams->h2d, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&streams->compute, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&streams->compress, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&streams->d2h, CU_STREAM_NON_BLOCKING));
-
-  return 0;
-Fail:
-  return 1;
-}
-
-static void
-destroy_cuda_streams(struct gpu_streams* streams)
-{
-  cu_stream_destroy(streams->h2d);
-  cu_stream_destroy(streams->compute);
-  cu_stream_destroy(streams->compress);
-  cu_stream_destroy(streams->d2h);
-}
-
 static void
 destroy_chunk_pools(struct pool_state* pools)
 {
@@ -138,13 +116,9 @@ stream_engine_init(struct stream_engine* e,
                    enum compression_codec codec_id,
                    int scatter_is_copy)
 {
-  CHECK(Fail, init_cuda_streams(&e->streams) == 0);
+  CHECK(Fail, gpu_streams_init(&e->streams) == 0);
   CHECK(Fail, gpu_ordering_init(&e->ord, e->streams.compute) == 0);
-  gpu_ordering_register_stream(&e->ord, GPU_STREAM_H2D, e->streams.h2d);
-  gpu_ordering_register_stream(&e->ord, GPU_STREAM_COMPUTE, e->streams.compute);
-  gpu_ordering_register_stream(
-    &e->ord, GPU_STREAM_COMPRESS, e->streams.compress);
-  gpu_ordering_register_stream(&e->ord, GPU_STREAM_D2H, e->streams.d2h);
+  gpu_streams_register(&e->streams, &e->ord);
 
   CHECK(Fail,
         ingest_init(
@@ -168,7 +142,9 @@ stream_engine_init(struct stream_engine* e,
 
   // shard_alignment is per-array; set by stream_engine_bind_array.
   CHECK(Fail,
-        d2h_deliver_init(&e->d2h_deliver, 0, &e->ord, e->streams.compute) == 0);
+        d2h_deliver_init(
+          &e->d2h_deliver, 0, &e->ord, e->streams.drain, e->streams.compute) ==
+          0);
 
   // Shared LOD buffers (sized to the max across arrays).
   if (lim->any_multiscale) {
@@ -206,7 +182,7 @@ stream_engine_destroy(struct stream_engine* e)
   destroy_chunk_pools(&e->pools);
   ingest_destroy(&e->stage);
   gpu_ordering_destroy(&e->ord);
-  destroy_cuda_streams(&e->streams);
+  gpu_streams_destroy(&e->streams);
 }
 
 // --- Per-array state ---

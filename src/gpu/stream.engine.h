@@ -6,6 +6,7 @@
 #include "gpu/ordering.h"
 #include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
+#include "gpu/schedule.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
 #include "stream/layouts.h"
@@ -106,12 +107,6 @@ struct lod_state
     uint64_t element_capacity;
     uint64_t morton_offset;
   } append_accum;
-};
-
-// CUDA stream handles (all immutable after create)
-struct gpu_streams
-{
-  CUstream h2d, compute, compress, d2h;
 };
 
 // Batch accumulation. Pool readiness is GPU_EDGE_POOL_FILLED: all K scatter
@@ -250,13 +245,7 @@ struct d2h_deliver_stage
 {
   struct gpu_ordering* ord; // borrowed
   CUevent t_d2h_start[2];   // timing
-
-  // Drain-time copies must not share the d2h stream: by drain time it can
-  // already hold the next kick's GPU_EDGE_AGG_DONE wait, which the tail
-  // gate keeps parked until THIS drain publishes — sharing would deadlock.
-  // The drain's host poll of GPU_EDGE_CHUNK_INDEX_READY already proves the
-  // copy source is stable, so no device-side ordering is needed here.
-  CUstream drain_stream;
+  CUstream drain_stream;    // borrowed (gpu_streams.drain)
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

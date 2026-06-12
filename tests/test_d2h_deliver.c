@@ -27,6 +27,7 @@ struct test_ctx
   struct d2h_deliver_stage d2h;
   CUstream compute;
   CUstream d2h_stream;
+  CUstream drain_stream;
   CUdeviceptr d_pool;
   struct gpu_ordering ord; // edge registry the harness pools draw from
   struct gpu_pool pool;    // chunk pool; slots rebound per kick's pool_buf
@@ -60,6 +61,7 @@ test_ctx_destroy(struct test_ctx* c)
   free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
   cu_stream_destroy(c->d2h_stream);
+  cu_stream_destroy(c->drain_stream);
 }
 
 // Setup: compute layouts, init compress_agg + d2h_deliver, allocate pool.
@@ -78,19 +80,24 @@ test_ctx_setup(struct test_ctx* c,
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->d2h_stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&c->drain_stream, CU_STREAM_NON_BLOCKING));
 
   CHECK(Fail, gpu_ordering_init(&c->ord, c->compute) == 0);
   c->ord_inited = 1;
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_COMPUTE, c->compute);
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_D2H, c->d2h_stream);
+  gpu_ordering_register_stream(&c->ord, GPU_STREAM_DRAIN, c->drain_stream);
 
   CHECK(Fail,
         compress_agg_init(&c->ca, &c->cl, config, &c->ord, c->compute) == 0);
   c->ca_inited = 1;
 
   CHECK(Fail,
-        d2h_deliver_init(
-          &c->d2h, platform_page_alignment(), &c->ord, c->compute) == 0);
+        d2h_deliver_init(&c->d2h,
+                         platform_page_alignment(),
+                         &c->ord,
+                         c->drain_stream,
+                         c->compute) == 0);
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *

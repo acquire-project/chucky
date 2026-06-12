@@ -3,10 +3,13 @@
 #include "gpu/stream.internal.h"
 #include "stream/dim_info.h"
 
+// drain_stream is borrowed; it must not be the d2h stream (deadlocks against
+// the tail gate — see gpu_streams.drain).
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
                  struct gpu_ordering* ord,
+                 CUstream drain_stream,
                  CUstream compute);
 
 void

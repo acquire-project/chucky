@@ -24,21 +24,19 @@ int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
                  struct gpu_ordering* ord,
+                 CUstream drain_stream,
                  CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
   stage->ord = ord;
   stage->shard_alignment = shard_alignment;
+  stage->drain_stream = drain_stream;
 
   // Seed timing events so the first metric reads see a valid interval.
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
   }
-
-  // Drain-time copies must not share the d2h stream (see d2h_deliver_stage).
-  CU(Fail, cuStreamCreate(&stage->drain_stream, CU_STREAM_NON_BLOCKING));
-  gpu_ordering_register_stream(ord, GPU_STREAM_DRAIN, stage->drain_stream);
 
   return 0;
 
@@ -54,7 +52,6 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
     return;
   for (int fc = 0; fc < 2; ++fc)
     cu_event_destroy(stage->t_d2h_start[fc]);
-  cu_stream_destroy(stage->drain_stream);
   stage->drain_stream = NULL;
 }
 
