@@ -42,3 +42,9 @@ pump_data_bpe(struct writer* w,
               size_t total_elements,
               fill_fn fill,
               size_t bpe);
+
+// Fill the pump buffer once and append it repeatedly. Isolates the writer's
+// cost from the per-iteration fill (perf benches only — chunk contents
+// repeat with the buffer period).
+int
+pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill);

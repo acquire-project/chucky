@@ -167,3 +167,32 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
 {
   return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
 }
+
+int
+pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill)
+{
+  const size_t bpe = sizeof(uint16_t);
+  const size_t nelements = 32 * 1024 * 1024; // 32M elements
+  uint16_t* data = (uint16_t*)malloc(nelements * bpe);
+  if (!data)
+    return 1;
+  fill(data, nelements < total_elements ? nelements : total_elements, 0,
+       total_elements);
+
+  for (size_t offset = 0; offset < total_elements; offset += nelements) {
+    size_t n = nelements;
+    if (offset + n > total_elements)
+      n = total_elements - offset;
+    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
+    struct writer_result r = writer_append_wait(w, input);
+    if (r.error) {
+      log_error("  append failed at offset %zu", offset);
+      free(data);
+      return 1;
+    }
+  }
+
+  struct writer_result r = writer_flush(w);
+  free(data);
+  return r.error;
+}

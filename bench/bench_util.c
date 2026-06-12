@@ -501,7 +501,10 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data(bench_writer(&h), total_elements, fill) == 0);
+  CHECK(Fail,
+        (cfg->prefill
+           ? pump_data_prefilled(bench_writer(&h), total_elements, fill)
+           : pump_data(bench_writer(&h), total_elements, fill)) == 0);
 
   size_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
@@ -607,6 +610,7 @@ struct bench_cli_args
   uint64_t io_latency_us;
   size_t backpressure_bytes;
   int max_threads;
+  int prefill;
 };
 
 // Parse the shared bench CLI flags into out. Unknown options print a usage
@@ -640,6 +644,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
+  out->prefill = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -688,6 +693,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       out->backpressure_bytes = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--prefill") == 0) {
+      out->prefill = 1;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -700,7 +707,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
-              "[--max-threads N (0 = OpenMP default)]\n",
+              "[--max-threads N (0 = OpenMP default)] [--prefill]\n",
               av[0]);
       return 1;
     }
@@ -761,6 +768,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .prefill = a.prefill,
   };
   ecode = run_bench(&cfg);
 
@@ -786,13 +794,19 @@ pump_data_interleaved(struct writer* w0,
                       struct writer* w1,
                       size_t total_elements,
                       fill_fn fill,
-                      size_t bpe)
+                      size_t bpe,
+                      int prefill)
 {
   const size_t nelements = 32 * 1024 * 1024; // 32M elements per chunk
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)malloc(alloc);
   if (!data)
     return 1;
+  if (prefill)
+    fill(data,
+         nelements < total_elements ? nelements : total_elements,
+         0,
+         total_elements);
 
   size_t off0 = 0, off1 = 0;
 
@@ -802,7 +816,8 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off0 + n > total_elements)
         n = total_elements - off0;
-      fill(data, n, off0, total_elements);
+      if (!prefill)
+        fill(data, n, off0, total_elements);
       struct slice input = { .beg = data, .end = (char*)data + n * bpe };
       struct writer_result r = writer_append_wait(w0, input);
       if (r.error) {
@@ -818,7 +833,8 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off1 + n > total_elements)
         n = total_elements - off1;
-      fill(data, n, off1, total_elements);
+      if (!prefill)
+        fill(data, n, off1, total_elements);
       struct slice input = { .beg = data, .end = (char*)data + n * bpe };
       struct writer_result r = writer_append_wait(w1, input);
       if (r.error) {
@@ -960,7 +976,9 @@ run_bench_two_streams(const struct bench_config* cfg)
   // Interleaved pump
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
+  CHECK(Fail,
+        pump_data_interleaved(
+          w0, w1, total_elements, fill, bpe, cfg->prefill) == 0);
 
   // Flush zarr sinks before measuring wall time
   struct platform_clock flush_clock = { 0 };
@@ -1133,6 +1151,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .prefill = a.prefill,
   };
   int ecode = run_bench_two_streams(&cfg);
 
