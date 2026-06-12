@@ -322,6 +322,12 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       }
     }
 
+    // finalize_shards queues footer write_direct jobs that reference
+    // stream-owned footer_buf memory; stream destroy frees it, so flush
+    // must not return while those jobs are pending. Mirrors the GPU body.
+    if (shard_sink_drain(v->sink))
+      return writer_error();
+
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
     if (v->metrics)
       accumulate_metric_ms(&v->metrics->sink, emit_ms, 0, 0);
