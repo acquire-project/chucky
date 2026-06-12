@@ -163,12 +163,13 @@ stream_append_body(struct stream_engine* e,
           struct platform_clock mc = { 0 };
           platform_toc(&mc);
           // Same h_in generation as the bytes_written==0 acquire above.
-          memcpy(gpu_pool_at(&e->stage.h_pool,
-                             e->stage.current,
-                             e->stage.bytes_written)
-                   .p,
-                 src + written,
-                 payload);
+          ingest_copy(e->copy_pool,
+                      gpu_pool_at(&e->stage.h_pool,
+                                  e->stage.current,
+                                  e->stage.bytes_written)
+                        .p,
+                      src + written,
+                      payload);
           accumulate_metric_ms(&e->metrics.memcpy,
                                (float)(platform_toc(&mc) * 1000.0),
                                payload,
