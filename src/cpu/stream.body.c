@@ -322,6 +322,9 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       }
     }
 
+    if (shard_sink_drain(v->sink))
+      return writer_error();
+
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
     if (v->metrics)
       accumulate_metric_ms(&v->metrics->sink, emit_ms, 0, 0);
