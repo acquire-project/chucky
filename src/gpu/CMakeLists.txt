@@ -8,12 +8,12 @@ add_src_lib(lod       SOURCES lod.cu lod.h
 add_src_lib(stream
     SOURCES
         stream.c ../stream.gpu.h stream.init.c
-        stream.flush.c stream.flush.h
         stream.ingest.c stream.ingest.h
         stream.lod.c stream.lod.h
         stream.internal.h
         ordering.c ordering.h
         pool.c pool.h
+        schedule.c schedule.h
         flush.compress_agg.c flush.compress_agg.h
         flush.d2h_deliver.c flush.d2h_deliver.h
         flush.handoff.h flush.helpers.h

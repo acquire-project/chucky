@@ -4,7 +4,7 @@
 // detect the cross-sink mis-routing deterministically and flag it without
 // blocking, so the assertion is a flag check rather than a timeout.
 //
-// The fix lives in unbind_context via drain_d2h_for_array, which waits on
+// The fix lives in unbind_context via schedule_quiesce_output, which waits on
 // any cached fence with the departing sink and clears it before another
 // array binds in. Without that drain, the next array picks up a fence the
 // prior sink stamped on the shared delivery pipeline.

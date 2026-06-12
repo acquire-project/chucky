@@ -1,7 +1,7 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
+#include "gpu/schedule.h"
 #include "gpu/stream.engine.h"
-#include "gpu/stream.flush.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
 
@@ -55,26 +55,6 @@ flush_impl(struct multiarray_writer* self);
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
-// Quiesce the shared d2h delivery pipeline against the departing array
-// before another array binds in. Without this, the next array would inherit
-// stale fences from a different sink (deadlock — fences only retire on the
-// sink that issued them) or reuse aggregate buffers the prior sink is still
-// reading.
-static void
-drain_d2h_for_array(struct stream_engine* e, struct array_descriptor_gpu* desc)
-{
-  cuStreamSynchronize(e->streams.d2h);
-  // Drain the unified slot's io_done fence with the departing array's sink
-  // so the next-bound array doesn't wait on a fence that was issued by a
-  // different sink. Host-ordered access: the sync above quiesced the slot.
-  for (int fc = 0; fc < 2; ++fc) {
-    struct aggregate_slot* agg = gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
-    if (agg->io_done.seq > 0 && desc->ctx.sink->wait_fence)
-      desc->ctx.sink->wait_fence(desc->ctx.sink, agg->io_done);
-    agg->io_done.seq = 0;
-  }
-}
-
 static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
@@ -87,13 +67,14 @@ bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 static void
 unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
-  drain_d2h_for_array(e, desc);
+  // Without this, the next array would inherit stale fences from a
+  // different sink (deadlock — fences only retire on the sink that issued
+  // them) or reuse aggregate buffers the prior sink is still reading.
+  schedule_quiesce_output(e, desc->ctx.sink);
 
-  // Wholesale: shard_state, accumulator counts, flush pipeline, and batch
-  // bookkeeping all mutate over a batch.
-  desc->st.batch = e->batch;
-  desc->st.pool_current = e->pools.current;
-  desc->st.flush = e->flush;
+  // Wholesale: shard_state, accumulator counts, and schedule progress all
+  // mutate over a batch.
+  desc->st.sched = e->sched;
   desc->st.lod = e->lod;
   desc->st.agg = e->compress_agg.ar;
 
@@ -159,11 +140,11 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
         0)
       return multiarray_writer_not_flushable;
 
-    // Flush departing array's accumulated batch. With sync_flush=1,
-    // stream_flush_body uses the synchronous path (no pool swap or
-    // pending state), so it's safe to call during switch.
-    if (e->batch.accumulated > 0) {
-      struct writer_result r = flush_accumulated_sync(e, &departing->ctx);
+    // Flush departing array's accumulated batch. The drain-after-kick
+    // schedule leaves no pool swap or kicked state behind, so this is safe
+    // mid-switch.
+    if (e->sched.accumulated > 0) {
+      struct writer_result r = schedule_flush_accumulated(e, &departing->ctx);
       if (r.error)
         return multiarray_writer_fail;
     }
@@ -176,12 +157,13 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
 
   // Zero both pools for the incoming array. This is the correctness-critical
   // zero: it ensures no stale data from the departing array leaks into the
-  // incoming array's scatter. (flush_accumulate_epoch's sync path also zeros
-  // the per-array portion of the current pool as an optimization for the
-  // common batch-boundary case, but that only covers one pool and only the
-  // per-array size — this full zero covers both pools at the max size.)
-  // Host-ordered access: the departing array's sync flush drained every
-  // batch, so no produce wait is queued.
+  // incoming array's scatter. (schedule_accumulate_epoch's drain-after-kick
+  // path also zeros the per-array portion of the current pool as an
+  // optimization for the common batch-boundary case, but that only covers
+  // one pool and only the per-array size — this full zero covers both pools
+  // at the max size.)
+  // Host-ordered access: the departing array's immediate drains completed
+  // every batch, so no produce wait is queued.
   for (int i = 0; i < 2; ++i)
     CU(Fail,
        cuMemsetD8Async(gpu_pool_view_d(gpu_pool_at(&e->pools.p, i, 0)),
@@ -250,7 +232,7 @@ flush_impl(struct multiarray_writer* self)
     // arrives.
     if (desc->flushed)
       continue;
-    if (desc->ctx.cursor_elements == 0 && desc->st.batch.accumulated == 0) {
+    if (desc->ctx.cursor_elements == 0 && desc->st.sched.accumulated == 0) {
       desc->flushed = 1;
       continue;
     }
@@ -387,10 +369,6 @@ multiarray_tile_stream_gpu_create(
                            &lim,
                            ms->arrays[0].ctx.config.codec.id,
                            all_multiscale) == 0);
-
-  // Use synchronous flush path — the double-buffered pipeline doesn't
-  // compose across array switches.
-  ms->engine.sync_flush = 1;
 
   return ms;
 

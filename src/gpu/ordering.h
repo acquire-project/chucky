@@ -24,7 +24,7 @@ enum gpu_stream_id
   GPU_STREAM_COMPUTE,
   GPU_STREAM_COMPRESS,
   GPU_STREAM_D2H,
-  GPU_STREAM_DRAIN, // d2h_deliver_stage.drain_stream
+  GPU_STREAM_DRAIN, // gpu_streams.drain
   GPU_STREAM_ID_COUNT,
 };
 
@@ -106,7 +106,7 @@ struct gpu_ordering
   // GEN_COUNTER runtime (GPU_EDGE_TAIL_PUBLISHED). Pinned + device-mapped;
   // absent (NULL/0) when the gate was never initialized or could not be
   // allocated/mapped — the lazy flush path then host-drains instead
-  // (stream.flush.c).
+  // (SCHEDULE_DRAIN_BEFORE_KICK, schedule.h).
   volatile uint64_t* h_tail_seq_flag;
   CUdeviceptr d_tail_seq;
   uint64_t kick_seq; // kicks enqueued (gate threshold)

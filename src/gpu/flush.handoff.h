@@ -19,7 +19,7 @@ struct compress_agg_array;
 // borrowed `per_lod_agg_layouts` array. `per_lod_n_active[lv]` carries
 // the per-LOD active epoch count for delivery sizing.
 //
-// batch_active_masks is borrowed from the flush_slot_gpu that produced this
+// batch_active_masks is borrowed from the schedule_slot that produced this
 // batch and is safe to read only inside compress+aggregate. D2H delivery
 // must read per-LOD active counts from `per_lod_n_active` instead.
 struct flush_handoff

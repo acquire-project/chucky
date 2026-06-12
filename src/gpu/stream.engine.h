@@ -2,10 +2,10 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
-#include "gpu/flush.handoff.h"
 #include "gpu/ordering.h"
 #include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
+#include "gpu/schedule.h"
 #include "platform/platform.h"
 #include "stream.gpu.h"
 #include "stream/layouts.h"
@@ -19,7 +19,6 @@ struct pool_state
   struct gpu_pool p;  // buf generations: ready=POOL_FILLED,
                       //                  consumed=POOL_CONSUMED (#140)
   CUdeviceptr buf[2]; // payloads; non-init code goes through p
-  int current;        // 0 or 1
 };
 
 // Ordering events (h2d-done, scatter-done) live in gpu_ordering, instanced
@@ -43,15 +42,6 @@ struct staging_state
                           //       order (fill precedes dispatch)
   int current;            // 0 or 1: which buffer the host is filling
   size_t bytes_written;   // bytes written to current slot's h_in so far
-};
-
-// Per flush-slot: mutable batch state (masks + epoch count).
-// batch_active_masks is heap-allocated to epochs_per_batch entries.
-struct flush_slot_gpu
-{
-  uint32_t active_levels_mask;  // union of per-epoch active masks
-  uint32_t* batch_active_masks; // [K] per-epoch active level masks
-  int batch_epoch_count;        // number of epochs accumulated in this batch
 };
 
 // Per-frame-counter timing events (double-buffered).
@@ -108,21 +98,6 @@ struct lod_state
   } append_accum;
 };
 
-// CUDA stream handles (all immutable after create)
-struct gpu_streams
-{
-  CUstream h2d, compute, compress, d2h;
-};
-
-// Batch accumulation. Pool readiness is GPU_EDGE_POOL_FILLED: all K scatter
-// ops run on the compute stream in order, so one record after the K-th
-// scatter subsumes all per-epoch ready signals.
-struct batch_state
-{
-  uint32_t epochs_per_batch; // K (immutable after create)
-  uint32_t accumulated;      // mutable: 0..K-1
-};
-
 // --- Stage types ---
 
 struct compress_agg_input
@@ -130,9 +105,7 @@ struct compress_agg_input
   int fc;
   uint32_t n_epochs;
   uint32_t active_levels_mask;
-  const uint32_t* batch_active_masks; // borrowed from flush_slot_gpu [K]
-  struct gpu_pool* pool; // chunk pool; the kick acquires slot fc's batch
-  int lod_active; // wait GPU_EDGE_LOD_DONE (multiscale with bound edge only)
+  const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
   uint32_t epochs_per_batch;
 };
 
@@ -250,43 +223,17 @@ struct d2h_deliver_stage
 {
   struct gpu_ordering* ord; // borrowed
   CUevent t_d2h_start[2];   // timing
-
-  // Drain-time copies must not share the d2h stream: by drain time it can
-  // already hold the next kick's GPU_EDGE_AGG_DONE wait, which the tail
-  // gate keeps parked until THIS drain publishes — sharing would deadlock.
-  // The drain's host poll of GPU_EDGE_CHUNK_INDEX_READY already proves the
-  // copy source is stable, so no device-side ordering is needed here.
-  CUstream drain_stream;
+  CUstream drain_stream;    // borrowed (gpu_streams.drain)
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation
 };
 
-// Lazy-delivery pipeline: each fc slot can independently hold a kicked-but-
-// not-yet-delivered batch. Delivery of fc=A happens at the start of the
-// drain_kick_and_swap round that is about to reuse fc=A (two rounds after
-// that batch was kicked, in N=2 alternation). Both fcs may hold a pending
-// batch simultaneously; drain order at final flush follows pending_seq.
-struct flush_pipeline
-{
-  struct flush_slot_gpu slot[2];
-  int current;                             // fc currently being filled
-  int pending[2];                          // per-fc: batch awaiting delivery
-  uint64_t pending_seq[2];                 // monotonic kick seq per pending
-  uint64_t next_seq;                       // next seq to assign on kick
-  struct flush_handoff pending_handoff[2]; // per-fc
-};
-
-_Static_assert(LOD_MAX_LEVELS <= 32,
-               "active_levels_mask is uint32_t; LOD_MAX_LEVELS > 32 overflows");
-
 // All per-array mutable engine state, grouped so a multiarray array switch
 // is whole-struct assignment in each direction — never a field checklist.
 struct engine_array_state
 {
-  struct batch_state batch;
-  int pool_current;
-  struct flush_pipeline flush;
+  struct gpu_scheduler sched;
   struct lod_state lod;
   struct compress_agg_array agg;
 };
@@ -312,17 +259,15 @@ struct stream_context
 
 // Shared GPU resources — constant memory, allocated once.
 // Contains all GPU allocations (pools, staging, codec, CUDA streams) and
-// mutable pipeline state (batch accumulation, flush slots, shard tracking).
+// the scheduler's mutable pipeline state.
 struct stream_engine
 {
-  int sync_flush; // 1 = synchronous batch flush (multiarray); 0 = pipelined
   struct gpu_streams streams;
   struct gpu_ordering ord;
+  struct gpu_scheduler sched;
   struct pool_state pools;
   size_t pool_bytes;
   struct staging_state stage;
-  struct batch_state batch;
-  struct flush_pipeline flush;
   struct compress_agg_stage compress_agg;
   struct d2h_deliver_stage d2h_deliver;
   struct lod_shared_state lod_shared; // engine-owned shared LOD resources

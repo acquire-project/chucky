@@ -1,5 +1,6 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
+#include "gpu/schedule.h"
 #include "platform/platform.h"
 #include "stream/config.h"
 
@@ -27,6 +28,7 @@ struct test_ctx
   struct d2h_deliver_stage d2h;
   CUstream compute;
   CUstream d2h_stream;
+  CUstream drain_stream;
   CUdeviceptr d_pool;
   struct gpu_ordering ord; // edge registry the harness pools draw from
   struct gpu_pool pool;    // chunk pool; slots rebound per kick's pool_buf
@@ -60,6 +62,7 @@ test_ctx_destroy(struct test_ctx* c)
   free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
   cu_stream_destroy(c->d2h_stream);
+  cu_stream_destroy(c->drain_stream);
 }
 
 // Setup: compute layouts, init compress_agg + d2h_deliver, allocate pool.
@@ -78,19 +81,24 @@ test_ctx_setup(struct test_ctx* c,
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->d2h_stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&c->drain_stream, CU_STREAM_NON_BLOCKING));
 
   CHECK(Fail, gpu_ordering_init(&c->ord, c->compute) == 0);
   c->ord_inited = 1;
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_COMPUTE, c->compute);
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_D2H, c->d2h_stream);
+  gpu_ordering_register_stream(&c->ord, GPU_STREAM_DRAIN, c->drain_stream);
 
   CHECK(Fail,
         compress_agg_init(&c->ca, &c->cl, config, &c->ord, c->compute) == 0);
   c->ca_inited = 1;
 
   CHECK(Fail,
-        d2h_deliver_init(
-          &c->d2h, platform_page_alignment(), &c->ord, c->compute) == 0);
+        d2h_deliver_init(&c->d2h,
+                         platform_page_alignment(),
+                         &c->ord,
+                         c->drain_stream,
+                         c->compute) == 0);
   c->d2h_inited = 1;
 
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
@@ -119,7 +127,7 @@ Fail:
   return 1;
 }
 
-// Run compress_agg_kick + d2h_deliver_kick + d2h_deliver_drain for a batch.
+// Run the compress_agg kick + d2h_deliver kick + drain for a batch.
 static int
 test_ctx_kick_and_drain(struct test_ctx* c,
                         const struct tile_stream_configuration* config,
@@ -138,35 +146,33 @@ test_ctx_kick_and_drain(struct test_ctx* c,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool = &c->pool,
-    .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(&c->ca,
-                          &in,
-                          &c->cl.levels,
-                          c->compute,
-                          handoff) == 0);
+        schedule_compress_agg_kick(&c->ca,
+                                   &in,
+                                   &c->cl.levels,
+                                   &c->pool,
+                                   0,
+                                   c->compute,
+                                   handoff) == 0);
 
-  CHECK(Fail,
-        d2h_deliver_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
+  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
 
-  struct writer_result r = d2h_deliver_drain(&c->d2h,
-                                             handoff,
-                                             &c->cl.levels,
-                                             &c->cl.dims,
-                                             &c->cl.layouts[0],
-                                             config,
-                                             sink,
-                                             &c->lod,
-                                             &c->lod_shared,
-                                             &c->metrics,
-                                             &c->metadata_clock,
-                                             c->d2h_stream);
+  struct writer_result r = schedule_d2h_drain(&c->d2h,
+                                              handoff,
+                                              &c->cl.levels,
+                                              &c->cl.dims,
+                                              &c->cl.layouts[0],
+                                              config,
+                                              sink,
+                                              &c->lod,
+                                              &c->lod_shared,
+                                              &c->metrics,
+                                              &c->metadata_clock);
   CHECK(Fail, r.error == 0);
 
   return 0;
@@ -705,7 +711,7 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, sink.finalize_count == 1);
 
   // Cycle 3: reuse fc=0. compress_agg's GPU_EDGE_SLOT_DRAINED wait depends
-  // on sync_and_deliver having recorded the edge in cycle 1.
+  // on the drain having recorded the edge in cycle 1.
   CHECK(
     Fail,
     fill_pool_epoch(

@@ -1,4 +1,4 @@
-#include "gpu/stream.flush.h"
+#include "gpu/schedule.h"
 #include "gpu/stream.ingest.h"
 
 #include "gpu/metric.cuda.h"
@@ -62,7 +62,7 @@ stream_engine_pool_epoch(struct stream_engine* e,
 {
   const size_t bpe = dtype_bpe(ctx->config.dtype);
   return gpu_pool_at(&e->pools.p,
-                     e->pools.current,
+                     e->sched.fill,
                      (uint64_t)epoch_in_batch * ctx->levels.total_chunks *
                        ctx->layout.chunk_stride * bpe);
 }
@@ -83,7 +83,7 @@ engine_dispatch_ingest(struct stream_engine* e, struct stream_context* ctx)
       &e->stage,
       &ctx->layout,
       &ctx->layout_gpu,
-      stream_engine_pool_epoch(e, ctx, e->batch.accumulated),
+      stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
       &ctx->cursor_elements,
       dtype_bpe(ctx->config.dtype),
       e->streams.h2d,
@@ -188,7 +188,7 @@ stream_append_body(struct stream_engine* e,
 
     if (ctx->cursor_elements % ctx->layout.epoch_elements == 0 &&
         ctx->cursor_elements > 0) {
-      struct writer_result fr = flush_accumulate_epoch(e, ctx);
+      struct writer_result fr = schedule_accumulate_epoch(e, ctx);
       if (fr.error)
         return writer_error_at(src, end);
       // Sample sink backpressure at epoch boundaries.
@@ -244,24 +244,23 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     e->stage.bytes_written = 0;
   }
 
-  struct writer_result r = flush_drain_pending(e, ctx);
+  struct writer_result r = schedule_drain_kicked(e, ctx);
   if (r.error)
     return r;
 
   // Flush any partial epoch first (sub-epoch data)
   if (ctx->cursor_elements % ctx->layout.epoch_elements != 0) {
-    if (flush_run_epoch_lod(e, ctx))
+    if (schedule_add_partial_epoch(e, ctx))
       return writer_error();
-    e->batch.accumulated++;
   }
 
   // Flush any accumulated epochs (partial batch)
-  r = flush_accumulated_sync(e, ctx);
+  r = schedule_flush_accumulated(e, ctx);
   if (r.error)
     return r;
 
   // Drain any partial append accumulators
-  r = flush_partial_append(e, ctx);
+  r = schedule_flush_partial_append(e, ctx);
   if (r.error)
     return r;
 

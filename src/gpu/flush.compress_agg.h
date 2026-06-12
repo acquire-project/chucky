@@ -52,9 +52,44 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
                              size_t* aggregate_device_bytes,
                              size_t* aggregate_host_bytes);
 
+// One batch's host-computed aggregation geometry, threaded through the kick
+// phases below. The phases are payload only — the acquires, the tail-gate
+// arm, and the releases between them are placed by the schedule
+// (schedule_compress_agg_kick).
+struct compress_agg_plan
+{
+  struct batch_aggregate_layout layout;
+  uint32_t per_lod_n_active[LOD_MAX_LEVELS];
+};
+
+// Host-side batch planning plus LUT/shard-table uploads. No pool access.
 int
-compress_agg_kick(struct compress_agg_stage* stage,
-                  const struct compress_agg_input* in,
-                  const struct level_geometry* levels,
-                  CUstream compress_stream,
-                  struct flush_handoff* out);
+compress_agg_prepare(struct compress_agg_stage* stage,
+                     const struct compress_agg_input* in,
+                     const struct level_geometry* levels,
+                     CUstream compress_stream,
+                     struct compress_agg_plan* plan);
+
+// Compress the batch out of the acquired pool view (CODEC_NONE records the
+// timing events only). Reads no tail state.
+int
+compress_agg_compress(struct compress_agg_stage* stage,
+                      const struct compress_agg_input* in,
+                      const struct level_geometry* levels,
+                      struct gpu_pool_view pool_buf,
+                      CUstream compress_stream);
+
+// Aggregate into the acquired slot.
+int
+compress_agg_aggregate(struct compress_agg_stage* stage,
+                       const struct compress_agg_plan* plan,
+                       int fc,
+                       struct aggregate_slot* slot,
+                       struct gpu_pool_view pool_buf,
+                       CUstream compress_stream);
+
+void
+compress_agg_fill_handoff(struct compress_agg_stage* stage,
+                          const struct compress_agg_input* in,
+                          const struct compress_agg_plan* plan,
+                          struct flush_handoff* out);
