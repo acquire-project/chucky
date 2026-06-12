@@ -1,5 +1,6 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
+#include "gpu/schedule.h"
 #include "platform/platform.h"
 #include "stream/config.h"
 
@@ -126,7 +127,7 @@ Fail:
   return 1;
 }
 
-// Run compress_agg_kick + d2h_deliver_kick + d2h_deliver_drain for a batch.
+// Run the compress_agg kick + d2h_deliver kick + drain for a batch.
 static int
 test_ctx_kick_and_drain(struct test_ctx* c,
                         const struct tile_stream_configuration* config,
@@ -145,19 +146,19 @@ test_ctx_kick_and_drain(struct test_ctx* c,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool = &c->pool,
-    .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(&c->ca,
-                          &in,
-                          &c->cl.levels,
-                          c->compute,
-                          handoff) == 0);
+        schedule_compress_agg_kick(&c->ca,
+                                   &in,
+                                   &c->cl.levels,
+                                   &c->pool,
+                                   0,
+                                   c->compute,
+                                   handoff) == 0);
 
   CHECK(Fail,
         d2h_deliver_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);

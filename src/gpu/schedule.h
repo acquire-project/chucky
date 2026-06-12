@@ -14,6 +14,9 @@ struct gpu_ordering;
 struct stream_engine;
 struct stream_context;
 struct compress_agg_array;
+struct compress_agg_stage;
+struct compress_agg_input;
+struct level_geometry;
 
 struct gpu_streams
 {
@@ -91,6 +94,18 @@ schedule_select(struct gpu_scheduler* sched,
 // resources; enable_multiscale alone is a per-array fact. Selected at bind.
 int
 schedule_lod_active(const struct gpu_ordering* ord, int enable_multiscale);
+
+// One batch through compress+aggregate: the stage's payload phases with the
+// schedule-owned acquires, tail-gate arm, and releases placed between them.
+// lod_active queues the second producer edge into the chunk pool.
+int
+schedule_compress_agg_kick(struct compress_agg_stage* stage,
+                           const struct compress_agg_input* in,
+                           const struct level_geometry* levels,
+                           struct gpu_pool* chunk_pool,
+                           int lod_active,
+                           CUstream compress_stream,
+                           struct flush_handoff* out);
 
 // Count one epoch into the batch being filled; kick (and, per depth, drain)
 // at the batch boundary.

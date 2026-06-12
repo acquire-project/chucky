@@ -71,6 +71,70 @@ schedule_lod_active(const struct gpu_ordering* ord, int enable_multiscale)
          gpu_ordering_event(ord, GPU_EDGE_LOD_DONE, 0) != NULL;
 }
 
+// --- Compress+aggregate kick ---
+
+int
+schedule_compress_agg_kick(struct compress_agg_stage* stage,
+                           const struct compress_agg_input* in,
+                           const struct level_geometry* levels,
+                           struct gpu_pool* chunk_pool,
+                           int lod_active,
+                           CUstream compress_stream,
+                           struct flush_handoff* out)
+{
+  struct compress_agg_plan plan;
+  CHECK(Error,
+        compress_agg_prepare(stage, in, levels, compress_stream, &plan) == 0);
+
+  struct gpu_pool_view pool_buf;
+  CHECK(Error,
+        gpu_pool_acquire_consume(
+          chunk_pool, in->fc, compress_stream, &pool_buf) == 0);
+  // LOD chunks land in the pool through a second producer edge.
+  if (lod_active)
+    CHECK(Error,
+          gpu_edge_wait(
+            chunk_pool->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
+  // Aggregate must not overwrite agg[fc] before the prior D2H on the same
+  // fc has read it.
+  struct gpu_pool_view slot;
+  CHECK(Error,
+        gpu_pool_acquire_produce(
+          &stage->agg_pool, in->fc, compress_stream, &slot) == 0);
+
+  CHECK(Error,
+        compress_agg_compress(stage, in, levels, pool_buf, compress_stream) ==
+          0);
+
+  // Page-aligned path only. The aggregate dispatch reads tail state that
+  // the previous kick's delivery uploads AFTER this enqueue (gate state in
+  // gpu_ordering, src/gpu/ordering.h). The wait goes after compress, which
+  // reads no tail state.
+  {
+    const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
+    const int enable = plan.layout.total_batch_chunks > 0 &&
+                       stage->ar.total_shards > 0 && page_size > 0;
+    CHECK(Error,
+          gpu_pool_acquire_consume_gen(&stage->tail, compress_stream, enable) ==
+            0);
+  }
+
+  CHECK(Error,
+        compress_agg_aggregate(
+          stage, &plan, in->fc, slot.p, pool_buf, compress_stream) == 0);
+  // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
+  // record (#140).
+  CHECK(Error,
+        gpu_pool_release_produce(&stage->agg_pool, in->fc, compress_stream) ==
+          0);
+
+  compress_agg_fill_handoff(stage, in, &plan, out);
+  return 0;
+
+Error:
+  return 1;
+}
+
 // --- Helpers ---
 
 static struct compress_agg_input
@@ -82,8 +146,6 @@ make_compress_input(struct stream_engine* e, int fc, uint32_t n_epochs)
     .n_epochs = n_epochs,
     .active_levels_mask = s->active_levels_mask,
     .batch_active_masks = s->batch_active_masks,
-    .pool = &e->pools.p,
-    .lod_active = e->sched.lod_active,
     .epochs_per_batch = e->sched.epochs_per_batch,
   };
 }
@@ -183,11 +245,13 @@ kick_batch(struct stream_engine* e,
   struct flush_handoff handoff = { 0 };
 
   CHECK(Error,
-        compress_agg_kick(&e->compress_agg,
-                          &in,
-                          &ctx->levels,
-                          e->streams.compress,
-                          &handoff) == 0);
+        schedule_compress_agg_kick(&e->compress_agg,
+                                   &in,
+                                   &ctx->levels,
+                                   &e->pools.p,
+                                   e->sched.lod_active,
+                                   e->streams.compress,
+                                   &handoff) == 0);
 
   CHECK(Error,
         d2h_deliver_kick(&e->d2h_deliver,

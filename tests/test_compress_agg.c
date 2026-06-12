@@ -1,4 +1,5 @@
 #include "gpu/flush.compress_agg.h"
+#include "gpu/schedule.h"
 #include "stream/config.h"
 #include "stream/types.aggregate.h"
 
@@ -118,8 +119,8 @@ Fail:
 }
 
 // Stand in for delivery's tail release (flush.d2h_deliver.c): tests drive
-// compress_agg_kick without the delivery loop, and an unreleased
-// generation parks the next kick's tail gate forever.
+// the kick without the delivery loop, and an unreleased generation parks
+// the next kick's tail gate forever.
 static void
 ca_ctx_publish_tail(struct ca_test_ctx* c)
 {
@@ -140,19 +141,19 @@ ca_ctx_kick(struct ca_test_ctx* c,
     .n_epochs = n_epochs,
     .active_levels_mask = 0x1,
     .batch_active_masks = c->batch_active_masks,
-    .pool = &c->pool,
-    .lod_active = 0,
     .epochs_per_batch = c->cl.epochs_per_batch,
   };
 
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        compress_agg_kick(&c->stage,
-                          &in,
-                          &c->cl.levels,
-                          c->compute,
-                          handoff) == 0);
+        schedule_compress_agg_kick(&c->stage,
+                                   &in,
+                                   &c->cl.levels,
+                                   &c->pool,
+                                   0,
+                                   c->compute,
+                                   handoff) == 0);
   CU(Fail, cuStreamSynchronize(c->compute));
   ca_ctx_publish_tail(c);
   return 0;
@@ -193,7 +194,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                   (CUdeviceptr)(agg->d_offsets + base),
                   (n_covering + 1) * sizeof(size_t)));
   // Production fetches h_permuted_sizes via d2h_deliver_kick on d2h_stream;
-  // tests that drive compress_agg_kick directly do the D2H here.
+  // tests that drive the kick directly do the D2H here.
   CU(Fail,
      cuMemcpyDtoH(agg->h_permuted_sizes + base,
                   (CUdeviceptr)(agg->d_permuted_sizes + base),
@@ -770,18 +771,18 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool = &c.pool,
-      .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     struct flush_handoff handoff;
     memset(&handoff, 0, sizeof(handoff));
     CHECK(Fail,
-          compress_agg_kick(&c.stage,
-                            &in,
-                            &c.cl.levels,
-                            c.compute,
-                            &handoff) == 0);
+          schedule_compress_agg_kick(&c.stage,
+                                     &in,
+                                     &c.cl.levels,
+                                     &c.pool,
+                                     0,
+                                     c.compute,
+                                     &handoff) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
     ca_ctx_publish_tail(&c);
   }
@@ -800,16 +801,16 @@ test_compress_agg_lut_cache_position_shift(void)
       .n_epochs = 2,
       .active_levels_mask = 0x1,
       .batch_active_masks = c.batch_active_masks,
-      .pool = &c.pool,
-      .lod_active = 0,
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     CHECK(Fail,
-          compress_agg_kick(&c.stage,
-                            &in,
-                            &c.cl.levels,
-                            c.compute,
-                            &handoff2) == 0);
+          schedule_compress_agg_kick(&c.stage,
+                                     &in,
+                                     &c.cl.levels,
+                                     &c.pool,
+                                     0,
+                                     c.compute,
+                                     &handoff2) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
     ca_ctx_publish_tail(&c);
   }

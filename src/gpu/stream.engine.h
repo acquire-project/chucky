@@ -106,8 +106,6 @@ struct compress_agg_input
   uint32_t n_epochs;
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
-  struct gpu_pool* pool; // chunk pool; the kick acquires slot fc's batch
-  int lod_active; // wait GPU_EDGE_LOD_DONE (multiscale with bound edge only)
   uint32_t epochs_per_batch;
 };
 
