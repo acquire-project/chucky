@@ -321,6 +321,73 @@ struct stream_engine
   struct platform_clock metadata_update_clock;
 };
 
+// --- Engine init / teardown (shared by single-array and multiarray) ---
+
+// Sizing for the engine's shared resources. Single-array fills this from its
+// one layout; multiarray accumulates the max across arrays — shared buffers
+// are sized to the maxima while each array still runs at its own geometry.
+struct engine_limits
+{
+  size_t buffer_capacity; // page-aligned staging slot size
+  size_t pool_bytes;      // one chunk-pool buffer
+  size_t chunk_bytes;     // codec chunk stride in bytes
+  uint64_t codec_batch;   // K * total_chunks
+  uint32_t epochs_per_batch;
+  int max_nlod;
+  uint64_t max_total_batch_chunks;
+  uint64_t max_total_batch_covering;
+  size_t max_total_data_bytes;
+  uint64_t max_total_shards;
+  size_t lod_linear_bytes;
+  size_t lod_morton_bytes;
+  int any_multiscale;
+};
+
+// Fold one array's requirements into *lim (max per field). Call once per
+// array on a zeroed struct before stream_engine_init.
+int
+engine_limits_accumulate(struct engine_limits* lim,
+                         const struct computed_stream_layouts* cl,
+                         const struct tile_stream_configuration* config);
+
+// Allocate all shared engine resources (streams, ordering, staging, pools,
+// compress/aggregate shared buffers, d2h, shared LOD buffers, metrics).
+// scatter_is_copy selects the ingest metric label only. On failure the
+// engine is left partially initialized; stream_engine_destroy handles it.
+int
+stream_engine_init(struct stream_engine* e,
+                   const struct engine_limits* lim,
+                   enum compression_codec codec_id,
+                   int scatter_is_copy);
+
+// Free shared engine resources. Per-array state (engine_array_state) is
+// destroyed separately by its owner. Caller must have synchronized all
+// engine streams first.
+void
+stream_engine_destroy(struct stream_engine* e);
+
+// Initialize one array's engine state. ctx->config/sink/shard_alignment
+// must be set; fills the remaining ctx fields and takes ownership of
+// cl->plan. gate_ord arms the tail-generation gate (pipelined single-array
+// path); pass NULL on the multiarray sync-flush path, whose immediate
+// drains host-order the tail uploads instead.
+int
+engine_array_state_init(struct engine_array_state* st,
+                        struct stream_context* ctx,
+                        struct computed_stream_layouts* cl,
+                        struct gpu_ordering* gate_ord,
+                        CUstream gate_stream);
+
+void
+engine_array_state_destroy(struct engine_array_state* st);
+
+// Make *st the engine's active array (whole-struct handoff + per-array
+// shard-capacity upload + LUT-cache invalidation).
+int
+stream_engine_bind_array(struct stream_engine* e,
+                         const struct engine_array_state* st,
+                         const struct stream_context* ctx);
+
 // --- Engine operations ---
 
 // Pointer to the given epoch's chunk region in the current pool.
