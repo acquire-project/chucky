@@ -813,3 +813,79 @@ lod_run_epoch(struct lod_state* lod,
 Error:
   return 1;
 }
+
+uint32_t
+lod_partial_append_mask(const struct lod_state* lod)
+{
+  uint32_t mask = 0;
+  for (int lv = 1; lv < lod->plan.levels.nlod; ++lv)
+    if (lod->append_accum.counts[lv] > 0)
+      mask |= (1u << lv);
+  return mask;
+}
+
+int
+lod_emit_partial_append(struct lod_state* lod,
+                        struct lod_shared_state* sh,
+                        const struct level_geometry* levels,
+                        const struct tile_stream_layout* layout,
+                        enum dtype dtype,
+                        enum lod_reduce_method append_reduce_method,
+                        uint32_t active_levels_mask,
+                        struct gpu_pool_view pool0,
+                        CUstream compute)
+{
+  const struct lod_plan* p = &lod->plan;
+  const size_t bytes_per_element = dtype_bpe(dtype);
+
+  for (int lv = 1; lv < p->levels.nlod; ++lv) {
+    if (!(active_levels_mask & (1u << lv)))
+      continue;
+
+    uint64_t n_elements =
+      p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
+
+    uint64_t accum_offset = 0;
+    for (int k = 1; k < lv; ++k)
+      accum_offset +=
+        p->levels.level[k].fixed_dims_count * p->levels.level[k].lod_nelem;
+
+    struct lod_span lev = lod_spans_at(&p->level_spans, lv);
+    CUdeviceptr morton_lv = sh->d_morton + lev.beg * bytes_per_element;
+    CUdeviceptr accum_lv =
+      lod->append_accum.d_accum + accum_offset * bytes_per_element;
+
+    CHECK(Error,
+          lod_accum_emit(morton_lv,
+                         accum_lv,
+                         dtype,
+                         append_reduce_method,
+                         n_elements,
+                         lod->append_accum.counts[lv],
+                         compute) == 0);
+
+    lod->append_accum.counts[lv] = 0;
+
+    CUdeviceptr dst = gpu_pool_view_d(pool0) +
+                      levels->level[lv].chunk_offset * layout->chunk_stride *
+                        bytes_per_element;
+    size_t lv_pool_bytes = levels->level[lv].chunk_count *
+                           layout->chunk_stride * bytes_per_element;
+    CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, compute));
+
+    CHECK(Error,
+          lod_morton_to_chunks_lut(dst,
+                                   morton_lv,
+                                   lod->d_morton_chunk_lut[lv],
+                                   lod->d_morton_fixed_dims_chunk_offsets[lv],
+                                   dtype,
+                                   p->levels.level[lv].lod_nelem,
+                                   p->levels.level[lv].fixed_dims_count,
+                                   compute) == 0);
+  }
+
+  return 0;
+
+Error:
+  return 1;
+}

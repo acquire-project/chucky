@@ -70,3 +70,21 @@ lod_run_epoch(struct lod_state* lod,
               const struct dim_info* dims,
               CUstream compute,
               uint32_t* out_active_mask);
+
+// Bitmask of levels holding accumulated append-dim data.
+uint32_t
+lod_partial_append_mask(const struct lod_state* lod);
+
+// Emit the accumulated append-dim data into the pool: per level, fold the
+// accumulator, zero the level's pool region, scatter morton-ordered values
+// into chunks. pool0 is the base of the caller-acquired fill generation.
+int
+lod_emit_partial_append(struct lod_state* lod,
+                        struct lod_shared_state* sh,
+                        const struct level_geometry* levels,
+                        const struct tile_stream_layout* layout,
+                        enum dtype dtype,
+                        enum lod_reduce_method append_reduce_method,
+                        uint32_t active_levels_mask,
+                        struct gpu_pool_view pool0,
+                        CUstream compute);

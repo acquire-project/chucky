@@ -4,7 +4,6 @@
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/stream.lod.h"
 
-#include "gpu/lod.h"
 #include "gpu/ordering.h"
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -585,16 +584,7 @@ schedule_flush_partial_append(struct stream_engine* e,
   if (!ctx->dims.append_downsample || !ctx->levels.enable_multiscale)
     return writer_ok();
 
-  const struct lod_plan* p = &e->lod.plan;
-  const size_t bytes_per_element = dtype_bpe(ctx->config.dtype);
-  const enum dtype dtype = ctx->config.dtype;
-
-  uint32_t active_levels_mask = 0;
-  for (int lv = 1; lv < p->levels.nlod; ++lv) {
-    if (e->lod.append_accum.counts[lv] > 0)
-      active_levels_mask |= (1u << lv);
-  }
-
+  uint32_t active_levels_mask = lod_partial_append_mask(&e->lod);
   if (!active_levels_mask)
     return writer_ok();
 
@@ -603,59 +593,18 @@ schedule_flush_partial_append(struct stream_engine* e,
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
 
-  for (int lv = 1; lv < p->levels.nlod; ++lv) {
-    if (!(active_levels_mask & (1u << lv)))
-      continue;
-
-    uint64_t n_elements =
-      p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
-
-    uint64_t accum_offset = 0;
-    for (int k = 1; k < lv; ++k)
-      accum_offset +=
-        p->levels.level[k].fixed_dims_count * p->levels.level[k].lod_nelem;
-
-    size_t accum_bpe = dtype_bpe(dtype);
-
-    struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr morton_lv =
-      e->lod_shared.d_morton + lev.beg * bytes_per_element;
-    CUdeviceptr accum_lv =
-      e->lod.append_accum.d_accum + accum_offset * accum_bpe;
-
-    CHECK(Error,
-          lod_accum_emit(morton_lv,
-                         accum_lv,
-                         dtype,
-                         ctx->config.append_reduce_method,
-                         n_elements,
-                         e->lod.append_accum.counts[lv],
-                         e->streams.compute) == 0);
-
-    e->lod.append_accum.counts[lv] = 0;
-
-    // Produce-phase write within the generation acquired at the last swap
-    // (the fill slot is still being filled).
-    CUdeviceptr dst =
-      gpu_pool_view_d(gpu_pool_at(&e->pools.p,
-                                  fc,
-                                  ctx->levels.level[lv].chunk_offset *
-                                    ctx->layout.chunk_stride *
-                                    bytes_per_element));
-    size_t lv_pool_bytes = ctx->levels.level[lv].chunk_count *
-                           ctx->layout.chunk_stride * bytes_per_element;
-    CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, e->streams.compute));
-
-    CHECK(Error,
-          lod_morton_to_chunks_lut(dst,
-                                   morton_lv,
-                                   e->lod.d_morton_chunk_lut[lv],
-                                   e->lod.d_morton_fixed_dims_chunk_offsets[lv],
-                                   dtype,
-                                   p->levels.level[lv].lod_nelem,
-                                   p->levels.level[lv].fixed_dims_count,
-                                   e->streams.compute) == 0);
-  }
+  // Produce-phase writes within the generation acquired at the last swap
+  // (the fill slot is still being filled).
+  CHECK(Error,
+        lod_emit_partial_append(&e->lod,
+                                &e->lod_shared,
+                                &ctx->levels,
+                                &ctx->layout,
+                                ctx->config.dtype,
+                                ctx->config.append_reduce_method,
+                                active_levels_mask,
+                                gpu_pool_at(&e->pools.p, fc, 0),
+                                e->streams.compute) == 0);
 
   if (gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc))
     CHECK(Error,
