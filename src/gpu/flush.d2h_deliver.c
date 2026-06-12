@@ -57,25 +57,6 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 
 // --- Internal helpers ---
 
-// Wait for any pending IO fence on the unified slot (across all LODs that
-// share it). Accumulates wall time into stage->metrics->io_fence_stall.
-static void
-wait_io_fences(struct aggregate_slot* slot,
-               struct shard_sink* sink,
-               struct stream_metrics* metrics)
-{
-  if (!sink->wait_fence)
-    return;
-  struct platform_clock clk = { 0 };
-  platform_toc(&clk);
-  if (slot->io_done.seq > 0)
-    sink->wait_fence(sink, slot->io_done);
-  if (metrics) {
-    float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(&metrics->io_fence_stall, ms, 0, 0);
-  }
-}
-
 static void
 record_flush_metrics(const struct flush_handoff* handoff,
                      const struct aggregate_slot* slot,
@@ -197,103 +178,68 @@ Error:
   return 1;
 }
 
-// Releases the drained kick's tail generation; must run exactly once per
-// drain, on failure exits too — the gate threshold counts kicks, so a
-// skipped release leaves the gate unsatisfiable and destroy's auto-flush
-// hangs polling. Tail-state content is moot once the drain has failed.
-static struct writer_result
-finish_drain(struct gpu_pool* tail, int err)
+// Sized bulk copies for the drained slot. Goes on drain_stream, never
+// d2h_stream — sharing deadlocks against the tail gate (see
+// gpu_streams.drain). The caller's host poll of the chunk index already
+// proves the copy source is stable. Returns the dispatch error without
+// releasing anything — the schedule owns the releases.
+int
+d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
+                       const struct flush_handoff* handoff,
+                       struct aggregate_slot* slot)
 {
-  gpu_pool_release_produce_gen(tail);
-  return err ? writer_error() : writer_ok();
+  const struct batch_aggregate_layout* alayout = &handoff->layout;
+  int dispatch_err = 0;
+  if (alayout->page_size > 0) {
+    for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
+      if (handoff->per_lod_n_active[lv] == 0)
+        continue;
+      const struct lod_segment* seg = &alayout->lods[lv];
+      size_t actual = 0;
+      if (lod_actual_bytes(handoff, slot, lv, &actual))
+        return 1;
+      if (actual == 0)
+        continue;
+      D2H_TRY(dispatch_err,
+              "cuMemcpyDtoHAsync",
+              cuMemcpyDtoHAsync(
+                (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
+                (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
+                actual,
+                stage->drain_stream));
+    }
+  } else if (alayout->total_batch_covering > 0) {
+    const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
+    const size_t total = slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
+    if (total > 0)
+      D2H_TRY(dispatch_err,
+              "cuMemcpyDtoHAsync",
+              cuMemcpyDtoHAsync(slot->h_aggregated,
+                                (CUdeviceptr)slot->d_aggregated,
+                                total,
+                                stage->drain_stream));
+  }
+  return dispatch_err;
 }
 
-static struct writer_result
-sync_and_deliver(struct d2h_deliver_stage* stage,
-                 const struct flush_handoff* handoff,
-                 const struct level_geometry* levels,
-                 const struct dim_info* dims,
-                 const struct tile_stream_layout* layout,
-                 const struct tile_stream_configuration* config,
-                 struct shard_sink* sink,
-                 const struct lod_state* lod,
-                 const struct lod_shared_state* lod_shared,
-                 struct stream_metrics* metrics)
+// Deliver the drained host slot to the sink and upload the next batch's
+// tail state. `shards` is the tail pool's acquired payload. No tail-gate
+// release here — the schedule publishes after this returns.
+struct writer_result
+d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
+                       const struct flush_handoff* handoff,
+                       struct aggregate_slot* slot,
+                       struct compress_agg_array* shards,
+                       const struct level_geometry* levels,
+                       const struct dim_info* dims,
+                       const struct tile_stream_layout* layout,
+                       const struct tile_stream_configuration* config,
+                       struct shard_sink* sink,
+                       const struct lod_state* lod,
+                       const struct lod_shared_state* lod_shared,
+                       struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = NULL;
-  const struct batch_aggregate_layout* alayout = &handoff->layout;
-
-  if (sink->has_error && sink->has_error(sink))
-    goto Error;
-
-  {
-    struct platform_clock kick_clk = { 0 };
-    platform_toc(&kick_clk);
-
-    if (handoff->passthrough) {
-      struct gpu_pool_view hv;
-      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, &hv))
-        goto Error;
-      slot = hv.p;
-    } else {
-      struct gpu_pool_view iv;
-      if (gpu_pool_host_acquire_consume(handoff->agg_index, fc, &iv))
-        goto Error;
-      slot = iv.p;
-
-      // Bulk copies go on drain_stream, never d2h_stream — sharing
-      // deadlocks against the tail gate (see gpu_streams.drain).
-      int dispatch_err = 0;
-      if (alayout->page_size > 0) {
-        for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
-          if (handoff->per_lod_n_active[lv] == 0)
-            continue;
-          const struct lod_segment* seg = &alayout->lods[lv];
-          size_t actual = 0;
-          if (lod_actual_bytes(handoff, slot, lv, &actual))
-            goto Error;
-          if (actual == 0)
-            continue;
-          D2H_TRY(dispatch_err,
-                  "cuMemcpyDtoHAsync",
-                  cuMemcpyDtoHAsync(
-                    (uint8_t*)slot->h_aggregated + seg->data_segment_offset,
-                    (CUdeviceptr)slot->d_aggregated + seg->data_segment_offset,
-                    actual,
-                    stage->drain_stream));
-        }
-      } else if (alayout->total_batch_covering > 0) {
-        const size_t n = alayout->total_batch_covering + (size_t)handoff->nlod;
-        const size_t total =
-          slot->h_offsets[n - 1] + slot->h_permuted_sizes[n - 1];
-        if (total > 0)
-          D2H_TRY(dispatch_err,
-                  "cuMemcpyDtoHAsync",
-                  cuMemcpyDtoHAsync(slot->h_aggregated,
-                                    (CUdeviceptr)slot->d_aggregated,
-                                    total,
-                                    stage->drain_stream));
-      }
-
-      // Always release the slot (SLOT_DRAINED), even if the D2H dispatch
-      // above failed: the host poll below and the next kick's acquire block
-      // on it and would hang otherwise. Release-on-error is harmless
-      // because the stream is already in an error state and the next op
-      // will short-circuit.
-      CHECK(Error,
-            gpu_pool_release_consume(
-              handoff->agg_pool, fc, stage->drain_stream) == 0);
-
-      if (dispatch_err)
-        goto Error;
-      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, NULL))
-        goto Error;
-    }
-
-    float kick_ms = platform_toc(&kick_clk) * 1000.0f;
-    accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
-  }
 
   record_flush_metrics(handoff,
                        slot,
@@ -312,13 +258,6 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    // The consumed direction is the deliver-oldest-first host rule, so no
-    // device wait is queued; the acquire hands out the array whose tail
-    // buffers this delivery uploads.
-    struct gpu_pool_view tv = { 0 };
-    if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
-      goto Error;
-    struct compress_agg_array* shards = tv.p;
     const size_t page_size = shards ? shards->page_size : 0;
 
     // In carry-over mode the bias kernel places each LOD at
@@ -379,8 +318,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     }
 
     // SYNC_MEMOPS on the destinations guarantees these copies have
-    // completed at the device before they return, so the tail-gate publish
-    // in finish_drain cannot outrun them.
+    // completed at the device before they return, so the schedule's
+    // tail-gate publish cannot outrun them.
     if (shards && shards->total_shards > 0 && page_size > 0) {
       CU(Error,
          cuMemcpyHtoD((CUdeviceptr)shards->d_tail_bytes,
@@ -401,8 +340,8 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
       }
     }
 
-    // Record an aggregate IO fence on the unified slot. wait_io_fences()
-    // checks slot->io_done at the next kick.
+    // Record an aggregate IO fence on the unified slot; the schedule waits
+    // it out before the slot's next kick.
     if (sink->record_fence)
       slot->io_done = sink->record_fence(sink);
 
@@ -410,19 +349,19 @@ sync_and_deliver(struct d2h_deliver_stage* stage,
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
   }
 
-  return finish_drain(handoff->tail, 0);
+  return writer_ok();
 
 Error:
-  return finish_drain(handoff->tail, 1);
+  return writer_error();
 }
 
 // Periodic metadata update (append-dim extents per level).
-static int
-maybe_update_metadata(const struct flush_handoff* handoff,
-                      const struct dim_info* dims_info,
-                      const struct tile_stream_configuration* config,
-                      struct shard_sink* sink,
-                      struct platform_clock* metadata_update_clock)
+int
+d2h_deliver_update_metadata(const struct flush_handoff* handoff,
+                            const struct dim_info* dims_info,
+                            const struct tile_stream_configuration* config,
+                            struct shard_sink* sink,
+                            struct platform_clock* metadata_update_clock)
 {
   if (!sink->update_append)
     return 0;
@@ -449,25 +388,15 @@ maybe_update_metadata(const struct flush_handoff* handoff,
   return 0;
 }
 
-// --- Public interface ---
-
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
-                 struct shard_sink* sink,
+                 struct aggregate_slot* slot,
                  CUstream d2h_stream)
 {
   const int fc = handoff->fc;
   const struct batch_aggregate_layout* layout = &handoff->layout;
 
-  // io_done is host-owned slot bookkeeping; its fence must retire before
-  // any device acquire, so peek rather than acquire here.
-  wait_io_fences(gpu_pool_at(handoff->agg_host, fc, 0).p, sink, stage->metrics);
-
-  struct gpu_pool_view v;
-  CHECK(Error,
-        gpu_pool_acquire_consume(handoff->agg_pool, fc, d2h_stream, &v) == 0);
-  struct aggregate_slot* slot = v.p;
   CU(Error, cuEventRecord(stage->t_d2h_start[fc], d2h_stream));
 
   // Compressed codecs use these in drain to size exact per-LOD transfers;
@@ -489,13 +418,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                                 n * sizeof(size_t),
                                 d2h_stream));
   }
-  // Passthrough never polls the chunk index (its drain waits on the
-  // slot-drained edge recorded after the bulk copy below).
-  if (!dispatch_err && !handoff->passthrough &&
-      gpu_pool_release_produce(handoff->agg_index, fc, d2h_stream))
-    dispatch_err = 1;
 
-  // Compressed defers bulk D2H to sync_and_deliver once the chunk index lands.
+  // Compressed defers bulk D2H to drain time, once the chunk index lands.
   if (!dispatch_err && handoff->passthrough && layout->total_data_bytes > 0)
     D2H_TRY(dispatch_err,
             "cuMemcpyDtoHAsync",
@@ -504,48 +428,8 @@ d2h_deliver_kick(struct d2h_deliver_stage* stage,
                               layout->total_data_bytes,
                               d2h_stream));
 
-  // Always release the passthrough slot (SLOT_DRAINED) even on dispatch
-  // error: the drain's host poll blocks on it and would hang otherwise.
-  if (handoff->passthrough) {
-    CHECK(Error,
-          gpu_pool_release_consume(handoff->agg_pool, fc, d2h_stream) == 0);
-  }
-
   return dispatch_err;
 
 Error:
   return 1;
-}
-
-struct writer_result
-d2h_deliver_drain(struct d2h_deliver_stage* stage,
-                  const struct flush_handoff* handoff,
-                  const struct level_geometry* levels,
-                  const struct dim_info* dims,
-                  const struct tile_stream_layout* layout,
-                  const struct tile_stream_configuration* config,
-                  struct shard_sink* sink,
-                  const struct lod_state* lod,
-                  const struct lod_shared_state* lod_shared,
-                  struct stream_metrics* metrics,
-                  struct platform_clock* metadata_update_clock,
-                  CUstream d2h_stream)
-{
-  (void)d2h_stream; // drain-time copies use stage->drain_stream
-  struct writer_result r = sync_and_deliver(stage,
-                                            handoff,
-                                            levels,
-                                            dims,
-                                            layout,
-                                            config,
-                                            sink,
-                                            lod,
-                                            lod_shared,
-                                            metrics);
-  if (!r.error) {
-    if (maybe_update_metadata(
-          handoff, dims, config, sink, metadata_update_clock))
-      return writer_error();
-  }
-  return r;
 }

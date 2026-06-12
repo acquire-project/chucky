@@ -16,7 +16,16 @@ struct stream_context;
 struct compress_agg_array;
 struct compress_agg_stage;
 struct compress_agg_input;
+struct d2h_deliver_stage;
 struct level_geometry;
+struct shard_sink;
+struct dim_info;
+struct tile_stream_layout;
+struct tile_stream_configuration;
+struct lod_state;
+struct lod_shared_state;
+struct stream_metrics;
+struct platform_clock;
 
 struct gpu_streams
 {
@@ -106,6 +115,36 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            int lod_active,
                            CUstream compress_stream,
                            struct flush_handoff* out);
+
+// Slot-reuse fence wait plus the slot acquire around the D2H kick payload.
+// Releases the chunk-index facet (compressed) or the slot itself
+// (passthrough, whose drain has no chunk index to poll).
+int
+schedule_d2h_kick(struct d2h_deliver_stage* stage,
+                  const struct flush_handoff* handoff,
+                  struct shard_sink* sink,
+                  CUstream d2h_stream);
+
+// Host-acquire the drained slot per codec shape, deliver it to the sink,
+// and publish the tail generation exactly once — on failure paths too.
+struct writer_result
+schedule_d2h_drain(struct d2h_deliver_stage* stage,
+                   const struct flush_handoff* handoff,
+                   const struct level_geometry* levels,
+                   const struct dim_info* dims,
+                   const struct tile_stream_layout* layout,
+                   const struct tile_stream_configuration* config,
+                   struct shard_sink* sink,
+                   const struct lod_state* lod,
+                   const struct lod_shared_state* lod_shared,
+                   struct stream_metrics* metrics,
+                   struct platform_clock* metadata_update_clock);
+
+// Quiesce the output slots for the departing sink before another array
+// binds in (multiarray): stale fences only retire on the sink that issued
+// them.
+void
+schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink);
 
 // Count one epoch into the batch being filled; kick (and, per depth, drain)
 // at the batch boundary.

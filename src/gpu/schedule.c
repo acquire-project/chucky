@@ -10,6 +10,7 @@
 #include "platform/platform.h"
 #include "util/metric.h"
 #include "util/prelude.h"
+#include "zarr/shard_delivery.h"
 
 #include <string.h>
 
@@ -135,6 +136,168 @@ Error:
   return 1;
 }
 
+// --- D2H kick / drain ---
+
+// Wait for any pending IO fence on the unified slot (across all LODs that
+// share it). Accumulates wall time into io_fence_stall.
+static void
+wait_io_fences(struct aggregate_slot* slot,
+               struct shard_sink* sink,
+               struct stream_metrics* metrics)
+{
+  if (!sink->wait_fence)
+    return;
+  struct platform_clock clk = { 0 };
+  platform_toc(&clk);
+  if (slot->io_done.seq > 0)
+    sink->wait_fence(sink, slot->io_done);
+  if (metrics) {
+    float ms = (float)(platform_toc(&clk) * 1000.0);
+    accumulate_metric_ms(&metrics->io_fence_stall, ms, 0, 0);
+  }
+}
+
+int
+schedule_d2h_kick(struct d2h_deliver_stage* stage,
+                  const struct flush_handoff* handoff,
+                  struct shard_sink* sink,
+                  CUstream d2h_stream)
+{
+  const int fc = handoff->fc;
+
+  // io_done is host-owned slot bookkeeping; its fence must retire before
+  // any device acquire, so peek rather than acquire here.
+  wait_io_fences(gpu_pool_at(handoff->agg_host, fc, 0).p, sink, stage->metrics);
+
+  struct gpu_pool_view v;
+  CHECK(Error,
+        gpu_pool_acquire_consume(handoff->agg_pool, fc, d2h_stream, &v) == 0);
+
+  int dispatch_err = d2h_deliver_kick(stage, handoff, v.p, d2h_stream);
+
+  // Passthrough never polls the chunk index (its drain waits on the
+  // slot-drained edge recorded after the kick's bulk copy).
+  if (!dispatch_err && !handoff->passthrough &&
+      gpu_pool_release_produce(handoff->agg_index, fc, d2h_stream))
+    dispatch_err = 1;
+
+  // Always release the passthrough slot (SLOT_DRAINED) even on dispatch
+  // error: the drain's host poll blocks on it and would hang otherwise.
+  if (handoff->passthrough)
+    CHECK(Error,
+          gpu_pool_release_consume(handoff->agg_pool, fc, d2h_stream) == 0);
+
+  return dispatch_err;
+
+Error:
+  return 1;
+}
+
+struct writer_result
+schedule_d2h_drain(struct d2h_deliver_stage* stage,
+                   const struct flush_handoff* handoff,
+                   const struct level_geometry* levels,
+                   const struct dim_info* dims,
+                   const struct tile_stream_layout* layout,
+                   const struct tile_stream_configuration* config,
+                   struct shard_sink* sink,
+                   const struct lod_state* lod,
+                   const struct lod_shared_state* lod_shared,
+                   struct stream_metrics* metrics,
+                   struct platform_clock* metadata_update_clock)
+{
+  const int fc = handoff->fc;
+  struct aggregate_slot* slot = NULL;
+  int err = 1;
+
+  if (sink->has_error && sink->has_error(sink))
+    goto Done;
+
+  {
+    struct platform_clock kick_clk = { 0 };
+    platform_toc(&kick_clk);
+
+    if (handoff->passthrough) {
+      struct gpu_pool_view hv;
+      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, &hv))
+        goto Done;
+      slot = hv.p;
+    } else {
+      struct gpu_pool_view iv;
+      if (gpu_pool_host_acquire_consume(handoff->agg_index, fc, &iv))
+        goto Done;
+      slot = iv.p;
+
+      int dispatch_err = d2h_deliver_drain_copy(stage, handoff, slot);
+
+      // Always release the slot (SLOT_DRAINED), even if the D2H dispatch
+      // above failed: the host poll below and the next kick's acquire block
+      // on it and would hang otherwise. Release-on-error is harmless
+      // because the stream is already in an error state and the next op
+      // will short-circuit.
+      if (gpu_pool_release_consume(handoff->agg_pool, fc, stage->drain_stream))
+        goto Done;
+
+      if (dispatch_err)
+        goto Done;
+      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, NULL))
+        goto Done;
+    }
+
+    float kick_ms = platform_toc(&kick_clk) * 1000.0f;
+    accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
+  }
+
+  {
+    // The consumed direction is the deliver-oldest-first host rule, so no
+    // device wait is queued; the acquire hands out the array whose tail
+    // buffers this delivery uploads.
+    struct gpu_pool_view tv = { 0 };
+    if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
+      goto Done;
+    err = d2h_deliver_drain_sink(stage,
+                                 handoff,
+                                 slot,
+                                 tv.p,
+                                 levels,
+                                 dims,
+                                 layout,
+                                 config,
+                                 sink,
+                                 lod,
+                                 lod_shared,
+                                 metrics)
+            .error;
+  }
+
+Done:
+  // The drained kick's tail generation releases exactly once, on failure
+  // exits too — the gate threshold counts kicks, so a skipped release
+  // leaves the gate unsatisfiable and destroy's auto-flush hangs polling.
+  // Tail-state content is moot once the drain has failed.
+  gpu_pool_release_produce_gen(handoff->tail);
+  if (err)
+    return writer_error();
+  if (d2h_deliver_update_metadata(
+        handoff, dims, config, sink, metadata_update_clock))
+    return writer_error();
+  return writer_ok();
+}
+
+void
+schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
+{
+  cuStreamSynchronize(e->streams.d2h);
+  // Host-ordered slot access: the sync above quiesced the slots.
+  for (int fc = 0; fc < 2; ++fc) {
+    struct aggregate_slot* slot =
+      gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
+    if (slot->io_done.seq > 0 && sink->wait_fence)
+      sink->wait_fence(sink, slot->io_done);
+    slot->io_done.seq = 0;
+  }
+}
+
 // --- Helpers ---
 
 static struct compress_agg_input
@@ -212,18 +375,17 @@ drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
-  struct writer_result r = d2h_deliver_drain(&e->d2h_deliver,
-                                             &s->handoff,
-                                             &ctx->levels,
-                                             &ctx->dims,
-                                             &ctx->layout,
-                                             &ctx->config,
-                                             ctx->sink,
-                                             &e->lod,
-                                             &e->lod_shared,
-                                             &e->metrics,
-                                             &e->metadata_update_clock,
-                                             e->streams.d2h);
+  struct writer_result r = schedule_d2h_drain(&e->d2h_deliver,
+                                              &s->handoff,
+                                              &ctx->levels,
+                                              &ctx->dims,
+                                              &ctx->layout,
+                                              &ctx->config,
+                                              ctx->sink,
+                                              &e->lod,
+                                              &e->lod_shared,
+                                              &e->metrics,
+                                              &e->metadata_update_clock);
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
@@ -254,10 +416,10 @@ kick_batch(struct stream_engine* e,
                                    &handoff) == 0);
 
   CHECK(Error,
-        d2h_deliver_kick(&e->d2h_deliver,
-                         &handoff,
-                         ctx->sink,
-                         e->streams.d2h) == 0);
+        schedule_d2h_kick(&e->d2h_deliver,
+                          &handoff,
+                          ctx->sink,
+                          e->streams.d2h) == 0);
 
   e->sched.slot[fc].handoff = handoff;
   e->sched.slot[fc].kick_seq = e->sched.next_seq++;

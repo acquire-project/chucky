@@ -160,21 +160,19 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                    c->compute,
                                    handoff) == 0);
 
-  CHECK(Fail,
-        d2h_deliver_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
+  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
 
-  struct writer_result r = d2h_deliver_drain(&c->d2h,
-                                             handoff,
-                                             &c->cl.levels,
-                                             &c->cl.dims,
-                                             &c->cl.layouts[0],
-                                             config,
-                                             sink,
-                                             &c->lod,
-                                             &c->lod_shared,
-                                             &c->metrics,
-                                             &c->metadata_clock,
-                                             c->d2h_stream);
+  struct writer_result r = schedule_d2h_drain(&c->d2h,
+                                              handoff,
+                                              &c->cl.levels,
+                                              &c->cl.dims,
+                                              &c->cl.layouts[0],
+                                              config,
+                                              sink,
+                                              &c->lod,
+                                              &c->lod_shared,
+                                              &c->metrics,
+                                              &c->metadata_clock);
   CHECK(Fail, r.error == 0);
 
   return 0;
@@ -713,7 +711,7 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, sink.finalize_count == 1);
 
   // Cycle 3: reuse fc=0. compress_agg's GPU_EDGE_SLOT_DRAINED wait depends
-  // on sync_and_deliver having recorded the edge in cycle 1.
+  // on the drain having recorded the edge in cycle 1.
   CHECK(
     Fail,
     fill_pool_epoch(

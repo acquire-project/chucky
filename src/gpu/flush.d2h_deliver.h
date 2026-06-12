@@ -15,24 +15,43 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 void
 d2h_deliver_destroy(struct d2h_deliver_stage* stage);
 
-// Pass-through codecs complete the D2H here; compressed codecs only land
-// the chunk index and finish in drain (bulk D2H is sized by actual bytes).
+// Payload phases over an already-acquired slot; the acquires and releases
+// around them are placed by the schedule (schedule_d2h_kick /
+// schedule_d2h_drain).
+
+// Chunk-index copies. Pass-through codecs also run the bulk D2H here so it
+// overlaps the next batch's compute; compressed codecs land the chunk index
+// only and size the bulk copies at drain time.
 int
 d2h_deliver_kick(struct d2h_deliver_stage* stage,
                  const struct flush_handoff* handoff,
-                 struct shard_sink* sink,
+                 struct aggregate_slot* slot,
                  CUstream d2h_stream);
 
+// Compressed-only: per-LOD bulk copies sized from the landed chunk index.
+int
+d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
+                       const struct flush_handoff* handoff,
+                       struct aggregate_slot* slot);
+
+// Sink delivery + tail-state upload for the host-complete slot.
 struct writer_result
-d2h_deliver_drain(struct d2h_deliver_stage* stage,
-                  const struct flush_handoff* handoff,
-                  const struct level_geometry* levels,
-                  const struct dim_info* dims,
-                  const struct tile_stream_layout* layout,
-                  const struct tile_stream_configuration* config,
-                  struct shard_sink* sink,
-                  const struct lod_state* lod,
-                  const struct lod_shared_state* lod_shared,
-                  struct stream_metrics* metrics,
-                  struct platform_clock* metadata_update_clock,
-                  CUstream d2h_stream);
+d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
+                       const struct flush_handoff* handoff,
+                       struct aggregate_slot* slot,
+                       struct compress_agg_array* shards,
+                       const struct level_geometry* levels,
+                       const struct dim_info* dims,
+                       const struct tile_stream_layout* layout,
+                       const struct tile_stream_configuration* config,
+                       struct shard_sink* sink,
+                       const struct lod_state* lod,
+                       const struct lod_shared_state* lod_shared,
+                       struct stream_metrics* metrics);
+
+int
+d2h_deliver_update_metadata(const struct flush_handoff* handoff,
+                            const struct dim_info* dims_info,
+                            const struct tile_stream_configuration* config,
+                            struct shard_sink* sink,
+                            struct platform_clock* metadata_update_clock);
