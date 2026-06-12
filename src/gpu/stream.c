@@ -41,6 +41,20 @@ stream_engine_init_metrics(int enable_multiscale)
   };
 }
 
+void
+stream_engine_attach_edge_stalls(struct stream_engine* e)
+{
+  e->metrics.edge_stall[0] = mk_stream_metric("StagingFree");
+  e->metrics.edge_stall[1] = mk_stream_metric("ChunkIndex");
+  e->metrics.edge_stall[2] = mk_stream_metric("D2HDone");
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_STAGING_FREE, &e->metrics.edge_stall[0]);
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_CHUNK_INDEX_READY, &e->metrics.edge_stall[1]);
+  gpu_ordering_attach_stall_metric(
+    &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
+}
+
 void*
 stream_engine_pool_epoch(struct stream_engine* e,
                          struct stream_context* ctx,

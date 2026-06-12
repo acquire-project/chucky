@@ -300,6 +300,7 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   out->engine.metrics =
     stream_engine_init_metrics(out->ctx.levels.enable_multiscale);
   out->engine.d2h_deliver.metrics = &out->engine.metrics;
+  stream_engine_attach_edge_stalls(&out->engine);
 
   // Initialize metadata update timer
   out->engine.metadata_update_clock = (struct platform_clock){ 0 };

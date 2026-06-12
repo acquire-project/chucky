@@ -319,6 +319,11 @@ stream_engine_pool_epoch(struct stream_engine* e,
 struct stream_metrics
 stream_engine_init_metrics(int enable_multiscale);
 
+// Point the ordering host-poll edges at this engine's edge_stall metrics.
+// Call after assigning engine.metrics; the bench prints the rows.
+void
+stream_engine_attach_edge_stalls(struct stream_engine* e);
+
 // Append data to the stream. Handles staging, dispatch, epoch boundaries,
 // batch flush, and backpressure. Used by both single-array and multiarray.
 struct writer_result

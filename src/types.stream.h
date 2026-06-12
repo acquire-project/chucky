@@ -55,6 +55,10 @@ struct stream_metrics
                                         // before aggregate in
                                         // cpu_pipeline_flush_batch.
   struct stream_metric backpressure; // wait at epoch boundary for IO to drain
+  // Host-poll blocked time attributed to GPU ordering edges (gpu/ordering.h:
+  // staging_free, chunk_index_ready, d2h_done). GPU engines wire these up;
+  // entries stay zero (count 0) elsewhere.
+  struct stream_metric edge_stall[3];
   float max_append_ms;               // longest tile_stream_gpu_append body
   size_t peak_pending_bytes;         // max sink->pending_bytes seen
 };

@@ -135,10 +135,17 @@ print_bench_report(const struct stream_metrics* metrics,
 
   // Stall stats — wall-clock time the host is blocked waiting. Emitted only
   // if any stall was observed.
+  const size_t n_edge_stalls =
+    sizeof(metrics->edge_stall) / sizeof(metrics->edge_stall[0]);
+  int have_edge_stalls = 0;
+  for (size_t i = 0; i < n_edge_stalls; ++i)
+    if (metrics->edge_stall[i].count > 0)
+      have_edge_stalls = 1;
   int have_stalls =
     metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
     metrics->io_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
-    metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0;
+    metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
+    have_edge_stalls;
   if (have_stalls) {
     fputc('\n', stderr);
     print_report("  --- Stall stats ---");
@@ -146,6 +153,8 @@ print_bench_report(const struct stream_metrics* metrics,
     print_metric_row(&metrics->kick_sync_stall);
     print_metric_row(&metrics->io_fence_stall);
     print_metric_row(&metrics->backpressure);
+    for (size_t i = 0; i < n_edge_stalls; ++i)
+      print_metric_row(&metrics->edge_stall[i]);
     print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);

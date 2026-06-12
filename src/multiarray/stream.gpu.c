@@ -938,6 +938,7 @@ multiarray_tile_stream_gpu_create(
     }
   }
   ms->engine.metrics = stream_engine_init_metrics(all_multiscale);
+  stream_engine_attach_edge_stalls(&ms->engine);
   ms->engine.metadata_update_clock = (struct platform_clock){ 0 };
   platform_toc(&ms->engine.metadata_update_clock);
 
