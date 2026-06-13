@@ -416,11 +416,15 @@ run_bench(const struct bench_config* cfg)
   };
 
   uint64_t est_total_chunks = 0;
+  size_t est_total_bytes = 0;
+  size_t est_pinned_bytes = 0;
 
   if (cfg->backend == BENCH_GPU) {
     struct tile_stream_memory_info mem;
     if (tile_stream_gpu_memory_estimate(&config, 0, &mem) == 0) {
       est_total_chunks = mem.total_chunks;
+      est_total_bytes = mem.device_bytes;
+      est_pinned_bytes = mem.host_pinned_bytes;
       char a[32], b[32];
       format_bytes(a, sizeof(a), mem.device_bytes);
       format_bytes(b, sizeof(b), mem.host_pinned_bytes);
@@ -447,6 +451,7 @@ run_bench(const struct bench_config* cfg)
     struct tile_stream_cpu_memory_info mem;
     if (tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0) {
       est_total_chunks = mem.total_chunks;
+      est_total_bytes = mem.heap_bytes;
       char a[32], b[32];
       format_bytes(a, sizeof(a), mem.heap_bytes);
       print_report("  CPU memory:  %s heap", a);
@@ -560,7 +565,9 @@ run_bench(const struct bench_config* cfg)
                             total_elements,
                             wall_s,
                             init_s,
-                            flush_s);
+                            flush_s,
+                            est_total_bytes,
+                            est_pinned_bytes);
     }
   }
 
