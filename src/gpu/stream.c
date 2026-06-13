@@ -239,6 +239,12 @@ Error:
 struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 {
+  // A create that fails before sizing the layout leaves epoch_elements at 0;
+  // the auto-flush in destroy would then divide by it below. Nothing was
+  // ever sized, so there is nothing to flush.
+  if (ctx->layout.epoch_elements == 0)
+    return writer_ok();
+
   if (e->stage.bytes_written > 0) {
     if (engine_dispatch_ingest(e, ctx))
       return writer_error();
