@@ -322,7 +322,9 @@ static void
 delivery_main(void* arg)
 {
   struct gpu_delivery* d = (struct gpu_delivery*)arg;
-  cuCtxSetCurrent(d->cuda);
+  // On failure the first drain's CUDA call fails and surfaces through the
+  // worker result at join; warn so the root cause is visible.
+  CUWARN(cuCtxSetCurrent(d->cuda));
   platform_mutex_lock(d->mu);
   for (;;) {
     int fc = -1;
