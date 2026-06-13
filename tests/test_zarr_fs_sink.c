@@ -383,7 +383,7 @@ test_multiscale_metadata(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 3, dtype_u16, 0, 0, codec, NULL, 1) == 0);
+          &z, tmpdir, "", dims, 3, dtype_u16, 0, codec, NULL, 1) == 0);
 
   // Check root zarr.json has multiscales attribute
   {
@@ -472,7 +472,7 @@ test_multiscale_scale_non_pow2(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 3, dtype_u16, 0, 0, codec, NULL, 1) == 0);
+          &z, tmpdir, "", dims, 3, dtype_u16, 0, codec, NULL, 1) == 0);
 
   {
     char* data;
@@ -533,7 +533,7 @@ test_multiscale_scale_size1(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 3, dtype_u16, 0, 0, codec, NULL, 1) == 0);
+          &z, tmpdir, "", dims, 3, dtype_u16, 0, codec, NULL, 1) == 0);
 
   {
     char* data;
@@ -597,7 +597,7 @@ test_multiscale_unit_scale(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 3, dtype_u16, 0, 0, codec, axes, 1) == 0);
+          &z, tmpdir, "", dims, 3, dtype_u16, 0, codec, axes, 1) == 0);
 
   {
     char* data;
@@ -859,7 +859,7 @@ test_multiscale_unbounded(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 3, dtype_u16, 0, 0, codec, NULL, 1) == 0);
+          &z, tmpdir, "", dims, 3, dtype_u16, 0, codec, NULL, 1) == 0);
 
   // Check root zarr.json exists with multiscales
   {
@@ -2095,7 +2095,7 @@ test_nested_multiscale_array_name(const char* tmpdir)
   CHECK(
     Fail,
     test_zarr_multiscale_open(
-      &z, tmpdir, "path/to/group", dims, 2, dtype_u16, 0, 0, codec, NULL, 1) ==
+      &z, tmpdir, "path/to/group", dims, 2, dtype_u16, 0, codec, NULL, 1) ==
       0);
 
   // Check root group zarr.json
@@ -2176,7 +2176,7 @@ test_multiscale_chunk_clamp_metadata(const char* tmpdir)
   struct codec_config codec = { 0 };
   CHECK(Fail,
         test_zarr_multiscale_open(
-          &z, tmpdir, "", dims, 2, dtype_u16, 0, 0, codec, NULL, 1) == 0);
+          &z, tmpdir, "", dims, 2, dtype_u16, 0, codec, NULL, 1) == 0);
 
   // L0 zarr.json: shape=[32,10], chunk_size=8 in both dims
   {
