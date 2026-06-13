@@ -2,6 +2,14 @@
 
 #include "gpu/stream.internal.h"
 
+struct threadpool;
+
+// memcpy into pinned staging, split across the pool when the payload is
+// large enough to pay for the dispatch. The destination lies within one
+// acquired h_in generation owned by the caller, so no ordering is queued.
+void
+ingest_copy(struct threadpool* pool, void* dst, const void* src, size_t n);
+
 // Allocate double-buffered staging buffers and timing events; ordering
 // events live in ord. Returns 0 on success.
 int

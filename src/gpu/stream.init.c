@@ -8,6 +8,7 @@
 #include "lod/lod_plan.h"
 #include "platform/platform.h"
 #include "stream/config.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 #include "writer.h"
 
@@ -45,6 +46,8 @@ engine_limits_accumulate(struct engine_limits* lim,
   lim->buffer_capacity =
     max_sz(lim->buffer_capacity,
            (config->buffer_capacity_bytes + 4095) & ~(size_t)4095);
+  if (config->max_threads > lim->max_threads)
+    lim->max_threads = config->max_threads;
   lim->pool_bytes =
     max_sz(lim->pool_bytes, (size_t)K * total_chunks * chunk_stride * bpe);
   lim->chunk_bytes = max_sz(lim->chunk_bytes, chunk_stride * bpe);
@@ -123,6 +126,22 @@ stream_engine_init(struct stream_engine* e,
         ingest_init(
           &e->stage, lim->buffer_capacity, &e->ord, e->streams.compute) == 0);
 
+  {
+    // The staging copy is DRAM-bound; a few helpers saturate it. NULL pool
+    // means copies run serially on the producer.
+    int n = lim->max_threads > 0 ? lim->max_threads
+                                 : platform_default_thread_count();
+    int helpers = n - 1;
+    if (helpers > 3)
+      helpers = 3;
+    e->copy_pool = threadpool_new(helpers < 0 ? 0 : helpers);
+    if (!e->copy_pool)
+      log_warn("staging copy pool unavailable; copies run on the producer");
+  }
+
+  if (gpu_delivery_init(&e->delivery))
+    log_warn("delivery worker unavailable; drains run on the producer");
+
   e->pool_bytes = lim->pool_bytes;
   gpu_pool_init(
     &e->pools.p, &e->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
@@ -175,6 +194,10 @@ Fail:
 void
 stream_engine_destroy(struct stream_engine* e)
 {
+  // Before any stage teardown: queued jobs reference the stages and pools.
+  gpu_delivery_stop_join(&e->delivery);
+  threadpool_free(e->copy_pool);
+  e->copy_pool = NULL;
   d2h_deliver_destroy(&e->d2h_deliver);
   compress_agg_destroy_shared(&e->compress_agg);
   lod_shared_state_destroy(&e->lod_shared);
@@ -315,6 +338,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
       log_error("GPU stream auto-flush failed during destroy");
     s->flushed = 1;
   }
+
+  // A failed flush can leave delivery jobs queued; run them out before the
+  // forced gate release below — a worker publish after release_all would
+  // regress the published count and re-park the gate.
+  gpu_delivery_stop_join(&s->engine.delivery);
 
   // A failed flush can leave a kick parked on the tail gate; release it or
   // the syncs below never return.

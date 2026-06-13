@@ -12,6 +12,8 @@
 #include "zarr/shard_delivery.h"
 #include <stddef.h>
 
+struct threadpool;
+
 // --- Sub-struct definitions (shared between engine and internal headers) ---
 
 struct pool_state
@@ -272,6 +274,8 @@ struct stream_engine
   struct d2h_deliver_stage d2h_deliver;
   struct lod_shared_state lod_shared; // engine-owned shared LOD resources
   struct lod_state lod;               // per-array; overwritten on array switch
+  struct threadpool* copy_pool;       // staging-copy helpers (append body)
+  struct gpu_delivery delivery;       // drain worker (pipelined schedule)
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
 };
@@ -296,6 +300,7 @@ struct engine_limits
   size_t lod_linear_bytes;
   size_t lod_morton_bytes;
   int any_multiscale;
+  int max_threads; // max over arrays; 0 = platform default
 };
 
 // Fold one array's requirements into *lim (max per field). Call once per

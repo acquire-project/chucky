@@ -18,7 +18,7 @@ struct throttled_shard_sink
   struct shard_sink base;
   struct throttled_shard_writer writer; // single shared writer
   struct io_queue* queue;               // owned
-  uint64_t queued_bytes;                // main-thread only
+  _Atomic uint64_t queued_bytes;        // delivery thread posts, producer reads
   _Atomic uint64_t retired_bytes;       // worker, atomic
   _Atomic uint64_t total_bytes;         // reporting
   uint64_t latency_ns;                  // fixed per-job cost

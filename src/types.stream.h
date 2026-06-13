@@ -39,12 +39,13 @@ struct stream_metrics
   // flush_stall, kick_sync_stall, backpressure are GPU-only. io_fence_stall
   // is populated on both paths.
   //
-  // flush_stall is a SUPERSET: it wraps the entire schedule_d2h_drain call,
-  // which already times kick_sync_stall and sink internally. Summing
-  // flush_stall + kick_sync_stall + sink over-counts wall time. To isolate
-  // the drain-side overhead not already attributed elsewhere, compute
-  // flush_stall - kick_sync_stall - (sink portion inside drain).
-  struct stream_metric flush_stall;     // whole schedule_d2h_drain call
+  // On the pipelined schedule the drain runs on the delivery worker:
+  // kick_sync_stall and sink then accumulate worker-side and OVERLAP
+  // producer time — do not sum them with wall time. flush_stall is the
+  // producer's join wait in drain_slot (the producer-visible cost). On
+  // depth-1 schedules the drain runs inline and flush_stall is a superset
+  // of kick_sync_stall + sink, as before.
+  struct stream_metric flush_stall;     // producer join wait / inline drain
                                         // (drain_slot in schedule.c)
   // Passthrough: GPU_EDGE_D2H_DONE poll only. Compressed:
   // GPU_EDGE_CHUNK_INDEX_READY poll + per-LOD bulk D2H dispatch +

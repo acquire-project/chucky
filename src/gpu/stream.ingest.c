@@ -2,9 +2,35 @@
 
 #include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
 #include <string.h>
+
+struct copy_slices
+{
+  uint8_t* dst;
+  const uint8_t* src;
+};
+
+static void
+copy_slice(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct copy_slices* c = (struct copy_slices*)vctx;
+  memcpy(c->dst + beg, c->src + beg, end - beg);
+}
+
+void
+ingest_copy(struct threadpool* pool, void* dst, const void* src, size_t n)
+{
+  if (!pool || n < (2u << 20)) {
+    memcpy(dst, src, n);
+    return;
+  }
+  struct copy_slices c = { (uint8_t*)dst, (const uint8_t*)src };
+  threadpool_for_n(pool, n, copy_slice, &c);
+}
 
 int
 ingest_init(struct staging_state* stage,

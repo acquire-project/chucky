@@ -11,6 +11,7 @@
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
+#include <assert.h>
 #include <string.h>
 
 // --- Streams ---
@@ -297,6 +298,146 @@ schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
   }
 }
 
+// --- Delivery worker ---
+
+// The whole drain for one kicked slot; runs on the worker when queued,
+// inline otherwise.
+static struct writer_result
+drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
+{
+  return schedule_d2h_drain(&e->d2h_deliver,
+                            &e->sched.slot[fc].handoff,
+                            &ctx->levels,
+                            &ctx->dims,
+                            &ctx->layout,
+                            &ctx->config,
+                            ctx->sink,
+                            &e->lod,
+                            &e->lod_shared,
+                            &e->metrics,
+                            &e->metadata_update_clock);
+}
+
+static void
+delivery_main(void* arg)
+{
+  struct gpu_delivery* d = (struct gpu_delivery*)arg;
+  // On failure the first drain's CUDA call fails and surfaces through the
+  // worker result at join; warn so the root cause is visible.
+  CUWARN(cuCtxSetCurrent(d->cuda));
+  platform_mutex_lock(d->mu);
+  for (;;) {
+    int fc = -1;
+    for (int i = 0; i < 2; ++i) {
+      struct delivery_job* j = &d->job[i];
+      if (j->queued && !j->done && (fc < 0 || j->seq < d->job[fc].seq))
+        fc = i;
+    }
+    if (fc < 0) {
+      if (d->stop)
+        break;
+      platform_cond_wait(d->cv, d->mu);
+      continue;
+    }
+    struct delivery_job* j = &d->job[fc];
+    const struct delivery_job* o = &d->job[fc ^ 1];
+    int oldest = !o->queued || o->done || j->seq < o->seq;
+    platform_mutex_unlock(d->mu);
+
+    gpu_edge_host_rule(&j->e->ord, GPU_EDGE_DELIVER_OLDEST_FIRST, oldest);
+    struct writer_result r = drain_payload(j->e, j->ctx, fc);
+
+    platform_mutex_lock(d->mu);
+    j->result = r;
+    j->done = 1;
+    platform_cond_broadcast(d->cv);
+  }
+  platform_mutex_unlock(d->mu);
+}
+
+int
+gpu_delivery_init(struct gpu_delivery* d)
+{
+  memset(d, 0, sizeof(*d));
+  if (cuCtxGetCurrent(&d->cuda) != CUDA_SUCCESS || !d->cuda)
+    return 1;
+  d->mu = platform_mutex_new();
+  d->cv = platform_cond_new();
+  CHECK(Fail, d->mu && d->cv);
+  d->thread = platform_thread_start(delivery_main, d);
+  CHECK(Fail, d->thread);
+  return 0;
+
+Fail:
+  platform_cond_free(d->cv);
+  platform_mutex_free(d->mu);
+  memset(d, 0, sizeof(*d));
+  return 1;
+}
+
+void
+gpu_delivery_enqueue(struct gpu_delivery* d,
+                     struct stream_engine* e,
+                     struct stream_context* ctx,
+                     int fc,
+                     uint64_t seq)
+{
+  if (!d->thread)
+    return;
+  platform_mutex_lock(d->mu);
+  // The drain-before-rekick rule keeps a slot's previous job joined before
+  // its next kick can enqueue here.
+  assert(!d->job[fc].queued);
+  d->job[fc] = (struct delivery_job){
+    .queued = 1,
+    .seq = seq,
+    .e = e,
+    .ctx = ctx,
+  };
+  platform_cond_broadcast(d->cv);
+  platform_mutex_unlock(d->mu);
+}
+
+int
+gpu_delivery_pending(struct gpu_delivery* d, int fc)
+{
+  if (!d->thread)
+    return 0;
+  platform_mutex_lock(d->mu);
+  int p = d->job[fc].queued;
+  platform_mutex_unlock(d->mu);
+  return p;
+}
+
+struct writer_result
+gpu_delivery_join(struct gpu_delivery* d, int fc)
+{
+  platform_mutex_lock(d->mu);
+  while (!d->job[fc].done)
+    platform_cond_wait(d->cv, d->mu);
+  struct writer_result r = d->job[fc].result;
+  d->job[fc] = (struct delivery_job){ 0 };
+  platform_mutex_unlock(d->mu);
+  return r;
+}
+
+void
+gpu_delivery_stop_join(struct gpu_delivery* d)
+{
+  if (!d->thread)
+    return;
+  platform_mutex_lock(d->mu);
+  d->stop = 1;
+  platform_cond_broadcast(d->cv);
+  platform_mutex_unlock(d->mu);
+  platform_thread_join(d->thread);
+  d->thread = NULL;
+  platform_cond_free(d->cv);
+  d->cv = NULL;
+  platform_mutex_free(d->mu);
+  d->mu = NULL;
+}
+
 // --- Helpers ---
 
 static struct compress_agg_input
@@ -355,8 +496,8 @@ Error:
   return 1;
 }
 
-// The handoff host-sync is near-zero in steady state; the whole call
-// accumulates flush_stall.
+// The join wait is near-zero in steady state; the whole call accumulates
+// flush_stall.
 static struct writer_result
 drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
@@ -372,17 +513,9 @@ drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
-  struct writer_result r = schedule_d2h_drain(&e->d2h_deliver,
-                                              &s->handoff,
-                                              &ctx->levels,
-                                              &ctx->dims,
-                                              &ctx->layout,
-                                              &ctx->config,
-                                              ctx->sink,
-                                              &e->lod,
-                                              &e->lod_shared,
-                                              &e->metrics,
-                                              &e->metadata_update_clock);
+  struct writer_result r = gpu_delivery_pending(&e->delivery, fc)
+                             ? gpu_delivery_join(&e->delivery, fc)
+                             : drain_payload(e, ctx, fc);
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
@@ -419,6 +552,12 @@ kick_batch(struct stream_engine* e,
   e->sched.slot[fc].handoff = handoff;
   e->sched.slot[fc].kick_seq = e->sched.next_seq++;
   e->sched.slot[fc].kicked = 1;
+
+  // Depth-1 schedules drain inline right after this kick; the host
+  // ordering they exist for must not move to another thread.
+  if (e->sched.depth == SCHEDULE_PIPELINED)
+    gpu_delivery_enqueue(
+      &e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
 
   return 0;
 

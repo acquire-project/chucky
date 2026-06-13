@@ -1,7 +1,10 @@
 # GPU stream orchestration: target design and migration plan
 
-Status: accepted direction, migration in progress (step 2).
-Base: main + #142. Related: #140, #141, PR #142, `gpu-output-slot-ledger.md`.
+Status: steps 1–4 merged (#143 edge table, #144 engine unification, #148
+resource pools, #149 scheduler); step 5 (workers) in review. The §5
+ambitions beyond data-movement workers (CPU/GPU sharing one orchestration,
+multiarray as composition) remain open follow-ups.
+Related: #140, #141, PR #142, `gpu-output-slot-ledger.md`.
 
 ## Why
 
