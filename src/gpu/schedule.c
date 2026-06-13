@@ -494,7 +494,6 @@ Error:
   return 1;
 }
 
-// Joins the slot's queued delivery (or drains inline when none is queued).
 // The join wait is near-zero in steady state; the whole call accumulates
 // flush_stall.
 static struct writer_result
