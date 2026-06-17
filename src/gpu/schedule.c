@@ -624,10 +624,13 @@ schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   // Release pool-filled once after the last epoch's scatter; compute-stream
-  // ordering means this subsumes per-epoch ready signals.
-  CHECK(Error,
-        gpu_pool_release_produce(
-          &e->pools.p, e->sched.fill, e->streams.compute) == 0);
+  // ordering means this subsumes per-epoch ready signals. The drain-after-kick
+  // path releases inside schedule_flush_accumulated, so skip it here to avoid
+  // re-recording the same edge on the same stream.
+  if (e->sched.depth != SCHEDULE_DRAIN_AFTER_KICK)
+    CHECK(Error,
+          gpu_pool_release_produce(
+            &e->pools.p, e->sched.fill, e->streams.compute) == 0);
 
   if (e->sched.depth == SCHEDULE_DRAIN_AFTER_KICK) {
     struct writer_result r = schedule_flush_accumulated(e, ctx);
