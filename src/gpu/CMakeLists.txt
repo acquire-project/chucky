@@ -16,7 +16,7 @@ add_src_lib(stream
         schedule.c schedule.h
         flush.compress_agg.c flush.compress_agg.h
         flush.d2h_deliver.c flush.d2h_deliver.h
-        flush.handoff.h flush.helpers.h
+        flush.handoff.h
     LINKS
         transpose compress aggregate lod stream_config lod_plan index_ops
         dimension crc32c shard_delivery writer platform threadpool chucky_log

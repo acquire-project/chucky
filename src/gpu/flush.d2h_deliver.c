@@ -1,5 +1,4 @@
 #include "gpu/flush.d2h_deliver.h"
-#include "gpu/flush.helpers.h"
 
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
