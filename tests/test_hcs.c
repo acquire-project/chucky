@@ -131,7 +131,6 @@ test_hcs_plate_create(void)
     .fov =
       {
         .data_type = dtype_u16,
-        .fill_value = 0,
         .rank = 2,
         .dimensions = dims,
         .nlod = 0,

@@ -245,7 +245,6 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
                         const struct dimension* dims,
                         uint8_t rank,
                         enum dtype data_type,
-                        double fill_value,
                         int nlod)
 {
   *z = (struct s3_test_multiscale){ 0 };
@@ -276,7 +275,6 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
 
   struct ngff_multiscale_config mscfg = {
     .data_type = data_type,
-    .fill_value = fill_value,
     .rank = rank,
     .dimensions = dims,
     .nlod = nlod,
@@ -580,7 +578,7 @@ test_multiscale_metadata(void)
   struct s3_test_multiscale ms;
   CHECK(Fail,
         s3_test_multiscale_open(
-          &ms, "test-multiscale", "", dims, 3, dtype_u16, 0, 0) == 0);
+          &ms, "test-multiscale", "", dims, 3, dtype_u16, 0) == 0);
 
   // Check root zarr.json has multiscales attribute
   {
@@ -647,7 +645,7 @@ test_multiscale_metadata_named(void)
   struct s3_test_multiscale ms;
   CHECK(Fail,
         s3_test_multiscale_open(
-          &ms, "test-ms-named", "ms", dims, 3, dtype_u16, 0, 0) == 0);
+          &ms, "test-ms-named", "ms", dims, 3, dtype_u16, 0) == 0);
 
   // Root zarr.json should be a plain group (attributes:{})
   {

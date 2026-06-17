@@ -65,7 +65,6 @@ test_multiscale_create(void)
 
   struct ngff_multiscale_config cfg = {
     .data_type = dtype_u16,
-    .fill_value = 0,
     .rank = 2,
     .dimensions = dims,
     .nlod = 0, // auto

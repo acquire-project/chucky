@@ -218,7 +218,9 @@ print_bench_json_pass(const struct stream_metrics* m,
                       size_t total_elements,
                       float wall_s,
                       float init_s,
-                      float flush_s)
+                      float flush_s,
+                      size_t memory_estimate_total_bytes,
+                      size_t memory_estimate_pinned_bytes)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -263,6 +265,10 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)init_s);
   jw_key(&jw, "flush_s");
   jw_float(&jw, (double)flush_s);
+  jw_key(&jw, "memory_estimate_total_bytes");
+  jw_uint(&jw, memory_estimate_total_bytes);
+  jw_key(&jw, "memory_estimate_pinned_bytes");
+  jw_uint(&jw, memory_estimate_pinned_bytes);
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);

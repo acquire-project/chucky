@@ -265,7 +265,6 @@ ngff_multiscale_init(struct store* store,
 
     struct zarr_array_config acfg = {
       .data_type = cfg->data_type,
-      .fill_value = cfg->fill_value,
       .rank = cfg->rank,
       .dimensions = lv_dims,
       .codec = cfg->codec,

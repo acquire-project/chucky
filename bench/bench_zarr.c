@@ -58,7 +58,6 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
   if (is_multiscale) {
     struct ngff_multiscale_config mscfg = {
       .data_type = data_type,
-      .fill_value = fill_value,
       .rank = rank,
       .dimensions = dims,
       .nlod = 0,
@@ -135,7 +134,6 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
   if (is_multiscale) {
     struct ngff_multiscale_config mscfg = {
       .data_type = data_type,
-      .fill_value = fill_value,
       .rank = rank,
       .dimensions = dims,
       .nlod = 0,

@@ -579,6 +579,69 @@ Fail:
   return 1;
 }
 
+// Every LOD level shares one aggregate-pool chunk byte size (#94): the same
+// max_output_size feeds every aggregate_layout_compute call in
+// compute_stream_layouts, so per_level[lv].agg_layout.max_comp_chunk_bytes is
+// uniform. For CODEC_NONE that size is the L0 chunk byte size
+// (chunk_stride * bpe). The runtime relies on this for the unified chunk pool
+// stride (batch_aggregate_layout_init asserts it).
+static int
+test_uniform_chunk_bytes_across_levels(void)
+{
+  log_info("=== test_uniform_chunk_bytes_across_levels ===");
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 256,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 1 },
+    { .size = 256,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .downsample = 1,
+      .storage_position = 2 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .max_nlod = 0, // auto -> several levels
+  };
+
+  struct computed_stream_layouts cl;
+  CHECK(Fail,
+        compute_stream_layouts(
+          &config, 1, compress_cpu_max_output_size, 0, &cl) == 0);
+  CHECK(Fail, cl.levels.nlod > 1); // multiscale, so the invariant is meaningful
+
+  const size_t expected = (size_t)cl.layouts[0].chunk_stride *
+                          dtype_bpe(config.dtype);
+  CHECK(Fail, cl.max_output_size == expected); // CODEC_NONE pass-through bound
+
+  for (int lv = 0; lv < cl.levels.nlod; ++lv)
+    CHECK(Fail, cl.per_level[lv].agg_layout.max_comp_chunk_bytes == expected);
+
+  log_info("  nlod=%d, chunk bytes=%zu (uniform across levels)",
+           cl.levels.nlod,
+           expected);
+
+  computed_stream_layouts_free(&cl);
+  log_info("  PASS");
+  return 0;
+Fail:
+  computed_stream_layouts_free(&cl);
+  log_error("  FAIL");
+  return 1;
+}
+
 // chunk_size is constant across levels (partial chunks are padded).
 // chunks_per_shard is clamped to chunk_count at coarse levels.
 static int
@@ -960,6 +1023,7 @@ main(int ac, char* av[])
   rc |= test_max_nlod_one_via_layouts();
   rc |= test_max_nlod_positive_cap_via_layouts();
   rc |= test_max_nlod_zero_equals_uncapped();
+  rc |= test_uniform_chunk_bytes_across_levels();
   rc |= test_chunk_geometry_at_coarse_levels();
   rc |= test_from_epoch_dims_clamp();
   rc |= test_clamp_at_chunk_size();

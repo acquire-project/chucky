@@ -48,7 +48,6 @@ ngff_axes_free_units(struct ngff_axis* axes, uint8_t rank);
 struct ngff_multiscale_config
 {
   enum dtype data_type;
-  double fill_value;
   uint8_t rank;
   const struct dimension* dimensions; // L0 dimensions
   int nlod;                           // 0 = auto
