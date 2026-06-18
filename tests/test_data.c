@@ -185,6 +185,14 @@ pump_cycle_blocks(struct writer* w,
   size_t nblocks = PUMP_CYCLE_BLOCK_COUNT;
   if (nblocks > nappends)
     nblocks = nappends;
+  // Cycling N blocks costs N * block_alloc of host RAM (vs one buffer in the
+  // other modes). Bound the total so large bytes-per-element runs don't blow
+  // up the harness footprint; u16 (64 MiB/block) is unaffected.
+  size_t max_by_mem = ((size_t)1 << 30) / block_alloc;
+  if (max_by_mem < 1)
+    max_by_mem = 1;
+  if (nblocks > max_by_mem)
+    nblocks = max_by_mem;
 
   uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
   if (!blocks)

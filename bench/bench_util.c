@@ -844,6 +844,13 @@ pump_data_interleaved(struct writer* w0,
   size_t nblocks = 1;
   if (mode == PUMP_CYCLE_BLOCKS) {
     nblocks = PUMP_CYCLE_BLOCK_COUNT;
+    // Bound total pre-gen host RAM (N * alloc); u16 is unaffected, large-bpe
+    // runs are capped. Both interleaved streams share the block set.
+    size_t max_by_mem = ((size_t)1 << 30) / alloc;
+    if (max_by_mem < 1)
+      max_by_mem = 1;
+    if (nblocks > max_by_mem)
+      nblocks = max_by_mem;
     if (nblocks > nappends)
       nblocks = nappends;
   }
