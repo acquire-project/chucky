@@ -1,5 +1,6 @@
 #include "test_data.h"
 #include "log/log.h"
+#include "platform/platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,30 +137,8 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
 int
 pump_data_bpe(struct writer* w, size_t total_elements, fill_fn fill, size_t bpe)
 {
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements
-  // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits
-  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
-  uint16_t* data = (uint16_t*)malloc(alloc);
-  if (!data)
-    return 1;
-
-  for (size_t offset = 0; offset < total_elements; offset += nelements) {
-    size_t n = nelements;
-    if (offset + n > total_elements)
-      n = total_elements - offset;
-    fill(data, n, offset, total_elements);
-    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
-    struct writer_result r = writer_append_wait(w, input);
-    if (r.error) {
-      log_error("  append failed at offset %zu", offset);
-      free(data);
-      return 1;
-    }
-  }
-
-  struct writer_result r = writer_flush(w);
-  free(data);
-  return r.error;
+  return pump_data_modal(
+    w, total_elements, fill, bpe, PUMP_BUSY_PRODUCER, NULL);
 }
 
 int
@@ -168,21 +147,125 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
   return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
 }
 
-int
-pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill)
+static const size_t PUMP_BLOCK_ELEMENTS = 32 * 1024 * 1024; // 32M elements
+
+// Cycle through pre-generated distinct blocks (PUMP_CYCLE_BLOCKS). The blocks
+// are filled once with staggered offsets into the fill pattern, so contents
+// differ block-to-block while keeping the value distribution -- and thus the
+// compression ratio -- realistic. No fill runs inside the append loop.
+static int
+pump_cycle_blocks(struct writer* w,
+                  size_t total_elements,
+                  fill_fn fill,
+                  size_t bpe,
+                  double* out_fill_s)
 {
-  const size_t bpe = sizeof(uint16_t);
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements
-  uint16_t* data = (uint16_t*)malloc(nelements * bpe);
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  const size_t block_alloc = nelements * (bpe > 2 ? bpe : 2);
+
+  size_t nappends = total_elements / nelements;
+  if (total_elements % nelements)
+    nappends += 1;
+  if (nappends == 0)
+    nappends = 1;
+
+  size_t nblocks = PUMP_CYCLE_BLOCK_COUNT;
+  if (nblocks > nappends)
+    nblocks = nappends;
+
+  uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
+  if (!blocks)
+    return 1;
+  for (size_t b = 0; b < nblocks; ++b) {
+    blocks[b] = (uint16_t*)malloc(block_alloc);
+    if (!blocks[b]) {
+      for (size_t j = 0; j < b; ++j)
+        free(blocks[j]);
+      free(blocks);
+      return 1;
+    }
+  }
+
+  struct platform_clock fill_clock = { 0 };
+  if (out_fill_s)
+    platform_toc(&fill_clock);
+  for (size_t b = 0; b < nblocks; ++b)
+    fill(blocks[b], nelements, b * nelements, total_elements);
+  if (out_fill_s)
+    *out_fill_s = (double)platform_toc(&fill_clock);
+
+  int err = 0;
+  size_t b = 0;
+  for (size_t offset = 0; offset < total_elements; offset += nelements) {
+    size_t n = nelements;
+    if (offset + n > total_elements)
+      n = total_elements - offset;
+    uint16_t* data = blocks[b];
+    b = (b + 1 == nblocks) ? 0 : b + 1;
+    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
+    struct writer_result r = writer_append_wait(w, input);
+    if (r.error) {
+      log_error("  append failed at offset %zu", offset);
+      err = 1;
+      break;
+    }
+  }
+
+  if (!err) {
+    struct writer_result r = writer_flush(w);
+    err = r.error;
+  }
+  for (size_t i = 0; i < nblocks; ++i)
+    free(blocks[i]);
+  free(blocks);
+  return err;
+}
+
+int
+pump_data_modal(struct writer* w,
+                size_t total_elements,
+                fill_fn fill,
+                size_t bpe,
+                enum pump_mode mode,
+                double* out_fill_s)
+{
+  if (out_fill_s)
+    *out_fill_s = 0.0;
+
+  if (mode == PUMP_CYCLE_BLOCKS)
+    return pump_cycle_blocks(w, total_elements, fill, bpe, out_fill_s);
+
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits.
+  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+  uint16_t* data = (uint16_t*)malloc(alloc);
   if (!data)
     return 1;
-  fill(data, nelements < total_elements ? nelements : total_elements, 0,
-       total_elements);
+
+  struct platform_clock fill_clock = { 0 };
+  double fill_s = 0.0;
+  if (mode == PUMP_SINGLE_BLOCK) {
+    if (out_fill_s)
+      platform_toc(&fill_clock);
+    fill(data,
+         nelements < total_elements ? nelements : total_elements,
+         0,
+         total_elements);
+    if (out_fill_s)
+      fill_s += (double)platform_toc(&fill_clock);
+  }
 
   for (size_t offset = 0; offset < total_elements; offset += nelements) {
     size_t n = nelements;
     if (offset + n > total_elements)
       n = total_elements - offset;
+    if (mode == PUMP_BUSY_PRODUCER) {
+      if (out_fill_s)
+        platform_toc(&fill_clock);
+      fill(data, n, offset, total_elements);
+      if (out_fill_s)
+        fill_s += (double)platform_toc(&fill_clock);
+    }
     struct slice input = { .beg = data, .end = (char*)data + n * bpe };
     struct writer_result r = writer_append_wait(w, input);
     if (r.error) {
@@ -194,5 +277,7 @@ pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill)
 
   struct writer_result r = writer_flush(w);
   free(data);
+  if (out_fill_s)
+    *out_fill_s = fill_s;
   return r.error;
 }

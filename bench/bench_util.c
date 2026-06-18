@@ -506,10 +506,14 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
+  double fill_s = 0.0;
   CHECK(Fail,
-        (cfg->prefill
-           ? pump_data_prefilled(bench_writer(&h), total_elements, fill)
-           : pump_data(bench_writer(&h), total_elements, fill)) == 0);
+        pump_data_modal(bench_writer(&h),
+                        total_elements,
+                        fill,
+                        dtype_bpe(dtype),
+                        cfg->pump_mode,
+                        &fill_s) == 0);
 
   size_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
@@ -552,6 +556,11 @@ run_bench(const struct bench_config* cfg)
                        init_s,
                        flush_s,
                        pending_bytes);
+
+    if (cfg->pump_mode != PUMP_CYCLE_BLOCKS || fill_s > 0)
+      print_report("  Data gen time: %.3f s (%.1f%% of wall)",
+                   fill_s,
+                   wall_s > 0 ? 100.0 * fill_s / wall_s : 0.0);
 
     if (cfg->json_output) {
       const struct stream_metric* sink_metric =
@@ -617,7 +626,7 @@ struct bench_cli_args
   uint64_t io_latency_us;
   size_t backpressure_bytes;
   int max_threads;
-  int prefill;
+  enum pump_mode pump_mode;
 };
 
 // Parse the shared bench CLI flags into out. Unknown options print a usage
@@ -651,7 +660,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
-  out->prefill = 0;
+  out->pump_mode = PUMP_CYCLE_BLOCKS;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -701,7 +710,9 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--prefill") == 0) {
-      out->prefill = 1;
+      out->pump_mode = PUMP_SINGLE_BLOCK;
+    } else if (strcmp(av[i], "--busy-producer") == 0) {
+      out->pump_mode = PUMP_BUSY_PRODUCER;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -714,7 +725,9 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
-              "[--max-threads N (0 = OpenMP default)] [--prefill]\n",
+              "[--max-threads N (0 = OpenMP default)] "
+              "[--busy-producer (regenerate input every append)] "
+              "[--prefill (one identical block, within-mode A/B only)]\n",
               av[0]);
       return 1;
     }
@@ -775,7 +788,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
-    .prefill = a.prefill,
+    .pump_mode = a.pump_mode,
   };
   ecode = run_bench(&cfg);
 
@@ -795,27 +808,74 @@ Fail:
 // ---------------------------------------------------------------------------
 
 // Interleaved pump: alternates writer_append between two writers in lockstep.
-// Each call pushes one chunk of data to each writer before advancing.
+// Each iteration pushes one chunk to each writer before advancing. The pump
+// mode (see test_data.h) decides how the chunk contents are produced; the
+// default cycles a handful of pre-generated distinct blocks with no in-loop
+// fill. Fill seconds are written to *out_fill_s when non-NULL.
 static int
 pump_data_interleaved(struct writer* w0,
                       struct writer* w1,
                       size_t total_elements,
                       fill_fn fill,
                       size_t bpe,
-                      int prefill)
+                      enum pump_mode mode,
+                      double* out_fill_s)
 {
   const size_t nelements = 32 * 1024 * 1024; // 32M elements per chunk
-  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
-  uint16_t* data = (uint16_t*)malloc(alloc);
-  if (!data)
+  const size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+
+  if (out_fill_s)
+    *out_fill_s = 0.0;
+
+  size_t nappends = total_elements / nelements;
+  if (total_elements % nelements)
+    nappends += 1;
+  if (nappends == 0)
+    nappends = 1;
+
+  size_t nblocks = 1;
+  if (mode == PUMP_CYCLE_BLOCKS) {
+    nblocks = PUMP_CYCLE_BLOCK_COUNT;
+    if (nblocks > nappends)
+      nblocks = nappends;
+  }
+
+  uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
+  if (!blocks)
     return 1;
-  if (prefill)
-    fill(data,
+  for (size_t b = 0; b < nblocks; ++b) {
+    blocks[b] = (uint16_t*)malloc(alloc);
+    if (!blocks[b]) {
+      for (size_t j = 0; j < b; ++j)
+        free(blocks[j]);
+      free(blocks);
+      return 1;
+    }
+  }
+
+  struct platform_clock fill_clock = { 0 };
+  double fill_s = 0.0;
+  if (mode == PUMP_CYCLE_BLOCKS) {
+    if (out_fill_s)
+      platform_toc(&fill_clock);
+    for (size_t b = 0; b < nblocks; ++b)
+      fill(blocks[b], nelements, b * nelements, total_elements);
+    if (out_fill_s)
+      fill_s += (double)platform_toc(&fill_clock);
+  } else if (mode == PUMP_SINGLE_BLOCK) {
+    if (out_fill_s)
+      platform_toc(&fill_clock);
+    fill(blocks[0],
          nelements < total_elements ? nelements : total_elements,
          0,
          total_elements);
+    if (out_fill_s)
+      fill_s += (double)platform_toc(&fill_clock);
+  }
 
+  int err = 0;
   size_t off0 = 0, off1 = 0;
+  size_t b0 = 0, b1 = 0;
 
   while (off0 < total_elements || off1 < total_elements) {
     // --- stream 0 ---
@@ -823,14 +883,21 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off0 + n > total_elements)
         n = total_elements - off0;
-      if (!prefill)
+      uint16_t* data = blocks[b0];
+      if (mode == PUMP_BUSY_PRODUCER) {
+        if (out_fill_s)
+          platform_toc(&fill_clock);
         fill(data, n, off0, total_elements);
+        if (out_fill_s)
+          fill_s += (double)platform_toc(&fill_clock);
+      }
+      b0 = (b0 + 1 == nblocks) ? 0 : b0 + 1;
       struct slice input = { .beg = data, .end = (char*)data + n * bpe };
       struct writer_result r = writer_append_wait(w0, input);
       if (r.error) {
         log_error("  stream-0 append failed at offset %zu", off0);
-        free(data);
-        return 1;
+        err = 1;
+        break;
       }
       off0 += n;
     }
@@ -840,24 +907,36 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off1 + n > total_elements)
         n = total_elements - off1;
-      if (!prefill)
+      uint16_t* data = blocks[b1];
+      if (mode == PUMP_BUSY_PRODUCER) {
+        if (out_fill_s)
+          platform_toc(&fill_clock);
         fill(data, n, off1, total_elements);
+        if (out_fill_s)
+          fill_s += (double)platform_toc(&fill_clock);
+      }
+      b1 = (b1 + 1 == nblocks) ? 0 : b1 + 1;
       struct slice input = { .beg = data, .end = (char*)data + n * bpe };
       struct writer_result r = writer_append_wait(w1, input);
       if (r.error) {
         log_error("  stream-1 append failed at offset %zu", off1);
-        free(data);
-        return 1;
+        err = 1;
+        break;
       }
       off1 += n;
     }
   }
 
-  // flush both
   struct writer_result r0 = writer_flush(w0);
   struct writer_result r1 = writer_flush(w1);
-  free(data);
-  return r0.error || r1.error;
+  if (!err)
+    err = r0.error || r1.error;
+  for (size_t b = 0; b < nblocks; ++b)
+    free(blocks[b]);
+  free(blocks);
+  if (out_fill_s)
+    *out_fill_s = fill_s;
+  return err;
 }
 
 static int
@@ -983,9 +1062,10 @@ run_bench_two_streams(const struct bench_config* cfg)
   // Interleaved pump
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
+  double fill_s = 0.0;
   CHECK(Fail,
         pump_data_interleaved(
-          w0, w1, total_elements, fill, bpe, cfg->prefill) == 0);
+          w0, w1, total_elements, fill, bpe, cfg->pump_mode, &fill_s) == 0);
 
   // Flush zarr sinks before measuring wall time
   struct platform_clock flush_clock = { 0 };
@@ -1034,6 +1114,10 @@ run_bench_two_streams(const struct bench_config* cfg)
   if (flush_s > 0)
     print_report("  Flush time:    %.3f s", (double)flush_s);
   print_report("  Wall time:     %.3f s", (double)wall_s);
+  if (cfg->pump_mode != PUMP_CYCLE_BLOCKS || fill_s > 0)
+    print_report("  Data gen time: %.3f s (%.1f%% of wall)",
+                 fill_s,
+                 wall_s > 0 ? 100.0 * fill_s / wall_s : 0.0);
   print_report("  Throughput:    %.2f GiB/s (combined)",
                wall_s > 0 ? combined_gib / wall_s : 0.0);
 
@@ -1158,7 +1242,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
-    .prefill = a.prefill,
+    .pump_mode = a.pump_mode,
   };
   int ecode = run_bench_two_streams(&cfg);
 
