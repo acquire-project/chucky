@@ -332,11 +332,13 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
+  int did_autoflush = 0;
   if (!s->flushed) {
     struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
     if (r.error)
       log_error("GPU stream auto-flush failed during destroy");
     s->flushed = 1;
+    did_autoflush = 1;
   }
 
   // A failed flush can leave delivery jobs queued; run them out before the
@@ -353,6 +355,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compute);
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
+
+  // Drain queued IO before teardown frees the buffers it points into. Only
+  // when we auto-flushed: a caller that flushed itself may have freed its sink.
+  if (did_autoflush && s->ctx.sink)
+    shard_sink_drain(s->ctx.sink);
 
   // s->ar owns the per-array allocations; the engine holds a bound copy of
   // the same pointers, so destroy strictly after engine teardown would

@@ -276,8 +276,11 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0) {
       if (finalize_shards(
-            &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+            &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment)) {
+        // Drain queued IO before bailing; it points into buffers destroy frees.
+        shard_sink_drain(ctx->sink);
         return writer_error();
+      }
     }
   }
 

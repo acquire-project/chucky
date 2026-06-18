@@ -3,6 +3,7 @@
 // references — including when sink IO is stalled at that moment.
 
 #include "gpu/prelude.cuda.h"
+#include "gpu/stream.internal.h" // white-box access for test hooks
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.gpu.h"
@@ -136,6 +137,114 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
 Cleanup:
   free(src);
   tile_stream_gpu_destroy(s);
+  zarr_array_destroy(arr);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return rc;
+}
+
+// Destroy must run out a delivery still queued when teardown begins, with no
+// hang and (under ASAN) no use-after-free. Holding the worker makes the queued
+// state deterministic rather than timing-dependent.
+static int
+test_destroy_runs_out_queued_delivery(const char* tmpdir)
+{
+  log_info("=== test_destroy_runs_out_queued_delivery ===");
+
+  struct dimension dims[3] = {
+    { .size = 12,
+      .chunk_size = 4,
+      .chunks_per_shard = 3,
+      .name = "z",
+      .storage_position = 0 },
+    { .size = 64,
+      .chunk_size = 16,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 64,
+      .chunk_size = 16,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+  const size_t epoch_elements = 4 * 64 * 64;
+  const size_t append_elements = 4 * epoch_elements; // two full batches at K=2
+
+  struct store* store = NULL;
+  struct shard_pool* pool = NULL;
+  struct zarr_array* arr = NULL;
+  struct tile_stream_gpu* s = NULL;
+  uint16_t* src = NULL;
+  test_thread* thr = NULL;
+  int rc = 1;
+
+  store = store_fs_create(tmpdir, 1);
+  CHECK(Cleanup, store);
+  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
+  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
+
+  pool = store->create_pool(store, 8);
+  CHECK(Cleanup, pool);
+
+  struct zarr_array_config acfg = {
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_ZSTD },
+  };
+  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
+  CHECK(Cleanup, arr);
+
+  const struct tile_stream_configuration cfg = {
+    .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_ZSTD },
+    .epochs_per_batch = 2,
+  };
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  CHECK(Cleanup, s);
+
+  src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
+  CHECK(Cleanup, src);
+  for (size_t i = 0; i < append_elements; ++i)
+    src[i] = (uint16_t)(i * 31);
+
+  // Hold the worker so a delivery stays queued through teardown.
+  gpu_delivery_set_hold(&s->engine.delivery, 1);
+
+  // Error the sink first so every delivery fails fast.
+  shard_pool_fs_set_error(pool);
+
+  {
+    struct slice input = { .beg = src, .end = src + append_elements };
+    writer_append(tile_stream_gpu_writer(s), input);
+  }
+
+  // Destroy on another thread so a hang surfaces as a timeout, not a wedge.
+  struct destroy_args da = { .s = s };
+  atomic_store(&da.done, 0);
+  CHECK(Cleanup, test_thread_start(&thr, destroy_thread_fn, &da) == 0);
+  s = NULL;
+
+  if (wait_for_done(&da.done, POST_RELEASE_TIMEOUT_MS)) {
+    log_error("destroy hung with a delivery job still queued");
+    goto Cleanup;
+  }
+
+  test_thread_join(thr);
+  thr = NULL;
+
+  rc = 0;
+  log_info("  PASS");
+
+Cleanup:
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_thread_join(thr);
   zarr_array_destroy(arr);
   shard_pool_destroy(pool);
   store_destroy(store);
@@ -281,6 +390,13 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/midstream_%d", tmpdir, rep);
     test_mkdir(sub);
     ecode |= test_destroy_with_delivery_in_flight(sub, rep);
+  }
+
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/runout", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_destroy_runs_out_queued_delivery(sub);
   }
 
   {

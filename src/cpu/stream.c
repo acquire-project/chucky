@@ -298,6 +298,9 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     struct writer_result r = cpu_stream_flush_body(&v);
     if (r.error)
       log_error("CPU stream auto-flush failed during destroy");
+    // A bailed flush can leave queued IO pointing into buffers teardown frees.
+    if (s->shard_sink)
+      shard_sink_drain(s->shard_sink);
     s->flushed = 1;
   }
 
