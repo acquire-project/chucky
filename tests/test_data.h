@@ -28,6 +28,10 @@ rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
 void
 rand_pattern_free(void);
 
+// Period (in elements) of the active fill pattern; 0 if it has none (zeros).
+size_t
+fill_pattern_period(fill_fn fill);
+
 size_t
 dim_total_elements(const struct dimension* dims, uint8_t rank);
 

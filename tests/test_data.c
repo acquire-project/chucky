@@ -123,6 +123,19 @@ fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total)
   }
 }
 
+// Period of the active fill pattern, in elements (0 if the fill has none, e.g.
+// fill_zeros). Block cycling staggers offsets across this so the pre-generated
+// blocks are distinct instead of aliasing back to identical content.
+size_t
+fill_pattern_period(fill_fn fill)
+{
+  if (fill == fill_xor)
+    return xor_pattern_len;
+  if (fill == fill_rand)
+    return rand_pattern_len;
+  return 0;
+}
+
 // --- Helpers ---
 
 size_t
@@ -177,7 +190,9 @@ pump_cycle_blocks(struct writer* w,
   if (!blocks)
     return 1;
   for (size_t b = 0; b < nblocks; ++b) {
-    blocks[b] = (uint16_t*)malloc(block_alloc);
+    // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
+    // the rest rather than ship uninitialized bytes to the writer.
+    blocks[b] = (uint16_t*)calloc(1, block_alloc);
     if (!blocks[b]) {
       for (size_t j = 0; j < b; ++j)
         free(blocks[j]);
@@ -186,11 +201,17 @@ pump_cycle_blocks(struct writer* w,
     }
   }
 
+  // Stagger each block's start across the fill pattern's full period so the
+  // blocks are genuinely distinct. A naive b*nelements offset aliases to
+  // identical content whenever nelements is a multiple of the period.
+  const size_t period = fill_pattern_period(fill);
+  const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
+
   struct platform_clock fill_clock = { 0 };
   if (out_fill_s)
     platform_toc(&fill_clock);
   for (size_t b = 0; b < nblocks; ++b)
-    fill(blocks[b], nelements, b * nelements, total_elements);
+    fill(blocks[b], nelements, b * stride, total_elements);
   if (out_fill_s)
     *out_fill_s = (double)platform_toc(&fill_clock);
 
@@ -237,8 +258,10 @@ pump_data_modal(struct writer* w,
 
   const size_t nelements = PUMP_BLOCK_ELEMENTS;
   // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits.
+  // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
+  // the rest rather than ship uninitialized bytes to the writer.
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
-  uint16_t* data = (uint16_t*)malloc(alloc);
+  uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
     return 1;
 

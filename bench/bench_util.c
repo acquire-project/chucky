@@ -575,6 +575,7 @@ run_bench(const struct bench_config* cfg)
                             wall_s,
                             init_s,
                             flush_s,
+                            (float)fill_s,
                             est_total_bytes,
                             est_pinned_bytes);
     }
@@ -662,6 +663,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->max_threads = 0;
   out->pump_mode = PUMP_CYCLE_BLOCKS;
 
+  const char* pump_flag = NULL; // last pump-mode flag seen (conflict warning)
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
       out->fill = parse_fill(av[++i]);
@@ -710,9 +712,15 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--prefill") == 0) {
+      if (pump_flag)
+        fprintf(stderr, "Warning: %s overrides %s\n", av[i], pump_flag);
       out->pump_mode = PUMP_SINGLE_BLOCK;
+      pump_flag = "--prefill";
     } else if (strcmp(av[i], "--busy-producer") == 0) {
+      if (pump_flag)
+        fprintf(stderr, "Warning: %s overrides %s\n", av[i], pump_flag);
       out->pump_mode = PUMP_BUSY_PRODUCER;
+      pump_flag = "--busy-producer";
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -844,7 +852,9 @@ pump_data_interleaved(struct writer* w0,
   if (!blocks)
     return 1;
   for (size_t b = 0; b < nblocks; ++b) {
-    blocks[b] = (uint16_t*)malloc(alloc);
+    // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
+    // the rest rather than ship uninitialized bytes to the writer.
+    blocks[b] = (uint16_t*)calloc(1, alloc);
     if (!blocks[b]) {
       for (size_t j = 0; j < b; ++j)
         free(blocks[j]);
@@ -856,10 +866,15 @@ pump_data_interleaved(struct writer* w0,
   struct platform_clock fill_clock = { 0 };
   double fill_s = 0.0;
   if (mode == PUMP_CYCLE_BLOCKS) {
+    // Stagger each block across the fill pattern's full period so the blocks
+    // are distinct; a naive b*nelements offset aliases to identical content
+    // when nelements is a multiple of the period.
+    const size_t period = fill_pattern_period(fill);
+    const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
     if (out_fill_s)
       platform_toc(&fill_clock);
     for (size_t b = 0; b < nblocks; ++b)
-      fill(blocks[b], nelements, b * nelements, total_elements);
+      fill(blocks[b], nelements, b * stride, total_elements);
     if (out_fill_s)
       fill_s += (double)platform_toc(&fill_clock);
   } else if (mode == PUMP_SINGLE_BLOCK) {
