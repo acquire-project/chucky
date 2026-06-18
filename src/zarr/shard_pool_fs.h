@@ -23,3 +23,10 @@ shard_pool_fs_inject_failing_job(struct shard_pool* pool);
 // Caller owns gate. Returns 0 on successful enqueue.
 int
 shard_pool_fs_inject_blocking_job(struct shard_pool* pool, _Atomic int* gate);
+
+// Test helper: one-shot. The next truncate fails before queueing its job,
+// so finalize_shards errors after it has already queued footer write_direct
+// jobs that reference footer_buf_pool. Exercises the destroy-time drain that
+// guards those buffers against a flush that bailed before its own drain.
+int
+shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);

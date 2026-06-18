@@ -26,6 +26,9 @@ struct shard_pool_fs
   _Atomic uint64_t queued_bytes;
   _Atomic uint64_t retired_bytes;
   _Atomic int io_error;
+  // Test hook: one-shot. The next fs_slot_truncate fails before queueing its
+  // job, leaving any footer write_direct jobs from finalize_shards queued.
+  _Atomic int fail_next_truncate;
 };
 
 // --- Writer slot for a single shard file ---
@@ -39,6 +42,7 @@ struct fs_slot
   _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
   _Atomic uint64_t* queued_bytes;  // points to shard_pool_fs.queued_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
+  _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
 };
 
 struct pwrite_job
@@ -206,6 +210,13 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   struct fs_slot* w = (struct fs_slot*)self;
   if (w->fd == PLATFORM_FD_INVALID)
     return 0;
+
+  // A real truncate failure (truncate_fn) marks the pool errored; mirror that
+  // so a subsequent flush bails at its has_error gate before its own drain.
+  if (w->fail_next_truncate && atomic_exchange(w->fail_next_truncate, 0)) {
+    atomic_store(w->io_error, 1);
+    return 1;
+  }
 
   if (w->queue) {
     struct truncate_job* j =
@@ -378,6 +389,14 @@ shard_pool_fs_inject_failing_job(struct shard_pool* self)
   return io_queue_post(p->queue, fail_fn, (void*)&p->io_error, NULL);
 }
 
+int
+shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  atomic_store(&p->fail_next_truncate, 1);
+  return 0;
+}
+
 struct gate_ctx
 {
   _Atomic int* gate;
@@ -452,6 +471,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->retired_bytes = &p->retired_bytes;
     s->queued_bytes = &p->queued_bytes;
     s->io_error = &p->io_error;
+    s->fail_next_truncate = &p->fail_next_truncate;
   }
 
   return &p->base;
