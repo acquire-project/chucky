@@ -829,71 +829,19 @@ pump_data_interleaved(struct writer* w0,
                       enum pump_mode mode,
                       double* out_fill_s)
 {
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements per chunk
-  const size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
 
   if (out_fill_s)
     *out_fill_s = 0.0;
 
-  size_t nappends = total_elements / nelements;
-  if (total_elements % nelements)
-    nappends += 1;
-  if (nappends == 0)
-    nappends = 1;
-
-  size_t nblocks = 1;
-  if (mode == PUMP_CYCLE_BLOCKS) {
-    nblocks = PUMP_CYCLE_BLOCK_COUNT;
-    // Bound total pre-gen host RAM (N * alloc); u16 is unaffected, large-bpe
-    // runs are capped. Both interleaved streams share the block set.
-    size_t max_by_mem = ((size_t)1 << 30) / alloc;
-    if (max_by_mem < 1)
-      max_by_mem = 1;
-    if (nblocks > max_by_mem)
-      nblocks = max_by_mem;
-    if (nblocks > nappends)
-      nblocks = nappends;
-  }
-
-  uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
-  if (!blocks)
+  struct pump_blocks blocks;
+  if (pump_blocks_alloc(
+        &blocks, total_elements, fill, bpe, mode, out_fill_s != NULL))
     return 1;
-  for (size_t b = 0; b < nblocks; ++b) {
-    // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
-    // the rest rather than ship uninitialized bytes to the writer.
-    blocks[b] = (uint16_t*)calloc(1, alloc);
-    if (!blocks[b]) {
-      for (size_t j = 0; j < b; ++j)
-        free(blocks[j]);
-      free(blocks);
-      return 1;
-    }
-  }
+  const size_t nblocks = blocks.count;
 
   struct platform_clock fill_clock = { 0 };
-  double fill_s = 0.0;
-  if (mode == PUMP_CYCLE_BLOCKS) {
-    // Stagger each block across the fill pattern's full period so the blocks
-    // are distinct; a naive b*nelements offset aliases to identical content
-    // when nelements is a multiple of the period.
-    const size_t period = fill_pattern_period(fill);
-    const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
-    if (out_fill_s)
-      platform_toc(&fill_clock);
-    for (size_t b = 0; b < nblocks; ++b)
-      fill(blocks[b], nelements, b * stride, total_elements);
-    if (out_fill_s)
-      fill_s += (double)platform_toc(&fill_clock);
-  } else if (mode == PUMP_SINGLE_BLOCK) {
-    if (out_fill_s)
-      platform_toc(&fill_clock);
-    fill(blocks[0],
-         nelements < total_elements ? nelements : total_elements,
-         0,
-         total_elements);
-    if (out_fill_s)
-      fill_s += (double)platform_toc(&fill_clock);
-  }
+  double fill_s = blocks.fill_s;
 
   int err = 0;
   size_t off0 = 0, off1 = 0;
@@ -905,7 +853,7 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off0 + n > total_elements)
         n = total_elements - off0;
-      uint16_t* data = blocks[b0];
+      uint16_t* data = blocks.block[b0];
       if (mode == PUMP_BUSY_PRODUCER) {
         if (out_fill_s)
           platform_toc(&fill_clock);
@@ -929,7 +877,7 @@ pump_data_interleaved(struct writer* w0,
       size_t n = nelements;
       if (off1 + n > total_elements)
         n = total_elements - off1;
-      uint16_t* data = blocks[b1];
+      uint16_t* data = blocks.block[b1];
       if (mode == PUMP_BUSY_PRODUCER) {
         if (out_fill_s)
           platform_toc(&fill_clock);
@@ -953,9 +901,7 @@ pump_data_interleaved(struct writer* w0,
   struct writer_result r1 = writer_flush(w1);
   if (!err)
     err = r0.error || r1.error;
-  for (size_t b = 0; b < nblocks; ++b)
-    free(blocks[b]);
-  free(blocks);
+  pump_blocks_free(&blocks);
   if (out_fill_s)
     *out_fill_s = fill_s;
   return err;

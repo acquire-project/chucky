@@ -160,39 +160,41 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
   return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
 }
 
-static const size_t PUMP_BLOCK_ELEMENTS = 32 * 1024 * 1024; // 32M elements
-
-// Cycle through pre-generated distinct blocks (PUMP_CYCLE_BLOCKS). The blocks
-// are filled once with staggered offsets into the fill pattern, so contents
-// differ block-to-block while keeping the value distribution -- and thus the
-// compression ratio -- realistic. No fill runs inside the append loop.
-static int
-pump_cycle_blocks(struct writer* w,
+int
+pump_blocks_alloc(struct pump_blocks* out,
                   size_t total_elements,
                   fill_fn fill,
                   size_t bpe,
-                  double* out_fill_s)
+                  enum pump_mode mode,
+                  int measure_fill)
 {
   const size_t nelements = PUMP_BLOCK_ELEMENTS;
   const size_t block_alloc = nelements * (bpe > 2 ? bpe : 2);
 
-  size_t nappends = total_elements / nelements;
-  if (total_elements % nelements)
-    nappends += 1;
-  if (nappends == 0)
-    nappends = 1;
+  out->block = NULL;
+  out->count = 0;
+  out->fill_s = 0.0;
 
-  size_t nblocks = PUMP_CYCLE_BLOCK_COUNT;
-  if (nblocks > nappends)
-    nblocks = nappends;
-  // Cycling N blocks costs N * block_alloc of host RAM (vs one buffer in the
-  // other modes). Bound the total so large bytes-per-element runs don't blow
-  // up the harness footprint; u16 (64 MiB/block) is unaffected.
-  size_t max_by_mem = ((size_t)1 << 30) / block_alloc;
-  if (max_by_mem < 1)
-    max_by_mem = 1;
-  if (nblocks > max_by_mem)
-    nblocks = max_by_mem;
+  size_t nblocks = 1;
+  if (mode == PUMP_CYCLE_BLOCKS) {
+    size_t nappends = total_elements / nelements;
+    if (total_elements % nelements)
+      nappends += 1;
+    if (nappends == 0)
+      nappends = 1;
+
+    nblocks = PUMP_CYCLE_BLOCK_COUNT;
+    if (nblocks > nappends)
+      nblocks = nappends;
+    // Cycling N blocks costs N * block_alloc of host RAM (vs one buffer in the
+    // other modes). Bound the total so large bytes-per-element runs don't blow
+    // up the harness footprint; u16 (64 MiB/block) is unaffected.
+    size_t max_by_mem = ((size_t)1 << 30) / block_alloc;
+    if (max_by_mem < 1)
+      max_by_mem = 1;
+    if (nblocks > max_by_mem)
+      nblocks = max_by_mem;
+  }
 
   uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
   if (!blocks)
@@ -208,20 +210,58 @@ pump_cycle_blocks(struct writer* w,
       return 1;
     }
   }
-
-  // Stagger each block's start across the fill pattern's full period so the
-  // blocks are genuinely distinct. A naive b*nelements offset aliases to
-  // identical content whenever nelements is a multiple of the period.
-  const size_t period = fill_pattern_period(fill);
-  const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
+  out->block = blocks;
+  out->count = nblocks;
 
   struct platform_clock fill_clock = { 0 };
-  if (out_fill_s)
+  if (measure_fill)
     platform_toc(&fill_clock);
-  for (size_t b = 0; b < nblocks; ++b)
-    fill(blocks[b], nelements, b * stride, total_elements);
+  if (mode == PUMP_CYCLE_BLOCKS) {
+    // Stagger each block's start across the fill pattern's full period so the
+    // blocks are genuinely distinct. A naive b*nelements offset aliases to
+    // identical content whenever nelements is a multiple of the period.
+    const size_t period = fill_pattern_period(fill);
+    const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
+    for (size_t b = 0; b < nblocks; ++b)
+      fill(blocks[b], nelements, b * stride, total_elements);
+  } else if (mode == PUMP_SINGLE_BLOCK) {
+    fill(blocks[0],
+         nelements < total_elements ? nelements : total_elements,
+         0,
+         total_elements);
+  }
+  if (measure_fill)
+    out->fill_s = (double)platform_toc(&fill_clock);
+
+  return 0;
+}
+
+void
+pump_blocks_free(struct pump_blocks* b)
+{
+  for (size_t i = 0; i < b->count; ++i)
+    free(b->block[i]);
+  free(b->block);
+  b->block = NULL;
+  b->count = 0;
+}
+
+// Cycle through pre-generated distinct blocks (PUMP_CYCLE_BLOCKS), one per
+// append with no in-loop fill, so per-append cost is just the writer.
+static int
+pump_cycle_blocks(struct writer* w,
+                  size_t total_elements,
+                  fill_fn fill,
+                  size_t bpe,
+                  double* out_fill_s)
+{
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  struct pump_blocks blocks;
+  if (pump_blocks_alloc(
+        &blocks, total_elements, fill, bpe, PUMP_CYCLE_BLOCKS, out_fill_s != 0))
+    return 1;
   if (out_fill_s)
-    *out_fill_s = (double)platform_toc(&fill_clock);
+    *out_fill_s = blocks.fill_s;
 
   int err = 0;
   size_t b = 0;
@@ -229,8 +269,8 @@ pump_cycle_blocks(struct writer* w,
     size_t n = nelements;
     if (offset + n > total_elements)
       n = total_elements - offset;
-    uint16_t* data = blocks[b];
-    b = (b + 1 == nblocks) ? 0 : b + 1;
+    uint16_t* data = blocks.block[b];
+    b = (b + 1 == blocks.count) ? 0 : b + 1;
     struct slice input = { .beg = data, .end = (char*)data + n * bpe };
     struct writer_result r = writer_append_wait(w, input);
     if (r.error) {
@@ -244,9 +284,7 @@ pump_cycle_blocks(struct writer* w,
     struct writer_result r = writer_flush(w);
     err = r.error;
   }
-  for (size_t i = 0; i < nblocks; ++i)
-    free(blocks[i]);
-  free(blocks);
+  pump_blocks_free(&blocks);
   return err;
 }
 
