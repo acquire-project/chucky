@@ -1,8 +1,6 @@
-// Regression test (#147): when a flush errors after finalize_shards has
-// queued footer write_direct jobs, it must drain the sink before returning.
-// Those jobs reference stream-owned footer_buf_pool, which shard_state_destroy
-// later frees. If the flush returns without draining, the IO worker reads
-// freed heap on destroy (use-after-free; ASAN catches it).
+// Regression test (#147): a flush that errors with footer IO still queued must
+// drain the sink before returning, or destroy frees buffers the IO worker still
+// reads (use-after-free; ASAN catches it).
 
 #include "platform/platform.h"
 #include "store.h"
@@ -24,9 +22,8 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
 {
   log_info("=== test_destroy_drains_after_flush_error (cpu) ===");
 
-  // Unbounded append dim with chunks_per_shard=2 and one appended epoch:
-  // the shard is partial at flush time, so finalize_shards queues a footer
-  // write_direct and then calls truncate, which the injected hook fails.
+  // One epoch into a 2-per-shard append dim leaves a partial shard, so flush
+  // queues a footer write then truncates — and the injected hook fails truncate.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,
@@ -91,9 +88,7 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // Make the next truncate fail. finalize_shards queues the footer
-  // write_direct first, then truncate fails, so the flush body errors out of
-  // its finalize loop with a footer job referencing footer_buf_pool queued.
+  // Fail the next truncate so flush errors with a footer write still queued.
   CHECK(Cleanup, shard_pool_fs_inject_failing_truncate(pool) == 0);
 
   {
@@ -104,8 +99,8 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
     }
   }
 
-  // Destroy frees footer_buf_pool. The errored flush above must have drained
-  // the queued footer jobs, or this reads freed heap under ASAN.
+  // Destroy frees the footer buffers; the errored flush must have drained the
+  // queued IO, or this reads freed heap under ASAN.
   tile_stream_cpu_destroy(s);
   s = NULL;
 

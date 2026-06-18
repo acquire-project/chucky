@@ -356,15 +356,8 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
 
-  // stop_join flushes worker-posted footer/write jobs into the sink IO queue
-  // but does not drain that queue. An auto-flush that bailed before its own
-  // drain can also leave footer jobs (referencing footer_buf_pool) queued.
-  // Drain now so engine_array_state_destroy frees that pool with no IO
-  // pointing into it. Gated on did_autoflush: the contract is that the caller
-  // keeps the sink alive until destroy, except that after a SUCCESSFUL flush it
-  // may tear the sink down (then flushed==1, did_autoflush==0, and this is
-  // skipped). A caller that frees its sink after a FAILED flush violates the
-  // contract — the auto-flush above would already fault before this drain.
+  // Drain queued IO before teardown frees the buffers it points into. Only
+  // when we auto-flushed: a caller that flushed itself may have freed its sink.
   if (did_autoflush && s->ctx.sink)
     shard_sink_drain(s->ctx.sink);
 

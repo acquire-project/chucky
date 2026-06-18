@@ -120,8 +120,7 @@ struct gpu_delivery
   struct platform_cond* cv;
   CUcontext cuda; // captured at init; made current on the worker
   int stop;
-  int hold; // test-only: worker parks after each job until stop is set, so a
-            // later job stays queued and stop_join must run it out
+  int hold; // test-only: park the worker so a job stays queued for teardown
   struct delivery_job job[2]; // by fc
 };
 
@@ -151,8 +150,7 @@ gpu_delivery_join(struct gpu_delivery* d, int fc);
 void
 gpu_delivery_stop_join(struct gpu_delivery* d);
 
-// Test-only: when on, the worker parks after completing each job until stop is
-// set. Lets a test guarantee a job is still queued when stop_join runs.
+// Test-only: park the worker so a test can keep a job queued through teardown.
 void
 gpu_delivery_set_hold(struct gpu_delivery* d, int on);
 

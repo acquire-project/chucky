@@ -351,8 +351,7 @@ delivery_main(void* arg)
     j->result = r;
     j->done = 1;
     platform_cond_broadcast(d->cv);
-    // Test hook: park here so a later job stays queued; stop_join then has to
-    // run it out. Wakes on stop so teardown still completes.
+    // Test hook: park so a later job stays queued for teardown to run out.
     while (d->hold && !d->stop)
       platform_cond_wait(d->cv, d->mu);
   }

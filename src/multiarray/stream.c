@@ -469,12 +469,9 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   if (!ms)
     return;
 
-  // Snapshot which arrays destroy itself will auto-flush (were not already
-  // flushed by the caller). Only those sinks are guaranteed alive at drain time
-  // — matching the single-array did_autoflush gate, a caller may free a sink
-  // after its own successful flush. On alloc failure, fall back to draining all:
-  // the freed-sink case is a rarer contract violation than the #147 footer-job
-  // use-after-free this guards.
+  // Remember which arrays we will auto-flush: only their sinks are sure to be
+  // alive at drain time, since a caller may free a sink after flushing itself.
+  // On alloc failure, drain all — the rarer hazard.
   int* autoflush = NULL;
   if (ms->arrays && ms->n_arrays > 0) {
     autoflush = (int*)calloc((size_t)ms->n_arrays, sizeof(int));
@@ -492,15 +489,11 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       log_error("CPU multiarray auto-flush failed during destroy");
   }
 
-  // A flush that errored after finalize_shards queued footer write_direct jobs
-  // (which reference each array's footer_buf_pool) can leave that IO pending in
-  // a sink's queue. Drain the sinks destroy auto-flushed before
-  // shard_state_destroy frees those pools below — the multiarray analogue of
-  // the single-array destroy fix (#147).
+  // Drain queued IO before teardown frees the buffers it points into.
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
       if (autoflush && !autoflush[i])
-        continue; // caller flushed this array; its sink may already be freed
+        continue;
       if (ms->arrays[i].sink)
         shard_sink_drain(ms->arrays[i].sink);
     }

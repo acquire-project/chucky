@@ -313,9 +313,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     }
 
     if (v->sink->has_error && v->sink->has_error(v->sink)) {
-      // A prior (mid-stream) finalize may have queued footer write_direct jobs
-      // that reference footer_buf_pool before the error surfaced; drain before
-      // bailing so destroy can free that pool with no IO pointing into it.
+      // Drain queued IO before bailing; it points into buffers destroy frees.
       shard_sink_drain(v->sink);
       return writer_error();
     }
@@ -323,9 +321,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment)) {
-          // finalize_shards can queue footer write_direct jobs that reference
-          // footer_buf_pool, then fail. Drain before returning so destroy can
-          // free that pool with no IO still pointing into it.
+          // Drain queued IO before bailing; it points into buffers destroy frees.
           shard_sink_drain(v->sink);
           return writer_error();
         }

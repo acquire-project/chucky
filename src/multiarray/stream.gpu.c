@@ -283,13 +283,9 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (!ms)
     return;
 
-  // Snapshot which arrays destroy itself will auto-flush (were not already
-  // flushed by the caller). Only those sinks are guaranteed alive at drain time
-  // — matching the single-array did_autoflush gate, a caller may free a sink
-  // after its own successful flush. Arrays the caller flushed are skipped (their
-  // flush already drained them, and their sink may already be gone). On alloc
-  // failure, fall back to draining all: the freed-sink case is a rarer contract
-  // violation than the #147 footer-job use-after-free this guards.
+  // Remember which arrays we will auto-flush: only their sinks are sure to be
+  // alive at drain time, since a caller may free a sink after flushing itself.
+  // On alloc failure, drain all — the rarer hazard.
   int* autoflush = NULL;
   if (ms->arrays && ms->n_arrays > 0) {
     autoflush = (int*)calloc((size_t)ms->n_arrays, sizeof(int));
@@ -307,24 +303,17 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       log_error("GPU multiarray auto-flush failed during destroy");
   }
 
-  // Ordering note: unlike the single-array path, this syncs before stop_join
-  // and never calls gpu_pool_release_all. That is safe only because multiarray
-  // binds every array with SCHEDULE_DRAIN_AFTER_KICK (gate_ord == NULL in
-  // init_array_descriptor): no tail gate is ever armed, so no kick can park and
-  // sync_all cannot hang. If multiarray ever adopts a gated/pipelined schedule,
-  // mirror the single-array order (stop_join -> release -> sync) here.
+  // Safe to sync first only because no array here arms a tail gate, so nothing
+  // can park waiting to be released. A gated schedule would need the single-
+  // array teardown order instead.
   sync_all(&ms->engine.streams);
 
-  // A flush that errored after finalize_shards queued footer write_direct jobs
-  // (which reference each array's footer_buf_pool) can leave that IO pending in
-  // a sink's queue. Stop the delivery worker and drain the sinks destroy
-  // auto-flushed before engine_array_state_destroy frees those pools below —
-  // the multiarray analogue of the single-array destroy fix (#147).
+  // Drain queued IO before teardown frees the buffers it points into.
   gpu_delivery_stop_join(&ms->engine.delivery);
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a) {
       if (autoflush && !autoflush[a])
-        continue; // caller flushed this array; its sink may already be freed
+        continue;
       if (ms->arrays[a].ctx.sink)
         shard_sink_drain(ms->arrays[a].ctx.sink);
     }

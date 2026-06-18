@@ -26,8 +26,7 @@ struct shard_pool_fs
   _Atomic uint64_t queued_bytes;
   _Atomic uint64_t retired_bytes;
   _Atomic int io_error;
-  // Test hook: one-shot. The next fs_slot_truncate fails before queueing its
-  // job, leaving any footer write_direct jobs from finalize_shards queued.
+  // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
 };
 
@@ -211,12 +210,8 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   if (w->fd == PLATFORM_FD_INVALID)
     return 0;
 
-  // Test hook: synthesize the footer-queued-then-error state. A queued footer
-  // write_direct has already been posted by finalize_shards; fail here (and set
-  // io_error, so a later flush bails at its has_error gate) so the queued
-  // footer outlives the flush. This returns synchronously rather than via the
-  // io worker like a genuine ftruncate failure, but it is enough to drive the
-  // teardown-drain path under test.
+  // Test hook: fail synchronously and mark the pool errored, so a footer write
+  // already queued by the caller outlives the flush that bails on the error.
   if (w->fail_next_truncate && atomic_exchange(w->fail_next_truncate, 0)) {
     atomic_store(w->io_error, 1);
     return 1;

@@ -3,7 +3,7 @@
 // references — including when sink IO is stalled at that moment.
 
 #include "gpu/prelude.cuda.h"
-#include "gpu/stream.internal.h" // white-box: hold the delivery worker
+#include "gpu/stream.internal.h" // white-box access for test hooks
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.gpu.h"
@@ -143,13 +143,9 @@ Cleanup:
   return rc;
 }
 
-// Two pipelined batches kicked (both enqueued on the delivery worker), the
-// sink forced into an error state, and the worker held after each job so the
-// second batch's delivery stays queued. destroy's auto-flush aborts on the
-// first failed drain without joining the second job; stop_join then has to run
-// that still-queued job out — the teardown run-out path. The hold makes the
-// queued-at-stop_join state deterministic rather than timing-dependent.
-// Asserts no hang and (under ASAN) no use-after-free.
+// Destroy must run out a delivery still queued when teardown begins, with no
+// hang and (under ASAN) no use-after-free. Holding the worker makes the queued
+// state deterministic rather than timing-dependent.
 static int
 test_destroy_runs_out_queued_delivery(const char* tmpdir)
 {
@@ -217,25 +213,18 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
   for (size_t i = 0; i < append_elements; ++i)
     src[i] = (uint16_t)(i * 31);
 
-  // Hold the worker after each completed job so the second batch's delivery is
-  // still queued when stop_join runs, exercising the run-out line. No-op if the
-  // worker is absent (drains run inline; no run-out line to hit).
+  // Hold the worker so a delivery stays queued through teardown.
   gpu_delivery_set_hold(&s->engine.delivery, 1);
 
-  // Force the sink errored before the kicks so every delivery the worker
-  // attempts short-circuits on has_error and fails fast.
+  // Error the sink first so every delivery fails fast.
   shard_pool_fs_set_error(pool);
 
   {
     struct slice input = { .beg = src, .end = src + append_elements };
-    // Append succeeds (the kick path does not check has_error); both batches
-    // are kicked and enqueued on the delivery worker, each failing on the
-    // sink error.
     writer_append(tile_stream_gpu_writer(s), input);
   }
 
-  // Destroy on another thread so a hung run-out shows up as a timeout rather
-  // than wedging the test.
+  // Destroy on another thread so a hang surfaces as a timeout, not a wedge.
   struct destroy_args da = { .s = s };
   atomic_store(&da.done, 0);
   CHECK(Cleanup, test_thread_start(&thr, destroy_thread_fn, &da) == 0);
@@ -249,8 +238,6 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
   test_thread_join(thr);
   thr = NULL;
 
-  // The sink is errored by construction; the point of the test is the clean
-  // teardown, which ASAN validates.
   rc = 0;
   log_info("  PASS");
 

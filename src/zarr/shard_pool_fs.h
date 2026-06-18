@@ -24,15 +24,11 @@ shard_pool_fs_inject_failing_job(struct shard_pool* pool);
 int
 shard_pool_fs_inject_blocking_job(struct shard_pool* pool, _Atomic int* gate);
 
-// Test helper: one-shot. The next truncate fails before queueing its job,
-// so finalize_shards errors after it has already queued footer write_direct
-// jobs that reference footer_buf_pool. Exercises the destroy-time drain that
-// guards those buffers against a flush that bailed before its own drain.
+// Test helper: one-shot, fail the next truncate so a flush errors with IO
+// still queued. Exercises the destroy-time drain that guards those buffers.
 int
 shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);
 
-// Test helper: mark the pool errored immediately (synchronous, no queue).
-// Lets a test make every subsequent shard delivery short-circuit on
-// has_error so a kicked batch's delivery fails and stays queued at destroy.
+// Test helper: mark the pool errored so later deliveries fail and stay queued.
 void
 shard_pool_fs_set_error(struct shard_pool* pool);
