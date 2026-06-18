@@ -663,7 +663,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->max_threads = 0;
   out->pump_mode = PUMP_CYCLE_BLOCKS;
 
-  const char* pump_flag = NULL; // last pump-mode flag seen (conflict warning)
+  const char* pump_flag = NULL;
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
       out->fill = parse_fill(av[++i]);
@@ -815,11 +815,7 @@ Fail:
 // Two-stream benchmark: two GPU pipelines, interleaved append on one thread
 // ---------------------------------------------------------------------------
 
-// Interleaved pump: alternates writer_append between two writers in lockstep.
-// Each iteration pushes one chunk to each writer before advancing. The pump
-// mode (see test_data.h) decides how the chunk contents are produced; the
-// default cycles a handful of pre-generated distinct blocks with no in-loop
-// fill. Fill seconds are written to *out_fill_s when non-NULL.
+// Interleaved pump: appends one chunk to each writer in turn until both are full.
 static int
 pump_data_interleaved(struct writer* w0,
                       struct writer* w1,

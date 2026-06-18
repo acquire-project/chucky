@@ -28,53 +28,32 @@ rand_pattern_init(const struct dimension* dims, uint8_t rank, size_t nframes);
 void
 rand_pattern_free(void);
 
-// Period (in elements) of the active fill pattern; 0 if it has none (zeros).
 size_t
 fill_pattern_period(fill_fn fill);
 
 size_t
 dim_total_elements(const struct dimension* dims, uint8_t rank);
 
-// How the pump produces the data it appends. The choice decides whether the
-// harness or the library dominates the measured wall time.
+// Distinct contents across blocks keep compression ratios realistic; identical
+// contents make compressed-codec results comparable only within one mode.
 enum pump_mode
 {
-  // Pre-generate a handful of distinct blocks once, then cycle through them
-  // one per append with no in-loop generation. Distinct contents keep
-  // compression ratios realistic; per-append cost is just the writer. Default.
   PUMP_CYCLE_BLOCKS = 0,
-  // Regenerate the block on every append (the original behaviour). The fill
-  // thread competes with the library for host memory bandwidth -- use this to
-  // measure the library under a busy producer.
   PUMP_BUSY_PRODUCER,
-  // Fill one block once and append it repeatedly. Cheapest, but every block has
-  // identical contents, so compressed-codec results are only comparable within
-  // this mode (within-mode A/B), not against the varied-data modes.
   PUMP_SINGLE_BLOCK,
 };
 
-// Number of distinct blocks pre-generated and cycled by PUMP_CYCLE_BLOCKS.
-// Capped to the number of appends for small runs.
 #define PUMP_CYCLE_BLOCK_COUNT 8
 
-// A set of pre-generated input blocks, each PUMP_BLOCK_ELEMENTS long, filled
-// according to the pump mode (see pump_blocks_alloc).
 struct pump_blocks
 {
-  uint16_t** block;  // count entries, each max(n*bpe, n*2) bytes
+  uint16_t** block;
   size_t count;
-  double fill_s;     // seconds spent filling, if measured (0 otherwise)
+  double fill_s;
 };
 
-// Elements per pre-generated block (also the per-append chunk size).
 #define PUMP_BLOCK_ELEMENTS (32 * 1024 * 1024)
 
-// Allocate and fill the block set the pump cycles through. For
-// PUMP_CYCLE_BLOCKS it pre-generates up to PUMP_CYCLE_BLOCK_COUNT distinct
-// blocks (staggered across the fill pattern, bounded by a host-RAM budget);
-// other modes allocate a single block, filled once for PUMP_SINGLE_BLOCK and
-// left for the append loop to fill for PUMP_BUSY_PRODUCER. When measure_fill is
-// nonzero the fill seconds are recorded in out->fill_s. Returns 0 on success.
 int
 pump_blocks_alloc(struct pump_blocks* out,
                   size_t total_elements,
@@ -98,10 +77,6 @@ pump_data_bpe(struct writer* w,
               fill_fn fill,
               size_t bpe);
 
-// Pump in the given mode. When out_fill_s is non-NULL, the seconds spent
-// generating data (block pre-generation for PUMP_CYCLE_BLOCKS, per-append fill
-// for PUMP_BUSY_PRODUCER) are written there so the report can attribute harness
-// time. Returns 0 on success.
 int
 pump_data_modal(struct writer* w,
                 size_t total_elements,

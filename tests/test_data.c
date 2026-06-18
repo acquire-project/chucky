@@ -123,9 +123,6 @@ fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total)
   }
 }
 
-// Period of the active fill pattern, in elements (0 if the fill has none, e.g.
-// fill_zeros). Block cycling staggers offsets across this so the pre-generated
-// blocks are distinct instead of aliasing back to identical content.
 size_t
 fill_pattern_period(fill_fn fill)
 {
@@ -186,9 +183,7 @@ pump_blocks_alloc(struct pump_blocks* out,
     nblocks = PUMP_CYCLE_BLOCK_COUNT;
     if (nblocks > nappends)
       nblocks = nappends;
-    // Cycling N blocks costs N * block_alloc of host RAM (vs one buffer in the
-    // other modes). Bound the total so large bytes-per-element runs don't blow
-    // up the harness footprint; u16 (64 MiB/block) is unaffected.
+    // Bound host RAM so large bytes-per-element runs don't blow up the footprint.
     size_t max_by_mem = ((size_t)1 << 30) / block_alloc;
     if (max_by_mem < 1)
       max_by_mem = 1;
@@ -200,8 +195,7 @@ pump_blocks_alloc(struct pump_blocks* out,
   if (!blocks)
     return 1;
   for (size_t b = 0; b < nblocks; ++b) {
-    // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
-    // the rest rather than ship uninitialized bytes to the writer.
+    // Zeroed: the fill leaves the high bytes untouched at wider element widths.
     blocks[b] = (uint16_t*)calloc(1, block_alloc);
     if (!blocks[b]) {
       for (size_t j = 0; j < b; ++j)
@@ -217,9 +211,8 @@ pump_blocks_alloc(struct pump_blocks* out,
   if (measure_fill)
     platform_toc(&fill_clock);
   if (mode == PUMP_CYCLE_BLOCKS) {
-    // Stagger each block's start across the fill pattern's full period so the
-    // blocks are genuinely distinct. A naive b*nelements offset aliases to
-    // identical content whenever nelements is a multiple of the period.
+    // Stagger starts across the pattern period; a per-block offset that is a
+    // multiple of the period would alias back to identical contents.
     const size_t period = fill_pattern_period(fill);
     const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
     for (size_t b = 0; b < nblocks; ++b)
@@ -246,8 +239,6 @@ pump_blocks_free(struct pump_blocks* b)
   b->count = 0;
 }
 
-// Cycle through pre-generated distinct blocks (PUMP_CYCLE_BLOCKS), one per
-// append with no in-loop fill, so per-append cost is just the writer.
 static int
 pump_cycle_blocks(struct writer* w,
                   size_t total_elements,
@@ -303,9 +294,7 @@ pump_data_modal(struct writer* w,
     return pump_cycle_blocks(w, total_elements, fill, bpe, out_fill_s);
 
   const size_t nelements = PUMP_BLOCK_ELEMENTS;
-  // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits.
-  // calloc: for bpe>2 the fill writes only the low uint16_t lanes, so zero
-  // the rest rather than ship uninitialized bytes to the writer.
+  // Zeroed: the fill leaves the high bytes untouched at wider element widths.
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
