@@ -54,7 +54,6 @@ struct bench_config
   uint64_t io_latency_us;     // 0 = no fixed per-job latency
   size_t backpressure_bytes;  // 0 = disabled; >0 = stall when pending > N
   int max_threads;            // 0 = OpenMP default (omp_get_max_threads)
-  int prefill;                // fill the pump buffer once, append repeatedly
 };
 
 int
