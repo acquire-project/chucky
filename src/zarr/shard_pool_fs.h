@@ -30,3 +30,9 @@ shard_pool_fs_inject_blocking_job(struct shard_pool* pool, _Atomic int* gate);
 // guards those buffers against a flush that bailed before its own drain.
 int
 shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);
+
+// Test helper: mark the pool errored immediately (synchronous, no queue).
+// Lets a test make every subsequent shard delivery short-circuit on
+// has_error so a kicked batch's delivery fails and stays queued at destroy.
+void
+shard_pool_fs_set_error(struct shard_pool* pool);

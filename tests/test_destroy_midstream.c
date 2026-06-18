@@ -142,6 +142,121 @@ Cleanup:
   return rc;
 }
 
+// Two pipelined batches kicked (both enqueued on the delivery worker), then
+// the sink is forced into an error state so each batch's delivery
+// short-circuits and fails. destroy's auto-flush aborts on the first failed
+// drain without joining the second batch's worker job, so a delivery job is
+// still queued when stop_join runs — the teardown run-out path. Asserts no
+// hang and (under ASAN) no use-after-free.
+static int
+test_destroy_runs_out_queued_delivery(const char* tmpdir)
+{
+  log_info("=== test_destroy_runs_out_queued_delivery ===");
+
+  struct dimension dims[3] = {
+    { .size = 12,
+      .chunk_size = 4,
+      .chunks_per_shard = 3,
+      .name = "z",
+      .storage_position = 0 },
+    { .size = 64,
+      .chunk_size = 16,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 64,
+      .chunk_size = 16,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+  const size_t epoch_elements = 4 * 64 * 64;
+  const size_t append_elements = 4 * epoch_elements; // two full batches at K=2
+
+  struct store* store = NULL;
+  struct shard_pool* pool = NULL;
+  struct zarr_array* arr = NULL;
+  struct tile_stream_gpu* s = NULL;
+  uint16_t* src = NULL;
+  test_thread* thr = NULL;
+  int rc = 1;
+
+  store = store_fs_create(tmpdir, 1);
+  CHECK(Cleanup, store);
+  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
+  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
+
+  pool = store->create_pool(store, 8);
+  CHECK(Cleanup, pool);
+
+  struct zarr_array_config acfg = {
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_ZSTD },
+  };
+  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
+  CHECK(Cleanup, arr);
+
+  const struct tile_stream_configuration cfg = {
+    .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_ZSTD },
+    .epochs_per_batch = 2,
+  };
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  CHECK(Cleanup, s);
+
+  src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
+  CHECK(Cleanup, src);
+  for (size_t i = 0; i < append_elements; ++i)
+    src[i] = (uint16_t)(i * 31);
+
+  // Force the sink errored before the kicks so every delivery the worker
+  // attempts short-circuits on has_error and fails fast.
+  shard_pool_fs_set_error(pool);
+
+  {
+    struct slice input = { .beg = src, .end = src + append_elements };
+    // Append succeeds (the kick path does not check has_error); both batches
+    // are kicked and enqueued on the delivery worker, each failing on the
+    // sink error.
+    writer_append(tile_stream_gpu_writer(s), input);
+  }
+
+  // Destroy on another thread so a hung run-out shows up as a timeout rather
+  // than wedging the test.
+  struct destroy_args da = { .s = s };
+  atomic_store(&da.done, 0);
+  CHECK(Cleanup, test_thread_start(&thr, destroy_thread_fn, &da) == 0);
+  s = NULL;
+
+  if (wait_for_done(&da.done, POST_RELEASE_TIMEOUT_MS)) {
+    log_error("destroy hung with a delivery job still queued");
+    goto Cleanup;
+  }
+
+  test_thread_join(thr);
+  thr = NULL;
+
+  // The sink is errored by construction; the point of the test is the clean
+  // teardown, which ASAN validates.
+  rc = 0;
+  log_info("  PASS");
+
+Cleanup:
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_thread_join(thr);
+  zarr_array_destroy(arr);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return rc;
+}
+
 // One full batch appended (slot kicked; its delivery ran on the worker and
 // queued sink IO), sink IO gated: destroy must block until the IO drains,
 // then finish clean.
@@ -281,6 +396,13 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/midstream_%d", tmpdir, rep);
     test_mkdir(sub);
     ecode |= test_destroy_with_delivery_in_flight(sub, rep);
+  }
+
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/runout", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_destroy_runs_out_queued_delivery(sub);
   }
 
   {

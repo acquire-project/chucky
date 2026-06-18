@@ -397,6 +397,13 @@ shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
   return 0;
 }
 
+void
+shard_pool_fs_set_error(struct shard_pool* self)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  atomic_store(&p->io_error, 1);
+}
+
 struct gate_ctx
 {
   _Atomic int* gate;
