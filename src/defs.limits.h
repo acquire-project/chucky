@@ -6,6 +6,10 @@
 #define HALF_MAX_RANK (MAX_RANK / 2)
 #define LOD_MAX_NDIM HALF_MAX_RANK
 #define LOD_MAX_LEVELS 32
+
+// Worst case three batches are live at once (draining, kicked-and-pending,
+// filling), so each needs its own timing buffer (#154).
+#define LOD_TIMING_SLOTS 3
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // S3

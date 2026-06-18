@@ -709,6 +709,8 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   const uint8_t nlod = stage->ar.nlod;
   out->fc = fc;
   out->n_epochs = in->n_epochs;
+  out->lod_timing_slot = in->lod_timing_slot;
+  out->has_lod_timing = in->has_lod_timing;
   out->active_levels_mask = in->active_levels_mask;
   out->batch_active_masks = in->batch_active_masks;
   out->nlod = nlod;

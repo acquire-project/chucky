@@ -464,6 +464,8 @@ make_compress_input(struct stream_engine* e, int fc, uint32_t n_epochs)
     .active_levels_mask = s->active_levels_mask,
     .batch_active_masks = s->batch_active_masks,
     .epochs_per_batch = e->sched.epochs_per_batch,
+    .lod_timing_slot = s->lod_timing_slot,
+    .has_lod_timing = s->has_lod_timing,
   };
 }
 
@@ -484,6 +486,15 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
   struct schedule_slot* s = &e->sched.slot[e->sched.fill];
   uint32_t active_mask;
 
+  // Pick a fresh timing buffer at the first epoch so the worker's drain read
+  // can't collide with the next batch's re-record (#154).
+  if (e->sched.accumulated == 0) {
+    s->lod_timing_slot = e->lod_shared.next_timing_slot;
+    e->lod_shared.next_timing_slot =
+      (e->lod_shared.next_timing_slot + 1) % LOD_TIMING_SLOTS;
+    s->has_lod_timing = e->sched.lod_active;
+  }
+
   if (!e->sched.lod_active) {
     active_mask = 1;
   } else {
@@ -492,6 +503,7 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
                         &e->lod_shared,
                         &e->ord,
                         e->sched.fill,
+                        s->lod_timing_slot,
                         &ctx->levels,
                         stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
                         ctx->config.dtype,
@@ -743,6 +755,8 @@ schedule_flush_partial_append(struct stream_engine* e,
   struct schedule_slot* fs = &e->sched.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
+  // No timed epoch here, so the drain must skip stale timing metrics (#154).
+  fs->has_lod_timing = 0;
 
   // Produce-phase writes within the generation acquired at the last swap
   // (the fill slot is still being filled).

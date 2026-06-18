@@ -9,7 +9,7 @@
 // Timing-only events are excluded (they must not masquerade as ordering):
 //   staging t_h2d_start/t_scatter_start; compress t_compress_start/end;
 //   d2h t_d2h_start; lod timing t_start/t_scatter_end/t_reduce_end/
-//   t_append_end (t_end doubles as GPU_EDGE_LOD_DONE and is bound here).
+//   t_append_end/t_end.
 
 #include <cuda.h>
 #include <stdint.h>
@@ -48,7 +48,7 @@ enum gpu_edge
   GPU_EDGE_POOL_FILLED, // compute -> compress: chunk-pool batch contents
                         // (single instance; one batch in flight at record)
   GPU_EDGE_LOD_DONE,    // compute -> compress: LOD chunks in pool
-                        // (bound to lod_shared timing t_end; multiscale only)
+                        // (multiscale only)
   GPU_EDGE_AGG_DONE,    // compress -> d2h: aggregate slot outputs ready
   GPU_EDGE_POOL_CONSUMED, // compress -> compute (alias of AGG_DONE):
                           // pool buf[fc] reuse / re-zero (#140)

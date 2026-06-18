@@ -171,10 +171,10 @@ stream_engine_init(struct stream_engine* e,
                                 lim->lod_linear_bytes,
                                 lim->lod_morton_bytes,
                                 e->streams.compute) == 0);
-    // t_end doubles as GPU_EDGE_LOD_DONE; already seeded by the init above.
+    // lod_done is the stable per-fc ordering edge; already seeded above.
     for (int fc = 0; fc < 2; ++fc)
       gpu_ordering_bind(
-        &e->ord, GPU_EDGE_LOD_DONE, fc, e->lod_shared.timing[fc].t_end);
+        &e->ord, GPU_EDGE_LOD_DONE, fc, e->lod_shared.lod_done[fc]);
   }
 
   CU(Fail, cuStreamSynchronize(e->streams.compute));
