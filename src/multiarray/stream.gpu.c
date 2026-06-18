@@ -294,6 +294,19 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   sync_all(&ms->engine.streams);
 
+  // A flush that errored after finalize_shards queued footer write_direct jobs
+  // (which reference each array's footer_buf_pool) can leave that IO pending in
+  // a sink's queue. Stop the delivery worker and drain every sink before
+  // engine_array_state_destroy frees those pools below — the multiarray analogue
+  // of the single-array destroy fix (#147). Sinks are caller-owned and must
+  // outlive destroy; the auto-flush above just used them, so they are alive.
+  gpu_delivery_stop_join(&ms->engine.delivery);
+  if (ms->arrays) {
+    for (int a = 0; a < ms->n_arrays; ++a)
+      if (ms->arrays[a].ctx.sink)
+        shard_sink_drain(ms->arrays[a].ctx.sink);
+  }
+
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);

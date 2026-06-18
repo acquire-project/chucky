@@ -360,9 +360,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   // but does not drain that queue. An auto-flush that bailed before its own
   // drain can also leave footer jobs (referencing footer_buf_pool) queued.
   // Drain now so engine_array_state_destroy frees that pool with no IO
-  // pointing into it. Guarded by did_autoflush: the sink is known alive only
-  // when destroy ran the flush; a caller that flushed itself may have torn
-  // its sink down already.
+  // pointing into it. Gated on did_autoflush: the contract is that the caller
+  // keeps the sink alive until destroy, except that after a SUCCESSFUL flush it
+  // may tear the sink down (then flushed==1, did_autoflush==0, and this is
+  // skipped). A caller that frees its sink after a FAILED flush violates the
+  // contract — the auto-flush above would already fault before this drain.
   if (did_autoflush && s->ctx.sink)
     shard_sink_drain(s->ctx.sink);
 

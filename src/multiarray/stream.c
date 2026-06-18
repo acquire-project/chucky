@@ -478,6 +478,18 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       log_error("CPU multiarray auto-flush failed during destroy");
   }
 
+  // A flush that errored after finalize_shards queued footer write_direct jobs
+  // (which reference each array's footer_buf_pool) can leave that IO pending in
+  // a sink's queue. Drain every sink before shard_state_destroy frees those
+  // pools below — the multiarray analogue of the single-array destroy fix
+  // (#147). Sinks are caller-owned and must outlive destroy; the auto-flush
+  // above just used them, so they are alive.
+  if (ms->arrays) {
+    for (int i = 0; i < ms->n_arrays; ++i)
+      if (ms->arrays[i].sink)
+        shard_sink_drain(ms->arrays[i].sink);
+  }
+
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
       struct array_descriptor* desc = &ms->arrays[i];

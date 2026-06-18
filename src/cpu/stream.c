@@ -299,10 +299,13 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     if (r.error)
       log_error("CPU stream auto-flush failed during destroy");
     // The flush may have bailed (e.g. the sink already errored) before its own
-    // drain, leaving footer jobs that reference footer_buf_pool queued. The
-    // sink is still alive here (we just flushed through it), so drain before
-    // the teardown below frees that pool. Only safe on this path: a caller
-    // that already flushed may have torn its sink down before destroy.
+    // drain, leaving footer jobs that reference footer_buf_pool queued; drain
+    // before the teardown below frees that pool. This is gated on !flushed:
+    // the contract is that the caller keeps the sink alive until destroy,
+    // except that after a SUCCESSFUL flush it may tear the sink down (then
+    // flushed==1 and neither the auto-flush nor this drain runs). A caller that
+    // frees its sink after a FAILED flush violates the contract — the
+    // auto-flush above would already fault on the freed sink before this drain.
     if (s->shard_sink)
       shard_sink_drain(s->shard_sink);
     s->flushed = 1;
