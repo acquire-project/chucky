@@ -292,14 +292,22 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       log_error("GPU multiarray auto-flush failed during destroy");
   }
 
+  // Ordering note: unlike the single-array path, this syncs before stop_join
+  // and never calls gpu_pool_release_all. That is safe only because multiarray
+  // binds every array with SCHEDULE_DRAIN_AFTER_KICK (gate_ord == NULL in
+  // init_array_descriptor): no tail gate is ever armed, so no kick can park and
+  // sync_all cannot hang. If multiarray ever adopts a gated/pipelined schedule,
+  // mirror the single-array order (stop_join -> release -> sync) here.
   sync_all(&ms->engine.streams);
 
   // A flush that errored after finalize_shards queued footer write_direct jobs
   // (which reference each array's footer_buf_pool) can leave that IO pending in
   // a sink's queue. Stop the delivery worker and drain every sink before
   // engine_array_state_destroy frees those pools below — the multiarray analogue
-  // of the single-array destroy fix (#147). Sinks are caller-owned and must
-  // outlive destroy; the auto-flush above just used them, so they are alive.
+  // of the single-array destroy fix (#147). The drain is unconditional (no
+  // did_autoflush gate): multiarray destroy always re-runs flush_impl through
+  // the sinks, so its sinks must always outlive destroy — there is no
+  // free-sink-after-successful-flush carve-out like the single-array path.
   gpu_delivery_stop_join(&ms->engine.delivery);
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a)

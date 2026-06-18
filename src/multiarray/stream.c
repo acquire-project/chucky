@@ -482,8 +482,10 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   // (which reference each array's footer_buf_pool) can leave that IO pending in
   // a sink's queue. Drain every sink before shard_state_destroy frees those
   // pools below — the multiarray analogue of the single-array destroy fix
-  // (#147). Sinks are caller-owned and must outlive destroy; the auto-flush
-  // above just used them, so they are alive.
+  // (#147). The drain is unconditional (no did_autoflush gate): multiarray
+  // destroy always re-runs flush_impl through the sinks, so its sinks must
+  // always outlive destroy — there is no free-sink-after-successful-flush
+  // carve-out like the single-array path.
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i)
       if (ms->arrays[i].sink)
