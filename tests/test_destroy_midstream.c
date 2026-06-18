@@ -3,6 +3,7 @@
 // references — including when sink IO is stalled at that moment.
 
 #include "gpu/prelude.cuda.h"
+#include "gpu/stream.internal.h" // white-box: hold the delivery worker
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.gpu.h"
@@ -142,12 +143,13 @@ Cleanup:
   return rc;
 }
 
-// Two pipelined batches kicked (both enqueued on the delivery worker), then
-// the sink is forced into an error state so each batch's delivery
-// short-circuits and fails. destroy's auto-flush aborts on the first failed
-// drain without joining the second batch's worker job, so a delivery job is
-// still queued when stop_join runs — the teardown run-out path. Asserts no
-// hang and (under ASAN) no use-after-free.
+// Two pipelined batches kicked (both enqueued on the delivery worker), the
+// sink forced into an error state, and the worker held after each job so the
+// second batch's delivery stays queued. destroy's auto-flush aborts on the
+// first failed drain without joining the second job; stop_join then has to run
+// that still-queued job out — the teardown run-out path. The hold makes the
+// queued-at-stop_join state deterministic rather than timing-dependent.
+// Asserts no hang and (under ASAN) no use-after-free.
 static int
 test_destroy_runs_out_queued_delivery(const char* tmpdir)
 {
@@ -214,6 +216,11 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
   CHECK(Cleanup, src);
   for (size_t i = 0; i < append_elements; ++i)
     src[i] = (uint16_t)(i * 31);
+
+  // Hold the worker after each completed job so the second batch's delivery is
+  // still queued when stop_join runs, exercising the run-out line. No-op if the
+  // worker is absent (drains run inline; no run-out line to hit).
+  gpu_delivery_set_hold(&s->engine.delivery, 1);
 
   // Force the sink errored before the kicks so every delivery the worker
   // attempts short-circuits on has_error and fails fast.

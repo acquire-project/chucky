@@ -312,8 +312,13 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       v->sink->wait_fence(v->sink, v->io_done[1]);
     }
 
-    if (v->sink->has_error && v->sink->has_error(v->sink))
+    if (v->sink->has_error && v->sink->has_error(v->sink)) {
+      // A prior (mid-stream) finalize may have queued footer write_direct jobs
+      // that reference footer_buf_pool before the error surfaced; drain before
+      // bailing so destroy can free that pool with no IO pointing into it.
+      shard_sink_drain(v->sink);
       return writer_error();
+    }
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {

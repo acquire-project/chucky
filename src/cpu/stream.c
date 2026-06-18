@@ -298,6 +298,13 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     struct writer_result r = cpu_stream_flush_body(&v);
     if (r.error)
       log_error("CPU stream auto-flush failed during destroy");
+    // The flush may have bailed (e.g. the sink already errored) before its own
+    // drain, leaving footer jobs that reference footer_buf_pool queued. The
+    // sink is still alive here (we just flushed through it), so drain before
+    // the teardown below frees that pool. Only safe on this path: a caller
+    // that already flushed may have torn its sink down before destroy.
+    if (s->shard_sink)
+      shard_sink_drain(s->shard_sink);
     s->flushed = 1;
   }
 

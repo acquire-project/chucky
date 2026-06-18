@@ -211,8 +211,12 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   if (w->fd == PLATFORM_FD_INVALID)
     return 0;
 
-  // A real truncate failure (truncate_fn) marks the pool errored; mirror that
-  // so a subsequent flush bails at its has_error gate before its own drain.
+  // Test hook: synthesize the footer-queued-then-error state. A queued footer
+  // write_direct has already been posted by finalize_shards; fail here (and set
+  // io_error, so a later flush bails at its has_error gate) so the queued
+  // footer outlives the flush. This returns synchronously rather than via the
+  // io worker like a genuine ftruncate failure, but it is enough to drive the
+  // teardown-drain path under test.
   if (w->fail_next_truncate && atomic_exchange(w->fail_next_truncate, 0)) {
     atomic_store(w->io_error, 1);
     return 1;

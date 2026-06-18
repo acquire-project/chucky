@@ -351,6 +351,10 @@ delivery_main(void* arg)
     j->result = r;
     j->done = 1;
     platform_cond_broadcast(d->cv);
+    // Test hook: park here so a later job stays queued; stop_join then has to
+    // run it out. Wakes on stop so teardown still completes.
+    while (d->hold && !d->stop)
+      platform_cond_wait(d->cv, d->mu);
   }
   platform_mutex_unlock(d->mu);
 }
@@ -436,6 +440,17 @@ gpu_delivery_stop_join(struct gpu_delivery* d)
   d->cv = NULL;
   platform_mutex_free(d->mu);
   d->mu = NULL;
+}
+
+void
+gpu_delivery_set_hold(struct gpu_delivery* d, int on)
+{
+  if (!d->thread)
+    return;
+  platform_mutex_lock(d->mu);
+  d->hold = on;
+  platform_cond_broadcast(d->cv);
+  platform_mutex_unlock(d->mu);
 }
 
 // --- Helpers ---
