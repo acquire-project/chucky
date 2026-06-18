@@ -469,6 +469,20 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   if (!ms)
     return;
 
+  // Snapshot which arrays destroy itself will auto-flush (were not already
+  // flushed by the caller). Only those sinks are guaranteed alive at drain time
+  // — matching the single-array did_autoflush gate, a caller may free a sink
+  // after its own successful flush. On alloc failure, fall back to draining all:
+  // the freed-sink case is a rarer contract violation than the #147 footer-job
+  // use-after-free this guards.
+  int* autoflush = NULL;
+  if (ms->arrays && ms->n_arrays > 0) {
+    autoflush = (int*)calloc((size_t)ms->n_arrays, sizeof(int));
+    if (autoflush)
+      for (int i = 0; i < ms->n_arrays; ++i)
+        autoflush[i] = !ms->arrays[i].flushed;
+  }
+
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
   // for callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
@@ -480,17 +494,18 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
 
   // A flush that errored after finalize_shards queued footer write_direct jobs
   // (which reference each array's footer_buf_pool) can leave that IO pending in
-  // a sink's queue. Drain every sink before shard_state_destroy frees those
-  // pools below — the multiarray analogue of the single-array destroy fix
-  // (#147). The drain is unconditional (no did_autoflush gate): multiarray
-  // destroy always re-runs flush_impl through the sinks, so its sinks must
-  // always outlive destroy — there is no free-sink-after-successful-flush
-  // carve-out like the single-array path.
+  // a sink's queue. Drain the sinks destroy auto-flushed before
+  // shard_state_destroy frees those pools below — the multiarray analogue of
+  // the single-array destroy fix (#147).
   if (ms->arrays) {
-    for (int i = 0; i < ms->n_arrays; ++i)
+    for (int i = 0; i < ms->n_arrays; ++i) {
+      if (autoflush && !autoflush[i])
+        continue; // caller flushed this array; its sink may already be freed
       if (ms->arrays[i].sink)
         shard_sink_drain(ms->arrays[i].sink);
+    }
   }
+  free(autoflush);
 
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
