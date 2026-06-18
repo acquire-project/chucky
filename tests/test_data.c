@@ -1,6 +1,5 @@
 #include "test_data.h"
 #include "log/log.h"
-#include "platform/platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,16 +122,6 @@ fill_xor(uint16_t* buf, size_t count, size_t offset, size_t total)
   }
 }
 
-size_t
-fill_pattern_period(fill_fn fill)
-{
-  if (fill == fill_xor)
-    return xor_pattern_len;
-  if (fill == fill_rand)
-    return rand_pattern_len;
-  return 0;
-}
-
 // --- Helpers ---
 
 size_t
@@ -144,186 +133,24 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
   return n;
 }
 
+static const size_t PUMP_BLOCK_ELEMENTS = 32 * 1024 * 1024;
+
+// Regenerate each appended block. Tests that verify content rely on the
+// per-append variation; benchmarks should use pump_data_prefill instead.
 int
 pump_data_bpe(struct writer* w, size_t total_elements, fill_fn fill, size_t bpe)
 {
-  return pump_data_modal(
-    w, total_elements, fill, bpe, PUMP_BUSY_PRODUCER, NULL);
-}
-
-int
-pump_data(struct writer* w, size_t total_elements, fill_fn fill)
-{
-  return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
-}
-
-int
-pump_blocks_alloc(struct pump_blocks* out,
-                  size_t total_elements,
-                  fill_fn fill,
-                  size_t bpe,
-                  enum pump_mode mode,
-                  int measure_fill)
-{
   const size_t nelements = PUMP_BLOCK_ELEMENTS;
-  const size_t block_alloc = nelements * (bpe > 2 ? bpe : 2);
-
-  out->block = NULL;
-  out->count = 0;
-  out->fill_s = 0.0;
-
-  size_t nblocks = 1;
-  if (mode == PUMP_CYCLE_BLOCKS) {
-    size_t nappends = total_elements / nelements;
-    if (total_elements % nelements)
-      nappends += 1;
-    if (nappends == 0)
-      nappends = 1;
-
-    nblocks = PUMP_CYCLE_BLOCK_COUNT;
-    if (nblocks > nappends)
-      nblocks = nappends;
-    // Bound host RAM so large bytes-per-element runs don't blow up the footprint.
-    size_t max_by_mem = ((size_t)1 << 30) / block_alloc;
-    if (max_by_mem < 1)
-      max_by_mem = 1;
-    if (nblocks > max_by_mem)
-      nblocks = max_by_mem;
-  }
-
-  uint16_t** blocks = (uint16_t**)calloc(nblocks, sizeof(uint16_t*));
-  if (!blocks)
-    return 1;
-  for (size_t b = 0; b < nblocks; ++b) {
-    // Zeroed: the fill leaves the high bytes untouched at wider element widths.
-    blocks[b] = (uint16_t*)calloc(1, block_alloc);
-    if (!blocks[b]) {
-      for (size_t j = 0; j < b; ++j)
-        free(blocks[j]);
-      free(blocks);
-      return 1;
-    }
-  }
-  out->block = blocks;
-  out->count = nblocks;
-
-  struct platform_clock fill_clock = { 0 };
-  if (measure_fill)
-    platform_toc(&fill_clock);
-  if (mode == PUMP_CYCLE_BLOCKS) {
-    // Stagger starts across the pattern period; a per-block offset that is a
-    // multiple of the period would alias back to identical contents.
-    const size_t period = fill_pattern_period(fill);
-    const size_t stride = (period && period >= nblocks) ? period / nblocks : 1;
-    for (size_t b = 0; b < nblocks; ++b)
-      fill(blocks[b], nelements, b * stride, total_elements);
-  } else if (mode == PUMP_SINGLE_BLOCK) {
-    fill(blocks[0],
-         nelements < total_elements ? nelements : total_elements,
-         0,
-         total_elements);
-  }
-  if (measure_fill)
-    out->fill_s = (double)platform_toc(&fill_clock);
-
-  return 0;
-}
-
-void
-pump_blocks_free(struct pump_blocks* b)
-{
-  for (size_t i = 0; i < b->count; ++i)
-    free(b->block[i]);
-  free(b->block);
-  b->block = NULL;
-  b->count = 0;
-}
-
-static int
-pump_cycle_blocks(struct writer* w,
-                  size_t total_elements,
-                  fill_fn fill,
-                  size_t bpe,
-                  double* out_fill_s)
-{
-  const size_t nelements = PUMP_BLOCK_ELEMENTS;
-  struct pump_blocks blocks;
-  if (pump_blocks_alloc(
-        &blocks, total_elements, fill, bpe, PUMP_CYCLE_BLOCKS, out_fill_s != 0))
-    return 1;
-  if (out_fill_s)
-    *out_fill_s = blocks.fill_s;
-
-  int err = 0;
-  size_t b = 0;
-  for (size_t offset = 0; offset < total_elements; offset += nelements) {
-    size_t n = nelements;
-    if (offset + n > total_elements)
-      n = total_elements - offset;
-    uint16_t* data = blocks.block[b];
-    b = (b + 1 == blocks.count) ? 0 : b + 1;
-    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
-    struct writer_result r = writer_append_wait(w, input);
-    if (r.error) {
-      log_error("  append failed at offset %zu", offset);
-      err = 1;
-      break;
-    }
-  }
-
-  if (!err) {
-    struct writer_result r = writer_flush(w);
-    err = r.error;
-  }
-  pump_blocks_free(&blocks);
-  return err;
-}
-
-int
-pump_data_modal(struct writer* w,
-                size_t total_elements,
-                fill_fn fill,
-                size_t bpe,
-                enum pump_mode mode,
-                double* out_fill_s)
-{
-  if (out_fill_s)
-    *out_fill_s = 0.0;
-
-  if (mode == PUMP_CYCLE_BLOCKS)
-    return pump_cycle_blocks(w, total_elements, fill, bpe, out_fill_s);
-
-  const size_t nelements = PUMP_BLOCK_ELEMENTS;
-  // Zeroed: the fill leaves the high bytes untouched at wider element widths.
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
     return 1;
 
-  struct platform_clock fill_clock = { 0 };
-  double fill_s = 0.0;
-  if (mode == PUMP_SINGLE_BLOCK) {
-    if (out_fill_s)
-      platform_toc(&fill_clock);
-    fill(data,
-         nelements < total_elements ? nelements : total_elements,
-         0,
-         total_elements);
-    if (out_fill_s)
-      fill_s += (double)platform_toc(&fill_clock);
-  }
-
   for (size_t offset = 0; offset < total_elements; offset += nelements) {
     size_t n = nelements;
     if (offset + n > total_elements)
       n = total_elements - offset;
-    if (mode == PUMP_BUSY_PRODUCER) {
-      if (out_fill_s)
-        platform_toc(&fill_clock);
-      fill(data, n, offset, total_elements);
-      if (out_fill_s)
-        fill_s += (double)platform_toc(&fill_clock);
-    }
+    fill(data, n, offset, total_elements);
     struct slice input = { .beg = data, .end = (char*)data + n * bpe };
     struct writer_result r = writer_append_wait(w, input);
     if (r.error) {
@@ -335,7 +162,47 @@ pump_data_modal(struct writer* w,
 
   struct writer_result r = writer_flush(w);
   free(data);
-  if (out_fill_s)
-    *out_fill_s = fill_s;
+  return r.error;
+}
+
+int
+pump_data(struct writer* w, size_t total_elements, fill_fn fill)
+{
+  return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
+}
+
+// Fill one block and reuse it for every append, so the measured loop is the
+// writer rather than the generator.
+int
+pump_data_prefill(struct writer* w,
+                  size_t total_elements,
+                  fill_fn fill,
+                  size_t bpe)
+{
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+  uint16_t* data = (uint16_t*)calloc(1, alloc);
+  if (!data)
+    return 1;
+  fill(data,
+       nelements < total_elements ? nelements : total_elements,
+       0,
+       total_elements);
+
+  for (size_t offset = 0; offset < total_elements; offset += nelements) {
+    size_t n = nelements;
+    if (offset + n > total_elements)
+      n = total_elements - offset;
+    struct slice input = { .beg = data, .end = (char*)data + n * bpe };
+    struct writer_result r = writer_append_wait(w, input);
+    if (r.error) {
+      log_error("  append failed at offset %zu", offset);
+      free(data);
+      return 1;
+    }
+  }
+
+  struct writer_result r = writer_flush(w);
+  free(data);
   return r.error;
 }

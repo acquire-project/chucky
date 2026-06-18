@@ -219,7 +219,6 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      float data_gen_s,
                       size_t memory_estimate_total_bytes,
                       size_t memory_estimate_pinned_bytes)
 {
@@ -266,8 +265,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)init_s);
   jw_key(&jw, "flush_s");
   jw_float(&jw, (double)flush_s);
-  jw_key(&jw, "data_gen_s");
-  jw_float(&jw, (double)data_gen_s);
   jw_key(&jw, "memory_estimate_total_bytes");
   jw_uint(&jw, memory_estimate_total_bytes);
   jw_key(&jw, "memory_estimate_pinned_bytes");

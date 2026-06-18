@@ -55,7 +55,6 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      float data_gen_s,
                       size_t memory_estimate_total_bytes,
                       size_t memory_estimate_pinned_bytes);
 
