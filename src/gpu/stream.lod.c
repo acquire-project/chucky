@@ -394,18 +394,26 @@ lod_shared_state_init(struct lod_shared_state* sh,
   CU(Fail, cuMemAlloc(&sh->d_linear, linear_bytes));
   CU(Fail, cuMemAlloc(&sh->d_morton, morton_bytes));
 
+  sh->next_timing_slot = 0;
+
+  // Ordering-edge events, one per fc (GPU_EDGE_LOD_DONE binds these).
   for (int fc = 0; fc < 2; ++fc) {
-    CU(Fail, cuEventCreate(&sh->timing[fc].t_start, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&sh->timing[fc].t_scatter_end, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&sh->timing[fc].t_reduce_end, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&sh->timing[fc].t_append_end, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&sh->timing[fc].t_end, CU_EVENT_DEFAULT));
-    // Seed events so initial waits complete immediately.
-    CU(Fail, cuEventRecord(sh->timing[fc].t_start, seed_stream));
-    CU(Fail, cuEventRecord(sh->timing[fc].t_scatter_end, seed_stream));
-    CU(Fail, cuEventRecord(sh->timing[fc].t_reduce_end, seed_stream));
-    CU(Fail, cuEventRecord(sh->timing[fc].t_append_end, seed_stream));
-    CU(Fail, cuEventRecord(sh->timing[fc].t_end, seed_stream));
+    CU(Fail, cuEventCreate(&sh->lod_done[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventRecord(sh->lod_done[fc], seed_stream));
+  }
+
+  // Timing generations. Seed so initial metric reads see a valid interval.
+  for (int g = 0; g < LOD_TIMING_SLOTS; ++g) {
+    CU(Fail, cuEventCreate(&sh->timing[g].t_start, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&sh->timing[g].t_scatter_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&sh->timing[g].t_reduce_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&sh->timing[g].t_append_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&sh->timing[g].t_end, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventRecord(sh->timing[g].t_start, seed_stream));
+    CU(Fail, cuEventRecord(sh->timing[g].t_scatter_end, seed_stream));
+    CU(Fail, cuEventRecord(sh->timing[g].t_reduce_end, seed_stream));
+    CU(Fail, cuEventRecord(sh->timing[g].t_append_end, seed_stream));
+    CU(Fail, cuEventRecord(sh->timing[g].t_end, seed_stream));
   }
 
   return 0;
@@ -424,12 +432,14 @@ lod_shared_state_destroy(struct lod_shared_state* sh)
   // Null-check each event individually: a partial init (e.g., cleanup after
   // lod_shared_state_init fails halfway through event creation) leaves some
   // handles zero, and cuEventDestroy on NULL returns an error.
-  for (int fc = 0; fc < 2; ++fc) {
-    cu_event_destroy(sh->timing[fc].t_start);
-    cu_event_destroy(sh->timing[fc].t_scatter_end);
-    cu_event_destroy(sh->timing[fc].t_reduce_end);
-    cu_event_destroy(sh->timing[fc].t_append_end);
-    cu_event_destroy(sh->timing[fc].t_end);
+  for (int fc = 0; fc < 2; ++fc)
+    cu_event_destroy(sh->lod_done[fc]);
+  for (int g = 0; g < LOD_TIMING_SLOTS; ++g) {
+    cu_event_destroy(sh->timing[g].t_start);
+    cu_event_destroy(sh->timing[g].t_scatter_end);
+    cu_event_destroy(sh->timing[g].t_reduce_end);
+    cu_event_destroy(sh->timing[g].t_append_end);
+    cu_event_destroy(sh->timing[g].t_end);
   }
   memset(sh, 0, sizeof(*sh));
 }
@@ -731,6 +741,7 @@ lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
               struct gpu_ordering* ord,
               int fc,
+              int timing_slot,
               const struct level_geometry* levels,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,
@@ -741,7 +752,7 @@ lod_run_epoch(struct lod_state* lod,
               uint32_t* out_active_mask)
 {
   struct lod_plan* p = &lod->plan;
-  struct lod_timing* t = &sh->timing[fc];
+  struct lod_timing* t = &sh->timing[timing_slot];
 
   CU(Error, cuEventRecord(t->t_start, compute));
 
@@ -804,7 +815,9 @@ lod_run_epoch(struct lod_state* lod,
           lod, sh, levels, pool_epoch, dtype, active_levels_mask, compute) ==
           0);
 
-  // t_end doubles as GPU_EDGE_LOD_DONE (bound at engine init).
+  // Timing endpoint for the batch's generation; the ordering edge records
+  // separately on the stable per-fc sh->lod_done[fc] (bound at engine init).
+  CU(Error, cuEventRecord(t->t_end, compute));
   CHECK(Error, gpu_edge_record(ord, GPU_EDGE_LOD_DONE, fc, compute) == 0);
 
   *out_active_mask = active_levels_mask;

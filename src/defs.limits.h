@@ -6,6 +6,13 @@
 #define HALF_MAX_RANK (MAX_RANK / 2)
 #define LOD_MAX_NDIM HALF_MAX_RANK
 #define LOD_MAX_LEVELS 32
+
+// Generations of per-fc LOD timing events. The delivery worker reads a
+// drained batch's timing while the producer re-records the next same-fc
+// batch's events; at the worst case three batches are live at once (one
+// draining, one kicked-and-pending, one filling), so each owns its own
+// generation for its whole lifetime (#154).
+#define LOD_TIMING_SLOTS 3
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // S3

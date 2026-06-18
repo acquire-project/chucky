@@ -17,10 +17,11 @@ lod_state_init(struct lod_state* lod,
 // linear_bytes / morton_bytes are the buffer sizes (multiarray passes the max
 // across arrays; single-array passes the array's own sizes).
 //
-// The timing events are created AND seeded on `seed_stream` so the first
-// downstream wait completes immediately.  `seed_stream` must be the same
-// compute stream that later runs lod_run_epoch — seeding on an unrelated
-// stream leaves the initial waits unsatisfied.
+// The lod_done ordering events and the timing generations are created AND
+// seeded on `seed_stream` so the first downstream wait (and metric read)
+// completes immediately. `seed_stream` must be the same compute stream that
+// later runs lod_run_epoch — seeding on an unrelated stream leaves the
+// initial waits unsatisfied.
 //
 // Returns 0 on success; on failure, the struct is left safe to pass to
 // lod_shared_state_destroy.
@@ -55,13 +56,16 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
 
 // Run LOD pipeline for one epoch: gather -> reduce -> append fold ->
 // morton-to-chunks. pool_epoch: acquired view of this epoch's chunk pool
-// region (all levels). *out_active_mask: set to bitmask of active LOD levels
-// for this epoch. Returns 0 on success, non-zero on error.
+// region (all levels). timing_slot: the batch's owned timing generation
+// (sh->timing[timing_slot]); the ordering edge records on the stable
+// per-fc sh->lod_done[fc]. *out_active_mask: set to bitmask of active LOD
+// levels for this epoch. Returns 0 on success, non-zero on error.
 int
 lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
               struct gpu_ordering* ord,
               int fc,
+              int timing_slot,
               const struct level_geometry* levels,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,

@@ -71,6 +71,7 @@ struct schedule_slot
 {
   uint32_t active_levels_mask;  // union of per-epoch active masks
   uint32_t* batch_active_masks; // [epochs_per_batch]; per-array allocation
+  int lod_timing_slot;          // generation owned by the batch being filled
   int kicked;
   uint64_t kick_seq;
   struct flush_handoff handoff;
