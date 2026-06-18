@@ -276,8 +276,13 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0) {
       if (finalize_shards(
-            &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+            &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment)) {
+        // finalize_shards can queue footer write_direct jobs that reference
+        // footer_buf_pool, then fail. Drain before returning so destroy can
+        // free that pool with no IO still pointing into it.
+        shard_sink_drain(ctx->sink);
         return writer_error();
+      }
     }
   }
 

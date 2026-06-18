@@ -317,8 +317,13 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment))
+        if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment)) {
+          // finalize_shards can queue footer write_direct jobs that reference
+          // footer_buf_pool, then fail. Drain before returning so destroy can
+          // free that pool with no IO still pointing into it.
+          shard_sink_drain(v->sink);
           return writer_error();
+        }
       }
     }
 

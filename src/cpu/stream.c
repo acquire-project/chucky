@@ -301,12 +301,6 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
     s->flushed = 1;
   }
 
-  // A flush that errored after finalize_shards queued footer write_direct
-  // jobs returns before draining the sink. Drain unconditionally so no queued
-  // IO still references footer_buf_pool when shard_state_destroy frees it.
-  if (s->shard_sink)
-    shard_sink_drain(s->shard_sink);
-
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     shard_state_destroy(&s->shard[lv]);
     free(s->h_tail_bytes[lv]);

@@ -1,8 +1,8 @@
-// Regression test (#147): a writer_flush that errors after finalize_shards
-// has queued footer write_direct jobs returns before its own drain. Those
-// jobs reference stream-owned footer_buf_pool. tile_stream_cpu_destroy must
-// drain the sink unconditionally before shard_state_destroy frees that pool,
-// or the IO worker reads freed heap (use-after-free; ASAN catches it).
+// Regression test (#147): when a flush errors after finalize_shards has
+// queued footer write_direct jobs, it must drain the sink before returning.
+// Those jobs reference stream-owned footer_buf_pool, which shard_state_destroy
+// later frees. If the flush returns without draining, the IO worker reads
+// freed heap on destroy (use-after-free; ASAN catches it).
 
 #include "platform/platform.h"
 #include "store.h"
@@ -92,8 +92,8 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
   }
 
   // Make the next truncate fail. finalize_shards queues the footer
-  // write_direct first, then truncate fails, so the flush body returns error
-  // before reaching its own drain.
+  // write_direct first, then truncate fails, so the flush body errors out of
+  // its finalize loop with a footer job referencing footer_buf_pool queued.
   CHECK(Cleanup, shard_pool_fs_inject_failing_truncate(pool) == 0);
 
   {
@@ -104,8 +104,8 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
     }
   }
 
-  // Destroy with the footer jobs still queued and the pool errored. The
-  // unconditional drain must run them out before footer_buf_pool is freed.
+  // Destroy frees footer_buf_pool. The errored flush above must have drained
+  // the queued footer jobs, or this reads freed heap under ASAN.
   tile_stream_cpu_destroy(s);
   s = NULL;
 

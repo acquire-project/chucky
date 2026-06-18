@@ -354,13 +354,6 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   sync(s->engine.streams.compress);
   sync(s->engine.streams.d2h);
 
-  // A flush that errored after finalize_shards queued footer write_direct
-  // jobs returns before draining the sink. Drain unconditionally so no queued
-  // IO still references footer_buf_pool when engine_array_state_destroy frees
-  // it below.
-  if (s->ctx.sink)
-    shard_sink_drain(s->ctx.sink);
-
   // s->ar owns the per-array allocations; the engine holds a bound copy of
   // the same pointers, so destroy strictly after engine teardown would
   // double-free — free once, here.
