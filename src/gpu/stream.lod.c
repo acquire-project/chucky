@@ -396,13 +396,12 @@ lod_shared_state_init(struct lod_shared_state* sh,
 
   sh->next_timing_slot = 0;
 
-  // Ordering-edge events, one per fc (GPU_EDGE_LOD_DONE binds these).
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&sh->lod_done[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(sh->lod_done[fc], seed_stream));
   }
 
-  // Timing generations. Seed so initial metric reads see a valid interval.
+  // Seed so the first downstream wait and metric read complete immediately.
   for (int g = 0; g < LOD_TIMING_SLOTS; ++g) {
     CU(Fail, cuEventCreate(&sh->timing[g].t_start, CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&sh->timing[g].t_scatter_end, CU_EVENT_DEFAULT));
@@ -815,8 +814,6 @@ lod_run_epoch(struct lod_state* lod,
           lod, sh, levels, pool_epoch, dtype, active_levels_mask, compute) ==
           0);
 
-  // Timing endpoint for the batch's generation; the ordering edge records
-  // separately on the stable per-fc sh->lod_done[fc] (bound at engine init).
   CU(Error, cuEventRecord(t->t_end, compute));
   CHECK(Error, gpu_edge_record(ord, GPU_EDGE_LOD_DONE, fc, compute) == 0);
 

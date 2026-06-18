@@ -472,15 +472,12 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
   struct schedule_slot* s = &e->sched.slot[e->sched.fill];
   uint32_t active_mask;
 
-  // The batch owns one timing generation for its whole lifetime; pick a fresh
-  // one at the first epoch so the worker's drain read can't collide with the
-  // next same-fc batch's re-record (#154).
+  // Pick a fresh timing buffer at the first epoch so the worker's drain read
+  // can't collide with the next batch's re-record (#154).
   if (e->sched.accumulated == 0) {
     s->lod_timing_slot = e->lod_shared.next_timing_slot;
     e->lod_shared.next_timing_slot =
       (e->lod_shared.next_timing_slot + 1) % LOD_TIMING_SLOTS;
-    // Only a real (lod_active) epoch records into the slot; otherwise the
-    // drain must not read it as this batch's timing (#154).
     s->has_lod_timing = e->sched.lod_active;
   }
 
@@ -744,9 +741,7 @@ schedule_flush_partial_append(struct stream_engine* e,
   struct schedule_slot* fs = &e->sched.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
-  // This batch runs no timed LOD epoch (lod_emit_partial_append records no
-  // timing), so the drain must skip LOD metrics rather than read whatever
-  // generation this slot last held (#154).
+  // No timed epoch here, so the drain must skip stale timing metrics (#154).
   fs->has_lod_timing = 0;
 
   // Produce-phase writes within the generation acquired at the last swap

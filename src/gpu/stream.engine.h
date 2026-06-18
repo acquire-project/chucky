@@ -64,17 +64,13 @@ struct lod_shared_state
   CUdeviceptr d_linear; // linear epoch buffer (device)
   CUdeviceptr d_morton; // morton-ordered LOD output (all levels packed)
 
-  // Per-fc ordering edge (GPU_EDGE_LOD_DONE). Stable per fc — recorded every
-  // epoch, never rotates — so the bound edge handle stays valid for waits.
+  // Recorded every epoch and never rotated, so a bound handle stays valid.
   CUevent lod_done[2];
 
-  // Pipeline timing read at drain. Rotated across batches so a batch's
-  // generation stays stable while the worker reads it and the producer
-  // re-records the next same-fc batch into a different one (#154). Each
-  // batch picks a generation at its first epoch and owns it through drain;
-  // the chosen index rides the flush handoff.
+  // Rotated across batches so the worker's read can't collide with the
+  // producer re-recording the next same-fc batch (#154).
   struct lod_timing timing[LOD_TIMING_SLOTS];
-  int next_timing_slot; // producer-only round-robin picker
+  int next_timing_slot;
 };
 
 // Per-array LOD state.  In multiarray, one instance per array; the active
@@ -120,8 +116,8 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
   uint32_t epochs_per_batch;
-  int lod_timing_slot; // the batch's owned LOD timing generation (#154)
-  int has_lod_timing;  // batch ran a timed LOD epoch (#154)
+  int lod_timing_slot;
+  int has_lod_timing;
 };
 
 // Per-shard layout tables shared across arrays, sized to the max
