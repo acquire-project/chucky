@@ -121,6 +121,7 @@ struct compress_agg_input
   const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
   uint32_t epochs_per_batch;
   int lod_timing_slot; // the batch's owned LOD timing generation (#154)
+  int has_lod_timing;  // batch ran a timed LOD epoch (#154)
 };
 
 // Per-shard layout tables shared across arrays, sized to the max

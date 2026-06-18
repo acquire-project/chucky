@@ -73,7 +73,7 @@ record_flush_metrics(const struct flush_handoff* handoff,
   const uint32_t n_epochs = handoff->n_epochs;
 
   const struct lod_timing* t = &lod_shared->timing[handoff->lod_timing_slot];
-  if (levels->enable_multiscale && t->t_start) {
+  if (levels->enable_multiscale && handoff->has_lod_timing) {
     const size_t bytes_per_element = dtype_bpe(config->dtype);
     const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
     const size_t morton_bytes =

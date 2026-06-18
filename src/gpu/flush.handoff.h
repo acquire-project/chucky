@@ -31,6 +31,7 @@ struct flush_handoff
   uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;
   int lod_timing_slot; // LOD timing generation this batch owns (#154)
+  int has_lod_timing;  // batch ran a timed LOD epoch; else skip LOD metrics (#154)
 
   CUevent t_aggregate_end;  // D2H waits on this
   CUevent t_compress_start; // for metrics
