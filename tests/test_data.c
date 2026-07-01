@@ -133,13 +133,16 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
   return n;
 }
 
+static const size_t PUMP_BLOCK_ELEMENTS = 32 * 1024 * 1024;
+
+// Regenerate each appended block. Tests that verify content rely on the
+// per-append variation; benchmarks should use pump_data_prefill instead.
 int
 pump_data_bpe(struct writer* w, size_t total_elements, fill_fn fill, size_t bpe)
 {
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements
-  // Allocate max(n*bpe, n*2) so fill (which writes uint16_t) always fits
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
-  uint16_t* data = (uint16_t*)malloc(alloc);
+  uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
     return 1;
 
@@ -168,15 +171,22 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
   return pump_data_bpe(w, total_elements, fill, sizeof(uint16_t));
 }
 
+// Fill one block and reuse it for every append, so the measured loop is the
+// writer rather than the generator.
 int
-pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill)
+pump_data_prefill(struct writer* w,
+                  size_t total_elements,
+                  fill_fn fill,
+                  size_t bpe)
 {
-  const size_t bpe = sizeof(uint16_t);
-  const size_t nelements = 32 * 1024 * 1024; // 32M elements
-  uint16_t* data = (uint16_t*)malloc(nelements * bpe);
+  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  size_t alloc = nelements * (bpe > 2 ? bpe : 2);
+  uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
     return 1;
-  fill(data, nelements < total_elements ? nelements : total_elements, 0,
+  fill(data,
+       nelements < total_elements ? nelements : total_elements,
+       0,
        total_elements);
 
   for (size_t offset = 0; offset < total_elements; offset += nelements) {

@@ -31,20 +31,21 @@ rand_pattern_free(void);
 size_t
 dim_total_elements(const struct dimension* dims, uint8_t rank);
 
-// Fill data, pump through writer, flush. Returns 0 on success.
+// Regenerate every appended block. Returns 0 on success.
 int
 pump_data(struct writer* w, size_t total_elements, fill_fn fill);
 
-// Like pump_data but with explicit bytes-per-element.
-// Fill still works on uint16_t buffers; the slice end is trimmed to n*bpe.
+// Like pump_data but with explicit bytes-per-element. The fill writes
+// uint16_t; the slice end is trimmed to n*bpe.
 int
 pump_data_bpe(struct writer* w,
               size_t total_elements,
               fill_fn fill,
               size_t bpe);
 
-// Fill the pump buffer once and append it repeatedly. Isolates the writer's
-// cost from the per-iteration fill (perf benches only — chunk contents
-// repeat with the buffer period).
+// Fill one block once and reuse it for every append.
 int
-pump_data_prefilled(struct writer* w, size_t total_elements, fill_fn fill);
+pump_data_prefill(struct writer* w,
+                  size_t total_elements,
+                  fill_fn fill,
+                  size_t bpe);
