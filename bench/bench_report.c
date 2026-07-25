@@ -191,6 +191,12 @@ json_stage_metric(struct json_writer* jw,
   double out_gibs = gb_per_s(sm->output_bytes, (double)sm->ms);
   jw_key(jw, name);
   jw_object_begin(jw);
+  // total_ms and count are the primitives every other field is derived from;
+  // without them a sweep file cannot be re-analyzed.
+  jw_key(jw, "total_ms");
+  jw_float(jw, (double)sm->ms);
+  jw_key(jw, "count");
+  jw_uint(jw, (uint64_t)sm->count);
   jw_key(jw, "avg_ms");
   jw_float(jw, avg_ms);
   if (sm->best_ms < 1e29f) {
@@ -304,6 +310,24 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->backpressure.ms);
   jw_key(&jw, "backpressure_count");
   jw_uint(&jw, (uint64_t)m->backpressure.count);
+  // StagingFree is the producer's own append-side wait — the stall that
+  // explains dropped frames. Keys come from the engine's metric names.
+  jw_key(&jw, "edge_stalls");
+  jw_object_begin(&jw);
+  for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
+       ++i) {
+    const struct stream_metric* es = &m->edge_stall[i];
+    if (es->count <= 0 || !es->name)
+      continue;
+    jw_key(&jw, es->name);
+    jw_object_begin(&jw);
+    jw_key(&jw, "total_ms");
+    jw_float(&jw, (double)es->ms);
+    jw_key(&jw, "count");
+    jw_uint(&jw, (uint64_t)es->count);
+    jw_object_end(&jw);
+  }
+  jw_object_end(&jw);
   jw_key(&jw, "max_append_ms");
   jw_float(&jw, (double)m->max_append_ms);
   jw_key(&jw, "peak_pending_mib");
