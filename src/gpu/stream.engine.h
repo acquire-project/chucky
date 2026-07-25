@@ -235,9 +235,10 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  struct gpu_ordering* ord; // borrowed
-  CUevent t_d2h_start[2];   // timing
-  CUstream drain_stream;    // borrowed (gpu_streams.drain)
+  struct gpu_ordering* ord;     // borrowed
+  CUevent t_d2h_start[2];       // timing; kick-time, before the worker handoff
+  CUevent t_d2h_drain_start[2]; // timing; immediately before the payload copy
+  CUstream drain_stream;        // borrowed (gpu_streams.drain)
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

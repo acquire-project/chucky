@@ -35,6 +35,8 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
+    CU(Fail, cuEventCreate(&stage->t_d2h_drain_start[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventRecord(stage->t_d2h_drain_start[fc], compute));
   }
 
   return 0;
@@ -49,8 +51,10 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 {
   if (!stage)
     return;
-  for (int fc = 0; fc < 2; ++fc)
+  for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
+    cu_event_destroy(stage->t_d2h_drain_start[fc]);
+  }
   stage->drain_stream = NULL;
 }
 
@@ -79,6 +83,12 @@ record_flush_metrics(const struct flush_handoff* handoff,
       lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] * bytes_per_element;
     const size_t unified_pool_bytes =
       levels->total_chunks * layout->chunk_stride * bytes_per_element;
+    // The reduce writes levels 1..nlod-1; level 0 is its input, not its
+    // output. Counting the whole span here overstated the rate ~8x in 3D.
+    const size_t reduced_bytes =
+      (lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] -
+       lod->plan.level_spans.ends[0]) *
+      bytes_per_element;
 
     accumulate_metric_cu(&metrics->lod_gather,
                          t->t_start,
@@ -89,7 +99,7 @@ record_flush_metrics(const struct flush_handoff* handoff,
                          t->t_scatter_end,
                          t->t_reduce_end,
                          scatter_bytes,
-                         morton_bytes);
+                         reduced_bytes);
     if (dims->append_downsample) {
       size_t accum_bpe = dtype_bpe(config->dtype);
       size_t accum_bytes = lod->append_accum.element_capacity * accum_bpe;
@@ -119,11 +129,14 @@ record_flush_metrics(const struct flush_handoff* handoff,
     for (size_t i = 0; i < n_perm; ++i)
       agg_bytes += slot->h_permuted_sizes[i];
 
-    accumulate_metric_cu(&metrics->compress,
-                         handoff->t_compress_start,
-                         handoff->t_compress_end,
-                         pool_bytes,
-                         agg_bytes);
+    // Pass-through runs no codec, so there is no compress interval to report;
+    // its start/end events bracket nothing and would read as an infinite rate.
+    if (!handoff->passthrough)
+      accumulate_metric_cu(&metrics->compress,
+                           handoff->t_compress_start,
+                           handoff->t_compress_end,
+                           pool_bytes,
+                           agg_bytes);
     accumulate_metric_cu(&metrics->aggregate,
                          handoff->t_aggregate_start,
                          handoff->t_aggregate_end,
@@ -188,6 +201,12 @@ d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
 {
   const struct batch_aggregate_layout* alayout = &handoff->layout;
   int dispatch_err = 0;
+  // Marks the payload transfer itself. The kick-time start event sits before
+  // the host handoff to the delivery worker, so measuring from there reports
+  // batch turnaround rather than transfer rate.
+  if (cuEventRecord(stage->t_d2h_drain_start[handoff->fc],
+                    stage->drain_stream) != CUDA_SUCCESS)
+    return 1;
   if (alayout->page_size > 0) {
     for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
       if (handoff->per_lod_n_active[lv] == 0)
@@ -249,7 +268,8 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     lod,
     lod_shared,
     metrics,
-    stage->t_d2h_start[fc],
+    handoff->passthrough ? stage->t_d2h_start[fc]
+                         : stage->t_d2h_drain_start[fc],
     gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED, fc));
 
   {
