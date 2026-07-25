@@ -125,7 +125,7 @@ record_flush_metrics(const struct flush_handoff* handoff,
                          pool_bytes,
                          agg_bytes);
     accumulate_metric_cu(&metrics->aggregate,
-                         handoff->t_compress_end,
+                         handoff->t_aggregate_start,
                          handoff->t_aggregate_end,
                          agg_bytes,
                          agg_bytes);

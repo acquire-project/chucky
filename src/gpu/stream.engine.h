@@ -181,8 +181,11 @@ struct compress_agg_stage
   struct gpu_ordering* ord; // borrowed
   struct codec codec;
   CUdeviceptr d_compressed[2];
-  CUevent t_compress_start[2]; // timing
-  CUevent t_compress_end[2];   // timing
+  CUevent t_compress_start[2];  // timing
+  CUevent t_compress_end[2];    // timing
+  CUevent t_aggregate_start[2]; // timing; recorded after the tail-gate wait
+                                // so a slow sink cannot read as slow
+                                // aggregation
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 

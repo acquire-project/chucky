@@ -86,6 +86,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
         cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&stage->t_aggregate_start[fc], CU_EVENT_DEFAULT));
   }
 
   stage->max_total_batch_chunks = lim->max_total_batch_chunks;
@@ -142,6 +143,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventRecord(stage->t_compress_start[fc], compute));
     CU(Fail, cuEventRecord(stage->t_compress_end[fc], compute));
+    CU(Fail, cuEventRecord(stage->t_aggregate_start[fc], compute));
   }
 
   return 0;
@@ -171,9 +173,11 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
     cu_mem_free(stage->d_compressed[fc]);
     cu_event_destroy(stage->t_compress_start[fc]);
     cu_event_destroy(stage->t_compress_end[fc]);
+    cu_event_destroy(stage->t_aggregate_start[fc]);
     stage->d_compressed[fc] = 0;
     stage->t_compress_start[fc] = NULL;
     stage->t_compress_end[fc] = NULL;
+    stage->t_aggregate_start[fc] = NULL;
   }
   if (stage->lut_steady_count + stage->lut_recompute_count > 0) {
     const uint64_t tot = stage->lut_steady_count + stage->lut_recompute_count;
@@ -647,6 +651,9 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                        struct gpu_pool_view pool_buf,
                        CUstream compress_stream)
 {
+  // The schedule places the tail-gate wait before this call, so recording here
+  // keeps a slow sink out of the aggregate interval.
+  CU(Error, cuEventRecord(stage->t_aggregate_start[fc], compress_stream));
   // CODEC_NONE aggregates straight from the pool buffer, skipping compress.
   const CUdeviceptr d_aggregate_src = (stage->codec.type == CODEC_NONE)
                                         ? gpu_pool_view_d(pool_buf)
@@ -701,6 +708,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->t_aggregate_end = gpu_ordering_event(stage->ord, GPU_EDGE_AGG_DONE, fc);
   out->t_compress_start = stage->t_compress_start[fc];
   out->t_compress_end = stage->t_compress_end[fc];
+  out->t_aggregate_start = stage->t_aggregate_start[fc];
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->agg_pool = &stage->agg_pool;

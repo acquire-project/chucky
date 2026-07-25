@@ -33,9 +33,10 @@ struct flush_handoff
   int lod_timing_slot;
   int has_lod_timing;
 
-  CUevent t_aggregate_end;  // D2H waits on this
-  CUevent t_compress_start; // for metrics
-  CUevent t_compress_end;   // for metrics
+  CUevent t_aggregate_end;   // D2H waits on this
+  CUevent t_compress_start;  // for metrics
+  CUevent t_compress_end;    // for metrics
+  CUevent t_aggregate_start; // for metrics; after the tail-gate wait
 
   // The unified slot for fc travels as pool handles, never a raw pointer;
   // delivery acquires the facet it consumes (stream.engine.h).
