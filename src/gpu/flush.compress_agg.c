@@ -13,7 +13,6 @@
 
 // --- Internal helpers ---
 
-// Record compress-start, compress, record compress-end.
 static int
 kick_compress(struct compress_agg_stage* stage,
               int fc,
@@ -68,10 +67,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   // Codec
   CHECK(Fail, codec_init(&stage->codec, codec_id, lim->chunk_bytes, M) == 0);
 
-  // Per-LOD scratch for mask-scan results, plus the previous-kick cache used
-  // for steady-state LUT-cache validation. Both are sized to
-  // LOD_MAX_LEVELS * K with stride K so each LOD's slice lives at a stable
-  // offset and the cache comparison can match by stride.
   stage->pool_epochs_stride = K;
   stage->pool_epochs_scratch =
     (uint32_t*)malloc((size_t)LOD_MAX_LEVELS * K * sizeof(uint32_t));
@@ -97,12 +92,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   stage->max_total_batch_covering = lim->max_total_batch_covering;
   stage->max_total_data_bytes = lim->max_total_data_bytes;
 
-  // Unified aggregate slot per fc. Sized for the max-batch case:
-  //   d_aggregated: max_total_data_bytes (page-aligned across LOD segments)
-  //   d_offsets/d_permuted_sizes/h_*: max_total_batch_covering + max_nlod
-  //     entries each (one sentinel slot per LOD for the +lv shift in
-  //     aggregate_batch_luts_unified). The CUB exclusive scan fills all
-  //     sentinel positions, so no per-LOD write_total fixup is needed.
   if (stage->max_total_batch_chunks > 0) {
     const uint64_t C_max =
       stage->max_total_batch_covering + (uint64_t)lim->max_nlod;
@@ -530,12 +519,6 @@ Error:
   return 1;
 }
 
-// Cache key: per-LOD active count AND each LOD's pool_epoch values. Counts
-// alone are insufficient — the gather LUT encodes the actual epoch indices,
-// so two batches with identical counts but different active-epoch positions
-// (mid-stream phase shifts when K doesn't divide an LOD's append period)
-// would mis-hit and reuse stale gather indices. See
-// [[ok-let-s-make-a-curious-prism]].
 static int
 build_and_upload_luts(struct compress_agg_stage* stage,
                       const struct batch_aggregate_layout* layout,
