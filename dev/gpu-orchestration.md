@@ -1,217 +1,229 @@
-# GPU stream orchestration: target design and migration plan
+# GPU pipeline: how it works, and what's next
 
-Status: steps 1–4 merged (#143 edge table, #144 engine unification, #148
-resource pools, #149 scheduler); step 5 (workers) in review. The §5
-ambitions beyond data-movement workers (CPU/GPU sharing one orchestration,
-multiarray as composition) remain open follow-ups.
-Related: #140, #141, PR #142, `gpu-output-slot-ledger.md`.
+**Status.** The five-step rebuild is **finished and merged** (#143, #144, #148,
+#149, #151). Nothing under "The rebuild that shipped" is pending — it is kept
+as history and as the reason the current shape looks the way it does.
 
-## Why
+Open work is under "What's next".
 
-Three findings from the 2026-06 investigation drive this:
+This file lives in `dev/` because it is a working plan, not user-facing
+documentation. Reference docs for how to *use* chucky are in `docs/`.
 
-1. **Ordering is implicit and has shipped two silent-corruption races.**
-   Cross-stream rules live as `cuEventRecord`/`cuStreamWaitEvent` pairs spread
-   across six files, plus host call-order assumptions ("drain fc before
-   re-kicking fc", "deliver oldest-first") written nowhere. #140 was a missing
-   pool-reuse edge; #141 was a dependency an event *cannot* express (wait on a
-   future host action). Several events are recorded but never waited — dead
-   edges are indistinguishable from load-bearing ones.
-2. **Both races were resource-lifetime bugs, not stage-logic bugs.** A buffer
-   generation was reused (pool re-zero) or read (tail state) while the
-   previous reader/writer was still in flight. Stage code forgot an edge; the
-   architecture let it.
-3. **The L40 stage baseline says the next optimizations are structural.**
-   Wall time is ~100% host/producer-side (ingest staging memcpy is the
-   ×1.65–1.94 lever; D2H-free buys ≤×1.01 — see PR #139's retrospective).
-   Decoupling data movement from orchestration must not become another race
-   factory; ordering has to be auditable first.
+## Words used here
 
-## End state
+- **Stage** — one step of work: bring data in, build reduced levels, compress,
+  gather into shards, copy back, hand to the sink.
+- **Slot** — the pipeline runs two batches at a time, so most buffers exist in
+  pairs. The code calls the index `fc`.
+- **Generation** — each time a slot is reused for a new batch counts as a new
+  generation. Most past bugs were one generation reading or overwriting a
+  buffer while the previous generation was still using it.
+- **Kick** — start a batch through compress and gather.
+- **Drain** — wait for a kicked batch to finish, then hand its bytes to the sink.
+- **Ordering rule** — a "this must happen before that" rule between two CUDA
+  streams, or between the host and a stream. The code calls these *edges*.
 
-Five concepts, four of which exist today in partial form:
+## How the pipeline is put together
 
-### 1. Resources: slotted pools with generation-carried ordering
+**Five CUDA streams** (`gpu_streams`, `src/gpu/schedule.h`): `h2d`, `compute`,
+`compress`, `d2h`, and a separate `drain`. Drain-time copies get their own
+stream because by drain time `d2h` can already be holding the next batch's
+wait, and that wait is not released until this drain finishes — sharing one
+stream would deadlock.
 
-Every device-side buffer that cycles (staging slots, chunk-pool epochs,
-compressed buffers, aggregate output slots, tail state) becomes a slot in a
-pool with an acquire/release protocol:
+**One table of ordering rules** (`src/gpu/ordering.{h,c}`). Every cross-stream
+and host-to-stream rule is a named entry with its producer, its consumer, and
+the buffer it protects. Debug builds check that the stream a rule is recorded
+or waited on matches its declaration, and warn at shutdown about rules that
+were recorded but never waited on. Timing-only events are deliberately kept
+out of the table so a measurement can never be mistaken for a rule.
 
-- `acquire(pool, slot, stream)` — queues a wait on the slot's previous
-  generation's release before handing out the pointer.
-- `release(pool, slot, stream)` — records the generation's completion event.
-- Host-published resources (tail state) release via generation counter +
-  `cuStreamWaitValue64` instead of an event (the #142 mechanism), behind the
-  same API.
+**Pools carry the ordering** (`src/gpu/pool.{h,c}`). A pool binds a recycled
+buffer to the two rules that order its generations: *ready* (producer to
+consumer, contents are valid) and *consumed* (consumer to producer, safe to
+reuse). Acquiring queues the wait before handing out the pointer; releasing
+records completion. You cannot get the pointer without getting its ordering,
+which is what makes the #140 and #141 bug class hard to write again.
 
-A stage cannot observe a raw pointer without its synchronization. Forgetting
-an edge stops being possible at the call site; #140 and #141 become
-unwritable. Teardown is `pool_release_all` per pool — the #142 hang class
-(F2) dies structurally.
+**One scheduler** (`src/gpu/schedule.{h,c}`) owns stream creation, how deep the
+pipeline runs, which stages run for the current settings, and where the
+acquires and releases go. Stages are payload only: they compute and copy;
+they do not decide ordering.
 
-### 2. Edges: one declared table (`src/gpu/ordering.{h,c}`)
+**Two workers.** Staging copies run on a small thread pool; each drain is
+queued to a delivery worker at kick time and joined before its slot is
+refilled. The producer thread decides what happens but no longer moves large
+amounts of data itself.
 
-The audit layer, and step 1 of the migration. Every cross-stream /
-host-stream rule is a named entry:
+## The ordering rules
 
-```c
-enum gpu_edge { EDGE_POOL_FILLED, EDGE_POOL_CONSUMED, EDGE_AGG_DONE,
-                EDGE_SLOT_DRAINED, EDGE_TAIL_PUBLISHED, EDGE_STAGING_FREE,
-                /* ... */ EDGE_COUNT };
+One event can back several named rules when it guards different buffers for
+different readers — the extras are marked "shares" below. Thirteen names,
+seven distinct events, one counter, two rules with no GPU primitive behind
+them.
 
-struct gpu_edge_desc {
-  const char*        name;
-  enum gpu_stream_id producer, consumer;  // stream id or HOST
-  const char*        guards;              // the resource this edge protects
-  enum edge_kind     kind;                // EVENT | GEN_COUNTER | HOST_RULE
-  uint8_t            per_fc;              // instanced per pipeline slot
-};
-```
+| Name in code | producer → consumer | protects | how | per slot |
+|---|---|---|---|---|
+| `STAGING_SCATTER_DONE` | compute → h2d | staging input buffer, read before it is overwritten | event | yes |
+| `STAGING_H2D_DONE` | h2d → compute | staging input buffer contents | event | yes |
+| `STAGING_FREE` | h2d → host | host staging buffer safe to refill | shares `STAGING_H2D_DONE` | yes |
+| `POOL_FILLED` | compute → compress | chunk pool batch contents | event | no |
+| `LOD_DONE` | compute → compress | reduced-level chunks in the pool | event, owned by the LOD timer | yes |
+| `AGG_DONE` | compress → d2h | gathered output slot | event | yes |
+| `POOL_CONSUMED` | compress → compute | chunk pool reuse and re-zero (#140) | shares `AGG_DONE` | yes |
+| `SLOT_DRAINED` | d2h or drain → compress | gathered slot reuse | event | yes |
+| `D2H_DONE` | d2h or drain → host | host copy stable for the sink | shares `SLOT_DRAINED` | yes |
+| `CHUNK_INDEX_READY` | d2h → host | chunk offsets and sizes; only with a codec | event | yes |
+| `TAIL_PUBLISHED` | host → compress | shard tail state uploaded by the previous drain (#142) | counter | no |
+| `DRAIN_BEFORE_REKICK` | host | drain a slot before kicking it again | call-order rule | yes |
+| `DELIVER_OLDEST_FIRST` | host | drains follow kick order, which the counter above relies on | call-order rule | yes |
 
-Call sites go through `edge_record` / `edge_wait` / `edge_publish` /
-`edge_release_all`. Debug builds assert: consumer stream matches the
-declaration; no wait without a live record/publish (the #141 class); at
-destroy, edges with records but zero waits over the run are flagged dead.
-Timing-only events (`t_compress_start/end`, lod timing) are excluded or
-tagged TIMING — metrics events must not masquerade as ordering. Host-rule
-edges (drain-before-rekick, oldest-first delivery — the invariant #142's GEQ
-gate relies on) get debug asserts even though no GPU primitive backs them.
+Notes worth keeping:
 
-Per-edge wait/stall accounting comes for free, closing the unmetered
-staging-slot busy-poll gap found in the baseline (`stream.c` append loop).
+- **Borrow, don't own, when an event does double duty.** The LOD end-of-work
+  timer also serves as `LOD_DONE`, recorded once and attached with
+  `gpu_ordering_bind`. Test harnesses use the same hook to stand in for a
+  producer.
+- **The "recorded but never waited" check is weak for events**, because all of
+  them are pre-signaled at startup so the first wait costs nothing. What
+  actually caught a deleted wait in testing was the shutdown report of rules
+  that saw no waits all run.
+- **Some rules are idle depending on settings** (`POOL_CONSUMED` on the
+  multi-array path, `CHUNK_INDEX_READY` without a codec), so the shutdown
+  warning fires by design there. Fixing that needs a per-configuration list of
+  which rules should be live — see "What's next", item 2.
 
-When step 3 lands, most EVENT edges collapse into pool acquire/release; the
-table remains as the registry the pools draw from and the audit surface.
+## The rebuild that shipped
 
-### 3. Stages: config in, state owned, handoff out, edges declared
+Five steps, each shippable on its own, each replacing one piece behind an
+existing seam. No flag day, no second engine. All merged:
 
-A stage is independently testable when its boundary is data:
+1. **One table of ordering rules** — #143. Moved every record and wait through
+   `ordering.{h,c}`, tagged timing-only events, deleted three rules that
+   turned out to be dead.
+2. **One engine setup and teardown** — #144, shared by single-array and
+   multi-array, replacing a field-by-field copy checklist.
+3. **Pools that carry ordering** — #148. Staging, chunk pool, gathered slots
+   and tail state became pools; the #142 counter became one of the pool's
+   release kinds.
+4. **One scheduler** — #149. Stream creation, pipeline depth and fallbacks
+   moved into `schedule.{h,c}`; the old orchestration state was deleted.
+5. **Workers** — #151. Staging copies and sink delivery moved off the producer
+   thread.
 
-- created from a small config; owns its state; no reaching into engine
-  globals.
-- inputs/outputs are explicit handoff structs (`flush_handoff` is the
-  existing model) plus declared edges.
-- any neighbor can be faked in one line (the `test_compress_agg` harness
-  publish is the proven pattern — that property becomes a requirement).
+Why it was worth doing: two shipped silent-corruption bugs (#140, #141) were
+both lifetime bugs, not logic bugs — a buffer was reused or read while the
+previous user was still in flight. The stage code forgot a rule and the old
+structure allowed it.
 
-Variations that change the *dependency shape* (memops-unsupported fallback
-dropping pipeline depth, codec NONE skipping compress, page-aligned tail
-carry) move out of intra-stage branches and into the schedule (below).
+## What's next
 
-### 4. Scheduler: one owner for streams, depth, and fallbacks
+Three items, in the order I'd do them.
 
-A single module owns: stream creation, pipeline depth, which stages run for
-the active configuration, and degraded schedules (e.g. depth-1 host-ordered
-when stream memops are unavailable). Orchestration stays single-threaded —
-the producer thread *decides*; it stops *moving bytes*:
+### 1. Make the measurements trustworthy
 
-### 5. Workers: data movement behind queues
+This is the blocker for every performance question, and it is the smallest
+piece of work here. Today the numbers mislead in five specific ways:
 
-Ingest staging copies and sink delivery become queue-fed workers. This is
-the baseline's top lever (×1.65–1.94) and the most race-prone change on the
-roadmap — it lands last, when every handoff it touches is declared (edges)
-or carried (pools). CPU and GPU backends become the same orchestration over
-different stage implementations; multiarray becomes composition (N pipelines
-sharing pools) instead of the bind/copy checklist in
-`src/multiarray/stream.gpu.c`.
+- The scatter timer reads elapsed time without checking the result. When the
+  event isn't ready the sample is silently dropped — on some settings more
+  than half the scattered bytes go uncounted.
+- The reduced-level timers use one event pair per batch, re-recorded every
+  epoch, so each reported row is only the batch's last epoch. The reported
+  total is one epoch's worth of time where it should be the whole batch's.
+- The gather timer starts before the wait for the previous drain's tail
+  upload, so a slow sink is reported as slow gathering.
+- The producer's real waiting time is the `StagingFree` stall. It is measured,
+  and printed to the console table, but left out of the JSON the sweep
+  analyzes (`bench/bench_report.c` — the console block prints it, the JSON
+  block does not). This has already caused one wrong diagnosis.
+- The JSON keeps averages and rates but drops each stage's total time and
+  sample count, so you cannot re-derive anything from a sweep file.
 
-## Edge table (as implemented in step 1, `src/gpu/ordering.{h,c}`)
+Fixes: export `StagingFree` and per-stage total time and count in the JSON;
+start the gather timer after the tail wait; check the elapsed-time result and
+retry instead of dropping the sample; accumulate reduced-level timings per
+epoch instead of per batch; keep the "too small to be real" filter only for
+detecting pre-signaled events.
 
-| enum | producer → consumer | guards | kind | inst | backing |
-|---|---|---|---|---|---|
-| `GPU_EDGE_STAGING_SCATTER_DONE` | compute → h2d | staging `d_in` reuse (scatter read before H2D overwrite) | EVENT, seeded | ×2 slot | owned |
-| `GPU_EDGE_STAGING_H2D_DONE` | h2d → compute | staging `d_in` contents | EVENT, seeded | ×2 slot | owned |
-| `GPU_EDGE_STAGING_FREE` | h2d → HOST poll (`stream.c` append) | staging `h_in` refill | EVENT | ×2 slot | alias of STAGING_H2D_DONE |
-| `GPU_EDGE_POOL_FILLED` | compute → compress | chunk-pool batch contents | EVENT, seeded | ×1 | owned |
-| `GPU_EDGE_LOD_DONE` | compute → compress | LOD chunks in pool | EVENT, seeded | ×2 fc | bound to `lod_shared.timing[fc].t_end` |
-| `GPU_EDGE_AGG_DONE` | compress → d2h | aggregate slot outputs | EVENT, seeded | ×2 fc | owned |
-| `GPU_EDGE_POOL_CONSUMED` | compress → compute | chunk pool `buf[fc]` reuse/re-zero (#140) | EVENT | ×2 fc | alias of AGG_DONE |
-| `GPU_EDGE_SLOT_DRAINED` | d2h\|drain → compress | `agg[fc]` slot reuse | EVENT, seeded | ×2 fc | owned |
-| `GPU_EDGE_D2H_DONE` | d2h\|drain → HOST poll | `h_aggregated` stable for delivery | EVENT | ×2 fc | alias of SLOT_DRAINED |
-| `GPU_EDGE_CHUNK_INDEX_READY` | d2h → HOST poll | `h_offsets`/`h_permuted_sizes`; drain-copy source | EVENT, seeded; compressed-only | ×2 fc | owned |
-| `GPU_EDGE_TAIL_PUBLISHED` | HOST → compress | `d_tail_bytes`/`d_tail_carry` generation (#142) | GEN_COUNTER | ×1 | ordering-owned pinned devicemap counter |
-| `GPU_EDGE_DRAIN_BEFORE_REKICK` | HOST rule | pending handoff + agg host buffers per fc | HOST_RULE | per fc | debug assert in kick/swap |
-| `GPU_EDGE_DELIVER_OLDEST_FIRST` | HOST rule | tail-gate GEQ monotonicity, shard write order | HOST_RULE | per fc | debug assert in drain |
+*Done when:* a sweep JSON alone is enough to reconstruct each stage's total
+time, and the producer's stall time appears in it. Some of this already exists
+on the local `issue-101-append-latency` branch (append latency distribution,
+issue #101).
 
-TIMING events stay outside the table (metric intervals only): staging
-`t_h2d_start`/`t_scatter_start`, `t_compress_start/end`, `t_d2h_start`, lod
-`t_start/t_scatter_end/t_reduce_end/t_append_end`.
+### 2. Cover the Windows pipeline shape; drop the multi-array one
 
-Deleted as verified-dead in step 1: `pool_state.ready[2]`,
-`aggregate_slot.ready` (only waiter was #139's abandoned cap-stacking), and
-the passthrough-path CHUNK_INDEX_READY record (never polled there).
+`schedule_depth` has three values. Two should survive, and one of the survivors
+is missing the test coverage it needs.
 
-Design notes from implementation:
-- **Bind, not own, for dual-use events** (`gpu_ordering_bind`): lod `t_end`
-  serves timing and EDGE_LOD_DONE with one record; test harnesses use bind
-  to fake producers.
-- **Aliases**: one event may back several named edges guarding different
-  resources for different consumers (`alias_of`) — each stays separately
-  declared, asserted, and metered.
-- The wait-without-record assert is weak for EVENT edges (all are seeded at
-  init); the #141-class protection in practice is GEN_COUNTER publish
-  discipline plus end-of-run dead-edge accounting — which mutation testing
-  confirmed catches a removed wait.
-- Some edges are config-dependent (POOL_CONSUMED idle on sync/multiarray
-  paths; CHUNK_INDEX_READY compressed-only): debug dead-edge warnings fire
-  by design there. Per-config expected-edge sets are a candidate refinement
-  for steps 2–4.
+- `SCHEDULE_PIPELINED` — the normal path.
+- `SCHEDULE_DRAIN_BEFORE_KICK` — **keep.** Windows is a supported target, and
+  `cuStreamWaitValue64` is not dependably available there (it depends on the
+  driver and the display mode), so the shard tail upload cannot be ordered on
+  the device and the drain has to finish before the next kick is queued.
+  Probing at startup and stepping down is the right design. The real problem
+  is that there is no Windows machine with a GPU in CI — no such GitHub runner
+  is available — so this path ships without a test ever running it: the probe
+  always succeeds on the Linux GPU box.
+- `SCHEDULE_DRAIN_AFTER_KICK` — **drop.** It exists only because the
+  multi-array path shares one engine and swaps per-array state in and out, and
+  two-slot pipeline state does not survive that swap.
 
-## Migration: five steps, shippable at every point
+What the third shape costs today: the branch in `schedule_accumulate_epoch`
+skips the pool release and then re-zeros the pool through `gpu_pool_at`,
+stepping around the ordering API on purpose; the multi-array switch then zeros
+both pools a third time, under a comment explaining that the other zero only
+covers part of it; teardown ordering differs between the two paths; and the
+"rule never waited on" warning stays noisy because rule liveness depends on
+which shape is running.
 
-The end state is reached **in place** — each step replaces one subsystem
-behind an existing seam. No flag day, no second engine.
+Work, in this order:
 
-1. **Ordering table.** `ordering.{h,c}`; migrate every record/wait/publish
-   call site; re-derive the full edge table; tag timing events; add debug
-   asserts + per-edge stall metrics. Separate commit deletes verified-dead
-   edges. Behavior-neutral.
-   *Exit: suite green; edge table in code matches a hand audit; dead edges
-   gone; stall metrics visible in bench output.*
-2. **Unify init/teardown and multiarray binding.** Single engine init/destroy
-   shared by single-array and multiarray; kill the field-by-field copy
-   checklist and the hand-mirrored memory estimate. Behavior-neutral.
-   *Exit: suite green; multiarray bind is one struct handoff; memory estimate
-   derived, not duplicated.*
-3. **Resource pools with generations.** Introduce the pool API; move staging
-   slots, chunk pool, aggregate slots, tail state into it; EVENT edges
-   guarding those resources collapse into acquire/release; #142's gate
-   becomes the pool's GEN_COUNTER release kind.
-   *Exit: suite green; no raw cycled-buffer pointer crosses a stage boundary
-   outside the pool API; determinism + tail-carry + round-trip still red on
-   deliberately-broken builds (mutation check).*
-4. **Extract the scheduler.** May be written greenfield and dropped in behind
-   the now-clean stage interfaces in one PR — by then it moves wiring, not
-   behavior. Dependency-shape variations (fallbacks, codec NONE, page-aligned)
-   become schedule selections.
-   *Exit: suite green; `stream.flush.c` orchestration state replaced; depth/
-   fallback decisions in one module.*
-5. **Workers.** Ingest staging copies and delivery move behind queues; the
-   producer thread stops doing large memcpys.
-   *Exit: suite green; L40 baseline rerun shows the ingest lever realized
-   without zstd-path regressions; no new edges outside the table/pools.*
+1. **Make the Windows shape runnable here.** Add a test-only way to force the
+   startup probe to report no support. `gpu_ordering_gate_init` sets
+   `tail_gate_supported` from a single probe call; clearing it afterwards, while
+   leaving the counter allocated, reproduces the Windows case exactly — the
+   wait is skipped, the count still advances, and `schedule_select` picks the
+   drain-before-kick shape. Then run the ordering-critical tests
+   (`gpu_zstd_determinism`, `gpu_zstd_round_trip`,
+   `gpu_page_aligned_tail_carry`) under it on the Linux GPU box. Until a
+   Windows GPU runner exists, this is the only coverage that path can get.
+2. **Make multi-array compose** — several pipelines sharing pooled buffers,
+   rather than one engine with state swapped in and out — and delete
+   `SCHEDULE_DRAIN_AFTER_KICK`. This is the leftover ambition from the original
+   step 5.
 
-### Gates at every step
+*Done when:* two pipeline shapes remain and a test exercises each, the two
+pool-zero workarounds are gone, and the shutdown warning about unused rules is
+clean without needing a per-configuration exception list.
 
-`ctest -E "(s3)"` full suite; `gpu_zstd_determinism`, `gpu_zstd_round_trip`,
-`gpu_page_aligned_tail_carry` (≥8 reps); zero new build warnings; L40
-baseline sweep rerun (`launch.sh` harness) at steps 3 and 5.
+### 3. Close the last way to get a raw pointer
 
-### Escape hatch
+The pools work (#148) set out to reach "no pointer to a recycled buffer
+crosses a stage boundary outside the pool API". It didn't. `gpu_pool_at`
+hands out a pointer with no ordering attached, and has five non-test callers
+(`src/gpu/stream.c`, `src/gpu/schedule.c`, `src/multiarray/stream.gpu.c`).
+Each is correct today because a comment says so. Three of them are pool
+zeroing.
 
-If during steps 2–3 adapter shims start outweighing the code they adapt, or
-the seam inventory proves wrong, flip the remainder to a greenfield engine
-behind the same stage interfaces — the landed steps still pay, having
-sharpened the seams and the test spec a rewrite needs. The criterion is
-mechanical: adapter LOC > adapted LOC in a step's diff ⇒ stop and reassess.
+Work: give the pool an operation for "zero this slot for its next use" and one
+for reading at an offset inside a generation the caller already holds, then
+remove `gpu_pool_at`.
 
-## Non-goals
+*Done when:* the rule is checkable with grep instead of by reading comments.
 
-- No change to layout math (`stream/config.c`), kernels (`aggregate.cu`,
-  `lod.cu`), codec backends, or the zarr/sink layer — they keep their
-  signatures throughout.
-- No CUDA Graphs adoption: the pipeline is small enough that a declared
-  table + pools gives the auditability without a graph executor (revisit
-  only if the scheduler step shows dispatch overhead that matters).
-- No attempt to preserve PR #139's cap-stacking; the baseline showed D2H
-  batching is not a lever (≤×1.01).
+## Not doing
+
+- No changes to layout math (`src/stream/config.c`), kernels
+  (`src/gpu/aggregate.cu`, `src/gpu/lod.cu`), codec backends, or the
+  zarr/sink layer. Their signatures stay as they are.
+- No CUDA Graphs. The pipeline is small enough that a declared table plus
+  pools gives the auditability without a graph executor. Revisit only if
+  dispatch overhead shows up as a real cost.
+- No revival of PR #139's batched output slots. Measurement showed batching
+  the copy back from the device is worth at most 1%.
+
+## Related
+
+Issues #140 and #141 (the two corruption bugs), PR #142 (the tail-state
+counter), issues #101 and #162.
