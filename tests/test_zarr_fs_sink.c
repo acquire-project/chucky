@@ -2231,7 +2231,7 @@ main(int ac, char* av[])
   int ecode = 0;
 
   // Create temp directory
-  char tmpdir[4096];
+  char tmpdir[512];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   log_info("temp dir: %s", tmpdir);
 
@@ -2240,7 +2240,7 @@ main(int ac, char* av[])
 
   // Metadata tests (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/meta", tmpdir);
     test_mkdir(sub);
     ecode |= test_metadata(sub);
@@ -2248,7 +2248,7 @@ main(int ac, char* av[])
 
   // Metadata test with n_append=2 (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/meta2app", tmpdir);
     test_mkdir(sub);
     ecode |= test_metadata_two_append(sub);
@@ -2256,7 +2256,7 @@ main(int ac, char* av[])
 
   // Nested array_name intermediate group metadata test (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/nested", tmpdir);
     test_mkdir(sub);
     ecode |= test_nested_array_name(sub);
@@ -2264,7 +2264,7 @@ main(int ac, char* av[])
 
   // Nested multiscale array_name intermediate group metadata test (no CUDA)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/nested_ms", tmpdir);
     test_mkdir(sub);
     ecode |= test_nested_multiscale_array_name(sub);
@@ -2272,7 +2272,7 @@ main(int ac, char* av[])
 
   // Multiscale metadata test (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/msmeta", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_metadata(sub);
@@ -2280,7 +2280,7 @@ main(int ac, char* av[])
 
   // Multiscale scale with non-power-of-2 sizes (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/msscalenp2", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_scale_non_pow2(sub);
@@ -2288,7 +2288,7 @@ main(int ac, char* av[])
 
   // Multiscale scale with size-1 downsample dim (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/msscalesz1", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_scale_size1(sub);
@@ -2296,7 +2296,7 @@ main(int ac, char* av[])
 
   // Multiscale unit/scale metadata test (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/msunitscale", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_unit_scale(sub);
@@ -2304,7 +2304,7 @@ main(int ac, char* av[])
 
   // Multiscale unbounded metadata test (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/msunbounded", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_unbounded(sub);
@@ -2312,7 +2312,7 @@ main(int ac, char* av[])
 
   // Multiscale chunk_size clamping test (no CUDA needed, issue #44)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/mschunkclamp", tmpdir);
     test_mkdir(sub);
     ecode |= test_multiscale_chunk_clamp_metadata(sub);
@@ -2320,7 +2320,7 @@ main(int ac, char* av[])
 
   // Storage order validation test (no CUDA needed)
   {
-    char sub[4200];
+    char sub[576];
     snprintf(sub, sizeof(sub), "%s/so_valid", tmpdir);
     test_mkdir(sub);
     ecode |= test_storage_order_validation(sub);
@@ -2336,42 +2336,42 @@ main(int ac, char* av[])
     CU(Cleanup, cu_ctx_create(&ctx, 0, dev));
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/pipe", tmpdir);
       test_mkdir(sub);
       ecode |= test_pipeline(sub);
     }
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/unbounded", tmpdir);
       test_mkdir(sub);
       ecode |= test_unbounded_metadata_update(sub);
     }
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/midstream", tmpdir);
       test_mkdir(sub);
       ecode |= test_midstream_metadata_update(sub);
     }
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/unbuf", tmpdir);
       test_mkdir(sub);
       ecode |= test_unbuffered_pipeline(sub);
     }
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/unbuf_ms", tmpdir);
       test_mkdir(sub);
       ecode |= test_unbuffered_pipeline_multishard(sub);
     }
 
     {
-      char sub[4200];
+      char sub[576];
       snprintf(sub, sizeof(sub), "%s/so_pipe", tmpdir);
       test_mkdir(sub);
       ecode |= test_pipeline_storage_order(sub);

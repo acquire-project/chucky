@@ -69,7 +69,6 @@ record_flush_metrics(const struct flush_handoff* handoff,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
-  const int fc = handoff->fc;
   const uint32_t n_epochs = handoff->n_epochs;
 
   const struct lod_timing* t = &lod_shared->timing[handoff->lod_timing_slot];
