@@ -1,7 +1,7 @@
 #pragma once
 
 // Declared cross-stream / host-stream ordering edges for the GPU pipeline
-// (docs/gpu-orchestration.md). Every cuEventRecord/cuStreamWaitEvent/
+// (dev/gpu-orchestration.md). Every cuEventRecord/cuStreamWaitEvent/
 // cuStreamWaitValue64/cuEventQuery pair that orders work between streams (or
 // between the host and a stream) goes through this table; an edge that is
 // not declared here must be timing-only.

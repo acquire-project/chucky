@@ -1,7 +1,7 @@
 #pragma once
 
 // Slotted resource pools with generation-carried ordering
-// (docs/gpu-orchestration.md §1). A pool binds a cycled resource's per-slot
+// (dev/gpu-orchestration.md). A pool binds a cycled resource's per-slot
 // payload to the declared edges that order its generations:
 //   ready    — producer -> consumer: slot contents valid
 //   consumed — consumer -> producer: slot reusable

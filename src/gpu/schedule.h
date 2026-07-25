@@ -1,6 +1,6 @@
 #pragma once
 
-// One owner for GPU orchestration (docs/gpu-orchestration.md §4): stream
+// One owner for GPU orchestration (dev/gpu-orchestration.md): stream
 // creation, pipeline depth, which stages run for the active configuration,
 // and degraded schedules. Stages stay payload; the schedule places the
 // cross-stage acquires/releases and decides when kicks and drains happen.
