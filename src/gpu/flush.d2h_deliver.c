@@ -240,18 +240,18 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
 {
   const int fc = handoff->fc;
 
-  record_flush_metrics(handoff,
-                       slot,
-                       levels,
-                       dims,
-                       layout,
-                       config,
-                       lod,
-                       lod_shared,
-                       metrics,
-                       stage->t_d2h_start[fc],
-                       gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED,
-                                          fc));
+  record_flush_metrics(
+    handoff,
+    slot,
+    levels,
+    dims,
+    layout,
+    config,
+    lod,
+    lod_shared,
+    metrics,
+    stage->t_d2h_start[fc],
+    gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED, fc));
 
   {
     struct platform_clock sink_clock = { 0 };

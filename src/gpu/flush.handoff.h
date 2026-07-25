@@ -44,11 +44,11 @@ struct flush_handoff
   struct gpu_pool* agg_index;           // borrowed
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
-  struct shard_state* shards_by_lod[LOD_MAX_LEVELS]; // borrowed
-  struct gpu_pool* tail; // tail-state pool (#142); the drain's produce-
-                         // acquire yields the compress_agg_array whose
-                         // d_tail_bytes/d_tail_carry the delivery uploads
-  size_t max_output_size;      // codec bound
+  struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
+  struct gpu_pool* tail;  // tail-state pool (#142); the drain's produce-
+                          // acquire yields the compress_agg_array whose
+                          // d_tail_bytes/d_tail_carry the delivery uploads
+  size_t max_output_size; // codec bound
 
   // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so
   // delivery skips the exact-size sync and keeps the kick-time bulk D2H

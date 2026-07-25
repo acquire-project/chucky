@@ -97,9 +97,8 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
       stage->max_total_batch_covering + (uint64_t)lim->max_nlod;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(&stage->agg[fc],
-                                      C_max,
-                                      stage->max_total_data_bytes) == 0);
+            aggregate_batch_slot_init(
+              &stage->agg[fc], C_max, stage->max_total_data_bytes) == 0);
     }
 
     CU(Fail,
@@ -274,13 +273,13 @@ compress_agg_array_init(struct compress_agg_array* ar,
       {
         unsigned int sync_memops = 1;
         CU(Fail,
-           cuPointerSetAttribute(&sync_memops,
-                                 CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-                                 ar->d_tail_carry));
+           cuPointerSetAttribute(
+             &sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, ar->d_tail_carry));
       }
 
       // Without stream memops — or when the counter can't be allocated or
-      // mapped — the lazy path host-drains instead (SCHEDULE_DRAIN_BEFORE_KICK).
+      // mapped — the lazy path host-drains instead
+      // (SCHEDULE_DRAIN_BEFORE_KICK).
       if (gate_ord) {
         CHECK(Fail, gpu_ordering_gate_init(gate_ord, gate_stream) == 0);
         if (!gpu_ordering_gate_supported(gate_ord))
@@ -386,7 +385,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
     CHECK(Error,
           aggregate_batch_slot_memory(
             C_max, lim->max_total_data_bytes, &slot_dev, &slot_host) == 0);
-    dev += 2 * slot_dev;  // agg[2]
+    dev += 2 * slot_dev; // agg[2]
     host += 2 * slot_host;
     dev += 2 * lim->max_total_batch_chunks *
            sizeof(uint32_t); // d_batch_gather + d_batch_perm
@@ -394,8 +393,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
 
   // Shared per-shard device tables: d_base_offsets, d_shard_capacity,
   // d_tps_group, d_offsets_base.
-  dev +=
-    lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
+  dev += lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
 
   // Per-array slice (compress_agg_array_init).
   {

@@ -2092,11 +2092,10 @@ test_nested_multiscale_array_name(const char* tmpdir)
 
   struct test_zarr_multiscale z = { 0 };
   struct codec_config codec = { 0 };
-  CHECK(
-    Fail,
-    test_zarr_multiscale_open(
-      &z, tmpdir, "path/to/group", dims, 2, dtype_u16, 0, codec, NULL, 1) ==
-      0);
+  CHECK(Fail,
+        test_zarr_multiscale_open(
+          &z, tmpdir, "path/to/group", dims, 2, dtype_u16, 0, codec, NULL, 1) ==
+          0);
 
   // Check root group zarr.json
   {

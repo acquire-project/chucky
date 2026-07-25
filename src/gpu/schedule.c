@@ -570,10 +570,8 @@ kick_batch(struct stream_engine* e,
                                    &handoff) == 0);
 
   CHECK(Error,
-        schedule_d2h_kick(&e->d2h_deliver,
-                          &handoff,
-                          ctx->sink,
-                          e->streams.d2h) == 0);
+        schedule_d2h_kick(
+          &e->d2h_deliver, &handoff, ctx->sink, e->streams.d2h) == 0);
 
   e->sched.slot[fc].handoff = handoff;
   e->sched.slot[fc].kick_seq = e->sched.next_seq++;
@@ -582,8 +580,7 @@ kick_batch(struct stream_engine* e,
   // Depth-1 schedules drain inline right after this kick; the host
   // ordering they exist for must not move to another thread.
   if (e->sched.depth == SCHEDULE_PIPELINED)
-    gpu_delivery_enqueue(
-      &e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
+    gpu_delivery_enqueue(&e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
 
   return 0;
 
@@ -625,8 +622,9 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
           &e->pools.p, e->sched.fill, e->streams.compute, &fresh) == 0);
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
-  CU(Error,
-     cuMemsetD8Async(gpu_pool_view_d(fresh), 0, pool_bytes, e->streams.compute));
+  CU(
+    Error,
+    cuMemsetD8Async(gpu_pool_view_d(fresh), 0, pool_bytes, e->streams.compute));
 
   reset_fill_slot(e);
 
@@ -773,8 +771,8 @@ schedule_flush_partial_append(struct stream_engine* e,
 
   if (gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc))
     CHECK(Error,
-          gpu_edge_record(
-            &e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) == 0);
+          gpu_edge_record(&e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) ==
+            0);
 
   CHECK(Error,
         gpu_pool_release_produce(&e->pools.p, fc, e->streams.compute) == 0);

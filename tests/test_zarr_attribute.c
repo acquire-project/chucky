@@ -157,7 +157,9 @@ test_array_replace_key(void)
 
   struct dimension dims[1] = { { .size = 8, .chunk_size = 4, .name = "x" } };
   struct zarr_array_config cfg = {
-    .data_type = dtype_u8, .rank = 1, .dimensions = dims,
+    .data_type = dtype_u8,
+    .rank = 1,
+    .dimensions = dims,
   };
   struct zarr_array* a = zarr_array_create(s, "rep", &cfg);
   CHECK(Fail2, a);
@@ -198,7 +200,9 @@ test_array_reject_bad_inputs(void)
 
   struct dimension dims[1] = { { .size = 8, .chunk_size = 4, .name = "x" } };
   struct zarr_array_config cfg = {
-    .data_type = dtype_u8, .rank = 1, .dimensions = dims,
+    .data_type = dtype_u8,
+    .rank = 1,
+    .dimensions = dims,
   };
   struct zarr_array* a = zarr_array_create(s, "rej", &cfg);
   CHECK(Fail2, a);
@@ -235,7 +239,9 @@ test_array_value_shapes(void)
 
   struct dimension dims[1] = { { .size = 8, .chunk_size = 4, .name = "x" } };
   struct zarr_array_config cfg = {
-    .data_type = dtype_u8, .rank = 1, .dimensions = dims,
+    .data_type = dtype_u8,
+    .rank = 1,
+    .dimensions = dims,
   };
   struct zarr_array* a = zarr_array_create(s, "shapes", &cfg);
   CHECK(Fail2, a);
@@ -292,7 +298,9 @@ test_array_large_value(void)
 
   struct dimension dims[1] = { { .size = 8, .chunk_size = 4, .name = "x" } };
   struct zarr_array_config cfg = {
-    .data_type = dtype_u8, .rank = 1, .dimensions = dims,
+    .data_type = dtype_u8,
+    .rank = 1,
+    .dimensions = dims,
   };
   struct zarr_array* a = zarr_array_create(s, "big", &cfg);
   CHECK(Fail2, a);
@@ -352,7 +360,9 @@ test_array_collide_top_level(void)
     { .size = 16, .chunk_size = 8, .name = "x" },
   };
   struct zarr_array_config cfg = {
-    .data_type = dtype_u8, .rank = 2, .dimensions = dims,
+    .data_type = dtype_u8,
+    .rank = 2,
+    .dimensions = dims,
   };
   struct zarr_array* a = zarr_array_create(s, "col", &cfg);
   CHECK(Fail2, a);

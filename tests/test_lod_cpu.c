@@ -622,8 +622,8 @@ test_uniform_chunk_bytes_across_levels(void)
           &config, 1, compress_cpu_max_output_size, 0, &cl) == 0);
   CHECK(Fail, cl.levels.nlod > 1); // multiscale, so the invariant is meaningful
 
-  const size_t expected = (size_t)cl.layouts[0].chunk_stride *
-                          dtype_bpe(config.dtype);
+  const size_t expected =
+    (size_t)cl.layouts[0].chunk_stride * dtype_bpe(config.dtype);
   CHECK(Fail, cl.max_output_size == expected); // CODEC_NONE pass-through bound
 
   for (int lv = 0; lv < cl.levels.nlod; ++lv)

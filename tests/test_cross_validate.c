@@ -1068,6 +1068,7 @@ RUN_GPU_TESTS({ "cross_validate_basic", test_cross_validate_basic },
               { "cross_validate_multishard", test_cross_validate_multishard },
               { "cross_validate_lod", test_cross_validate_lod },
               { "cross_validate_lod_dim0", test_cross_validate_lod_dim0 },
-              { "gpu_page_aligned_tail_carry", test_gpu_page_aligned_tail_carry },
+              { "gpu_page_aligned_tail_carry",
+                test_gpu_page_aligned_tail_carry },
               { "gpu_zstd_round_trip", test_gpu_zstd_round_trip },
               { "gpu_zstd_determinism", test_gpu_zstd_determinism }, )

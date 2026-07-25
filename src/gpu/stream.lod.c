@@ -564,12 +564,13 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
   if (cl->dims.append_downsample) {
     uint64_t total = 0;
     for (int lv = 1; lv < p->levels.nlod; ++lv)
-      total += p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
+      total +=
+        p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
     if (total > 0) {
       const size_t bpe = dtype_bpe(config->dtype);
-      bytes += total * bpe;                                  // d_accum
-      bytes += total;                                        // d_level_ids
-      bytes += (uint64_t)p->levels.nlod * sizeof(uint32_t);  // d_counts
+      bytes += total * bpe;                                 // d_accum
+      bytes += total;                                       // d_level_ids
+      bytes += (uint64_t)p->levels.nlod * sizeof(uint32_t); // d_counts
     }
   }
 
@@ -714,9 +715,9 @@ scatter_morton_to_chunks(struct lod_state* lod,
       continue;
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr dst = gpu_pool_view_d(pool_epoch) +
-                      levels->level[lv].chunk_offset * chunk_stride *
-                        bytes_per_element;
+    CUdeviceptr dst =
+      gpu_pool_view_d(pool_epoch) +
+      levels->level[lv].chunk_offset * chunk_stride * bytes_per_element;
 
     CHECK(Error,
           lod_morton_to_chunks_lut(dst,
@@ -876,11 +877,11 @@ lod_emit_partial_append(struct lod_state* lod,
 
     lod->append_accum.counts[lv] = 0;
 
-    CUdeviceptr dst = gpu_pool_view_d(pool0) +
-                      levels->level[lv].chunk_offset * layout->chunk_stride *
-                        bytes_per_element;
-    size_t lv_pool_bytes = levels->level[lv].chunk_count *
-                           layout->chunk_stride * bytes_per_element;
+    CUdeviceptr dst = gpu_pool_view_d(pool0) + levels->level[lv].chunk_offset *
+                                                 layout->chunk_stride *
+                                                 bytes_per_element;
+    size_t lv_pool_bytes =
+      levels->level[lv].chunk_count * layout->chunk_stride * bytes_per_element;
     CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, compute));
 
     CHECK(Error,

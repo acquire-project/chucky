@@ -104,7 +104,8 @@ test_ctx_setup(struct test_ctx* c,
   size_t pool_bytes = (uint64_t)n_pool_epochs * c->cl.levels.total_chunks *
                       c->cl.layouts[0].chunk_stride * dtype_bpe(config->dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
-  gpu_pool_init(&c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
+  gpu_pool_init(
+    &c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
 
   c->batch_active_masks =
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
@@ -152,13 +153,8 @@ test_ctx_kick_and_drain(struct test_ctx* c,
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        schedule_compress_agg_kick(&c->ca,
-                                   &in,
-                                   &c->cl.levels,
-                                   &c->pool,
-                                   0,
-                                   c->compute,
-                                   handoff) == 0);
+        schedule_compress_agg_kick(
+          &c->ca, &in, &c->cl.levels, &c->pool, 0, c->compute, handoff) == 0);
 
   CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
 
@@ -567,14 +563,11 @@ test_d2h_double_buffer(void)
 
   {
     struct flush_handoff handoff;
-    CHECK(Fail,
-          test_ctx_kick_and_drain(&c,
-                                  &config,
-                                  &sink.base,
-                                  1,
-                                  1,
-                                  c.d_pool + epoch_pool_bytes,
-                                  &handoff) == 0);
+    CHECK(
+      Fail,
+      test_ctx_kick_and_drain(
+        &c, &config, &sink.base, 1, 1, c.d_pool + epoch_pool_bytes, &handoff) ==
+        0);
   }
 
   CHECK(Fail, sink.finalize_count == 1); // shard complete
@@ -698,14 +691,11 @@ test_d2h_zstd_double_buffer(void)
 
   {
     struct flush_handoff handoff;
-    CHECK(Fail,
-          test_ctx_kick_and_drain(&c,
-                                  &config,
-                                  &sink.base,
-                                  1,
-                                  1,
-                                  c.d_pool + epoch_pool_bytes,
-                                  &handoff) == 0);
+    CHECK(
+      Fail,
+      test_ctx_kick_and_drain(
+        &c, &config, &sink.base, 1, 1, c.d_pool + epoch_pool_bytes, &handoff) ==
+        0);
   }
 
   CHECK(Fail, sink.finalize_count == 1);
@@ -740,14 +730,11 @@ test_d2h_zstd_double_buffer(void)
 
   {
     struct flush_handoff handoff;
-    CHECK(Fail,
-          test_ctx_kick_and_drain(&c,
-                                  &config,
-                                  &sink.base,
-                                  1,
-                                  1,
-                                  c.d_pool + epoch_pool_bytes,
-                                  &handoff) == 0);
+    CHECK(
+      Fail,
+      test_ctx_kick_and_drain(
+        &c, &config, &sink.base, 1, 1, c.d_pool + epoch_pool_bytes, &handoff) ==
+        0);
   }
 
   CHECK(Fail, sink.finalize_count == 2);
@@ -764,9 +751,8 @@ test_d2h_zstd_double_buffer(void)
     decomp_buf = (uint8_t*)malloc(chunk_bytes);
     CHECK(Fail, decomp_buf);
 
-    uint16_t (*fills[4])(uint64_t) = {
-      fill_epoch0, fill_epoch1, fill_epoch2, fill_epoch3
-    };
+    uint16_t (*fills[4])(
+      uint64_t) = { fill_epoch0, fill_epoch1, fill_epoch2, fill_epoch3 };
     int errors = 0;
     for (int shard = 0; shard < 2; ++shard) {
       CHECK(Fail, sink.writers[0][shard].size >= index_total_bytes);
@@ -778,8 +764,8 @@ test_d2h_zstd_double_buffer(void)
         const int global_epoch = shard * 2 + local_epoch;
         uint16_t (*fill_fn)(uint64_t) = fills[global_epoch];
         for (uint64_t t = 0; t < total_chunks; ++t) {
-          uint32_t pi = cpu_perm(
-            t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
+          uint32_t pi =
+            cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
           uint64_t slot_idx = (uint64_t)local_epoch * cps_inner + pi;
           uint64_t tile_off = idx[2 * slot_idx];
           uint64_t tile_sz = idx[2 * slot_idx + 1];

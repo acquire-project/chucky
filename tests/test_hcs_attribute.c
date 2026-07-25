@@ -63,10 +63,7 @@ make_plate(struct store* s)
     .rows = 2,
     .cols = 2,
     .field_count = 2,
-    .fov = { .data_type = dtype_u8,
-             .rank = 2,
-             .dimensions = dims,
-             .nlod = 1 },
+    .fov = { .data_type = dtype_u8, .rank = 2, .dimensions = dims, .nlod = 1 },
   };
   return hcs_plate_create(s, &cfg);
 }
@@ -115,8 +112,7 @@ test_hcs_well_attr(void)
   struct hcs_plate* p = make_plate(s);
   CHECK(Fail2, p);
 
-  CHECK(Fail3,
-        hcs_plate_set_well_attribute(p, 0, 1, "barcode", "\"W1\"") == 0);
+  CHECK(Fail3, hcs_plate_set_well_attribute(p, 0, 1, "barcode", "\"W1\"") == 0);
   CHECK(Fail3, hcs_plate_flush_metadata(p) == 0);
 
   // Well group for row 0, col 1 = A/2

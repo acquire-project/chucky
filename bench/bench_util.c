@@ -971,8 +971,7 @@ run_bench_two_streams(const struct bench_config* cfg)
   // Interleaved pump
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail,
-        pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
+  CHECK(Fail, pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
 
   // Flush zarr sinks before measuring wall time
   struct platform_clock flush_clock = { 0 };

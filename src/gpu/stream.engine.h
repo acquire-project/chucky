@@ -199,10 +199,10 @@ struct compress_agg_stage
                              // consumed is the drain-before-rekick host rule
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
-  struct gpu_pool tail; // d_tail_bytes/d_tail_carry generations (#142):
-                        // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
-                        // the deliver-oldest-first host rule. Payload is
-                        // the bound compress_agg_array (ar below).
+  struct gpu_pool tail;      // d_tail_bytes/d_tail_carry generations (#142):
+                             // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
+                             // the deliver-oldest-first host rule. Payload is
+                             // the bound compress_agg_array (ar below).
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;
