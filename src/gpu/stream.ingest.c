@@ -81,6 +81,24 @@ ingest_destroy(struct staging_state* stage)
 }
 
 void
+ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m)
+{
+  for (int i = 0; i < 2; ++i) {
+    struct staging_slot* ss = &stage->slot[i];
+    if (!ss->h2d_pending)
+      continue;
+    CUevent end =
+      gpu_ordering_event(stage->d_pool.ord, GPU_EDGE_STAGING_H2D_DONE, i);
+    if (accumulate_metric_cu_if_ready(m,
+                                      ss->t_h2d_start,
+                                      end,
+                                      ss->dispatched_bytes,
+                                      ss->dispatched_bytes) == 0)
+      ss->h2d_pending = 0;
+  }
+}
+
+void
 ingest_collect_scatter_timing(struct staging_state* stage,
                               struct stream_metric* m)
 {
@@ -126,6 +144,7 @@ dispatch_h2d(struct staging_state* stage,
      cuMemcpyHtoDAsync(
        gpu_pool_view_d(*d_in), h_in.p, stage->bytes_written, h2d));
   CHECK(Error, gpu_pool_release_produce(&stage->d_pool, idx, h2d) == 0);
+  stage->slot[idx].h2d_pending = 1;
   return 0;
 
 Error:

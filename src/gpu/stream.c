@@ -137,23 +137,15 @@ stream_append_body(struct stream_engine* e,
 
         if (e->stage.bytes_written == 0) {
           const int si = e->stage.current;
-          struct staging_slot* ss = &e->stage.slot[si];
           // Poll instead of cuEventSynchronize to keep the producer thread
           // hot — it has memcpy work queued up immediately after.
           if (gpu_pool_host_acquire_produce(&e->stage.h_pool, si, NULL))
             goto Error;
 
-          if (ctx->cursor_elements > 0) {
-            // The acquire above waited on this slot's H2D, so its interval is
-            // readable here. The scatter runs afterwards on the compute
-            // stream, so its samples are collected from the ring instead.
-            accumulate_metric_cu(
-              &e->metrics.h2d,
-              ss->t_h2d_start,
-              gpu_ordering_event(&e->ord, GPU_EDGE_STAGING_H2D_DONE, si),
-              ss->dispatched_bytes,
-              ss->dispatched_bytes);
-          }
+          // The acquire above waited on this slot's H2D, so its interval is
+          // ready. The scatter runs afterwards on the compute stream, so its
+          // samples come from the ring whenever they finish.
+          ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
           ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
         }
 
@@ -269,9 +261,10 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (r.error)
     return r;
 
-  // Last chance to read the tail of the scatter ring; flush is already a sync
-  // point, so waiting here costs nothing and leaves no sample unread.
+  // Last chance to read the outstanding ingest intervals; flush is already a
+  // sync point, so waiting here costs nothing and leaves no sample unread.
   cuStreamSynchronize(e->streams.compute);
+  ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
   ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
   if (e->stage.scatter_samples_lost > 0)
     log_debug("scatter timing ring wrapped %llu times",

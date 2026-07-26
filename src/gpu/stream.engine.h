@@ -32,6 +32,7 @@ struct staging_slot
   CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
   CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
+  int h2d_pending;         // dispatched, interval not yet folded into metrics
 };
 
 // One scatter measurement. Owns both ends of its interval: reusing the

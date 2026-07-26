@@ -30,6 +30,12 @@ void
 ingest_collect_scatter_timing(struct staging_state* stage,
                               struct stream_metric* m);
 
+// Same for the per-slot H2D intervals. Cheap at slot reacquire, where the
+// acquire has already waited on the interval's end; the flush call picks up the
+// final dispatches, which no reacquire ever revisits.
+void
+ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m);
+
 // H2D transfer + scatter into chunk pool.
 // pool_epoch: acquired view of the target epoch's chunk region in the pool.
 // cursor: in/out, incremented by elements transferred.
