@@ -99,6 +99,13 @@ record_flush_metrics(const struct flush_handoff* handoff,
                                   handoff->t_compress_end,
                                   pool_bytes,
                                   agg_bytes);
+  // The gap the aggregate interval no longer covers. Carries no bytes; it is
+  // a wait, and on the page-aligned path it is the cost of the tail gate.
+  accumulate_metric_cu_if_ready(&metrics->tail_gate,
+                                handoff->t_compress_end,
+                                handoff->t_aggregate_start,
+                                0,
+                                0);
   accumulate_metric_cu_if_ready(&metrics->aggregate,
                                 handoff->t_aggregate_start,
                                 handoff->t_aggregate_end,

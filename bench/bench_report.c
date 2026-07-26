@@ -145,7 +145,8 @@ print_bench_report(const struct stream_metrics* metrics,
     metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
     metrics->io_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
     metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
-    have_edge_stalls;
+    metrics->tail_gate.count > 0 || metrics->scatter_samples_lost > 0 ||
+    metrics->lod_samples_lost > 0 || have_edge_stalls;
   if (have_stalls) {
     fputc('\n', stderr);
     print_report("  --- Stall stats ---");
@@ -153,8 +154,14 @@ print_bench_report(const struct stream_metrics* metrics,
     print_metric_row(&metrics->kick_sync_stall);
     print_metric_row(&metrics->io_fence_stall);
     print_metric_row(&metrics->backpressure);
+    print_metric_row(&metrics->tail_gate);
     for (size_t i = 0; i < n_edge_stalls; ++i)
       print_metric_row(&metrics->edge_stall[i]);
+    if (metrics->scatter_samples_lost || metrics->lod_samples_lost)
+      print_report("  TIMING SAMPLES LOST: scatter=%llu lod=%llu "
+                   "(stage totals under-report)",
+                   (unsigned long long)metrics->scatter_samples_lost,
+                   (unsigned long long)metrics->lod_samples_lost);
     print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
@@ -197,6 +204,12 @@ json_stage_metric(struct json_writer* jw,
   jw_float(jw, (double)sm->ms);
   jw_key(jw, "count");
   jw_uint(jw, (uint64_t)sm->count);
+  // Raw totals as well as the rates: bytes are safe to sum across stages,
+  // unlike times, which belong to different threads.
+  jw_key(jw, "in_bytes");
+  jw_uint(jw, (uint64_t)sm->input_bytes);
+  jw_key(jw, "out_bytes");
+  jw_uint(jw, (uint64_t)sm->output_bytes);
   jw_key(jw, "avg_ms");
   jw_float(jw, avg_ms);
   if (sm->best_ms < 1e29f) {
@@ -310,6 +323,15 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->backpressure.ms);
   jw_key(&jw, "backpressure_count");
   jw_uint(&jw, (uint64_t)m->backpressure.count);
+  jw_key(&jw, "tail_gate_ms");
+  jw_float(&jw, (double)m->tail_gate.ms);
+  jw_key(&jw, "tail_gate_count");
+  jw_uint(&jw, (uint64_t)m->tail_gate.count);
+  // Non-zero means the stage totals above are under-reported.
+  jw_key(&jw, "scatter_samples_lost");
+  jw_uint(&jw, m->scatter_samples_lost);
+  jw_key(&jw, "lod_samples_lost");
+  jw_uint(&jw, m->lod_samples_lost);
   // StagingFree is the producer's own append-side wait — the stall that
   // explains dropped frames. Keys come from the engine's metric names.
   jw_key(&jw, "edge_stalls");

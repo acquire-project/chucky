@@ -39,6 +39,7 @@ stream_engine_init_metrics(int enable_multiscale)
     .kick_sync_stall = mk_stream_metric("KickSync"),
     .io_fence_stall = mk_stream_metric("IOFence"),
     .backpressure = mk_stream_metric("Backpres"),
+    .tail_gate = mk_stream_metric("TailGate"),
   };
 }
 
@@ -268,6 +269,8 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
   ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
   lod_collect_timing(&e->lod_shared, &e->metrics);
+  e->metrics.scatter_samples_lost = e->stage.scatter_samples_lost;
+  e->metrics.lod_samples_lost = e->lod_shared.timing_samples_lost;
   if (e->lod_shared.timing_samples_lost > 0)
     log_debug("lod timing ring wrapped %llu times",
               (unsigned long long)e->lod_shared.timing_samples_lost);

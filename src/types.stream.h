@@ -61,8 +61,21 @@ struct stream_metrics
   // staging_free, chunk_index_ready, d2h_done). GPU engines wire these up;
   // entries stay zero (count 0) elsewhere.
   struct stream_metric edge_stall[3];
+  // Device-side wait on the previous batch's tail upload (the #142 gate),
+  // measured between compress-end and aggregate-start. Only ever non-zero on
+  // the page-aligned path; without it that wait is invisible, since it was
+  // deliberately excluded from `aggregate`.
+  struct stream_metric tail_gate;
+
   float max_append_ms;       // longest tile_stream_gpu_append body
   size_t peak_pending_bytes; // max sink->pending_bytes seen
+
+  // Timing measurements discarded because their ring wrapped before the host
+  // read them. Non-zero means the stage totals below it are under-reported —
+  // the failure this instrumentation exists to make visible, so it must not
+  // stay a debug-only log line.
+  uint64_t scatter_samples_lost;
+  uint64_t lod_samples_lost;
 };
 
 struct tile_stream_configuration
