@@ -10,6 +10,10 @@
 // Worst case three batches are live at once (draining, kicked-and-pending,
 // filling), so each needs its own timing buffer (#154).
 #define LOD_TIMING_SLOTS 3
+
+// More than the two staging slots, so a scatter measurement can outlive the
+// dispatch that produced it and still be read after it completes.
+#define SCATTER_TIMING_SLOTS 4
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // S3

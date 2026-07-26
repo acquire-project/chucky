@@ -7,7 +7,8 @@
 // not declared here must be timing-only.
 //
 // Timing-only events are excluded (they must not masquerade as ordering):
-//   staging t_h2d_start/t_scatter_start; compress t_compress_start/end;
+//   staging t_h2d_start and the rotated scatter pairs; compress
+//   t_compress_start/end; aggregate t_aggregate_start; d2h t_d2h_drain_start;
 //   d2h t_d2h_start; lod timing t_start/t_scatter_end/t_reduce_end/
 //   t_append_end/t_end.
 

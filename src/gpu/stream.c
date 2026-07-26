@@ -144,19 +144,17 @@ stream_append_body(struct stream_engine* e,
             goto Error;
 
           if (ctx->cursor_elements > 0) {
+            // The acquire above waited on this slot's H2D, so its interval is
+            // readable here. The scatter runs afterwards on the compute
+            // stream, so its samples are collected from the ring instead.
             accumulate_metric_cu(
               &e->metrics.h2d,
               ss->t_h2d_start,
               gpu_ordering_event(&e->ord, GPU_EDGE_STAGING_H2D_DONE, si),
               ss->dispatched_bytes,
               ss->dispatched_bytes);
-            accumulate_metric_cu(
-              &e->metrics.scatter,
-              ss->t_scatter_start,
-              gpu_ordering_event(&e->ord, GPU_EDGE_STAGING_SCATTER_DONE, si),
-              ss->dispatched_bytes,
-              ss->dispatched_bytes);
           }
+          ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
         }
 
         {
@@ -270,6 +268,14 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   r = schedule_flush_partial_append(e, ctx);
   if (r.error)
     return r;
+
+  // Last chance to read the tail of the scatter ring; flush is already a sync
+  // point, so waiting here costs nothing and leaves no sample unread.
+  cuStreamSynchronize(e->streams.compute);
+  ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
+  if (e->stage.scatter_samples_lost > 0)
+    log_debug("scatter timing ring wrapped %llu times",
+              (unsigned long long)e->stage.scatter_samples_lost);
 
   // Emit partial shards for all levels (unified path: shard[lv] is the
   // shard_state read by the new kick/D2H code).

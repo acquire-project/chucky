@@ -31,8 +31,21 @@ struct staging_slot
   void* h_in;              // pinned host WC, size = buffer_capacity_bytes
   CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
   CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
-  CUevent t_scatter_start; // recorded before scatter kernel (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
+};
+
+// One scatter measurement. Owns both ends of its interval: reusing the
+// STAGING_SCATTER_DONE ordering edge as the end tied a sample's lifetime to the
+// staging slot, and the host reads slot state at a point that only waits on
+// STAGING_H2D_DONE — so the scatter was usually still running and the sample
+// was lost. Rotating more of these than there are staging slots lets a sample
+// wait for its own completion instead.
+struct scatter_timing
+{
+  CUevent t_start;
+  CUevent t_end;
+  size_t bytes;
+  int pending;
 };
 
 struct staging_state
@@ -44,6 +57,10 @@ struct staging_state
                           //       order (fill precedes dispatch)
   int current;            // 0 or 1: which buffer the host is filling
   size_t bytes_written;   // bytes written to current slot's h_in so far
+
+  struct scatter_timing timing[SCATTER_TIMING_SLOTS];
+  int next_timing;
+  uint64_t scatter_samples_lost; // ring wrapped while still outstanding
 };
 
 // Per-frame-counter timing events (double-buffered).

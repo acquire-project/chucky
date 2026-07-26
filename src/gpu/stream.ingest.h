@@ -3,6 +3,7 @@
 #include "gpu/stream.internal.h"
 
 struct threadpool;
+struct stream_metric;
 
 // memcpy into pinned staging, split across the pool when the payload is
 // large enough to pay for the dispatch. The destination lies within one
@@ -21,6 +22,13 @@ ingest_init(struct staging_state* stage,
 // Free staging buffers and events.
 void
 ingest_destroy(struct staging_state* stage);
+
+// Fold every finished scatter measurement into m, leaving the unfinished ones
+// for a later call. Never blocks. Call from the append loop and again at flush
+// so the last dispatches are not left unread.
+void
+ingest_collect_scatter_timing(struct staging_state* stage,
+                              struct stream_metric* m);
 
 // H2D transfer + scatter into chunk pool.
 // pool_epoch: acquired view of the target epoch's chunk region in the pool.
