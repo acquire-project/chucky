@@ -1,6 +1,6 @@
 #pragma once
 
-// One owner for GPU orchestration (docs/gpu-orchestration.md §4): stream
+// One owner for GPU orchestration (dev/gpu-orchestration.md): stream
 // creation, pipeline depth, which stages run for the active configuration,
 // and degraded schedules. Stages stay payload; the schedule places the
 // cross-stage acquires/releases and decides when kicks and drains happen.
@@ -71,8 +71,6 @@ struct schedule_slot
 {
   uint32_t active_levels_mask;  // union of per-epoch active masks
   uint32_t* batch_active_masks; // [epochs_per_batch]; per-array allocation
-  int lod_timing_slot;          // generation owned by the batch being filled
-  int has_lod_timing;           // batch ran a timed LOD epoch (#154)
   int kicked;
   uint64_t kick_seq;
   struct flush_handoff handoff;
@@ -200,8 +198,6 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
                    const struct tile_stream_layout* layout,
                    const struct tile_stream_configuration* config,
                    struct shard_sink* sink,
-                   const struct lod_state* lod,
-                   const struct lod_shared_state* lod_shared,
                    struct stream_metrics* metrics,
                    struct platform_clock* metadata_update_clock);
 

@@ -116,15 +116,15 @@ test_ingest_single_epoch(void)
   {
     uint64_t cursor = 0;
     CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  (struct gpu_pool_view){
-                                    .p = (void*)(uintptr_t)d_pool },
-                                  &cursor,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
+          ingest_dispatch_scatter(
+            &stage,
+            &layout,
+            &layout_gpu,
+            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
+            &cursor,
+            bytes_per_element,
+            h2d,
+            compute) == 0);
     CHECK(Fail, cursor == epoch_elements);
   }
 
@@ -247,15 +247,15 @@ test_ingest_incremental(void)
     memcpy(gpu_pool_at(&stage.h_pool, stage.current, 0).p, h_src, half);
     stage.bytes_written = half;
     CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  (struct gpu_pool_view){
-                                    .p = (void*)(uintptr_t)d_pool },
-                                  &cursor,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
+          ingest_dispatch_scatter(
+            &stage,
+            &layout,
+            &layout_gpu,
+            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
+            &cursor,
+            bytes_per_element,
+            h2d,
+            compute) == 0);
     CHECK(Fail, cursor == epoch_elements / 2);
 
     struct gpu_pool_view h_in;
@@ -265,15 +265,15 @@ test_ingest_incremental(void)
     memcpy(h_in.p, (uint8_t*)h_src + half, half);
     stage.bytes_written = half;
     CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  (struct gpu_pool_view){
-                                    .p = (void*)(uintptr_t)d_pool },
-                                  &cursor,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
+          ingest_dispatch_scatter(
+            &stage,
+            &layout,
+            &layout_gpu,
+            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
+            &cursor,
+            bytes_per_element,
+            h2d,
+            compute) == 0);
     CHECK(Fail, cursor == epoch_elements);
   }
 

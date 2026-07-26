@@ -112,8 +112,7 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
 
   // No tail gate on the multiarray sync-flush path: every kick drains
   // immediately, so tail uploads are host-ordered.
-  return engine_array_state_init(
-    &desc->st, &desc->ctx, &desc->cl, NULL, NULL);
+  return engine_array_state_init(&desc->st, &desc->ctx, &desc->cl, NULL, NULL);
 }
 
 static void

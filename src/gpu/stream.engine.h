@@ -31,8 +31,22 @@ struct staging_slot
   void* h_in;              // pinned host WC, size = buffer_capacity_bytes
   CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
   CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
-  CUevent t_scatter_start; // recorded before scatter kernel (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
+  int h2d_pending;         // dispatched, interval not yet folded into metrics
+};
+
+// One scatter measurement. Owns both ends of its interval: reusing the
+// STAGING_SCATTER_DONE ordering edge as the end tied a sample's lifetime to the
+// staging slot, and the host reads slot state at a point that only waits on
+// STAGING_H2D_DONE — so the scatter was usually still running and the sample
+// was lost. Rotating more of these than there are staging slots lets a sample
+// wait for its own completion instead.
+struct scatter_timing
+{
+  CUevent t_start;
+  CUevent t_end;
+  size_t bytes;
+  int pending;
 };
 
 struct staging_state
@@ -44,9 +58,13 @@ struct staging_state
                           //       order (fill precedes dispatch)
   int current;            // 0 or 1: which buffer the host is filling
   size_t bytes_written;   // bytes written to current slot's h_in so far
+
+  struct scatter_timing timing[SCATTER_TIMING_SLOTS];
+  int next_timing;
+  uint64_t scatter_samples_lost; // ring wrapped while still outstanding
 };
 
-// Per-frame-counter timing events (double-buffered).
+// One epoch's LOD phase boundaries.
 struct lod_timing
 {
   CUevent t_start;
@@ -54,6 +72,18 @@ struct lod_timing
   CUevent t_reduce_end;
   CUevent t_append_end;
   CUevent t_end;
+  int pending;         // recorded, not yet folded into metrics
+  int has_append_fold; // the append-fold phase ran this epoch
+
+  // Captured when the epoch is recorded, not when it is read. The ring is
+  // engine-owned and shared across arrays while the geometry these come from
+  // is per-array and swapped on bind, so a sample outstanding across an array
+  // switch would otherwise be folded in with the wrong array's sizes.
+  size_t epoch_bytes;
+  size_t reduced_bytes;
+  size_t morton_bytes;
+  size_t pool_bytes;
+  size_t accum_bytes;
 };
 
 // Engine-owned LOD resources shared across all arrays in a multiarray stream
@@ -67,10 +97,11 @@ struct lod_shared_state
   // Recorded every epoch and never rotated, so a bound handle stays valid.
   CUevent lod_done[2];
 
-  // Rotated across batches so the worker's read can't collide with the
-  // producer re-recording the next same-fc batch (#154).
+  // Rotated per epoch and read by the producer, which is also the only writer
+  // — so the cross-thread collision #154 worked around cannot arise.
   struct lod_timing timing[LOD_TIMING_SLOTS];
   int next_timing_slot;
+  uint64_t timing_samples_lost; // ring wrapped while still unread
 };
 
 // Per-array LOD state.  In multiarray, one instance per array; the active
@@ -116,8 +147,6 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
   uint32_t epochs_per_batch;
-  int lod_timing_slot;
-  int has_lod_timing;
 };
 
 // Per-shard layout tables shared across arrays, sized to the max
@@ -181,8 +210,11 @@ struct compress_agg_stage
   struct gpu_ordering* ord; // borrowed
   struct codec codec;
   CUdeviceptr d_compressed[2];
-  CUevent t_compress_start[2]; // timing
-  CUevent t_compress_end[2];   // timing
+  CUevent t_compress_start[2];  // timing
+  CUevent t_compress_end[2];    // timing
+  CUevent t_aggregate_start[2]; // timing; recorded after the tail-gate wait
+                                // so a slow sink cannot read as slow
+                                // aggregation
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
@@ -199,10 +231,10 @@ struct compress_agg_stage
                              // consumed is the drain-before-rekick host rule
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
-  struct gpu_pool tail; // d_tail_bytes/d_tail_carry generations (#142):
-                        // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
-                        // the deliver-oldest-first host rule. Payload is
-                        // the bound compress_agg_array (ar below).
+  struct gpu_pool tail;      // d_tail_bytes/d_tail_carry generations (#142):
+                             // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
+                             // the deliver-oldest-first host rule. Payload is
+                             // the bound compress_agg_array (ar below).
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;
@@ -232,9 +264,10 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  struct gpu_ordering* ord; // borrowed
-  CUevent t_d2h_start[2];   // timing
-  CUstream drain_stream;    // borrowed (gpu_streams.drain)
+  struct gpu_ordering* ord;     // borrowed
+  CUevent t_d2h_start[2];       // timing; kick-time, before the worker handoff
+  CUevent t_d2h_drain_start[2]; // timing; immediately before the payload copy
+  CUstream drain_stream;        // borrowed (gpu_streams.drain)
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

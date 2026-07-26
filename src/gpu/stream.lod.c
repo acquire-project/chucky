@@ -2,6 +2,7 @@
 
 #include "dimension.h"
 #include "gpu/lod.h"
+#include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
@@ -564,12 +565,13 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
   if (cl->dims.append_downsample) {
     uint64_t total = 0;
     for (int lv = 1; lv < p->levels.nlod; ++lv)
-      total += p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
+      total +=
+        p->levels.level[lv].fixed_dims_count * p->levels.level[lv].lod_nelem;
     if (total > 0) {
       const size_t bpe = dtype_bpe(config->dtype);
-      bytes += total * bpe;                                  // d_accum
-      bytes += total;                                        // d_level_ids
-      bytes += (uint64_t)p->levels.nlod * sizeof(uint32_t);  // d_counts
+      bytes += total * bpe;                                 // d_accum
+      bytes += total;                                       // d_level_ids
+      bytes += (uint64_t)p->levels.nlod * sizeof(uint32_t); // d_counts
     }
   }
 
@@ -714,9 +716,9 @@ scatter_morton_to_chunks(struct lod_state* lod,
       continue;
 
     struct lod_span lev = lod_spans_at(&p->level_spans, lv);
-    CUdeviceptr dst = gpu_pool_view_d(pool_epoch) +
-                      levels->level[lv].chunk_offset * chunk_stride *
-                        bytes_per_element;
+    CUdeviceptr dst =
+      gpu_pool_view_d(pool_epoch) +
+      levels->level[lv].chunk_offset * chunk_stride * bytes_per_element;
 
     CHECK(Error,
           lod_morton_to_chunks_lut(dst,
@@ -740,8 +742,8 @@ lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
               struct gpu_ordering* ord,
               int fc,
-              int timing_slot,
               const struct level_geometry* levels,
+              const struct tile_stream_layout* layout,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
@@ -751,7 +753,25 @@ lod_run_epoch(struct lod_state* lod,
               uint32_t* out_active_mask)
 {
   struct lod_plan* p = &lod->plan;
-  struct lod_timing* t = &sh->timing[timing_slot];
+  // A fresh measurement per epoch. An entry still unread here has outlived its
+  // slack; overwrite it rather than stall, and let the caller see the loss.
+  struct lod_timing* t = &sh->timing[sh->next_timing_slot];
+  if (t->pending)
+    sh->timing_samples_lost++;
+  sh->next_timing_slot = (sh->next_timing_slot + 1) % LOD_TIMING_SLOTS;
+  t->pending = 0;
+  t->has_append_fold = 0;
+  {
+    const size_t bpe = dtype_bpe(dtype);
+    const uint64_t* ends = p->level_spans.ends;
+    const uint8_t nlod = p->levels.nlod;
+    t->epoch_bytes = layout->epoch_elements * bpe;
+    t->morton_bytes = ends ? ends[nlod - 1] * bpe : 0;
+    // The reduce writes levels 1..nlod-1; level 0 is its input.
+    t->reduced_bytes = ends ? (ends[nlod - 1] - ends[0]) * bpe : 0;
+    t->pool_bytes = levels->total_chunks * layout->chunk_stride * bpe;
+    t->accum_bytes = lod->append_accum.element_capacity * bpe;
+  }
 
   CU(Error, cuEventRecord(t->t_start, compute));
 
@@ -805,6 +825,7 @@ lod_run_epoch(struct lod_state* lod,
       run_append_fold_emit(
         lod, sh, dtype, append_reduce_method, compute, &active_levels_mask) ==
         0);
+    t->has_append_fold = 1;
   }
 
   CU(Error, cuEventRecord(t->t_append_end, compute));
@@ -817,11 +838,46 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(t->t_end, compute));
   CHECK(Error, gpu_edge_record(ord, GPU_EDGE_LOD_DONE, fc, compute) == 0);
 
+  t->pending = 1;
   *out_active_mask = active_levels_mask;
   return 0;
 
 Error:
   return 1;
+}
+
+void
+lod_collect_timing(struct lod_shared_state* sh, struct stream_metrics* metrics)
+{
+  for (int i = 0; i < LOD_TIMING_SLOTS; ++i) {
+    struct lod_timing* t = &sh->timing[i];
+    if (!t->pending)
+      continue;
+    if (cuEventQuery(t->t_end) != CUDA_SUCCESS)
+      continue;
+    accumulate_metric_cu_if_ready(&metrics->lod_gather,
+                                  t->t_start,
+                                  t->t_scatter_end,
+                                  t->epoch_bytes,
+                                  t->epoch_bytes);
+    accumulate_metric_cu_if_ready(&metrics->lod_reduce,
+                                  t->t_scatter_end,
+                                  t->t_reduce_end,
+                                  t->epoch_bytes,
+                                  t->reduced_bytes);
+    if (t->has_append_fold)
+      accumulate_metric_cu_if_ready(&metrics->lod_append_fold,
+                                    t->t_reduce_end,
+                                    t->t_append_end,
+                                    t->accum_bytes,
+                                    t->accum_bytes);
+    accumulate_metric_cu_if_ready(&metrics->lod_morton_chunk,
+                                  t->t_append_end,
+                                  t->t_end,
+                                  t->morton_bytes,
+                                  t->pool_bytes);
+    t->pending = 0;
+  }
 }
 
 uint32_t
@@ -876,11 +932,11 @@ lod_emit_partial_append(struct lod_state* lod,
 
     lod->append_accum.counts[lv] = 0;
 
-    CUdeviceptr dst = gpu_pool_view_d(pool0) +
-                      levels->level[lv].chunk_offset * layout->chunk_stride *
-                        bytes_per_element;
-    size_t lv_pool_bytes = levels->level[lv].chunk_count *
-                           layout->chunk_stride * bytes_per_element;
+    CUdeviceptr dst = gpu_pool_view_d(pool0) + levels->level[lv].chunk_offset *
+                                                 layout->chunk_stride *
+                                                 bytes_per_element;
+    size_t lv_pool_bytes =
+      levels->level[lv].chunk_count * layout->chunk_stride * bytes_per_element;
     CU(Error, cuMemsetD8Async(dst, 0, lv_pool_bytes, compute));
 
     CHECK(Error,

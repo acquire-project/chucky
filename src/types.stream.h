@@ -45,24 +45,37 @@ struct stream_metrics
   // producer's join wait in drain_slot (the producer-visible cost). On
   // depth-1 schedules the drain runs inline and flush_stall is a superset
   // of kick_sync_stall + sink, as before.
-  struct stream_metric flush_stall;     // producer join wait / inline drain
-                                        // (drain_slot in schedule.c)
+  struct stream_metric flush_stall; // producer join wait / inline drain
+                                    // (drain_slot in schedule.c)
   // Passthrough: GPU_EDGE_D2H_DONE poll only. Compressed:
   // GPU_EDGE_CHUNK_INDEX_READY poll + per-LOD bulk D2H dispatch +
   // GPU_EDGE_D2H_DONE poll (the second poll includes DMA transfer wall
   // time).
   struct stream_metric kick_sync_stall;
-  struct stream_metric io_fence_stall;  // GPU: wait_io_fences in
-                                        // schedule_d2h_kick. CPU: wait_fence
-                                        // before aggregate in
-                                        // cpu_pipeline_flush_batch.
-  struct stream_metric backpressure; // wait at epoch boundary for IO to drain
+  struct stream_metric io_fence_stall; // GPU: wait_io_fences in
+                                       // schedule_d2h_kick. CPU: wait_fence
+                                       // before aggregate in
+                                       // cpu_pipeline_flush_batch.
+  struct stream_metric backpressure;   // wait at epoch boundary for IO to drain
   // Host-poll blocked time attributed to GPU ordering edges (gpu/ordering.h:
   // staging_free, chunk_index_ready, d2h_done). GPU engines wire these up;
   // entries stay zero (count 0) elsewhere.
   struct stream_metric edge_stall[3];
-  float max_append_ms;               // longest tile_stream_gpu_append body
-  size_t peak_pending_bytes;         // max sink->pending_bytes seen
+  // Device-side wait on the previous batch's tail upload (the #142 gate),
+  // measured between compress-end and aggregate-start. Only ever non-zero on
+  // the page-aligned path; without it that wait is invisible, since it was
+  // deliberately excluded from `aggregate`.
+  struct stream_metric tail_gate;
+
+  float max_append_ms;       // longest tile_stream_gpu_append body
+  size_t peak_pending_bytes; // max sink->pending_bytes seen
+
+  // Timing measurements discarded because their ring wrapped before the host
+  // read them. Non-zero means the stage totals below it are under-reported —
+  // the failure this instrumentation exists to make visible, so it must not
+  // stay a debug-only log line.
+  uint64_t scatter_samples_lost;
+  uint64_t lod_samples_lost;
 };
 
 struct tile_stream_configuration

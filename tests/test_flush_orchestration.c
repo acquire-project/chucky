@@ -117,9 +117,8 @@ orch_ctx_setup(struct orch_ctx* c,
                 GPU_EDGE_POOL_CONSUMED);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&c->s->engine.pools.buf[i], pool_bytes));
-    gpu_pool_bind(&c->s->engine.pools.p,
-                  i,
-                  (void*)(uintptr_t)c->s->engine.pools.buf[i]);
+    gpu_pool_bind(
+      &c->s->engine.pools.p, i, (void*)(uintptr_t)c->s->engine.pools.buf[i]);
     CU(Fail,
        cuMemsetD8Async(c->s->engine.pools.buf[i],
                        0,
@@ -261,7 +260,7 @@ test_full_batch_auto_flush(void)
 
   // After full batch: drain_kick_and_swap fired
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
-  CHECK(Fail, c.s->engine.sched.fill == 1);    // swapped to pool 1
+  CHECK(Fail, c.s->engine.sched.fill == 1);           // swapped to pool 1
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending at fc=0
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
 
@@ -429,7 +428,7 @@ test_two_batch_cycle(void)
 
   // Batch 2 kicked on fc=1. Lazy delivery: batch 1 stays pending at fc=0
   // until fc=0 is reused (batch 3) or the final flush drains it.
-  CHECK(Fail, c.s->engine.sched.fill == 0);    // swapped back to pool 0
+  CHECK(Fail, c.s->engine.sched.fill == 0);           // swapped back to pool 0
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 still pending
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.sched.accumulated == 0);

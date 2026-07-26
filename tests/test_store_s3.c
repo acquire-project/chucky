@@ -126,8 +126,8 @@ test_s3_has_existing_data_with_prefix(void)
   struct store* other_store = make_store(other);
   CHECK(Fail, other_store);
   const char* meta = "{}";
-  CHECK(Fail_other, other_store->put(other_store, "zarr.json", meta,
-                                     strlen(meta)) == 0);
+  CHECK(Fail_other,
+        other_store->put(other_store, "zarr.json", meta, strlen(meta)) == 0);
   store_destroy(other_store);
 
   struct store* s = make_store(mine);

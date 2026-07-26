@@ -41,12 +41,9 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        struct aggregate_slot* slot,
                        struct compress_agg_array* shards,
                        const struct level_geometry* levels,
-                       const struct dim_info* dims,
                        const struct tile_stream_layout* layout,
                        const struct tile_stream_configuration* config,
                        struct shard_sink* sink,
-                       const struct lod_state* lod,
-                       const struct lod_shared_state* lod_shared,
                        struct stream_metrics* metrics);
 
 int

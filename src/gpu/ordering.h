@@ -1,13 +1,14 @@
 #pragma once
 
 // Declared cross-stream / host-stream ordering edges for the GPU pipeline
-// (docs/gpu-orchestration.md). Every cuEventRecord/cuStreamWaitEvent/
+// (dev/gpu-orchestration.md). Every cuEventRecord/cuStreamWaitEvent/
 // cuStreamWaitValue64/cuEventQuery pair that orders work between streams (or
 // between the host and a stream) goes through this table; an edge that is
 // not declared here must be timing-only.
 //
 // Timing-only events are excluded (they must not masquerade as ordering):
-//   staging t_h2d_start/t_scatter_start; compress t_compress_start/end;
+//   staging t_h2d_start and the rotated scatter pairs; compress
+//   t_compress_start/end; aggregate t_aggregate_start; d2h t_d2h_drain_start;
 //   d2h t_d2h_start; lod timing t_start/t_scatter_end/t_reduce_end/
 //   t_append_end/t_end.
 
@@ -45,11 +46,11 @@ enum gpu_edge
                                  // h_in safe to refill (stream.c poll)
 
   // Batch pipeline (instanced by fc unless noted).
-  GPU_EDGE_POOL_FILLED, // compute -> compress: chunk-pool batch contents
-                        // (single instance; one batch in flight at record)
-  GPU_EDGE_LOD_DONE,    // compute -> compress: LOD chunks in pool
-                        // (multiscale only)
-  GPU_EDGE_AGG_DONE,    // compress -> d2h: aggregate slot outputs ready
+  GPU_EDGE_POOL_FILLED,   // compute -> compress: chunk-pool batch contents
+                          // (single instance; one batch in flight at record)
+  GPU_EDGE_LOD_DONE,      // compute -> compress: LOD chunks in pool
+                          // (multiscale only)
+  GPU_EDGE_AGG_DONE,      // compress -> d2h: aggregate slot outputs ready
   GPU_EDGE_POOL_CONSUMED, // compress -> compute (alias of AGG_DONE):
                           // pool buf[fc] reuse / re-zero (#140)
   GPU_EDGE_SLOT_DRAINED,  // d2h|drain -> compress: agg slot reuse
@@ -133,10 +134,7 @@ gpu_ordering_register_stream(struct gpu_ordering* ord,
 
 // Attach an externally owned (already seeded) event to an external edge.
 void
-gpu_ordering_bind(struct gpu_ordering* ord,
-                  enum gpu_edge e,
-                  int i,
-                  CUevent ev);
+gpu_ordering_bind(struct gpu_ordering* ord, enum gpu_edge e, int i, CUevent ev);
 
 // The edge's event (alias edges resolve to their owner's). NULL if unbound.
 CUevent
@@ -149,7 +147,10 @@ gpu_edge_record(struct gpu_ordering* ord,
                 CUstream stream);
 
 int
-gpu_edge_wait(struct gpu_ordering* ord, enum gpu_edge e, int i, CUstream stream);
+gpu_edge_wait(struct gpu_ordering* ord,
+              enum gpu_edge e,
+              int i,
+              CUstream stream);
 
 // Host-side poll (cuEventQuery loop). Returns 0 on completion — including
 // CUDA_ERROR_DEINITIALIZED at context teardown, where exiting cleanly is

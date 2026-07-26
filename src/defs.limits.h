@@ -9,7 +9,14 @@
 
 // Worst case three batches are live at once (draining, kicked-and-pending,
 // filling), so each needs its own timing buffer (#154).
-#define LOD_TIMING_SLOTS 3
+// One measurement per epoch, read by the producer a few epochs later once the
+// device has caught up. Enough slack for the epochs in flight, not one per
+// batch — a per-batch slot is overwritten by every epoch after the first.
+#define LOD_TIMING_SLOTS 8
+
+// More than the two staging slots, so a scatter measurement can outlive the
+// dispatch that produced it and still be read after it completes.
+#define SCATTER_TIMING_SLOTS 4
 #define MAX_ZARR_RANK (HALF_MAX_RANK)
 
 // S3
