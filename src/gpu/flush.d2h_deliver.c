@@ -70,39 +70,42 @@ record_flush_metrics(const struct flush_handoff* handoff,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
-  const uint32_t n_epochs = handoff->n_epochs;
+  // An empty batch dispatched no kernels and moved no bytes, so its events
+  // bracket nothing. Screening on that is what the old sub-10us magnitude
+  // filter was really for, and unlike the filter it cannot discard a stage
+  // that genuinely ran fast.
+  if (handoff->layout.total_batch_chunks == 0)
+    return;
 
   // LOD timing is per epoch and collected by the producer (lod_collect_timing);
   // a batch-wide read here only ever saw the batch's last epoch.
-  {
-    const size_t pool_bytes = (uint64_t)n_epochs * levels->total_chunks *
-                              layout->chunk_stride * dtype_bpe(config->dtype);
+  const size_t pool_bytes = (uint64_t)handoff->n_epochs * levels->total_chunks *
+                            layout->chunk_stride * dtype_bpe(config->dtype);
 
-    // Aggregated bytes: sum of actual compressed chunk sizes across all LODs
-    // in this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with
-    // a 0 sentinel slot inserted per LOD); summing those gives the real D2H
-    // payload regardless of the absolute/segment-relative offset semantics.
-    size_t agg_bytes = 0;
-    const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
-    for (size_t i = 0; i < n_perm; ++i)
-      agg_bytes += slot->h_permuted_sizes[i];
+  // Aggregated bytes: sum of actual compressed chunk sizes across all LODs in
+  // this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with a 0
+  // sentinel slot inserted per LOD); summing those gives the real D2H payload
+  // regardless of the absolute/segment-relative offset semantics.
+  size_t agg_bytes = 0;
+  const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
+  for (size_t i = 0; i < n_perm; ++i)
+    agg_bytes += slot->h_permuted_sizes[i];
 
-    // Pass-through runs no codec, so there is no compress interval to report;
-    // its start/end events bracket nothing and would read as an infinite rate.
-    if (!handoff->passthrough)
-      accumulate_metric_cu(&metrics->compress,
-                           handoff->t_compress_start,
-                           handoff->t_compress_end,
-                           pool_bytes,
-                           agg_bytes);
-    accumulate_metric_cu(&metrics->aggregate,
-                         handoff->t_aggregate_start,
-                         handoff->t_aggregate_end,
-                         agg_bytes,
-                         agg_bytes);
-    accumulate_metric_cu(
-      &metrics->d2h, t_d2h_start, t_d2h_ready, agg_bytes, agg_bytes);
-  }
+  // Pass-through runs no codec, so there is no compress interval to report;
+  // its start/end events bracket nothing and would read as an infinite rate.
+  if (!handoff->passthrough)
+    accumulate_metric_cu_if_ready(&metrics->compress,
+                                  handoff->t_compress_start,
+                                  handoff->t_compress_end,
+                                  pool_bytes,
+                                  agg_bytes);
+  accumulate_metric_cu_if_ready(&metrics->aggregate,
+                                handoff->t_aggregate_start,
+                                handoff->t_aggregate_end,
+                                agg_bytes,
+                                agg_bytes);
+  accumulate_metric_cu_if_ready(
+    &metrics->d2h, t_d2h_start, t_d2h_ready, agg_bytes, agg_bytes);
 }
 
 // `data_base` is the byte offset within h_aggregated where this LOD's first

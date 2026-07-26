@@ -4,20 +4,6 @@
 #include "util/metric.h"
 #include <cuda.h>
 
-static inline void
-accumulate_metric_cu(struct stream_metric* m,
-                     CUevent start,
-                     CUevent end,
-                     size_t input_bytes,
-                     size_t output_bytes)
-{
-  float ms = 0;
-  cuEventElapsedTime(&ms, start, end);
-  if (ms < 1e-2f)
-    return; // skip bogus measurements from seeded events
-  accumulate_metric_ms(m, ms, input_bytes, output_bytes);
-}
-
 // Accumulate only once the interval has finished on the device. Returns 1 while
 // it is still outstanding so the caller can keep the sample and retry, rather
 // than reading a zero and discarding it. No magnitude filter: the caller owns
