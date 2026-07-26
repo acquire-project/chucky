@@ -1,5 +1,6 @@
 #include "gpu/stream.ingest.h"
 
+#include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
 #include "threadpool/threadpool.h"
@@ -52,9 +53,11 @@ ingest_init(struct staging_state* stage,
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
     CU(Fail, cuEventCreate(&stage->slot[i].t_h2d_start, CU_EVENT_DEFAULT));
-    CU(Fail, cuEventCreate(&stage->slot[i].t_scatter_start, CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->slot[i].t_h2d_start, compute));
-    CU(Fail, cuEventRecord(stage->slot[i].t_scatter_start, compute));
+  }
+  for (int i = 0; i < SCATTER_TIMING_SLOTS; ++i) {
+    CU(Fail, cuEventCreate(&stage->timing[i].t_start, CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&stage->timing[i].t_end, CU_EVENT_DEFAULT));
   }
   return 0;
 Fail:
@@ -70,8 +73,57 @@ ingest_destroy(struct staging_state* stage)
     cu_mem_freehost(ss->h_in);
     cu_mem_free(ss->d_in);
     cu_event_destroy(ss->t_h2d_start);
-    cu_event_destroy(ss->t_scatter_start);
   }
+  for (int i = 0; i < SCATTER_TIMING_SLOTS; ++i) {
+    cu_event_destroy(stage->timing[i].t_start);
+    cu_event_destroy(stage->timing[i].t_end);
+  }
+}
+
+void
+ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m)
+{
+  for (int i = 0; i < 2; ++i) {
+    struct staging_slot* ss = &stage->slot[i];
+    if (!ss->h2d_pending)
+      continue;
+    CUevent end =
+      gpu_ordering_event(stage->d_pool.ord, GPU_EDGE_STAGING_H2D_DONE, i);
+    if (accumulate_metric_cu_if_ready(m,
+                                      ss->t_h2d_start,
+                                      end,
+                                      ss->dispatched_bytes,
+                                      ss->dispatched_bytes) == 0)
+      ss->h2d_pending = 0;
+  }
+}
+
+void
+ingest_collect_scatter_timing(struct staging_state* stage,
+                              struct stream_metric* m)
+{
+  for (int i = 0; i < SCATTER_TIMING_SLOTS; ++i) {
+    struct scatter_timing* st = &stage->timing[i];
+    if (!st->pending)
+      continue;
+    if (accumulate_metric_cu_if_ready(
+          m, st->t_start, st->t_end, st->bytes, st->bytes) == 0)
+      st->pending = 0;
+  }
+}
+
+// Claims the next measurement in the ring. An entry still outstanding here has
+// outlived its slack, so count it rather than lose it silently.
+static struct scatter_timing*
+scatter_timing_begin(struct staging_state* stage, size_t bytes)
+{
+  struct scatter_timing* st = &stage->timing[stage->next_timing];
+  if (st->pending)
+    stage->scatter_samples_lost++;
+  stage->next_timing = (stage->next_timing + 1) % SCATTER_TIMING_SLOTS;
+  st->bytes = bytes;
+  st->pending = 1;
+  return st;
 }
 
 // The produce-acquire keeps the H2D copy from overwriting d_in while the
@@ -92,6 +144,7 @@ dispatch_h2d(struct staging_state* stage,
      cuMemcpyHtoDAsync(
        gpu_pool_view_d(*d_in), h_in.p, stage->bytes_written, h2d));
   CHECK(Error, gpu_pool_release_produce(&stage->d_pool, idx, h2d) == 0);
+  stage->slot[idx].h2d_pending = 1;
   return 0;
 
 Error:
@@ -126,7 +179,8 @@ ingest_dispatch_scatter(struct staging_state* stage,
   // Scatter into chunk pool
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  CU(Error, cuEventRecord(ss->t_scatter_start, compute));
+  struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
+  CU(Error, cuEventRecord(st->t_start, compute));
   transpose(gpu_pool_view_d(pool_epoch),
             gpu_pool_view_d(d_in),
             stage->bytes_written,
@@ -136,6 +190,7 @@ ingest_dispatch_scatter(struct staging_state* stage,
             layout_gpu->d_lifted_shape,
             layout_gpu->d_lifted_strides,
             compute);
+  CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
   *cursor += elements;
@@ -173,7 +228,8 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   // Copy raw input to linear epoch buffer for LOD downsampling
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  CU(Error, cuEventRecord(ss->t_scatter_start, compute));
+  struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
+  CU(Error, cuEventRecord(st->t_start, compute));
   {
     uint64_t epoch_offset = (*cursor % epoch_elements) * bpe;
     CU(Error,
@@ -182,6 +238,7 @@ ingest_dispatch_multiscale(struct staging_state* stage,
                          elements * bpe,
                          compute));
   }
+  CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
   *cursor += elements;

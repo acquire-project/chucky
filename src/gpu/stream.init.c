@@ -129,8 +129,8 @@ stream_engine_init(struct stream_engine* e,
   {
     // The staging copy is DRAM-bound; a few helpers saturate it. NULL pool
     // means copies run serially on the producer.
-    int n = lim->max_threads > 0 ? lim->max_threads
-                                 : platform_default_thread_count();
+    int n =
+      lim->max_threads > 0 ? lim->max_threads : platform_default_thread_count();
     int helpers = n - 1;
     if (helpers > 3)
       helpers = 3;
@@ -148,8 +148,9 @@ stream_engine_init(struct stream_engine* e,
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemAlloc(&e->pools.buf[i], lim->pool_bytes));
     gpu_pool_bind(&e->pools.p, i, (void*)(uintptr_t)e->pools.buf[i]);
-    CU(Fail,
-       cuMemsetD8Async(e->pools.buf[i], 0, lim->pool_bytes, e->streams.compute));
+    CU(
+      Fail,
+      cuMemsetD8Async(e->pools.buf[i], 0, lim->pool_bytes, e->streams.compute));
   }
 
   e->sched.epochs_per_batch = lim->epochs_per_batch;
@@ -248,7 +249,8 @@ engine_array_state_init(struct engine_array_state* st,
     CHECK(Fail, st->sched.slot[fc].batch_active_masks);
   }
 
-  CHECK(Fail, compress_agg_array_init(&st->agg, cl, gate_ord, gate_stream) == 0);
+  CHECK(Fail,
+        compress_agg_array_init(&st->agg, cl, gate_ord, gate_stream) == 0);
   // After the gate is armed, so support is known.
   schedule_select(&st->sched, &st->agg, gate_ord);
 
@@ -404,10 +406,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   memset(&lim, 0, sizeof(lim));
   CHECK(FailPhase2, engine_limits_accumulate(&lim, &cl, config) == 0);
   CHECK(FailPhase2,
-        stream_engine_init(&out->engine,
-                           &lim,
-                           config->codec.id,
-                           cl.levels.enable_multiscale) == 0);
+        stream_engine_init(
+          &out->engine, &lim, config->codec.id, cl.levels.enable_multiscale) ==
+          0);
   // The pipelined (non-sync-flush) path arms the tail gate.
   CHECK(FailPhase2,
         engine_array_state_init(&out->ar,

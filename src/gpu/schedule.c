@@ -201,8 +201,6 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
                    const struct tile_stream_layout* layout,
                    const struct tile_stream_configuration* config,
                    struct shard_sink* sink,
-                   const struct lod_state* lod,
-                   const struct lod_shared_state* lod_shared,
                    struct stream_metrics* metrics,
                    struct platform_clock* metadata_update_clock)
 {
@@ -255,18 +253,8 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
     struct gpu_pool_view tv = { 0 };
     if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
       goto Done;
-    err = d2h_deliver_drain_sink(stage,
-                                 handoff,
-                                 slot,
-                                 tv.p,
-                                 levels,
-                                 dims,
-                                 layout,
-                                 config,
-                                 sink,
-                                 lod,
-                                 lod_shared,
-                                 metrics)
+    err = d2h_deliver_drain_sink(
+            stage, handoff, slot, tv.p, levels, layout, config, sink, metrics)
             .error;
   }
 
@@ -312,8 +300,6 @@ drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
                             &ctx->layout,
                             &ctx->config,
                             ctx->sink,
-                            &e->lod,
-                            &e->lod_shared,
                             &e->metrics,
                             &e->metadata_update_clock);
 }
@@ -464,8 +450,6 @@ make_compress_input(struct stream_engine* e, int fc, uint32_t n_epochs)
     .active_levels_mask = s->active_levels_mask,
     .batch_active_masks = s->batch_active_masks,
     .epochs_per_batch = e->sched.epochs_per_batch,
-    .lod_timing_slot = s->lod_timing_slot,
-    .has_lod_timing = s->has_lod_timing,
   };
 }
 
@@ -486,15 +470,6 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
   struct schedule_slot* s = &e->sched.slot[e->sched.fill];
   uint32_t active_mask;
 
-  // Pick a fresh timing buffer at the first epoch so the worker's drain read
-  // can't collide with the next batch's re-record (#154).
-  if (e->sched.accumulated == 0) {
-    s->lod_timing_slot = e->lod_shared.next_timing_slot;
-    e->lod_shared.next_timing_slot =
-      (e->lod_shared.next_timing_slot + 1) % LOD_TIMING_SLOTS;
-    s->has_lod_timing = e->sched.lod_active;
-  }
-
   if (!e->sched.lod_active) {
     active_mask = 1;
   } else {
@@ -503,8 +478,8 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
                         &e->lod_shared,
                         &e->ord,
                         e->sched.fill,
-                        s->lod_timing_slot,
                         &ctx->levels,
+                        &ctx->layout,
                         stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
                         ctx->config.dtype,
                         ctx->config.reduce_method,
@@ -512,6 +487,7 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
                         &ctx->dims,
                         e->streams.compute,
                         &active_mask) == 0);
+    lod_collect_timing(&e->lod_shared, &e->metrics);
   }
 
   s->batch_active_masks[e->sched.accumulated] = active_mask;
@@ -570,10 +546,8 @@ kick_batch(struct stream_engine* e,
                                    &handoff) == 0);
 
   CHECK(Error,
-        schedule_d2h_kick(&e->d2h_deliver,
-                          &handoff,
-                          ctx->sink,
-                          e->streams.d2h) == 0);
+        schedule_d2h_kick(
+          &e->d2h_deliver, &handoff, ctx->sink, e->streams.d2h) == 0);
 
   e->sched.slot[fc].handoff = handoff;
   e->sched.slot[fc].kick_seq = e->sched.next_seq++;
@@ -582,8 +556,7 @@ kick_batch(struct stream_engine* e,
   // Depth-1 schedules drain inline right after this kick; the host
   // ordering they exist for must not move to another thread.
   if (e->sched.depth == SCHEDULE_PIPELINED)
-    gpu_delivery_enqueue(
-      &e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
+    gpu_delivery_enqueue(&e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
 
   return 0;
 
@@ -625,8 +598,9 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
           &e->pools.p, e->sched.fill, e->streams.compute, &fresh) == 0);
   size_t pool_bytes = (uint64_t)K * ctx->levels.total_chunks *
                       ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype);
-  CU(Error,
-     cuMemsetD8Async(gpu_pool_view_d(fresh), 0, pool_bytes, e->streams.compute));
+  CU(
+    Error,
+    cuMemsetD8Async(gpu_pool_view_d(fresh), 0, pool_bytes, e->streams.compute));
 
   reset_fill_slot(e);
 
@@ -755,8 +729,6 @@ schedule_flush_partial_append(struct stream_engine* e,
   struct schedule_slot* fs = &e->sched.slot[fc];
   fs->active_levels_mask = active_levels_mask;
   fs->batch_active_masks[0] = active_levels_mask;
-  // No timed epoch here, so the drain must skip stale timing metrics (#154).
-  fs->has_lod_timing = 0;
 
   // Produce-phase writes within the generation acquired at the last swap
   // (the fill slot is still being filled).
@@ -773,8 +745,8 @@ schedule_flush_partial_append(struct stream_engine* e,
 
   if (gpu_ordering_event(&e->ord, GPU_EDGE_LOD_DONE, fc))
     CHECK(Error,
-          gpu_edge_record(
-            &e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) == 0);
+          gpu_edge_record(&e->ord, GPU_EDGE_LOD_DONE, fc, e->streams.compute) ==
+            0);
 
   CHECK(Error,
         gpu_pool_release_produce(&e->pools.p, fc, e->streams.compute) == 0);

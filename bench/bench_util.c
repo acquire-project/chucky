@@ -883,6 +883,9 @@ run_bench_two_streams(const struct bench_config* cfg)
   struct throttled_shard_sink tss[2] = { 0 };
   int use_throttled = 0;
   struct shard_sink* sink[2];
+  // Declared before the first goto Fail: the cleanup path destroys them.
+  struct tile_stream_gpu* s0 = NULL;
+  struct tile_stream_gpu* s1 = NULL;
 
   if (output_path) {
     // Build per-stream paths: <output_path>/stream-0, <output_path>/stream-1
@@ -954,8 +957,6 @@ run_bench_two_streams(const struct bench_config* cfg)
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
 
-  struct tile_stream_gpu* s0 = NULL;
-  struct tile_stream_gpu* s1 = NULL;
   s0 = tile_stream_gpu_create(&config, sink[0]);
   s1 = tile_stream_gpu_create(&config, sink[1]);
   CHECK(Fail, s0 && s1);
@@ -971,8 +972,7 @@ run_bench_two_streams(const struct bench_config* cfg)
   // Interleaved pump
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail,
-        pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
+  CHECK(Fail, pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
 
   // Flush zarr sinks before measuring wall time
   struct platform_clock flush_clock = { 0 };

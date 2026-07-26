@@ -35,6 +35,8 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventCreate(&stage->t_d2h_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(stage->t_d2h_start[fc], compute));
+    CU(Fail, cuEventCreate(&stage->t_d2h_drain_start[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventRecord(stage->t_d2h_drain_start[fc], compute));
   }
 
   return 0;
@@ -49,8 +51,10 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 {
   if (!stage)
     return;
-  for (int fc = 0; fc < 2; ++fc)
+  for (int fc = 0; fc < 2; ++fc) {
     cu_event_destroy(stage->t_d2h_start[fc]);
+    cu_event_destroy(stage->t_d2h_drain_start[fc]);
+  }
   stage->drain_stream = NULL;
 }
 
@@ -60,79 +64,55 @@ static void
 record_flush_metrics(const struct flush_handoff* handoff,
                      const struct aggregate_slot* slot,
                      const struct level_geometry* levels,
-                     const struct dim_info* dims,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
-                     const struct lod_state* lod,
-                     const struct lod_shared_state* lod_shared,
                      struct stream_metrics* metrics,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
-  const int fc = handoff->fc;
-  const uint32_t n_epochs = handoff->n_epochs;
+  // An empty batch dispatched no kernels and moved no bytes, so its events
+  // bracket nothing. Screening on that is what the old sub-10us magnitude
+  // filter was really for, and unlike the filter it cannot discard a stage
+  // that genuinely ran fast.
+  if (handoff->layout.total_batch_chunks == 0)
+    return;
 
-  const struct lod_timing* t = &lod_shared->timing[handoff->lod_timing_slot];
-  if (levels->enable_multiscale && handoff->has_lod_timing) {
-    const size_t bytes_per_element = dtype_bpe(config->dtype);
-    const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
-    const size_t morton_bytes =
-      lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] * bytes_per_element;
-    const size_t unified_pool_bytes =
-      levels->total_chunks * layout->chunk_stride * bytes_per_element;
+  // LOD timing is per epoch and collected by the producer (lod_collect_timing);
+  // a batch-wide read here only ever saw the batch's last epoch.
+  const size_t pool_bytes = (uint64_t)handoff->n_epochs * levels->total_chunks *
+                            layout->chunk_stride * dtype_bpe(config->dtype);
 
-    accumulate_metric_cu(&metrics->lod_gather,
-                         t->t_start,
-                         t->t_scatter_end,
-                         scatter_bytes,
-                         scatter_bytes);
-    accumulate_metric_cu(&metrics->lod_reduce,
-                         t->t_scatter_end,
-                         t->t_reduce_end,
-                         scatter_bytes,
-                         morton_bytes);
-    if (dims->append_downsample) {
-      size_t accum_bpe = dtype_bpe(config->dtype);
-      size_t accum_bytes = lod->append_accum.element_capacity * accum_bpe;
-      accumulate_metric_cu(&metrics->lod_append_fold,
-                           t->t_reduce_end,
-                           t->t_append_end,
-                           accum_bytes,
-                           accum_bytes);
-    }
-    accumulate_metric_cu(&metrics->lod_morton_chunk,
-                         t->t_append_end,
-                         t->t_end,
-                         morton_bytes,
-                         unified_pool_bytes);
-  }
+  // Aggregated bytes: sum of actual compressed chunk sizes across all LODs in
+  // this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with a 0
+  // sentinel slot inserted per LOD); summing those gives the real D2H payload
+  // regardless of the absolute/segment-relative offset semantics.
+  size_t agg_bytes = 0;
+  const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
+  for (size_t i = 0; i < n_perm; ++i)
+    agg_bytes += slot->h_permuted_sizes[i];
 
-  {
-    const size_t pool_bytes = (uint64_t)n_epochs * levels->total_chunks *
-                              layout->chunk_stride * dtype_bpe(config->dtype);
-
-    // Aggregated bytes: sum of actual compressed chunk sizes across all LODs
-    // in this batch. h_permuted_sizes carries pre-bias per-chunk sizes (with
-    // a 0 sentinel slot inserted per LOD); summing those gives the real D2H
-    // payload regardless of the absolute/segment-relative offset semantics.
-    size_t agg_bytes = 0;
-    const size_t n_perm = handoff->layout.total_batch_covering + handoff->nlod;
-    for (size_t i = 0; i < n_perm; ++i)
-      agg_bytes += slot->h_permuted_sizes[i];
-
-    accumulate_metric_cu(&metrics->compress,
-                         handoff->t_compress_start,
-                         handoff->t_compress_end,
-                         pool_bytes,
-                         agg_bytes);
-    accumulate_metric_cu(&metrics->aggregate,
-                         handoff->t_compress_end,
-                         handoff->t_aggregate_end,
-                         agg_bytes,
-                         agg_bytes);
-    accumulate_metric_cu(
-      &metrics->d2h, t_d2h_start, t_d2h_ready, agg_bytes, agg_bytes);
-  }
+  // Pass-through runs no codec, so there is no compress interval to report;
+  // its start/end events bracket nothing and would read as an infinite rate.
+  if (!handoff->passthrough)
+    accumulate_metric_cu_if_ready(&metrics->compress,
+                                  handoff->t_compress_start,
+                                  handoff->t_compress_end,
+                                  pool_bytes,
+                                  agg_bytes);
+  // The gap the aggregate interval no longer covers. Carries no bytes; it is
+  // a wait, and on the page-aligned path it is the cost of the tail gate.
+  accumulate_metric_cu_if_ready(&metrics->tail_gate,
+                                handoff->t_compress_end,
+                                handoff->t_aggregate_start,
+                                0,
+                                0);
+  accumulate_metric_cu_if_ready(&metrics->aggregate,
+                                handoff->t_aggregate_start,
+                                handoff->t_aggregate_end,
+                                agg_bytes,
+                                agg_bytes);
+  accumulate_metric_cu_if_ready(
+    &metrics->d2h, t_d2h_start, t_d2h_ready, agg_bytes, agg_bytes);
 }
 
 // `data_base` is the byte offset within h_aggregated where this LOD's first
@@ -189,6 +169,12 @@ d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
 {
   const struct batch_aggregate_layout* alayout = &handoff->layout;
   int dispatch_err = 0;
+  // Marks the payload transfer itself. The kick-time start event sits before
+  // the host handoff to the delivery worker, so measuring from there reports
+  // batch turnaround rather than transfer rate.
+  if (cuEventRecord(stage->t_d2h_drain_start[handoff->fc],
+                    stage->drain_stream) != CUDA_SUCCESS)
+    return 1;
   if (alayout->page_size > 0) {
     for (uint8_t lv = 0; lv < handoff->nlod && !dispatch_err; ++lv) {
       if (handoff->per_lod_n_active[lv] == 0)
@@ -230,28 +216,23 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        struct aggregate_slot* slot,
                        struct compress_agg_array* shards,
                        const struct level_geometry* levels,
-                       const struct dim_info* dims,
                        const struct tile_stream_layout* layout,
                        const struct tile_stream_configuration* config,
                        struct shard_sink* sink,
-                       const struct lod_state* lod,
-                       const struct lod_shared_state* lod_shared,
                        struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
 
-  record_flush_metrics(handoff,
-                       slot,
-                       levels,
-                       dims,
-                       layout,
-                       config,
-                       lod,
-                       lod_shared,
-                       metrics,
-                       stage->t_d2h_start[fc],
-                       gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED,
-                                          fc));
+  record_flush_metrics(
+    handoff,
+    slot,
+    levels,
+    layout,
+    config,
+    metrics,
+    handoff->passthrough ? stage->t_d2h_start[fc]
+                         : stage->t_d2h_drain_start[fc],
+    gpu_ordering_event(stage->ord, GPU_EDGE_SLOT_DRAINED, fc));
 
   {
     struct platform_clock sink_clock = { 0 };

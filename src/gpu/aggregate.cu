@@ -290,8 +290,7 @@ add_shard_bias_unified_k(size_t* __restrict__ d_offsets,
   const uint64_t tps_group = d_shard_tps_group[s];
   __shared__ size_t bias_s;
   if (threadIdx.x == 0)
-    bias_s =
-      d_shard_base_offsets[s] + d_tail_bytes_prev[s] - d_offsets[base];
+    bias_s = d_shard_base_offsets[s] + d_tail_bytes_prev[s] - d_offsets[base];
   __syncthreads();
   for (uint64_t k = threadIdx.x; k < tps_group; k += blockDim.x)
     d_offsets[base + k] += bias_s;

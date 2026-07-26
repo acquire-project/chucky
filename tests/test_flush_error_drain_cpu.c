@@ -23,7 +23,8 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
   log_info("=== test_destroy_drains_after_flush_error (cpu) ===");
 
   // One epoch into a 2-per-shard append dim leaves a partial shard, so flush
-  // queues a footer write then truncates — and the injected hook fails truncate.
+  // queues a footer write then truncates — and the injected hook fails
+  // truncate.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,

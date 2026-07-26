@@ -185,7 +185,10 @@ test_ngff_reject_bad(void)
       .storage_position = 1 },
   };
   struct ngff_multiscale_config cfg = {
-    .data_type = dtype_u8, .rank = 2, .dimensions = dims, .nlod = 1,
+    .data_type = dtype_u8,
+    .rank = 2,
+    .dimensions = dims,
+    .nlod = 1,
   };
   CHECK(Fail2, s->mkdirs(s, "ms3") == 0);
   struct ngff_multiscale* ms = ngff_multiscale_create(s, "ms3", &cfg);

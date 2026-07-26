@@ -69,6 +69,7 @@ extern "C"
                                      CUdeviceptr d_tail_carry,
                                      CUstream stream);
 
+  // clang-format off
   // Single dispatch across all LODs. The kernels read per-shard parameters
   // from device-side tables built host-side at kick time. Per-LOD info is
   // encoded in the tables; the kernels themselves are level-agnostic.
@@ -106,25 +107,25 @@ extern "C"
   //                          0 = no carry-over path.
   //   total_shards         : sum_lv num_shards[lv]
   //   stream               : compress stream
-  int aggregate_batch_unified_async(
-    const void* d_compressed,
-    size_t* d_comp_sizes,
-    const uint32_t* d_batch_gather,
-    const uint32_t* d_batch_perm,
-    uint64_t total_batch_chunks,
-    uint64_t total_batch_covering,
-    uint8_t nlod,
-    size_t max_comp_chunk_bytes,
-    struct aggregate_slot* slot,
-    const size_t* d_shard_base_offsets,
-    const size_t* d_shard_capacity,
-    const uint64_t* d_shard_tps_group,
-    const uint64_t* d_shard_offsets_base,
-    const size_t* d_tail_bytes,
-    CUdeviceptr d_tail_carry,
-    size_t page_size,
-    uint64_t total_shards,
-    CUstream stream);
+  // clang-format on
+  int aggregate_batch_unified_async(const void* d_compressed,
+                                    size_t* d_comp_sizes,
+                                    const uint32_t* d_batch_gather,
+                                    const uint32_t* d_batch_perm,
+                                    uint64_t total_batch_chunks,
+                                    uint64_t total_batch_covering,
+                                    uint8_t nlod,
+                                    size_t max_comp_chunk_bytes,
+                                    struct aggregate_slot* slot,
+                                    const size_t* d_shard_base_offsets,
+                                    const size_t* d_shard_capacity,
+                                    const uint64_t* d_shard_tps_group,
+                                    const uint64_t* d_shard_offsets_base,
+                                    const size_t* d_tail_bytes,
+                                    CUdeviceptr d_tail_carry,
+                                    size_t page_size,
+                                    uint64_t total_shards,
+                                    CUstream stream);
 
 #ifdef __cplusplus
 }

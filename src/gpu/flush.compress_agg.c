@@ -13,7 +13,6 @@
 
 // --- Internal helpers ---
 
-// Record compress-start, compress, record compress-end.
 static int
 kick_compress(struct compress_agg_stage* stage,
               int fc,
@@ -68,10 +67,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   // Codec
   CHECK(Fail, codec_init(&stage->codec, codec_id, lim->chunk_bytes, M) == 0);
 
-  // Per-LOD scratch for mask-scan results, plus the previous-kick cache used
-  // for steady-state LUT-cache validation. Both are sized to
-  // LOD_MAX_LEVELS * K with stride K so each LOD's slice lives at a stable
-  // offset and the cache comparison can match by stride.
   stage->pool_epochs_stride = K;
   stage->pool_epochs_scratch =
     (uint32_t*)malloc((size_t)LOD_MAX_LEVELS * K * sizeof(uint32_t));
@@ -91,26 +86,20 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
         cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventCreate(&stage->t_aggregate_start[fc], CU_EVENT_DEFAULT));
   }
 
   stage->max_total_batch_chunks = lim->max_total_batch_chunks;
   stage->max_total_batch_covering = lim->max_total_batch_covering;
   stage->max_total_data_bytes = lim->max_total_data_bytes;
 
-  // Unified aggregate slot per fc. Sized for the max-batch case:
-  //   d_aggregated: max_total_data_bytes (page-aligned across LOD segments)
-  //   d_offsets/d_permuted_sizes/h_*: max_total_batch_covering + max_nlod
-  //     entries each (one sentinel slot per LOD for the +lv shift in
-  //     aggregate_batch_luts_unified). The CUB exclusive scan fills all
-  //     sentinel positions, so no per-LOD write_total fixup is needed.
   if (stage->max_total_batch_chunks > 0) {
     const uint64_t C_max =
       stage->max_total_batch_covering + (uint64_t)lim->max_nlod;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(&stage->agg[fc],
-                                      C_max,
-                                      stage->max_total_data_bytes) == 0);
+            aggregate_batch_slot_init(
+              &stage->agg[fc], C_max, stage->max_total_data_bytes) == 0);
     }
 
     CU(Fail,
@@ -154,6 +143,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   for (int fc = 0; fc < 2; ++fc) {
     CU(Fail, cuEventRecord(stage->t_compress_start[fc], compute));
     CU(Fail, cuEventRecord(stage->t_compress_end[fc], compute));
+    CU(Fail, cuEventRecord(stage->t_aggregate_start[fc], compute));
   }
 
   return 0;
@@ -183,9 +173,11 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
     cu_mem_free(stage->d_compressed[fc]);
     cu_event_destroy(stage->t_compress_start[fc]);
     cu_event_destroy(stage->t_compress_end[fc]);
+    cu_event_destroy(stage->t_aggregate_start[fc]);
     stage->d_compressed[fc] = 0;
     stage->t_compress_start[fc] = NULL;
     stage->t_compress_end[fc] = NULL;
+    stage->t_aggregate_start[fc] = NULL;
   }
   if (stage->lut_steady_count + stage->lut_recompute_count > 0) {
     const uint64_t tot = stage->lut_steady_count + stage->lut_recompute_count;
@@ -285,13 +277,13 @@ compress_agg_array_init(struct compress_agg_array* ar,
       {
         unsigned int sync_memops = 1;
         CU(Fail,
-           cuPointerSetAttribute(&sync_memops,
-                                 CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-                                 ar->d_tail_carry));
+           cuPointerSetAttribute(
+             &sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, ar->d_tail_carry));
       }
 
       // Without stream memops — or when the counter can't be allocated or
-      // mapped — the lazy path host-drains instead (SCHEDULE_DRAIN_BEFORE_KICK).
+      // mapped — the lazy path host-drains instead
+      // (SCHEDULE_DRAIN_BEFORE_KICK).
       if (gate_ord) {
         CHECK(Fail, gpu_ordering_gate_init(gate_ord, gate_stream) == 0);
         if (!gpu_ordering_gate_supported(gate_ord))
@@ -397,7 +389,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
     CHECK(Error,
           aggregate_batch_slot_memory(
             C_max, lim->max_total_data_bytes, &slot_dev, &slot_host) == 0);
-    dev += 2 * slot_dev;  // agg[2]
+    dev += 2 * slot_dev; // agg[2]
     host += 2 * slot_host;
     dev += 2 * lim->max_total_batch_chunks *
            sizeof(uint32_t); // d_batch_gather + d_batch_perm
@@ -405,8 +397,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
 
   // Shared per-shard device tables: d_base_offsets, d_shard_capacity,
   // d_tps_group, d_offsets_base.
-  dev +=
-    lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
+  dev += lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
 
   // Per-array slice (compress_agg_array_init).
   {
@@ -530,12 +521,6 @@ Error:
   return 1;
 }
 
-// Cache key: per-LOD active count AND each LOD's pool_epoch values. Counts
-// alone are insufficient — the gather LUT encodes the actual epoch indices,
-// so two batches with identical counts but different active-epoch positions
-// (mid-stream phase shifts when K doesn't divide an LOD's append period)
-// would mis-hit and reuse stale gather indices. See
-// [[ok-let-s-make-a-curious-prism]].
 static int
 build_and_upload_luts(struct compress_agg_stage* stage,
                       const struct batch_aggregate_layout* layout,
@@ -666,6 +651,9 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                        struct gpu_pool_view pool_buf,
                        CUstream compress_stream)
 {
+  // The schedule places the tail-gate wait before this call, so recording here
+  // keeps a slow sink out of the aggregate interval.
+  CU(Error, cuEventRecord(stage->t_aggregate_start[fc], compress_stream));
   // CODEC_NONE aggregates straight from the pool buffer, skipping compress.
   const CUdeviceptr d_aggregate_src = (stage->codec.type == CODEC_NONE)
                                         ? gpu_pool_view_d(pool_buf)
@@ -709,8 +697,6 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   const uint8_t nlod = stage->ar.nlod;
   out->fc = fc;
   out->n_epochs = in->n_epochs;
-  out->lod_timing_slot = in->lod_timing_slot;
-  out->has_lod_timing = in->has_lod_timing;
   out->active_levels_mask = in->active_levels_mask;
   out->batch_active_masks = in->batch_active_masks;
   out->nlod = nlod;
@@ -720,6 +706,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->t_aggregate_end = gpu_ordering_event(stage->ord, GPU_EDGE_AGG_DONE, fc);
   out->t_compress_start = stage->t_compress_start[fc];
   out->t_compress_end = stage->t_compress_end[fc];
+  out->t_aggregate_start = stage->t_aggregate_start[fc];
   out->max_output_size = stage->codec.max_output_size;
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->agg_pool = &stage->agg_pool;

@@ -27,8 +27,8 @@ struct ca_test_ctx
   struct compress_agg_stage stage;
   CUstream compute;
   CUdeviceptr d_pool;
-  struct gpu_ordering ord; // edge registry the harness pools draw from
-  struct gpu_pool pool;    // chunk pool faked over d_pool (both slots)
+  struct gpu_ordering ord;      // edge registry the harness pools draw from
+  struct gpu_pool pool;         // chunk pool faked over d_pool (both slots)
   uint32_t* batch_active_masks; // [K] owned scratch for tests
   int ord_inited;
   int stage_inited;
@@ -80,7 +80,8 @@ ca_ctx_setup(struct ca_test_ctx* c,
                       c->cl.layouts[0].chunk_stride *
                       dtype_bpe(c->config.dtype);
   CU(Fail, cuMemAlloc(&c->d_pool, pool_bytes));
-  gpu_pool_init(&c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
+  gpu_pool_init(
+    &c->pool, &c->ord, GPU_EDGE_POOL_FILLED, GPU_EDGE_POOL_CONSUMED);
   for (int fc = 0; fc < 2; ++fc)
     gpu_pool_bind(&c->pool, fc, (void*)(uintptr_t)c->d_pool);
 
@@ -147,13 +148,9 @@ ca_ctx_kick(struct ca_test_ctx* c,
   memset(handoff, 0, sizeof(*handoff));
 
   CHECK(Fail,
-        schedule_compress_agg_kick(&c->stage,
-                                   &in,
-                                   &c->cl.levels,
-                                   &c->pool,
-                                   0,
-                                   c->compute,
-                                   handoff) == 0);
+        schedule_compress_agg_kick(
+          &c->stage, &in, &c->cl.levels, &c->pool, 0, c->compute, handoff) ==
+          0);
   CU(Fail, cuStreamSynchronize(c->compute));
   ca_ctx_publish_tail(c);
   return 0;
@@ -776,13 +773,8 @@ test_compress_agg_lut_cache_position_shift(void)
     struct flush_handoff handoff;
     memset(&handoff, 0, sizeof(handoff));
     CHECK(Fail,
-          schedule_compress_agg_kick(&c.stage,
-                                     &in,
-                                     &c.cl.levels,
-                                     &c.pool,
-                                     0,
-                                     c.compute,
-                                     &handoff) == 0);
+          schedule_compress_agg_kick(
+            &c.stage, &in, &c.cl.levels, &c.pool, 0, c.compute, &handoff) == 0);
     CU(Fail, cuStreamSynchronize(c.compute));
     ca_ctx_publish_tail(&c);
   }
@@ -804,13 +796,9 @@ test_compress_agg_lut_cache_position_shift(void)
       .epochs_per_batch = c.cl.epochs_per_batch,
     };
     CHECK(Fail,
-          schedule_compress_agg_kick(&c.stage,
-                                     &in,
-                                     &c.cl.levels,
-                                     &c.pool,
-                                     0,
-                                     c.compute,
-                                     &handoff2) == 0);
+          schedule_compress_agg_kick(
+            &c.stage, &in, &c.cl.levels, &c.pool, 0, c.compute, &handoff2) ==
+            0);
     CU(Fail, cuStreamSynchronize(c.compute));
     ca_ctx_publish_tail(&c);
   }

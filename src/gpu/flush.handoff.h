@@ -30,12 +30,11 @@ struct flush_handoff
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
   uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;
-  int lod_timing_slot;
-  int has_lod_timing;
 
-  CUevent t_aggregate_end;  // D2H waits on this
-  CUevent t_compress_start; // for metrics
-  CUevent t_compress_end;   // for metrics
+  CUevent t_aggregate_end;   // D2H waits on this
+  CUevent t_compress_start;  // for metrics
+  CUevent t_compress_end;    // for metrics
+  CUevent t_aggregate_start; // for metrics; after the tail-gate wait
 
   // The unified slot for fc travels as pool handles, never a raw pointer;
   // delivery acquires the facet it consumes (stream.engine.h).
@@ -44,11 +43,11 @@ struct flush_handoff
   struct gpu_pool* agg_index;           // borrowed
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
-  struct shard_state* shards_by_lod[LOD_MAX_LEVELS]; // borrowed
-  struct gpu_pool* tail; // tail-state pool (#142); the drain's produce-
-                         // acquire yields the compress_agg_array whose
-                         // d_tail_bytes/d_tail_carry the delivery uploads
-  size_t max_output_size;      // codec bound
+  struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
+  struct gpu_pool* tail;  // tail-state pool (#142); the drain's produce-
+                          // acquire yields the compress_agg_array whose
+                          // d_tail_bytes/d_tail_carry the delivery uploads
+  size_t max_output_size; // codec bound
 
   // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so
   // delivery skips the exact-size sync and keeps the kick-time bulk D2H

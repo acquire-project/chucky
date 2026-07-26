@@ -178,8 +178,8 @@ check_stream(const struct gpu_ordering* ord,
   if ((want == GPU_STREAM_NONE || !ord->streams[want]) &&
       (want_alt == GPU_STREAM_NONE || !ord->streams[want_alt]))
     return;
-  log_error("gpu_ordering: edge %s %s on undeclared stream", DESC[e].name,
-            role);
+  log_error(
+    "gpu_ordering: edge %s %s on undeclared stream", DESC[e].name, role);
   assert(!"gpu_ordering: stream does not match edge declaration");
 }
 #endif
@@ -264,13 +264,16 @@ gpu_ordering_event(const struct gpu_ordering* ord, enum gpu_edge e, int i)
 }
 
 int
-gpu_edge_record(struct gpu_ordering* ord, enum gpu_edge e, int i, CUstream stream)
+gpu_edge_record(struct gpu_ordering* ord,
+                enum gpu_edge e,
+                int i,
+                CUstream stream)
 {
   struct gpu_edge_state* st = &ord->edge[e];
 #ifndef NDEBUG
   assert(DESC[e].kind == GPU_EDGE_EVENT && DESC[e].alias_of < 0);
-  check_stream(ord, e, DESC[e].producer, DESC[e].producer_alt, stream,
-               "record");
+  check_stream(
+    ord, e, DESC[e].producer, DESC[e].producer_alt, stream, "record");
   st->records[i]++;
 #endif
   CU(Error, cuEventRecord(st->ev[i], stream));
@@ -313,8 +316,7 @@ gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i)
 {
   CUevent ev = ord->edge[owner_of(e)].ev[i];
 #ifndef NDEBUG
-  assert(DESC[e].kind == GPU_EDGE_EVENT &&
-         DESC[e].consumer == GPU_STREAM_HOST);
+  assert(DESC[e].kind == GPU_EDGE_EVENT && DESC[e].consumer == GPU_STREAM_HOST);
   ord->edge[e].waits[i]++;
 #endif
   struct stream_metric* m = ord->edge[e].stall;
@@ -365,9 +367,8 @@ gpu_ordering_gate_init(struct gpu_ordering* ord, CUstream probe_stream)
     ord->h_tail_seq_flag = NULL;
   } else {
     *ord->h_tail_seq_flag = 0;
-    if (cuMemHostGetDevicePointer(&ord->d_tail_seq,
-                                  (void*)ord->h_tail_seq_flag,
-                                  0) != CUDA_SUCCESS) {
+    if (cuMemHostGetDevicePointer(
+          &ord->d_tail_seq, (void*)ord->h_tail_seq_flag, 0) != CUDA_SUCCESS) {
       cuMemFreeHost((void*)ord->h_tail_seq_flag);
       ord->h_tail_seq_flag = NULL;
       ord->d_tail_seq = 0;
@@ -446,8 +447,8 @@ gpu_edge_host_rule_check(struct gpu_ordering* ord,
   (void)ord;
   if (cond)
     return;
-  log_log(LOG_ERROR, file, line, "gpu_ordering: host rule %s violated",
-          DESC[e].name);
+  log_log(
+    LOG_ERROR, file, line, "gpu_ordering: host rule %s violated", DESC[e].name);
   assert(!"gpu_ordering: host rule violated");
 }
 #endif

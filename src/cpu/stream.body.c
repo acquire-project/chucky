@@ -321,7 +321,8 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0) {
         if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment)) {
-          // Drain queued IO before bailing; it points into buffers destroy frees.
+          // Drain queued IO before bailing; it points into buffers destroy
+          // frees.
           shard_sink_drain(v->sink);
           return writer_error();
         }

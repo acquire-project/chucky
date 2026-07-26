@@ -164,7 +164,7 @@ codec_device_bytes(enum compression_codec type,
   size_t bytes = batch_size * sizeof(size_t); // d_comp_sizes
   bytes += batch_size * sizeof(size_t);       // d_uncomp_sizes
   if (type != CODEC_NONE)
-    bytes += 2 * batch_size * sizeof(void*); // d_ptrs
+    bytes += 2 * batch_size * sizeof(void*);                // d_ptrs
   bytes += codec_temp_bytes(type, chunk_bytes, batch_size); // d_temp
   return bytes;
 }
