@@ -2,6 +2,7 @@
 
 #include "dimension.h"
 #include "gpu/lod.h"
+#include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
@@ -741,7 +742,6 @@ lod_run_epoch(struct lod_state* lod,
               struct lod_shared_state* sh,
               struct gpu_ordering* ord,
               int fc,
-              int timing_slot,
               const struct level_geometry* levels,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,
@@ -752,7 +752,14 @@ lod_run_epoch(struct lod_state* lod,
               uint32_t* out_active_mask)
 {
   struct lod_plan* p = &lod->plan;
-  struct lod_timing* t = &sh->timing[timing_slot];
+  // A fresh measurement per epoch. An entry still unread here has outlived its
+  // slack; overwrite it rather than stall, and let the caller see the loss.
+  struct lod_timing* t = &sh->timing[sh->next_timing_slot];
+  if (t->pending)
+    sh->timing_samples_lost++;
+  sh->next_timing_slot = (sh->next_timing_slot + 1) % LOD_TIMING_SLOTS;
+  t->pending = 0;
+  t->has_append_fold = 0;
 
   CU(Error, cuEventRecord(t->t_start, compute));
 
@@ -806,6 +813,7 @@ lod_run_epoch(struct lod_state* lod,
       run_append_fold_emit(
         lod, sh, dtype, append_reduce_method, compute, &active_levels_mask) ==
         0);
+    t->has_append_fold = 1;
   }
 
   CU(Error, cuEventRecord(t->t_append_end, compute));
@@ -818,11 +826,66 @@ lod_run_epoch(struct lod_state* lod,
   CU(Error, cuEventRecord(t->t_end, compute));
   CHECK(Error, gpu_edge_record(ord, GPU_EDGE_LOD_DONE, fc, compute) == 0);
 
+  t->pending = 1;
   *out_active_mask = active_levels_mask;
   return 0;
 
 Error:
   return 1;
+}
+
+void
+lod_collect_timing(struct lod_shared_state* sh,
+                   const struct lod_state* lod,
+                   const struct level_geometry* levels,
+                   const struct tile_stream_layout* layout,
+                   enum dtype dtype,
+                   struct stream_metrics* metrics)
+{
+  const size_t bpe = dtype_bpe(dtype);
+  const uint8_t nlod = lod->plan.levels.nlod;
+  if (nlod == 0 || bpe == 0)
+    return;
+  const uint64_t* ends = lod->plan.level_spans.ends;
+  if (!ends)
+    return;
+
+  const size_t epoch_bytes = layout->epoch_elements * bpe;
+  const size_t morton_bytes = ends[nlod - 1] * bpe;
+  // The reduce writes levels 1..nlod-1; level 0 is its input.
+  const size_t reduced_bytes = (ends[nlod - 1] - ends[0]) * bpe;
+  const size_t pool_bytes = levels->total_chunks * layout->chunk_stride * bpe;
+  const size_t accum_bytes = lod->append_accum.element_capacity * bpe;
+
+  for (int i = 0; i < LOD_TIMING_SLOTS; ++i) {
+    struct lod_timing* t = &sh->timing[i];
+    if (!t->pending)
+      continue;
+    if (cuEventQuery(t->t_end) != CUDA_SUCCESS)
+      continue;
+    accumulate_metric_cu_if_ready(&metrics->lod_gather,
+                                  t->t_start,
+                                  t->t_scatter_end,
+                                  epoch_bytes,
+                                  epoch_bytes);
+    accumulate_metric_cu_if_ready(&metrics->lod_reduce,
+                                  t->t_scatter_end,
+                                  t->t_reduce_end,
+                                  epoch_bytes,
+                                  reduced_bytes);
+    if (t->has_append_fold)
+      accumulate_metric_cu_if_ready(&metrics->lod_append_fold,
+                                    t->t_reduce_end,
+                                    t->t_append_end,
+                                    accum_bytes,
+                                    accum_bytes);
+    accumulate_metric_cu_if_ready(&metrics->lod_morton_chunk,
+                                  t->t_append_end,
+                                  t->t_end,
+                                  morton_bytes,
+                                  pool_bytes);
+    t->pending = 0;
+  }
 }
 
 uint32_t

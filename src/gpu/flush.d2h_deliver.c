@@ -64,58 +64,16 @@ static void
 record_flush_metrics(const struct flush_handoff* handoff,
                      const struct aggregate_slot* slot,
                      const struct level_geometry* levels,
-                     const struct dim_info* dims,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
-                     const struct lod_state* lod,
-                     const struct lod_shared_state* lod_shared,
                      struct stream_metrics* metrics,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
   const uint32_t n_epochs = handoff->n_epochs;
 
-  const struct lod_timing* t = &lod_shared->timing[handoff->lod_timing_slot];
-  if (levels->enable_multiscale && handoff->has_lod_timing) {
-    const size_t bytes_per_element = dtype_bpe(config->dtype);
-    const size_t scatter_bytes = layout->epoch_elements * bytes_per_element;
-    const size_t morton_bytes =
-      lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] * bytes_per_element;
-    const size_t unified_pool_bytes =
-      levels->total_chunks * layout->chunk_stride * bytes_per_element;
-    // The reduce writes levels 1..nlod-1; level 0 is its input, not its
-    // output. Counting the whole span here overstated the rate ~8x in 3D.
-    const size_t reduced_bytes =
-      (lod->plan.level_spans.ends[lod->plan.levels.nlod - 1] -
-       lod->plan.level_spans.ends[0]) *
-      bytes_per_element;
-
-    accumulate_metric_cu(&metrics->lod_gather,
-                         t->t_start,
-                         t->t_scatter_end,
-                         scatter_bytes,
-                         scatter_bytes);
-    accumulate_metric_cu(&metrics->lod_reduce,
-                         t->t_scatter_end,
-                         t->t_reduce_end,
-                         scatter_bytes,
-                         reduced_bytes);
-    if (dims->append_downsample) {
-      size_t accum_bpe = dtype_bpe(config->dtype);
-      size_t accum_bytes = lod->append_accum.element_capacity * accum_bpe;
-      accumulate_metric_cu(&metrics->lod_append_fold,
-                           t->t_reduce_end,
-                           t->t_append_end,
-                           accum_bytes,
-                           accum_bytes);
-    }
-    accumulate_metric_cu(&metrics->lod_morton_chunk,
-                         t->t_append_end,
-                         t->t_end,
-                         morton_bytes,
-                         unified_pool_bytes);
-  }
-
+  // LOD timing is per epoch and collected by the producer (lod_collect_timing);
+  // a batch-wide read here only ever saw the batch's last epoch.
   {
     const size_t pool_bytes = (uint64_t)n_epochs * levels->total_chunks *
                               layout->chunk_stride * dtype_bpe(config->dtype);
@@ -248,12 +206,9 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        struct aggregate_slot* slot,
                        struct compress_agg_array* shards,
                        const struct level_geometry* levels,
-                       const struct dim_info* dims,
                        const struct tile_stream_layout* layout,
                        const struct tile_stream_configuration* config,
                        struct shard_sink* sink,
-                       const struct lod_state* lod,
-                       const struct lod_shared_state* lod_shared,
                        struct stream_metrics* metrics)
 {
   const int fc = handoff->fc;
@@ -262,11 +217,8 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     handoff,
     slot,
     levels,
-    dims,
     layout,
     config,
-    lod,
-    lod_shared,
     metrics,
     handoff->passthrough ? stage->t_d2h_start[fc]
                          : stage->t_d2h_drain_start[fc],

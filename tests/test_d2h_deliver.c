@@ -165,8 +165,6 @@ test_ctx_kick_and_drain(struct test_ctx* c,
                                               &c->cl.layouts[0],
                                               config,
                                               sink,
-                                              &c->lod,
-                                              &c->lod_shared,
                                               &c->metrics,
                                               &c->metadata_clock);
   CHECK(Fail, r.error == 0);

@@ -30,8 +30,6 @@ struct flush_handoff
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
   uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;
-  int lod_timing_slot;
-  int has_lod_timing;
 
   CUevent t_aggregate_end;   // D2H waits on this
   CUevent t_compress_start;  // for metrics

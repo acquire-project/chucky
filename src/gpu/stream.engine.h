@@ -64,7 +64,7 @@ struct staging_state
   uint64_t scatter_samples_lost; // ring wrapped while still outstanding
 };
 
-// Per-frame-counter timing events (double-buffered).
+// One epoch's LOD phase boundaries.
 struct lod_timing
 {
   CUevent t_start;
@@ -72,6 +72,8 @@ struct lod_timing
   CUevent t_reduce_end;
   CUevent t_append_end;
   CUevent t_end;
+  int pending;         // recorded, not yet folded into metrics
+  int has_append_fold; // the append-fold phase ran this epoch
 };
 
 // Engine-owned LOD resources shared across all arrays in a multiarray stream
@@ -85,10 +87,11 @@ struct lod_shared_state
   // Recorded every epoch and never rotated, so a bound handle stays valid.
   CUevent lod_done[2];
 
-  // Rotated across batches so the worker's read can't collide with the
-  // producer re-recording the next same-fc batch (#154).
+  // Rotated per epoch and read by the producer, which is also the only writer
+  // — so the cross-thread collision #154 worked around cannot arise.
   struct lod_timing timing[LOD_TIMING_SLOTS];
   int next_timing_slot;
+  uint64_t timing_samples_lost; // ring wrapped while still unread
 };
 
 // Per-array LOD state.  In multiarray, one instance per array; the active
@@ -134,8 +137,6 @@ struct compress_agg_input
   uint32_t active_levels_mask;
   const uint32_t* batch_active_masks; // borrowed from schedule_slot [K]
   uint32_t epochs_per_batch;
-  int lod_timing_slot;
-  int has_lod_timing;
 };
 
 // Per-shard layout tables shared across arrays, sized to the max

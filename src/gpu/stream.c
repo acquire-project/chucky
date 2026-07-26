@@ -1,5 +1,6 @@
 #include "gpu/schedule.h"
 #include "gpu/stream.ingest.h"
+#include "gpu/stream.lod.h"
 
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
@@ -266,6 +267,16 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   cuStreamSynchronize(e->streams.compute);
   ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
   ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
+  if (ctx->levels.enable_multiscale)
+    lod_collect_timing(&e->lod_shared,
+                       &e->lod,
+                       &ctx->levels,
+                       &ctx->layout,
+                       ctx->config.dtype,
+                       &e->metrics);
+  if (e->lod_shared.timing_samples_lost > 0)
+    log_debug("lod timing ring wrapped %llu times",
+              (unsigned long long)e->lod_shared.timing_samples_lost);
   if (e->stage.scatter_samples_lost > 0)
     log_debug("scatter timing ring wrapped %llu times",
               (unsigned long long)e->stage.scatter_samples_lost);
