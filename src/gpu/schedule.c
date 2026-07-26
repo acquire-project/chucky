@@ -479,6 +479,7 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
                         &e->ord,
                         e->sched.fill,
                         &ctx->levels,
+                        &ctx->layout,
                         stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
                         ctx->config.dtype,
                         ctx->config.reduce_method,
@@ -486,12 +487,7 @@ run_epoch_lod(struct stream_engine* e, struct stream_context* ctx)
                         &ctx->dims,
                         e->streams.compute,
                         &active_mask) == 0);
-    lod_collect_timing(&e->lod_shared,
-                       &e->lod,
-                       &ctx->levels,
-                       &ctx->layout,
-                       ctx->config.dtype,
-                       &e->metrics);
+    lod_collect_timing(&e->lod_shared, &e->metrics);
   }
 
   s->batch_active_masks[e->sched.accumulated] = active_mask;

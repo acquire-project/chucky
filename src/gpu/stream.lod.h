@@ -62,6 +62,7 @@ lod_run_epoch(struct lod_state* lod,
               struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
+              const struct tile_stream_layout* layout,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
@@ -78,12 +79,7 @@ lod_partial_append_mask(const struct lod_state* lod);
 // leave the unfinished ones for a later call. Never blocks. Call once per epoch
 // and again at flush so the last epochs are not left unread.
 void
-lod_collect_timing(struct lod_shared_state* sh,
-                   const struct lod_state* lod,
-                   const struct level_geometry* levels,
-                   const struct tile_stream_layout* layout,
-                   enum dtype dtype,
-                   struct stream_metrics* metrics);
+lod_collect_timing(struct lod_shared_state* sh, struct stream_metrics* metrics);
 
 // Emit accumulated append-dim LOD data into the pool. pool0 is the base of
 // the caller-acquired fill generation.

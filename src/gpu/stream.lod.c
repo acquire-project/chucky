@@ -743,6 +743,7 @@ lod_run_epoch(struct lod_state* lod,
               struct gpu_ordering* ord,
               int fc,
               const struct level_geometry* levels,
+              const struct tile_stream_layout* layout,
               struct gpu_pool_view pool_epoch,
               enum dtype dtype,
               enum lod_reduce_method reduce_method,
@@ -760,6 +761,17 @@ lod_run_epoch(struct lod_state* lod,
   sh->next_timing_slot = (sh->next_timing_slot + 1) % LOD_TIMING_SLOTS;
   t->pending = 0;
   t->has_append_fold = 0;
+  {
+    const size_t bpe = dtype_bpe(dtype);
+    const uint64_t* ends = p->level_spans.ends;
+    const uint8_t nlod = p->levels.nlod;
+    t->epoch_bytes = layout->epoch_elements * bpe;
+    t->morton_bytes = ends ? ends[nlod - 1] * bpe : 0;
+    // The reduce writes levels 1..nlod-1; level 0 is its input.
+    t->reduced_bytes = ends ? (ends[nlod - 1] - ends[0]) * bpe : 0;
+    t->pool_bytes = levels->total_chunks * layout->chunk_stride * bpe;
+    t->accum_bytes = lod->append_accum.element_capacity * bpe;
+  }
 
   CU(Error, cuEventRecord(t->t_start, compute));
 
@@ -835,28 +847,8 @@ Error:
 }
 
 void
-lod_collect_timing(struct lod_shared_state* sh,
-                   const struct lod_state* lod,
-                   const struct level_geometry* levels,
-                   const struct tile_stream_layout* layout,
-                   enum dtype dtype,
-                   struct stream_metrics* metrics)
+lod_collect_timing(struct lod_shared_state* sh, struct stream_metrics* metrics)
 {
-  const size_t bpe = dtype_bpe(dtype);
-  const uint8_t nlod = lod->plan.levels.nlod;
-  if (nlod == 0 || bpe == 0)
-    return;
-  const uint64_t* ends = lod->plan.level_spans.ends;
-  if (!ends)
-    return;
-
-  const size_t epoch_bytes = layout->epoch_elements * bpe;
-  const size_t morton_bytes = ends[nlod - 1] * bpe;
-  // The reduce writes levels 1..nlod-1; level 0 is its input.
-  const size_t reduced_bytes = (ends[nlod - 1] - ends[0]) * bpe;
-  const size_t pool_bytes = levels->total_chunks * layout->chunk_stride * bpe;
-  const size_t accum_bytes = lod->append_accum.element_capacity * bpe;
-
   for (int i = 0; i < LOD_TIMING_SLOTS; ++i) {
     struct lod_timing* t = &sh->timing[i];
     if (!t->pending)
@@ -866,24 +858,24 @@ lod_collect_timing(struct lod_shared_state* sh,
     accumulate_metric_cu_if_ready(&metrics->lod_gather,
                                   t->t_start,
                                   t->t_scatter_end,
-                                  epoch_bytes,
-                                  epoch_bytes);
+                                  t->epoch_bytes,
+                                  t->epoch_bytes);
     accumulate_metric_cu_if_ready(&metrics->lod_reduce,
                                   t->t_scatter_end,
                                   t->t_reduce_end,
-                                  epoch_bytes,
-                                  reduced_bytes);
+                                  t->epoch_bytes,
+                                  t->reduced_bytes);
     if (t->has_append_fold)
       accumulate_metric_cu_if_ready(&metrics->lod_append_fold,
                                     t->t_reduce_end,
                                     t->t_append_end,
-                                    accum_bytes,
-                                    accum_bytes);
+                                    t->accum_bytes,
+                                    t->accum_bytes);
     accumulate_metric_cu_if_ready(&metrics->lod_morton_chunk,
                                   t->t_append_end,
                                   t->t_end,
-                                  morton_bytes,
-                                  pool_bytes);
+                                  t->morton_bytes,
+                                  t->pool_bytes);
     t->pending = 0;
   }
 }

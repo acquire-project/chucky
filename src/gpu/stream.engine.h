@@ -74,6 +74,16 @@ struct lod_timing
   CUevent t_end;
   int pending;         // recorded, not yet folded into metrics
   int has_append_fold; // the append-fold phase ran this epoch
+
+  // Captured when the epoch is recorded, not when it is read. The ring is
+  // engine-owned and shared across arrays while the geometry these come from
+  // is per-array and swapped on bind, so a sample outstanding across an array
+  // switch would otherwise be folded in with the wrong array's sizes.
+  size_t epoch_bytes;
+  size_t reduced_bytes;
+  size_t morton_bytes;
+  size_t pool_bytes;
+  size_t accum_bytes;
 };
 
 // Engine-owned LOD resources shared across all arrays in a multiarray stream
