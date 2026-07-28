@@ -83,7 +83,8 @@ struct lod_timing
   size_t reduced_bytes;
   size_t morton_bytes;
   size_t pool_bytes;
-  size_t accum_bytes;
+  size_t folded_bytes;
+  size_t emitted_bytes;
 };
 
 // Engine-owned LOD resources shared across all arrays in a multiarray stream
