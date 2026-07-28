@@ -35,23 +35,26 @@ struct stream_metrics
   struct stream_metric d2h;
   struct stream_metric sink;
 
-  // Stall metrics — wall-clock time the host is blocked at each sync point.
-  // flush_stall, kick_sync_stall, backpressure are GPU-only. io_fence_stall
-  // is populated on both paths.
+  // Wall-clock time a thread is blocked at each sync point. flush_stall,
+  // drain_dispatch and backpressure are GPU-only; io_fence_stall is populated
+  // on both paths.
   //
-  // On the pipelined schedule the drain runs on the delivery worker:
-  // kick_sync_stall and sink then accumulate worker-side and OVERLAP
-  // producer time — do not sum them with wall time. flush_stall is the
-  // producer's join wait in drain_slot (the producer-visible cost). On
-  // depth-1 schedules the drain runs inline and flush_stall is a superset
-  // of kick_sync_stall + sink, as before.
+  // These belong to two different threads and must not be added together. On
+  // the pipelined schedule the drain runs on the delivery worker, so
+  // drain_dispatch, sink and the edge_stall entries are the worker's time and
+  // overlap the producer's. flush_stall is the producer's own cost: its join
+  // wait in drain_slot. On depth-1 schedules the drain runs inline, so
+  // flush_stall contains the worker set instead of overlapping it.
+  //
+  // Within the worker the entries are disjoint, so they can be added:
+  // edge_stall covers the waits, sink covers delivery, and drain_dispatch
+  // covers what is left.
   struct stream_metric flush_stall; // producer join wait / inline drain
                                     // (drain_slot in schedule.c)
-  // Passthrough: GPU_EDGE_D2H_DONE poll only. Compressed:
-  // GPU_EDGE_CHUNK_INDEX_READY poll + per-LOD bulk D2H dispatch +
-  // GPU_EDGE_D2H_DONE poll (the second poll includes DMA transfer wall
-  // time).
-  struct stream_metric kick_sync_stall;
+  // The drain block minus the waits the edge stalls already count: queuing the
+  // per-LOD copies and releasing the slot. Was reported as the whole block,
+  // which double-counted those waits.
+  struct stream_metric drain_dispatch;
   struct stream_metric io_fence_stall; // GPU: wait_io_fences in
                                        // schedule_d2h_kick. CPU: wait_fence
                                        // before aggregate in

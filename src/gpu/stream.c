@@ -36,7 +36,7 @@ stream_engine_init_metrics(int enable_multiscale)
     .d2h = mk_stream_metric("D2H"),
     .sink = mk_stream_metric("Sink"),
     .flush_stall = mk_stream_metric("FlushStall"),
-    .kick_sync_stall = mk_stream_metric("KickSync"),
+    .drain_dispatch = mk_stream_metric("DrainDisp"),
     .io_fence_stall = mk_stream_metric("IOFence"),
     .backpressure = mk_stream_metric("Backpres"),
     .tail_gate = mk_stream_metric("TailGate"),

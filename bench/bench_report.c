@@ -142,7 +142,7 @@ print_bench_report(const struct stream_metrics* metrics,
     if (metrics->edge_stall[i].count > 0)
       have_edge_stalls = 1;
   int have_stalls =
-    metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
+    metrics->flush_stall.count > 0 || metrics->drain_dispatch.count > 0 ||
     metrics->io_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
     metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
     metrics->tail_gate.count > 0 || metrics->scatter_samples_lost > 0 ||
@@ -151,7 +151,7 @@ print_bench_report(const struct stream_metrics* metrics,
     fputc('\n', stderr);
     print_report("  --- Stall stats ---");
     print_metric_row(&metrics->flush_stall);
-    print_metric_row(&metrics->kick_sync_stall);
+    print_metric_row(&metrics->drain_dispatch);
     print_metric_row(&metrics->io_fence_stall);
     print_metric_row(&metrics->backpressure);
     print_metric_row(&metrics->tail_gate);
@@ -311,10 +311,10 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->flush_stall.ms);
   jw_key(&jw, "flush_stall_count");
   jw_uint(&jw, (uint64_t)m->flush_stall.count);
-  jw_key(&jw, "kick_sync_ms");
-  jw_float(&jw, (double)m->kick_sync_stall.ms);
-  jw_key(&jw, "kick_sync_count");
-  jw_uint(&jw, (uint64_t)m->kick_sync_stall.count);
+  jw_key(&jw, "drain_dispatch_ms");
+  jw_float(&jw, (double)m->drain_dispatch.ms);
+  jw_key(&jw, "drain_dispatch_count");
+  jw_uint(&jw, (uint64_t)m->drain_dispatch.count);
   jw_key(&jw, "io_fence_ms");
   jw_float(&jw, (double)m->io_fence_stall.ms);
   jw_key(&jw, "io_fence_count");

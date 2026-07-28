@@ -248,7 +248,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.sink = mk_stream_metric("sink");
   // GPU-only stall metrics: named but never populated on CPU path.
   s->metrics.flush_stall = mk_stream_metric("flush_stall");
-  s->metrics.kick_sync_stall = mk_stream_metric("kick_sync");
+  s->metrics.drain_dispatch = mk_stream_metric("drain_dispatch");
   s->metrics.io_fence_stall = mk_stream_metric("io_fence");
   s->metrics.backpressure = mk_stream_metric("backpressure");
   if (s->levels.enable_multiscale) {
