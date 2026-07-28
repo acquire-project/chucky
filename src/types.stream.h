@@ -9,9 +9,28 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Which resource's timeline a measurement belongs to. Times may be added
+// together only within one owner. Named by role rather than by thread: the
+// drain runs on the delivery worker when the pipeline is deep and on the
+// producer when it is not.
+enum metric_owner
+{
+  METRIC_OWNER_NONE = 0,
+  METRIC_OWNER_PRODUCER,
+  METRIC_OWNER_DRAIN,
+  METRIC_OWNER_H2D,
+  METRIC_OWNER_COMPUTE,
+  METRIC_OWNER_COMPRESS,
+  METRIC_OWNER_D2H,
+};
+
+const char*
+metric_owner_name(enum metric_owner o);
+
 struct stream_metric
 {
   const char* name;
+  enum metric_owner owner;
   float ms;                 // cumulative
   float best_ms;            // fastest measurement; 1e30f = none yet
   double best_input_bytes;  // bytes at the fastest measurement, for its rate

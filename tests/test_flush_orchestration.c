@@ -137,11 +137,14 @@ orch_ctx_setup(struct orch_ctx* c,
   memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));
 
   memset(&c->s->engine.metrics, 0, sizeof(c->s->engine.metrics));
-  c->s->engine.metrics.compress = mk_stream_metric("Compress");
-  c->s->engine.metrics.aggregate = mk_stream_metric("Aggregate");
-  c->s->engine.metrics.d2h = mk_stream_metric("D2H");
-  c->s->engine.metrics.sink = mk_stream_metric("Sink");
-  c->s->engine.metrics.lod_gather = mk_stream_metric("LOD Gather");
+  c->s->engine.metrics.compress =
+    mk_stream_metric("Compress", METRIC_OWNER_COMPRESS);
+  c->s->engine.metrics.aggregate =
+    mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS);
+  c->s->engine.metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
+  c->s->engine.metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
+  c->s->engine.metrics.lod_gather =
+    mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
 
   memset(&c->s->engine.metadata_update_clock,
          0,

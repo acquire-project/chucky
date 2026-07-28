@@ -24,31 +24,33 @@ struct stream_metrics
 stream_engine_init_metrics(int enable_multiscale)
 {
   return (struct stream_metrics){
-    .memcpy = mk_stream_metric("Memcpy"),
-    .h2d = mk_stream_metric("H2D"),
-    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter"),
-    .lod_gather = mk_stream_metric("LOD Gather"),
-    .lod_reduce = mk_stream_metric("LOD Reduce"),
-    .lod_append_fold = mk_stream_metric("Append Fold"),
-    .lod_morton_chunk = mk_stream_metric("LOD to chunks"),
-    .compress = mk_stream_metric("Compress"),
-    .aggregate = mk_stream_metric("Aggregate"),
-    .d2h = mk_stream_metric("D2H"),
-    .sink = mk_stream_metric("Sink"),
-    .flush_stall = mk_stream_metric("FlushStall"),
-    .drain_dispatch = mk_stream_metric("DrainDisp"),
-    .io_fence_stall = mk_stream_metric("IOFence"),
-    .backpressure = mk_stream_metric("Backpres"),
-    .tail_gate = mk_stream_metric("TailGate"),
+    .memcpy = mk_stream_metric("Memcpy", METRIC_OWNER_PRODUCER),
+    .h2d = mk_stream_metric("H2D", METRIC_OWNER_H2D),
+    .scatter = mk_stream_metric(enable_multiscale ? "Copy" : "Scatter",
+                                METRIC_OWNER_COMPUTE),
+    .lod_gather = mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE),
+    .lod_reduce = mk_stream_metric("LOD Reduce", METRIC_OWNER_COMPUTE),
+    .lod_append_fold = mk_stream_metric("Append Fold", METRIC_OWNER_COMPUTE),
+    .lod_morton_chunk = mk_stream_metric("LOD to chunks", METRIC_OWNER_COMPUTE),
+    .compress = mk_stream_metric("Compress", METRIC_OWNER_COMPRESS),
+    .aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS),
+    .d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H),
+    .sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN),
+    .flush_stall = mk_stream_metric("FlushStall", METRIC_OWNER_PRODUCER),
+    .drain_dispatch = mk_stream_metric("DrainDisp", METRIC_OWNER_DRAIN),
+    .io_fence_stall = mk_stream_metric("IOFence", METRIC_OWNER_PRODUCER),
+    .backpressure = mk_stream_metric("Backpres", METRIC_OWNER_PRODUCER),
+    .tail_gate = mk_stream_metric("TailGate", METRIC_OWNER_COMPRESS),
   };
 }
 
 void
 stream_engine_attach_edge_stalls(struct stream_engine* e)
 {
-  e->metrics.edge_stall[0] = mk_stream_metric("StagingFree");
-  e->metrics.edge_stall[1] = mk_stream_metric("ChunkIndex");
-  e->metrics.edge_stall[2] = mk_stream_metric("D2HDone");
+  e->metrics.edge_stall[0] =
+    mk_stream_metric("StagingFree", METRIC_OWNER_PRODUCER);
+  e->metrics.edge_stall[1] = mk_stream_metric("ChunkIndex", METRIC_OWNER_DRAIN);
+  e->metrics.edge_stall[2] = mk_stream_metric("D2HDone", METRIC_OWNER_DRAIN);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_STAGING_FREE, &e->metrics.edge_stall[0]);
   gpu_ordering_attach_stall_metric(

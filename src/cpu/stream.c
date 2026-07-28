@@ -241,21 +241,29 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   }
 
   // Metrics.
-  s->metrics.memcpy = mk_stream_metric("memcpy");
-  s->metrics.scatter = mk_stream_metric("scatter");
-  s->metrics.compress = mk_stream_metric("compress");
-  s->metrics.aggregate = mk_stream_metric("aggregate");
-  s->metrics.sink = mk_stream_metric("sink");
+  s->metrics.memcpy = mk_stream_metric("memcpy", METRIC_OWNER_PRODUCER);
+  s->metrics.scatter = mk_stream_metric("scatter", METRIC_OWNER_COMPUTE);
+  s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
+  s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
+  s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
   // GPU-only stall metrics: named but never populated on CPU path.
-  s->metrics.flush_stall = mk_stream_metric("flush_stall");
-  s->metrics.drain_dispatch = mk_stream_metric("drain_dispatch");
-  s->metrics.io_fence_stall = mk_stream_metric("io_fence");
-  s->metrics.backpressure = mk_stream_metric("backpressure");
+  s->metrics.flush_stall =
+    mk_stream_metric("flush_stall", METRIC_OWNER_PRODUCER);
+  s->metrics.drain_dispatch =
+    mk_stream_metric("drain_dispatch", METRIC_OWNER_DRAIN);
+  s->metrics.io_fence_stall =
+    mk_stream_metric("io_fence", METRIC_OWNER_PRODUCER);
+  s->metrics.backpressure =
+    mk_stream_metric("backpressure", METRIC_OWNER_PRODUCER);
   if (s->levels.enable_multiscale) {
-    s->metrics.lod_gather = mk_stream_metric("lod_gather");
-    s->metrics.lod_reduce = mk_stream_metric("lod_reduce");
-    s->metrics.lod_append_fold = mk_stream_metric("lod_append_fold");
-    s->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
+    s->metrics.lod_gather =
+      mk_stream_metric("lod_gather", METRIC_OWNER_COMPUTE);
+    s->metrics.lod_reduce =
+      mk_stream_metric("lod_reduce", METRIC_OWNER_COMPUTE);
+    s->metrics.lod_append_fold =
+      mk_stream_metric("lod_append_fold", METRIC_OWNER_COMPUTE);
+    s->metrics.lod_morton_chunk =
+      mk_stream_metric("lod_morton", METRIC_OWNER_COMPUTE);
   }
 
   // Precompute total_element_limit (configured stream length) so the body can

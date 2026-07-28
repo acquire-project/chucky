@@ -390,7 +390,30 @@ Fail:
 }
 
 struct stream_metric
-mk_stream_metric(const char* name)
+mk_stream_metric(const char* name, enum metric_owner owner)
 {
-  return (struct stream_metric){ .name = name, .best_ms = 1e30f };
+  return (
+    struct stream_metric){ .name = name, .owner = owner, .best_ms = 1e30f };
+}
+
+const char*
+metric_owner_name(enum metric_owner o)
+{
+  switch (o) {
+    case METRIC_OWNER_PRODUCER:
+      return "producer";
+    case METRIC_OWNER_DRAIN:
+      return "drain";
+    case METRIC_OWNER_H2D:
+      return "h2d";
+    case METRIC_OWNER_COMPUTE:
+      return "compute";
+    case METRIC_OWNER_COMPRESS:
+      return "compress";
+    case METRIC_OWNER_D2H:
+      return "d2h";
+    case METRIC_OWNER_NONE:
+      break;
+  }
+  return "unset";
 }
