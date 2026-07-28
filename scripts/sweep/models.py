@@ -58,14 +58,60 @@ def validate_results(data: dict) -> ResultsFile:
 # ---------------------------------------------------------------------------
 
 
+# One version per sweep, since every run in a file comes from one binary. Bump
+# when a metric is renamed, removed, or changes meaning; adding one does not
+# need a bump. Version 1 predates the rule and is not a single shape, so
+# migrating from it cannot assume which keys are present.
+CURRENT_VERSION = 2
+
+# Renames of an unchanged quantity, safe to carry forward.
+_RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
+
+# Keys whose value cannot be recovered, by the version that retired them.
+RETIRED_AT = {2: ("kick_sync_ms", "kick_sync_count")}
+
+
+def _migrate_1_to_2(data: dict) -> None:
+    for run in data.get("runs", []):
+        stages = run.get("stages")
+        if not isinstance(stages, dict):
+            continue
+        for old_name, new_name in _RENAMED_STAGES_1_TO_2.items():
+            if old_name in stages and new_name not in stages:
+                stages[new_name] = stages.pop(old_name)
+
+
+_MIGRATIONS = {1: _migrate_1_to_2}
+
+
 def migrate_run(run: dict) -> dict:
     """Fill defaults for fields added after the initial schema."""
     run.setdefault("sink", "discard")
     return run
 
 
+def retired_metrics(data: dict) -> tuple[str, ...]:
+    """Keys this file carries that must not be compared against later sweeps."""
+    origin = data.get("migrated_from", data.get("version", 1))
+    out: list[str] = []
+    for version, keys in sorted(RETIRED_AT.items()):
+        if origin < version:
+            out.extend(keys)
+    return tuple(out)
+
+
 def migrate_results(data: dict) -> dict:
-    """In-place migration of a results dict to the current schema."""
+    """Bring one results file to the current schema, in place.
+
+    Keys whose meaning changed are left as they are; converting them would
+    invent data. Use retired_metrics to find them.
+    """
+    version = data.get("version", 1)
+    data.setdefault("migrated_from", version)
+    while version < CURRENT_VERSION and version in _MIGRATIONS:
+        _MIGRATIONS[version](data)
+        version += 1
+        data["version"] = version
     for run in data.get("runs", []):
         migrate_run(run)
     return data
