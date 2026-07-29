@@ -4,11 +4,8 @@
 #include "util/metric.h"
 #include <cuda.h>
 
-// Accumulate only once the interval has finished on the device. Returns 1 while
-// it is still outstanding so the caller can keep the sample and retry, rather
-// than reading a zero and discarding it. No magnitude filter: the caller owns
-// deciding which intervals are real, so a genuinely sub-10us stage still
-// counts.
+// Accumulate a completed interval. Returns 1 without accumulating while the
+// interval is still outstanding, leaving the sample for the caller to retry.
 static inline int
 accumulate_metric_cu_if_ready(struct stream_metric* m,
                               CUevent start,

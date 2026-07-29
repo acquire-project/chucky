@@ -138,8 +138,7 @@ Error:
 
 // --- D2H kick / drain ---
 
-// Poll time already attributed to the ordering edges. The drain block below
-// contains those polls, so it subtracts this to avoid counting them twice.
+// Wait time already attributed to the ordering edges.
 static float
 edge_stall_total_ms(const struct stream_metrics* m)
 {
@@ -255,8 +254,6 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
         goto Done;
     }
 
-    // What is left after the polls is the worker's own dispatch and
-    // bookkeeping, so this and the edge stalls can be added together.
     float block_ms = platform_toc(&kick_clk) * 1000.0f;
     float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
     accumulate_metric_ms(

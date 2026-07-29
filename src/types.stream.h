@@ -10,9 +10,8 @@
 #include <stdint.h>
 
 // Which resource's timeline a measurement belongs to. Times may be added
-// together only within one owner. Named by role rather than by thread: the
-// drain runs on the delivery worker when the pipeline is deep and on the
-// producer when it is not.
+// together only within one owner. Named by role, not by thread, because the
+// drain does not always run on the same one.
 enum metric_owner
 {
   METRIC_OWNER_NONE = 0,

@@ -70,15 +70,11 @@ record_flush_metrics(const struct flush_handoff* handoff,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
-  // An empty batch dispatched no kernels and moved no bytes, so its events
-  // bracket nothing. Screening on that is what the old sub-10us magnitude
-  // filter was really for, and unlike the filter it cannot discard a stage
-  // that genuinely ran fast.
+  // An empty batch dispatched no kernels and moved no bytes, so it has no
+  // interval to report.
   if (handoff->layout.total_batch_chunks == 0)
     return;
 
-  // LOD timing is per epoch and collected by the producer (lod_collect_timing);
-  // a batch-wide read here only ever saw the batch's last epoch.
   const size_t pool_bytes = (uint64_t)handoff->n_epochs * levels->total_chunks *
                             layout->chunk_stride * dtype_bpe(config->dtype);
 
@@ -91,16 +87,14 @@ record_flush_metrics(const struct flush_handoff* handoff,
   for (size_t i = 0; i < n_perm; ++i)
     agg_bytes += slot->h_permuted_sizes[i];
 
-  // Pass-through runs no codec, so there is no compress interval to report;
-  // its start/end events bracket nothing and would read as an infinite rate.
+  // Pass-through runs no codec, so it has no compress interval to report.
   if (!handoff->passthrough)
     accumulate_metric_cu_if_ready(&metrics->compress,
                                   handoff->t_compress_start,
                                   handoff->t_compress_end,
                                   pool_bytes,
                                   agg_bytes);
-  // The gap the aggregate interval no longer covers. Carries no bytes; it is
-  // a wait, and on the page-aligned path it is the cost of the tail gate.
+  // A wait, so it carries no bytes.
   accumulate_metric_cu_if_ready(&metrics->tail_gate,
                                 handoff->t_compress_end,
                                 handoff->t_aggregate_start,
@@ -169,9 +163,7 @@ d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
 {
   const struct batch_aggregate_layout* alayout = &handoff->layout;
   int dispatch_err = 0;
-  // Marks the payload transfer itself. The kick-time start event sits before
-  // the host handoff to the delivery worker, so measuring from there reports
-  // batch turnaround rather than transfer rate.
+  // Bounds the payload transfer, excluding the handoff that precedes it.
   if (cuEventRecord(stage->t_d2h_drain_start[handoff->fc],
                     stage->drain_stream) != CUDA_SUCCESS)
     return 1;
