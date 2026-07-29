@@ -112,11 +112,11 @@ test_ctx_setup(struct test_ctx* c,
   CHECK(Fail, c->batch_active_masks);
 
   memset(&c->metrics, 0, sizeof(c->metrics));
-  c->metrics.compress = mk_stream_metric("Compress");
-  c->metrics.aggregate = mk_stream_metric("Aggregate");
-  c->metrics.d2h = mk_stream_metric("D2H");
-  c->metrics.sink = mk_stream_metric("Sink");
-  c->metrics.lod_gather = mk_stream_metric("LOD Gather");
+  c->metrics.compress = mk_stream_metric("Compress", METRIC_OWNER_COMPRESS);
+  c->metrics.aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS);
+  c->metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
+  c->metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
+  c->metrics.lod_gather = mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
 
   memset(&c->lod, 0, sizeof(c->lod));
   memset(&c->lod_shared, 0, sizeof(c->lod_shared));

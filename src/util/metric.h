@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 struct stream_metric
-mk_stream_metric(const char* name);
+mk_stream_metric(const char* name, enum metric_owner owner);
 
 static inline void
 accumulate_metric_ms(struct stream_metric* m,

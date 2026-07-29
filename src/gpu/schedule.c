@@ -138,6 +138,18 @@ Error:
 
 // --- D2H kick / drain ---
 
+// Poll time already attributed to the ordering edges. The drain block below
+// contains those polls, so it subtracts this to avoid counting them twice.
+static float
+edge_stall_total_ms(const struct stream_metrics* m)
+{
+  float t = 0;
+  const size_t n = sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
+  for (size_t i = 0; i < n; ++i)
+    t += m->edge_stall[i].ms;
+  return t;
+}
+
 // Wait for any pending IO fence on the unified slot (across all LODs that
 // share it). Accumulates wall time into io_fence_stall.
 static void
@@ -214,6 +226,7 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
   {
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
+    const float polls_before = edge_stall_total_ms(metrics);
 
     if (handoff->passthrough) {
       struct gpu_pool_view hv;
@@ -242,8 +255,12 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
         goto Done;
     }
 
-    float kick_ms = platform_toc(&kick_clk) * 1000.0f;
-    accumulate_metric_ms(&metrics->kick_sync_stall, kick_ms, 0, 0);
+    // What is left after the polls is the worker's own dispatch and
+    // bookkeeping, so this and the edge stalls can be added together.
+    float block_ms = platform_toc(&kick_clk) * 1000.0f;
+    float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
+    accumulate_metric_ms(
+      &metrics->drain_dispatch, own_ms > 0 ? own_ms : 0.0f, 0, 0);
   }
 
   {

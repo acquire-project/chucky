@@ -9,20 +9,41 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Which resource's timeline a measurement belongs to. Times may be added
+// together only within one owner. Named by role rather than by thread: the
+// drain runs on the delivery worker when the pipeline is deep and on the
+// producer when it is not.
+enum metric_owner
+{
+  METRIC_OWNER_NONE = 0,
+  METRIC_OWNER_PRODUCER,
+  METRIC_OWNER_DRAIN,
+  METRIC_OWNER_H2D,
+  METRIC_OWNER_COMPUTE,
+  METRIC_OWNER_COMPRESS,
+  METRIC_OWNER_D2H,
+};
+
+const char*
+metric_owner_name(enum metric_owner o);
+
 struct stream_metric
 {
   const char* name;
-  float ms;                // cumulative
-  float best_ms;           // best single measurement (1e30f = not yet measured)
-  double best_input_bytes; // input_bytes at the best-ms call (for best GiB/s)
-  double best_output_bytes; // output_bytes at the best-ms call
-  double input_bytes;       // cumulative bytes read by stage
-  double output_bytes;      // cumulative bytes written by stage
-  int count;
+  enum metric_owner owner;
+  float ms;                 // cumulative
+  float best_ms;            // fastest measurement; 1e30f = none yet
+  double best_input_bytes;  // bytes at the fastest measurement, for its rate
+  double best_output_bytes; // likewise
+  double input_bytes;       // cumulative, read by the stage
+  double output_bytes;      // cumulative, written by the stage
+  int count;                // measurements taken, not work items
 };
 
 struct stream_metrics
 {
+  // Work done. Bytes may be summed across stages; times may not, since the
+  // stages run at the same time on separate streams.
   struct stream_metric memcpy;
   struct stream_metric h2d;
   struct stream_metric lod_gather;
@@ -35,45 +56,26 @@ struct stream_metrics
   struct stream_metric d2h;
   struct stream_metric sink;
 
-  // Stall metrics — wall-clock time the host is blocked at each sync point.
-  // flush_stall, kick_sync_stall, backpressure are GPU-only. io_fence_stall
-  // is populated on both paths.
-  //
-  // On the pipelined schedule the drain runs on the delivery worker:
-  // kick_sync_stall and sink then accumulate worker-side and OVERLAP
-  // producer time — do not sum them with wall time. flush_stall is the
-  // producer's join wait in drain_slot (the producer-visible cost). On
-  // depth-1 schedules the drain runs inline and flush_stall is a superset
-  // of kick_sync_stall + sink, as before.
-  struct stream_metric flush_stall; // producer join wait / inline drain
-                                    // (drain_slot in schedule.c)
-  // Passthrough: GPU_EDGE_D2H_DONE poll only. Compressed:
-  // GPU_EDGE_CHUNK_INDEX_READY poll + per-LOD bulk D2H dispatch +
-  // GPU_EDGE_D2H_DONE poll (the second poll includes DMA transfer wall
-  // time).
-  struct stream_metric kick_sync_stall;
-  struct stream_metric io_fence_stall; // GPU: wait_io_fences in
-                                       // schedule_d2h_kick. CPU: wait_fence
-                                       // before aggregate in
-                                       // cpu_pipeline_flush_batch.
-  struct stream_metric backpressure;   // wait at epoch boundary for IO to drain
-  // Host-poll blocked time attributed to GPU ordering edges (gpu/ordering.h:
-  // staging_free, chunk_index_ready, d2h_done). GPU engines wire these up;
-  // entries stay zero (count 0) elsewhere.
-  struct stream_metric edge_stall[3];
-  // Device-side wait on the previous batch's tail upload (the #142 gate),
-  // measured between compress-end and aggregate-start. Only ever non-zero on
-  // the page-aligned path; without it that wait is invisible, since it was
-  // deliberately excluded from `aggregate`.
-  struct stream_metric tail_gate;
+  // Time spent waiting. The producer and the delivery worker are separate
+  // threads, so their entries overlap and may not be summed together; the
+  // worker's own entries are disjoint and may be. When the drain runs on the
+  // producer instead of the worker, the producer entry contains the worker's
+  // rather than overlapping it. An entry a backend never fills keeps count 0,
+  // meaning not measured rather than no wait.
+  struct stream_metric flush_stall;    // producer: waiting for a drain
+  struct stream_metric drain_dispatch; // worker: its work between the waits
+  struct stream_metric io_fence_stall; // queued writes still holding a slot
+  struct stream_metric backpressure;   // sink queue over its watermark
+  struct stream_metric edge_stall[3];  // one declared ordering edge each; the
+                                       // name says which
+  struct stream_metric tail_gate; // previous batch's shard tail state; only
+                                  // sinks needing aligned shards wait here
 
-  float max_append_ms;       // longest tile_stream_gpu_append body
-  size_t peak_pending_bytes; // max sink->pending_bytes seen
+  float max_append_ms;       // longest single append
+  size_t peak_pending_bytes; // high-water mark of bytes awaiting write
 
-  // Timing measurements discarded because their ring wrapped before the host
-  // read them. Non-zero means the stage totals below it are under-reported —
-  // the failure this instrumentation exists to make visible, so it must not
-  // stay a debug-only log line.
+  // Measurements dropped before they could be read. Non-zero means the stage
+  // totals above are under-reported.
   uint64_t scatter_samples_lost;
   uint64_t lod_samples_lost;
 };

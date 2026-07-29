@@ -1053,14 +1053,14 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_metric_row(&m[k].sink);
 
     int have_stalls =
-      m[k].flush_stall.count > 0 || m[k].kick_sync_stall.count > 0 ||
+      m[k].flush_stall.count > 0 || m[k].drain_dispatch.count > 0 ||
       m[k].io_fence_stall.count > 0 || m[k].backpressure.count > 0 ||
       m[k].max_append_ms > 0 || m[k].peak_pending_bytes > 0;
     if (have_stalls) {
       fputc('\n', stderr);
       print_report("  --- Stall stats (stream-%d) ---", k);
       print_metric_row(&m[k].flush_stall);
-      print_metric_row(&m[k].kick_sync_stall);
+      print_metric_row(&m[k].drain_dispatch);
       print_metric_row(&m[k].io_fence_stall);
       print_metric_row(&m[k].backpressure);
       print_report("  max append ms:   %.2f", (double)m[k].max_append_ms);

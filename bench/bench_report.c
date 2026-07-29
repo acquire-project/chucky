@@ -142,7 +142,7 @@ print_bench_report(const struct stream_metrics* metrics,
     if (metrics->edge_stall[i].count > 0)
       have_edge_stalls = 1;
   int have_stalls =
-    metrics->flush_stall.count > 0 || metrics->kick_sync_stall.count > 0 ||
+    metrics->flush_stall.count > 0 || metrics->drain_dispatch.count > 0 ||
     metrics->io_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
     metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
     metrics->tail_gate.count > 0 || metrics->scatter_samples_lost > 0 ||
@@ -151,7 +151,7 @@ print_bench_report(const struct stream_metrics* metrics,
     fputc('\n', stderr);
     print_report("  --- Stall stats ---");
     print_metric_row(&metrics->flush_stall);
-    print_metric_row(&metrics->kick_sync_stall);
+    print_metric_row(&metrics->drain_dispatch);
     print_metric_row(&metrics->io_fence_stall);
     print_metric_row(&metrics->backpressure);
     print_metric_row(&metrics->tail_gate);
@@ -198,6 +198,9 @@ json_stage_metric(struct json_writer* jw,
   double out_gibs = gb_per_s(sm->output_bytes, (double)sm->ms);
   jw_key(jw, name);
   jw_object_begin(jw);
+  // Which timeline this belongs to. Times may be summed only within one owner.
+  jw_key(jw, "owner");
+  jw_string(jw, metric_owner_name(sm->owner));
   // total_ms and count are the primitives every other field is derived from;
   // without them a sweep file cannot be re-analyzed.
   jw_key(jw, "total_ms");
@@ -311,10 +314,10 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->flush_stall.ms);
   jw_key(&jw, "flush_stall_count");
   jw_uint(&jw, (uint64_t)m->flush_stall.count);
-  jw_key(&jw, "kick_sync_ms");
-  jw_float(&jw, (double)m->kick_sync_stall.ms);
-  jw_key(&jw, "kick_sync_count");
-  jw_uint(&jw, (uint64_t)m->kick_sync_stall.count);
+  jw_key(&jw, "drain_dispatch_ms");
+  jw_float(&jw, (double)m->drain_dispatch.ms);
+  jw_key(&jw, "drain_dispatch_count");
+  jw_uint(&jw, (uint64_t)m->drain_dispatch.count);
   jw_key(&jw, "io_fence_ms");
   jw_float(&jw, (double)m->io_fence_stall.ms);
   jw_key(&jw, "io_fence_count");
@@ -334,6 +337,19 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, m->lod_samples_lost);
   // StagingFree is the producer's own append-side wait — the stall that
   // explains dropped frames. Keys come from the engine's metric names.
+  jw_key(&jw, "owners");
+  jw_object_begin(&jw);
+  jw_key(&jw, "flush_stall");
+  jw_string(&jw, metric_owner_name(m->flush_stall.owner));
+  jw_key(&jw, "drain_dispatch");
+  jw_string(&jw, metric_owner_name(m->drain_dispatch.owner));
+  jw_key(&jw, "io_fence");
+  jw_string(&jw, metric_owner_name(m->io_fence_stall.owner));
+  jw_key(&jw, "backpressure");
+  jw_string(&jw, metric_owner_name(m->backpressure.owner));
+  jw_key(&jw, "tail_gate");
+  jw_string(&jw, metric_owner_name(m->tail_gate.owner));
+  jw_object_end(&jw);
   jw_key(&jw, "edge_stalls");
   jw_object_begin(&jw);
   for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
@@ -343,6 +359,8 @@ print_bench_json_pass(const struct stream_metrics* m,
       continue;
     jw_key(&jw, es->name);
     jw_object_begin(&jw);
+    jw_key(&jw, "owner");
+    jw_string(&jw, metric_owner_name(es->owner));
     jw_key(&jw, "total_ms");
     jw_float(&jw, (double)es->ms);
     jw_key(&jw, "count");

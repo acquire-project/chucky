@@ -26,4 +26,4 @@ computed_stream_layouts_free(struct computed_stream_layouts* cl);
 
 // Create a named stream_metric with best_ms initialized to a large value.
 struct stream_metric
-mk_stream_metric(const char* name);
+mk_stream_metric(const char* name, enum metric_owner owner);

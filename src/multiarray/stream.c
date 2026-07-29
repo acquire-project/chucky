@@ -441,18 +441,23 @@ multiarray_tile_stream_cpu_create(
 
   if (enable_metrics) {
     ms->metrics_enabled = 1;
-    ms->metrics.scatter = mk_stream_metric("scatter");
-    ms->metrics.compress = mk_stream_metric("compress");
-    ms->metrics.aggregate = mk_stream_metric("aggregate");
-    ms->metrics.sink = mk_stream_metric("sink");
+    ms->metrics.scatter = mk_stream_metric("scatter", METRIC_OWNER_COMPUTE);
+    ms->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
+    ms->metrics.aggregate =
+      mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
+    ms->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
     int any_multiscale = 0;
     for (int i = 0; i < n_arrays; ++i)
       any_multiscale |= ms->arrays[i].levels.enable_multiscale;
     if (any_multiscale) {
-      ms->metrics.lod_gather = mk_stream_metric("lod_gather");
-      ms->metrics.lod_reduce = mk_stream_metric("lod_reduce");
-      ms->metrics.lod_append_fold = mk_stream_metric("lod_append_fold");
-      ms->metrics.lod_morton_chunk = mk_stream_metric("lod_morton");
+      ms->metrics.lod_gather =
+        mk_stream_metric("lod_gather", METRIC_OWNER_COMPUTE);
+      ms->metrics.lod_reduce =
+        mk_stream_metric("lod_reduce", METRIC_OWNER_COMPUTE);
+      ms->metrics.lod_append_fold =
+        mk_stream_metric("lod_append_fold", METRIC_OWNER_COMPUTE);
+      ms->metrics.lod_morton_chunk =
+        mk_stream_metric("lod_morton", METRIC_OWNER_COMPUTE);
     }
   }
 
