@@ -770,7 +770,8 @@ lod_run_epoch(struct lod_state* lod,
     // The reduce writes levels 1..nlod-1; level 0 is its input.
     t->reduced_bytes = ends ? (ends[nlod - 1] - ends[0]) * bpe : 0;
     t->pool_bytes = levels->total_chunks * layout->chunk_stride * bpe;
-    t->accum_bytes = lod->append_accum.element_capacity * bpe;
+    t->folded_bytes = 0;
+    t->emitted_bytes = 0;
   }
 
   CU(Error, cuEventRecord(t->t_start, compute));
@@ -826,6 +827,14 @@ lod_run_epoch(struct lod_state* lod,
         lod, sh, dtype, append_reduce_method, compute, &active_levels_mask) ==
         0);
     t->has_append_fold = 1;
+    const size_t bpe = dtype_bpe(dtype);
+    for (int lv = 1; lv < p->levels.nlod; ++lv) {
+      const size_t level_bytes = p->levels.level[lv].fixed_dims_count *
+                                 p->levels.level[lv].lod_nelem * bpe;
+      t->folded_bytes += level_bytes;
+      if (active_levels_mask & (1u << lv))
+        t->emitted_bytes += level_bytes;
+    }
   }
 
   CU(Error, cuEventRecord(t->t_append_end, compute));
@@ -869,8 +878,8 @@ lod_collect_timing(struct lod_shared_state* sh, struct stream_metrics* metrics)
       accumulate_metric_cu_if_ready(&metrics->lod_append_fold,
                                     t->t_reduce_end,
                                     t->t_append_end,
-                                    t->accum_bytes,
-                                    t->accum_bytes);
+                                    t->folded_bytes,
+                                    t->emitted_bytes);
     accumulate_metric_cu_if_ready(&metrics->lod_morton_chunk,
                                   t->t_append_end,
                                   t->t_end,

@@ -201,14 +201,10 @@ json_stage_metric(struct json_writer* jw,
   // Which timeline this belongs to. Times may be summed only within one owner.
   jw_key(jw, "owner");
   jw_string(jw, metric_owner_name(sm->owner));
-  // total_ms and count are the primitives every other field is derived from;
-  // without them a sweep file cannot be re-analyzed.
   jw_key(jw, "total_ms");
   jw_float(jw, (double)sm->ms);
   jw_key(jw, "count");
   jw_uint(jw, (uint64_t)sm->count);
-  // Raw totals as well as the rates: bytes are safe to sum across stages,
-  // unlike times, which belong to different threads.
   jw_key(jw, "in_bytes");
   jw_uint(jw, (uint64_t)sm->input_bytes);
   jw_key(jw, "out_bytes");
@@ -335,8 +331,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, m->scatter_samples_lost);
   jw_key(&jw, "lod_samples_lost");
   jw_uint(&jw, m->lod_samples_lost);
-  // StagingFree is the producer's own append-side wait — the stall that
-  // explains dropped frames. Keys come from the engine's metric names.
+  // Keyed by metric name.
   jw_key(&jw, "owners");
   jw_object_begin(&jw);
   jw_key(&jw, "flush_stall");

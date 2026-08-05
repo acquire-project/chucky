@@ -35,12 +35,8 @@ struct staging_slot
   int h2d_pending;         // dispatched, interval not yet folded into metrics
 };
 
-// One scatter measurement. Owns both ends of its interval: reusing the
-// STAGING_SCATTER_DONE ordering edge as the end tied a sample's lifetime to the
-// staging slot, and the host reads slot state at a point that only waits on
-// STAGING_H2D_DONE — so the scatter was usually still running and the sample
-// was lost. Rotating more of these than there are staging slots lets a sample
-// wait for its own completion instead.
+// One scatter measurement, owning both ends of its own interval so it can
+// outlive the staging slot that produced it.
 struct scatter_timing
 {
   CUevent t_start;
@@ -75,15 +71,14 @@ struct lod_timing
   int pending;         // recorded, not yet folded into metrics
   int has_append_fold; // the append-fold phase ran this epoch
 
-  // Captured when the epoch is recorded, not when it is read. The ring is
-  // engine-owned and shared across arrays while the geometry these come from
-  // is per-array and swapped on bind, so a sample outstanding across an array
-  // switch would otherwise be folded in with the wrong array's sizes.
+  // Captured when the epoch is recorded. The geometry they come from is
+  // per-array and does not outlive a switch to another array.
   size_t epoch_bytes;
   size_t reduced_bytes;
   size_t morton_bytes;
   size_t pool_bytes;
-  size_t accum_bytes;
+  size_t folded_bytes;
+  size_t emitted_bytes;
 };
 
 // Engine-owned LOD resources shared across all arrays in a multiarray stream
