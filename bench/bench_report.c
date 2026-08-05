@@ -1,6 +1,7 @@
 #include "bench_report.h"
 
 #include "util/format_bytes.h"
+#include "util/metric.h"
 #include "zarr/json_writer.h"
 
 // --- Throughput helpers ---
@@ -162,7 +163,17 @@ print_bench_report(const struct stream_metrics* metrics,
                    "(stage totals under-report)",
                    (unsigned long long)metrics->scatter_samples_lost,
                    (unsigned long long)metrics->lod_samples_lost);
-    print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
+    if (metrics->append_count > 0)
+      print_report("  append ms:       p50 %.2f  p90 %.2f  p99 %.2f  p99.9 %.2f"
+                   "  max %.2f  (%llu appends)",
+                   (double)append_ms_at(metrics, 0.50),
+                   (double)append_ms_at(metrics, 0.90),
+                   (double)append_ms_at(metrics, 0.99),
+                   (double)append_ms_at(metrics, 0.999),
+                   (double)metrics->max_append_ms,
+                   (unsigned long long)metrics->append_count);
+    else
+      print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
     print_report("  peak pending:    %s", pbuf);
@@ -363,6 +374,16 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_object_end(&jw);
   }
   jw_object_end(&jw);
+  jw_key(&jw, "append_ms_p50");
+  jw_float(&jw, (double)append_ms_at(m, 0.50));
+  jw_key(&jw, "append_ms_p90");
+  jw_float(&jw, (double)append_ms_at(m, 0.90));
+  jw_key(&jw, "append_ms_p99");
+  jw_float(&jw, (double)append_ms_at(m, 0.99));
+  jw_key(&jw, "append_ms_p999");
+  jw_float(&jw, (double)append_ms_at(m, 0.999));
+  jw_key(&jw, "append_count");
+  jw_uint(&jw, m->append_count);
   jw_key(&jw, "max_append_ms");
   jw_float(&jw, (double)m->max_append_ms);
   jw_key(&jw, "peak_pending_mib");

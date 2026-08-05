@@ -73,6 +73,12 @@ struct stream_metrics
   float max_append_ms;       // longest single append
   size_t peak_pending_bytes; // high-water mark of bytes awaiting write
 
+  // How long individual appends took, as counts per time bucket. A caller
+  // asking whether it can keep up needs the slow tail, not the average, and
+  // there are far too many appends to keep every one.
+  uint32_t append_ms_buckets[APPEND_LATENCY_BUCKETS];
+  uint64_t append_count;
+
   // Measurements dropped before they could be read. Non-zero means the stage
   // totals above are under-reported.
   uint64_t scatter_samples_lost;

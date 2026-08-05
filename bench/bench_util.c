@@ -506,9 +506,19 @@ run_bench(const struct bench_config* cfg)
 
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
+  if (cfg->append_elements > 0) {
+    char abuf[32];
+    format_bytes(
+      abuf, sizeof(abuf), (uint64_t)(cfg->append_elements * dtype_bpe(dtype)));
+    print_report(
+      "  append size: %zu elements = %s", cfg->append_elements, abuf);
+  }
   CHECK(Fail,
-        pump_data_prefill(
-          bench_writer(&h), total_elements, fill, dtype_bpe(dtype)) == 0);
+        pump_data_prefill_blocked(bench_writer(&h),
+                                  total_elements,
+                                  fill,
+                                  dtype_bpe(dtype),
+                                  cfg->append_elements) == 0);
 
   size_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
@@ -605,6 +615,7 @@ struct bench_cli_args
   size_t target_batch_bytes;
   size_t memory_budget;
   uint64_t frames;
+  size_t append_elements; // 0 = default block
   int json_output;
   const char* output_path;
   const char* s3_bucket;
@@ -669,6 +680,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
         return 1;
     } else if (strcmp(av[i], "--frames") == 0 && i + 1 < ac) {
       out->frames = (uint64_t)strtoull(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--append-elements") == 0 && i + 1 < ac) {
+      out->append_elements = (size_t)strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--json") == 0) {
       out->json_output = 1;
     } else if (strcmp(av[i], "--chunk-bytes") == 0 && i + 1 < ac) {
@@ -765,6 +778,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .min_shard_bytes = spec.min_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
+    .append_elements = a.append_elements,
     .json_output = a.json_output,
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,

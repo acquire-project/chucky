@@ -179,7 +179,18 @@ pump_data_prefill(struct writer* w,
                   fill_fn fill,
                   size_t bpe)
 {
-  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  return pump_data_prefill_blocked(w, total_elements, fill, bpe, 0);
+}
+
+int
+pump_data_prefill_blocked(struct writer* w,
+                          size_t total_elements,
+                          fill_fn fill,
+                          size_t bpe,
+                          size_t block_elements)
+{
+  const size_t nelements =
+    block_elements > 0 ? block_elements : PUMP_BLOCK_ELEMENTS;
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)

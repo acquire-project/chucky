@@ -49,3 +49,12 @@ pump_data_prefill(struct writer* w,
                   size_t total_elements,
                   fill_fn fill,
                   size_t bpe);
+
+// Hand over block_elements at a time instead of the default block. Pass the
+// size of one frame to measure what a caller feeding frames would see.
+int
+pump_data_prefill_blocked(struct writer* w,
+                          size_t total_elements,
+                          fill_fn fill,
+                          size_t bpe,
+                          size_t block_elements);
