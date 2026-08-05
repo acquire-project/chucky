@@ -31,6 +31,7 @@ import click
 from pydantic import BaseModel, model_validator
 from rich.console import Console
 from models import (
+    CURRENT_VERSION,
     VALID_BACKENDS,
     VALID_CODECS,
     VALID_DTYPES,
@@ -491,7 +492,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             existing[rid] = r
     else:
         data = {
-            "version": 1,
+            "version": CURRENT_VERSION,
             "machine": {
                 "hostname": platform.node(),
                 "gpu": gpu_name(),

@@ -228,7 +228,7 @@ const LAYOUT = {
   stageThru: {W: 600, margin: {left: 100, right: 80, top: 40}},
 };
 
-const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_dim0_fold","lod_morton","lod_morton_chunk","compress","aggregate","d2h","sink"];
+const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_append_fold","lod_morton_chunk","compress","aggregate","d2h","sink"];
 
 const GROUP_LABELS = { single: "Single", multiscale: "Multiscale", dim0: "Dim0" };
 const GROUP_ORDER = ["single", "multiscale", "dim0"];
