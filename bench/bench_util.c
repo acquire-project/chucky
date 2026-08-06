@@ -809,9 +809,11 @@ pump_data_interleaved(struct writer* w0,
                       struct writer* w1,
                       size_t total_elements,
                       fill_fn fill,
-                      size_t bpe)
+                      size_t bpe,
+                      size_t block_elements)
 {
-  const size_t nelements = 32 * 1024 * 1024;
+  const size_t nelements =
+    block_elements > 0 ? block_elements : (size_t)32 * 1024 * 1024;
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)
@@ -986,7 +988,9 @@ run_bench_two_streams(const struct bench_config* cfg)
   // Interleaved pump
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
-  CHECK(Fail, pump_data_interleaved(w0, w1, total_elements, fill, bpe) == 0);
+  CHECK(Fail,
+        pump_data_interleaved(
+          w0, w1, total_elements, fill, bpe, cfg->append_elements) == 0);
 
   // Flush zarr sinks before measuring wall time
   struct platform_clock flush_clock = { 0 };
@@ -1077,7 +1081,7 @@ run_bench_two_streams(const struct bench_config* cfg)
       print_metric_row(&m[k].drain_dispatch);
       print_metric_row(&m[k].io_fence_stall);
       print_metric_row(&m[k].backpressure);
-      print_report("  max append ms:   %.2f", (double)m[k].max_append_ms);
+      print_append_latency(&m[k]);
       char pbuf[32];
       format_bytes(pbuf, sizeof(pbuf), (uint64_t)m[k].peak_pending_bytes);
       print_report("  peak pending:    %s", pbuf);

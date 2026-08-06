@@ -17,6 +17,23 @@ gb_per_s(double bytes, double ms)
 // --- Report + pipeline helpers ---
 
 void
+print_append_latency(const struct stream_metrics* m)
+{
+  if (m->append_count == 0) {
+    print_report("  max append ms:   %.2f", (double)m->max_append_ms);
+    return;
+  }
+  print_report("  append ms:       p50 %.2f  p90 %.2f  p99 %.2f  p99.9 %.2f"
+               "  max %.2f  (%llu appends)",
+               (double)append_ms_at(m, 0.50),
+               (double)append_ms_at(m, 0.90),
+               (double)append_ms_at(m, 0.99),
+               (double)append_ms_at(m, 0.999),
+               (double)m->max_append_ms,
+               (unsigned long long)m->append_count);
+}
+
+void
 print_metric_row(const struct stream_metric* m)
 {
   if (m->count <= 0)
@@ -163,17 +180,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    "(stage totals under-report)",
                    (unsigned long long)metrics->scatter_samples_lost,
                    (unsigned long long)metrics->lod_samples_lost);
-    if (metrics->append_count > 0)
-      print_report("  append ms:       p50 %.2f  p90 %.2f  p99 %.2f  p99.9 %.2f"
-                   "  max %.2f  (%llu appends)",
-                   (double)append_ms_at(metrics, 0.50),
-                   (double)append_ms_at(metrics, 0.90),
-                   (double)append_ms_at(metrics, 0.99),
-                   (double)append_ms_at(metrics, 0.999),
-                   (double)metrics->max_append_ms,
-                   (unsigned long long)metrics->append_count);
-    else
-      print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
+    print_append_latency(metrics);
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
     print_report("  peak pending:    %s", pbuf);
