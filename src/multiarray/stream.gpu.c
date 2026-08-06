@@ -140,18 +140,17 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
       return multiarray_writer_not_flushable;
 
     // Staging is engine-wide, so the departing array's data has to reach its
-    // own pool before another array's geometry binds in.
-    if (stream_dispatch_staged(e, &departing->ctx).error)
-      return multiarray_writer_fail;
+    // own pool before another array's geometry binds in. A failure here belongs
+    // to the array being left, which reports it when it is flushed; the array
+    // being switched to is still usable.
+    (void)stream_dispatch_staged(e, &departing->ctx);
 
     // Flush departing array's accumulated batch. The drain-after-kick
     // schedule leaves no pool swap or kicked state behind, so this is safe
-    // mid-switch.
-    if (e->sched.accumulated > 0) {
-      struct writer_result r = schedule_flush_accumulated(e, &departing->ctx);
-      if (r.error)
-        return multiarray_writer_fail;
-    }
+    // mid-switch. As above, a failure belongs to the array being left.
+    if (e->sched.accumulated > 0 &&
+        schedule_flush_accumulated(e, &departing->ctx).error)
+      departing->ctx.append_failed = 1;
 
     unbind_context(e, departing);
   }
