@@ -1,6 +1,7 @@
 #include "bench_report.h"
 
 #include "util/format_bytes.h"
+#include "util/metric.h"
 #include "zarr/json_writer.h"
 
 // --- Throughput helpers ---
@@ -14,6 +15,23 @@ gb_per_s(double bytes, double ms)
 }
 
 // --- Report + pipeline helpers ---
+
+void
+print_append_latency(const struct stream_metrics* m)
+{
+  if (m->append_count == 0) {
+    print_report("  max append ms:   %.2f", (double)m->max_append_ms);
+    return;
+  }
+  print_report("  append ms:       p50 %.3f  p90 %.3f  p99 %.3f  p99.9 %.3f"
+               "  max %.3f  (%llu appends)",
+               (double)append_ms_at(m, 0.50),
+               (double)append_ms_at(m, 0.90),
+               (double)append_ms_at(m, 0.99),
+               (double)append_ms_at(m, 0.999),
+               (double)m->max_append_ms,
+               (unsigned long long)m->append_count);
+}
 
 void
 print_metric_row(const struct stream_metric* m)
@@ -162,7 +180,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    "(stage totals under-report)",
                    (unsigned long long)metrics->scatter_samples_lost,
                    (unsigned long long)metrics->lod_samples_lost);
-    print_report("  max append ms:   %.2f", (double)metrics->max_append_ms);
+    print_append_latency(metrics);
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
     print_report("  peak pending:    %s", pbuf);
@@ -363,6 +381,34 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_object_end(&jw);
   }
   jw_object_end(&jw);
+  if (m->append_count > 0) {
+    jw_key(&jw, "append_ms_p50");
+    jw_float(&jw, (double)append_ms_at(m, 0.50));
+    jw_key(&jw, "append_ms_p90");
+    jw_float(&jw, (double)append_ms_at(m, 0.90));
+    jw_key(&jw, "append_ms_p99");
+    jw_float(&jw, (double)append_ms_at(m, 0.99));
+    jw_key(&jw, "append_ms_p999");
+    jw_float(&jw, (double)append_ms_at(m, 0.999));
+  }
+  // The buckets themselves, so a reader can ask their own question — such as
+  // how many appends missed their frame budget. No single percentile answers
+  // that, because where the slow tail starts depends on the append size.
+  jw_key(&jw, "append_ms_histogram");
+  jw_array_begin(&jw);
+  for (int i = 0; i < APPEND_LATENCY_BUCKETS; ++i) {
+    if (m->append_ms_buckets[i] == 0)
+      continue;
+    jw_object_begin(&jw);
+    jw_key(&jw, "upto_ms");
+    jw_float(&jw, (double)append_bucket_ms(m, i));
+    jw_key(&jw, "n");
+    jw_uint(&jw, m->append_ms_buckets[i]);
+    jw_object_end(&jw);
+  }
+  jw_array_end(&jw);
+  jw_key(&jw, "append_count");
+  jw_uint(&jw, m->append_count);
   jw_key(&jw, "max_append_ms");
   jw_float(&jw, (double)m->max_append_ms);
   jw_key(&jw, "peak_pending_mib");

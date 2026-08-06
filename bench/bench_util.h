@@ -49,6 +49,8 @@ struct bench_config
                               // append dim (0 = no minimum). Forces
                               // shard-switching in benchmarks that would
                               // otherwise collapse to a single shard.
+  size_t append_elements;     // elements per append; 0 = default block. Set to
+                              // one frame to measure per-frame latency.
   int json_output;            // print JSON to stdout after run
   uint64_t io_bw_mbps;        // 0 = no bandwidth cap (MiB/s)
   uint64_t io_latency_us;     // 0 = no fixed per-job latency

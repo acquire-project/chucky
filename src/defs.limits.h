@@ -14,6 +14,12 @@
 // batch — a per-batch slot is overwritten by every epoch after the first.
 #define LOD_TIMING_SLOTS 8
 
+// Buckets spanning 1us to 100s, twenty per decade, so a reported time is within
+// about 12% of the truth.
+#define APPEND_LATENCY_BUCKETS 160
+#define APPEND_LATENCY_MIN_MS 0.001
+#define APPEND_LATENCY_PER_DECADE 20
+
 // More than the two staging slots, so a scatter measurement can outlive the
 // dispatch that produced it and still be read after it completes.
 #define SCATTER_TIMING_SLOTS 4
