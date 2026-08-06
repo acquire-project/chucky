@@ -382,6 +382,24 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)append_ms_at(m, 0.99));
   jw_key(&jw, "append_ms_p999");
   jw_float(&jw, (double)append_ms_at(m, 0.999));
+  // The buckets themselves, so a reader can ask their own question — such as
+  // how many appends missed their frame budget. No single percentile answers
+  // that, because where the slow tail starts depends on the append size.
+  jw_key(&jw, "append_ms_histogram");
+  jw_array_begin(&jw);
+  for (int i = 0; i < APPEND_LATENCY_BUCKETS; ++i) {
+    if (m->append_ms_buckets[i] == 0)
+      continue;
+    jw_object_begin(&jw);
+    jw_key(&jw, "upto_ms");
+    jw_float(&jw,
+             APPEND_LATENCY_MIN_MS *
+               pow(10.0, (double)(i + 1) / APPEND_LATENCY_PER_DECADE));
+    jw_key(&jw, "n");
+    jw_uint(&jw, m->append_ms_buckets[i]);
+    jw_object_end(&jw);
+  }
+  jw_array_end(&jw);
   jw_key(&jw, "append_count");
   jw_uint(&jw, m->append_count);
   jw_key(&jw, "max_append_ms");
