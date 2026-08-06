@@ -16,6 +16,10 @@ function(add_src_lib TARGET)
     set_property(GLOBAL APPEND PROPERTY CHUCKY_INTERNAL_TARGETS ${TARGET})
 endfunction()
 
+# Unix keeps the math functions in their own library; MSVC has them in the C
+# runtime and ships no m.lib, so asking for one fails the link.
+set(_math_lib $<$<NOT:$<PLATFORM_ID:Windows>>:m>)
+
 # --- Shared libraries (no CUDA dependency) ---
 
 add_src_lib(chucky_log SOURCES log/log.c log/log.h chucky_log.h)
@@ -55,7 +59,7 @@ add_src_lib(codec_types SOURCES types.codec.c types.codec.h)
 add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts.h
     stream/dim_info.c stream/dim_info.h
     stream/types.aggregate.c types.stream.h stream/types.aggregate.h types.lod.h defs.limits.h
-    LINKS m codec_types lod_plan index_ops platform chucky_log
+    LINKS ${_math_lib} codec_types lod_plan index_ops platform chucky_log
 )
 
 # --- Backend subdirectories ---
@@ -97,7 +101,7 @@ list(
 set(_with_blosc $<BOOL:${HAVE_BLOSC}>)
 set(_with_gpu $<BOOL:${CHUCKY_ENABLE_GPU}>)
 set(_chucky_public_deps
-    m
+    ${_math_lib}
     Threads::Threads
     Lz4::Lz4
     Zstd::Zstd
