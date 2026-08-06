@@ -339,12 +339,11 @@ Fail:
 }
 
 // One dispatch covering several epochs: each epoch's data must land in its own
-// region of the pool (#173).
+// region of the pool (#173). first_element places the buffer's first element in
+// the stream, so a value inside an epoch splits the dispatch unevenly.
 static int
-test_ingest_many_epochs_one_dispatch(void)
+run_many_epochs_one_dispatch(uint64_t first_element)
 {
-  log_info("=== test_ingest_many_epochs_one_dispatch ===");
-
   const int rank = 3;
   const uint64_t dim_sizes[] = { 4, 4, 6 };
   const uint64_t chunk_sizes[] = { 2, 2, 3 };
@@ -370,8 +369,11 @@ test_ingest_many_epochs_one_dispatch(void)
 
   const size_t epoch_bytes =
     chunks_per_epoch * chunk_stride * bytes_per_element;
-  const size_t src_bytes = n_epochs * epoch_elements * bytes_per_element;
-  const size_t pool_bytes = n_epochs * epoch_bytes;
+  const uint64_t src_elements = n_epochs * epoch_elements;
+  const size_t src_bytes = src_elements * bytes_per_element;
+  // The dispatch runs past its first epoch by however far first_element sits
+  // into it, so allow one more region than the epochs it fully covers.
+  const size_t pool_bytes = (n_epochs + 1) * epoch_bytes;
 
   struct staging_state stage = { 0 };
   struct gpu_ordering ord = { 0 };
@@ -406,7 +408,7 @@ test_ingest_many_epochs_one_dispatch(void)
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
-  for (uint64_t i = 0; i < n_epochs * epoch_elements; ++i)
+  for (uint64_t i = 0; i < src_elements; ++i)
     h_src[i] = (uint16_t)((i + 1) & 0xFFFF);
 
   memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
@@ -424,7 +426,7 @@ test_ingest_many_epochs_one_dispatch(void)
                                     .epoch_bytes = epoch_bytes,
                                     .epoch_elements = epoch_elements,
                                   },
-                                  0,
+                                  first_element,
                                   bytes_per_element,
                                   h2d,
                                   compute) == 0);
@@ -438,22 +440,22 @@ test_ingest_many_epochs_one_dispatch(void)
   CU(Fail, cuMemcpyDtoH(h_pool, d_pool, pool_bytes));
 
   {
+    const uint64_t first_epoch = first_element / epoch_elements;
     int errors = 0;
-    for (uint32_t ep = 0; ep < n_epochs; ++ep) {
-      const uint64_t base = ep * epoch_bytes / bytes_per_element;
-      for (uint64_t i = 0; i < epoch_elements; ++i) {
-        uint64_t off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
-        uint16_t src_val = h_src[ep * epoch_elements + i];
-        uint16_t dst_val = ((uint16_t*)h_pool)[base + off];
-        if (dst_val != src_val) {
-          if (errors < 5)
-            log_error("  epoch %u elem %lu: expected %u, got %u",
-                      ep,
-                      (unsigned long)i,
-                      src_val,
-                      dst_val);
-          errors++;
-        }
+    for (uint64_t i = 0; i < src_elements; ++i) {
+      const uint64_t element = first_element + i;
+      const uint64_t region = element / epoch_elements - first_epoch;
+      const uint64_t base = region * epoch_bytes / bytes_per_element;
+      const uint64_t off = ravel(
+        lifted_rank, lifted_shape, lifted_strides, element % epoch_elements);
+      uint16_t dst_val = ((uint16_t*)h_pool)[base + off];
+      if (dst_val != h_src[i]) {
+        if (errors < 5)
+          log_error("  element %lu: expected %u, got %u",
+                    (unsigned long)element,
+                    h_src[i],
+                    dst_val);
+        errors++;
       }
     }
     if (errors > 0) {
@@ -476,6 +478,22 @@ Fail:
 
   log_info("  %s", ok ? "PASS" : "FAIL");
   return ok ? 0 : 1;
+}
+
+static int
+test_ingest_many_epochs_one_dispatch(void)
+{
+  log_info("=== test_ingest_many_epochs_one_dispatch ===");
+  return run_many_epochs_one_dispatch(0);
+}
+
+// Starting one element in leaves every epoch after the first at an odd element
+// offset, which the scatter's coalesced load cannot be given.
+static int
+test_ingest_many_epochs_from_mid_epoch(void)
+{
+  log_info("=== test_ingest_many_epochs_from_mid_epoch ===");
+  return run_many_epochs_one_dispatch(1);
 }
 
 // Multiscale ingest: verify data arrives in linear buffer.
@@ -548,4 +566,6 @@ RUN_GPU_TESTS({ "ingest_single_epoch", test_ingest_single_epoch },
               { "ingest_incremental", test_ingest_incremental },
               { "ingest_many_epochs_one_dispatch",
                 test_ingest_many_epochs_one_dispatch },
+              { "ingest_many_epochs_from_mid_epoch",
+                test_ingest_many_epochs_from_mid_epoch },
               { "ingest_multiscale", test_ingest_multiscale }, )
