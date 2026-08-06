@@ -38,11 +38,12 @@ make_src(size_t count)
 
 // --- Test cases ---
 
-// 1. Mid-batch state verification: 1 epoch into a K=2 batch.
+// 1. One epoch into a K=2 batch stays in staging: dispatch waits for the
+// staging buffer to fill, and here that takes the whole batch (#173).
 static int
-test_batch_counter_one_epoch(void)
+test_batch_one_epoch_waits_for_buffer(void)
 {
-  log_info("=== test_batch_counter_one_epoch ===");
+  log_info("=== test_batch_one_epoch_waits_for_buffer ===");
 
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -63,21 +64,23 @@ test_batch_counter_one_epoch(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  // Verify state: mid-batch
+  // Verify state: nothing dispatched, so no epoch counted into the batch
   {
     struct tile_stream_status st = tile_stream_gpu_status(s);
-    CHECK(Fail2, st.batch_accumulated == 1);
+    CHECK(Fail2, st.batch_accumulated == 0);
     CHECK(Fail2, st.pool_current == 0);
     CHECK(Fail2, st.flush_pending == 0);
   }
+  CHECK(Fail2, tile_stream_gpu_cursor(s) == 48);
 
   // Sink should not have been touched yet
   CHECK(Fail2, css.open_count == 0);
   CHECK(Fail2, css.finalize_count == 0);
 
-  // Clean up via flush
+  // Flush is what gets the staged epoch to the device
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
+  CHECK(Fail2, css.finalize_count >= 1);
 
   free(src);
   tile_stream_gpu_destroy(s);
@@ -226,7 +229,6 @@ test_batch_partial_flush(void)
   struct slice input = { .beg = src, .end = src + 48 };
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
-  CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 1);
 
   // Flush exercises the partial batch path (schedule_flush_accumulated)
   r = writer_flush(tile_stream_gpu_writer(s));
@@ -277,9 +279,10 @@ test_batch_3epochs_flush(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
+  // Epochs 0-1 filled the staging buffer and kicked; epoch 2 is still staged.
   {
     struct tile_stream_status st = tile_stream_gpu_status(s);
-    CHECK(Fail2, st.batch_accumulated == 1);
+    CHECK(Fail2, st.batch_accumulated == 0);
     CHECK(Fail2, st.flush_pending == 1);
   }
 
@@ -411,7 +414,8 @@ Fail0:
   return 1;
 }
 
-RUN_GPU_TESTS({ "batch_counter_one_epoch", test_batch_counter_one_epoch },
+RUN_GPU_TESTS({ "batch_one_epoch_waits_for_buffer",
+                test_batch_one_epoch_waits_for_buffer },
               { "batch_full_triggers_swap", test_batch_full_triggers_swap },
               { "batch_multi_cycle", test_batch_multi_cycle },
               { "batch_partial_flush", test_batch_partial_flush },

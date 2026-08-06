@@ -101,8 +101,9 @@ struct tile_stream_configuration
   uint32_t
     target_batch_bytes; // target uncompressed bytes per batch (default 512 MiB)
   float metadata_update_interval_s;
-  size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
-                             // when sink->pending_bytes exceeds this watermark
+  size_t backpressure_bytes; // 0 = disabled; >0 = stall after handing a
+                             // staging buffer to the device when
+                             // sink->pending_bytes exceeds this watermark
   int max_threads;           // 0 = OpenMP default
 };
 

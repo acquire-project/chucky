@@ -410,6 +410,14 @@ stream_append_body(struct stream_engine* e,
                    struct stream_context* ctx,
                    struct slice input);
 
+// Hand whatever staging holds to the device and count into the batch every
+// epoch that completes. The append cursor runs ahead of the device between
+// dispatches, so anything reading it as the position of delivered data — flush,
+// an array switch — has to call this first. Staging is engine-wide, so ctx must
+// be the array that filled it.
+struct writer_result
+stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx);
+
 // Flush the stream: partial epoch, accumulated batch, partial append
 // accumulators, finalize shards, update metadata.
 struct writer_result

@@ -151,12 +151,51 @@ Error:
   return 1;
 }
 
+// The chunk position a scatter computes repeats every epoch, so each epoch the
+// buffer covers gets its own call against its own region of the pool.
+static void
+scatter_by_epoch(const struct tile_stream_layout* layout,
+                 const struct tile_stream_layout_gpu* layout_gpu,
+                 struct scatter_destination dst,
+                 struct gpu_pool_view d_in,
+                 size_t bytes,
+                 uint64_t first_element,
+                 size_t bpe,
+                 CUstream compute)
+{
+  uint64_t element = first_element;
+  uint32_t epoch = dst.first_epoch;
+
+  for (size_t at = 0; at < bytes;) {
+    const uint64_t in_epoch = element % dst.epoch_elements;
+    const uint64_t room = (dst.epoch_elements - in_epoch) * bpe;
+    const uint64_t left = bytes - at;
+    const uint64_t n = room < left ? room : left;
+
+    transpose(gpu_pool_view_d(gpu_pool_at(
+                dst.pool, dst.slot, (size_t)epoch * dst.epoch_bytes)),
+              gpu_pool_view_d(d_in) + at,
+              n,
+              (uint8_t)bpe,
+              element,
+              layout->lifted_rank,
+              layout_gpu->d_lifted_shape,
+              layout_gpu->d_lifted_strides,
+              compute);
+
+    at += (size_t)n;
+    element += n / bpe;
+    if (element % dst.epoch_elements == 0)
+      epoch++;
+  }
+}
+
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
                         const struct tile_stream_layout_gpu* layout_gpu,
-                        struct gpu_pool_view pool_epoch,
-                        uint64_t* cursor,
+                        struct scatter_destination dst,
+                        uint64_t first_element,
                         size_t bpe,
                         CUstream h2d,
                         CUstream compute)
@@ -181,19 +220,17 @@ ingest_dispatch_scatter(struct staging_state* stage,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
-  transpose(gpu_pool_view_d(pool_epoch),
-            gpu_pool_view_d(d_in),
-            stage->bytes_written,
-            (uint8_t)bpe,
-            *cursor,
-            layout->lifted_rank,
-            layout_gpu->d_lifted_shape,
-            layout_gpu->d_lifted_strides,
-            compute);
+  scatter_by_epoch(layout,
+                   layout_gpu,
+                   dst,
+                   d_in,
+                   ss->dispatched_bytes,
+                   first_element,
+                   bpe,
+                   compute);
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
-  *cursor += elements;
   stage->current ^= 1;
   return 0;
 
@@ -205,7 +242,7 @@ int
 ingest_dispatch_multiscale(struct staging_state* stage,
                            CUdeviceptr d_linear,
                            uint64_t epoch_elements,
-                           uint64_t* cursor,
+                           uint64_t first_element,
                            size_t bpe,
                            CUstream h2d,
                            CUstream compute)
@@ -231,7 +268,7 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
   {
-    uint64_t epoch_offset = (*cursor % epoch_elements) * bpe;
+    uint64_t epoch_offset = (first_element % epoch_elements) * bpe;
     CU(Error,
        cuMemcpyDtoDAsync(d_linear + epoch_offset,
                          gpu_pool_view_d(d_in),
@@ -241,7 +278,6 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
-  *cursor += elements;
   stage->current ^= 1;
   return 0;
 

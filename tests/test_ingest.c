@@ -35,6 +35,17 @@ destroy_layout_gpu(struct tile_stream_layout_gpu* gpu)
   cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
 }
 
+// The scatter takes its destination as pool slots so it can step from one
+// epoch's region to the next; these tests own the memory outright.
+static void
+bind_chunk_pool(struct gpu_pool* pool,
+                struct gpu_ordering* ord,
+                CUdeviceptr d_pool)
+{
+  gpu_pool_init(pool, ord, GPU_EDGE_COUNT, GPU_EDGE_COUNT);
+  gpu_pool_bind(pool, 0, (void*)(uintptr_t)d_pool);
+}
+
 // --- Tests ---
 
 // Single full-epoch ingest: write all epoch elements into staging, dispatch
@@ -114,18 +125,21 @@ test_ingest_single_epoch(void)
   stage.bytes_written = src_bytes;
 
   {
-    uint64_t cursor = 0;
+    struct gpu_pool chunks;
+    bind_chunk_pool(&chunks, &ord, d_pool);
     CHECK(Fail,
-          ingest_dispatch_scatter(
-            &stage,
-            &layout,
-            &layout_gpu,
-            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
-            &cursor,
-            bytes_per_element,
-            h2d,
-            compute) == 0);
-    CHECK(Fail, cursor == epoch_elements);
+          ingest_dispatch_scatter(&stage,
+                                  &layout,
+                                  &layout_gpu,
+                                  (struct scatter_destination){
+                                    .pool = &chunks,
+                                    .epoch_bytes = pool_bytes,
+                                    .epoch_elements = epoch_elements,
+                                  },
+                                  0,
+                                  bytes_per_element,
+                                  h2d,
+                                  compute) == 0);
   }
 
   CU(Fail, cuStreamSynchronize(compute));
@@ -242,21 +256,25 @@ test_ingest_incremental(void)
     h_src[i] = (uint16_t)(i & 0xFFFF);
 
   {
-    uint64_t cursor = 0;
+    struct gpu_pool chunks;
+    bind_chunk_pool(&chunks, &ord, d_pool);
+    const struct scatter_destination dst = {
+      .pool = &chunks,
+      .epoch_bytes = pool_bytes,
+      .epoch_elements = epoch_elements,
+    };
 
     memcpy(gpu_pool_at(&stage.h_pool, stage.current, 0).p, h_src, half);
     stage.bytes_written = half;
     CHECK(Fail,
-          ingest_dispatch_scatter(
-            &stage,
-            &layout,
-            &layout_gpu,
-            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
-            &cursor,
-            bytes_per_element,
-            h2d,
-            compute) == 0);
-    CHECK(Fail, cursor == epoch_elements / 2);
+          ingest_dispatch_scatter(&stage,
+                                  &layout,
+                                  &layout_gpu,
+                                  dst,
+                                  0,
+                                  bytes_per_element,
+                                  h2d,
+                                  compute) == 0);
 
     struct gpu_pool_view h_in;
     CHECK(Fail,
@@ -265,16 +283,14 @@ test_ingest_incremental(void)
     memcpy(h_in.p, (uint8_t*)h_src + half, half);
     stage.bytes_written = half;
     CHECK(Fail,
-          ingest_dispatch_scatter(
-            &stage,
-            &layout,
-            &layout_gpu,
-            (struct gpu_pool_view){ .p = (void*)(uintptr_t)d_pool },
-            &cursor,
-            bytes_per_element,
-            h2d,
-            compute) == 0);
-    CHECK(Fail, cursor == epoch_elements);
+          ingest_dispatch_scatter(&stage,
+                                  &layout,
+                                  &layout_gpu,
+                                  dst,
+                                  epoch_elements / 2,
+                                  bytes_per_element,
+                                  h2d,
+                                  compute) == 0);
   }
 
   CU(Fail, cuStreamSynchronize(compute));
@@ -298,6 +314,146 @@ test_ingest_incremental(void)
                     src_val,
                     dst_val);
         errors++;
+      }
+    }
+    if (errors > 0) {
+      log_error("  %d mismatches", errors);
+      goto Fail;
+    }
+  }
+
+  ok = 1;
+
+Fail:
+  free(h_src);
+  free(h_pool);
+  ingest_destroy(&stage);
+  gpu_ordering_destroy(&ord);
+  destroy_layout_gpu(&layout_gpu);
+  cu_mem_free(d_pool);
+  cu_stream_destroy(h2d);
+  cu_stream_destroy(compute);
+
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
+// One dispatch covering several epochs: each epoch's data must land in its own
+// region of the pool (#173).
+static int
+test_ingest_many_epochs_one_dispatch(void)
+{
+  log_info("=== test_ingest_many_epochs_one_dispatch ===");
+
+  const int rank = 3;
+  const uint64_t dim_sizes[] = { 4, 4, 6 };
+  const uint64_t chunk_sizes[] = { 2, 2, 3 };
+  const size_t bytes_per_element = 2;
+  const uint32_t n_epochs = 3;
+
+  uint8_t lifted_rank;
+  uint64_t lifted_shape[MAX_RANK];
+  int64_t lifted_strides[MAX_RANK];
+  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+
+  build_lifted_layout(rank,
+                      dim_sizes,
+                      chunk_sizes,
+                      NULL,
+                      &lifted_rank,
+                      lifted_shape,
+                      lifted_strides,
+                      &chunk_elements,
+                      &chunk_stride,
+                      &chunks_per_epoch,
+                      &epoch_elements);
+
+  const size_t epoch_bytes =
+    chunks_per_epoch * chunk_stride * bytes_per_element;
+  const size_t src_bytes = n_epochs * epoch_elements * bytes_per_element;
+  const size_t pool_bytes = n_epochs * epoch_bytes;
+
+  struct staging_state stage = { 0 };
+  struct gpu_ordering ord = { 0 };
+  struct tile_stream_layout layout = { 0 };
+  struct tile_stream_layout_gpu layout_gpu = { 0 };
+  CUstream h2d = 0, compute = 0;
+  CUdeviceptr d_pool = 0;
+  void* h_pool = NULL;
+  uint16_t* h_src = NULL;
+  int ok = 0;
+
+  CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
+  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
+  CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
+
+  CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
+  CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
+
+  layout.lifted_rank = lifted_rank;
+  memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
+  memcpy(layout.lifted_strides, lifted_strides, lifted_rank * sizeof(int64_t));
+  layout.chunk_elements = chunk_elements;
+  layout.chunk_stride = chunk_stride;
+  layout.chunks_per_epoch = chunks_per_epoch;
+  layout.epoch_elements = epoch_elements;
+  CHECK(Fail,
+        upload_layout_gpu(
+          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
+
+  h_src = (uint16_t*)malloc(src_bytes);
+  CHECK(Fail, h_src);
+  for (uint64_t i = 0; i < n_epochs * epoch_elements; ++i)
+    h_src[i] = (uint16_t)((i + 1) & 0xFFFF);
+
+  memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
+  stage.bytes_written = src_bytes;
+
+  {
+    struct gpu_pool chunks;
+    bind_chunk_pool(&chunks, &ord, d_pool);
+    CHECK(Fail,
+          ingest_dispatch_scatter(&stage,
+                                  &layout,
+                                  &layout_gpu,
+                                  (struct scatter_destination){
+                                    .pool = &chunks,
+                                    .epoch_bytes = epoch_bytes,
+                                    .epoch_elements = epoch_elements,
+                                  },
+                                  0,
+                                  bytes_per_element,
+                                  h2d,
+                                  compute) == 0);
+  }
+
+  CU(Fail, cuStreamSynchronize(compute));
+  CU(Fail, cuStreamSynchronize(h2d));
+
+  h_pool = calloc(1, pool_bytes);
+  CHECK(Fail, h_pool);
+  CU(Fail, cuMemcpyDtoH(h_pool, d_pool, pool_bytes));
+
+  {
+    int errors = 0;
+    for (uint32_t ep = 0; ep < n_epochs; ++ep) {
+      const uint64_t base = ep * epoch_bytes / bytes_per_element;
+      for (uint64_t i = 0; i < epoch_elements; ++i) {
+        uint64_t off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
+        uint16_t src_val = h_src[ep * epoch_elements + i];
+        uint16_t dst_val = ((uint16_t*)h_pool)[base + off];
+        if (dst_val != src_val) {
+          if (errors < 5)
+            log_error("  epoch %u elem %lu: expected %u, got %u",
+                      ep,
+                      (unsigned long)i,
+                      src_val,
+                      dst_val);
+          errors++;
+        }
       }
     }
     if (errors > 0) {
@@ -358,18 +514,11 @@ test_ingest_multiscale(void)
   memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
   stage.bytes_written = src_bytes;
 
-  {
-    uint64_t cursor = 0;
-    CHECK(Fail,
-          ingest_dispatch_multiscale(&stage,
-                                     d_linear,
-                                     epoch_elements,
-                                     &cursor,
-                                     bytes_per_element,
-                                     h2d,
-                                     compute) == 0);
-    CHECK(Fail, cursor == epoch_elements);
-  }
+  CHECK(
+    Fail,
+    ingest_dispatch_multiscale(
+      &stage, d_linear, epoch_elements, 0, bytes_per_element, h2d, compute) ==
+      0);
 
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
@@ -397,4 +546,6 @@ Fail:
 
 RUN_GPU_TESTS({ "ingest_single_epoch", test_ingest_single_epoch },
               { "ingest_incremental", test_ingest_incremental },
+              { "ingest_many_epochs_one_dispatch",
+                test_ingest_many_epochs_one_dispatch },
               { "ingest_multiscale", test_ingest_multiscale }, )

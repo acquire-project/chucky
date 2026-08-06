@@ -139,6 +139,11 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
         0)
       return multiarray_writer_not_flushable;
 
+    // Staging is engine-wide, so the departing array's data has to reach its
+    // own pool before another array's geometry binds in.
+    if (stream_dispatch_staged(e, &departing->ctx).error)
+      return multiarray_writer_fail;
+
     // Flush departing array's accumulated batch. The drain-after-kick
     // schedule leaves no pool swap or kicked state behind, so this is safe
     // mid-switch.
@@ -219,9 +224,14 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
 
-  // Save current array's state
-  if (ms->active >= 0)
-    unbind_context(&ms->engine, &ms->arrays[ms->active]);
+  // Save current array's state. Staging is engine-wide, so this array's data
+  // has to reach its own pool before another array's flush reuses the buffer.
+  if (ms->active >= 0) {
+    struct array_descriptor_gpu* desc = &ms->arrays[ms->active];
+    if (stream_dispatch_staged(&ms->engine, &desc->ctx).error)
+      goto Error;
+    unbind_context(&ms->engine, desc);
+  }
 
   // Flush each array that has data
   for (int a = 0; a < ms->n_arrays; ++a) {

@@ -76,11 +76,8 @@ transpose_indices(CUdeviceptr d_beg,
 // Transpose data kernel - v0
 // Uses shared memory to stage data before computing output positions.
 //
-// Requirements on d_src:
-//   - Must be aligned to sizeof(uint32_t) bytes.
-//   - Must be padded to a multiple of ELEMENTS_PER_BLOCK elements so that
-//     all vectorized loads are in-bounds. Padding values are ignored (filtered
-//     on store by src_size).
+// d_src must be aligned to sizeof(T). Reads stay within [d_src, d_src +
+// src_size), rounded up to a whole uint32_t when the coalesced path is taken.
 template<typename T>
 __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
                                                          const T* d_src,
@@ -96,43 +93,46 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
 
   const int tid = threadIdx.x;
   const int block_offset = blockIdx.x * ELEMENTS_PER_BLOCK;
+  const uint64_t left = src_size - (uint64_t)block_offset;
+  const int elements =
+    left < ELEMENTS_PER_BLOCK ? (int)left : ELEMENTS_PER_BLOCK;
 
-  // Vectorized load into shared memory. For small types (< 4 bytes) we coalesce
-  // through uint32_t loads; for types >= 4 bytes we load natively.
+  // Load into shared memory. Types under 4 bytes coalesce through uint32_t
+  // loads, which a source starting partway into the input may not permit.
   if constexpr (sizeof(T) < sizeof(uint32_t)) {
     constexpr int T_PER_LOAD = sizeof(uint32_t) / sizeof(T);
-    constexpr int LOADS_PER_BLOCK = ELEMENTS_PER_BLOCK / T_PER_LOAD;
     static_assert(ELEMENTS_PER_BLOCK % T_PER_LOAD == 0);
 
-    const uint32_t* src_u32 = (const uint32_t*)(d_src + block_offset);
-    uint32_t* buf_u32 = (uint32_t*)shared_buf;
-    for (int i = tid; i < LOADS_PER_BLOCK; i += blockDim.x)
-      buf_u32[i] = src_u32[i];
+    if (((uintptr_t)d_src & (sizeof(uint32_t) - 1)) == 0) {
+      const int loads = (elements + T_PER_LOAD - 1) / T_PER_LOAD;
+      const uint32_t* src_u32 = (const uint32_t*)(d_src + block_offset);
+      uint32_t* buf_u32 = (uint32_t*)shared_buf;
+      for (int i = tid; i < loads; i += blockDim.x)
+        buf_u32[i] = src_u32[i];
+    } else {
+      const T* src = d_src + block_offset;
+      for (int i = tid; i < elements; i += blockDim.x)
+        shared_buf[i] = src[i];
+    }
   } else {
     const T* src = d_src + block_offset;
-    for (int i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x)
+    for (int i = tid; i < elements; i += blockDim.x)
       shared_buf[i] = src[i];
   }
 
   __syncthreads();
 
-  for (int i = tid; i < ELEMENTS_PER_BLOCK; i += blockDim.x) {
-    int global_idx = block_offset + i;
+  for (int i = tid; i < elements; i += blockDim.x) {
+    uint64_t out_offset = 0;
+    uint64_t rest = i_offset + block_offset + i;
 
-    if (global_idx < src_size) {
-      uint64_t input_idx = i_offset + global_idx;
-      uint64_t out_offset = 0;
-      uint64_t rest = input_idx;
-
-      for (int d = rank - 1; d >= 0; --d) {
-        const uint64_t coord = rest % shape[d];
-        rest /= shape[d];
-        out_offset += coord * strides[d];
-      }
-
-      // Store
-      d_dst[out_offset] = shared_buf[i];
+    for (int d = rank - 1; d >= 0; --d) {
+      const uint64_t coord = rest % shape[d];
+      rest /= shape[d];
+      out_offset += coord * strides[d];
     }
+
+    d_dst[out_offset] = shared_buf[i];
   }
 }
 
@@ -155,9 +155,7 @@ transpose_launch(CUdeviceptr d_dst_beg,
   const int block_size = 256;
   const int elements_per_block = (1 << 12) / (int)sizeof(T);
 
-  assert(d_src_beg %
-           (sizeof(T) < sizeof(uint32_t) ? sizeof(uint32_t) : sizeof(T)) ==
-         0);
+  assert(d_src_beg % sizeof(T) == 0);
   const int grid_size =
     (int)((src_size + elements_per_block - 1) / elements_per_block);
 
