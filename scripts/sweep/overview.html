@@ -129,6 +129,12 @@ h2 { font-size: 1.02em; margin: 0; }
   background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
 }
 .filters .match-count { margin-left: auto; font-size: 0.8em; color: var(--text-secondary); }
+.filters .check {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 0.88em; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-primary); padding: 5px 8px;
+  background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+}
 
 /* Machine tiles */
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
@@ -138,7 +144,9 @@ h2 { font-size: 1.02em; margin: 0; }
 }
 .tile-head { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 0.92em; }
 .tile-key { width: 10px; height: 10px; border-radius: 2px; flex: none; }
-.tile-sub { color: var(--text-muted); font-size: 0.74em; margin-top: 2px; min-height: 2.2em; }
+.tile-sub { color: var(--text-secondary); font-size: 0.78em; margin-top: 3px; }
+.tile-specs { color: var(--text-muted); font-size: 0.72em; margin-top: 2px; min-height: 2.1em; }
+.tile-warn { color: var(--critical); font-size: 0.72em; margin-top: 3px; }
 .tile-value { font-size: 1.9em; font-weight: 650; line-height: 1.1; margin-top: 8px; }
 .tile-value .unit { font-size: 0.45em; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
 .tile-blank { font-size: 0.85em; color: var(--text-muted); margin-top: 12px; }
@@ -236,6 +244,10 @@ code { font-size: 0.92em; color: var(--text-secondary); }
       <label for="sink-sel">Sink</label>
       <select id="sink-sel"></select>
     </div>
+    <div>
+      <label for="group-toggle">Machines</label>
+      <label class="check"><input type="checkbox" id="group-toggle" checked> Group</label>
+    </div>
     <span class="match-count" id="match-count"></span>
   </section>
 
@@ -301,27 +313,45 @@ const SCENARIO_GROUPS = [
 const sweeps = DATA.sweeps.slice();
 sweeps.forEach(s => { s.dateObj = new Date(s.day + "T00:00:00"); });
 
-const machineOrder = (() => {
+/**
+ * One entry per machine. Grouped, that is what bench/machines.toml calls the
+ * same machine; split, it is each sweep name on its own — the way to check that
+ * two systems on one box, or two nodes from one cluster pool, really do match.
+ */
+function buildMachines(grouped) {
   const seen = new Map();
-  for (const s of sweeps) {
-    if (!seen.has(s.machine)) seen.set(s.machine, {name: s.machine, first: s.day, last: s.day, gpu: s.gpu, hosts: [], sweeps: []});
-    const m = seen.get(s.machine);
-    m.last = s.day;
-    m.gpu = m.gpu || s.gpu;
-    if (s.host && !m.hosts.includes(s.host)) m.hosts.push(s.host);
-    m.sweeps.push(s);
+  for (const sweep of sweeps) {
+    const name = grouped ? sweep.machine : sweep.member;
+    if (!seen.has(name)) {
+      seen.set(name, {
+        name,
+        description: sweep.description || "",
+        specs: sweep.specs || {},
+        registered: sweep.registered,
+        first: sweep.day, last: sweep.day,
+        gpus: [], hosts: [], members: [], sweeps: [],
+      });
+    }
+    const machine = seen.get(name);
+    machine.last = sweep.day;
+    machine.sweeps.push(sweep);
+    for (const [key, value] of [["gpus", sweep.gpu], ["hosts", sweep.host], ["members", sweep.member]]) {
+      if (value && !machine[key].includes(value)) machine[key].push(value);
+    }
   }
-  return [...seen.values()];
-})();
 
-// Colour follows the machine, assigned in order of first appearance so an added
-// machine never repaints the ones already on screen. Past the palette's eight
-// slots the extra machines stay in the tables but leave the chart.
-machineOrder.forEach((m, i) => {
-  m.color = i < MAX_SERIES ? SERIES_VARS[i] : "var(--series-none)";
-  m.plotted = i < MAX_SERIES;
-});
-const machineByName = new Map(machineOrder.map(m => [m.name, m]));
+  // Colour follows the machine, assigned in order of first appearance so an
+  // added machine never repaints the ones already on screen. Past the palette's
+  // eight slots the extra machines stay in the tables but leave the chart.
+  const machines = [...seen.values()];
+  machines.forEach((machine, i) => {
+    machine.color = i < MAX_SERIES ? SERIES_VARS[i] : "var(--series-none)";
+    machine.plotted = i < MAX_SERIES;
+  });
+  return machines;
+}
+
+let machineOrder = [];
 
 function metricValue(run, key) {
   const parts = key.split(".");
@@ -357,7 +387,8 @@ const ALL_SINKS = distinct("sink").sort();
 // Selection
 // =========================================================================
 
-const state = {metric: METRICS[0].key, scenario: null, codec: null, backend: null, sink: null};
+const state = {metric: METRICS[0].key, scenario: null, codec: null, backend: null, sink: null,
+               grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
 
@@ -607,12 +638,16 @@ fillSelect(backendSel, ALL_BACKENDS);
 fillSelect(sinkSel, ALL_SINKS);
 
 function syncControls() {
+  groupToggle.checked = state.grouped;
   metricSel.value = state.metric;
   scenarioSel.value = state.scenario;
   codecSel.value = state.codec;
   backendSel.value = state.backend;
   sinkSel.value = state.sink;
 }
+
+const groupToggle = document.getElementById("group-toggle");
+groupToggle.addEventListener("change", () => { state.grouped = groupToggle.checked; render(); });
 
 metricSel.addEventListener("change", () => { state.metric = metricSel.value; render(); });
 scenarioSel.addEventListener("change", () => { state.scenario = scenarioSel.value; render(); });
@@ -697,10 +732,18 @@ function renderTiles() {
     head.appendChild(el("span", null, machine.name));
     tile.appendChild(head);
 
+    const specs = Object.entries(machine.specs).map(([key, value]) => `${key}: ${value}`);
+    const onlyHost = machine.hosts.length === 1 ? machine.hosts[0] : "";
     const hosts = machine.hosts.length > 1
       ? `${machine.hosts.length} hosts`
-      : (machine.hosts[0] || "");
-    tile.appendChild(el("div", "tile-sub", [machine.gpu, hosts].filter(Boolean).join(" · ")));
+      : (onlyHost === machine.name || machine.members.includes(onlyHost) ? "" : onlyHost);
+    const sub = el("div", "tile-sub", machine.description || machine.gpus[0] || "");
+    if (machine.hosts.length > 1) sub.title = machine.hosts.join(", ");
+    tile.appendChild(sub);
+    tile.appendChild(el("div", "tile-specs", [...specs, hosts].filter(Boolean).join(" · ")));
+    if (machine.gpus.length > 1) {
+      tile.appendChild(el("div", "tile-warn", `${machine.gpus.length} GPU models here: ${machine.gpus.join(", ")}`));
+    }
 
     if (latest) {
       const value = el("div", "tile-value");
@@ -719,6 +762,10 @@ function renderTiles() {
       delta.appendChild(document.createTextNode(
         cls === "flat" ? ` vs ${previous.sweep.commit} — no real change`
                        : ` ${CHANGE_WORD[cls]} than ${previous.sweep.commit}`));
+      if (previous.sweep.member !== latest.sweep.member) {
+        delta.appendChild(el("div", "tile-warn",
+          `compares ${previous.sweep.member} against ${latest.sweep.member}`));
+      }
     } else if (latest) {
       delta.appendChild(document.createTextNode("first sweep with this configuration"));
     }
@@ -733,13 +780,23 @@ function renderTiles() {
     link.href = explorerLink(latestSweep);
     link.title = `Open ${latestSweep.filename} in the sweep explorer`;
     foot.appendChild(link);
-    foot.appendChild(document.createTextNode(` on ${fmtDay(latestSweep.day)}`));
+    foot.appendChild(document.createTextNode(
+      machine.members.length > 1
+        ? ` on ${fmtDay(latestSweep.day)}, ${latestSweep.member}`
+        : ` on ${fmtDay(latestSweep.day)}`));
     const fails = failureCount(latestSweep);
     if (fails) {
       foot.appendChild(document.createTextNode(" · "));
       foot.appendChild(el("span", "fails", `${fails} run${fails === 1 ? "" : "s"} did not pass`));
     }
     tile.appendChild(foot);
+
+    if (machine.members.length > 1) {
+      tile.appendChild(el("div", "tile-foot", `covers ${machine.members.join(", ")}`));
+    }
+    if (!machine.registered) {
+      tile.appendChild(el("div", "tile-foot tile-warn", "not in machines.toml"));
+    }
     host.appendChild(tile);
   }
 }
@@ -881,8 +938,10 @@ function renderTrend() {
       showTooltip(event, node => {
         node.appendChild(el("div", "tt-head", d3.timeFormat("%Y-%m-%d")(nearest)));
         for (const {machine, point} of rows) {
-          tooltipRow(node, machine.color, `${machine.name} · ${point.sweep.commit}`,
-            `${fmt(point.value)} ${meta.unit}`);
+          const who = machine.members.length > 1
+            ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
+            : `${machine.name} · ${point.sweep.commit}`;
+          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`);
           node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
         }
         node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));
@@ -1085,6 +1144,15 @@ function renderMovers() {
       `Showing ${shown.length} of ${all.length} shared configurations, taking turns between machines; ` +
       `${realCount} moved by ${REAL_CHANGE_PCT}% or more. The rest are in the sweep explorer.`));
   }
+
+  const crossing = [...new Set(shown
+    .filter(row => row.previousSweep.member !== row.latestSweep.member)
+    .map(row => `${row.previousSweep.member} → ${row.latestSweep.member}`))];
+  if (crossing.length) {
+    host.appendChild(el("p", "note",
+      `Some rows compare across the systems grouped into one machine (${crossing.join(", ")}). ` +
+      "Untick Group to keep them apart."));
+  }
 }
 
 // =========================================================================
@@ -1147,10 +1215,15 @@ function renderLede() {
     `${sweeps.length} sweeps · ${machineOrder.length} machines · ${span}`;
 
   const versions = [...new Set(sweeps.map(s => s.migrated_from ?? s.version))].sort();
+  const strangers = [...new Set(sweeps.filter(s => !s.registered).map(s => s.member))];
   const notes = [
+    "Machines are grouped by bench/machines.toml, which is where a box running two systems, or a pool of cluster nodes, is declared to be one machine. Untick Group to see the sweep names underneath.",
     "Each plotted value is the best run of a sweep for the chosen scenario and configuration; the remaining dimensions (data type, chunk size, fill) are searched, not averaged.",
     "Only passing runs count. A missing point means that sweep ran nothing matching the filter.",
   ];
+  if (strangers.length) {
+    notes.push(`Not described in bench/machines.toml: ${strangers.join(", ")}. Add an entry there to name and group them.`);
+  }
   if (versions.length > 1) {
     notes.push(`Sweeps here were written at result-schema versions ${versions.join(", ")}; a metric whose meaning changed between them is dropped from comparisons rather than converted.`);
   }
@@ -1172,6 +1245,8 @@ function renderMatchCount() {
 }
 
 function render() {
+  machineOrder = buildMachines(state.grouped);
+  renderLede();
   renderMatchCount();
   renderTiles();
   renderTrend();
@@ -1182,7 +1257,6 @@ function render() {
 
 pickDefaults();
 syncControls();
-renderLede();
 render();
 
 let resizeTimer = null;

@@ -29,7 +29,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from models import migrate_results, validate_results
-from summary import build_summary, machine_identity
+from summary import build_summary, find_registry, load_registry, machine_identity
 
 TEMPLATE_DIR = Path(__file__).parent
 EXPLORER_TEMPLATE = TEMPLATE_DIR / "template.html"
@@ -96,6 +96,8 @@ def main():
                     help="Directory to glob for *.json result files")
     ap.add_argument("-o", "--output", type=Path, default=Path("build/html"),
                     help="Output directory (a path ending in .html names the overview page)")
+    ap.add_argument("--machines", type=Path, default=None,
+                    help="Machine registry TOML (default: machines.toml beside the results)")
     args = ap.parse_args()
 
     paths: list[Path] = list(args.input or [])
@@ -110,12 +112,21 @@ def main():
     total_runs = sum(len(data.get("runs", [])) for _, data in loaded)
     print(f"Loaded {len(loaded)} file(s), {total_runs} runs", file=sys.stderr)
 
+    registry_path = args.machines or find_registry(args.results_dir, paths)
+    if args.machines and not args.machines.is_file():
+        raise SystemExit(f"No machine registry at {args.machines}")
+    registry = load_registry(registry_path)
+    if registry_path:
+        print(f"Machine registry: {registry_path} ({len(registry)} machines)", file=sys.stderr)
+    else:
+        print("No machine registry found; each sweep name is its own machine", file=sys.stderr)
+
     if args.output.suffix == ".html":
         out_dir, overview_name = args.output.parent, args.output.name
     else:
         out_dir, overview_name = args.output, "index.html"
 
-    write_page(OVERVIEW_TEMPLATE, build_summary(loaded), out_dir / overview_name)
+    write_page(OVERVIEW_TEMPLATE, build_summary(loaded, registry), out_dir / overview_name)
     write_page(EXPLORER_TEMPLATE, explorer_payload(loaded), out_dir / "explore.html")
 
 

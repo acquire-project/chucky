@@ -12,6 +12,9 @@ uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
 python3 -m http.server -d _site      # or just open _site/index.html
 ```
 
+`machines.toml` is picked up from beside the results (or one level up); point at
+another with `--machines`.
+
 Both pages embed their data at generation time, so they work straight off the
 filesystem and there is nothing to fetch at load. Re-run the command after
 adding or editing a results file.
@@ -25,15 +28,41 @@ The overview links into the explorer (`explore.html?file=<results file name>`);
 clicking a point on the trend chart or a commit on a machine card lands on that
 sweep.
 
-## One sweep is one machine at one commit
+## Which sweeps are the same machine
 
-The overview groups sweeps by **machine name taken from the file name**, which
-`sweep.py` writes as `<machine>-<commit>-<yyyymmdd>.json`. The name is the one a
-person chose, so it stays stable when a cluster hands out a different hostname
-for every allocation — `reef-l40` covers whichever `cw-us-e4a2-l40-*` node ran
-it. The hostname and GPU from the file's `machine` block are shown on the
-machine card. If a file name does not follow the pattern, the hostname is used
-instead.
+Every sweep names itself after its file, `<name>-<commit>-<yyyymmdd>.json`, which
+`sweep.py` writes from `--machine` (or `CHUCKY_MACHINE`), falling back to the
+hostname. Pass `--machine` where the hostname is not stable:
+
+```sh
+uv run scripts/sweep/sweep.py --all --machine reef-l40
+```
+
+That name alone is not enough to say what is the same machine — one box can boot
+two systems, and a cluster hands out a different node every allocation. So
+**`bench/machines.toml`** holds the grouping, matching on the sweep name or the
+hostname inside the file, both with wildcards:
+
+```toml
+[[machine]]
+name = "livescreen"
+description = "RTX PRO 6000 workstation, two systems on one box"
+names = ["LiveScreen-1", "livescreen-kubuntu"]
+[machine.specs]
+gpu = "RTX PRO 6000 Blackwell Workstation Edition"
+storage = "local nvme"
+```
+
+`specs` is free-form — put whatever decides whether two runs are comparable,
+since storage and network usually matter as much as the GPU. It is shown on the
+machine card. A sweep matching no entry keeps its own name and the page says it
+is undescribed, so a new machine gets an entry deliberately.
+
+Grouping is a view, not a fact baked into the data: untick **Group** on the
+overview to split a machine back into the sweep names underneath and check that
+its members really do agree. Where a comparison crosses two members — last
+sweep on one system, previous on the other — the page says so rather than
+quietly presenting it as one machine changing.
 
 Colours are assigned per machine in order of first appearance, so adding a
 machine never repaints the ones already on screen. The palette holds eight;

@@ -411,20 +411,25 @@ def status_style(status: str) -> str:
               help="S3 endpoint URL.")
 @click.option("--tmpdir", "tmpdir_root", type=click.Path(path_type=Path), default=None,
               help="Parent directory for fs-sink scratch dirs (default: system temp).")
+@click.option("--machine", "machine_name", default=None, envvar="CHUCKY_MACHINE",
+              help="Name this machine goes by in the report (default: hostname). "
+                   "Give a stable name where the hostname changes between runs, as "
+                   "it does on a cluster; group names live in bench/machines.toml.")
 def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
-         s3_bucket, s3_region, s3_endpoint, tmpdir_root):
+         s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name):
     """Benchmark sweep runner for chucky."""
     commit = git_commit()
     hostname = platform.node()
+    machine_name = machine_name or hostname
 
     if output is None:
         results_dir = Path("bench/results")
-        existing_files = sorted(results_dir.glob(f"{hostname}-{commit}-*.json"))
+        existing_files = sorted(results_dir.glob(f"{machine_name}-{commit}-*.json"))
         if existing_files:
             output = existing_files[-1]
         else:
             date_str = time.strftime("%Y%m%d")
-            output = results_dir / f"{hostname}-{commit}-{date_str}.json"
+            output = results_dir / f"{machine_name}-{commit}-{date_str}.json"
 
     # Resolve tiers
     if run_all:
@@ -494,6 +499,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         data = {
             "version": CURRENT_VERSION,
             "machine": {
+                "name": machine_name,
                 "hostname": platform.node(),
                 "gpu": gpu_name(),
                 "commit": commit,

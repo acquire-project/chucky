@@ -1,0 +1,64 @@
+# Which sweep files belong to the same machine, and what to call it.
+#
+# A sweep is named after its results file, `<name>-<commit>-<date>.json`, which
+# sweep.py writes using --machine (or the hostname when that is not given). That
+# is not enough on its own: one box can boot two systems, and a cluster hands out
+# a different node every allocation. This file says which of those names are the
+# same machine.
+#
+# Each entry matches on the sweep name or on the hostname recorded inside the
+# file. Both accept shell-style wildcards and ignore case, and the first entry
+# that matches wins. A sweep matching nothing keeps its own name and the report
+# points it out, so a new machine gets described here on purpose rather than
+# quietly appearing as a stranger.
+#
+# `specs` is free-form: put whatever decides whether two runs are comparable.
+# Storage and network usually matter as much as the GPU.
+
+[[machine]]
+name = "livescreen"
+description = "RTX PRO 6000 workstation, two systems on one box"
+names = ["LiveScreen-1", "livescreen-kubuntu"]
+[machine.specs]
+gpu = "RTX PRO 6000 Blackwell Workstation Edition"
+
+[[machine]]
+name = "reef-l40"
+description = "CoreWeave L40 node, whichever one the scheduler hands out"
+names = ["reef-l40"]
+hosts = ["cw-us-e4a2-l40-*"]
+[machine.specs]
+gpu = "L40"
+storage = "shared /mnt/main0"
+
+[[machine]]
+name = "reef-h100"
+description = "CoreWeave H100 node, whichever one the scheduler hands out"
+names = ["reef-h100"]
+hosts = ["cw-us-e4a1-h100-*"]
+[machine.specs]
+gpu = "H100"
+storage = "shared /mnt/main0"
+
+[[machine]]
+name = "reef-h200"
+description = "CoreWeave H200 node, whichever one the scheduler hands out"
+names = ["reef-h200"]
+hosts = ["cw-us-e4a1-h200-*"]
+[machine.specs]
+gpu = "H200"
+storage = "shared /mnt/main0"
+
+[[machine]]
+name = "auk"
+description = "Laptop"
+names = ["auk"]
+[machine.specs]
+gpu = "GeForce RTX 5070 Laptop GPU"
+
+[[machine]]
+name = "oreb"
+description = "Desktop"
+names = ["oreb"]
+[machine.specs]
+gpu = "GeForce RTX 5080"
