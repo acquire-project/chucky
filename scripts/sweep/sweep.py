@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -421,6 +422,15 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
     commit = git_commit()
     hostname = platform.node()
     machine_name = machine_name or hostname
+
+    # The name becomes a file name and a glob pattern, so keep it to characters
+    # that mean the same thing in both.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", machine_name):
+        raise click.BadParameter(
+            f"machine name {machine_name!r} may only contain letters, digits, dot, "
+            "underscore, and dash",
+            param_hint="--machine",
+        )
 
     if output is None:
         results_dir = Path("bench/results")

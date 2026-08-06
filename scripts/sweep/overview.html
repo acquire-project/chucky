@@ -335,12 +335,17 @@ function buildMachines(grouped) {
     const machine = seen.get(name);
     machine.last = sweep.day;
     machine.sweeps.push(sweep);
+    if (sweep.registered && !machine.registered) {
+      machine.registered = true;
+      machine.description = sweep.description || "";
+      machine.specs = sweep.specs || {};
+    }
     for (const [key, value] of [["gpus", sweep.gpu], ["hosts", sweep.host], ["members", sweep.member]]) {
       if (value && !machine[key].includes(value)) machine[key].push(value);
     }
   }
 
-  // Colour follows the machine, assigned in order of first appearance so an
+  // Color follows the machine, assigned in order of first appearance so an
   // added machine never repaints the ones already on screen. Past the palette's
   // eight slots the extra machines stay in the tables but leave the chart.
   const machines = [...seen.values()];
@@ -399,7 +404,7 @@ function pickDefaults() {
     const here = new Set();
     for (const r of s.runs) {
       if (r.status !== "pass" || metricValue(r, state.metric) == null) continue;
-      here.add([r.scenario, r.codec, r.backend, r.sink].join(" "));
+      here.add([r.scenario, r.codec, r.backend, r.sink].join("|"));
     }
     for (const combo of here) counts.set(combo, (counts.get(combo) || 0) + 1);
   }
@@ -408,7 +413,7 @@ function pickDefaults() {
     if (count > bestCount) { best = combo; bestCount = count; }
   }
   const [scenario, codec, backend, sink] = best
-    ? best.split(" ")
+    ? best.split("|")
     : [ALL_SCENARIOS[0], ALL_CODECS[0], ALL_BACKENDS[0], ALL_SINKS[0]];
   state.scenario = scenario; state.codec = codec; state.backend = backend; state.sink = sink;
 }
@@ -661,8 +666,18 @@ sinkSel.addEventListener("change", () => { state.sink = sinkSel.value; render();
 
 const themeToggle = document.getElementById("theme-toggle");
 
+// Reading storage throws in some file:// and private-browsing contexts, and this
+// runs before the page is drawn, so a theme preference must never be fatal.
+function storedTheme() {
+  try {
+    return localStorage.getItem("bench-theme");
+  } catch {
+    return null;
+  }
+}
+
 function currentTheme() {
-  const stored = localStorage.getItem("bench-theme");
+  const stored = storedTheme();
   if (stored === "light" || stored === "dark") return stored;
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -674,7 +689,11 @@ function applyTheme(theme) {
 
 themeToggle.addEventListener("click", () => {
   const next = currentTheme() === "dark" ? "light" : "dark";
-  localStorage.setItem("bench-theme", next);
+  try {
+    localStorage.setItem("bench-theme", next);
+  } catch {
+    // The choice still applies to this page; it just will not be remembered.
+  }
   applyTheme(next);
   render();
 });
@@ -959,7 +978,7 @@ function renderTrend() {
 
   const hidden = machineOrder.filter(m => !m.plotted);
   const noteParts = [];
-  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-colour palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
+  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
   if (meta.note) noteParts.push(`Reading this metric: ${meta.note}.`);
   document.getElementById("trend-note").textContent = noteParts.join(" ");
 }

@@ -65,7 +65,7 @@ its members really do agree. Where a comparison crosses two members — last
 sweep on one system, previous on the other — the page says so rather than
 quietly presenting it as one machine changing.
 
-Colours are assigned per machine in order of first appearance, so adding a
+Colors are assigned per machine in order of first appearance, so adding a
 machine never repaints the ones already on screen. The palette holds eight;
 machines past that stay in the tables and drop out of the chart, which the page
 says out loud.

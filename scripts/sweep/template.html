@@ -6,7 +6,12 @@
 <title>Sweep explorer</title>
 <script>
 document.documentElement.setAttribute("data-theme", (() => {
-  const stored = localStorage.getItem("bench-theme");
+  let stored = null;
+  try {
+    stored = localStorage.getItem("bench-theme");
+  } catch {
+    stored = null;
+  }
   if (stored === "light" || stored === "dark") return stored;
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 })());
@@ -1218,7 +1223,11 @@ function currentTheme() { return document.documentElement.getAttribute("data-the
 function paintToggle() { themeToggle.textContent = currentTheme() === "dark" ? "Light" : "Dark"; }
 themeToggle.addEventListener("click", () => {
   const next = currentTheme() === "dark" ? "light" : "dark";
-  localStorage.setItem("bench-theme", next);
+  try {
+    localStorage.setItem("bench-theme", next);
+  } catch {
+    // Applies to this page; it just will not be remembered.
+  }
   document.documentElement.setAttribute("data-theme", next);
   paintToggle();
   render();

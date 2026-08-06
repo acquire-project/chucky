@@ -112,9 +112,9 @@ def main():
     total_runs = sum(len(data.get("runs", [])) for _, data in loaded)
     print(f"Loaded {len(loaded)} file(s), {total_runs} runs", file=sys.stderr)
 
-    registry_path = args.machines or find_registry(args.results_dir, paths)
     if args.machines and not args.machines.is_file():
         raise SystemExit(f"No machine registry at {args.machines}")
+    registry_path = args.machines or find_registry(args.results_dir, paths)
     registry = load_registry(registry_path)
     if registry_path:
         print(f"Machine registry: {registry_path} ({len(registry)} machines)", file=sys.stderr)
