@@ -16,8 +16,6 @@ function(add_src_lib TARGET)
     set_property(GLOBAL APPEND PROPERTY CHUCKY_INTERNAL_TARGETS ${TARGET})
 endfunction()
 
-# Unix keeps the math functions in their own library; MSVC has them in the C
-# runtime and ships no m.lib, so asking for one fails the link.
 set(_math_lib $<$<NOT:$<PLATFORM_ID:Windows>>:m>)
 
 # --- Shared libraries (no CUDA dependency) ---
