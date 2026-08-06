@@ -6,8 +6,7 @@
 #include <stdint.h>
 
 // transpose reads whole 4-byte words overlapping the elements it is given, so a
-// source buffer needs this much room past the last element it will be asked
-// for.
+// source buffer needs this much room past the last element
 #define TRANSPOSE_SOURCE_PAD_BYTES 4
 
 #ifdef __cplusplus
