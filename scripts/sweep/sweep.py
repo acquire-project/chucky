@@ -38,7 +38,6 @@ from models import (
     VALID_DTYPES,
     VALID_FILLS,
     VALID_SINKS,
-    VALID_STATUSES,
     validate_results,
 )
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
@@ -491,9 +490,8 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
-        # Validate loaded results
         try:
-            validated = validate_results(raw_data)
+            validate_results(raw_data)
         except Exception as e:
             console.print(f"[yellow]Warning: results file validation failed: {e}[/yellow]")
             console.print("[yellow]Continuing with raw data.[/yellow]")
