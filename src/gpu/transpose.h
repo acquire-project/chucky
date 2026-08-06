@@ -5,6 +5,11 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
+// transpose reads whole 4-byte words overlapping the elements it is given, so a
+// source buffer needs this much room past the last element it will be asked
+// for.
+#define TRANSPOSE_SOURCE_PAD_BYTES 4
+
 #ifdef __cplusplus
 extern "C"
 {

@@ -76,8 +76,12 @@ transpose_indices(CUdeviceptr d_beg,
 // Transpose data kernel - v0
 // Uses shared memory to stage data before computing output positions.
 //
-// d_src must be aligned to sizeof(T). Reads stay within [d_src, d_src +
-// src_size), rounded up to a whole uint32_t when the coalesced path is taken.
+// Requirements on d_src:
+//   - Must be aligned to sizeof(T).
+//   - Loads take whole uint32_t words overlapping the requested elements and
+//     mask the rest, so a d_src that is not word aligned — a slice inside a
+//     larger buffer — needs room back to the previous word boundary, and the
+//     buffer needs TRANSPOSE_SOURCE_PAD_BYTES past src_size.
 template<typename T>
 __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
                                                          const T* d_src,
@@ -88,8 +92,13 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
                                                          const int64_t* strides)
 {
   constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / sizeof(T); // 4KB
+  constexpr int T_PER_LOAD =
+    sizeof(T) < sizeof(uint32_t) ? (int)(sizeof(uint32_t) / sizeof(T)) : 1;
+  static_assert(ELEMENTS_PER_BLOCK % T_PER_LOAD == 0);
 
-  __shared__ T shared_buf[ELEMENTS_PER_BLOCK];
+  // One word of slack: an unaligned d_src shifts the whole block's load.
+  __shared__ __align__(sizeof(uint32_t))
+    T shared_buf[ELEMENTS_PER_BLOCK + T_PER_LOAD];
 
   const int tid = threadIdx.x;
   const int block_offset = blockIdx.x * ELEMENTS_PER_BLOCK;
@@ -97,23 +106,18 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
   const int elements =
     left < ELEMENTS_PER_BLOCK ? (int)left : ELEMENTS_PER_BLOCK;
 
-  // Load into shared memory. Types under 4 bytes coalesce through uint32_t
-  // loads, which a source starting partway into the input may not permit.
-  if constexpr (sizeof(T) < sizeof(uint32_t)) {
-    constexpr int T_PER_LOAD = sizeof(uint32_t) / sizeof(T);
-    static_assert(ELEMENTS_PER_BLOCK % T_PER_LOAD == 0);
+  // Elements between the word boundary below d_src and d_src itself. Loaded
+  // with the rest and skipped on store. Always 0 for types of 4 bytes or more.
+  const int lead =
+    (int)(((uintptr_t)d_src & (sizeof(uint32_t) - 1)) / sizeof(T));
 
-    if (((uintptr_t)d_src & (sizeof(uint32_t) - 1)) == 0) {
-      const int loads = (elements + T_PER_LOAD - 1) / T_PER_LOAD;
-      const uint32_t* src_u32 = (const uint32_t*)(d_src + block_offset);
-      uint32_t* buf_u32 = (uint32_t*)shared_buf;
-      for (int i = tid; i < loads; i += blockDim.x)
-        buf_u32[i] = src_u32[i];
-    } else {
-      const T* src = d_src + block_offset;
-      for (int i = tid; i < elements; i += blockDim.x)
-        shared_buf[i] = src[i];
-    }
+  if constexpr (sizeof(T) < sizeof(uint32_t)) {
+    const uint32_t* src_words =
+      (const uint32_t*)(d_src - lead) + block_offset / T_PER_LOAD;
+    uint32_t* buf_words = (uint32_t*)shared_buf;
+    const int words = (lead + elements + T_PER_LOAD - 1) / T_PER_LOAD;
+    for (int i = tid; i < words; i += blockDim.x)
+      buf_words[i] = src_words[i];
   } else {
     const T* src = d_src + block_offset;
     for (int i = tid; i < elements; i += blockDim.x)
@@ -132,7 +136,7 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
       out_offset += coord * strides[d];
     }
 
-    d_dst[out_offset] = shared_buf[i];
+    d_dst[out_offset] = shared_buf[lead + i];
   }
 }
 
