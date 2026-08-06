@@ -136,7 +136,7 @@ dim_total_elements(const struct dimension* dims, uint8_t rank)
 static const size_t PUMP_BLOCK_ELEMENTS = 32 * 1024 * 1024;
 
 // Regenerate each appended block. Tests that verify content rely on the
-// per-append variation; benchmarks should use pump_data_prefill instead.
+// per-append variation; benchmarks should use the prefill pump instead.
 int
 pump_data_bpe(struct writer* w, size_t total_elements, fill_fn fill, size_t bpe)
 {
@@ -174,12 +174,14 @@ pump_data(struct writer* w, size_t total_elements, fill_fn fill)
 // Fill one block and reuse it for every append, so the measured loop is the
 // writer rather than the generator.
 int
-pump_data_prefill(struct writer* w,
-                  size_t total_elements,
-                  fill_fn fill,
-                  size_t bpe)
+pump_data_prefill_blocked(struct writer* w,
+                          size_t total_elements,
+                          fill_fn fill,
+                          size_t bpe,
+                          size_t block_elements)
 {
-  const size_t nelements = PUMP_BLOCK_ELEMENTS;
+  const size_t nelements =
+    block_elements > 0 ? block_elements : PUMP_BLOCK_ELEMENTS;
   size_t alloc = nelements * (bpe > 2 ? bpe : 2);
   uint16_t* data = (uint16_t*)calloc(1, alloc);
   if (!data)

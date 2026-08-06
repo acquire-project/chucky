@@ -21,6 +21,10 @@ struct sink_stats
 void
 print_metric_row(const struct stream_metric* m);
 
+// How long individual appends took.
+void
+print_append_latency(const struct stream_metrics* m);
+
 void
 log_bench_header(const struct tile_stream_layout* layout,
                  enum dtype dtype,
