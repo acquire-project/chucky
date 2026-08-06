@@ -740,7 +740,8 @@ function renderTiles() {
     const sub = el("div", "tile-sub", machine.description || machine.gpus[0] || "");
     if (machine.hosts.length > 1) sub.title = machine.hosts.join(", ");
     tile.appendChild(sub);
-    tile.appendChild(el("div", "tile-specs", [...specs, hosts].filter(Boolean).join(" · ")));
+    const gpu = machine.description && machine.gpus.length === 1 ? machine.gpus[0] : "";
+    tile.appendChild(el("div", "tile-specs", [gpu, ...specs, hosts].filter(Boolean).join(" · ")));
     if (machine.gpus.length > 1) {
       tile.appendChild(el("div", "tile-warn", `${machine.gpus.length} GPU models here: ${machine.gpus.join(", ")}`));
     }

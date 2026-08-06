@@ -46,17 +46,18 @@ hostname inside the file, both with wildcards:
 ```toml
 [[machine]]
 name = "livescreen"
-description = "RTX PRO 6000 workstation, two systems on one box"
+description = "Workstation running two systems"
 names = ["LiveScreen-1", "livescreen-kubuntu"]
 [machine.specs]
-gpu = "RTX PRO 6000 Blackwell Workstation Edition"
 storage = "local nvme"
 ```
 
-`specs` is free-form — put whatever decides whether two runs are comparable,
-since storage and network usually matter as much as the GPU. It is shown on the
-machine card. A sweep matching no entry keeps its own name and the page says it
-is undescribed, so a new machine gets an entry deliberately.
+A machine whose name never changes needs nothing but the name. `specs` is
+free-form and only worth filling in for what the sweep file does not already
+record — the GPU is in there, the disk and the network are not, and they decide
+as much about whether two runs compare. Both the description and the specs show
+on the machine card. A sweep matching no entry keeps its own name and the page
+says it is undescribed, so a new machine gets an entry deliberately.
 
 Grouping is a view, not a fact baked into the data: untick **Group** on the
 overview to split a machine back into the sweep names underneath and check that
