@@ -486,8 +486,8 @@ Fail0:
 }
 
 // 7. A failed delivery leaves the stream unable to say where new data belongs,
-// so it stops taking any. Closing the sink still has to happen: without the
-// array shape and the shard indexes, what was already written cannot be read.
+// so it stops taking any. Queued writes are still drained, but the array shape
+// is not written: it would claim frames that never reached the sink.
 static int
 test_batch_failed_delivery_still_closes_sink(void)
 {
@@ -516,14 +516,13 @@ test_batch_failed_delivery_still_closes_sink(void)
   struct writer_result again = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, again.error != 0);
 
-  // The failure is reported, and the sink is still closed out.
   struct writer_result fr = writer_flush(tile_stream_gpu_writer(s));
   log_info("  flush err=%d update_append=%d finalize=%d",
            fr.error,
            css.update_append_count,
            css.finalize_count);
   CHECK(Fail2, fr.error != 0);
-  CHECK(Fail2, css.update_append_count > 0);
+  CHECK(Fail2, css.update_append_count == 0);
 
   free(src);
   tile_stream_gpu_destroy(s);

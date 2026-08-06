@@ -194,7 +194,7 @@ The pools work (#148) set out to reach "no pointer to a recycled buffer
 crosses a stage boundary outside the pool API". It didn't. `gpu_pool_at`
 hands out a pointer with no ordering attached, and has seven non-test call
 sites (`src/gpu/stream.c`, `src/gpu/schedule.c`, `src/multiarray/stream.gpu.c`).
-Each is correct today because a comment says so. Three of them are pool
+Each is correct today because a comment says so. Two of them are pool
 zeroing.
 
 Work: give the pool an operation for "zero this slot for its next use" and one

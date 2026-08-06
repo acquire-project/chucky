@@ -121,9 +121,7 @@ stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
 {
   if (e->dispatch_failed)
     return writer_error();
-  // A create that failed before sizing the layout leaves epoch_elements at 0
-  // and nothing staged, so there is nothing to hand over.
-  if (e->stage.bytes_written == 0 || ctx->layout.epoch_elements == 0)
+  if (e->stage.bytes_written == 0)
     return writer_ok();
 
   const uint64_t first = dispatched_elements(e, ctx);
@@ -285,74 +283,60 @@ stream_append_body(struct stream_engine* e,
 
 // --- Shared flush body ---
 
-// Everything that puts more data in front of the sink.
+// The epochs the schedule has counted but not yet handed to compression.
 static struct writer_result
-flush_pending_data(struct stream_engine* e, struct stream_context* ctx)
+finish_accumulated(struct stream_engine* e, struct stream_context* ctx)
 {
-  struct writer_result r = stream_dispatch_staged(e, ctx);
-  if (r.error)
-    return r;
-
-  r = schedule_drain_kicked(e, ctx);
-  if (r.error)
-    return r;
-
-  // Flush any partial epoch first (sub-epoch data)
-  if (ctx->cursor_elements % ctx->layout.epoch_elements != 0) {
-    // An earlier flush can have counted a partial epoch into the batch and then
-    // failed to kick it, leaving no room for this one.
-    if (e->sched.accumulated >= e->sched.epochs_per_batch) {
-      r = schedule_flush_accumulated(e, ctx);
-      if (r.error)
-        return r;
-    }
-    if (schedule_add_partial_epoch(e, ctx))
-      return writer_error();
+  if (ctx->cursor_elements % ctx->layout.epoch_elements != 0 &&
+      schedule_add_partial_epoch(e, ctx)) {
+    e->dispatch_failed = 1;
+    return writer_error();
   }
 
-  // Flush any accumulated epochs (partial batch)
-  r = schedule_flush_accumulated(e, ctx);
-  if (r.error)
+  struct writer_result r = schedule_flush_accumulated(e, ctx);
+  if (r.error) {
+    // The batch stays counted and unkicked, and nothing can say which of its
+    // epochs reached the sink, so the stream is done taking data.
+    e->dispatch_failed = 1;
     return r;
+  }
 
-  // Drain any partial append accumulators
   return schedule_flush_partial_append(e, ctx);
 }
 
-// Close out what already reached the sink: shard indexes, queued writes, and
-// the array shape. Runs even when the work above failed, because without these
-// nothing that was written can be read back.
+// A shard's index claims every chunk it names is present, and the array's shape
+// claims every element up to the append cursor is. Both only hold once
+// everything before them succeeded: a reader cannot tell a complete array from
+// one whose tail never arrived, so after a failure the output is left short
+// rather than made to look whole.
 static struct writer_result
-close_out_sink(struct stream_engine* e, struct stream_context* ctx)
+finalize_output_shards(struct stream_engine* e, struct stream_context* ctx)
 {
   struct writer_result r = writer_ok();
-
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
         finalize_shards(
           &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
       r = writer_error();
   }
+  return r;
+}
 
-  // Queued IO points into buffers destroy frees, so drain whatever happened
-  // above.
-  if (shard_sink_drain(ctx->sink))
-    r = writer_error();
+static struct writer_result
+publish_array_shape(struct stream_context* ctx)
+{
+  if (!ctx->sink->update_append)
+    return writer_ok();
 
-  if (ctx->sink->update_append) {
-    const uint8_t na = dim_info_n_append(&ctx->dims);
-    for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-      uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_final_append_sizes(
-        &ctx->dims, ctx->cursor_elements, lv, append_sizes);
-      if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
-        r = writer_error();
-    }
+  struct writer_result r = writer_ok();
+  const uint8_t na = dim_info_n_append(&ctx->dims);
+  for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
+    uint64_t append_sizes[HALF_MAX_RANK];
+    dim_info_final_append_sizes(
+      &ctx->dims, ctx->cursor_elements, lv, append_sizes);
+    if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
+      r = writer_error();
   }
-
-  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
-    r = writer_error();
-
   return r;
 }
 
@@ -360,13 +344,25 @@ struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 {
   // A create that fails before sizing the layout leaves epoch_elements at 0;
-  // the auto-flush in destroy would then divide by it below. Nothing was
-  // ever sized, so there is nothing to flush.
+  // the divisions below would then fault. Nothing was ever sized, so there is
+  // nothing to flush.
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
 
   struct writer_result r =
-    e->dispatch_failed ? writer_error() : flush_pending_data(e, ctx);
+    e->dispatch_failed ? writer_error() : stream_dispatch_staged(e, ctx);
+
+  // Whatever happened above, batches already handed to the delivery worker have
+  // to be joined: the worker writes the shard state this function goes on to
+  // read, and its queued writes point into buffers destroy frees.
+  {
+    struct writer_result d = schedule_drain_kicked(e, ctx);
+    if (!r.error)
+      r = d;
+  }
+
+  if (!r.error)
+    r = finish_accumulated(e, ctx);
 
   // Last chance to read the outstanding ingest intervals; flush is already a
   // sync point, so waiting here costs nothing and leaves no sample unread.
@@ -383,8 +379,22 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     log_debug("scatter timing ring wrapped %llu times",
               (unsigned long long)e->stage.scatter_samples_lost);
 
-  struct writer_result c = close_out_sink(e, ctx);
-  return r.error ? r : c;
+  if (!r.error)
+    r = finalize_output_shards(e, ctx);
+
+  // Queued writes point into buffers destroy frees, so drain on every path. The
+  // shape below is written after it, so it never names data that is still
+  // queued.
+  if (shard_sink_drain(ctx->sink) && !r.error)
+    r = writer_error();
+
+  if (!r.error)
+    r = publish_array_shape(ctx);
+
+  if (!r.error && ctx->sink->flush && ctx->sink->flush(ctx->sink))
+    r = writer_error();
+
+  return r;
 }
 
 // --- Accessor ---
