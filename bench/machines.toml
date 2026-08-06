@@ -1,0 +1,52 @@
+# This file identifies the different names that may be used for one machine.
+#
+# A sweep's name is the first part of its results file name. sweep.py takes it
+# from --machine, or uses the hostname when you do not pass one. One name is not
+# always one machine: a computer can boot two systems, and a cluster gives out a
+# different node each time you ask for one.
+#
+# An entry matches a sweep by its name, or by the hostname stored in the file.
+# Both accept wildcards and ignore case, and the first matching entry wins. A
+# sweep that matches nothing keeps its own name, and the report marks it as not
+# described here.
+#
+# Fill in specs only where the sweep file does not already record something. It
+# records the GPU. It does not record the disk or the network.
+
+[[machine]]
+name = "livescreen"
+description = "Workstation with two operating systems installed"
+names = ["LiveScreen-1", "livescreen-kubuntu"]
+
+[[machine]]
+name = "reef-l40"
+description = "One of the CoreWeave L40 nodes"
+names = ["reef-l40"]
+hosts = ["cw-us-e4a2-l40-*"]
+[machine.specs]
+storage = "shared /mnt/main0"
+
+[[machine]]
+name = "reef-h100"
+description = "One of the CoreWeave H100 nodes"
+names = ["reef-h100"]
+hosts = ["cw-us-e4a1-h100-*"]
+[machine.specs]
+storage = "shared /mnt/main0"
+
+[[machine]]
+name = "reef-h200"
+description = "One of the CoreWeave H200 nodes"
+names = ["reef-h200"]
+hosts = ["cw-us-e4a1-h200-*"]
+[machine.specs]
+storage = "shared /mnt/main0"
+
+# A machine that always reports the same name needs only that name.
+[[machine]]
+name = "auk"
+names = ["auk"]
+
+[[machine]]
+name = "oreb"
+names = ["oreb"]

@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmarks over time</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --plane: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --good: #0ca30c;
+  --good-text: #006300;
+  --critical: #d03b3b;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-none: #898781;
+  --radius: 8px;
+  --gap: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --good-text: #0ca30c;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --plane: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255,255,255,0.10);
+  --good-text: #0ca30c;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--text-primary);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--series-1); }
+
+.site-head {
+  display: flex; align-items: center; gap: var(--gap);
+  padding: 12px 24px; border-bottom: 1px solid var(--border);
+  background: var(--surface-1); flex-wrap: wrap;
+}
+.brand { font-weight: 650; }
+.site-head nav { display: flex; gap: 4px; margin-right: auto; }
+.site-head nav a {
+  padding: 4px 10px; border-radius: var(--radius); text-decoration: none;
+  color: var(--text-secondary); font-size: 0.9em;
+}
+.site-head nav a[aria-current="page"] { background: var(--plane); color: var(--text-primary); font-weight: 600; }
+.theme-toggle {
+  font: inherit; font-size: 0.85em; padding: 4px 10px; cursor: pointer;
+  background: var(--surface-1); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+.lede { color: var(--text-secondary); font-size: 0.9em; margin: 0 0 var(--gap); }
+h1 { font-size: 1.35em; margin: 0 0 4px; }
+h2 { font-size: 1.02em; margin: 0; }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--gap); margin-bottom: var(--gap);
+}
+.card-sub { color: var(--text-secondary); font-size: 0.82em; margin: 2px 0 12px; }
+.note { color: var(--text-muted); font-size: 0.78em; margin: 8px 0 0; }
+.empty { color: var(--text-secondary); font-size: 0.9em; padding: 24px 0; text-align: center; }
+.link-button {
+  font: inherit; font-size: inherit; padding: 2px 6px; cursor: pointer;
+  color: var(--series-1); background: none; border: none; text-decoration: underline;
+}
+
+/* Filters — one row, above everything they scope */
+.filters {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px var(--gap); margin-bottom: var(--gap);
+}
+.filters label { display: block; font-size: 0.72em; font-weight: 600; color: var(--text-secondary); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+.filters select {
+  font: inherit; font-size: 0.88em; padding: 5px 8px; color: var(--text-primary);
+  background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+}
+.filters .match-count { margin-left: auto; font-size: 0.8em; color: var(--text-secondary); }
+.filters .check {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 0.88em; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-primary); padding: 5px 8px;
+  background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+}
+
+/* Machine tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
+.tile {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.tile-head { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 0.92em; }
+.tile-key { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.tile-sub { color: var(--text-secondary); font-size: 0.78em; margin-top: 3px; }
+.tile-specs { color: var(--text-muted); font-size: 0.72em; margin-top: 2px; min-height: 2.1em; }
+.tile-warn { color: var(--critical); font-size: 0.72em; margin-top: 3px; }
+.tile-value { font-size: 1.9em; font-weight: 650; line-height: 1.1; margin-top: 8px; }
+.tile-value .unit { font-size: 0.45em; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
+.tile-blank { font-size: 0.85em; color: var(--text-muted); margin-top: 12px; }
+.tile-delta { font-size: 0.78em; margin-top: 3px; color: var(--text-secondary); }
+.tile-delta .up { color: var(--good-text); font-weight: 600; }
+.tile-delta .down { color: var(--critical); font-weight: 600; }
+.tile-foot { color: var(--text-muted); font-size: 0.72em; margin-top: 8px; }
+.tile-foot .fails { color: var(--critical); }
+.tile svg { display: block; margin-top: 10px; overflow: visible; }
+
+/* Tables */
+table { border-collapse: collapse; width: 100%; font-size: 0.82em; }
+th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--grid); }
+th { color: var(--text-secondary); font-weight: 600; font-size: 0.92em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--plane); }
+.matrix tbody tr { cursor: pointer; }
+.matrix tbody tr[aria-selected="true"] { background: var(--plane); }
+.matrix .scenario-cell { font-weight: 600; padding-left: 10px; border-left: 3px solid transparent; }
+.matrix tbody tr[aria-selected="true"] .scenario-cell { border-left-color: var(--series-1); }
+.matrix tbody tr:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+.cell-delta { font-size: 0.85em; margin-left: 6px; }
+.cell-delta.up { color: var(--good-text); }
+.cell-delta.down { color: var(--critical); }
+.cell-flat { color: var(--text-muted); }
+.machine-th { white-space: nowrap; }
+.machine-th .tile-key { display: inline-block; margin-right: 5px; vertical-align: baseline; }
+details summary { cursor: pointer; font-weight: 600; font-size: 0.95em; }
+details[open] summary { margin-bottom: 12px; }
+code { font-size: 0.92em; color: var(--text-secondary); }
+
+/* Charts */
+.chart-wrap { position: relative; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--text-secondary); }
+.legend-key { width: 18px; height: 2px; border-radius: 1px; flex: none; }
+.legend-item .legend-value { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.axis text { fill: var(--text-muted); font-size: 11px; }
+.axis path { display: none; }
+.axis line { stroke: var(--axis); }
+.grid line { stroke: var(--grid); }
+.tick-label { fill: var(--text-muted); font-size: 11px; }
+.end-label { fill: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 20; max-width: 300px;
+  background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+  padding: 8px 10px; font-size: 0.78em; line-height: 1.45;
+}
+.tooltip .tt-head { color: var(--text-secondary); margin-bottom: 5px; }
+.tooltip .tt-row { display: flex; align-items: baseline; gap: 7px; }
+.tooltip .tt-key { width: 14px; height: 2px; border-radius: 1px; flex: none; position: relative; top: -3px; }
+.tooltip .tt-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+.tooltip .tt-name { color: var(--text-secondary); }
+
+@media (max-width: 620px) {
+  .filters { flex-direction: column; align-items: stretch; }
+  .filters .match-count { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="site-head">
+  <span class="brand">chucky benchmarks</span>
+  <nav>
+    <a href="index.html" aria-current="page">Over time</a>
+    <a href="explore.html">Sweep explorer</a>
+  </nav>
+  <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
+</header>
+
+<main>
+  <h1>How performance is moving</h1>
+  <p class="lede" id="lede"></p>
+
+  <section class="filters" aria-label="Filters">
+    <div>
+      <label for="metric-sel">Metric</label>
+      <select id="metric-sel"></select>
+    </div>
+    <div>
+      <label for="scenario-sel">Scenario</label>
+      <select id="scenario-sel"></select>
+    </div>
+    <div>
+      <label for="codec-sel">Codec</label>
+      <select id="codec-sel"></select>
+    </div>
+    <div>
+      <label for="backend-sel">Backend</label>
+      <select id="backend-sel"></select>
+    </div>
+    <div>
+      <label for="sink-sel">Sink</label>
+      <select id="sink-sel"></select>
+    </div>
+    <div>
+      <label for="group-toggle">Machines</label>
+      <label class="check"><input type="checkbox" id="group-toggle" checked> Group</label>
+    </div>
+    <span class="match-count" id="match-count"></span>
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="Machines"></section>
+
+  <section class="card">
+    <h2>Trend across sweeps</h2>
+    <p class="card-sub" id="trend-sub"></p>
+    <div class="chart-wrap" id="trend"></div>
+    <div class="legend" id="trend-legend"></div>
+    <p class="note" id="trend-note"></p>
+  </section>
+
+  <section class="card">
+    <h2>Latest sweep, every scenario</h2>
+    <p class="card-sub" id="matrix-sub"></p>
+    <div id="matrix"></div>
+  </section>
+
+  <section class="card">
+    <h2>Biggest changes since the previous sweep</h2>
+    <p class="card-sub" id="movers-sub"></p>
+    <div id="movers"></div>
+  </section>
+
+  <details class="card" id="table-view">
+    <summary>Table view of the trend</summary>
+    <div id="trend-table"></div>
+  </details>
+
+  <p class="note" id="footnotes"></p>
+</main>
+
+<script>
+const DATA = __DATA_PLACEHOLDER__;
+
+const MAX_SERIES = 8;
+const SERIES_VARS = Array.from({length: MAX_SERIES}, (_, i) => `var(--series-${i + 1})`);
+
+const METRICS = [
+  {key: "throughput_in_gibs", label: "Input throughput", unit: "GiB/s", better: "high"},
+  {key: "throughput_out_gibs", label: "Output throughput", unit: "GiB/s", better: "high"},
+  {key: "compression_fold", label: "Compression ratio", unit: "x", better: "high"},
+  {key: "wall_s", label: "Wall time", unit: "s", better: "low"},
+  {key: "init_s", label: "Init time", unit: "s", better: "low"},
+  {key: "stalls.max_append_ms", label: "Slowest append block", unit: "ms", better: "low",
+   note: "one append is a multi-frame block push, not a single frame"},
+  {key: "stalls.peak_pending_mib", label: "Peak pending bytes", unit: "MiB", better: "low"},
+  {key: "stalls.backpressure_ms", label: "Backpressure wait", unit: "ms", better: "low"},
+  {key: "stalls.flush_stall_ms", label: "Flush stall", unit: "ms", better: "low"},
+];
+
+const SCENARIO_GROUPS = [
+  {suffix: "_multiscale_dim0", rank: 2},
+  {suffix: "_multiscale", rank: 1},
+  {suffix: "_single", rank: 0},
+];
+
+// =========================================================================
+// Data model
+// =========================================================================
+
+const sweeps = DATA.sweeps.slice();
+sweeps.forEach(s => { s.dateObj = new Date(s.day + "T00:00:00"); });
+
+/**
+ * One entry per machine. Grouped, that is what bench/machines.toml calls the
+ * same machine; split, it is each sweep name on its own — the way to check that
+ * two systems on one box, or two nodes from one cluster pool, really do match.
+ */
+function buildMachines(grouped) {
+  const seen = new Map();
+  for (const sweep of sweeps) {
+    const name = grouped ? sweep.machine : sweep.member;
+    if (!seen.has(name)) {
+      seen.set(name, {
+        name,
+        description: sweep.description || "",
+        specs: sweep.specs || {},
+        registered: sweep.registered,
+        first: sweep.day, last: sweep.day,
+        gpus: [], hosts: [], members: [], sweeps: [],
+      });
+    }
+    const machine = seen.get(name);
+    machine.last = sweep.day;
+    machine.sweeps.push(sweep);
+    if (sweep.registered && !machine.registered) {
+      machine.registered = true;
+      machine.description = sweep.description || "";
+      machine.specs = sweep.specs || {};
+    }
+    for (const [key, value] of [["gpus", sweep.gpu], ["hosts", sweep.host], ["members", sweep.member]]) {
+      if (value && !machine[key].includes(value)) machine[key].push(value);
+    }
+  }
+
+  // Color follows the machine, assigned in order of first appearance so an
+  // added machine never repaints the ones already on screen. Past the palette's
+  // eight slots the extra machines stay in the tables but leave the chart.
+  const machines = [...seen.values()];
+  machines.forEach((machine, i) => {
+    machine.color = i < MAX_SERIES ? SERIES_VARS[i] : "var(--series-none)";
+    machine.plotted = i < MAX_SERIES;
+  });
+  return machines;
+}
+
+let machineOrder = [];
+
+function metricValue(run, key) {
+  const parts = key.split(".");
+  let v = run;
+  for (const p of parts) {
+    if (v == null || typeof v !== "object") return null;
+    v = v[p];
+  }
+  return typeof v === "number" && isFinite(v) ? v : null;
+}
+
+function scenarioRank(name) {
+  for (const g of SCENARIO_GROUPS) if (name.endsWith(g.suffix)) return g.rank;
+  return 3;
+}
+
+function sortedScenarios(names) {
+  return [...names].sort((a, b) => scenarioRank(a) - scenarioRank(b) || a.localeCompare(b));
+}
+
+function distinct(key) {
+  const values = new Set();
+  for (const s of sweeps) for (const r of s.runs) if (r[key] != null) values.add(r[key]);
+  return [...values];
+}
+
+const ALL_SCENARIOS = sortedScenarios(distinct("scenario"));
+const ALL_CODECS = distinct("codec").sort();
+const ALL_BACKENDS = distinct("backend").sort();
+const ALL_SINKS = distinct("sink").sort();
+
+// =========================================================================
+// Selection
+// =========================================================================
+
+const state = {metric: METRICS[0].key, scenario: null, codec: null, backend: null, sink: null,
+               grouped: true};
+
+function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
+
+/** The opening view should not be empty: pick the config the most sweeps ran. */
+function pickDefaults() {
+  const counts = new Map();
+  for (const s of sweeps) {
+    const here = new Set();
+    for (const r of s.runs) {
+      if (r.status !== "pass" || metricValue(r, state.metric) == null) continue;
+      here.add([r.scenario, r.codec, r.backend, r.sink].join("|"));
+    }
+    for (const combo of here) counts.set(combo, (counts.get(combo) || 0) + 1);
+  }
+  let best = null, bestCount = -1;
+  for (const [combo, count] of counts) {
+    if (count > bestCount) { best = combo; bestCount = count; }
+  }
+  const [scenario, codec, backend, sink] = best
+    ? best.split("|")
+    : [ALL_SCENARIOS[0], ALL_CODECS[0], ALL_BACKENDS[0], ALL_SINKS[0]];
+  state.scenario = scenario; state.codec = codec; state.backend = backend; state.sink = sink;
+}
+
+function matchesConfig(run) {
+  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink;
+}
+
+function comparable(sweep) {
+  const leaf = state.metric.split(".").pop();
+  return !(sweep.retired || []).includes(leaf);
+}
+
+/** Best run of a sweep for one scenario under the current config filters. */
+function bestRun(sweep, scenario) {
+  const meta = metricMeta(state.metric);
+  const wantHigh = meta.better === "high";
+  let best = null, bestValue = null, count = 0;
+  for (const run of sweep.runs) {
+    if (run.scenario !== scenario || run.status !== "pass" || !matchesConfig(run)) continue;
+    const value = metricValue(run, state.metric);
+    if (value == null) continue;
+    count++;
+    if (bestValue == null || (wantHigh ? value > bestValue : value < bestValue)) {
+      best = run; bestValue = value;
+    }
+  }
+  return best ? {run: best, value: bestValue, count} : null;
+}
+
+/** Codec, backend, and sink combinations with at least one usable run. */
+function availableCombinations(scenario) {
+  const found = new Set();
+  for (const sweep of sweeps) {
+    if (!comparable(sweep)) continue;
+    for (const run of sweep.runs) {
+      if (run.status !== "pass" || metricValue(run, state.metric) == null) continue;
+      if (scenario && run.scenario !== scenario) continue;
+      found.add([run.codec, run.backend, run.sink].join("|"));
+    }
+  }
+  return found;
+}
+
+/**
+ * Nearest selections that would show something: one changed dimension first,
+ * so an empty view says where the data actually is instead of just "none".
+ */
+function nearestAlternatives(scenario, limit = 3) {
+  const available = availableCombinations(scenario);
+  const current = [state.codec, state.backend, state.sink];
+  // Backend and sink first: the codec is usually the deliberate choice, so
+  // suggest keeping it and moving where it ran.
+  const dimensions = [
+    {index: 1, key: "backend", label: "backend"},
+    {index: 2, key: "sink", label: "sink"},
+    {index: 0, key: "codec", label: "codec"},
+  ];
+  const out = [];
+  for (const dimension of dimensions) {
+    for (const combo of available) {
+      const parts = combo.split("|");
+      if (parts.every((p, i) => i === dimension.index || p === current[i]) && parts[dimension.index] !== current[dimension.index]) {
+        out.push({label: `${dimension.label} ${parts[dimension.index]}`, key: dimension.key, value: parts[dimension.index]});
+      }
+    }
+  }
+  if (!out.length) {
+    for (const combo of available) {
+      const [codec, backend, sink] = combo.split("|");
+      out.push({label: `${codec} · ${backend} · ${sink}`, codec, backend, sink});
+      if (out.length >= limit) break;
+    }
+  }
+  return out.slice(0, limit);
+}
+
+function emptyState(message, scenario) {
+  const node = el("p", "empty");
+  node.appendChild(document.createTextNode(message + " "));
+  const alternatives = nearestAlternatives(scenario);
+  if (!alternatives.length) return node;
+  node.appendChild(document.createTextNode("Try: "));
+  alternatives.forEach((alternative, i) => {
+    if (i) node.appendChild(document.createTextNode(", "));
+    const button = el("button", "link-button", alternative.label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      if (alternative.key) state[alternative.key] = alternative.value;
+      else Object.assign(state, {codec: alternative.codec, backend: alternative.backend, sink: alternative.sink});
+      syncControls();
+      render();
+    });
+    node.appendChild(button);
+  });
+  node.appendChild(document.createTextNode("."));
+  return node;
+}
+
+/** One point per sweep for a machine: {sweep, value, run, count}. */
+function series(machine, scenario) {
+  const points = [];
+  for (const sweep of machine.sweeps) {
+    if (!comparable(sweep)) continue;
+    const hit = bestRun(sweep, scenario);
+    if (hit) points.push({sweep, ...hit});
+  }
+  return points;
+}
+
+// =========================================================================
+// Formatting
+// =========================================================================
+
+function fmt(value) {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1000) return d3.format(",.0f")(value);
+  if (abs >= 100) return d3.format(".0f")(value);
+  if (abs >= 10) return d3.format(".1f")(value);
+  if (abs >= 1) return d3.format(".2f")(value);
+  if (abs > 0) return d3.format(".3f")(value);
+  return "0";
+}
+
+function fmtDay(day) { return day || "unknown date"; }
+
+function percentChange(previous, latest) {
+  if (previous == null || latest == null || previous === 0) return null;
+  return (latest - previous) / Math.abs(previous) * 100;
+}
+
+/** Direction of a change, judged against what the metric wants. */
+function changeClass(pct) {
+  if (pct == null || Math.abs(pct) < 2) return "flat";
+  const better = metricMeta(state.metric).better === "high" ? pct > 0 : pct < 0;
+  return better ? "up" : "down";
+}
+
+const CHANGE_GLYPH = {up: "▲", down: "▼", flat: "≈"};
+const CHANGE_WORD = {up: "better", down: "worse", flat: "no real change"};
+const REAL_CHANGE_PCT = 2;
+
+function signedPercent(pct) {
+  const shown = Math.abs(pct) < 100 ? fmt(pct) : d3.format(".0f")(pct);
+  return `${pct > 0 ? "+" : ""}${shown}%`;
+}
+
+function explorerLink(sweep) {
+  return `explore.html?file=${encodeURIComponent(sweep.filename)}`;
+}
+
+function setText(node, text) { node.textContent = text; return node; }
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function keySwatch(color, className) {
+  const node = el("span", className || "tile-key");
+  node.style.background = color;
+  return node;
+}
+
+function configLabel(run) {
+  return [run.dtype, run.chunk_bytes_label, run.fill].filter(Boolean).join(" · ");
+}
+
+// =========================================================================
+// Tooltip
+// =========================================================================
+
+const tooltip = el("div", "tooltip");
+tooltip.style.display = "none";
+document.body.appendChild(tooltip);
+
+function showTooltip(event, build) {
+  tooltip.replaceChildren();
+  build(tooltip);
+  tooltip.style.display = "block";
+  const box = tooltip.getBoundingClientRect();
+  const pad = 14;
+  let x = event.clientX + pad, y = event.clientY + pad;
+  if (x + box.width > window.innerWidth - 8) x = event.clientX - box.width - pad;
+  if (y + box.height > window.innerHeight - 8) y = event.clientY - box.height - pad;
+  tooltip.style.left = Math.max(8, x) + "px";
+  tooltip.style.top = Math.max(8, y) + "px";
+}
+
+function hideTooltip() { tooltip.style.display = "none"; }
+
+function tooltipRow(parent, color, name, value) {
+  const row = el("div", "tt-row");
+  if (color) row.appendChild(keySwatch(color, "tt-key"));
+  row.appendChild(el("span", "tt-value", value));
+  row.appendChild(el("span", "tt-name", name));
+  parent.appendChild(row);
+  return row;
+}
+
+// =========================================================================
+// Controls
+// =========================================================================
+
+function fillSelect(select, values, labels) {
+  select.replaceChildren();
+  values.forEach((value, i) => {
+    const option = el("option", null, labels ? labels[i] : value);
+    option.value = value;
+    select.appendChild(option);
+  });
+}
+
+const metricSel = document.getElementById("metric-sel");
+const scenarioSel = document.getElementById("scenario-sel");
+const codecSel = document.getElementById("codec-sel");
+const backendSel = document.getElementById("backend-sel");
+const sinkSel = document.getElementById("sink-sel");
+
+fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label} (${m.unit})`));
+fillSelect(scenarioSel, ALL_SCENARIOS);
+fillSelect(codecSel, ALL_CODECS);
+fillSelect(backendSel, ALL_BACKENDS);
+fillSelect(sinkSel, ALL_SINKS);
+
+function syncControls() {
+  groupToggle.checked = state.grouped;
+  metricSel.value = state.metric;
+  scenarioSel.value = state.scenario;
+  codecSel.value = state.codec;
+  backendSel.value = state.backend;
+  sinkSel.value = state.sink;
+}
+
+const groupToggle = document.getElementById("group-toggle");
+groupToggle.addEventListener("change", () => { state.grouped = groupToggle.checked; render(); });
+
+metricSel.addEventListener("change", () => { state.metric = metricSel.value; render(); });
+scenarioSel.addEventListener("change", () => { state.scenario = scenarioSel.value; render(); });
+codecSel.addEventListener("change", () => { state.codec = codecSel.value; render(); });
+backendSel.addEventListener("change", () => { state.backend = backendSel.value; render(); });
+sinkSel.addEventListener("change", () => { state.sink = sinkSel.value; render(); });
+
+// =========================================================================
+// Theme
+// =========================================================================
+
+const themeToggle = document.getElementById("theme-toggle");
+
+// Reading storage throws in some file:// and private-browsing contexts, and this
+// runs before the page is drawn, so a theme preference must never be fatal.
+function storedTheme() {
+  try {
+    return localStorage.getItem("bench-theme");
+  } catch {
+    return null;
+  }
+}
+
+function currentTheme() {
+  const stored = storedTheme();
+  if (stored === "light" || stored === "dark") return stored;
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  themeToggle.textContent = theme === "dark" ? "Light" : "Dark";
+}
+
+themeToggle.addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  try {
+    localStorage.setItem("bench-theme", next);
+  } catch {
+    // The choice still applies to this page; it just will not be remembered.
+  }
+  applyTheme(next);
+  render();
+});
+
+applyTheme(currentTheme());
+
+// =========================================================================
+// Machine tiles
+// =========================================================================
+
+function sparkline(points, color) {
+  const W = 176, H = 30, r = 3;
+  const svg = d3.create("svg").attr("width", W).attr("height", H)
+    .attr("role", "img").attr("aria-hidden", "true");
+  if (points.length < 2) return svg.node();
+  const x = d3.scaleTime()
+    .domain(d3.extent(points, p => p.sweep.dateObj))
+    .range([r + 1, W - r - 1]);
+  const y = d3.scaleLinear()
+    .domain(d3.extent(points, p => p.value)).nice()
+    .range([H - r - 1, r + 1]);
+  svg.append("path")
+    .attr("fill", "none").attr("stroke", color).attr("stroke-width", 2)
+    .attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
+    .attr("d", d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value))(points));
+  const last = points[points.length - 1];
+  svg.append("circle")
+    .attr("cx", x(last.sweep.dateObj)).attr("cy", y(last.value)).attr("r", r)
+    .attr("fill", color).attr("stroke", "var(--surface-1)").attr("stroke-width", 2);
+  return svg.node();
+}
+
+function failureCount(sweep) {
+  let fails = 0;
+  for (const [status, n] of Object.entries(sweep.counts || {})) {
+    if (status !== "pass") fails += n;
+  }
+  return fails;
+}
+
+function renderTiles() {
+  const host = document.getElementById("tiles");
+  host.replaceChildren();
+  const meta = metricMeta(state.metric);
+
+  for (const machine of machineOrder) {
+    const points = series(machine, state.scenario);
+    const latest = points[points.length - 1] || null;
+    const previous = points[points.length - 2] || null;
+    const latestSweep = machine.sweeps[machine.sweeps.length - 1];
+
+    const tile = el("div", "tile");
+    const head = el("div", "tile-head");
+    head.appendChild(keySwatch(machine.color));
+    head.appendChild(el("span", null, machine.name));
+    tile.appendChild(head);
+
+    const specs = Object.entries(machine.specs).map(([key, value]) => `${key}: ${value}`);
+    const onlyHost = machine.hosts.length === 1 ? machine.hosts[0] : "";
+    const hosts = machine.hosts.length > 1
+      ? `${machine.hosts.length} hosts`
+      : (onlyHost === machine.name || machine.members.includes(onlyHost) ? "" : onlyHost);
+    const sub = el("div", "tile-sub", machine.description || machine.gpus[0] || "");
+    if (machine.hosts.length > 1) sub.title = machine.hosts.join(", ");
+    tile.appendChild(sub);
+    const gpu = machine.description && machine.gpus.length === 1 ? machine.gpus[0] : "";
+    tile.appendChild(el("div", "tile-specs", [gpu, ...specs, hosts].filter(Boolean).join(" · ")));
+    if (machine.gpus.length > 1) {
+      tile.appendChild(el("div", "tile-warn", `${machine.gpus.length} GPU models here: ${machine.gpus.join(", ")}`));
+    }
+
+    if (latest) {
+      const value = el("div", "tile-value");
+      value.appendChild(document.createTextNode(fmt(latest.value)));
+      value.appendChild(el("span", "unit", meta.unit));
+      tile.appendChild(value);
+    } else {
+      tile.appendChild(el("div", "tile-blank", "No run matches this filter"));
+    }
+
+    const delta = el("div", "tile-delta");
+    if (latest && previous) {
+      const pct = percentChange(previous.value, latest.value);
+      const cls = changeClass(pct);
+      delta.appendChild(setText(el("span", cls), `${CHANGE_GLYPH[cls]} ${signedPercent(pct)}`));
+      delta.appendChild(document.createTextNode(
+        cls === "flat" ? ` vs ${previous.sweep.commit} — no real change`
+                       : ` ${CHANGE_WORD[cls]} than ${previous.sweep.commit}`));
+      if (previous.sweep.member !== latest.sweep.member) {
+        delta.appendChild(el("div", "tile-warn",
+          `compares ${previous.sweep.member} against ${latest.sweep.member}`));
+      }
+    } else if (latest) {
+      delta.appendChild(document.createTextNode("first sweep with this configuration"));
+    }
+    tile.appendChild(delta);
+
+    if (points.length >= 2) tile.appendChild(sparkline(points, machine.color));
+
+    const foot = el("div", "tile-foot");
+    foot.appendChild(document.createTextNode(
+      `${machine.sweeps.length} sweep${machine.sweeps.length === 1 ? "" : "s"} · latest `));
+    const link = el("a", null, latestSweep.commit);
+    link.href = explorerLink(latestSweep);
+    link.title = `Open ${latestSweep.filename} in the sweep explorer`;
+    foot.appendChild(link);
+    foot.appendChild(document.createTextNode(
+      machine.members.length > 1
+        ? ` on ${fmtDay(latestSweep.day)}, ${latestSweep.member}`
+        : ` on ${fmtDay(latestSweep.day)}`));
+    const fails = failureCount(latestSweep);
+    if (fails) {
+      foot.appendChild(document.createTextNode(" · "));
+      foot.appendChild(el("span", "fails", `${fails} run${fails === 1 ? "" : "s"} did not pass`));
+    }
+    tile.appendChild(foot);
+
+    if (machine.members.length > 1) {
+      tile.appendChild(el("div", "tile-foot", `covers ${machine.members.join(", ")}`));
+    }
+    if (!machine.registered) {
+      tile.appendChild(el("div", "tile-foot tile-warn", "not in machines.toml"));
+    }
+    host.appendChild(tile);
+  }
+}
+
+// =========================================================================
+// Trend chart
+// =========================================================================
+
+let trendRows = [];
+
+function renderTrend() {
+  const host = document.getElementById("trend");
+  host.replaceChildren();
+  const legendHost = document.getElementById("trend-legend");
+  legendHost.replaceChildren();
+  const meta = metricMeta(state.metric);
+
+  const lines = machineOrder
+    .filter(m => m.plotted)
+    .map(m => ({machine: m, points: series(m, state.scenario)}))
+    .filter(l => l.points.length > 0);
+
+  trendRows = lines;
+
+  document.getElementById("trend-sub").textContent =
+    `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer.`;
+
+  if (!lines.length) {
+    host.appendChild(emptyState(`No passing runs for ${state.scenario} with ${state.codec} on ${state.backend} into ${state.sink}.`, state.scenario));
+    return;
+  }
+
+  const width = Math.max(320, host.clientWidth || 860);
+  const height = 320;
+  const margin = {top: 12, right: 92, bottom: 28, left: 56};
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  const allPoints = lines.flatMap(l => l.points);
+  const svg = d3.select(host).append("svg")
+    .attr("width", width).attr("height", height)
+    .attr("role", "img")
+    .attr("aria-label", `${meta.label} over time, one line per machine`);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const dates = [...new Set(allPoints.map(p => +p.sweep.dateObj))].sort((a, b) => a - b).map(t => new Date(t));
+  const x = d3.scaleTime()
+    .domain(d3.extent(dates))
+    .range([0, innerW]);
+  if (dates.length === 1) x.domain([d3.timeDay.offset(dates[0], -1), d3.timeDay.offset(dates[0], 1)]);
+
+  const maxValue = d3.max(allPoints, p => p.value);
+  const y = d3.scaleLinear().domain([0, maxValue * 1.08 || 1]).nice().range([innerH, 0]);
+
+  g.append("g").attr("class", "grid")
+    .selectAll("line").data(y.ticks(5)).join("line")
+    .attr("x1", 0).attr("x2", innerW).attr("y1", d => y(d)).attr("y2", d => y(d));
+
+  g.append("g").attr("class", "axis")
+    .attr("transform", `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(Math.min(6, dates.length)).tickSizeOuter(0).tickFormat(d3.timeFormat("%b %d")));
+  g.append("g").attr("class", "axis")
+    .call(d3.axisLeft(y).ticks(5).tickSize(0).tickFormat(d3.format("~s")));
+  g.append("text").attr("class", "tick-label")
+    .attr("x", 0).attr("y", -2).text(meta.unit);
+
+  const line = d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value));
+
+  for (const {machine, points} of lines) {
+    g.append("path")
+      .attr("fill", "none").attr("stroke", machine.color).attr("stroke-width", 2)
+      .attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
+      .attr("d", line(points));
+    g.selectAll(null).data(points).join("circle")
+      .attr("cx", p => x(p.sweep.dateObj)).attr("cy", p => y(p.value)).attr("r", 4)
+      .attr("fill", machine.color)
+      .attr("stroke", "var(--surface-1)").attr("stroke-width", 2);
+  }
+
+  // Direct end labels only while they stay attached to their own line.
+  const ends = lines.map(l => ({machine: l.machine, point: l.points[l.points.length - 1]}))
+    .sort((a, b) => y(a.point.value) - y(b.point.value));
+  const roomy = ends.every((e, i) => i === 0 || Math.abs(y(e.point.value) - y(ends[i - 1].point.value)) >= 13);
+  if (roomy && ends.length <= 4) {
+    for (const e of ends) {
+      g.append("text").attr("class", "end-label")
+        .attr("x", x(e.point.sweep.dateObj) + 9)
+        .attr("y", y(e.point.value) + 4)
+        .text(e.machine.name);
+    }
+  }
+
+  // Crosshair: aim at a sweep date, read every machine that ran that day.
+  const crosshair = g.append("line")
+    .attr("stroke", "var(--axis)").attr("stroke-width", 1)
+    .attr("y1", 0).attr("y2", innerH).style("display", "none");
+
+  const byDate = new Map();
+  for (const {machine, points} of lines) {
+    for (const p of points) {
+      const key = +p.sweep.dateObj;
+      if (!byDate.has(key)) byDate.set(key, []);
+      byDate.get(key).push({machine, point: p});
+    }
+  }
+
+  const nearestDate = px => {
+    const target = x.invert(px);
+    let nearest = dates[0];
+    for (const d of dates) if (Math.abs(d - target) < Math.abs(nearest - target)) nearest = d;
+    return nearest;
+  };
+  const nearestPoint = (px, py) => {
+    const rows = byDate.get(+nearestDate(px)) || [];
+    let best = null;
+    for (const row of rows) {
+      const distance = Math.abs(y(row.point.value) - py);
+      if (!best || distance < best.distance) best = {...row, distance};
+    }
+    return best;
+  };
+
+  svg.append("rect")
+    .attr("x", margin.left).attr("y", margin.top)
+    .attr("width", innerW).attr("height", innerH)
+    .attr("fill", "transparent")
+    .style("cursor", "pointer")
+    .on("pointerleave", () => { crosshair.style("display", "none"); hideTooltip(); })
+    .on("click", event => {
+      const [px, py] = d3.pointer(event, g.node());
+      const hit = nearestPoint(px, py);
+      if (hit) location.href = explorerLink(hit.point.sweep);
+    })
+    .on("pointermove", event => {
+      const [px] = d3.pointer(event, g.node());
+      const nearest = nearestDate(px);
+      crosshair.attr("x1", x(nearest)).attr("x2", x(nearest)).style("display", null);
+      const rows = byDate.get(+nearest) || [];
+      showTooltip(event, node => {
+        node.appendChild(el("div", "tt-head", d3.timeFormat("%Y-%m-%d")(nearest)));
+        for (const {machine, point} of rows) {
+          const who = machine.members.length > 1
+            ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
+            : `${machine.name} · ${point.sweep.commit}`;
+          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`);
+          node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
+        }
+        node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));
+      });
+    });
+
+  for (const {machine, points} of lines) {
+    const item = el("div", "legend-item");
+    item.appendChild(keySwatch(machine.color, "legend-key"));
+    item.appendChild(el("span", null, machine.name));
+    item.appendChild(el("span", "legend-value", `${fmt(points[points.length - 1].value)} ${meta.unit}`));
+    legendHost.appendChild(item);
+  }
+
+  const hidden = machineOrder.filter(m => !m.plotted);
+  const noteParts = [];
+  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
+  if (meta.note) noteParts.push(`Reading this metric: ${meta.note}.`);
+  document.getElementById("trend-note").textContent = noteParts.join(" ");
+}
+
+// =========================================================================
+// Latest-sweep matrix
+// =========================================================================
+
+function renderMatrix() {
+  const host = document.getElementById("matrix");
+  host.replaceChildren();
+  const meta = metricMeta(state.metric);
+  document.getElementById("matrix-sub").textContent =
+    `Best ${meta.label.toLowerCase()} (${meta.unit}) in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
+
+  const table = el("table", "matrix");
+  const thead = el("thead");
+  const headRow = el("tr");
+  headRow.appendChild(el("th", null, "Scenario"));
+  for (const machine of machineOrder) {
+    const th = el("th", "machine-th num");
+    th.appendChild(keySwatch(machine.color));
+    th.appendChild(document.createTextNode(machine.name));
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  let anyValue = false;
+
+  for (const scenario of ALL_SCENARIOS) {
+    const row = el("tr");
+    row.setAttribute("aria-selected", scenario === state.scenario ? "true" : "false");
+    row.tabIndex = 0;
+    const pick = () => { state.scenario = scenario; syncControls(); render(); };
+    row.addEventListener("click", pick);
+    row.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick(); } });
+    row.appendChild(el("td", "scenario-cell", scenario));
+
+    for (const machine of machineOrder) {
+      const points = series(machine, scenario);
+      const latest = points[points.length - 1] || null;
+      const previous = points[points.length - 2] || null;
+      const cell = el("td", "num");
+      if (!latest) {
+        cell.appendChild(el("span", "cell-flat", "—"));
+      } else {
+        anyValue = true;
+        cell.appendChild(document.createTextNode(fmt(latest.value)));
+        const pct = percentChange(previous ? previous.value : null, latest.value);
+        if (pct != null) {
+          const cls = changeClass(pct);
+          const tag = el("span", `cell-delta ${cls}`, `${CHANGE_GLYPH[cls]} ${signedPercent(pct)}`);
+          tag.title = `${fmt(previous.value)} at ${previous.sweep.commit} (${fmtDay(previous.sweep.day)}) → ${fmt(latest.value)} at ${latest.sweep.commit} (${fmtDay(latest.sweep.day)}) — ${CHANGE_WORD[cls]}`;
+          cell.appendChild(tag);
+        }
+        cell.title = `${latest.sweep.commit} (${fmtDay(latest.sweep.day)}) · ${configLabel(latest.run)} · best of ${latest.count} run${latest.count === 1 ? "" : "s"}`;
+      }
+      row.appendChild(cell);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+
+  if (!anyValue) {
+    host.appendChild(emptyState(`No scenario has a passing run with ${state.codec} on ${state.backend} into ${state.sink}.`, null));
+    return;
+  }
+  host.appendChild(table);
+}
+
+// =========================================================================
+// Movers
+// =========================================================================
+
+const MOVERS_SHOWN = 12;
+
+function moversFor(machine) {
+  const index = sweep => {
+    const map = new Map();
+    for (const run of sweep.runs) {
+      if (run.status !== "pass" || !matchesConfig(run)) continue;
+      const value = metricValue(run, state.metric);
+      if (value != null) map.set(run.id, {run, value});
+    }
+    return map;
+  };
+
+  // The two most recent sweeps that ran anything matching, so a sweep that
+  // skipped this configuration does not hide the comparison.
+  const usable = machine.sweeps
+    .filter(comparable)
+    .map(sweep => ({sweep, runs: index(sweep)}))
+    .filter(entry => entry.runs.size);
+  if (usable.length < 2) return {rows: [], latest: null, previous: null};
+  const {sweep: latest, runs: after} = usable[usable.length - 1];
+  const {sweep: previous, runs: before} = usable[usable.length - 2];
+  const rows = [];
+  for (const [id, now] of after) {
+    const then = before.get(id);
+    if (!then) continue;
+    const pct = percentChange(then.value, now.value);
+    if (pct == null) continue;
+    rows.push({machine, id, run: now.run, previous: then.value, latest: now.value, pct, latestSweep: latest, previousSweep: previous});
+  }
+  return {rows, latest, previous};
+}
+
+function renderMovers() {
+  const host = document.getElementById("movers");
+  host.replaceChildren();
+  const meta = metricMeta(state.metric);
+
+  const all = [];
+  const pairs = [];
+  for (const machine of machineOrder) {
+    const {rows, latest, previous} = moversFor(machine);
+    if (latest && previous) pairs.push(`${machine.name} ${previous.commit}→${latest.commit}`);
+    all.push(...rows);
+  }
+  document.getElementById("movers-sub").textContent = pairs.length
+    ? `${meta.label} for configurations run in both of a machine's two most recent sweeps (${pairs.join(", ")}), across every scenario.`
+    : `${meta.label}, comparing each machine's two most recent sweeps.`;
+
+  if (!all.length) {
+    host.appendChild(el("p", "empty", "Nothing to compare: no configuration ran in two consecutive sweeps of the same machine under this filter."));
+    return;
+  }
+
+  // Take turns between machines so the busiest machine cannot fill the table,
+  // and put real movement ahead of the many configurations that barely moved.
+  const shown = [];
+  const queues = machineOrder
+    .map(machine => all.filter(r => r.machine === machine).sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)))
+    .filter(q => q.length);
+  const realCount = all.filter(r => Math.abs(r.pct) >= REAL_CHANGE_PCT).length;
+  for (const onlyReal of [true, false]) {
+    let took = true;
+    while (took && shown.length < MOVERS_SHOWN) {
+      took = false;
+      for (const queue of queues) {
+        if (shown.length >= MOVERS_SHOWN) break;
+        const next = queue.findIndex(r => !shown.includes(r) && (!onlyReal || Math.abs(r.pct) >= REAL_CHANGE_PCT));
+        if (next >= 0) { shown.push(queue[next]); took = true; }
+      }
+    }
+  }
+
+  const table = el("table");
+  const thead = el("thead");
+  const headRow = el("tr");
+  for (const [label, cls] of [["Machine", ""], ["Scenario", ""], ["Configuration", ""],
+                              ["Previous", "num"], ["Latest", "num"], ["Change", "num"]]) {
+    headRow.appendChild(el("th", cls, label));
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const row of shown) {
+    const tr = el("tr");
+    const machineCell = el("td");
+    machineCell.appendChild(keySwatch(row.machine.color));
+    machineCell.appendChild(document.createTextNode(" " + row.machine.name));
+    tr.appendChild(machineCell);
+    tr.appendChild(el("td", null, row.run.scenario));
+    tr.appendChild(el("td", null, configLabel(row.run)));
+    tr.appendChild(el("td", "num", fmt(row.previous)));
+    tr.appendChild(el("td", "num", fmt(row.latest)));
+    const cls = changeClass(row.pct);
+    const change = el("td", "num");
+    change.appendChild(el("span", `cell-delta ${cls}`,
+      `${CHANGE_GLYPH[cls]} ${signedPercent(row.pct)} ${CHANGE_WORD[cls]}`));
+    tr.appendChild(change);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  host.appendChild(table);
+
+  if (all.length > shown.length) {
+    host.appendChild(el("p", "note",
+      `Showing ${shown.length} of ${all.length} shared configurations, taking turns between machines; ` +
+      `${realCount} moved by ${REAL_CHANGE_PCT}% or more. The rest are in the sweep explorer.`));
+  }
+
+  const crossing = [...new Set(shown
+    .filter(row => row.previousSweep.member !== row.latestSweep.member)
+    .map(row => `${row.previousSweep.member} → ${row.latestSweep.member}`))];
+  if (crossing.length) {
+    host.appendChild(el("p", "note",
+      `Some rows compare across the systems grouped into one machine (${crossing.join(", ")}). ` +
+      "Untick Group to keep them apart."));
+  }
+}
+
+// =========================================================================
+// Table view (the twin of the trend chart)
+// =========================================================================
+
+function renderTrendTable() {
+  const host = document.getElementById("trend-table");
+  host.replaceChildren();
+  const meta = metricMeta(state.metric);
+
+  if (!trendRows.length) {
+    host.appendChild(el("p", "empty", "Nothing plotted."));
+    return;
+  }
+
+  const rows = [];
+  for (const {machine, points} of trendRows) {
+    for (const p of points) rows.push({machine, p});
+  }
+  rows.sort((a, b) => a.p.sweep.dateObj - b.p.sweep.dateObj || a.machine.name.localeCompare(b.machine.name));
+
+  const table = el("table");
+  const thead = el("thead");
+  const headRow = el("tr");
+  for (const [label, cls] of [["Date", ""], ["Machine", ""], ["Commit", ""],
+                              [`${meta.label} (${meta.unit})`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
+    headRow.appendChild(el("th", cls, label));
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const {machine, p} of rows) {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, fmtDay(p.sweep.day)));
+    const machineCell = el("td");
+    machineCell.appendChild(keySwatch(machine.color));
+    machineCell.appendChild(document.createTextNode(" " + machine.name));
+    tr.appendChild(machineCell);
+    tr.appendChild(el("td", null, p.sweep.commit));
+    tr.appendChild(el("td", "num", fmt(p.value)));
+    tr.appendChild(el("td", null, configLabel(p.run)));
+    tr.appendChild(el("td", "num", String(p.count)));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  host.appendChild(el("p", "card-sub", `${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink.`));
+  host.appendChild(table);
+}
+
+// =========================================================================
+// Page
+// =========================================================================
+
+function renderLede() {
+  const days = sweeps.map(s => s.day).filter(Boolean).sort();
+  const span = days.length ? `${days[0]} to ${days[days.length - 1]}` : "no dates";
+  document.getElementById("lede").textContent =
+    `${sweeps.length} sweeps · ${machineOrder.length} machines · ${span}`;
+
+  const versions = [...new Set(sweeps.map(s => s.migrated_from ?? s.version))].sort();
+  const strangers = [...new Set(sweeps.filter(s => !s.registered).map(s => s.member))];
+  const notes = [
+    "Machines are grouped by bench/machines.toml, which is where a box running two systems, or a pool of cluster nodes, is declared to be one machine. Untick Group to see the sweep names underneath.",
+    "Each plotted value is the best run of a sweep for the chosen scenario and configuration; the remaining dimensions (data type, chunk size, fill) are searched, not averaged.",
+    "Only passing runs count. A missing point means that sweep ran nothing matching the filter.",
+  ];
+  if (strangers.length) {
+    notes.push(`Not described in bench/machines.toml: ${strangers.join(", ")}. Add an entry there to name and group them.`);
+  }
+  if (versions.length > 1) {
+    notes.push(`Sweeps here were written at result-schema versions ${versions.join(", ")}; a metric whose meaning changed between them is dropped from comparisons rather than converted.`);
+  }
+  document.getElementById("footnotes").textContent = notes.join(" ");
+}
+
+function renderMatchCount() {
+  let runs = 0, sweepsHit = 0;
+  for (const sweep of sweeps) {
+    let here = 0;
+    for (const run of sweep.runs) {
+      if (run.status === "pass" && matchesConfig(run) && metricValue(run, state.metric) != null) here++;
+    }
+    runs += here;
+    if (here) sweepsHit++;
+  }
+  document.getElementById("match-count").textContent =
+    `${runs} passing runs in ${sweepsHit} of ${sweeps.length} sweeps match`;
+}
+
+function render() {
+  machineOrder = buildMachines(state.grouped);
+  renderLede();
+  renderMatchCount();
+  renderTiles();
+  renderTrend();
+  renderMatrix();
+  renderMovers();
+  renderTrendTable();
+}
+
+pickDefaults();
+syncControls();
+render();
+
+let resizeTimer = null;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { renderTrend(); }, 120);
+});
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'bench/results/*.json'
+      - 'bench/machines.toml'
       - 'scripts/sweep/**'
   workflow_dispatch:
 
@@ -26,7 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
 
       - name: Generate report
-        run: uv run scripts/sweep/report.py --results-dir bench/results/ -o _site/index.html
+        run: uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
 
       - uses: actions/upload-pages-artifact@v3
 
