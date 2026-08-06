@@ -489,9 +489,9 @@ Fail0:
 // so it stops taking any. Queued writes are still drained, but the array shape
 // is not written: it would claim frames that never reached the sink.
 static int
-test_batch_failed_delivery_still_closes_sink(void)
+test_batch_failed_delivery_writes_no_shape(void)
 {
-  log_info("=== test_batch_failed_delivery_still_closes_sink ===");
+  log_info("=== test_batch_failed_delivery_writes_no_shape ===");
 
   struct test_shard_sink css;
   // Far too small for one batch, so a shard write fails during delivery.
@@ -523,6 +523,9 @@ test_batch_failed_delivery_still_closes_sink(void)
            css.finalize_count);
   CHECK(Fail2, fr.error != 0);
   CHECK(Fail2, css.update_append_count == 0);
+  // Queued writes were drained even so; nothing is left pointing into the
+  // buffers destroy is about to free.
+  CHECK(Fail2, shard_sink_pending_bytes(&css.base) == 0);
 
   free(src);
   tile_stream_gpu_destroy(s);
@@ -548,5 +551,5 @@ RUN_GPU_TESTS(
   { "batch_partial_flush", test_batch_partial_flush },
   { "batch_3epochs_flush", test_batch_3epochs_flush },
   { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K },
-  { "batch_failed_delivery_still_closes_sink",
-    test_batch_failed_delivery_still_closes_sink }, )
+  { "batch_failed_delivery_writes_no_shape",
+    test_batch_failed_delivery_writes_no_shape }, )

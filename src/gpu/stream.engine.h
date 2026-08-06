@@ -295,6 +295,12 @@ struct stream_context
   uint64_t cursor_elements;
   uint64_t total_element_limit; // configured stream length; 0 = unbounded
   size_t shard_alignment;       // from sink; 0 = no alignment
+
+  // A dispatch that fails partway leaves the epochs it transferred uncounted,
+  // and nothing can un-enqueue them, so this array's cursor no longer says
+  // where data belongs and it stops taking any. Per array: the other arrays of
+  // a multiarray stream are unaffected and still close out normally.
+  int append_failed;
 };
 
 // Shared GPU resources — constant memory, allocated once.
@@ -316,11 +322,6 @@ struct stream_engine
   struct gpu_delivery delivery;       // drain worker (pipelined schedule)
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;
-
-  // A dispatch that fails partway leaves the epochs it transferred uncounted,
-  // and nothing can un-enqueue them. Later work would place data using a stale
-  // epoch position, so the stream stops taking any.
-  int dispatch_failed;
 };
 
 // --- Engine init / teardown (shared by single-array and multiarray) ---

@@ -119,14 +119,17 @@ engine_dispatch_ingest(struct stream_engine* e,
 struct writer_result
 stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
 {
-  if (e->dispatch_failed)
+  if (ctx->append_failed)
     return writer_error();
   if (e->stage.bytes_written == 0)
     return writer_ok();
 
   const uint64_t first = dispatched_elements(e, ctx);
   if (engine_dispatch_ingest(e, ctx, first)) {
-    e->dispatch_failed = 1;
+    ctx->append_failed = 1;
+    // Staging is shared with the stream's other arrays, and these bytes are
+    // never going to reach this one's pool, so let go of them.
+    e->stage.bytes_written = 0;
     return writer_error();
   }
   e->stage.bytes_written = 0;
@@ -136,7 +139,7 @@ stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
        at += epoch) {
     struct writer_result r = schedule_accumulate_epoch(e, ctx);
     if (r.error) {
-      e->dispatch_failed = 1;
+      ctx->append_failed = 1;
       return r;
     }
   }
@@ -208,7 +211,7 @@ stream_append_body(struct stream_engine* e,
 
   const uint64_t total_limit = ctx->total_element_limit;
 
-  if (e->dispatch_failed)
+  if (ctx->append_failed)
     return writer_error_at(src, end);
   // A failed kick leaves the batch full without swapping the slot, so the
   // epochs the pool holds are all accounted for and there is nowhere to put
@@ -289,19 +292,22 @@ finish_accumulated(struct stream_engine* e, struct stream_context* ctx)
 {
   if (ctx->cursor_elements % ctx->layout.epoch_elements != 0 &&
       schedule_add_partial_epoch(e, ctx)) {
-    e->dispatch_failed = 1;
+    ctx->append_failed = 1;
     return writer_error();
   }
 
   struct writer_result r = schedule_flush_accumulated(e, ctx);
   if (r.error) {
     // The batch stays counted and unkicked, and nothing can say which of its
-    // epochs reached the sink, so the stream is done taking data.
-    e->dispatch_failed = 1;
+    // epochs reached the sink.
+    ctx->append_failed = 1;
     return r;
   }
 
-  return schedule_flush_partial_append(e, ctx);
+  r = schedule_flush_partial_append(e, ctx);
+  if (r.error)
+    ctx->append_failed = 1;
+  return r;
 }
 
 // A shard's index claims every chunk it names is present, and the array's shape
@@ -350,13 +356,15 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   struct writer_result r =
-    e->dispatch_failed ? writer_error() : stream_dispatch_staged(e, ctx);
+    ctx->append_failed ? writer_error() : stream_dispatch_staged(e, ctx);
 
   // Whatever happened above, batches already handed to the delivery worker have
   // to be joined: the worker writes the shard state this function goes on to
   // read, and its queued writes point into buffers destroy frees.
   {
     struct writer_result d = schedule_drain_kicked(e, ctx);
+    if (d.error)
+      ctx->append_failed = 1;
     if (!r.error)
       r = d;
   }
