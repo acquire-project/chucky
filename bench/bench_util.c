@@ -504,8 +504,6 @@ run_bench(const struct bench_config* cfg)
   if (is_multiscale && nlod > 0)
     print_report("  LOD levels:  %d", nlod);
 
-  struct platform_clock clock = { 0 };
-  platform_toc(&clock);
   if (cfg->append_elements > 0) {
     char abuf[32];
     format_bytes(
@@ -513,6 +511,9 @@ run_bench(const struct bench_config* cfg)
     print_report(
       "  append size: %zu elements = %s", cfg->append_elements, abuf);
   }
+
+  struct platform_clock clock = { 0 };
+  platform_toc(&clock);
   CHECK(Fail,
         pump_data_prefill_blocked(bench_writer(&h),
                                   total_elements,
@@ -733,7 +734,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
 int
 bench_stream_main(int ac, char* av[], struct bench_spec spec)
 {
-  struct bench_cli_args a;
+  struct bench_cli_args a = { 0 };
   if (parse_bench_cli_args(ac, av, &a))
     return 1;
 
@@ -1123,7 +1124,7 @@ Fail:
 int
 bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
 {
-  struct bench_cli_args a;
+  struct bench_cli_args a = { 0 };
   if (parse_bench_cli_args(ac, av, &a))
     return 1;
 
@@ -1149,6 +1150,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .append_reduce_method =
       a.reduce == lod_reduce_median ? lod_reduce_max : a.reduce,
     .backend = BENCH_GPU, // two-streams is GPU-only
+    .append_elements = a.append_elements,
     .dtype = a.dtype,
     .chunk_ratios = spec.chunk_ratios,
     .target_chunk_bytes =

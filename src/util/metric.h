@@ -25,27 +25,36 @@ record_append_ms(struct stream_metrics* m, float ms)
   m->append_count++;
 }
 
-// Duration within which the given fraction of appends completed. Rounded up to
-// a bucket boundary, so it overstates rather than understates, and never
-// exceeds the longest append actually seen. Returns 0 when nothing was
-// recorded.
+// The upper edge of bucket i, or the longest append seen when that is smaller.
+// The topmost bucket has no upper edge, so it reports the longest append.
+static inline float
+append_bucket_ms(const struct stream_metrics* m, int i)
+{
+  if (i >= APPEND_LATENCY_BUCKETS - 1)
+    return m->max_append_ms;
+  const float edge =
+    (float)(APPEND_LATENCY_MIN_MS *
+            pow(10.0, (double)(i + 1) / APPEND_LATENCY_PER_DECADE));
+  return edge < m->max_append_ms ? edge : m->max_append_ms;
+}
+
+// Duration within which the given fraction of appends completed. Never exceeds
+// the longest append seen. Returns 0 when nothing was recorded.
 static inline float
 append_ms_at(const struct stream_metrics* m, double fraction)
 {
   if (m->append_count == 0)
     return 0.0f;
-  const uint64_t want = (uint64_t)(fraction * (double)m->append_count + 0.5);
+  uint64_t want = (uint64_t)ceil(fraction * (double)m->append_count);
+  if (want == 0)
+    want = 1;
   uint64_t seen = 0;
   for (int i = 0; i < APPEND_LATENCY_BUCKETS; ++i) {
     seen += m->append_ms_buckets[i];
-    if (seen >= want || i == APPEND_LATENCY_BUCKETS - 1) {
-      const float edge =
-        (float)(APPEND_LATENCY_MIN_MS *
-                pow(10.0, (double)(i + 1) / APPEND_LATENCY_PER_DECADE));
-      return edge < m->max_append_ms ? edge : m->max_append_ms;
-    }
+    if (seen >= want)
+      return append_bucket_ms(m, i);
   }
-  return 0.0f;
+  return m->max_append_ms;
 }
 
 static inline void

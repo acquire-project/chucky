@@ -43,15 +43,9 @@ pump_data_bpe(struct writer* w,
               fill_fn fill,
               size_t bpe);
 
-// Fill one block once and reuse it for every append.
-int
-pump_data_prefill(struct writer* w,
-                  size_t total_elements,
-                  fill_fn fill,
-                  size_t bpe);
-
-// Hand over block_elements at a time instead of the default block. Pass the
-// size of one frame to measure what a caller feeding frames would see.
+// Fill one block once and reuse it for every append. block_elements is how much
+// is handed over per append; 0 uses a default. Pass one frame's worth to see
+// what a caller feeding frames would see.
 int
 pump_data_prefill_blocked(struct writer* w,
                           size_t total_elements,

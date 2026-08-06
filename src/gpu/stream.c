@@ -336,7 +336,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   float ms = (float)(platform_toc(&clk) * 1000.0);
   if (ms > s->engine.metrics.max_append_ms)
     s->engine.metrics.max_append_ms = ms;
-  record_append_ms(&s->engine.metrics, ms);
+  if (r.rest.beg != input.beg)
+    record_append_ms(&s->engine.metrics, ms);
   if (s->flushed && r.rest.beg != input.beg)
     s->flushed = 0;
   return r;

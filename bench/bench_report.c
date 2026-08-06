@@ -23,8 +23,8 @@ print_append_latency(const struct stream_metrics* m)
     print_report("  max append ms:   %.2f", (double)m->max_append_ms);
     return;
   }
-  print_report("  append ms:       p50 %.2f  p90 %.2f  p99 %.2f  p99.9 %.2f"
-               "  max %.2f  (%llu appends)",
+  print_report("  append ms:       p50 %.3f  p90 %.3f  p99 %.3f  p99.9 %.3f"
+               "  max %.3f  (%llu appends)",
                (double)append_ms_at(m, 0.50),
                (double)append_ms_at(m, 0.90),
                (double)append_ms_at(m, 0.99),
@@ -381,14 +381,16 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_object_end(&jw);
   }
   jw_object_end(&jw);
-  jw_key(&jw, "append_ms_p50");
-  jw_float(&jw, (double)append_ms_at(m, 0.50));
-  jw_key(&jw, "append_ms_p90");
-  jw_float(&jw, (double)append_ms_at(m, 0.90));
-  jw_key(&jw, "append_ms_p99");
-  jw_float(&jw, (double)append_ms_at(m, 0.99));
-  jw_key(&jw, "append_ms_p999");
-  jw_float(&jw, (double)append_ms_at(m, 0.999));
+  if (m->append_count > 0) {
+    jw_key(&jw, "append_ms_p50");
+    jw_float(&jw, (double)append_ms_at(m, 0.50));
+    jw_key(&jw, "append_ms_p90");
+    jw_float(&jw, (double)append_ms_at(m, 0.90));
+    jw_key(&jw, "append_ms_p99");
+    jw_float(&jw, (double)append_ms_at(m, 0.99));
+    jw_key(&jw, "append_ms_p999");
+    jw_float(&jw, (double)append_ms_at(m, 0.999));
+  }
   // The buckets themselves, so a reader can ask their own question — such as
   // how many appends missed their frame budget. No single percentile answers
   // that, because where the slow tail starts depends on the append size.
@@ -399,9 +401,7 @@ print_bench_json_pass(const struct stream_metrics* m,
       continue;
     jw_object_begin(&jw);
     jw_key(&jw, "upto_ms");
-    jw_float(&jw,
-             APPEND_LATENCY_MIN_MS *
-               pow(10.0, (double)(i + 1) / APPEND_LATENCY_PER_DECADE));
+    jw_float(&jw, (double)append_bucket_ms(m, i));
     jw_key(&jw, "n");
     jw_uint(&jw, m->append_ms_buckets[i]);
     jw_object_end(&jw);

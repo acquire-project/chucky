@@ -76,7 +76,7 @@ struct stream_metrics
   // How long individual appends took, as counts per time bucket. A caller
   // asking whether it can keep up needs the slow tail, not the average, and
   // there are far too many appends to keep every one.
-  uint32_t append_ms_buckets[APPEND_LATENCY_BUCKETS];
+  uint64_t append_ms_buckets[APPEND_LATENCY_BUCKETS];
   uint64_t append_count;
 
   // Measurements dropped before they could be read. Non-zero means the stage

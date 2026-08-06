@@ -101,7 +101,7 @@ install(
 # integration path. cudart_static / nvcomp are baked into the chucky archive
 # but a bare -l flag cannot locate them without -L into the toolkit.
 set(CHUCKY_VARIANT_DESCRIPTION "CPU only")
-set(CHUCKY_PC_LIBS_PRIVATE "-llz4 -lzstd -laws-c-s3 -ldl -lrt -lpthread")
+set(CHUCKY_PC_LIBS_PRIVATE "-lm -llz4 -lzstd -laws-c-s3 -ldl -lrt -lpthread")
 if(CHUCKY_ENABLE_GPU)
     set(CHUCKY_VARIANT_DESCRIPTION "GPU + CPU")
     string(APPEND CHUCKY_PC_LIBS_PRIVATE " -lcudart_static -lnvcomp")

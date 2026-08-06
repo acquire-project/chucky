@@ -55,7 +55,7 @@ add_src_lib(codec_types SOURCES types.codec.c types.codec.h)
 add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts.h
     stream/dim_info.c stream/dim_info.h
     stream/types.aggregate.c types.stream.h stream/types.aggregate.h types.lod.h defs.limits.h
-    LINKS codec_types lod_plan index_ops platform chucky_log
+    LINKS m codec_types lod_plan index_ops platform chucky_log
 )
 
 # --- Backend subdirectories ---
@@ -97,6 +97,7 @@ list(
 set(_with_blosc $<BOOL:${HAVE_BLOSC}>)
 set(_with_gpu $<BOOL:${CHUCKY_ENABLE_GPU}>)
 set(_chucky_public_deps
+    m
     Threads::Threads
     Lz4::Lz4
     Zstd::Zstd
