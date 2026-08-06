@@ -148,6 +148,10 @@ test_batch_mid_batch_after_dispatch(void)
   CHECK(Fail2, r.error == 0);
   CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 0);
   CHECK(Fail2, css.finalize_count >= 1);
+  // All 16 epochs went over in one transfer, which is what tells this apart
+  // from a transfer per epoch. Counted after the flush, which is where the
+  // last outstanding measurement is read.
+  CHECK(Fail2, tile_stream_gpu_get_metrics(s).h2d.count == 1);
 
   free(src);
   tile_stream_gpu_destroy(s);
@@ -481,6 +485,62 @@ Fail0:
   return 1;
 }
 
+// 7. A failed delivery leaves the stream unable to say where new data belongs,
+// so it stops taking any. Closing the sink still has to happen: without the
+// array shape and the shard indexes, what was already written cannot be read.
+static int
+test_batch_failed_delivery_still_closes_sink(void)
+{
+  log_info("=== test_batch_failed_delivery_still_closes_sink ===");
+
+  struct test_shard_sink css;
+  // Far too small for one batch, so a shard write fails during delivery.
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 64);
+
+  struct dimension dims[3];
+  make_test_dims_3d_unbounded(dims);
+  struct tile_stream_configuration config = make_config(dims);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
+  CHECK(Fail0, s);
+
+  // 6 epochs at K=2. The third batch's kick is the first to drain a kicked
+  // slot, so that is where delivery fails and the append reports it.
+  uint16_t* src = make_src(288);
+  CHECK(Fail, src);
+
+  struct slice input = { .beg = src, .end = src + 288 };
+  struct writer_result ar = writer_append(tile_stream_gpu_writer(s), input);
+  CHECK(Fail2, ar.error != 0);
+
+  // The stream can no longer say where new data belongs, so it takes none.
+  struct writer_result again = writer_append(tile_stream_gpu_writer(s), input);
+  CHECK(Fail2, again.error != 0);
+
+  // The failure is reported, and the sink is still closed out.
+  struct writer_result fr = writer_flush(tile_stream_gpu_writer(s));
+  log_info("  flush err=%d update_append=%d finalize=%d",
+           fr.error,
+           css.update_append_count,
+           css.finalize_count);
+  CHECK(Fail2, fr.error != 0);
+  CHECK(Fail2, css.update_append_count > 0);
+
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&css);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  free(src);
+Fail:
+  tile_stream_gpu_destroy(s);
+Fail0:
+  test_sink_free(&css);
+  log_error("  FAIL");
+  return 1;
+}
+
 RUN_GPU_TESTS(
   { "batch_one_epoch_stays_staged", test_batch_one_epoch_stays_staged },
   { "batch_mid_batch_after_dispatch", test_batch_mid_batch_after_dispatch },
@@ -488,4 +548,6 @@ RUN_GPU_TESTS(
   { "batch_multi_cycle", test_batch_multi_cycle },
   { "batch_partial_flush", test_batch_partial_flush },
   { "batch_3epochs_flush", test_batch_3epochs_flush },
-  { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K }, )
+  { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K },
+  { "batch_failed_delivery_still_closes_sink",
+    test_batch_failed_delivery_still_closes_sink }, )

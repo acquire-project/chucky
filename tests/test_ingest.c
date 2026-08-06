@@ -127,6 +127,7 @@ test_ingest_single_epoch(void)
                                   .first_epoch = as_view(d_pool),
                                   .epoch_bytes = pool_bytes,
                                   .epoch_elements = epoch_elements,
+                                  .epochs = 1,
                                 },
                                 0,
                                 bytes_per_element,
@@ -251,6 +252,7 @@ test_ingest_incremental(void)
       .first_epoch = as_view(d_pool),
       .epoch_bytes = pool_bytes,
       .epoch_elements = epoch_elements,
+      .epochs = 1,
     };
 
     memcpy(gpu_pool_at(&stage.h_pool, stage.current, 0).p, h_src, half);
@@ -411,6 +413,7 @@ run_many_epochs_one_dispatch(uint64_t first_element)
                                   .first_epoch = as_view(d_pool),
                                   .epoch_bytes = epoch_bytes,
                                   .epoch_elements = epoch_elements,
+                                  .epochs = n_epochs + 1,
                                 },
                                 first_element,
                                 bytes_per_element,

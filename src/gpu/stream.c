@@ -103,6 +103,7 @@ engine_dispatch_ingest(struct stream_engine* e,
       .first_epoch = stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
       .epoch_bytes = pool_epoch_bytes(ctx),
       .epoch_elements = ctx->layout.epoch_elements,
+      .epochs = e->sched.epochs_per_batch - e->sched.accumulated,
     };
     return ingest_dispatch_scatter(&e->stage,
                                    &ctx->layout,
@@ -284,15 +285,10 @@ stream_append_body(struct stream_engine* e,
 
 // --- Shared flush body ---
 
-struct writer_result
-stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
+// Everything that puts more data in front of the sink.
+static struct writer_result
+flush_pending_data(struct stream_engine* e, struct stream_context* ctx)
 {
-  // A create that fails before sizing the layout leaves epoch_elements at 0;
-  // the auto-flush in destroy would then divide by it below. Nothing was
-  // ever sized, so there is nothing to flush.
-  if (ctx->layout.epoch_elements == 0)
-    return writer_ok();
-
   struct writer_result r = stream_dispatch_staged(e, ctx);
   if (r.error)
     return r;
@@ -303,6 +299,13 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 
   // Flush any partial epoch first (sub-epoch data)
   if (ctx->cursor_elements % ctx->layout.epoch_elements != 0) {
+    // An earlier flush can have counted a partial epoch into the batch and then
+    // failed to kick it, leaving no room for this one.
+    if (e->sched.accumulated >= e->sched.epochs_per_batch) {
+      r = schedule_flush_accumulated(e, ctx);
+      if (r.error)
+        return r;
+    }
     if (schedule_add_partial_epoch(e, ctx))
       return writer_error();
   }
@@ -313,9 +316,57 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     return r;
 
   // Drain any partial append accumulators
-  r = schedule_flush_partial_append(e, ctx);
-  if (r.error)
-    return r;
+  return schedule_flush_partial_append(e, ctx);
+}
+
+// Close out what already reached the sink: shard indexes, queued writes, and
+// the array shape. Runs even when the work above failed, because without these
+// nothing that was written can be read back.
+static struct writer_result
+close_out_sink(struct stream_engine* e, struct stream_context* ctx)
+{
+  struct writer_result r = writer_ok();
+
+  for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
+    if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
+        finalize_shards(
+          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+      r = writer_error();
+  }
+
+  // Queued IO points into buffers destroy frees, so drain whatever happened
+  // above.
+  if (shard_sink_drain(ctx->sink))
+    r = writer_error();
+
+  if (ctx->sink->update_append) {
+    const uint8_t na = dim_info_n_append(&ctx->dims);
+    for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
+      uint64_t append_sizes[HALF_MAX_RANK];
+      dim_info_final_append_sizes(
+        &ctx->dims, ctx->cursor_elements, lv, append_sizes);
+      if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
+        r = writer_error();
+    }
+  }
+
+  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
+    r = writer_error();
+
+  return r;
+}
+
+struct writer_result
+stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
+{
+  // A create that fails before sizing the layout leaves epoch_elements at 0;
+  // the auto-flush in destroy would then divide by it below. Nothing was
+  // ever sized, so there is nothing to flush.
+  if (ctx->layout.epoch_elements == 0)
+    return writer_ok();
+
+  struct writer_result r =
+    e->dispatch_failed ? writer_error() : flush_pending_data(e, ctx);
 
   // Last chance to read the outstanding ingest intervals; flush is already a
   // sync point, so waiting here costs nothing and leaves no sample unread.
@@ -332,38 +383,8 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     log_debug("scatter timing ring wrapped %llu times",
               (unsigned long long)e->stage.scatter_samples_lost);
 
-  // Emit partial shards for all levels (unified path: shard[lv] is the
-  // shard_state read by the new kick/D2H code).
-  for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0) {
-      if (finalize_shards(
-            &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment)) {
-        // Drain queued IO before bailing; it points into buffers destroy frees.
-        shard_sink_drain(ctx->sink);
-        return writer_error();
-      }
-    }
-  }
-
-  if (shard_sink_drain(ctx->sink))
-    return writer_error();
-
-  // Final metadata update using pre-emit chunk counts.
-  if (ctx->sink->update_append) {
-    const uint8_t na = dim_info_n_append(&ctx->dims);
-    for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-      uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_final_append_sizes(
-        &ctx->dims, ctx->cursor_elements, lv, append_sizes);
-      if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
-        return writer_error();
-    }
-  }
-
-  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
-    return writer_error();
-
-  return writer_ok();
+  struct writer_result c = close_out_sink(e, ctx);
+  return r.error ? r : c;
 }
 
 // --- Accessor ---

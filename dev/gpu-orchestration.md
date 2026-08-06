@@ -55,6 +55,19 @@ queued to a delivery worker at kick time and joined before its slot is
 refilled. The producer thread decides what happens but no longer moves large
 amounts of data itself.
 
+**Four sizes of work, from smallest to largest** (#173). An *append* copies the
+caller's bytes into a pinned staging buffer and does nothing else. A *dispatch*
+fires when that buffer is full: one transfer for the whole buffer, then one
+scatter for each epoch the buffer covers. An *epoch* is one layer of chunks, and
+the level-of-detail work runs per epoch. A *batch* is the epochs the chunk pool
+holds at once, sized so a group of epochs has enough chunks to spread compression
+work; compress, aggregate, copy-back and delivery all run per batch. A dispatch
+covers at most the room left in the batch, since that is what the pool holds.
+Two consequences worth knowing: the append cursor runs ahead of the epochs the
+schedule has counted, by whatever is still in staging, and nothing reaches the
+device until the buffer fills or the caller flushes, so `buffer_capacity_bytes`
+trades throughput against how long an append can sit unsent.
+
 ## The ordering rules
 
 One event can back several named rules when it guards different buffers for
@@ -118,38 +131,16 @@ structure allowed it.
 
 ## What's next
 
-Three items, in the order I'd do them.
+Two items remain of the three below; the first is done and kept for the record.
 
-### 1. Make the measurements trustworthy
+### 1. Make the measurements trustworthy — done
 
-This is the blocker for every performance question, and it is the smallest
-piece of work here. Today the numbers mislead in five specific ways:
-
-- The scatter timer reads elapsed time without checking the result. When the
-  event isn't ready the sample is silently dropped — on some settings more
-  than half the scattered bytes go uncounted.
-- The reduced-level timers use one event pair per batch, re-recorded every
-  epoch, so each reported row is only the batch's last epoch. The reported
-  total is one epoch's worth of time where it should be the whole batch's.
-- The gather timer starts before the wait for the previous drain's tail
-  upload, so a slow sink is reported as slow gathering.
-- The producer's real waiting time is the `StagingFree` stall. It is measured,
-  and printed to the console table, but left out of the JSON the sweep
-  analyzes (`bench/bench_report.c` — the console block prints it, the JSON
-  block does not). This has already caused one wrong diagnosis.
-- The JSON keeps averages and rates but drops each stage's total time and
-  sample count, so you cannot re-derive anything from a sweep file.
-
-Fixes: export `StagingFree` and per-stage total time and count in the JSON;
-start the gather timer after the tail wait; check the elapsed-time result and
-retry instead of dropping the sample; accumulate reduced-level timings per
-epoch instead of per batch; keep the "too small to be real" filter only for
-detecting pre-signaled events.
-
-*Done when:* a sweep JSON alone is enough to reconstruct each stage's total
-time, and the producer's stall time appears in it. Some of this already exists
-on the local `issue-101-append-latency` branch (append latency distribution,
-issue #101).
+Shipped across #163 through #167. A sweep JSON now carries each stage's total
+time, sample count, and input and output bytes; the producer's `StagingFree`
+stall is in it; unready timing results are left pending instead of dropped and
+counted when a ring wraps; reduced-level timings accumulate per epoch; and the
+aggregate timer starts after the tail-state wait. Per-append times are kept as a
+bucketed distribution (#101).
 
 ### 2. Cover the Windows pipeline shape; drop the multi-array one
 
@@ -201,8 +192,8 @@ clean without needing a per-configuration exception list.
 
 The pools work (#148) set out to reach "no pointer to a recycled buffer
 crosses a stage boundary outside the pool API". It didn't. `gpu_pool_at`
-hands out a pointer with no ordering attached, and has five non-test callers
-(`src/gpu/stream.c`, `src/gpu/schedule.c`, `src/multiarray/stream.gpu.c`).
+hands out a pointer with no ordering attached, and has seven non-test call
+sites (`src/gpu/stream.c`, `src/gpu/schedule.c`, `src/multiarray/stream.gpu.c`).
 Each is correct today because a comment says so. Three of them are pool
 zeroing.
 
@@ -218,12 +209,13 @@ remove `gpu_pool_at`.
   (`src/gpu/aggregate.cu`, `src/gpu/lod.cu`), codec backends, or the
   zarr/sink layer. Their signatures stay as they are.
 - No CUDA Graphs. The pipeline is small enough that a declared table plus
-  pools gives the auditability without a graph executor. Revisit only if
-  dispatch overhead shows up as a real cost.
+  pools gives the auditability without a graph executor. Dispatch overhead did
+  turn out to be a real cost (#173), and the answer was to dispatch less often
+  rather than to record a graph.
 - No revival of PR #139's batched output slots. Measurement showed batching
   the copy back from the device is worth at most 1%.
 
 ## Related
 
 Issues #140 and #141 (the two corruption bugs), PR #142 (the tail-state
-counter), issues #101 and #162.
+counter), issues #101, #162 and #173.

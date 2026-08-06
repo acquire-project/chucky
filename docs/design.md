@@ -559,7 +559,7 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `rank` | 1–32 | Number of dimensions (`MAX_ZARR_RANK`) |
 | `dimensions` | `struct dimension[]` | Per-dimension geometry (see below) |
 | `dtype` | `enum dtype` | Element type (11 types, 1–8 bytes; see `src/dtype.h`) |
-| `buffer_capacity_bytes` | > 0 | H2D staging buffer size (doubled internally) |
+| `buffer_capacity_bytes` | > 0 | H2D staging buffer size, rounded up to a 4096-byte page and doubled internally. Also the dispatch size: nothing reaches the device until it fills or the caller flushes, so a larger value raises throughput and lets an append wait longer |
 | `codec` | none / lz4 / zstd | Compression codec |
 | `epochs_per_batch` | ≥ 0 | Epochs per batch ($K$); 0 = auto (from `target_batch_bytes`) |
 | `target_batch_bytes` | > 0 | Target uncompressed bytes per batch for auto-$K$ (default 512 MiB) |

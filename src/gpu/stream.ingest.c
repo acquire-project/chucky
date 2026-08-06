@@ -53,12 +53,13 @@ ingest_init(struct staging_state* stage,
     CU(Fail,
        cuMemAlloc(&stage->slot[i].d_in,
                   buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
-    // The scatter reads into the pad and discards it, but no transfer ever
-    // writes there, so leaving it unset reads as uninitialized to a checker.
+    // A transfer writes whole elements, and the scatter reads whole words, so
+    // it can take a few bytes past the last element transferred. Those bytes
+    // are discarded, but they have to hold something.
     CU(Fail,
-       cuMemsetD8(stage->slot[i].d_in + buffer_capacity_bytes,
+       cuMemsetD8(stage->slot[i].d_in,
                   0,
-                  TRANSPOSE_SOURCE_PAD_BYTES));
+                  buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
     CU(Fail, cuEventCreate(&stage->slot[i].t_h2d_start, CU_EVENT_DEFAULT));
@@ -176,8 +177,10 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
 {
   uint64_t element = first_element;
   CUdeviceptr d_epoch = gpu_pool_view_d(dst.first_epoch);
+  uint32_t epoch = 0;
 
   for (size_t at = 0; at < bytes;) {
+    assert(epoch < dst.epochs);
     const uint64_t in_epoch = element % dst.epoch_elements;
     const uint64_t room = (dst.epoch_elements - in_epoch) * bpe;
     const uint64_t left = bytes - at;
@@ -195,8 +198,10 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
 
     at += (size_t)n;
     element += n / bpe;
-    if (element % dst.epoch_elements == 0)
+    if (element % dst.epoch_elements == 0) {
       d_epoch += dst.epoch_bytes;
+      epoch++;
+    }
   }
 }
 

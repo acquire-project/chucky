@@ -224,12 +224,16 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
 
+  // One array failing must not leave the others unfinalized, so the whole loop
+  // runs and the first failure is what gets reported.
+  int failed = 0;
+
   // Save current array's state. Staging is engine-wide, so this array's data
   // has to reach its own pool before another array's flush reuses the buffer.
   if (ms->active >= 0) {
     struct array_descriptor_gpu* desc = &ms->arrays[ms->active];
     if (stream_dispatch_staged(&ms->engine, &desc->ctx).error)
-      goto Error;
+      failed = 1;
     unbind_context(&ms->engine, desc);
   }
 
@@ -250,11 +254,12 @@ flush_impl(struct multiarray_writer* self)
     bind_context(&ms->engine, desc);
 
     struct writer_result r = stream_flush_body(&ms->engine, &desc->ctx);
-    if (r.error)
-      goto Error;
 
     unbind_context(&ms->engine, desc);
-    desc->flushed = 1;
+    if (r.error)
+      failed = 1;
+    else
+      desc->flushed = 1;
   }
 
   ms->active = -1;
@@ -262,13 +267,9 @@ flush_impl(struct multiarray_writer* self)
   // Each array's stream_flush_body already drained its sink as a commit
   // point; no additional drain needed here.
 
-  return (struct multiarray_writer_result){ .error = multiarray_writer_ok };
-
-Error:
-  if (ms->active >= 0)
-    unbind_context(&ms->engine, &ms->arrays[ms->active]);
-  ms->active = -1;
-  return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
+  return (struct multiarray_writer_result){
+    .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
+  };
 }
 
 // ---- Create / Destroy ----

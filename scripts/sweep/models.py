@@ -62,13 +62,20 @@ def validate_results(data: dict) -> ResultsFile:
 # when a metric is renamed, removed, or changes meaning; adding one does not
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present.
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
 
 # Keys whose value cannot be recovered, by the version that retired them.
-RETIRED_AT = {2: ("kick_sync_ms", "kick_sync_count")}
+# Version 3: the writer stopped starting a transfer per append (#173), so the
+# pending-bytes high-water mark and the backpressure wait are sampled once per
+# staging buffer instead of once per epoch. The numbers are far apart for reasons
+# that have nothing to do with the hardware.
+RETIRED_AT = {
+    2: ("kick_sync_ms", "kick_sync_count"),
+    3: ("peak_pending_mib", "backpressure_ms", "backpressure_count"),
+}
 
 
 def _migrate_1_to_2(data: dict) -> None:
