@@ -35,15 +35,10 @@ destroy_layout_gpu(struct tile_stream_layout_gpu* gpu)
   cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
 }
 
-// The scatter takes its destination as pool slots so it can step from one
-// epoch's region to the next; these tests own the memory outright.
-static void
-bind_chunk_pool(struct gpu_pool* pool,
-                struct gpu_ordering* ord,
-                CUdeviceptr d_pool)
+static struct gpu_pool_view
+as_view(CUdeviceptr d)
 {
-  gpu_pool_init(pool, ord, GPU_EDGE_COUNT, GPU_EDGE_COUNT);
-  gpu_pool_bind(pool, 0, (void*)(uintptr_t)d_pool);
+  return (struct gpu_pool_view){ .p = (void*)(uintptr_t)d };
 }
 
 // --- Tests ---
@@ -124,23 +119,19 @@ test_ingest_single_epoch(void)
   memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
   stage.bytes_written = src_bytes;
 
-  {
-    struct gpu_pool chunks;
-    bind_chunk_pool(&chunks, &ord, d_pool);
-    CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  (struct scatter_destination){
-                                    .pool = &chunks,
-                                    .epoch_bytes = pool_bytes,
-                                    .epoch_elements = epoch_elements,
-                                  },
-                                  0,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
-  }
+  CHECK(Fail,
+        ingest_dispatch_scatter(&stage,
+                                &layout,
+                                &layout_gpu,
+                                (struct scatter_destination){
+                                  .first_epoch = as_view(d_pool),
+                                  .epoch_bytes = pool_bytes,
+                                  .epoch_elements = epoch_elements,
+                                },
+                                0,
+                                bytes_per_element,
+                                h2d,
+                                compute) == 0);
 
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
@@ -256,10 +247,8 @@ test_ingest_incremental(void)
     h_src[i] = (uint16_t)(i & 0xFFFF);
 
   {
-    struct gpu_pool chunks;
-    bind_chunk_pool(&chunks, &ord, d_pool);
     const struct scatter_destination dst = {
-      .pool = &chunks,
+      .first_epoch = as_view(d_pool),
       .epoch_bytes = pool_bytes,
       .epoch_elements = epoch_elements,
     };
@@ -414,23 +403,19 @@ run_many_epochs_one_dispatch(uint64_t first_element)
   memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
   stage.bytes_written = src_bytes;
 
-  {
-    struct gpu_pool chunks;
-    bind_chunk_pool(&chunks, &ord, d_pool);
-    CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  (struct scatter_destination){
-                                    .pool = &chunks,
-                                    .epoch_bytes = epoch_bytes,
-                                    .epoch_elements = epoch_elements,
-                                  },
-                                  first_element,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
-  }
+  CHECK(Fail,
+        ingest_dispatch_scatter(&stage,
+                                &layout,
+                                &layout_gpu,
+                                (struct scatter_destination){
+                                  .first_epoch = as_view(d_pool),
+                                  .epoch_bytes = epoch_bytes,
+                                  .epoch_elements = epoch_elements,
+                                },
+                                first_element,
+                                bytes_per_element,
+                                h2d,
+                                compute) == 0);
 
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
@@ -488,7 +473,7 @@ test_ingest_many_epochs_one_dispatch(void)
 }
 
 // Starting one element in leaves every epoch after the first at an odd element
-// offset, which the scatter's coalesced load cannot be given.
+// offset, so the scatter's combined load starts partway into a word.
 static int
 test_ingest_many_epochs_from_mid_epoch(void)
 {

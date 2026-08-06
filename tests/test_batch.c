@@ -38,12 +38,12 @@ make_src(size_t count)
 
 // --- Test cases ---
 
-// 1. One epoch into a K=2 batch stays in staging: dispatch waits for the
-// staging buffer to fill, and here that takes the whole batch (#173).
+// 1. One epoch into a K=2 batch stays in staging. A dispatch covers at most the
+// room left in the batch, and here that is the whole batch (#173).
 static int
-test_batch_one_epoch_waits_for_buffer(void)
+test_batch_one_epoch_stays_staged(void)
 {
-  log_info("=== test_batch_one_epoch_waits_for_buffer ===");
+  log_info("=== test_batch_one_epoch_stays_staged ===");
 
   struct test_shard_sink css;
   test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 512 * 1024);
@@ -80,6 +80,73 @@ test_batch_one_epoch_waits_for_buffer(void)
   // Flush is what gets the staged epoch to the device
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail2, r.error == 0);
+  CHECK(Fail2, css.finalize_count >= 1);
+
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&css);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  free(src);
+Fail:
+  tile_stream_gpu_destroy(s);
+Fail0:
+  test_sink_free(&css);
+  log_error("  FAIL");
+  return 1;
+}
+
+// 1b. A dispatch that ends on an epoch boundary partway through a batch leaves
+// the batch counted but unkicked. Epochs are 256 bytes here and the staging
+// buffer is 4096, so one dispatch covers 16 of the batch's 32 epochs.
+static int
+test_batch_mid_batch_after_dispatch(void)
+{
+  log_info("=== test_batch_mid_batch_after_dispatch ===");
+
+  struct test_shard_sink css;
+  test_sink_init(&css, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
+
+  struct dimension dims[3];
+  uint8_t rank = dims_create(dims, "zyx", (uint64_t[]){ 0, 8, 8 });
+  dims_set_chunk_sizes(dims, rank, (uint64_t[]){ 2, 4, 4 });
+  dims[0].chunks_per_shard = 16;
+  dims_set_shard_counts(dims, rank, (uint64_t[]){ 0, 1, 1 });
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 32,
+  };
+
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &css.base);
+  CHECK(Fail0, s);
+
+  const uint64_t epoch = tile_stream_gpu_layout(s)->epoch_elements;
+  CHECK(Fail, epoch == 128);
+
+  uint16_t* src = make_src(16 * epoch);
+  CHECK(Fail, src);
+
+  struct slice input = { .beg = src, .end = src + 16 * epoch };
+  struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
+  CHECK(Fail2, r.error == 0);
+
+  {
+    struct tile_stream_status st = tile_stream_gpu_status(s);
+    CHECK(Fail2, st.epochs_per_batch == 32);
+    CHECK(Fail2, st.batch_accumulated == 16);
+    CHECK(Fail2, st.flush_pending == 0);
+  }
+
+  r = writer_flush(tile_stream_gpu_writer(s));
+  CHECK(Fail2, r.error == 0);
+  CHECK(Fail2, tile_stream_gpu_status(s).batch_accumulated == 0);
   CHECK(Fail2, css.finalize_count >= 1);
 
   free(src);
@@ -279,7 +346,7 @@ test_batch_3epochs_flush(void)
   struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
   CHECK(Fail2, r.error == 0);
 
-  // Epochs 0-1 filled the staging buffer and kicked; epoch 2 is still staged.
+  // Epochs 0-1 filled the batch and kicked; epoch 2 is still staged.
   {
     struct tile_stream_status st = tile_stream_gpu_status(s);
     CHECK(Fail2, st.batch_accumulated == 0);
@@ -414,11 +481,11 @@ Fail0:
   return 1;
 }
 
-RUN_GPU_TESTS({ "batch_one_epoch_waits_for_buffer",
-                test_batch_one_epoch_waits_for_buffer },
-              { "batch_full_triggers_swap", test_batch_full_triggers_swap },
-              { "batch_multi_cycle", test_batch_multi_cycle },
-              { "batch_partial_flush", test_batch_partial_flush },
-              { "batch_3epochs_flush", test_batch_3epochs_flush },
-              { "batch_multiscale_unaligned_K",
-                test_batch_multiscale_unaligned_K }, )
+RUN_GPU_TESTS(
+  { "batch_one_epoch_stays_staged", test_batch_one_epoch_stays_staged },
+  { "batch_mid_batch_after_dispatch", test_batch_mid_batch_after_dispatch },
+  { "batch_full_triggers_swap", test_batch_full_triggers_swap },
+  { "batch_multi_cycle", test_batch_multi_cycle },
+  { "batch_partial_flush", test_batch_partial_flush },
+  { "batch_3epochs_flush", test_batch_3epochs_flush },
+  { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K }, )

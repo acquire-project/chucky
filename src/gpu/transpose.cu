@@ -79,9 +79,9 @@ transpose_indices(CUdeviceptr d_beg,
 // Requirements on d_src:
 //   - Must be aligned to sizeof(T).
 //   - Loads take whole uint32_t words overlapping the requested elements and
-//     mask the rest, so a d_src that is not word aligned — a slice inside a
-//     larger buffer — needs room back to the previous word boundary, and the
-//     buffer needs TRANSPOSE_SOURCE_PAD_BYTES past src_size.
+//     ignore the surplus on store, so a d_src that is not word aligned needs
+//     room back to the previous word boundary, and the buffer needs
+//     TRANSPOSE_SOURCE_PAD_BYTES past src_size.
 template<typename T>
 __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
                                                          const T* d_src,
@@ -106,16 +106,16 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
   const int elements =
     left < ELEMENTS_PER_BLOCK ? (int)left : ELEMENTS_PER_BLOCK;
 
-  // Elements between the word boundary below d_src and d_src itself. Loaded
-  // with the rest and skipped on store. Always 0 for types of 4 bytes or more.
-  const int lead =
+  // Elements between the word boundary below d_src and d_src itself. Always 0
+  // for types of 4 bytes or more, which cannot straddle a word boundary.
+  const int lead_elements =
     (int)(((uintptr_t)d_src & (sizeof(uint32_t) - 1)) / sizeof(T));
 
   if constexpr (sizeof(T) < sizeof(uint32_t)) {
     const uint32_t* src_words =
-      (const uint32_t*)(d_src - lead) + block_offset / T_PER_LOAD;
+      (const uint32_t*)(d_src - lead_elements) + block_offset / T_PER_LOAD;
     uint32_t* buf_words = (uint32_t*)shared_buf;
-    const int words = (lead + elements + T_PER_LOAD - 1) / T_PER_LOAD;
+    const int words = (lead_elements + elements + T_PER_LOAD - 1) / T_PER_LOAD;
     for (int i = tid; i < words; i += blockDim.x)
       buf_words[i] = src_words[i];
   } else {
@@ -136,7 +136,7 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
       out_offset += coord * strides[d];
     }
 
-    d_dst[out_offset] = shared_buf[lead + i];
+    d_dst[out_offset] = shared_buf[lead_elements + i];
   }
 }
 

@@ -218,15 +218,16 @@ test_transpose_4d_storage_order(void)
 }
 
 // A scatter split across epochs hands the kernel a start partway into the
-// staging buffer, so it has to cope with one that is not word aligned.
+// staging buffer, so it has to cope with one that is not word aligned. The
+// shape spans several blocks, since each block offsets the load itself.
 static int
 test_transpose_unaligned_source(void)
 {
-  uint64_t dim_sizes[] = { 4, 4, 6 };
-  uint64_t chunk_sizes[] = { 2, 2, 3 };
+  uint64_t dim_sizes[] = { 4, 64, 96 };
+  uint64_t chunk_sizes[] = { 2, 16, 24 };
   int err = 0;
   for (uint8_t bpe = 1; bpe <= 2; bpe = (uint8_t)(bpe * 2))
-    for (uint64_t off = 0; off < TRANSPOSE_SOURCE_PAD_BYTES / bpe; ++off)
+    for (uint64_t off = 0; off < sizeof(uint32_t) / bpe; ++off)
       err |= run_transpose_test("test_transpose_unaligned_source",
                                 3,
                                 dim_sizes,

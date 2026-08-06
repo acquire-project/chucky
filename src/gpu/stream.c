@@ -75,8 +75,8 @@ stream_engine_pool_epoch(struct stream_engine* e,
     &e->pools.p, e->sched.fill, (size_t)epoch_in_batch * pool_epoch_bytes(ctx));
 }
 
-// Elements already handed to the device. The append cursor counts everything
-// the caller has passed in, including what is still sitting in staging.
+// The append cursor counts everything the caller has passed in, including what
+// is still sitting in staging.
 static uint64_t
 dispatched_elements(const struct stream_engine* e,
                     const struct stream_context* ctx)
@@ -100,9 +100,7 @@ engine_dispatch_ingest(struct stream_engine* e,
                                       e->streams.compute);
   } else {
     const struct scatter_destination dst = {
-      .pool = &e->pools.p,
-      .slot = e->sched.fill,
-      .first_epoch = e->sched.accumulated,
+      .first_epoch = stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
       .epoch_bytes = pool_epoch_bytes(ctx),
       .epoch_elements = ctx->layout.epoch_elements,
     };
@@ -120,31 +118,38 @@ engine_dispatch_ingest(struct stream_engine* e,
 struct writer_result
 stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
 {
-  if (e->stage.bytes_written == 0)
+  if (e->dispatch_failed)
+    return writer_error();
+  // A create that failed before sizing the layout leaves epoch_elements at 0
+  // and nothing staged, so there is nothing to hand over.
+  if (e->stage.bytes_written == 0 || ctx->layout.epoch_elements == 0)
     return writer_ok();
 
   const uint64_t first = dispatched_elements(e, ctx);
-  if (engine_dispatch_ingest(e, ctx, first))
+  if (engine_dispatch_ingest(e, ctx, first)) {
+    e->dispatch_failed = 1;
     return writer_error();
+  }
   e->stage.bytes_written = 0;
 
   const uint64_t epoch = ctx->layout.epoch_elements;
   for (uint64_t at = first - first % epoch + epoch; at <= ctx->cursor_elements;
        at += epoch) {
     struct writer_result r = schedule_accumulate_epoch(e, ctx);
-    if (r.error)
+    if (r.error) {
+      e->dispatch_failed = 1;
       return r;
+    }
   }
   return writer_ok();
 }
 
-// How full staging gets before it is handed over. The scatter writes into the
-// epochs of the batch being filled, so a dispatch cannot hold more than the
-// room left in that batch; multiscale takes one epoch at a time, since its
-// linear buffer holds exactly one.
+// The scatter writes into the epochs of the batch being filled, so a dispatch
+// cannot hold more than the room left in that batch. Multiscale takes one epoch
+// at a time, since its linear buffer holds exactly one.
 static size_t
-dispatch_at_bytes(const struct stream_engine* e,
-                  const struct stream_context* ctx)
+bytes_before_dispatch(const struct stream_engine* e,
+                      const struct stream_context* ctx)
 {
   const uint64_t epoch = ctx->layout.epoch_elements;
   const uint32_t epochs = ctx->levels.enable_multiscale
@@ -157,8 +162,6 @@ dispatch_at_bytes(const struct stream_engine* e,
   return room < capacity ? (size_t)room : capacity;
 }
 
-// Sample the sink's queue and hold the producer while it stays over the
-// configured watermark.
 static void
 apply_backpressure(struct stream_engine* e, struct stream_context* ctx)
 {
@@ -206,6 +209,14 @@ stream_append_body(struct stream_engine* e,
 
   const uint64_t total_limit = ctx->total_element_limit;
 
+  if (e->dispatch_failed)
+    return writer_error_at(src, end);
+  // A failed kick leaves the batch full without swapping the slot, so the
+  // epochs the pool holds are all accounted for and there is nowhere to put
+  // more. Only a flush that succeeds can clear it.
+  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+    return writer_error_at(src, end);
+
   while (src < end) {
     // Capacity reached: refuse further writes and report `finished` with the
     // remaining input unconsumed. Sink finalization is NOT run here — it
@@ -213,14 +224,13 @@ stream_append_body(struct stream_engine* e,
     if (total_limit > 0 && ctx->cursor_elements >= total_limit)
       return writer_finished_at(src, end);
 
-    const size_t target = dispatch_at_bytes(e, ctx);
+    const size_t target = bytes_before_dispatch(e, ctx);
     uint64_t elements = (target - e->stage.bytes_written) / bpe;
     const uint64_t offered = (uint64_t)(end - src) / bpe;
     if (elements > offered)
       elements = offered;
     if (total_limit > 0 && elements > total_limit - ctx->cursor_elements)
       elements = total_limit - ctx->cursor_elements;
-    // Less than one element left over: hand it back unconsumed.
     if (elements == 0)
       break;
 

@@ -36,19 +36,17 @@ ingest_collect_scatter_timing(struct staging_state* stage,
 void
 ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m);
 
-// Where one dispatch's data goes in the chunk pool. A dispatch can span
-// several epochs, so the scatter steps from one epoch's region to the next.
+// Where one dispatch's data goes in the chunk pool.
 struct scatter_destination
 {
-  struct gpu_pool* pool; // borrowed; the chunk pool
-  int slot;              // pool slot being filled
-  uint32_t first_epoch;  // epoch-in-batch holding the first element
-  size_t epoch_bytes;    // one epoch's region in the pool
+  struct gpu_pool_view first_epoch; // region for the epoch holding the first
+                                    // element, within the produce generation
+                                    // the caller acquired
+  size_t epoch_bytes;               // one epoch's region in the pool
   uint64_t epoch_elements;
 };
 
 // H2D transfer + scatter into chunk pool.
-// dst: epochs of the pool slot the caller acquired for producing.
 // first_element: append-cursor position of the buffer's first element.
 // Returns 0 on success, non-zero on error.
 int
@@ -63,10 +61,10 @@ ingest_dispatch_scatter(struct staging_state* stage,
 
 // H2D transfer + copy to linear epoch buffer for LOD.
 // L0 tiling is deferred to run_lod.
-// d_linear: device pointer to the linear epoch buffer.
+// d_linear: device pointer to the linear epoch buffer, holding one epoch.
 // epoch_elements: elements per epoch (layout.epoch_elements).
 // first_element: append-cursor position of the buffer's first element. The
-// linear buffer holds one epoch, so the buffer may not cross an epoch boundary.
+// staged bytes may not cross an epoch boundary.
 // Returns 0 on success, non-zero on error.
 int
 ingest_dispatch_multiscale(struct staging_state* stage,

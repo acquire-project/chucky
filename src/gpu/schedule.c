@@ -629,6 +629,12 @@ Error:
 struct writer_result
 schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
 {
+  // batch_active_masks holds one entry per epoch of a batch, and the slot's
+  // pool region holds one epoch each. A failed kick can leave the batch full
+  // without resetting, and counting another epoch would run past both.
+  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+    return writer_error();
+
   if (run_epoch_lod(e, ctx))
     return writer_error();
 
@@ -676,6 +682,8 @@ Error:
 int
 schedule_add_partial_epoch(struct stream_engine* e, struct stream_context* ctx)
 {
+  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+    return 1;
   if (run_epoch_lod(e, ctx))
     return 1;
   e->sched.accumulated++;

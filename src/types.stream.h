@@ -70,8 +70,10 @@ struct stream_metrics
   struct stream_metric tail_gate; // previous batch's shard tail state; only
                                   // sinks needing aligned shards wait here
 
-  float max_append_ms;       // longest single append
-  size_t peak_pending_bytes; // high-water mark of bytes awaiting write
+  float max_append_ms; // longest single append
+  // High-water mark of bytes awaiting write, read once per staging buffer
+  // handed to the device rather than continuously.
+  size_t peak_pending_bytes;
 
   // How long individual appends took, as counts per time bucket. A caller
   // asking whether it can keep up needs the slow tail, not the average, and
@@ -116,6 +118,8 @@ struct tile_stream_status
   enum dtype dtype;
   struct codec_config codec;
   size_t codec_batch_size;
+  // Epochs dispatched into the batch being filled. The append cursor can be
+  // ahead of this, by whatever is still in the staging buffer.
   uint32_t batch_accumulated;
   int pool_current;
   int flush_pending;

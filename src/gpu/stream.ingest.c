@@ -6,6 +6,7 @@
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
+#include <assert.h>
 #include <string.h>
 
 struct copy_slices
@@ -52,6 +53,12 @@ ingest_init(struct staging_state* stage,
     CU(Fail,
        cuMemAlloc(&stage->slot[i].d_in,
                   buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
+    // The scatter reads into the pad and discards it, but no transfer ever
+    // writes there, so leaving it unset reads as uninitialized to a checker.
+    CU(Fail,
+       cuMemsetD8(stage->slot[i].d_in + buffer_capacity_bytes,
+                  0,
+                  TRANSPOSE_SOURCE_PAD_BYTES));
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
     CU(Fail, cuEventCreate(&stage->slot[i].t_h2d_start, CU_EVENT_DEFAULT));
@@ -153,7 +160,9 @@ Error:
   return 1;
 }
 
-// The chunk position a scatter computes repeats every epoch, so each epoch the
+// The chunk position a scatter computes repeats every epoch_elements, because
+// compute_level_layout zeroes the append dims' chunk strides and dims_n_append
+// allows a chunk size above 1 only on the first append dim. So each epoch the
 // buffer covers gets its own call against its own region of the pool.
 static void
 scatter_by_epoch(const struct tile_stream_layout* layout,
@@ -166,7 +175,7 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
                  CUstream compute)
 {
   uint64_t element = first_element;
-  uint32_t epoch = dst.first_epoch;
+  CUdeviceptr d_epoch = gpu_pool_view_d(dst.first_epoch);
 
   for (size_t at = 0; at < bytes;) {
     const uint64_t in_epoch = element % dst.epoch_elements;
@@ -174,8 +183,7 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
     const uint64_t left = bytes - at;
     const uint64_t n = room < left ? room : left;
 
-    transpose(gpu_pool_view_d(gpu_pool_at(
-                dst.pool, dst.slot, (size_t)epoch * dst.epoch_bytes)),
+    transpose(d_epoch,
               gpu_pool_view_d(d_in) + at,
               n,
               (uint8_t)bpe,
@@ -188,7 +196,7 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
     at += (size_t)n;
     element += n / bpe;
     if (element % dst.epoch_elements == 0)
-      epoch++;
+      d_epoch += dst.epoch_bytes;
   }
 }
 
@@ -271,6 +279,9 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   CU(Error, cuEventRecord(st->t_start, compute));
   {
     uint64_t epoch_offset = (first_element % epoch_elements) * bpe;
+    // d_linear holds one epoch. The caller keeps the staging buffer inside one,
+    // and it is not this file that can see whether it still does.
+    assert(first_element % epoch_elements + elements <= epoch_elements);
     CU(Error,
        cuMemcpyDtoDAsync(d_linear + epoch_offset,
                          gpu_pool_view_d(d_in),
