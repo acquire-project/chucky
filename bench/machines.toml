@@ -11,8 +11,7 @@
 # described here.
 #
 # Fill in specs only where the sweep file does not already record something. It
-# records the GPU. It does not record the disk or the network, which matter just
-# as much when you compare two runs.
+# records the GPU. It does not record the disk or the network.
 
 [[machine]]
 name = "livescreen"
