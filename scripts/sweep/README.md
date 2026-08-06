@@ -1,91 +1,64 @@
-# Benchmark sweeps and the site they feed
+# Benchmark sweeps and reports
 
-`sweep.py` runs the bench binaries and writes one JSON file per sweep to
-`bench/results/`. `report.py` turns every one of those files into a two-page
-static site, which CI publishes to GitHub Pages on each push to `main`
-(`.github/workflows/pages.yml`).
+`sweep.py` runs the benchmarks and writes one JSON file per sweep to
+`bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
+files and writes a site with two pages. CI publishes it to GitHub Pages on every
+push to `main` (`.github/workflows/pages.yml`).
+
+- `index.html` shows how each machine's numbers change from one sweep to the next.
+- `explore.html` shows a single sweep in detail, down to per-stage timing.
+
+Clicking a point on a trend chart, or a commit on a machine card, opens that
+sweep in `explore.html`.
 
 ## Generating the site
 
 ```sh
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
-python3 -m http.server -d _site      # or just open _site/index.html
+python3 -m http.server -d _site      # or open _site/index.html
 ```
 
-`machines.toml` is picked up from beside the results (or one level up); point at
-another with `--machines`.
+The data is embedded in the pages when they are written, so they need no server
+and load nothing. Run the command again after you add or change a results file.
 
-Both pages embed their data at generation time, so they work straight off the
-filesystem and there is nothing to fetch at load. Re-run the command after
-adding or editing a results file.
+`report.py` looks for `bench/machines.toml` next to the results directory, then
+one level up. Use `--machines` to point somewhere else.
 
-| Page | Question it answers |
-|---|---|
-| `index.html` | Is this getting faster or slower, on which machine, and what moved last? |
-| `explore.html` | Inside one sweep: every codec, chunk size, and per-stage timing. |
+## Machine names
 
-The overview links into the explorer (`explore.html?file=<results file name>`);
-clicking a point on the trend chart or a commit on a machine card lands on that
-sweep.
-
-## Which sweeps are the same machine
-
-Every sweep names itself after its file, `<name>-<commit>-<yyyymmdd>.json`, which
-`sweep.py` writes from `--machine` (or `CHUCKY_MACHINE`), falling back to the
-hostname. Pass `--machine` where the hostname is not stable:
+Pass `--machine` when a machine's hostname changes between runs, or set
+`CHUCKY_MACHINE`:
 
 ```sh
 uv run scripts/sweep/sweep.py --all --machine reef-l40
 ```
 
-That name alone is not enough to say what is the same machine — one box can boot
-two systems, and a cluster hands out a different node every allocation. So
-**`bench/machines.toml`** holds the grouping, matching on the sweep name or the
-hostname inside the file, both with wildcards:
+`bench/machines.toml` says which names belong to the same machine and describes
+each one. The comment at the top of that file explains the fields.
 
-```toml
-[[machine]]
-name = "livescreen"
-description = "Workstation running two systems"
-names = ["LiveScreen-1", "livescreen-kubuntu"]
-[machine.specs]
-storage = "local nvme"
-```
+The overview groups machines that way. A **Group** checkbox turns the grouping
+off, so you can check that the names under one machine really do agree. When a
+comparison uses two of those names, the last sweep from one and the sweep before
+it from another, the page says so.
 
-A machine whose name never changes needs nothing but the name. `specs` is
-free-form and only worth filling in for what the sweep file does not already
-record — the GPU is in there, the disk and the network are not, and they decide
-as much about whether two runs compare. Both the description and the specs show
-on the machine card. A sweep matching no entry keeps its own name and the page
-says it is undescribed, so a new machine gets an entry deliberately.
-
-Grouping is a view, not a fact baked into the data: untick **Group** on the
-overview to split a machine back into the sweep names underneath and check that
-its members really do agree. Where a comparison crosses two members — last
-sweep on one system, previous on the other — the page says so rather than
-quietly presenting it as one machine changing.
-
-Colors are assigned per machine in order of first appearance, so adding a
-machine never repaints the ones already on screen. The palette holds eight;
-machines past that stay in the tables and drop out of the chart, which the page
-says out loud.
+A machine keeps its color as other machines are added. Eight colors are
+available; machines past that appear in the tables but not in the chart, and the
+page names them.
 
 ## What the numbers mean
 
-- A plotted point is the **best** passing run of that sweep for the selected
-  scenario, codec, backend, and sink. Data type, chunk size, and fill are
-  searched rather than averaged — hover a point for the winning configuration
-  and how many runs it beat.
-- Runs that did not pass are excluded and counted on the machine card instead.
-- A missing point means that sweep ran nothing matching the filter, not zero.
-- Changes are per machine, latest sweep against its previous sweep with
-  matching runs, matched on the exact run id. Anything under ±2% is labelled
-  "no real change".
+- A point is the best passing run in that sweep for the scenario, codec,
+  backend, and sink you picked. Data type, chunk size, and fill are searched
+  instead of averaged. Hover a point to see which run won and how many it beat.
+- Runs that did not pass are left out, and counted on the machine card instead.
+- A gap means the sweep ran nothing matching the filter. It does not mean zero.
+- A change compares a machine's latest sweep against its previous one, matching
+  runs by id. Changes under 2% are shown as no real change.
 
 ## Schema changes
 
-`models.py` owns the results schema, its version, and the migrations.
-`retired_metrics` reports the metrics a file carries whose meaning changed
-later; the overview drops those from comparisons rather than converting them.
-Bump `CURRENT_VERSION` when a metric is renamed, removed, or changes meaning —
-adding one does not need a bump.
+`models.py` holds the results schema, its version, and the migrations.
+`retired_metrics` lists the metrics in a file whose meaning changed later, and
+the overview leaves those out of comparisons instead of converting them. Bump
+`CURRENT_VERSION` when a metric is renamed, removed, or changes meaning. Adding
+one does not need a bump.
