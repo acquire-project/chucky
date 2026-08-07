@@ -83,19 +83,3 @@ gpu_pool_host_acquire_consume(struct gpu_pool* p,
 // already acquired on the same stream.
 struct gpu_pool_view
 gpu_pool_at(struct gpu_pool* p, int slot, size_t byte_offset);
-
-// GEN_COUNTER ready edge (#142 host-published generations) behind the same
-// API. Consumer acquire arms the gate; the threshold advances even when
-// enable is 0 — every kick drains exactly once. Producer release publishes
-// the drained generation and must run exactly once per drain, on failure
-// paths too.
-int
-gpu_pool_acquire_consume_gen(struct gpu_pool* p, CUstream stream, int enable);
-void
-gpu_pool_release_produce_gen(struct gpu_pool* p);
-
-// Force-satisfy every parked acquire. Required before any blocking stream/
-// context sync when a generation may be undrained (#142 teardown). Releases
-// through the whole ordering table, not just this pool's edges.
-void
-gpu_pool_release_all(struct gpu_pool* p);

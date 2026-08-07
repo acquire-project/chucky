@@ -1,4 +1,6 @@
 #include "gpu/prelude.cuda.h"
+#include "gpu/stream.internal.h"
+#include "platform/platform.h"
 #include "stream.gpu.h"
 #include "stream/layouts.h"
 #include "test_gpu_helpers.h"
@@ -34,6 +36,37 @@ make_src(size_t count)
   for (size_t i = 0; i < count; ++i)
     src[i] = (uint16_t)(i % 65536);
   return src;
+}
+
+static struct tile_stream_configuration
+make_coordinator_config(struct dimension* dims, enum compression_codec codec)
+{
+  uint8_t rank = dims_create(dims, "zyx", (uint64_t[]){ 0, 8, 12 });
+  dims_set_chunk_sizes(dims, rank, (uint64_t[]){ 2, 2, 3 });
+  dims[0].chunks_per_shard = 4;
+  dims_set_shard_counts(dims, rank, (uint64_t[]){ 0, 2, 2 });
+  return (struct tile_stream_configuration){
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = { .id = codec },
+    .epochs_per_batch = 1,
+  };
+}
+
+static int
+coordinator_sink_has_output(const struct test_shard_sink* sink,
+                            uint64_t expected_shards)
+{
+  uint64_t finalized = 0;
+  size_t bytes = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    if (sink->writers[0][i].finalized)
+      finalized++;
+    bytes += sink->writers[0][i].size;
+  }
+  return finalized >= expected_shards && bytes > 0;
 }
 
 // --- Test cases ---
@@ -411,10 +444,149 @@ Fail0:
   return 1;
 }
 
+// Hold generation 1 after submission but before drain. Generation 2 may
+// compress and reach PREPARED, but cannot aggregate until generation 1 has
+// delivered and synchronously uploaded its tail state.
+static int
+run_host_coordinator_hold(enum compression_codec codec)
+{
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 2 * 1024 * 1024);
+  sink.shard_alignment = platform_page_alignment();
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config =
+    make_coordinator_config(dims, codec);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &sink.base);
+  uint16_t* src = NULL;
+  int held = 0;
+  int ok = 0;
+  CHECK(Fail, s);
+  CHECK(Fail, s->engine.sched.host_coordinated);
+  CHECK(Fail, s->engine.sched.epochs_per_batch == 1);
+  CHECK(Fail, s->engine.compress_agg.ar.total_shards > 1);
+
+  const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
+  src = make_src(2 * epoch_elements);
+  CHECK(Fail, src);
+
+  gpu_delivery_set_hold_before_drain(&s->engine.delivery, 1);
+  held = 1;
+  {
+    struct slice input = { .beg = src, .end = src + 2 * epoch_elements };
+    CHECK(Fail, writer_append(tile_stream_gpu_writer(s), input).error == 0);
+  }
+
+  uint64_t generation0 = 0;
+  uint64_t generation1 = 0;
+  CHECK(Fail,
+        gpu_delivery_job_state(
+          &s->engine.delivery, 0, &generation0) == DELIVERY_JOB_SUBMITTED);
+  CHECK(Fail,
+        gpu_delivery_job_state(
+          &s->engine.delivery, 1, &generation1) == DELIVERY_JOB_PREPARED);
+  CHECK(Fail, generation0 == 1);
+  CHECK(Fail, generation1 == 2);
+  {
+    uint64_t submitted = 0;
+    uint64_t tail_ready = 0;
+    gpu_delivery_generations(
+      &s->engine.delivery, &submitted, &tail_ready);
+    CHECK(Fail, submitted == 1);
+    CHECK(Fail, tail_ready == 0);
+  }
+
+  gpu_delivery_set_hold_before_drain(&s->engine.delivery, 0);
+  held = 0;
+  CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
+  {
+    uint64_t submitted = 0;
+    uint64_t tail_ready = 0;
+    gpu_delivery_generations(
+      &s->engine.delivery, &submitted, &tail_ready);
+    CHECK(Fail, submitted == 2);
+    CHECK(Fail, tail_ready == 2);
+  }
+  CHECK(Fail,
+        coordinator_sink_has_output(
+          &sink, s->engine.compress_agg.ar.total_shards));
+  ok = 1;
+
+Fail:
+  if (held && s)
+    gpu_delivery_set_hold_before_drain(&s->engine.delivery, 0);
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&sink);
+  return ok ? 0 : 1;
+}
+
+static int
+test_host_coordinator_hold(void)
+{
+  log_info("=== test_host_coordinator_hold ===");
+  int error = 0;
+  error |= run_host_coordinator_hold(CODEC_ZSTD);
+  error |= run_host_coordinator_hold(CODEC_NONE);
+  log_info("  %s", error ? "FAIL" : "PASS");
+  return error;
+}
+
+// Force the worker-unavailable selection after construction, before any job
+// is queued. Page-aligned tail carry must remain correct on the direct,
+// drain-before-kick fallback.
+static int
+test_worker_unavailable_fallback(void)
+{
+  log_info("=== test_worker_unavailable_fallback ===");
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 2 * 1024 * 1024);
+  sink.shard_alignment = platform_page_alignment();
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config =
+    make_coordinator_config(dims, CODEC_ZSTD);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &sink.base);
+  uint16_t* src = NULL;
+  int ok = 0;
+  CHECK(Fail, s);
+
+  gpu_delivery_stop_join(&s->engine.delivery);
+  schedule_select(&s->engine.sched,
+                  &s->engine.compress_agg.ar,
+                  &s->engine.delivery);
+  CHECK(Fail, s->engine.sched.depth == SCHEDULE_DRAIN_BEFORE_KICK);
+  CHECK(Fail, !s->engine.sched.host_coordinated);
+
+  const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
+  src = make_src(4 * epoch_elements);
+  CHECK(Fail, src);
+  {
+    struct slice input = { .beg = src, .end = src + 4 * epoch_elements };
+    CHECK(Fail, writer_append(tile_stream_gpu_writer(s), input).error == 0);
+  }
+  CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
+  CHECK(Fail,
+        coordinator_sink_has_output(
+          &sink, s->engine.compress_agg.ar.total_shards));
+  ok = 1;
+
+Fail:
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS({ "batch_counter_one_epoch", test_batch_counter_one_epoch },
               { "batch_full_triggers_swap", test_batch_full_triggers_swap },
               { "batch_multi_cycle", test_batch_multi_cycle },
               { "batch_partial_flush", test_batch_partial_flush },
               { "batch_3epochs_flush", test_batch_3epochs_flush },
-              { "batch_multiscale_unaligned_K",
-                test_batch_multiscale_unaligned_K }, )
+               { "batch_multiscale_unaligned_K",
+                 test_batch_multiscale_unaligned_K },
+              { "host_coordinator_hold", test_host_coordinator_hold },
+              { "worker_unavailable_fallback",
+                test_worker_unavailable_fallback }, )

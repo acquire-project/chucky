@@ -174,6 +174,9 @@ target_compile_definitions(
 )
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_zarr_fs_sink PROPERTIES TIMEOUT 120)
+endif()
 add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)

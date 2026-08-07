@@ -110,9 +110,9 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   if (engine_limits_accumulate(lim, &desc->cl, config))
     return 1;
 
-  // No tail gate on the multiarray sync-flush path: every kick drains
-  // immediately, so tail uploads are host-ordered.
-  return engine_array_state_init(&desc->st, &desc->ctx, &desc->cl, NULL, NULL);
+  // No delivery coordinator on the multiarray sync-flush path: every kick
+  // drains immediately before per-array state is swapped.
+  return engine_array_state_init(&desc->st, &desc->ctx, &desc->cl, NULL);
 }
 
 static void
@@ -274,6 +274,8 @@ sync_all(struct gpu_streams* streams)
     cuStreamSynchronize(streams->compress);
   if (streams->d2h)
     cuStreamSynchronize(streams->d2h);
+  if (streams->drain)
+    cuStreamSynchronize(streams->drain);
 }
 
 void
@@ -302,13 +304,11 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       log_error("GPU multiarray auto-flush failed during destroy");
   }
 
-  // Safe to sync first only because no array here arms a tail gate, so nothing
-  // can park waiting to be released. A gated schedule would need the single-
-  // array teardown order instead.
+  // Resolve every worker job before synchronizing streams or freeing buffers.
+  gpu_delivery_stop_join(&ms->engine.delivery);
   sync_all(&ms->engine.streams);
 
   // Drain queued IO before teardown frees the buffers it points into.
-  gpu_delivery_stop_join(&ms->engine.delivery);
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a) {
       if (autoflush && !autoflush[a])

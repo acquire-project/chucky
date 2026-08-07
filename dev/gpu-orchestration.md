@@ -27,9 +27,9 @@ documentation. Reference docs for how to *use* chucky are in `docs/`.
 
 **Five CUDA streams** (`gpu_streams`, `src/gpu/schedule.h`): `h2d`, `compute`,
 `compress`, `d2h`, and a separate `drain`. Drain-time copies get their own
-stream because by drain time `d2h` can already be holding the next batch's
-wait, and that wait is not released until this drain finishes — sharing one
-stream would deadlock.
+stream because compressed payload extents are known only after the metadata
+copy has completed on the host. Keeping the exact-size payload copies on
+`drain` avoids inserting them behind later metadata work on `d2h`.
 
 **One table of ordering rules** (`src/gpu/ordering.{h,c}`). Every cross-stream
 and host-to-stream rule is a named entry with its producer, its consumer, and
@@ -55,12 +55,39 @@ queued to a delivery worker at kick time and joined before its slot is
 refilled. The producer thread decides what happens but no longer moves large
 amounts of data itself.
 
+**Host-coordinated page-aligned aggregation.** A page-aligned single-array
+batch is first `PREPARED`: the scheduler acquires its chunk and aggregate
+slots, uploads its batch tables, queues compression, builds the handoff, and
+retains the plan and pool views in the scheduler slot. The delivery worker
+changes it to `SUBMITTED` only when the preceding generation's sink delivery
+and synchronous tail uploads have returned. Submission queues aggregation on
+the existing compress stream, records `AGG_DONE`/`POOL_CONSUMED`, and queues
+the normal metadata D2H kick. After the exact-size payload copy and sink
+delivery finish, the job becomes `DONE`.
+
+Jobs use monotonic generations starting at 1. `tail_ready_generation` starts
+at 0, so generation N can be submitted only when it equals N-1. Before the
+producer prepares N+1, it waits until N is submitted. That host barrier keeps
+the shared codec-size arrays, LUTs, and shard tables live through N's
+aggregation without adding a stream or double-buffering those tables.
+
+No CUDA work waits on state that a future host action must produce. The tail
+dependency exists only in the worker's condition-variable state machine. If
+the worker is unavailable, single-array scheduling uses the existing
+drain-before-kick depth-one path; multi-array scheduling still drains
+immediately because it swaps per-array state between calls. Contiguous batches
+do not read tail state and keep their direct aggregation submission path.
+
+Coordinator and sink errors are sticky. They wake producer and join waiters,
+and later `PREPARED` jobs become failed `DONE` jobs without aggregation. During
+teardown the worker drains valid jobs or cancels invalid ones before any CUDA
+stream is synchronized.
+
 ## The ordering rules
 
 One event can back several named rules when it guards different buffers for
-different readers — the extras are marked "shares" below. Thirteen names,
-seven distinct events, one counter, two rules with no GPU primitive behind
-them.
+different readers — the extras are marked "shares" below. Twelve names, seven
+distinct events, and two rules with no GPU primitive behind them.
 
 | Name in code | producer → consumer | protects | how | per slot |
 |---|---|---|---|---|
@@ -74,9 +101,8 @@ them.
 | `SLOT_DRAINED` | d2h or drain → compress | gathered slot reuse | event | yes |
 | `D2H_DONE` | d2h or drain → host | host copy stable for the sink | shares `SLOT_DRAINED` | yes |
 | `CHUNK_INDEX_READY` | d2h → host | chunk offsets and sizes; only with a codec | event | yes |
-| `TAIL_PUBLISHED` | host → compress | shard tail state uploaded by the previous drain (#142) | counter | no |
 | `DRAIN_BEFORE_REKICK` | host | drain a slot before kicking it again | call-order rule | yes |
-| `DELIVER_OLDEST_FIRST` | host | drains follow kick order, which the counter above relies on | call-order rule | yes |
+| `DELIVER_OLDEST_FIRST` | host | drains follow batch generation order | call-order rule | yes |
 
 Notes worth keeping:
 
@@ -103,9 +129,8 @@ existing seam. No flag day, no second engine. All merged:
    turned out to be dead.
 2. **One engine setup and teardown** — #144, shared by single-array and
    multi-array, replacing a field-by-field copy checklist.
-3. **Pools that carry ordering** — #148. Staging, chunk pool, gathered slots
-   and tail state became pools; the #142 counter became one of the pool's
-   release kinds.
+3. **Pools that carry ordering** — #148. Staging, chunk pool, and gathered
+   slots became pools with explicit ready/consumed generations.
 4. **One scheduler** — #149. Stream creation, pipeline depth and fallbacks
    moved into `schedule.{h,c}`; the old orchestration state was deleted.
 5. **Workers** — #151. Staging copies and sink delivery moved off the producer
@@ -123,7 +148,7 @@ Three items, in the order I'd do them.
 ### 1. Make the measurements trustworthy
 
 This is the blocker for every performance question, and it is the smallest
-piece of work here. Today the numbers mislead in five specific ways:
+piece of work here. Today the numbers mislead in four specific ways:
 
 - The scatter timer reads elapsed time without checking the result. When the
   event isn't ready the sample is silently dropped — on some settings more
@@ -131,8 +156,6 @@ piece of work here. Today the numbers mislead in five specific ways:
 - The reduced-level timers use one event pair per batch, re-recorded every
   epoch, so each reported row is only the batch's last epoch. The reported
   total is one epoch's worth of time where it should be the whole batch's.
-- The gather timer starts before the wait for the previous drain's tail
-  upload, so a slow sink is reported as slow gathering.
 - The producer's real waiting time is the `StagingFree` stall. It is measured,
   and printed to the console table, but left out of the JSON the sweep
   analyzes (`bench/bench_report.c` — the console block prints it, the JSON
@@ -141,61 +164,39 @@ piece of work here. Today the numbers mislead in five specific ways:
   sample count, so you cannot re-derive anything from a sweep file.
 
 Fixes: export `StagingFree` and per-stage total time and count in the JSON;
-start the gather timer after the tail wait; check the elapsed-time result and
-retry instead of dropping the sample; accumulate reduced-level timings per
-epoch instead of per batch; keep the "too small to be real" filter only for
-detecting pre-signaled events.
+check the elapsed-time result and retry instead of dropping the sample;
+accumulate reduced-level timings per epoch instead of per batch; keep the "too
+small to be real" filter only for detecting pre-signaled events.
+
+The public `tail_gate` metric and JSON key remain for compatibility. They now
+measure the compression-to-aggregation delay while the coordinator waits for
+the preceding batch's tail readiness; they do not represent a device gate.
 
 *Done when:* a sweep JSON alone is enough to reconstruct each stage's total
 time, and the producer's stall time appears in it. Some of this already exists
 on the local `issue-101-append-latency` branch (append latency distribution,
 issue #101).
 
-### 2. Cover the Windows pipeline shape; drop the multi-array one
+### 2. Make multi-array compose
 
-`schedule_depth` has three values. Two should survive, and one of the survivors
-is missing the test coverage it needs.
+`schedule_depth` still has three values:
 
-- `SCHEDULE_PIPELINED` — the normal path.
-- `SCHEDULE_DRAIN_BEFORE_KICK` — **keep.** Windows is a supported target, and
-  `cuStreamWaitValue64` is not dependably available there (it depends on the
-  driver and the display mode), so the shard tail upload cannot be ordered on
-  the device and the drain has to finish before the next kick is queued.
-  Probing at startup and stepping down is the right design. The real problem
-  is that there is no Windows machine with a GPU in CI — no such GitHub runner
-  is available — so this path ships without a test ever running it: the probe
-  always succeeds on the Linux GPU box.
-- `SCHEDULE_DRAIN_AFTER_KICK` — **drop.** It exists only because the
-  multi-array path shares one engine and swaps per-array state in and out, and
-  two-slot pipeline state does not survive that swap.
+- `SCHEDULE_PIPELINED` — the normal single-array path. Page-aligned batches use
+  host-coordinated submission; contiguous batches submit directly.
+- `SCHEDULE_DRAIN_BEFORE_KICK` — the single-array fallback when the delivery
+  worker cannot be created. A deterministic test forces this selection and
+  exercises page-aligned tail carry.
+- `SCHEDULE_DRAIN_AFTER_KICK` — the multi-array path, where per-array state is
+  swapped between calls and every kick therefore drains immediately.
 
-What the third shape costs today: the branch in `schedule_accumulate_epoch`
-skips the pool release and then re-zeros the pool through `gpu_pool_at`,
-stepping around the ordering API on purpose; the multi-array switch then zeros
-both pools a third time, under a comment explaining that the other zero only
-covers part of it; teardown ordering differs between the two paths; and the
-"rule never waited on" warning stays noisy because rule liveness depends on
-which shape is running.
+The remaining work is to make multi-array use several pipelines sharing pooled
+buffers rather than one engine with state swapped in and out, then delete
+`SCHEDULE_DRAIN_AFTER_KICK`. That also removes its special pool-zeroing and
+teardown branches.
 
-Work, in this order:
-
-1. **Make the Windows shape runnable here.** Add a test-only way to force the
-   startup probe to report no support. `gpu_ordering_gate_init` sets
-   `tail_gate_supported` from a single probe call; clearing it afterwards, while
-   leaving the counter allocated, reproduces the Windows case exactly — the
-   wait is skipped, the count still advances, and `schedule_select` picks the
-   drain-before-kick shape. Then run the ordering-critical tests
-   (`gpu_zstd_determinism`, `gpu_zstd_round_trip`,
-   `gpu_page_aligned_tail_carry`) under it on the Linux GPU box. Until a
-   Windows GPU runner exists, this is the only coverage that path can get.
-2. **Make multi-array compose** — several pipelines sharing pooled buffers,
-   rather than one engine with state swapped in and out — and delete
-   `SCHEDULE_DRAIN_AFTER_KICK`. This is the leftover ambition from the original
-   step 5.
-
-*Done when:* two pipeline shapes remain and a test exercises each, the two
-pool-zero workarounds are gone, and the shutdown warning about unused rules is
-clean without needing a per-configuration exception list.
+*Done when:* two pipeline shapes remain, the two pool-zero workarounds are
+gone, and the shutdown warning about unused rules is clean without needing a
+per-configuration exception list.
 
 ### 3. Close the last way to get a raw pointer
 

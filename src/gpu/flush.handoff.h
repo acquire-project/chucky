@@ -11,6 +11,15 @@
 struct shard_state;
 struct compress_agg_array;
 
+// Host-computed geometry retained from compression preparation until
+// aggregation is submitted. Page-aligned single-array pipelines may hold this
+// across the preceding batch's drain.
+struct compress_agg_plan
+{
+  struct batch_aggregate_layout layout;
+  uint32_t per_lod_n_active[LOD_MAX_LEVELS];
+};
+
 // Handoff from compress+aggregate to D2H+deliver.
 //
 // Post-unification, the GPU pipeline runs one aggregate dispatch over all
@@ -34,7 +43,7 @@ struct flush_handoff
   CUevent t_aggregate_end;   // D2H waits on this
   CUevent t_compress_start;  // for metrics
   CUevent t_compress_end;    // for metrics
-  CUevent t_aggregate_start; // for metrics; after the tail-gate wait
+  CUevent t_aggregate_start; // for metrics; after prior tail readiness
 
   // The unified slot for fc travels as pool handles, never a raw pointer;
   // delivery acquires the facet it consumes (stream.engine.h).
@@ -44,9 +53,7 @@ struct flush_handoff
   struct batch_aggregate_layout layout; // owned (by-value snapshot)
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
-  struct gpu_pool* tail;  // tail-state pool (#142); the drain's produce-
-                          // acquire yields the compress_agg_array whose
-                          // d_tail_bytes/d_tail_carry the delivery uploads
+  struct compress_agg_array* shards; // borrowed per-array tail/shard state
   size_t max_output_size; // codec bound
 
   // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so

@@ -125,13 +125,18 @@ orch_ctx_setup(struct orch_ctx* c,
                        pool_bytes,
                        c->s->engine.streams.compute));
   }
-  // Scheduler state (calloc'd engine: pipelined depth, slot 0 filling)
+  // Scheduler state. This fixture intentionally has no delivery worker, so
+  // select the same depth-one producer-drain fallback used when worker setup
+  // fails in the real engine.
   c->s->engine.sched.epochs_per_batch = K;
   for (int fc = 0; fc < 2; ++fc) {
     c->s->engine.sched.slot[fc].batch_active_masks =
       (uint32_t*)calloc(K, sizeof(uint32_t));
     CHECK(Fail, c->s->engine.sched.slot[fc].batch_active_masks);
   }
+  schedule_select(&c->s->engine.sched,
+                  &c->s->engine.compress_agg.ar,
+                  &c->s->engine.delivery);
 
   // Non-multiscale: zeroed lod
   memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));
@@ -429,14 +434,15 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Batch 2 kicked on fc=1. Lazy delivery: batch 1 stays pending at fc=0
-  // until fc=0 is reused (batch 3) or the final flush drains it.
+  // Before batch 2 is kicked on fc=1, the worker-unavailable fallback drains
+  // batch 1 on the producer. Batch 2 remains pending until the final drain.
   CHECK(Fail, c.s->engine.sched.fill == 0);           // swapped back to pool 0
-  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 still pending
+  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0); // batch 1 drained
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 1);
 
-  // Drain both pending batches (in kick order: batch 1 then batch 2)
+  // Drain the remaining pending batch.
   struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);

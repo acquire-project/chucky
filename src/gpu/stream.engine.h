@@ -186,15 +186,6 @@ struct compress_agg_array
   CUdeviceptr d_tail_carry;
   size_t tail_carry_bytes; // == total_shards * page_size
 
-  // Tail-generation gate (page-aligned lazy pipeline). Kick #k's tail reads
-  // consume the d_tail_bytes/d_tail_carry upload made by kick #k-1's
-  // delivery, which on the lazy path runs AFTER kick #k is enqueued;
-  // nothing else orders that host upload against the queued kernels. Kick
-  // #k waits the generation counter >= k, the delivery publishes after each
-  // upload (flush.d2h_deliver.c), and drains are oldest-first, so the
-  // published count tracks delivered kicks. Counter state lives in
-  // gpu_ordering (GPU_EDGE_TAIL_PUBLISHED).
-
   // Per-LOD slice info, needed by delivery to view the unified slot buffers.
   uint32_t shards_begin[LOD_MAX_LEVELS]; // first global shard index for LOD lv
   uint32_t n_shards[LOD_MAX_LEVELS];     // num_shards_lv
@@ -207,9 +198,8 @@ struct compress_agg_stage
   CUdeviceptr d_compressed[2];
   CUevent t_compress_start[2];  // timing
   CUevent t_compress_end[2];    // timing
-  CUevent t_aggregate_start[2]; // timing; recorded after the tail-gate wait
-                                // so a slow sink cannot read as slow
-                                // aggregation
+  CUevent t_aggregate_start[2]; // timing; recorded when aggregation is
+                                // submitted after prior tail readiness
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
@@ -226,10 +216,6 @@ struct compress_agg_stage
                              // consumed is the drain-before-rekick host rule
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
-  struct gpu_pool tail;      // d_tail_bytes/d_tail_carry generations (#142):
-                             // ready=TAIL_PUBLISHED (GEN_COUNTER); consumed is
-                             // the deliver-oldest-first host rule. Payload is
-                             // the bound compress_agg_array (ar below).
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_total_data_bytes;
@@ -361,17 +347,15 @@ stream_engine_init(struct stream_engine* e,
 void
 stream_engine_destroy(struct stream_engine* e);
 
-// Initialize one array's engine state. ctx->config/sink/shard_alignment
-// must be set; fills the remaining ctx fields and takes ownership of
-// cl->plan. gate_ord arms the tail-generation gate (pipelined single-array
-// path); pass NULL on the multiarray sync-flush path, whose immediate
-// drains host-order the tail uploads instead.
+// Initialize one array's engine state. ctx->config/sink/shard_alignment must
+// be set; fills the remaining ctx fields and takes ownership of cl->plan.
+// Pass the engine delivery worker for a single-array stream; pass NULL for
+// multi-array, whose immediate drains host-order per-array state changes.
 int
 engine_array_state_init(struct engine_array_state* st,
                         struct stream_context* ctx,
                         struct computed_stream_layouts* cl,
-                        struct gpu_ordering* gate_ord,
-                        CUstream gate_stream);
+                        struct gpu_delivery* delivery);
 
 void
 engine_array_state_destroy(struct engine_array_state* st);

@@ -67,8 +67,9 @@ struct stream_metrics
   struct stream_metric backpressure;   // sink queue over its watermark
   struct stream_metric edge_stall[3];  // one declared ordering edge each; the
                                        // name says which
-  struct stream_metric tail_gate; // previous batch's shard tail state; only
-                                  // sinks needing aligned shards wait here
+  // Compatibility name: compression-to-aggregation delay while waiting for
+  // the preceding batch's page-aligned tail state to become host-ready.
+  struct stream_metric tail_gate;
 
   float max_append_ms;       // longest single append
   size_t peak_pending_bytes; // high-water mark of bytes awaiting write
