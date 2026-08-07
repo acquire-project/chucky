@@ -355,8 +355,8 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
 
-  struct writer_result r =
-    ctx->append_failed ? writer_error() : stream_dispatch_staged(e, ctx);
+  // Returns the failure without touching staging once the array has failed.
+  struct writer_result r = stream_dispatch_staged(e, ctx);
 
   // Whatever happened above, batches already handed to the delivery worker have
   // to be joined: the worker writes the shard state this function goes on to

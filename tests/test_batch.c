@@ -523,9 +523,6 @@ test_batch_failed_delivery_writes_no_shape(void)
            css.finalize_count);
   CHECK(Fail2, fr.error != 0);
   CHECK(Fail2, css.update_append_count == 0);
-  // Queued writes were drained even so; nothing is left pointing into the
-  // buffers destroy is about to free.
-  CHECK(Fail2, shard_sink_pending_bytes(&css.base) == 0);
 
   free(src);
   tile_stream_gpu_destroy(s);

@@ -313,6 +313,9 @@ test_one_array_failure_spares_the_others(void)
     make_2d_config(d1, dtype_u16),
     make_2d_config(d2, dtype_u16),
   };
+  // One epoch per batch, so array 1's own append fills a batch and hits its
+  // sink. Without this the failure only lands later, during the switch away.
+  configs[1].epochs_per_batch = 1;
   struct shard_sink* sinks[] = { &sink0.base, &sink1.base, &sink2.base };
 
   struct multiarray_tile_stream_gpu* ms =
@@ -320,8 +323,14 @@ test_one_array_failure_spares_the_others(void)
   CHECK(Fail, ms);
 
   struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
-  for (int a = 0; a < 3; ++a)
-    write_fill(w, a, 8, sizeof(uint16_t), (uint8_t)(a + 1));
+  CHECK(Fail,
+        write_fill(w, 0, 8, sizeof(uint16_t), 1).error == multiarray_writer_ok);
+  // Array 1's batch is one epoch, so this append kicks and its sink refuses.
+  CHECK(Fail,
+        write_fill(w, 1, 8, sizeof(uint16_t), 2).error != multiarray_writer_ok);
+  // Switching away from the failed array still works, and array 2 takes data.
+  CHECK(Fail,
+        write_fill(w, 2, 8, sizeof(uint16_t), 3).error == multiarray_writer_ok);
 
   // The flush reports array 1's failure.
   CHECK(Fail, w->flush(w).error != multiarray_writer_ok);

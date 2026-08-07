@@ -38,10 +38,11 @@ struct test_shard_sink
   // takes the zero-copy direct path on aligned runs.
   int write_count;
   int write_direct_count;
-  // Writes past this many total bytes fail. 0 = never. Lets a test put the
-  // failure after some data has landed, rather than on the first write.
+  // Once this many bytes have been accepted, every later write fails. 0 =
+  // never. Lets a test put the failure after some data has landed rather than
+  // on the first write.
   size_t fail_writes_after_bytes;
-  size_t written_bytes;
+  size_t written_bytes; // accepted only
 };
 
 // Initialize a multi-level sink.
