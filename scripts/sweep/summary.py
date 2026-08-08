@@ -20,6 +20,9 @@ from models import retired_metrics
 # for every allocation.
 FILENAME_RE = re.compile(r"^(?P<machine>.+)-(?P<commit>[0-9a-f]{7,40})-(?P<date>\d{8})$")
 
+# Bumped to 2 when report.py started packing the runs into columns.
+OVERVIEW_VERSION = 2
+
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
     "chunk_bytes", "chunk_bytes_label", "sink", "status",
@@ -211,7 +214,7 @@ def build_summary(files: list[tuple[Path, dict]], registry: list[dict] | None = 
                 entry[key].append(value)
 
     return {
-        "version": 1,
+        "version": OVERVIEW_VERSION,
         "machines": sorted(machines.values(), key=lambda m: m["name"].lower()),
         "sweeps": sweeps,
     }

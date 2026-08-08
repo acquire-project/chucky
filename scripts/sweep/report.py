@@ -7,16 +7,26 @@
 """
 Generate the benchmark site from sweep result files.
 
-Two pages, both self-contained (data embedded at generation time):
+Two pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
 
+The pages are code only; their data sits beside them and is fetched at load:
+    decode.js                   unpacks the columns, imported by both pages
+    data/overview.json          every sweep, trimmed, for the overview
+    data/sweeps.json            the sweep list the explorer offers
+    data/sweeps/<result>.json   one sweep in full, fetched when it is opened
+
+That keeps the explorer from downloading every sweep to show one, and lets an
+unchanged sweep revalidate instead of being re-sent. It also means the pages
+need to be served over http — opening them from a file:// path will not work.
+
 Usage:
-    uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
+    uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
     uv run scripts/sweep/report.py bench/results/*.json -o _site
     uv run scripts/sweep/report.py --results-dir bench/results/ -o _site/index.html
 
-Re-run after changing any results file; nothing is read at page load.
+Re-run after changing any results file.
 """
 
 from __future__ import annotations
@@ -24,17 +34,26 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from pydantic import ValidationError
 
+from columnar import pack
 from models import migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry, machine_identity
 
-TEMPLATE_DIR = Path(__file__).parent
-EXPLORER_TEMPLATE = TEMPLATE_DIR / "template.html"
-OVERVIEW_TEMPLATE = TEMPLATE_DIR / "overview.html"
-PLACEHOLDER = "__DATA_PLACEHOLDER__"
+SOURCE_DIR = Path(__file__).parent
+EXPLORER_PAGE = SOURCE_DIR / "template.html"
+OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
+DECODER = SOURCE_DIR / "decode.js"
+
+# The explorer draws from the config fields and never reads the recorded id,
+# which is the longest string in a sweep. The overview keeps it, because its
+# movers panel matches runs between sweeps by it.
+EXPLORER_OMITS = ("id",)
+EXPLORER_VERSION = 3
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
@@ -62,8 +81,8 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
     return loaded
 
 
-def explorer_payload(loaded: list[tuple[Path, dict]]) -> dict:
-    """What the one-sweep-at-a-time page needs: full runs, including stages."""
+def explorer_index(loaded: list[tuple[Path, dict]]) -> dict:
+    """The sweep list the explorer shows before anything is opened."""
     files = []
     for path, data in loaded:
         machine = data.get("machine", {})
@@ -74,19 +93,51 @@ def explorer_payload(loaded: list[tuple[Path, dict]]) -> dict:
             "label": label,
             "filename": path.name,
             "machine": machine,
-            "runs": data.get("runs", []),
         })
-    return {"version": 2, "files": files}
+    return {"version": EXPLORER_VERSION, "files": files}
 
 
-def write_page(template: Path, payload: dict, output: Path) -> None:
-    text = template.read_text()
-    if PLACEHOLDER not in text:
-        raise SystemExit(f"{template.name} has no {PLACEHOLDER} to fill")
-    embedded = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+def write_json(payload: dict, output: Path) -> int:
+    # allow_nan would write Infinity, which JSON.parse rejects — better to stop
+    # here than to publish a page that cannot read its own data.
+    try:
+        text = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+    except ValueError as e:
+        raise SystemExit(f"{output}: {e}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(text.replace(PLACEHOLDER, embedded))
+    output.write_text(text)
+    return len(text.encode())
+
+
+def write_page(source: Path, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(source.read_text())
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
+
+
+def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: Path) -> None:
+    overview = build_summary(loaded, registry)
+    try:
+        strings, blocks = pack([s["runs"] for s in overview["sweeps"]])
+    except ValueError as e:
+        raise SystemExit(f"overview.json: {e}")
+    for sweep, block in zip(overview["sweeps"], blocks):
+        sweep["runs"] = block
+    overview["strings"] = strings
+    size = write_json(overview, data_dir / "overview.json")
+    print(f"Wrote {data_dir / 'overview.json'} ({size / 1024:.0f} KiB)", file=sys.stderr)
+
+    write_json(explorer_index(loaded), data_dir / "sweeps.json")
+    biggest = 0
+    for path, data in loaded:
+        try:
+            strings, blocks = pack([data.get("runs", [])], EXPLORER_OMITS)
+        except ValueError as e:
+            raise SystemExit(f"{path.name}: {e}")
+        payload = {"version": EXPLORER_VERSION, "strings": strings, "runs": blocks[0]}
+        biggest = max(biggest, write_json(payload, data_dir / "sweeps" / path.name))
+    print(f"Wrote {len(loaded)} sweep file(s) to {data_dir / 'sweeps'} "
+          f"(largest {biggest / 1024:.0f} KiB)", file=sys.stderr)
 
 
 def main():
@@ -98,6 +149,10 @@ def main():
                     help="Output directory (a path ending in .html names the overview page)")
     ap.add_argument("--machines", type=Path, default=None,
                     help="Machine registry TOML (default: machines.toml beside the results)")
+    ap.add_argument("--serve", nargs="?", type=int, const=8000, default=None,
+                    metavar="PORT",
+                    help="Serve the site after writing it (default port 8000). The pages "
+                         "fetch their data, so they need this rather than a file:// path.")
     args = ap.parse_args()
 
     paths: list[Path] = list(args.input or [])
@@ -126,8 +181,27 @@ def main():
     else:
         out_dir, overview_name = args.output, "index.html"
 
-    write_page(OVERVIEW_TEMPLATE, build_summary(loaded, registry), out_dir / overview_name)
-    write_page(EXPLORER_TEMPLATE, explorer_payload(loaded), out_dir / "explore.html")
+    write_page(OVERVIEW_PAGE, out_dir / overview_name)
+    write_page(EXPLORER_PAGE, out_dir / "explore.html")
+    write_page(DECODER, out_dir / DECODER.name)
+    write_data(loaded, registry, out_dir / "data")
+
+    if args.serve is not None:
+        serve(out_dir, overview_name, args.serve)
+
+
+def serve(out_dir: Path, overview_name: str, port: int) -> None:
+    handler = partial(SimpleHTTPRequestHandler, directory=str(out_dir))
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError as e:
+        raise SystemExit(f"Cannot serve on port {port}: {e}")
+    print(f"\nServing {out_dir} at http://127.0.0.1:{port}/{overview_name}\n"
+          f"Ctrl-C to stop.", file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
 
 
 if __name__ == "__main__":
