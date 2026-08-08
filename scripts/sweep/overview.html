@@ -4,103 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Benchmarks over time</title>
+<link rel="stylesheet" href="site.css">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
-:root {
-  color-scheme: light;
-  --surface-1: #fcfcfb;
-  --plane: #f9f9f7;
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted: #898781;
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
-  --border: rgba(11,11,11,0.10);
-  --good: #0ca30c;
-  --good-text: #006300;
-  --critical: #d03b3b;
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
-  --series-6: #008300;
-  --series-7: #4a3aa7;
-  --series-8: #e34948;
-  --series-none: #898781;
-  --radius: 8px;
-  --gap: 16px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --surface-1: #1a1a19;
-    --plane: #0d0d0d;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --grid: #2c2c2a;
-    --axis: #383835;
-    --border: rgba(255,255,255,0.10);
-    --good-text: #0ca30c;
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
-    --series-7: #9085e9;
-    --series-8: #e66767;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --surface-1: #1a1a19;
-  --plane: #0d0d0d;
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
-  --grid: #2c2c2a;
-  --axis: #383835;
-  --border: rgba(255,255,255,0.10);
-  --good-text: #0ca30c;
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
-  --series-6: #008300;
-  --series-7: #9085e9;
-  --series-8: #e66767;
-}
-
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--plane);
-  color: var(--text-primary);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-a { color: var(--series-1); }
-
-.site-head {
-  display: flex; align-items: center; gap: var(--gap);
-  padding: 12px 24px; border-bottom: 1px solid var(--border);
-  background: var(--surface-1); flex-wrap: wrap;
-}
-.brand { font-weight: 650; }
-.site-head nav { display: flex; gap: 4px; margin-right: auto; }
-.site-head nav a {
-  padding: 4px 10px; border-radius: var(--radius); text-decoration: none;
-  color: var(--text-secondary); font-size: 0.9em;
-}
-.site-head nav a[aria-current="page"] { background: var(--plane); color: var(--text-primary); font-weight: 600; }
-.theme-toggle {
-  font: inherit; font-size: 0.85em; padding: 4px 10px; cursor: pointer;
-  background: var(--surface-1); color: var(--text-secondary);
-  border: 1px solid var(--border); border-radius: var(--radius);
-}
-
 main { max-width: 1180px; margin: 0 auto; padding: 24px; }
 .lede { color: var(--text-secondary); font-size: 0.9em; margin: 0 0 var(--gap); }
 h1 { font-size: 1.35em; margin: 0 0 4px; }
@@ -216,6 +122,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
     <a href="index.html" aria-current="page">Over time</a>
     <a href="explore.html">Benchmark explorer</a>
   </nav>
+  <a class="repo-link" href="https://github.com/acquire-project/chucky">Source</a>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
 </header>
 

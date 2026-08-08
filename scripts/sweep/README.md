@@ -11,6 +11,10 @@ push to `main` (`.github/workflows/pages.yml`).
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
 
+The explorer picks a machine first and then one of its sweeps, newest at the
+top, so it opens on the most recent sweep run anywhere. A control disappears
+when the open sweep leaves it nothing to choose.
+
 ## Generating the site
 
 ```sh
@@ -25,6 +29,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 
 | file | holds |
 |---|---|
+| `site.css` | the palette and the title bar, linked by both pages |
 | `decode.js` | unpacks the columns, imported by both pages |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
@@ -58,10 +63,13 @@ uv run scripts/sweep/sweep.py --all --machine reef-l40
 `bench/machines.toml` says which names belong to the same machine and describes
 each one. The comment at the top of that file explains the fields.
 
-The overview groups machines that way. A **Group** checkbox turns the grouping
-off, so you can check that the names under one machine really do agree. When a
+Both pages group machines that way: the overview's cards and the explorer's
+machine list. A **Group** checkbox on the overview turns the grouping off, so
+you can check that the names under one machine really do agree. When a
 comparison uses two of those names, the last sweep from one and the sweep before
-it from another, the page says so.
+it from another, the page says so. The explorer marks the sweeps that ran under
+another name, so `livescreen` shows which of its sweeps came from
+`LiveScreen-1`.
 
 A machine keeps its color as other machines are added. Eight colors are
 available; machines past that appear in the tables but not in the chart, and the
