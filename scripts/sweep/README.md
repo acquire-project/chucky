@@ -62,3 +62,25 @@ page names them.
 the overview leaves those out of comparisons instead of converting them. Bump
 `CURRENT_VERSION` when a metric is renamed, removed, or changes meaning. Adding
 one does not need a bump.
+
+When you bump it, add a line below saying what changed and whether numbers
+either side of the bump can still be compared. A stored sweep records only its
+version number, so this list is the only place that says what that number
+means.
+
+### Version history
+
+- **4** — The discard sink reports a fixed 4096-byte shard alignment, so a
+  sweep with no output path measures the page-aligned pipeline. Earlier
+  versions measured the contiguous one and never reached the tail-carry code.
+  Throughput and every stage timing are **not comparable** across this bump.
+- **3** — `tail_gate` was redefined. It measured a device gate's wait; it now
+  measures the delay between compression and aggregation while the host
+  coordinator waits for the preceding batch's tail upload. `tail_gate_ms` and
+  `tail_gate_count` are retired at this version, so the overview drops them
+  from comparisons with older files. Other metrics stay comparable.
+- **2** — `kick_sync_ms` and `kick_sync_count` retired; the stage
+  `lod_dim0_fold` renamed to `lod_append_fold`. The rename carries forward, so
+  everything except the retired pair stays comparable.
+- **1** — Predates this rule and is not a single shape, so a migration from it
+  cannot assume which keys are present.

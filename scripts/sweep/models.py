@@ -61,7 +61,9 @@ def validate_results(data: dict) -> ResultsFile:
 # One version per sweep, since every run in a file comes from one binary. Bump
 # when a metric is renamed, removed, or changes meaning; adding one does not
 # need a bump. Version 1 predates the rule and is not a single shape, so
-# migrating from it cannot assume which keys are present.
+# migrating from it cannot assume which keys are present. A bump also needs an
+# entry in the version history in README.md, which is the only record of what a
+# stored version number means.
 CURRENT_VERSION = 4
 
 # Renames of an unchanged quantity, safe to carry forward.
