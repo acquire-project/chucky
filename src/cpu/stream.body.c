@@ -247,16 +247,21 @@ cpu_stream_flush_batch(struct cpu_stream_view* v)
 struct writer_result
 cpu_stream_flush_body(struct cpu_stream_view* v)
 {
+  // Every exit runs the drain: queued IO points into buffers destroy frees.
+  // Finalizing shards and writing the array shape both claim the output is
+  // complete, so they are skipped once anything above them failed.
+  int failed = 0;
+
   // Flush partial epoch into the batch.
   if (*v->cursor_elements % v->layout->epoch_elements != 0) {
     uint32_t active_mask = 1;
     if (v->levels->enable_multiscale) {
       struct scatter_epoch_params sp = make_scatter_params(v);
-      if (cpu_pipeline_scatter_epoch(&sp, *v->batch_accumulated, &active_mask))
-        return writer_error();
+      CHECK(Fail,
+            cpu_pipeline_scatter_epoch(
+              &sp, *v->batch_accumulated, &active_mask) == 0);
     }
-    if (*v->batch_accumulated >= v->cl->epochs_per_batch)
-      return writer_error();
+    CHECK(Fail, *v->batch_accumulated < v->cl->epochs_per_batch);
     v->batch_active_masks[*v->batch_accumulated] = active_mask;
     (*v->batch_accumulated)++;
   }
@@ -264,9 +269,9 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
   // Flush any accumulated batch.
   if (*v->batch_accumulated > 0) {
     struct flush_batch_params fp = make_flush_params(v);
-    if (cpu_pipeline_flush_batch(
-          &fp, *v->batch_accumulated, v->batch_active_masks))
-      return writer_error();
+    CHECK(Fail,
+          cpu_pipeline_flush_batch(
+            &fp, *v->batch_accumulated, v->batch_active_masks) == 0);
     *v->batch_accumulated = 0;
   }
 
@@ -289,14 +294,12 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     }
 
     uint32_t drain_mask = 0;
-    if (cpu_pipeline_append_drain(&dp, &drain_mask))
-      return writer_error();
+    CHECK(Fail, cpu_pipeline_append_drain(&dp, &drain_mask) == 0);
 
     if (drain_mask) {
       v->batch_active_masks[0] = drain_mask;
       struct flush_batch_params fp = make_flush_params(v);
-      if (cpu_pipeline_flush_batch(&fp, 1, v->batch_active_masks))
-        return writer_error();
+      CHECK(Fail, cpu_pipeline_flush_batch(&fp, 1, v->batch_active_masks) == 0);
     }
   }
 
@@ -312,30 +315,29 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       v->sink->wait_fence(v->sink, v->io_done[1]);
     }
 
-    if (v->sink->has_error && v->sink->has_error(v->sink)) {
-      // Drain queued IO before bailing; it points into buffers destroy frees.
-      shard_sink_drain(v->sink);
-      return writer_error();
-    }
+    CHECK(Fail, !(v->sink->has_error && v->sink->has_error(v->sink)));
 
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
-      if (v->shard[lv].epoch_in_shard > 0) {
-        if (finalize_shards(&v->shard[lv], v->sink, v->shard_alignment)) {
-          // Drain queued IO before bailing; it points into buffers destroy
-          // frees.
-          shard_sink_drain(v->sink);
-          return writer_error();
-        }
-      }
+      if (v->shard[lv].epoch_in_shard > 0)
+        CHECK(Fail,
+              finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
     }
-
-    if (shard_sink_drain(v->sink))
-      return writer_error();
 
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
     if (v->metrics)
       accumulate_metric_ms(&v->metrics->sink, emit_ms, 0, 0);
   }
+
+  goto Drain;
+
+Fail:
+  failed = 1;
+
+Drain:
+  if (shard_sink_drain(v->sink))
+    failed = 1;
+  if (failed)
+    return writer_error();
 
   // Final metadata.
   if (v->sink->update_append) {
