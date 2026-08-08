@@ -1,6 +1,7 @@
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
 #include "log/log.h"
+#include "util/prelude.h"
 #include <nvcomp/lz4.h>
 #include <nvcomp/shared_types.h>
 #include <nvcomp/zstd.h>
@@ -103,15 +104,19 @@ codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
                chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      return max_comp;
+      break;
     case CODEC_ZSTD:
       NVCOMP(Fail,
              nvcompBatchedZstdCompressGetMaxOutputChunkSize(
                chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      return max_comp;
-    default:
       break;
+    default:
+      goto Fail;
   }
+  // nvcomp's own bound is not a multiple of the alignment it requires (zstd
+  // returns 65547 for 64 KiB chunks), so callers spacing chunks by this value
+  // would misalign every chunk after the first.
+  return align_up(max_comp, codec_alignment(type));
 Fail:
   return 0;
 }
@@ -181,7 +186,6 @@ codec_init(struct codec* c,
   c->type = type;
   c->chunk_bytes = chunk_bytes;
   c->batch_size = batch_size;
-  c->alignment = codec_alignment(type);
 
   switch (type) {
     case CODEC_BLOSC_LZ4:
@@ -195,11 +199,8 @@ codec_init(struct codec* c,
       break;
 
     case CODEC_LZ4_NON_STANDARD: {
-      size_t max_comp = 0;
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      c->max_output_size = max_comp;
+      c->max_output_size = codec_max_output_size(type, chunk_bytes);
+      CHECK(Fail, c->max_output_size > 0);
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetTempSizeAsync(
                batch_size,
@@ -211,11 +212,8 @@ codec_init(struct codec* c,
     }
 
     case CODEC_ZSTD: {
-      size_t max_comp = 0;
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      c->max_output_size = max_comp;
+      c->max_output_size = codec_max_output_size(type, chunk_bytes);
+      CHECK(Fail, c->max_output_size > 0);
       NVCOMP(Fail,
              nvcompBatchedZstdCompressGetTempSizeAsync(
                batch_size,

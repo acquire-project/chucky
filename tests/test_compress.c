@@ -26,6 +26,45 @@ source_value_at(size_t gi, size_t total)
   return (uint16_t)(gi ^ (gi >> 16));
 }
 
+// Chunks are laid out back to back at max_output_size, so that value must be a
+// multiple of the alignment nvcomp requires of every output buffer.
+static int
+test_max_output_size_alignment(void)
+{
+  log_info("=== test_max_output_size_alignment ===");
+
+  static const enum compression_codec codecs[] = { CODEC_NONE,
+                                                   CODEC_LZ4_NON_STANDARD,
+                                                   CODEC_ZSTD };
+  static const size_t chunk_sizes[] = { 16384,  65536,   131072, 262144,
+                                        524288, 1048576, 2097152 };
+
+  for (size_t i = 0; i < countof(codecs); ++i) {
+    const size_t alignment = codec_alignment(codecs[i]);
+    CHECK(Fail, alignment > 0);
+    for (size_t j = 0; j < countof(chunk_sizes); ++j) {
+      const size_t max_out = codec_max_output_size(codecs[i], chunk_sizes[j]);
+      CHECK(Fail, max_out >= chunk_sizes[j]);
+      if (max_out % alignment) {
+        log_error("codec %d chunk %zu: max_output_size %zu is not a multiple "
+                  "of %zu",
+                  (int)codecs[i],
+                  chunk_sizes[j],
+                  max_out,
+                  alignment);
+        goto Fail;
+      }
+    }
+  }
+
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 static int
 test_compress_roundtrip(void)
 {
@@ -375,5 +414,6 @@ Fail:
   return 1;
 }
 
-RUN_GPU_TESTS({ "compress_roundtrip", test_compress_roundtrip },
+RUN_GPU_TESTS({ "max_output_size_alignment", test_max_output_size_alignment },
+              { "compress_roundtrip", test_compress_roundtrip },
               { "compress_lz4_roundtrip", test_compress_lz4_roundtrip }, )

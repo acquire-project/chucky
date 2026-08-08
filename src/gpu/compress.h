@@ -12,7 +12,6 @@ extern "C"
   struct codec
   {
     enum compression_codec type;
-    size_t alignment;       // required input chunk alignment
     size_t max_output_size; // max compressed bytes per chunk
     size_t chunk_bytes;     // uncompressed bytes per chunk
     size_t batch_size;      // number of chunks
@@ -28,7 +27,8 @@ extern "C"
   // Query alignment for a codec type without full init.
   size_t codec_alignment(enum compression_codec type);
 
-  // Query max compressed output size per chunk (no GPU allocation).
+  // Query max compressed output size per chunk, rounded up to codec_alignment
+  // so chunks spaced by this value stay aligned (no GPU allocation).
   size_t codec_max_output_size(enum compression_codec type, size_t chunk_bytes);
 
   // Total device bytes codec_init allocates (size arrays, ptr table, nvcomp
