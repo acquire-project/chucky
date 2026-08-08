@@ -10,10 +10,13 @@ using chucky are in `docs/`.
 ## Terms
 
 - **Chunk** — the smallest block of data compressed and stored on its own.
-- **Epoch** — one full set of chunks covering the array once. Appends
-  accumulate into an epoch.
+- **Epoch** — one full set of chunks covering the array once.
 - **Batch** — the epochs compressed and gathered together, `epochs_per_batch`
   of them.
+- **Append** — one call handing data to the writer. Appends accumulate in the
+  staging buffer and do not reach the device on their own.
+- **Dispatch** — one transfer of a filled staging buffer, and the scatters that
+  place it. Covers as many epochs as the buffer spans.
 - **Shard** — a group of chunks written as one file, ending with an index of
   each chunk's offset and size.
 - **Sink** — whatever finished shards are handed to: files, object storage, or
@@ -66,20 +69,43 @@ batch is queued to a delivery worker and joined before its slot is refilled.
 The producer thread decides what happens but no longer moves large amounts of
 data itself.
 
-**Four sizes of work, from smallest to largest** (#173). An *append* copies the
-caller's bytes into a pinned staging buffer and does nothing else. A *dispatch*
-fires when that buffer is full: one transfer for the whole buffer, then one
-scatter for each epoch the buffer covers. An *epoch* is one layer of chunks, and
-the level-of-detail work runs per epoch. A *batch* is the epochs the chunk pool
-holds at once, sized so a group of epochs has enough chunks to spread
-compression work; compress, aggregate, copy-back and delivery all run per batch.
-A dispatch covers at most the room left in the batch, since that is what the
-pool holds — or one epoch when the stream is multiscale, where the dispatch is a
-linear copy into a one-epoch buffer rather than a scatter. Two consequences
-worth knowing: the append cursor runs ahead of the epochs the schedule has
-counted, by whatever is still in staging, and nothing reaches the device until
-the buffer fills or the caller flushes, so `buffer_capacity_bytes` trades
-throughput against how long an append can sit unsent.
+**Dispatch groups appends** (#173). An append copies into the pinned staging
+buffer and returns. Nothing reaches the device until that buffer fills or the
+caller flushes, at which point one transfer moves the whole buffer and one
+scatter runs per epoch it covers. A dispatch is capped at the room left in the
+batch, since that is what the chunk pool holds — or at one epoch for a
+multiscale stream, whose linear buffer holds one. So `buffer_capacity_bytes`
+sets the transfer size, and the append cursor runs ahead of the epochs the
+schedule has counted by whatever is still staged.
+
+### Cost of grouped dispatch
+
+Frame-sized appends stopped paying a transfer and a kernel launch each. On one
+L40: `256cube` at 128 KiB per append went 3.0 to 10.8 GiB/s, `smallepoch` at
+512 B went 0.02 to 3.0 GiB/s, and dispatches fell from 153,600 and 2,000,000 to
+150 and 8. Waits for a staging buffer fell from 35,146 to 19, and from 147,173
+to none.
+
+The producer pays in the copy. Appends used to land in the same first bytes of
+the pinned buffer and stay in cache; they now sweep all of it, so that stage
+went 584 to 1398 ms at the same call count. Write-combined staging memory
+recovers about a third of that but costs the pooled large-append path more than
+it gains, so it was measured and rejected. #183 tracks the copy threshold
+instead.
+
+### Flush and failure
+
+A flush separates work that must happen from work that claims the output is
+complete. Joining the delivery worker and draining the sink always run, because
+queued writes point into buffers teardown frees. Finalizing a shard index and
+writing the array shape run only when everything before them succeeded: a reader
+cannot tell a complete array from one whose tail never arrived, so a failed
+flush leaves the output short rather than making it look whole.
+
+A dispatch that fails partway leaves epochs transferred but uncounted, and
+nothing can un-enqueue them. The array records that and stops taking data. The
+latch is per array, so one array's failure does not silence the others in a
+multi-array stream.
 
 ### Host-coordinated aggregation
 
@@ -251,6 +277,11 @@ pointer with no ordering attached, and has seven non-test callers in
 Each is correct today because a comment says so. Two zero a pool; the rest read
 at an offset inside a generation the caller already holds.
 
+#173 added a second way past the pool API: the scatter steps a raw device
+pointer from one epoch's region to the next, so those derivations never appear
+in a search for `gpu_pool_at`. #181 would remove them by scattering a whole
+buffer in one launch.
+
 Work: give the pool an operation for each of those two uses, then remove
 `gpu_pool_at`.
 
@@ -271,4 +302,4 @@ Work: give the pool an operation for each of those two uses, then remove
 ## Related
 
 Issues #140 and #141 (the two corruption bugs), PR #142 (the tail-state
-counter), issues #101, #162 and #173.
+counter), issues #101, #162, #173, #181 and #183.
