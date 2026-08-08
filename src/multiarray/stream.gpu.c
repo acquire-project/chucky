@@ -144,12 +144,9 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
           0)
         return multiarray_writer_not_flushable;
 
-      // Staging is engine-wide, so the departing array's data has to reach its
-      // own pool before another array's geometry binds in. Either step failing
-      // belongs to the array being left, which reports it when it is flushed;
-      // the array being switched to is still usable.
-      if (!stream_dispatch_staged(e, &departing->ctx).error &&
-          e->sched.accumulated > 0 &&
+      // Either failure belongs to the array being left, which reports it when
+      // it is flushed; the array being switched to is still usable.
+      if (!stream_dispatch_staged(e).error && e->sched.accumulated > 0 &&
           schedule_flush_accumulated(e, &departing->ctx).error)
         departing->ctx.append_failed = 1;
     }
@@ -229,11 +226,10 @@ flush_impl(struct multiarray_writer* self)
   // runs and the first failure is what gets reported.
   int failed = 0;
 
-  // Save current array's state. Staging is engine-wide, so this array's data
-  // has to reach its own pool before another array's flush reuses the buffer.
+  // Empty staging before the loop binds another array.
   if (ms->active >= 0) {
     struct array_descriptor_gpu* desc = &ms->arrays[ms->active];
-    if (stream_dispatch_staged(&ms->engine, &desc->ctx).error)
+    if (stream_dispatch_staged(&ms->engine).error)
       failed = 1;
     unbind_context(&ms->engine, desc);
   }
