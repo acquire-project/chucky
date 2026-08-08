@@ -52,13 +52,18 @@ gpu_streams_sync(const struct gpu_streams* s);
 void
 gpu_streams_register(const struct gpu_streams* s, struct gpu_ordering* ord);
 
-// Pipeline depth and drain placement, selected once per array.
-enum schedule_depth
+// Pipeline depth, drain placement, and who enqueues aggregation, selected
+// once per array. One value per legal combination, so no caller has to check
+// two fields to know which schedule it is looking at.
+enum schedule_mode
 {
   // Depth 2: kick now; drain a slot only when about to refill it.
-  SCHEDULE_PIPELINED = 0,
-  // Depth 1: drain every kicked slot before kicking. Used when the delivery
-  // worker is unavailable, so tail uploads are ordered on the producer.
+  SCHEDULE_PIPELINED_DIRECT = 0,
+  // Depth 2, and the delivery worker enqueues aggregation, which cannot run
+  // until the preceding batch has finished uploading the tail it reads.
+  SCHEDULE_PIPELINED_HOST_COORDINATED,
+  // Depth 1: drain every kicked slot before kicking. A page-aligned array
+  // with no delivery worker, so tail uploads are ordered on the producer.
   SCHEDULE_DRAIN_BEFORE_KICK,
   // Depth 1: drain immediately after kicking; no pool swap. Multiarray:
   // double-buffered pipeline state does not compose across array switches.
@@ -90,8 +95,7 @@ _Static_assert(LOD_MAX_LEVELS <= 32,
 // swaps the whole struct on array switch. Codec shape rides each handoff.
 struct gpu_scheduler
 {
-  enum schedule_depth depth;
-  int host_coordinated; // split prepare/submit for page-aligned single-array
+  enum schedule_mode mode;
   int lod_active; // multiscale: LOD is a second producer into the chunk pool
   uint32_t epochs_per_batch;
   uint32_t accumulated;     // epochs in the batch being filled

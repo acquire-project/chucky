@@ -491,8 +491,7 @@ test_two_batch_cycle_pipelined(void)
   int ok = 0;
 
   CHECK(Fail, orch_ctx_setup_aligned(&c, &config, &sink.base, 0) == 0);
-  CHECK(Fail, c.s->engine.sched.depth == SCHEDULE_PIPELINED);
-  CHECK(Fail, c.s->engine.sched.host_coordinated == 0);
+  CHECK(Fail, c.s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
 
   // --- Batch 1: epochs 0,1 on pool 0 ---
   CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);

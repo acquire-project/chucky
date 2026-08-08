@@ -199,15 +199,17 @@ issue #101).
 
 ### 2. Make multi-array compose
 
-`schedule_depth` still has three values:
+`schedule_mode` still has four values, one per legal schedule:
 
-- `SCHEDULE_PIPELINED` — the normal single-array path. Page-aligned batches use
-  host-coordinated submission; contiguous batches submit directly.
+- `SCHEDULE_PIPELINED_DIRECT` — an array with no alignment requirement. The
+  producer enqueues aggregation itself and queues only the drain.
+- `SCHEDULE_PIPELINED_HOST_COORDINATED` — a page-aligned array with a delivery
+  worker. The worker enqueues aggregation once the preceding batch's tail
+  upload is done.
 - `SCHEDULE_DRAIN_BEFORE_KICK` — the fallback for a page-aligned array when the
-  delivery worker cannot be created. An array with no alignment requirement
-  stays pipelined and drains on the producer instead. A deterministic test
-  forces the fallback and checks that each finalized shard is packed with no
-  gap where the carried tail joins the next batch.
+  delivery worker cannot be created. A deterministic test forces it and checks
+  that each finalized shard is packed with no gap where the carried tail joins
+  the next batch.
 - `SCHEDULE_DRAIN_AFTER_KICK` — the multi-array path, where per-array state is
   swapped between calls and every kick therefore drains immediately.
 

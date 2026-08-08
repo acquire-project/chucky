@@ -521,7 +521,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   int held = 0;
   int ok = 0;
   CHECK(Fail, s);
-  CHECK(Fail, s->engine.sched.host_coordinated);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED);
   CHECK(Fail, s->engine.sched.epochs_per_batch == 1);
   CHECK(Fail, s->engine.compress_agg.ar.total_shards > 1);
 
@@ -613,8 +613,7 @@ test_worker_unavailable_fallback(void)
   gpu_delivery_stop_join(&s->engine.delivery);
   schedule_select(
     &s->engine.sched, &s->engine.compress_agg.ar, &s->engine.delivery);
-  CHECK(Fail, s->engine.sched.depth == SCHEDULE_DRAIN_BEFORE_KICK);
-  CHECK(Fail, !s->engine.sched.host_coordinated);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_DRAIN_BEFORE_KICK);
 
   const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
   src = make_src(4 * epoch_elements);

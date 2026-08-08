@@ -68,15 +68,13 @@ schedule_select(struct gpu_scheduler* sched,
 {
   const int page_aligned = ar->page_size > 0 && ar->total_shards > 0;
   const int worker = delivery && delivery->thread;
-  sched->host_coordinated = 0;
   if (!delivery)
-    sched->depth = SCHEDULE_DRAIN_AFTER_KICK;
-  else if (page_aligned && !worker)
-    sched->depth = SCHEDULE_DRAIN_BEFORE_KICK;
-  else {
-    sched->depth = SCHEDULE_PIPELINED;
-    sched->host_coordinated = page_aligned;
-  }
+    sched->mode = SCHEDULE_DRAIN_AFTER_KICK;
+  else if (!page_aligned)
+    sched->mode = SCHEDULE_PIPELINED_DIRECT;
+  else
+    sched->mode =
+      worker ? SCHEDULE_PIPELINED_HOST_COORDINATED : SCHEDULE_DRAIN_BEFORE_KICK;
   if (sched->next_generation == 0)
     sched->next_generation = 1;
 }
@@ -764,7 +762,7 @@ kick_batch(struct stream_engine* e,
 
   // Shared codec-size arrays, LUTs, and shard tables can be overwritten only
   // after the previous aggregation has been enqueued on this same stream.
-  if (e->sched.host_coordinated && generation > 1)
+  if (e->sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED && generation > 1)
     CHECK(Error,
           gpu_delivery_wait_submitted(&e->delivery, generation - 1) == 0);
 
@@ -780,7 +778,7 @@ kick_batch(struct stream_engine* e,
   s->generation = generation;
   e->sched.next_generation = generation + 1;
 
-  if (e->sched.host_coordinated) {
+  if (e->sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED) {
     // The worker owns submission so aggregation cannot read tail state until
     // generation-1's synchronous upload has completed.
     int enqueue_error =
@@ -801,7 +799,7 @@ kick_batch(struct stream_engine* e,
 
   // Depth-1 schedules drain inline. Contiguous pipelined batches have already
   // submitted aggregation and queue only their drain.
-  if (e->sched.depth == SCHEDULE_PIPELINED)
+  if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT)
     CHECK(Error,
           gpu_delivery_enqueue_submitted(
             &e->delivery, e, ctx, fc, generation) == 0);
@@ -828,7 +826,7 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 
   // Without a worker, drain the other kicked batch too. The next direct
   // aggregation is enqueued only after its predecessor's tail upload returns.
-  if (e->sched.depth == SCHEDULE_DRAIN_BEFORE_KICK) {
+  if (e->sched.mode == SCHEDULE_DRAIN_BEFORE_KICK) {
     struct writer_result r = drain_slot(e, ctx, fc ^ 1);
     if (r.error)
       return r;
@@ -874,12 +872,12 @@ schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   // ordering means this subsumes per-epoch ready signals. The drain-after-kick
   // path releases inside schedule_flush_accumulated, so skip it here to avoid
   // re-recording the same edge on the same stream.
-  if (e->sched.depth != SCHEDULE_DRAIN_AFTER_KICK)
+  if (e->sched.mode != SCHEDULE_DRAIN_AFTER_KICK)
     CHECK(Error,
           gpu_pool_release_produce(
             &e->pools.p, e->sched.fill, e->streams.compute) == 0);
 
-  if (e->sched.depth == SCHEDULE_DRAIN_AFTER_KICK) {
+  if (e->sched.mode == SCHEDULE_DRAIN_AFTER_KICK) {
     struct writer_result r = schedule_flush_accumulated(e, ctx);
     // Host-ordered re-acquire: the drain above host-completed this slot's
     // D2H, so no device wait is queued.
