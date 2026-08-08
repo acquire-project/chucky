@@ -43,142 +43,6 @@ as_view(CUdeviceptr d)
 
 // --- Tests ---
 
-// Single full-epoch ingest: write all epoch elements into staging, dispatch
-// once, verify chunks in pool match CPU ravel reference.
-static int
-test_ingest_single_epoch(void)
-{
-  log_info("=== test_ingest_single_epoch ===");
-
-  const int rank = 3;
-  const uint64_t dim_sizes[] = { 4, 4, 6 };
-  const uint64_t chunk_sizes[] = { 2, 2, 3 };
-  const size_t bytes_per_element = 2;
-
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
-
-  build_lifted_layout(rank,
-                      dim_sizes,
-                      chunk_sizes,
-                      NULL,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
-
-  const size_t src_bytes = epoch_elements * bytes_per_element;
-  const size_t pool_bytes = chunks_per_epoch * chunk_stride * bytes_per_element;
-
-  log_info("  epoch_elements=%lu chunks_per_epoch=%lu pool_bytes=%lu",
-           (unsigned long)epoch_elements,
-           (unsigned long)chunks_per_epoch,
-           (unsigned long)pool_bytes);
-
-  struct staging_state stage = { 0 };
-  struct gpu_ordering ord = { 0 };
-  struct tile_stream_layout layout = { 0 };
-  struct tile_stream_layout_gpu layout_gpu = { 0 };
-  CUstream h2d = 0, compute = 0;
-  CUdeviceptr d_pool = 0;
-  void* h_pool = NULL;
-  uint16_t* h_src = NULL;
-  int ok = 0;
-
-  CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
-  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
-  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
-  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
-  CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
-
-  CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
-  CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
-
-  layout.lifted_rank = lifted_rank;
-  memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
-  memcpy(layout.lifted_strides, lifted_strides, lifted_rank * sizeof(int64_t));
-  layout.chunk_elements = chunk_elements;
-  layout.chunk_stride = chunk_stride;
-  layout.chunks_per_epoch = chunks_per_epoch;
-  layout.epoch_elements = epoch_elements;
-  CHECK(Fail,
-        upload_layout_gpu(
-          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
-
-  h_src = (uint16_t*)malloc(src_bytes);
-  CHECK(Fail, h_src);
-  for (uint64_t i = 0; i < epoch_elements; ++i)
-    h_src[i] = (uint16_t)(i & 0xFFFF);
-
-  memcpy(gpu_pool_at(&stage.h_pool, 0, 0).p, h_src, src_bytes);
-  stage.bytes_written = src_bytes;
-
-  CHECK(Fail,
-        ingest_dispatch_scatter(&stage,
-                                &layout,
-                                &layout_gpu,
-                                (struct scatter_destination){
-                                  .first_epoch = as_view(d_pool),
-                                  .epoch_bytes = pool_bytes,
-                                  .epoch_elements = epoch_elements,
-                                  .epochs = 1,
-                                },
-                                0,
-                                bytes_per_element,
-                                h2d,
-                                compute) == 0);
-
-  CU(Fail, cuStreamSynchronize(compute));
-  CU(Fail, cuStreamSynchronize(h2d));
-
-  h_pool = calloc(1, pool_bytes);
-  CHECK(Fail, h_pool);
-  CU(Fail, cuMemcpyDtoH(h_pool, d_pool, pool_bytes));
-
-  {
-    int errors = 0;
-    for (uint64_t i = 0; i < epoch_elements; ++i) {
-      uint64_t off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
-      uint16_t src_val = h_src[i];
-      uint16_t dst_val = ((uint16_t*)h_pool)[off];
-      if (dst_val != src_val) {
-        if (errors < 5)
-          log_error("  elem %lu: expected pool[%lu]=%u, got %u",
-                    (unsigned long)i,
-                    (unsigned long)off,
-                    src_val,
-                    dst_val);
-        errors++;
-      }
-    }
-    if (errors > 0) {
-      log_error("  %d mismatches", errors);
-      goto Fail;
-    }
-  }
-
-  ok = 1;
-
-Fail:
-  free(h_src);
-  free(h_pool);
-  ingest_destroy(&stage);
-  gpu_ordering_destroy(&ord);
-  destroy_layout_gpu(&layout_gpu);
-  cu_mem_free(d_pool);
-  cu_stream_destroy(h2d);
-  cu_stream_destroy(compute);
-
-  log_info("  %s", ok ? "PASS" : "FAIL");
-  return ok ? 0 : 1;
-}
-
 // Incremental ingest: feed one epoch in two halves, verify pool.
 static int
 test_ingest_incremental(void)
@@ -251,7 +115,6 @@ test_ingest_incremental(void)
     const struct scatter_destination dst = {
       .first_epoch = as_view(d_pool),
       .epoch_bytes = pool_bytes,
-      .epoch_elements = epoch_elements,
       .epochs = 1,
     };
 
@@ -333,13 +196,12 @@ Fail:
 // region of the pool (#173). first_element places the buffer's first element in
 // the stream, so a value inside an epoch splits the dispatch unevenly.
 static int
-run_many_epochs_one_dispatch(uint64_t first_element)
+run_epochs_from(uint32_t n_epochs, uint64_t first_element)
 {
   const int rank = 3;
   const uint64_t dim_sizes[] = { 4, 4, 6 };
   const uint64_t chunk_sizes[] = { 2, 2, 3 };
   const size_t bytes_per_element = 2;
-  const uint32_t n_epochs = 3;
 
   uint8_t lifted_rank;
   uint64_t lifted_shape[MAX_RANK];
@@ -412,7 +274,6 @@ run_many_epochs_one_dispatch(uint64_t first_element)
                                 (struct scatter_destination){
                                   .first_epoch = as_view(d_pool),
                                   .epoch_bytes = epoch_bytes,
-                                  .epoch_elements = epoch_elements,
                                   .epochs = n_epochs + 1,
                                 },
                                 first_element,
@@ -468,11 +329,19 @@ Fail:
   return ok ? 0 : 1;
 }
 
+// One epoch, starting at the beginning: the simplest shape the scatter takes.
+static int
+test_ingest_single_epoch(void)
+{
+  log_info("=== test_ingest_single_epoch ===");
+  return run_epochs_from(1, 0);
+}
+
 static int
 test_ingest_many_epochs_one_dispatch(void)
 {
   log_info("=== test_ingest_many_epochs_one_dispatch ===");
-  return run_many_epochs_one_dispatch(0);
+  return run_epochs_from(3, 0);
 }
 
 // Starting one element in leaves every epoch after the first at an odd element
@@ -481,7 +350,7 @@ static int
 test_ingest_many_epochs_from_mid_epoch(void)
 {
   log_info("=== test_ingest_many_epochs_from_mid_epoch ===");
-  return run_many_epochs_one_dispatch(1);
+  return run_epochs_from(3, 1);
 }
 
 // Multiscale ingest: verify data arrives in linear buffer.

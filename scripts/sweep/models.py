@@ -115,8 +115,10 @@ def migrate_results(data: dict) -> dict:
     """
     version = data.get("version", 1)
     data.setdefault("migrated_from", version)
-    while version < CURRENT_VERSION and version in _MIGRATIONS:
-        _MIGRATIONS[version](data)
+    while version < CURRENT_VERSION:
+        migrate = _MIGRATIONS.get(version)
+        if migrate:
+            migrate(data)
         version += 1
         data["version"] = version
     for run in data.get("runs", []):

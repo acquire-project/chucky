@@ -3,14 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Non-zero once the sink has accepted as many bytes as it was told to take.
-static int
-write_budget_spent(const struct test_shard_sink* s)
-{
-  return s->fail_writes_after_bytes > 0 &&
-         s->written_bytes >= s->fail_writes_after_bytes;
-}
-
 static int
 test_sink_write(struct shard_writer* self,
                 uint64_t offset,
@@ -19,12 +11,11 @@ test_sink_write(struct shard_writer* self,
 {
   struct test_shard_writer* w = (struct test_shard_writer*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (offset + nbytes > w->capacity || write_budget_spent(w->sink))
+  if (offset + nbytes > w->capacity)
     return 1;
   memcpy(w->buf + offset, beg, nbytes);
   if (offset + nbytes > w->size)
     w->size = offset + nbytes;
-  w->sink->written_bytes += nbytes;
   w->sink->write_count++;
   return 0;
 }
@@ -37,12 +28,11 @@ test_sink_write_direct(struct shard_writer* self,
 {
   struct test_shard_writer* w = (struct test_shard_writer*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
-  if (offset + nbytes > w->capacity || write_budget_spent(w->sink))
+  if (offset + nbytes > w->capacity)
     return 1;
   memcpy(w->buf + offset, beg, nbytes);
   if (offset + nbytes > w->size)
     w->size = offset + nbytes;
-  w->sink->written_bytes += nbytes;
   w->sink->write_direct_count++;
   return 0;
 }

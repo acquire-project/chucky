@@ -62,7 +62,9 @@ scatter for each epoch the buffer covers. An *epoch* is one layer of chunks, and
 the level-of-detail work runs per epoch. A *batch* is the epochs the chunk pool
 holds at once, sized so a group of epochs has enough chunks to spread compression
 work; compress, aggregate, copy-back and delivery all run per batch. A dispatch
-covers at most the room left in the batch, since that is what the pool holds.
+covers at most the room left in the batch, since that is what the pool holds —
+or one epoch when the stream is multiscale, where the dispatch is a linear copy
+into a one-epoch buffer rather than a scatter.
 Two consequences worth knowing: the append cursor runs ahead of the epochs the
 schedule has counted, by whatever is still in staging, and nothing reaches the
 device until the buffer fills or the caller flushes, so `buffer_capacity_bytes`

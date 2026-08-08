@@ -102,7 +102,6 @@ engine_dispatch_ingest(struct stream_engine* e,
     const struct scatter_destination dst = {
       .first_epoch = stream_engine_pool_epoch(e, ctx, e->sched.accumulated),
       .epoch_bytes = pool_epoch_bytes(ctx),
-      .epoch_elements = ctx->layout.epoch_elements,
       .epochs = e->sched.epochs_per_batch - e->sched.accumulated,
     };
     return ingest_dispatch_scatter(&e->stage,
@@ -135,8 +134,8 @@ stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
   e->stage.bytes_written = 0;
 
   const uint64_t epoch = ctx->layout.epoch_elements;
-  for (uint64_t at = first - first % epoch + epoch; at <= ctx->cursor_elements;
-       at += epoch) {
+  const uint64_t crossed = ctx->cursor_elements / epoch - first / epoch;
+  for (uint64_t i = 0; i < crossed; ++i) {
     struct writer_result r = schedule_accumulate_epoch(e, ctx);
     if (r.error) {
       ctx->append_failed = 1;
@@ -150,7 +149,7 @@ stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
 // cannot hold more than the room left in that batch. Multiscale takes one epoch
 // at a time, since its linear buffer holds exactly one.
 static size_t
-bytes_before_dispatch(const struct stream_engine* e,
+dispatch_target_bytes(const struct stream_engine* e,
                       const struct stream_context* ctx)
 {
   const uint64_t epoch = ctx->layout.epoch_elements;
@@ -211,12 +210,9 @@ stream_append_body(struct stream_engine* e,
 
   const uint64_t total_limit = ctx->total_element_limit;
 
-  if (ctx->append_failed)
-    return writer_error_at(src, end);
-  // A failed kick leaves the batch full without swapping the slot, so the
-  // epochs the pool holds are all accounted for and there is nowhere to put
-  // more. Only a flush that succeeds can clear it.
-  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+  // A full batch means a kick failed without swapping the slot. Both states
+  // would underflow the room dispatch_target_bytes computes.
+  if (ctx->append_failed || e->sched.accumulated >= e->sched.epochs_per_batch)
     return writer_error_at(src, end);
 
   while (src < end) {
@@ -226,7 +222,7 @@ stream_append_body(struct stream_engine* e,
     if (total_limit > 0 && ctx->cursor_elements >= total_limit)
       return writer_finished_at(src, end);
 
-    const size_t target = bytes_before_dispatch(e, ctx);
+    const size_t target = dispatch_target_bytes(e, ctx);
     uint64_t elements = (target - e->stage.bytes_written) / bpe;
     const uint64_t offered = (uint64_t)(end - src) / bpe;
     if (elements > offered)
@@ -286,37 +282,22 @@ stream_append_body(struct stream_engine* e,
 
 // --- Shared flush body ---
 
-// The epochs the schedule has counted but not yet handed to compression.
 static struct writer_result
 finish_accumulated(struct stream_engine* e, struct stream_context* ctx)
 {
   if (ctx->cursor_elements % ctx->layout.epoch_elements != 0 &&
-      schedule_add_partial_epoch(e, ctx)) {
-    ctx->append_failed = 1;
+      schedule_add_partial_epoch(e, ctx))
     return writer_error();
-  }
 
   struct writer_result r = schedule_flush_accumulated(e, ctx);
-  if (r.error) {
-    // The batch stays counted and unkicked, and nothing can say which of its
-    // epochs reached the sink.
-    ctx->append_failed = 1;
-    return r;
-  }
-
-  r = schedule_flush_partial_append(e, ctx);
   if (r.error)
-    ctx->append_failed = 1;
-  return r;
+    return r;
+
+  return schedule_flush_partial_append(e, ctx);
 }
 
-// A shard's index claims every chunk it names is present, and the array's shape
-// claims every element up to the append cursor is. Both only hold once
-// everything before them succeeded: a reader cannot tell a complete array from
-// one whose tail never arrived, so after a failure the output is left short
-// rather than made to look whole.
 static struct writer_result
-finalize_output_shards(struct stream_engine* e, struct stream_context* ctx)
+finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
 {
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
@@ -326,6 +307,25 @@ finalize_output_shards(struct stream_engine* e, struct stream_context* ctx)
       r = writer_error();
   }
   return r;
+}
+
+// Flush is already a sync point, so waiting here costs nothing and leaves no
+// ingest sample unread.
+static void
+collect_ingest_timing(struct stream_engine* e)
+{
+  cuStreamSynchronize(e->streams.compute);
+  ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
+  ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
+  lod_collect_timing(&e->lod_shared, &e->metrics);
+  e->metrics.scatter_samples_lost = e->stage.scatter_samples_lost;
+  e->metrics.lod_samples_lost = e->lod_shared.timing_samples_lost;
+  if (e->lod_shared.timing_samples_lost > 0)
+    log_debug("lod timing ring wrapped %llu times",
+              (unsigned long long)e->lod_shared.timing_samples_lost);
+  if (e->stage.scatter_samples_lost > 0)
+    log_debug("scatter timing ring wrapped %llu times",
+              (unsigned long long)e->stage.scatter_samples_lost);
 }
 
 static struct writer_result
@@ -355,7 +355,6 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
 
-  // Returns the failure without touching staging once the array has failed.
   struct writer_result r = stream_dispatch_staged(e, ctx);
 
   // Whatever happened above, batches already handed to the delivery worker have
@@ -369,30 +368,20 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       r = d;
   }
 
-  if (!r.error)
+  // A shard index and the array shape both claim the output is complete, so
+  // they only run once everything before them succeeded: a reader cannot tell a
+  // complete array from one whose tail never arrived.
+  if (!r.error) {
     r = finish_accumulated(e, ctx);
+    if (r.error)
+      ctx->append_failed = 1;
+    else
+      r = finalize_all_levels(e, ctx);
+  }
 
-  // Last chance to read the outstanding ingest intervals; flush is already a
-  // sync point, so waiting here costs nothing and leaves no sample unread.
-  cuStreamSynchronize(e->streams.compute);
-  ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
-  ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
-  lod_collect_timing(&e->lod_shared, &e->metrics);
-  e->metrics.scatter_samples_lost = e->stage.scatter_samples_lost;
-  e->metrics.lod_samples_lost = e->lod_shared.timing_samples_lost;
-  if (e->lod_shared.timing_samples_lost > 0)
-    log_debug("lod timing ring wrapped %llu times",
-              (unsigned long long)e->lod_shared.timing_samples_lost);
-  if (e->stage.scatter_samples_lost > 0)
-    log_debug("scatter timing ring wrapped %llu times",
-              (unsigned long long)e->stage.scatter_samples_lost);
+  collect_ingest_timing(e);
 
-  if (!r.error)
-    r = finalize_output_shards(e, ctx);
-
-  // Queued writes point into buffers destroy frees, so drain on every path. The
-  // shape below is written after it, so it never names data that is still
-  // queued.
+  // The shape is written after this, so it never names data still queued.
   if (shard_sink_drain(ctx->sink) && !r.error)
     r = writer_error();
 

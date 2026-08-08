@@ -43,7 +43,6 @@ struct scatter_destination
                                     // element, within the produce generation
                                     // the caller acquired
   size_t epoch_bytes;               // one epoch's region in the pool
-  uint64_t epoch_elements;
   uint32_t epochs; // regions the caller has, counting from first_epoch
 };
 

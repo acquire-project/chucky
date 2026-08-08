@@ -134,10 +134,9 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   if (ms->active >= 0) {
     struct array_descriptor_gpu* departing = &ms->arrays[ms->active];
 
-    // An array that has failed will never finish its epoch and never reads the
-    // pool again, and a failure has already released whatever it had staged, so
-    // there is nothing left to hand over and nothing to wait for. Holding the
-    // switch on it would strand every other array in the stream.
+    // A failed array holds no staging and never reads the pool again, so
+    // leaving it needs nothing. Holding the switch on it would strand every
+    // other array in the stream.
     if (!departing->ctx.append_failed) {
       // Reject switch mid-epoch
       if (departing->ctx.cursor_elements %
@@ -146,16 +145,11 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
         return multiarray_writer_not_flushable;
 
       // Staging is engine-wide, so the departing array's data has to reach its
-      // own pool before another array's geometry binds in. A failure here
+      // own pool before another array's geometry binds in. Either step failing
       // belongs to the array being left, which reports it when it is flushed;
       // the array being switched to is still usable.
-      (void)stream_dispatch_staged(e, &departing->ctx);
-
-      // Flush departing array's accumulated batch. The drain-after-kick
-      // schedule leaves no pool swap or kicked state behind, so this is safe
-      // mid-switch. Skipped once the array has failed, for the same reason the
-      // flush skips it: nothing can say which of the batch's epochs landed.
-      if (!departing->ctx.append_failed && e->sched.accumulated > 0 &&
+      if (!stream_dispatch_staged(e, &departing->ctx).error &&
+          e->sched.accumulated > 0 &&
           schedule_flush_accumulated(e, &departing->ctx).error)
         departing->ctx.append_failed = 1;
     }

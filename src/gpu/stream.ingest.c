@@ -53,9 +53,8 @@ ingest_init(struct staging_state* stage,
     CU(Fail,
        cuMemAlloc(&stage->slot[i].d_in,
                   buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
-    // A transfer writes whole elements, and the scatter reads whole words, so
-    // it can take a few bytes past the last element transferred. Those bytes
-    // are discarded, but they have to hold something.
+    // The scatter's word-aligned reads can run past the last element; see
+    // TRANSPOSE_SOURCE_PAD_BYTES.
     CU(Fail,
        cuMemsetD8(stage->slot[i].d_in,
                   0,
@@ -175,14 +174,15 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
                  size_t bpe,
                  CUstream compute)
 {
+  const uint64_t epoch_elements = layout->epoch_elements;
   uint64_t element = first_element;
   CUdeviceptr d_epoch = gpu_pool_view_d(dst.first_epoch);
   uint32_t epoch = 0;
 
   for (size_t at = 0; at < bytes;) {
     assert(epoch < dst.epochs);
-    const uint64_t in_epoch = element % dst.epoch_elements;
-    const uint64_t room = (dst.epoch_elements - in_epoch) * bpe;
+    const uint64_t in_epoch = element % epoch_elements;
+    const uint64_t room = (epoch_elements - in_epoch) * bpe;
     const uint64_t left = bytes - at;
     const uint64_t n = room < left ? room : left;
 
@@ -198,7 +198,7 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
 
     at += (size_t)n;
     element += n / bpe;
-    if (element % dst.epoch_elements == 0) {
+    if (element % epoch_elements == 0) {
       d_epoch += dst.epoch_bytes;
       epoch++;
     }
@@ -284,8 +284,6 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   CU(Error, cuEventRecord(st->t_start, compute));
   {
     uint64_t epoch_offset = (first_element % epoch_elements) * bpe;
-    // d_linear holds one epoch. The caller keeps the staging buffer inside one,
-    // and it is not this file that can see whether it still does.
     assert(first_element % epoch_elements + elements <= epoch_elements);
     CU(Error,
        cuMemcpyDtoDAsync(d_linear + epoch_offset,

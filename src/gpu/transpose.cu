@@ -2,86 +2,11 @@
 #include <assert.h>
 #include <stdint.h>
 
-__global__ void
-fill_k(uint16_t* beg, uint16_t* end)
-{
-  const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (beg + i < end) {
-    beg[i] = i;
-  }
-}
-
-extern "C" void
-fill_u16(CUdeviceptr d_beg,
-         CUdeviceptr d_end,
-         int grid_size,
-         int block_size,
-         CUstream stream)
-{
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
-  fill_k<<<grid_size, block_size, 0, cuda_stream>>>((uint16_t*)d_beg,
-                                                    (uint16_t*)d_end);
-}
-
-// Transpose indices kernel
-// Each thread independently computes one output index using the add() algorithm
-__global__ void
-transpose_indices_k(uint64_t* d_out,
-                    uint64_t beg,
-                    uint64_t end,
-                    uint8_t rank,
-                    const uint64_t* shape,
-                    const int64_t* strides)
-{
-  const uint64_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-  const uint64_t input_idx = beg + gid;
-
-  if (input_idx < end) {
-    // Decompose input_idx into coordinates, then compute output offset
-    uint64_t out = 0;
-    uint64_t rest = input_idx;
-
-    for (int d = rank - 1; d >= 0; --d) {
-      const uint64_t coord = rest % shape[d];
-      rest /= shape[d];
-      out += coord * strides[d];
-    }
-
-    d_out[gid] = out;
-  }
-}
-
-extern "C" void
-transpose_indices(CUdeviceptr d_beg,
-                  CUdeviceptr d_end,
-                  uint64_t i_offset,
-                  uint8_t rank,
-                  const uint64_t* d_shape,
-                  const int64_t* d_strides,
-                  CUstream stream)
-{
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
-
-  uint64_t* out_beg = (uint64_t*)d_beg;
-  uint64_t* out_end = (uint64_t*)d_end;
-  const uint64_t n = (uint64_t)(out_end - out_beg);
-
-  const int block_size = 256;
-  const int grid_size = (int)((n + block_size - 1) / block_size);
-
-  transpose_indices_k<<<grid_size, block_size, 0, cuda_stream>>>(
-    out_beg, i_offset, i_offset + n, rank, d_shape, d_strides);
-}
-
 // Transpose data kernel - v0
 // Uses shared memory to stage data before computing output positions.
 //
-// Requirements on d_src:
-//   - Must be aligned to sizeof(T).
-//   - Loads take whole uint32_t words overlapping the requested elements and
-//     ignore the surplus on store, so a d_src that is not word aligned needs
-//     room back to the previous word boundary, and the buffer needs
-//     TRANSPOSE_SOURCE_PAD_BYTES past src_size.
+// d_src must be aligned to sizeof(T); see TRANSPOSE_SOURCE_PAD_BYTES for the
+// room the loads need on either side of the requested elements.
 template<typename T>
 __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
                                                          const T* d_src,

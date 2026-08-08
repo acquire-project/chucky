@@ -303,9 +303,9 @@ test_one_array_failure_spares_the_others(void)
 
   struct test_shard_sink sink0, sink1, sink2;
   test_sink_init_1(&sink0);
-  test_sink_init_1(&sink1);
+  // A shard too small to hold anything: array 1's every write fails.
+  test_sink_init(&sink1, SINK_N_SHARDS, 1);
   test_sink_init_1(&sink2);
-  sink1.fail_writes_after_bytes = 1; // array 1 cannot write anything
 
   struct dimension d0[2], d1[2], d2[2];
   struct tile_stream_configuration configs[] = {
