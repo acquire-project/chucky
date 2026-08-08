@@ -79,11 +79,11 @@ data itself.
 **Dispatch groups appends** (#173). An append copies into the pinned staging
 buffer and returns. Nothing reaches the device until that buffer fills or the
 caller flushes, at which point one transfer moves the whole buffer and one
-scatter runs per epoch it covers. A dispatch is capped at the room left in the
-batch, since that is what the chunk pool holds — or at one epoch for a
-multiscale stream, whose linear buffer holds one. So `buffer_capacity_bytes`
-sets the transfer size, and the append cursor runs ahead of the epochs the
-schedule has counted by whatever is still staged.
+scatter covers it, whichever epochs it spans. A dispatch is capped at the room
+left in the batch, since that is what the chunk pool holds — or at one epoch
+for a multiscale stream, whose linear buffer holds one. So
+`buffer_capacity_bytes` sets the transfer size, and the append cursor runs
+ahead of the epochs the schedule has counted by whatever is still staged.
 
 ### Cost of grouped dispatch
 

@@ -209,6 +209,8 @@ test_transpose_u16_basic(void)
             n * sizeof(uint16_t),
             sizeof(uint16_t),
             0, // i_offset (start at input index 0)
+            n, // one epoch holds the whole array
+            0, // so no epoch stride to step by
             rank,
             (const uint64_t*)d_shape,
             (const int64_t*)d_strides,
@@ -350,6 +352,8 @@ test_transpose_u16_with_offset(void)
             count * sizeof(uint16_t),
             sizeof(uint16_t),
             i_offset,
+            n, // one epoch holds the whole array
+            0, // so no epoch stride to step by
             rank,
             (const uint64_t*)d_shape,
             (const int64_t*)d_strides,

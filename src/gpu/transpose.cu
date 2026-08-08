@@ -3,57 +3,31 @@
 #include <stdint.h>
 
 // Transpose data kernel - v0
-// Uses shared memory to stage data before computing output positions.
-//
-// d_src must be aligned to sizeof(T); see TRANSPOSE_SOURCE_PAD_BYTES for the
-// room the loads need on either side of the requested elements.
+// Each element's destination comes from its own index, so one launch covers the
+// buffer however many epochs it spans.
 template<typename T>
-__global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
-                                                         const T* d_src,
-                                                         uint64_t src_size,
-                                                         uint64_t i_offset,
-                                                         uint8_t rank,
-                                                         const uint64_t* shape,
-                                                         const int64_t* strides)
+__global__ void __launch_bounds__(256, 4)
+  transpose_v0_k(T* d_dst,
+                 const T* d_src,
+                 uint64_t src_size,
+                 uint64_t i_offset,
+                 uint64_t epoch_elements,
+                 uint64_t epoch_stride,
+                 uint8_t rank,
+                 const uint64_t* shape,
+                 const int64_t* strides)
 {
   constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / sizeof(T); // 4KB
-  constexpr int T_PER_LOAD =
-    sizeof(T) < sizeof(uint32_t) ? (int)(sizeof(uint32_t) / sizeof(T)) : 1;
-  static_assert(ELEMENTS_PER_BLOCK % T_PER_LOAD == 0);
-
-  // One word of slack: an unaligned d_src shifts the whole block's load.
-  __shared__ __align__(sizeof(uint32_t))
-    T shared_buf[ELEMENTS_PER_BLOCK + T_PER_LOAD];
 
   const int tid = threadIdx.x;
-  const int block_offset = blockIdx.x * ELEMENTS_PER_BLOCK;
-  const uint64_t left = src_size - (uint64_t)block_offset;
+  const uint64_t block_offset = (uint64_t)blockIdx.x * ELEMENTS_PER_BLOCK;
+  const uint64_t left = src_size - block_offset;
   const int elements =
     left < ELEMENTS_PER_BLOCK ? (int)left : ELEMENTS_PER_BLOCK;
 
-  // Elements between the word boundary below d_src and d_src itself. Always 0
-  // for types of 4 bytes or more, which cannot straddle a word boundary.
-  const int lead_elements =
-    (int)(((uintptr_t)d_src & (sizeof(uint32_t) - 1)) / sizeof(T));
-
-  if constexpr (sizeof(T) < sizeof(uint32_t)) {
-    const uint32_t* src_words =
-      (const uint32_t*)(d_src - lead_elements) + block_offset / T_PER_LOAD;
-    uint32_t* buf_words = (uint32_t*)shared_buf;
-    const int words = (lead_elements + elements + T_PER_LOAD - 1) / T_PER_LOAD;
-    for (int i = tid; i < words; i += blockDim.x)
-      buf_words[i] = src_words[i];
-  } else {
-    const T* src = d_src + block_offset;
-    for (int i = tid; i < elements; i += blockDim.x)
-      shared_buf[i] = src[i];
-  }
-
-  __syncthreads();
-
   for (int i = tid; i < elements; i += blockDim.x) {
-    uint64_t out_offset = 0;
     uint64_t rest = i_offset + block_offset + i;
+    uint64_t out_offset = (rest / epoch_elements) * epoch_stride;
 
     for (int d = rank - 1; d >= 0; --d) {
       const uint64_t coord = rest % shape[d];
@@ -61,7 +35,7 @@ __global__ void __launch_bounds__(256, 4) transpose_v0_k(T* d_dst,
       out_offset += coord * strides[d];
     }
 
-    d_dst[out_offset] = shared_buf[lead_elements + i];
+    d_dst[out_offset] = d_src[block_offset + i];
   }
 }
 
@@ -71,6 +45,8 @@ transpose_launch(CUdeviceptr d_dst_beg,
                  CUdeviceptr d_src_beg,
                  uint64_t src_bytes,
                  uint64_t i_offset,
+                 uint64_t epoch_elements,
+                 uint64_t epoch_bytes,
                  uint8_t rank,
                  const uint64_t* d_shape,
                  const int64_t* d_strides,
@@ -85,11 +61,21 @@ transpose_launch(CUdeviceptr d_dst_beg,
   const int elements_per_block = (1 << 12) / (int)sizeof(T);
 
   assert(d_src_beg % sizeof(T) == 0);
+  assert(epoch_bytes % sizeof(T) == 0);
+  assert(epoch_elements > 0);
   const int grid_size =
     (int)((src_size + elements_per_block - 1) / elements_per_block);
 
-  transpose_v0_k<T><<<grid_size, block_size, 0, cuda_stream>>>(
-    (T*)d_dst_beg, (T*)d_src_beg, src_size, i_offset, rank, d_shape, d_strides);
+  transpose_v0_k<T>
+    <<<grid_size, block_size, 0, cuda_stream>>>((T*)d_dst_beg,
+                                                (T*)d_src_beg,
+                                                src_size,
+                                                i_offset,
+                                                epoch_elements,
+                                                epoch_bytes / sizeof(T),
+                                                rank,
+                                                d_shape,
+                                                d_strides);
 }
 
 extern "C" void
@@ -98,6 +84,8 @@ transpose(CUdeviceptr d_dst_beg,
           uint64_t src_bytes,
           uint8_t bpe,
           uint64_t i_offset,
+          uint64_t epoch_elements,
+          uint64_t epoch_bytes,
           uint8_t rank,
           const uint64_t* d_shape,
           const int64_t* d_strides,
@@ -109,6 +97,8 @@ transpose(CUdeviceptr d_dst_beg,
                                 d_src_beg,
                                 src_bytes,
                                 i_offset,
+                                epoch_elements,
+                                epoch_bytes,
                                 rank,
                                 d_shape,
                                 d_strides,
@@ -119,6 +109,8 @@ transpose(CUdeviceptr d_dst_beg,
                                  d_src_beg,
                                  src_bytes,
                                  i_offset,
+                                 epoch_elements,
+                                 epoch_bytes,
                                  rank,
                                  d_shape,
                                  d_strides,
@@ -129,6 +121,8 @@ transpose(CUdeviceptr d_dst_beg,
                                  d_src_beg,
                                  src_bytes,
                                  i_offset,
+                                 epoch_elements,
+                                 epoch_bytes,
                                  rank,
                                  d_shape,
                                  d_strides,
@@ -139,6 +133,8 @@ transpose(CUdeviceptr d_dst_beg,
                                  d_src_beg,
                                  src_bytes,
                                  i_offset,
+                                 epoch_elements,
+                                 epoch_bytes,
                                  rank,
                                  d_shape,
                                  d_strides,
