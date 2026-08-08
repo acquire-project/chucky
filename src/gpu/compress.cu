@@ -91,6 +91,31 @@ codec_alignment(enum compression_codec type)
   }
 }
 
+// --- codec_output_alignment ---
+
+static size_t
+larger(size_t a, size_t b)
+{
+  return a > b ? a : b;
+}
+
+// Compressed chunks are written by compression and read back by
+// decompression, which asks for the stricter alignment of the two.
+extern "C" size_t
+codec_output_alignment(enum compression_codec type)
+{
+  switch (type) {
+    case CODEC_LZ4_NON_STANDARD:
+      return larger(nvcompLZ4RequiredCompressionAlignment,
+                    nvcompLZ4RequiredDecompressionAlignment);
+    case CODEC_ZSTD:
+      return larger(nvcompZstdRequiredCompressionAlignment,
+                    nvcompZstdRequiredDecompressionAlignment);
+    default:
+      return 1;
+  }
+}
+
 // --- codec_max_output_size ---
 
 extern "C" size_t
@@ -114,9 +139,8 @@ codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
       goto Fail;
   }
   // nvcomp's own bound is not a multiple of the alignment it requires (zstd
-  // returns 65547 for 64 KiB chunks), so callers spacing chunks by this value
-  // would misalign every chunk after the first.
-  return align_up(max_comp, codec_alignment(type));
+  // returns 65547 for 64 KiB chunks).
+  return align_up(max_comp, codec_output_alignment(type));
 Fail:
   return 0;
 }
@@ -187,20 +211,20 @@ codec_init(struct codec* c,
   c->chunk_bytes = chunk_bytes;
   c->batch_size = batch_size;
 
-  switch (type) {
-    case CODEC_BLOSC_LZ4:
-    case CODEC_BLOSC_ZSTD:
-      log_error("blosc codecs are not supported on GPU");
-      goto Fail;
+  if (type == CODEC_BLOSC_LZ4 || type == CODEC_BLOSC_ZSTD) {
+    log_error("blosc codecs are not supported on GPU");
+    goto Fail;
+  }
 
+  c->max_output_size = codec_max_output_size(type, chunk_bytes);
+  CHECK(Fail, c->max_output_size > 0);
+
+  switch (type) {
     case CODEC_NONE:
-      c->max_output_size = chunk_bytes;
       c->temp_bytes = 0;
       break;
 
-    case CODEC_LZ4_NON_STANDARD: {
-      c->max_output_size = codec_max_output_size(type, chunk_bytes);
-      CHECK(Fail, c->max_output_size > 0);
+    case CODEC_LZ4_NON_STANDARD:
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetTempSizeAsync(
                batch_size,
@@ -209,11 +233,8 @@ codec_init(struct codec* c,
                &c->temp_bytes,
                batch_size * chunk_bytes));
       break;
-    }
 
-    case CODEC_ZSTD: {
-      c->max_output_size = codec_max_output_size(type, chunk_bytes);
-      CHECK(Fail, c->max_output_size > 0);
+    case CODEC_ZSTD:
       NVCOMP(Fail,
              nvcompBatchedZstdCompressGetTempSizeAsync(
                batch_size,
@@ -222,7 +243,6 @@ codec_init(struct codec* c,
                &c->temp_bytes,
                batch_size * chunk_bytes));
       break;
-    }
 
     default:
       goto Fail;

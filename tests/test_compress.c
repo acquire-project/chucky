@@ -2,6 +2,7 @@
 #include "gpu/prelude.cuda.h"
 #include "util/prelude.h"
 #include <nvcomp/lz4.h>
+#include <nvcomp/zstd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,8 +27,35 @@ source_value_at(size_t gi, size_t total)
   return (uint16_t)(gi ^ (gi >> 16));
 }
 
-// Chunks are laid out back to back at max_output_size, so that value must be a
-// multiple of the alignment nvcomp requires of every output buffer.
+// Asks nvcomp directly rather than reusing the value the code under test
+// rounds with, so a wrong constant in the codec layer still fails here.
+static size_t
+nvcomp_required_chunk_alignment(enum compression_codec type)
+{
+  nvcompAlignmentRequirements_t comp = { 0 }, decomp = { 0 };
+  switch (type) {
+    case CODEC_LZ4_NON_STANDARD:
+      if (nvcompBatchedLZ4CompressGetRequiredAlignments(
+            nvcompBatchedLZ4CompressDefaultOpts, &comp) != nvcompSuccess ||
+          nvcompBatchedLZ4DecompressGetRequiredAlignments(
+            nvcompBatchedLZ4DecompressDefaultOpts, &decomp) != nvcompSuccess)
+        return 0;
+      break;
+    case CODEC_ZSTD:
+      if (nvcompBatchedZstdCompressGetRequiredAlignments(
+            nvcompBatchedZstdCompressDefaultOpts, &comp) != nvcompSuccess ||
+          nvcompBatchedZstdDecompressGetRequiredAlignments(
+            nvcompBatchedZstdDecompressDefaultOpts, &decomp) != nvcompSuccess)
+        return 0;
+      break;
+    default:
+      return 1;
+  }
+  return comp.output > decomp.input ? comp.output : decomp.input;
+}
+
+// Chunks are laid out back to back at the bound, so the bound must be a
+// multiple of the alignment nvcomp requires of every compressed chunk.
 static int
 test_max_output_size_alignment(void)
 {
@@ -40,16 +68,33 @@ test_max_output_size_alignment(void)
                                         524288, 1048576, 2097152 };
 
   for (size_t i = 0; i < countof(codecs); ++i) {
-    const size_t alignment = codec_alignment(codecs[i]);
+    const size_t alignment = nvcomp_required_chunk_alignment(codecs[i]);
     CHECK(Fail, alignment > 0);
+    CHECK(Fail, codec_output_alignment(codecs[i]) % alignment == 0);
     for (size_t j = 0; j < countof(chunk_sizes); ++j) {
       const size_t max_out = codec_max_output_size(codecs[i], chunk_sizes[j]);
       CHECK(Fail, max_out >= chunk_sizes[j]);
       if (max_out % alignment) {
-        log_error("codec %d chunk %zu: max_output_size %zu is not a multiple "
-                  "of %zu",
+        log_error("codec %d chunk %zu: bound %zu is not a multiple of %zu",
                   (int)codecs[i],
                   chunk_sizes[j],
+                  max_out,
+                  alignment);
+        goto Fail;
+      }
+
+      // The stride the compress kernel actually uses is the struct field, so
+      // check that rather than only the query.
+      struct codec c = { 0 };
+      CHECK(Fail, codec_init(&c, codecs[i], chunk_sizes[j], 2) == 0);
+      const size_t stride = c.max_output_size;
+      codec_free(&c);
+      if (stride != max_out || stride % alignment) {
+        log_error("codec %d chunk %zu: stride %zu does not match bound %zu or "
+                  "is not a multiple of %zu",
+                  (int)codecs[i],
+                  chunk_sizes[j],
+                  stride,
                   max_out,
                   alignment);
         goto Fail;
