@@ -1,9 +1,12 @@
 name: CI
 
+# A sweep result is data, not code: nothing it can change is what CI builds.
 on:
   push:
     branches: [main]
+    paths-ignore: ['bench/results/**']
   pull_request:
+    paths-ignore: ['bench/results/**']
 
 concurrency:
   group: ci-${{ github.ref }}
