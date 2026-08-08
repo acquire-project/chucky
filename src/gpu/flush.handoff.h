@@ -54,7 +54,7 @@ struct flush_handoff
   const struct aggregate_layout* per_lod_agg_layouts; // borrowed [nlod]
   struct shard_state* shards_by_lod[LOD_MAX_LEVELS];  // borrowed
   struct compress_agg_array* shards; // borrowed per-array tail/shard state
-  size_t max_output_size; // codec bound
+  size_t max_output_size;            // codec bound
 
   // Pass-through codec (CODEC_NONE): per-LOD bytes equal worst-case, so
   // delivery skips the exact-size sync and keeps the kick-time bulk D2H

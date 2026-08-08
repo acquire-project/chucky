@@ -62,7 +62,7 @@ def validate_results(data: dict) -> ResultsFile:
 # when a metric is renamed, removed, or changes meaning; adding one does not
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present.
-CURRENT_VERSION = 3
+CURRENT_VERSION = 4
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -92,7 +92,15 @@ def _migrate_2_to_3(data: dict) -> None:
     pass
 
 
-_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
+def _migrate_3_to_4(data: dict) -> None:
+    # The discard sink now reports a shard alignment, so a default sweep
+    # measures the page-aligned pipeline instead of the contiguous one. Every
+    # timing changes meaning; none of them can be converted, so this only
+    # advances the file version.
+    pass
+
+
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4}
 
 
 def migrate_run(run: dict) -> dict:

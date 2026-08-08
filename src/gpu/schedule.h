@@ -91,16 +91,15 @@ struct gpu_scheduler
   int host_coordinated; // split prepare/submit for page-aligned single-array
   int lod_active; // multiscale: LOD is a second producer into the chunk pool
   uint32_t epochs_per_batch;
-  uint32_t accumulated; // epochs in the batch being filled
-  int fill;             // slot being filled (chunk pool + masks)
+  uint32_t accumulated;     // epochs in the batch being filled
+  int fill;                 // slot being filled (chunk pool + masks)
   uint64_t next_generation; // monotonic, starts at 1
   struct schedule_slot slot[2];
 };
 
-// Page-aligned single-array batches enter PREPARED after compression and
-// become SUBMITTED only when the preceding generation's tail upload is
-// host-complete. Contiguous batches enter SUBMITTED directly. All jobs drain
-// oldest-first and are joined before their slot is refilled.
+// A page-aligned batch waits here between compression and aggregation,
+// because its aggregation reads tail bytes the preceding batch only finishes
+// uploading during its own delivery.
 enum delivery_job_state
 {
   DELIVERY_JOB_EMPTY = 0,
@@ -125,7 +124,7 @@ struct gpu_delivery
   struct platform_cond* cv;
   CUcontext cuda; // captured at init; made current on the worker
   int stop;
-  int hold; // test-only: park after a drain for teardown coverage
+  int hold;              // test-only: park after a drain for teardown coverage
   int hold_before_drain; // test-only: park a SUBMITTED job before its drain
   int sticky_error;
   uint64_t submitted_generation;
@@ -134,8 +133,7 @@ struct gpu_delivery
 };
 
 // Captures the calling thread's CUDA context and starts the worker.
-// Failure leaves the worker absent; single-array scheduling degrades to
-// drain-before-kick.
+// Failure leaves the worker absent; callers may degrade rather than abort.
 int
 gpu_delivery_init(struct gpu_delivery* d);
 
@@ -178,9 +176,7 @@ void
 gpu_delivery_set_hold_before_drain(struct gpu_delivery* d, int on);
 
 enum delivery_job_state
-gpu_delivery_job_state(struct gpu_delivery* d,
-                       int fc,
-                       uint64_t* generation);
+gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation);
 
 void
 gpu_delivery_generations(struct gpu_delivery* d,
@@ -188,7 +184,9 @@ gpu_delivery_generations(struct gpu_delivery* d,
                          uint64_t* tail_ready);
 
 // Depth selection from the array and worker availability. delivery == NULL is
-// the multi-array immediate-drain path. An absent worker selects depth one.
+// the multi-array immediate-drain path. Only a page-aligned array needs a
+// worker; without one it must drain before each kick to order its tail
+// uploads on the producer.
 void
 schedule_select(struct gpu_scheduler* sched,
                 const struct compress_agg_array* ar,

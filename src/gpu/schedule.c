@@ -57,10 +57,11 @@ schedule_select(struct gpu_scheduler* sched,
                 const struct gpu_delivery* delivery)
 {
   const int page_aligned = ar->page_size > 0 && ar->total_shards > 0;
+  const int worker = delivery && delivery->thread;
   sched->host_coordinated = 0;
   if (!delivery)
     sched->depth = SCHEDULE_DRAIN_AFTER_KICK;
-  else if (!delivery->thread)
+  else if (page_aligned && !worker)
     sched->depth = SCHEDULE_DRAIN_BEFORE_KICK;
   else {
     sched->depth = SCHEDULE_PIPELINED;
@@ -88,6 +89,12 @@ schedule_compress_agg_prepare(struct compress_agg_stage* stage,
                               CUstream compress_stream,
                               struct schedule_slot* slot)
 {
+  // Ahead of the pool acquires, so these uploads overlap the previous batch's
+  // drain instead of queueing behind the wait for it.
+  CHECK(Error,
+        compress_agg_prepare(stage, in, levels, compress_stream, &slot->plan) ==
+          0);
+
   CHECK(Error,
         gpu_pool_acquire_consume(
           chunk_pool, in->fc, compress_stream, &slot->pool_buf) == 0);
@@ -102,10 +109,6 @@ schedule_compress_agg_prepare(struct compress_agg_stage* stage,
         gpu_pool_acquire_produce(
           &stage->agg_pool, in->fc, compress_stream, &slot->aggregate_slot) ==
           0);
-
-  CHECK(Error,
-        compress_agg_prepare(
-          stage, in, levels, compress_stream, &slot->plan) == 0);
 
   CHECK(Error,
         compress_agg_compress(
@@ -126,13 +129,12 @@ schedule_compress_agg_submit(struct compress_agg_stage* stage,
   const int fc = slot->handoff.fc;
 
   CHECK(Error,
-        compress_agg_aggregate(
-          stage,
-          &slot->plan,
-          fc,
-          slot->aggregate_slot.p,
-          slot->pool_buf,
-          compress_stream) == 0);
+        compress_agg_aggregate(stage,
+                               &slot->plan,
+                               fc,
+                               slot->aggregate_slot.p,
+                               slot->pool_buf,
+                               compress_stream) == 0);
   // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
   // record (#140).
   CHECK(Error,
@@ -155,13 +157,9 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
 {
   struct schedule_slot slot = { 0 };
   CHECK(Error,
-        schedule_compress_agg_prepare(stage,
-                                      in,
-                                      levels,
-                                      chunk_pool,
-                                      lod_active,
-                                      compress_stream,
-                                      &slot) == 0);
+        schedule_compress_agg_prepare(
+          stage, in, levels, chunk_pool, lod_active, compress_stream, &slot) ==
+          0);
   CHECK(Error,
         schedule_compress_agg_submit(stage, &slot, compress_stream) == 0);
 
@@ -346,9 +344,6 @@ drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
                             &e->metadata_update_clock);
 }
 
-// Complete the PREPARED -> SUBMITTED transition. Aggregation and its
-// AGG_DONE/POOL_CONSUMED record are followed immediately by the existing
-// metadata D2H kick.
 static int
 submit_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
@@ -365,18 +360,19 @@ Error:
   return 1;
 }
 
-// d->mu must be held. Once one generation fails, a later PREPARED job must
-// never aggregate from tail state that was not produced by its predecessor.
-// Already-submitted contiguous jobs are safe to abandon after their queued GPU
-// work completes during teardown.
+// d->mu must be held. Once one generation fails, a later prepared job must
+// never aggregate from tail state that was not produced by its predecessor,
+// so it is cancelled before anything is queued for it. A job that already
+// submitted still has its aggregation and device-to-host copy queued on the
+// device, and its output has to reach the sink and release its pool slot, so
+// it is left for the loop to drain.
 static void
 delivery_fail_pending_locked(struct gpu_delivery* d)
 {
   d->sticky_error = 1;
   for (int i = 0; i < 2; ++i) {
     struct delivery_job* j = &d->job[i];
-    if (j->state == DELIVERY_JOB_PREPARED ||
-        j->state == DELIVERY_JOB_SUBMITTED) {
+    if (j->state == DELIVERY_JOB_PREPARED) {
       j->result = writer_error();
       j->state = DELIVERY_JOB_DONE;
     }
@@ -434,8 +430,6 @@ delivery_main(void* arg)
       int submit_error = submit_payload(e, ctx, fc);
       platform_mutex_lock(d->mu);
 
-      // A concurrently joined job cannot be cleared before DONE, so the
-      // producer still owns this exact generation here.
       j = &d->job[fc];
       if (submit_error) {
         j->result = writer_error();
@@ -545,8 +539,7 @@ gpu_delivery_enqueue_prepared(struct gpu_delivery* d,
                               int fc,
                               uint64_t generation)
 {
-  return gpu_delivery_enqueue(
-    d, e, ctx, fc, generation, DELIVERY_JOB_PREPARED);
+  return gpu_delivery_enqueue(d, e, ctx, fc, generation, DELIVERY_JOB_PREPARED);
 }
 
 int
@@ -556,6 +549,10 @@ gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
                                int fc,
                                uint64_t generation)
 {
+  // Aggregation is already queued, so without a worker the producer can drain
+  // this slot itself when it comes to refill it.
+  if (!d->thread)
+    return 0;
   return gpu_delivery_enqueue(
     d, e, ctx, fc, generation, DELIVERY_JOB_SUBMITTED);
 }
@@ -636,9 +633,7 @@ gpu_delivery_set_hold_before_drain(struct gpu_delivery* d, int on)
 }
 
 enum delivery_job_state
-gpu_delivery_job_state(struct gpu_delivery* d,
-                       int fc,
-                       uint64_t* generation)
+gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation)
 {
   if (!d->mu) {
     if (generation)
@@ -796,8 +791,8 @@ kick_batch(struct stream_engine* e,
   if (e->sched.host_coordinated) {
     // The worker owns submission so aggregation cannot read tail state until
     // generation-1's synchronous upload has completed.
-    int enqueue_error = gpu_delivery_enqueue_prepared(
-      &e->delivery, e, ctx, fc, generation);
+    int enqueue_error =
+      gpu_delivery_enqueue_prepared(&e->delivery, e, ctx, fc, generation);
     s->kicked = 1;
     CHECK(Error, enqueue_error == 0);
     return 0;

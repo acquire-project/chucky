@@ -248,8 +248,7 @@ engine_array_state_init(struct engine_array_state* st,
     CHECK(Fail, st->sched.slot[fc].batch_active_masks);
   }
 
-  CHECK(Fail,
-        compress_agg_array_init(&st->agg, cl) == 0);
+  CHECK(Fail, compress_agg_array_init(&st->agg, cl) == 0);
   schedule_select(&st->sched, &st->agg, delivery);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
@@ -405,10 +404,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
           &out->engine, &lim, config->codec.id, cl.levels.enable_multiscale) ==
           0);
   CHECK(FailPhase2,
-        engine_array_state_init(&out->ar,
-                                &out->ctx,
-                                &cl,
-                                &out->engine.delivery) == 0);
+        engine_array_state_init(
+          &out->ar, &out->ctx, &cl, &out->engine.delivery) == 0);
   CHECK(FailPhase2,
         stream_engine_bind_array(&out->engine, &out->ar, &out->ctx) == 0);
 

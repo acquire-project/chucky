@@ -172,6 +172,26 @@ The public `tail_gate` metric and JSON key remain for compatibility. They now
 measure the compression-to-aggregation delay while the coordinator waits for
 the preceding batch's tail readiness; they do not represent a device gate.
 
+The discard sink reports a fixed 4096-byte shard alignment, so a bench run with
+no output path measures the page-aligned pipeline. Before that change the
+default bench measured the contiguous one, and nothing in the default
+configuration reached the tail-carry code at all. Sweep files from before
+schema version 4 therefore measured a different pipeline and are not
+comparable with later ones.
+
+### Measured cost of host coordination
+
+Handing submission to the delivery worker means a batch's aggregation is
+enqueued only after the preceding batch's delivery has returned from its
+synchronous tail upload, where the device gate let the GPU run ahead on its
+own. Against `ad1125b` on one L40, page-aligned output to a local O_DIRECT
+store, four scenarios, two repetitions each, interleaved in one allocation:
+`256cube` block `-0.1%`, `256cube` frame `+7.0%`, `smallepoch` block `+0.5%`,
+`orca2` block `-0.3%` throughput. Producer wait moved out of the I/O fence and
+into the flush stall without changing wall time. This was measured with a fast
+sink, which is the case that most favors the run-ahead the gate provided; a
+slower or higher-latency sink is unmeasured, as is Windows.
+
 *Done when:* a sweep JSON alone is enough to reconstruct each stage's total
 time, and the producer's stall time appears in it. Some of this already exists
 on the local `issue-101-append-latency` branch (append latency distribution,
@@ -183,9 +203,11 @@ issue #101).
 
 - `SCHEDULE_PIPELINED` — the normal single-array path. Page-aligned batches use
   host-coordinated submission; contiguous batches submit directly.
-- `SCHEDULE_DRAIN_BEFORE_KICK` — the single-array fallback when the delivery
-  worker cannot be created. A deterministic test forces this selection and
-  exercises page-aligned tail carry.
+- `SCHEDULE_DRAIN_BEFORE_KICK` — the fallback for a page-aligned array when the
+  delivery worker cannot be created. An array with no alignment requirement
+  stays pipelined and drains on the producer instead. A deterministic test
+  forces the fallback and checks that each finalized shard is packed with no
+  gap where the carried tail joins the next batch.
 - `SCHEDULE_DRAIN_AFTER_KICK` — the multi-array path, where per-array state is
   swapped between calls and every kick therefore drains immediately.
 

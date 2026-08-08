@@ -999,21 +999,24 @@ test_midstream_metadata_update(const char* tmpdir)
     data[len < 4095 ? len : 4095] = '\0';
     log_info("  midstream metadata: %s", (char*)data);
 
-    const char* shape = strstr((char*)data, "\"shape\":[");
-    const char* extent_beg =
-      shape ? shape + strlen("\"shape\":[") : NULL;
-    char* extent_end = NULL;
-    uint64_t extent = extent_beg ? strtoull(extent_beg, &extent_end, 10) : 0;
-    const uint64_t submitted_extent =
-      (total / tile_stream_gpu_layout(s)->epoch_elements) * dims[0].chunk_size;
-    const int extent_parsed = extent_beg && extent_end != extent_beg;
+    // Of the 6 epochs kicked, the two still sitting in their slots have not
+    // been delivered, and a slot is always drained before it is refilled, so
+    // the extent the live metadata may publish is exact.
+    const uint64_t epochs_kicked =
+      total / tile_stream_gpu_layout(s)->epoch_elements;
+    char expected_shape[64];
+    snprintf(expected_shape,
+             sizeof(expected_shape),
+             "\"shape\":[%llu,%llu,%llu]",
+             (unsigned long long)((epochs_kicked - 2) * dims[0].chunk_size),
+             (unsigned long long)dims[1].size,
+             (unsigned long long)dims[2].size);
+
+    int has_shape = strstr((char*)data, expected_shape) != NULL;
     int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
     free(data);
 
-    CHECK(Fail4, extent_parsed);
-    CHECK(Fail4, extent > 0);
-    CHECK(Fail4, extent % dims[0].chunk_size == 0);
-    CHECK(Fail4, extent <= submitted_extent);
+    CHECK(Fail4, has_shape);
     CHECK(Fail4, is_array);
   }
 

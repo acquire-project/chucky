@@ -69,6 +69,77 @@ coordinator_sink_has_output(const struct test_shard_sink* sink,
   return finalized >= expected_shards && bytes > 0;
 }
 
+// A batch whose aggregation read a stale tail length places its first chunk
+// at the wrong offset. The shard still finalizes with a plausible byte count,
+// so the only thing that catches it is the recorded layout: every chunk must
+// begin exactly where the previous one ended.
+static int
+coordinator_shards_are_packed(const struct test_shard_sink* sink,
+                              const struct compress_agg_array* ar)
+{
+  uint64_t checked = 0;
+  for (uint64_t si = 0; si < ar->total_shards; ++si) {
+    if (si >= TEST_SHARD_SINK_MAX_SHARDS)
+      break;
+    const struct test_shard_writer* w = &sink->writers[0][si];
+    if (!w->finalized)
+      continue;
+
+    const uint64_t nchunks = ar->shard[si].chunks_per_shard_total;
+    const size_t index_bytes = nchunks * 2 * sizeof(uint64_t) + 4;
+    if (w->size < index_bytes) {
+      log_error("  shard %llu: size %zu below index %zu",
+                (unsigned long long)si,
+                w->size,
+                index_bytes);
+      return 0;
+    }
+
+    const uint64_t* idx = (const uint64_t*)(w->buf + (w->size - index_bytes));
+    uint64_t expected_offset = 0;
+    uint64_t written = 0;
+    int past_end = 0;
+    for (uint64_t k = 0; k < nchunks; ++k) {
+      const uint64_t offset = idx[2 * k];
+      const uint64_t size = idx[2 * k + 1];
+      // A partly filled shard leaves its trailing slots unwritten.
+      if (offset == UINT64_MAX && size == UINT64_MAX) {
+        past_end = 1;
+        continue;
+      }
+      if (past_end) {
+        log_error("  shard %llu chunk %llu: written after an unwritten chunk",
+                  (unsigned long long)si,
+                  (unsigned long long)k);
+        return 0;
+      }
+      if (size == 0 || offset != expected_offset) {
+        log_error("  shard %llu chunk %llu: offset %llu size %llu, "
+                  "expected offset %llu",
+                  (unsigned long long)si,
+                  (unsigned long long)k,
+                  (unsigned long long)offset,
+                  (unsigned long long)size,
+                  (unsigned long long)expected_offset);
+        return 0;
+      }
+      expected_offset = offset + size;
+      written++;
+    }
+    if (written == 0)
+      continue;
+    if (expected_offset + index_bytes > w->size) {
+      log_error("  shard %llu: payload %llu overruns size %zu",
+                (unsigned long long)si,
+                (unsigned long long)expected_offset,
+                w->size);
+      return 0;
+    }
+    checked++;
+  }
+  return checked > 0;
+}
+
 // --- Test cases ---
 
 // 1. Mid-batch state verification: 1 epoch into a K=2 batch.
@@ -480,18 +551,17 @@ run_host_coordinator_hold(enum compression_codec codec)
   uint64_t generation0 = 0;
   uint64_t generation1 = 0;
   CHECK(Fail,
-        gpu_delivery_job_state(
-          &s->engine.delivery, 0, &generation0) == DELIVERY_JOB_SUBMITTED);
+        gpu_delivery_job_state(&s->engine.delivery, 0, &generation0) ==
+          DELIVERY_JOB_SUBMITTED);
   CHECK(Fail,
-        gpu_delivery_job_state(
-          &s->engine.delivery, 1, &generation1) == DELIVERY_JOB_PREPARED);
+        gpu_delivery_job_state(&s->engine.delivery, 1, &generation1) ==
+          DELIVERY_JOB_PREPARED);
   CHECK(Fail, generation0 == 1);
   CHECK(Fail, generation1 == 2);
   {
     uint64_t submitted = 0;
     uint64_t tail_ready = 0;
-    gpu_delivery_generations(
-      &s->engine.delivery, &submitted, &tail_ready);
+    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
     CHECK(Fail, submitted == 1);
     CHECK(Fail, tail_ready == 0);
   }
@@ -502,14 +572,14 @@ run_host_coordinator_hold(enum compression_codec codec)
   {
     uint64_t submitted = 0;
     uint64_t tail_ready = 0;
-    gpu_delivery_generations(
-      &s->engine.delivery, &submitted, &tail_ready);
+    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
     CHECK(Fail, submitted == 2);
     CHECK(Fail, tail_ready == 2);
   }
-  CHECK(Fail,
-        coordinator_sink_has_output(
-          &sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(
+    Fail,
+    coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
   ok = 1;
 
 Fail:
@@ -553,9 +623,8 @@ test_worker_unavailable_fallback(void)
   CHECK(Fail, s);
 
   gpu_delivery_stop_join(&s->engine.delivery);
-  schedule_select(&s->engine.sched,
-                  &s->engine.compress_agg.ar,
-                  &s->engine.delivery);
+  schedule_select(
+    &s->engine.sched, &s->engine.compress_agg.ar, &s->engine.delivery);
   CHECK(Fail, s->engine.sched.depth == SCHEDULE_DRAIN_BEFORE_KICK);
   CHECK(Fail, !s->engine.sched.host_coordinated);
 
@@ -567,9 +636,10 @@ test_worker_unavailable_fallback(void)
     CHECK(Fail, writer_append(tile_stream_gpu_writer(s), input).error == 0);
   }
   CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
-  CHECK(Fail,
-        coordinator_sink_has_output(
-          &sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(
+    Fail,
+    coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
   ok = 1;
 
 Fail:
@@ -585,8 +655,8 @@ RUN_GPU_TESTS({ "batch_counter_one_epoch", test_batch_counter_one_epoch },
               { "batch_multi_cycle", test_batch_multi_cycle },
               { "batch_partial_flush", test_batch_partial_flush },
               { "batch_3epochs_flush", test_batch_3epochs_flush },
-               { "batch_multiscale_unaligned_K",
-                 test_batch_multiscale_unaligned_K },
+              { "batch_multiscale_unaligned_K",
+                test_batch_multiscale_unaligned_K },
               { "host_coordinator_hold", test_host_coordinator_hold },
               { "worker_unavailable_fallback",
                 test_worker_unavailable_fallback }, )
