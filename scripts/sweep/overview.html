@@ -214,13 +214,13 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   <span class="brand">chucky benchmarks</span>
   <nav>
     <a href="index.html" aria-current="page">Over time</a>
-    <a href="explore.html">Sweep explorer</a>
+    <a href="explore.html">Benchmark explorer</a>
   </nav>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
 </header>
 
 <main>
-  <h1>How performance is moving</h1>
+  <h1>Performance over time</h1>
   <p class="lede" id="lede"></p>
 
   <section class="filters" aria-label="Filters">
@@ -254,7 +254,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   <section class="tiles" id="tiles" aria-label="Machines"></section>
 
   <section class="card">
-    <h2>Trend across sweeps</h2>
+    <h2>Trend</h2>
     <p class="card-sub" id="trend-sub"></p>
     <div class="chart-wrap" id="trend"></div>
     <div class="legend" id="trend-legend"></div>
@@ -262,19 +262,19 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   </section>
 
   <section class="card">
-    <h2>Latest sweep, every scenario</h2>
+    <h2>Latest sweep</h2>
     <p class="card-sub" id="matrix-sub"></p>
     <div id="matrix"></div>
   </section>
 
   <section class="card">
-    <h2>Biggest changes since the previous sweep</h2>
+    <h2>Biggest changes</h2>
     <p class="card-sub" id="movers-sub"></p>
     <div id="movers"></div>
   </section>
 
   <details class="card" id="table-view">
-    <summary>Table view of the trend</summary>
+    <summary>Trend table</summary>
     <div id="trend-table"></div>
   </details>
 
@@ -313,8 +313,8 @@ const METRICS = [
   {key: "throughput_in_gibs", label: "Input throughput", unit: "GiB/s", better: "high"},
   {key: "throughput_out_gibs", label: "Output throughput", unit: "GiB/s", better: "high"},
   {key: "compression_fold", label: "Compression ratio", unit: "x", better: "high"},
-  {key: "wall_s", label: "Wall time", unit: "s", better: "low"},
-  {key: "init_s", label: "Init time", unit: "s", better: "low"},
+  {key: "wall_s", label: "Wall-clock time", unit: "s", better: "low"},
+  {key: "init_s", label: "Startup time", unit: "s", better: "low"},
   {key: "stalls.max_append_ms", label: "Slowest append block", unit: "ms", better: "low",
    note: "one append is a multi-frame block push, not a single frame"},
   {key: "stalls.peak_pending_mib", label: "Peak pending bytes", unit: "MiB", better: "low"},
@@ -820,7 +820,7 @@ function renderTiles() {
       `${machine.sweeps.length} sweep${machine.sweeps.length === 1 ? "" : "s"} · latest `));
     const link = el("a", null, latestSweep.commit);
     link.href = explorerLink(latestSweep);
-    link.title = `Open ${latestSweep.filename} in the sweep explorer`;
+    link.title = `Open ${latestSweep.filename} in the benchmark explorer`;
     foot.appendChild(link);
     foot.appendChild(document.createTextNode(
       machine.members.length > 1
@@ -1184,7 +1184,7 @@ function renderMovers() {
   if (all.length > shown.length) {
     host.appendChild(el("p", "note",
       `Showing ${shown.length} of ${all.length} shared configurations, taking turns between machines; ` +
-      `${realCount} moved by ${REAL_CHANGE_PCT}% or more. The rest are in the sweep explorer.`));
+      `${realCount} moved by ${REAL_CHANGE_PCT}% or more. The rest are in the benchmark explorer.`));
   }
 
   const crossing = [...new Set(shown

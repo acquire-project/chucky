@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sweep explorer</title>
+<title>Benchmark explorer</title>
 <script>
 document.documentElement.setAttribute("data-theme", (() => {
   let stored = null;
@@ -199,30 +199,30 @@ main.container { overflow: visible; }
   <span class="brand">chucky benchmarks</span>
   <nav>
     <a href="index.html">Over time</a>
-    <a href="explore.html" aria-current="page">Sweep explorer</a>
+    <a href="explore.html" aria-current="page">Benchmark explorer</a>
   </nav>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
 </header>
 <main class="container">
 
-<h1>One sweep at a time <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
+<h1>Sweep <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
 <div class="subtitle" id="machine-info"></div>
 <div class="subtitle" id="s3-info" style="display:none"></div>
 
 <div class="controls">
   <div class="control-group control-group--primary">
     <div id="results-wrap">
-      <label>Results</label>
+      <label>Sweep</label>
       <select id="results-sel"></select>
     </div>
     <div id="metric-wrap">
       <label>Metric</label>
       <select id="metric-sel">
-        <option value="throughput_in_gibs" selected>Input Throughput (GiB/s)</option>
-        <option value="throughput_out_gibs">Output Throughput (GiB/s)</option>
-        <option value="compression_fold">Compression Ratio</option>
-        <option value="wall_s">Wall Time (s)</option>
-        <option value="init_s">Init Time (s)</option>
+        <option value="throughput_in_gibs" selected>Input throughput (GiB/s)</option>
+        <option value="throughput_out_gibs">Output throughput (GiB/s)</option>
+        <option value="compression_fold">Compression ratio</option>
+        <option value="wall_s">Wall-clock time (s)</option>
+        <option value="init_s">Startup time (s)</option>
       </select>
     </div>
   </div>
@@ -244,7 +244,7 @@ main.container { overflow: visible; }
       <div class="radio-group" id="backend-group"></div>
     </div>
     <div id="dtype-wrap">
-      <label>Dtype</label>
+      <label>Data type</label>
       <div class="radio-group" id="dtype-group"></div>
     </div>
     <div id="sink-wrap">
@@ -252,7 +252,7 @@ main.container { overflow: visible; }
       <div class="radio-group" id="sink-group"></div>
     </div>
     <div id="s3-throughput-wrap" style="display:none">
-      <label>S3 Target (Gb/s)</label>
+      <label>S3 throughput (Gb/s)</label>
       <div class="radio-group" id="s3-throughput-group"></div>
     </div>
     <div id="overlay-wrap" style="display:none">
@@ -334,11 +334,11 @@ const GROUP_LABELS = { single: "Single", multiscale: "Multiscale", dim0: "Dim0" 
 const GROUP_ORDER = ["single", "multiscale", "dim0"];
 
 const METRIC_LABELS = {
-  throughput_in_gibs: "Input Throughput (GiB/s)",
-  throughput_out_gibs: "Output Throughput (GiB/s)",
-  compression_fold: "Compression Ratio",
-  wall_s: "Wall Time (s)",
-  init_s: "Init Time (s)",
+  throughput_in_gibs: "Input throughput (GiB/s)",
+  throughput_out_gibs: "Output throughput (GiB/s)",
+  compression_fold: "Compression ratio",
+  wall_s: "Wall-clock time (s)",
+  init_s: "Startup time (s)",
 };
 
 const COLOR_SCHEMES = {
@@ -449,7 +449,7 @@ function metricLabel(key) {
 
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
-  t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  dtype: ${r.dtype}\n`;
+  t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
   if (r.sink && r.sink !== "discard") {
     t += `sink: ${r.sink}`;
     if (r.s3_throughput_gbps) t += `  target: ${r.s3_throughput_gbps} Gb/s`;
@@ -457,7 +457,7 @@ function tooltipText(r) {
   }
   if (r.throughput_in_gibs != null) t += `throughput: ${r.throughput_in_gibs.toFixed(2)} in, ${(r.throughput_out_gibs||0).toFixed(2)} out GiB/s\n`;
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
-  if (r.wall_s != null) t += `wall: ${r.wall_s.toFixed(3)}s  init: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
+  if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
   if (r.memory) {
     const m = r.memory;
