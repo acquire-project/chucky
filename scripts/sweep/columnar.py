@@ -6,8 +6,8 @@ key drops those. Text is worse than that: the same scenario and codec names, and
 the same run ids, come back in every sweep, so all the text in a file shares one
 table and the columns hold positions in it.
 
-The pages undo this at load time, so everything downstream still sees a plain
-list of run objects.
+decode_runs is what the pages do on load, and pack checks every file against it
+before report.py writes one.
 """
 
 from __future__ import annotations
@@ -15,16 +15,9 @@ from __future__ import annotations
 import math
 from collections import Counter
 
-# The explorer draws from the config fields, never from the recorded id, and the
-# id is the longest string in a sweep. It is kept in the overview, whose movers
-# panel matches runs between sweeps by it.
-EXPLORER_OMITS = ("id",)
-
 # About what the benchmarks can actually resolve, and more than any page shows.
 # Keeping the digits below this only adds bytes gzip cannot squeeze, since they
-# look like noise to it. It does move the movers panel, which compares numbers
-# far finer than four digits — but those comparisons were reporting measurement
-# noise, so losing them is the point rather than a cost.
+# look like noise to it.
 SIGNIFICANT_DIGITS = 4
 
 
@@ -35,18 +28,15 @@ class StringTable:
     appear in every run land in the single digits.
     """
 
-    def __init__(self, run_lists: list[list[dict]], omit: tuple[str, ...] = ()) -> None:
+    def __init__(self, row_lists: list[list[dict]]) -> None:
         counts: Counter[str] = Counter()
-        for runs in run_lists:
-            for run in runs:
-                for value in flatten(run, omit).values():
+        for rows in row_lists:
+            for row in rows:
+                for value in row.values():
                     if isinstance(value, str):
                         counts[value] += 1
         self.items = [text for text, _ in counts.most_common()]
-        self._position = {text: i for i, text in enumerate(self.items)}
-
-    def index(self, value: str) -> int:
-        return self._position[value]
+        self.position = {text: i for i, text in enumerate(self.items)}
 
 
 def round_float(value):
@@ -73,15 +63,24 @@ def flatten(run: dict, omit: tuple[str, ...] = ()) -> dict:
     return out
 
 
-def encode_column(values: list, strings: StringTable):
-    present = [v for v in values if v is not None]
-    if present and all(isinstance(v, str) for v in present):
-        return {"text": [None if v is None else strings.index(v) for v in values]}
+def encode_column(values: list, table: StringTable):
+    # Only when every value present is text, so a column mixing text with
+    # numbers stays as it is rather than looking a number up in the table.
+    if {type(v) for v in values if v is not None} == {str}:
+        return {"text": [None if v is None else table.position[v] for v in values]}
     return [round_float(v) for v in values]
 
 
+def encode_rows(rows: list[dict], table: StringTable) -> dict:
+    keys = list(dict.fromkeys(key for row in rows for key in row))
+    return {
+        "count": len(rows),
+        "columns": {key: encode_column([r.get(key) for r in rows], table) for key in keys},
+    }
+
+
 def decode_runs(block: dict, strings: list[str]) -> list[dict]:
-    """What the pages do on load. Here so report.py can check its own output."""
+    """What the pages do on load."""
     runs: list[dict] = [{} for _ in range(block["count"])]
     for key, column in block["columns"].items():
         text = column["text"] if isinstance(column, dict) else None
@@ -97,35 +96,24 @@ def decode_runs(block: dict, strings: list[str]) -> list[dict]:
     return runs
 
 
-def rounded(run: dict, omit: tuple[str, ...] = ()) -> dict:
-    """One run as the encoder will store it, for comparing against a decode.
+def pack(run_lists: list[list[dict]], omit: tuple[str, ...] = ()):
+    """Columns for each list of runs, sharing one string table.
 
-    An empty group is left out because flatten gives it no column, so unpacking
-    cannot bring it back and comparing against it would fail a sound encoding.
+    Refuses to hand back a file the pages would unpack differently, so a broken
+    encoding stops the build instead of reaching a page.
     """
-    out = {}
-    for key, value in run.items():
-        if key in omit:
-            continue
-        if isinstance(value, dict):
-            group = rounded(value)
-            if group:
-                out[key] = group
-        elif value is not None:
-            out[key] = round_float(value)
-    return out
+    row_lists = [[flatten(run, omit) for run in runs] for runs in run_lists]
+    table = StringTable(row_lists)
+    blocks = [encode_rows(rows, table) for rows in row_lists]
+    for rows, block in zip(row_lists, blocks):
+        check(rows, block, table.items)
+    return table.items, blocks
 
 
-def encode_runs(runs: list[dict], strings: StringTable, omit: tuple[str, ...] = ()) -> dict:
-    flat = [flatten(r, omit) for r in runs]
-    keys: list[str] = []
-    for run in flat:
-        for key in run:
-            if key not in keys:
-                keys.append(key)
-    return {
-        "count": len(flat),
-        "columns": {
-            key: encode_column([r.get(key) for r in flat], strings) for key in keys
-        },
-    }
+def check(rows: list[dict], block: dict, strings: list[str]) -> None:
+    for index, (row, restored) in enumerate(zip(rows, decode_runs(block, strings))):
+        want = {k: round_float(v) for k, v in row.items() if v is not None}
+        got = flatten(restored)
+        if got != want:
+            differing = sorted(k for k in want.keys() | got.keys() if want.get(k) != got.get(k))
+            raise ValueError(f"run {index} ({row.get('id', 'no id')}) changed: {differing}")

@@ -217,13 +217,7 @@ main.container { overflow: visible; }
     </div>
     <div id="metric-wrap">
       <label>Metric</label>
-      <select id="metric-sel">
-        <option value="throughput_in_gibs" selected>Input throughput (GiB/s)</option>
-        <option value="throughput_out_gibs">Output throughput (GiB/s)</option>
-        <option value="compression_fold">Compression ratio</option>
-        <option value="wall_s">Wall-clock time (s)</option>
-        <option value="init_s">Startup time (s)</option>
-      </select>
+      <select id="metric-sel"></select>
     </div>
   </div>
   <div>
@@ -279,30 +273,7 @@ main.container { overflow: visible; }
 </main>
 
 <script type="module">
-/** Undo the column packing report.py applies, back to one object per run. */
-function decodeRuns(block, strings) {
-  const runs = Array.from({length: block.count}, () => ({}));
-  for (const [key, column] of Object.entries(block.columns)) {
-    const text = column.text;
-    const values = text || column;
-    const path = key.split(".");
-    const leaf = path.pop();
-    for (let i = 0; i < block.count; i++) {
-      const packed = values[i];
-      if (packed == null) continue;
-      let node = runs[i];
-      for (const step of path) node = node[step] ??= {};
-      node[leaf] = text ? strings[packed] : packed;
-    }
-  }
-  return runs;
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url}: ${response.status}`);
-  return response.json();
-}
+import {decodeRuns, fetchJson} from "./decode.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
 async function ensureRuns(file) {
@@ -310,7 +281,6 @@ async function ensureRuns(file) {
     const sweep = await fetchJson(`data/sweeps/${file.filename}`);
     file.runs = decodeRuns(sweep.runs, sweep.strings);
   }
-  return file;
 }
 
 const DATA = await fetchJson("data/sweeps.json");
@@ -340,6 +310,13 @@ const METRIC_LABELS = {
   wall_s: "Wall-clock time (s)",
   init_s: "Startup time (s)",
 };
+
+for (const [key, label] of Object.entries(METRIC_LABELS)) {
+  const option = document.createElement("option");
+  option.value = key;
+  option.textContent = label;
+  document.getElementById("metric-sel").appendChild(option);
+}
 
 const COLOR_SCHEMES = {
   throughput_in_gibs: d3.interpolateViridis,

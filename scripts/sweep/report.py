@@ -12,6 +12,7 @@ Two pages:
     explore.html  one sweep at a time, down to per-stage timing
 
 The pages are code only; their data sits beside them and is fetched at load:
+    decode.js                   unpacks the columns, imported by both pages
     data/overview.json          every sweep, trimmed, for the overview
     data/sweeps.json            the sweep list the explorer offers
     data/sweeps/<result>.json   one sweep in full, fetched when it is opened
@@ -21,10 +22,9 @@ unchanged sweep revalidate instead of being re-sent. It also means the pages
 need to be served over http — opening them from a file:// path will not work.
 
 Usage:
-    uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
+    uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
     uv run scripts/sweep/report.py bench/results/*.json -o _site
     uv run scripts/sweep/report.py --results-dir bench/results/ -o _site/index.html
-    python -m http.server -d _site      # then open http://localhost:8000/
 
 Re-run after changing any results file.
 """
@@ -40,13 +40,20 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from columnar import EXPLORER_OMITS, StringTable, decode_runs, encode_runs, rounded
+from columnar import pack
 from models import migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry, machine_identity
 
-TEMPLATE_DIR = Path(__file__).parent
-EXPLORER_TEMPLATE = TEMPLATE_DIR / "template.html"
-OVERVIEW_TEMPLATE = TEMPLATE_DIR / "overview.html"
+SOURCE_DIR = Path(__file__).parent
+EXPLORER_PAGE = SOURCE_DIR / "template.html"
+OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
+DECODER = SOURCE_DIR / "decode.js"
+
+# The explorer draws from the config fields and never reads the recorded id,
+# which is the longest string in a sweep. The overview keeps it, because its
+# movers panel matches runs between sweeps by it.
+EXPLORER_OMITS = ("id",)
+EXPLORER_VERSION = 3
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
@@ -87,22 +94,7 @@ def explorer_index(loaded: list[tuple[Path, dict]]) -> dict:
             "filename": path.name,
             "machine": machine,
         })
-    return {"version": 3, "files": files}
-
-
-def check_roundtrip(runs: list[dict], block: dict, strings: list[str],
-                    where: str, omit: tuple[str, ...] = ()) -> None:
-    """Refuse to publish a packed sweep the pages would unpack differently."""
-    unpacked = decode_runs(block, strings)
-    if len(unpacked) != len(runs):
-        raise SystemExit(f"{where}: packed {len(runs)} runs, unpacked {len(unpacked)}")
-    for original, restored in zip(runs, unpacked):
-        want = rounded(original, omit)
-        if restored != want:
-            differing = sorted(set(want) ^ set(restored)) or \
-                sorted(k for k in want if want[k] != restored.get(k))
-            raise SystemExit(f"{where}: packing changed run "
-                             f"{original.get('id', '?')}: {differing}")
+    return {"version": EXPLORER_VERSION, "files": files}
 
 
 def write_json(payload: dict, output: Path) -> int:
@@ -114,35 +106,35 @@ def write_json(payload: dict, output: Path) -> int:
         raise SystemExit(f"{output}: {e}")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text)
-    return output.stat().st_size
+    return len(text.encode())
 
 
-def write_page(template: Path, output: Path) -> None:
+def write_page(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(template.read_text())
+    output.write_text(source.read_text())
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
 
 
 def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: Path) -> None:
     overview = build_summary(loaded, registry)
-    strings = StringTable([s["runs"] for s in overview["sweeps"]])
-    for sweep in overview["sweeps"]:
-        packed = encode_runs(sweep["runs"], strings)
-        check_roundtrip(sweep["runs"], packed, strings.items, sweep["filename"])
-        sweep["runs"] = packed
-    overview["version"] = 2
-    overview["strings"] = strings.items
-    total = write_json(overview, data_dir / "overview.json")
-    print(f"Wrote {data_dir / 'overview.json'} ({total / 1024:.0f} KiB)", file=sys.stderr)
+    try:
+        strings, blocks = pack([s["runs"] for s in overview["sweeps"]])
+    except ValueError as e:
+        raise SystemExit(f"overview.json: {e}")
+    for sweep, block in zip(overview["sweeps"], blocks):
+        sweep["runs"] = block
+    overview["strings"] = strings
+    size = write_json(overview, data_dir / "overview.json")
+    print(f"Wrote {data_dir / 'overview.json'} ({size / 1024:.0f} KiB)", file=sys.stderr)
 
     write_json(explorer_index(loaded), data_dir / "sweeps.json")
     biggest = 0
     for path, data in loaded:
-        runs = data.get("runs", [])
-        sweep_strings = StringTable([runs], EXPLORER_OMITS)
-        packed = encode_runs(runs, sweep_strings, EXPLORER_OMITS)
-        check_roundtrip(runs, packed, sweep_strings.items, path.name, EXPLORER_OMITS)
-        payload = {"version": 3, "strings": sweep_strings.items, "runs": packed}
+        try:
+            strings, blocks = pack([data.get("runs", [])], EXPLORER_OMITS)
+        except ValueError as e:
+            raise SystemExit(f"{path.name}: {e}")
+        payload = {"version": EXPLORER_VERSION, "strings": strings, "runs": blocks[0]}
         biggest = max(biggest, write_json(payload, data_dir / "sweeps" / path.name))
     print(f"Wrote {len(loaded)} sweep file(s) to {data_dir / 'sweeps'} "
           f"(largest {biggest / 1024:.0f} KiB)", file=sys.stderr)
@@ -189,8 +181,9 @@ def main():
     else:
         out_dir, overview_name = args.output, "index.html"
 
-    write_page(OVERVIEW_TEMPLATE, out_dir / overview_name)
-    write_page(EXPLORER_TEMPLATE, out_dir / "explore.html")
+    write_page(OVERVIEW_PAGE, out_dir / overview_name)
+    write_page(EXPLORER_PAGE, out_dir / "explore.html")
+    write_page(DECODER, out_dir / DECODER.name)
     write_data(loaded, registry, out_dir / "data")
 
     if args.serve is not None:

@@ -25,6 +25,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 
 | file | holds |
 |---|---|
+| `decode.js` | unpacks the columns, imported by both pages |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
@@ -36,10 +37,11 @@ from disk gets you an empty page, because the browser refuses the fetches. That
 is what `--serve` is for.
 
 Inside those files the runs are stored as columns rather than one object per
-run, with the text in a shared table (`columnar.py`). The pages undo it on load.
-Floats are cut to four significant figures, which is finer than any page prints
-and about what the benchmarks resolve. `report.py` unpacks every sweep it packs
-and refuses to write one the pages would read back differently.
+run, with the text in a shared table. `columnar.py` writes that and `decode.js`
+reads it. Floats are cut to four significant figures, which is finer than any
+page prints and about what the benchmarks resolve. `columnar.py` unpacks every
+sweep it packs and refuses to hand back one that does not match, so a broken
+encoding stops the build rather than reaching a page.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
