@@ -24,7 +24,7 @@ extern "C"
     size_t temp_bytes;      // workspace size
   };
 
-  // Query alignment for a codec type without full init.
+  // Alignment required of every uncompressed chunk handed to the codec.
   size_t codec_alignment(enum compression_codec type);
 
   // Alignment required of every compressed chunk in the output pool.

@@ -93,17 +93,9 @@ codec_alignment(enum compression_codec type)
 
 // --- codec_output_alignment ---
 
-static size_t
-larger(size_t a, size_t b)
-{
-  return a > b ? a : b;
-}
-
-// The alignment constants nvcomp exposes as named values are the strictest
-// across input, output and temporary buffers, which for these codecs is set by
-// a buffer this path does not allocate. Compressed chunks need only what
-// nvcomp reports for them, so ask, and follow a future release that tightens
-// it. Returns 0 if nvcomp cannot be queried.
+// nvcomp's named alignment constants are the strictest across all its buffers,
+// set by one this path never allocates; compressed chunks need only the
+// alignment nvcomp reports for them.
 extern "C" size_t
 codec_output_alignment(enum compression_codec type)
 {
@@ -128,7 +120,7 @@ codec_output_alignment(enum compression_codec type)
     default:
       return 1;
   }
-  return larger(written.output, read.input);
+  return written.output > read.input ? written.output : read.input;
 Fail:
   return 0;
 }
@@ -139,9 +131,13 @@ extern "C" size_t
 codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
 {
   size_t max_comp = 0;
+  const size_t alignment = codec_output_alignment(type);
+  CHECK(Fail, alignment > 0);
+
   switch (type) {
     case CODEC_NONE:
-      return chunk_bytes;
+      max_comp = chunk_bytes;
+      break;
     case CODEC_LZ4_NON_STANDARD:
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
@@ -155,13 +151,8 @@ codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
     default:
       goto Fail;
   }
-  {
-    // nvcomp's own bound need not be a multiple of the alignment it asks for.
-    const size_t alignment = codec_output_alignment(type);
-    if (alignment == 0)
-      goto Fail;
-    return align_up(max_comp, alignment);
-  }
+  // nvcomp's own bound need not be a multiple of the alignment it asks for.
+  return align_up(max_comp, alignment);
 Fail:
   return 0;
 }
