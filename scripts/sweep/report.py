@@ -7,16 +7,26 @@
 """
 Generate the benchmark site from sweep result files.
 
-Two pages, both self-contained (data embedded at generation time):
+Two pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
+
+The pages are code only; their data sits beside them and is fetched at load:
+    data/overview.json          every sweep, trimmed, for the overview
+    data/sweeps.json            the sweep list the explorer offers
+    data/sweeps/<result>.json   one sweep in full, fetched when it is opened
+
+That keeps the explorer from downloading every sweep to show one, and lets an
+unchanged sweep revalidate instead of being re-sent. It also means the pages
+need to be served over http — opening them from a file:// path will not work.
 
 Usage:
     uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
     uv run scripts/sweep/report.py bench/results/*.json -o _site
     uv run scripts/sweep/report.py --results-dir bench/results/ -o _site/index.html
+    python -m http.server -d _site      # then open http://localhost:8000/
 
-Re-run after changing any results file; nothing is read at page load.
+Re-run after changing any results file.
 """
 
 from __future__ import annotations
@@ -28,13 +38,13 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from columnar import EXPLORER_OMITS, StringTable, decode_runs, encode_runs, rounded
 from models import migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry, machine_identity
 
 TEMPLATE_DIR = Path(__file__).parent
 EXPLORER_TEMPLATE = TEMPLATE_DIR / "template.html"
 OVERVIEW_TEMPLATE = TEMPLATE_DIR / "overview.html"
-PLACEHOLDER = "__DATA_PLACEHOLDER__"
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
@@ -62,8 +72,8 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
     return loaded
 
 
-def explorer_payload(loaded: list[tuple[Path, dict]]) -> dict:
-    """What the one-sweep-at-a-time page needs: full runs, including stages."""
+def explorer_index(loaded: list[tuple[Path, dict]]) -> dict:
+    """The sweep list the explorer shows before anything is opened."""
     files = []
     for path, data in loaded:
         machine = data.get("machine", {})
@@ -74,19 +84,66 @@ def explorer_payload(loaded: list[tuple[Path, dict]]) -> dict:
             "label": label,
             "filename": path.name,
             "machine": machine,
-            "runs": data.get("runs", []),
         })
-    return {"version": 2, "files": files}
+    return {"version": 3, "files": files}
 
 
-def write_page(template: Path, payload: dict, output: Path) -> None:
-    text = template.read_text()
-    if PLACEHOLDER not in text:
-        raise SystemExit(f"{template.name} has no {PLACEHOLDER} to fill")
-    embedded = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+def check_roundtrip(runs: list[dict], block: dict, strings: list[str],
+                    where: str, omit: tuple[str, ...] = ()) -> None:
+    """Refuse to publish a packed sweep the pages would unpack differently."""
+    unpacked = decode_runs(block, strings)
+    if len(unpacked) != len(runs):
+        raise SystemExit(f"{where}: packed {len(runs)} runs, unpacked {len(unpacked)}")
+    for original, restored in zip(runs, unpacked):
+        want = rounded(original, omit)
+        if restored != want:
+            differing = sorted(set(want) ^ set(restored)) or \
+                sorted(k for k in want if want[k] != restored.get(k))
+            raise SystemExit(f"{where}: packing changed run "
+                             f"{original.get('id', '?')}: {differing}")
+
+
+def write_json(payload: dict, output: Path) -> int:
+    # allow_nan would write Infinity, which JSON.parse rejects — better to stop
+    # here than to publish a page that cannot read its own data.
+    try:
+        text = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+    except ValueError as e:
+        raise SystemExit(f"{output}: {e}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(text.replace(PLACEHOLDER, embedded))
+    output.write_text(text)
+    return output.stat().st_size
+
+
+def write_page(template: Path, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(template.read_text())
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
+
+
+def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: Path) -> None:
+    overview = build_summary(loaded, registry)
+    strings = StringTable([s["runs"] for s in overview["sweeps"]])
+    for sweep in overview["sweeps"]:
+        packed = encode_runs(sweep["runs"], strings)
+        check_roundtrip(sweep["runs"], packed, strings.items, sweep["filename"])
+        sweep["runs"] = packed
+    overview["version"] = 2
+    overview["strings"] = strings.items
+    total = write_json(overview, data_dir / "overview.json")
+    print(f"Wrote {data_dir / 'overview.json'} ({total / 1024:.0f} KiB)", file=sys.stderr)
+
+    write_json(explorer_index(loaded), data_dir / "sweeps.json")
+    biggest = 0
+    for path, data in loaded:
+        runs = data.get("runs", [])
+        sweep_strings = StringTable([runs], EXPLORER_OMITS)
+        packed = encode_runs(runs, sweep_strings, EXPLORER_OMITS)
+        check_roundtrip(runs, packed, sweep_strings.items, path.name, EXPLORER_OMITS)
+        payload = {"version": 3, "strings": sweep_strings.items, "runs": packed}
+        biggest = max(biggest, write_json(payload, data_dir / "sweeps" / path.name))
+    print(f"Wrote {len(loaded)} sweep file(s) to {data_dir / 'sweeps'} "
+          f"(largest {biggest / 1024:.0f} KiB)", file=sys.stderr)
 
 
 def main():
@@ -126,8 +183,9 @@ def main():
     else:
         out_dir, overview_name = args.output, "index.html"
 
-    write_page(OVERVIEW_TEMPLATE, build_summary(loaded, registry), out_dir / overview_name)
-    write_page(EXPLORER_TEMPLATE, explorer_payload(loaded), out_dir / "explore.html")
+    write_page(OVERVIEW_TEMPLATE, out_dir / overview_name)
+    write_page(EXPLORER_TEMPLATE, out_dir / "explore.html")
+    write_data(loaded, registry, out_dir / "data")
 
 
 if __name__ == "__main__":
