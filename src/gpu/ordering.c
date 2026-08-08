@@ -108,16 +108,6 @@ static const struct gpu_edge_desc DESC[GPU_EDGE_COUNT] = {
                                    1,
                                    -1,
                                    0 },
-  [GPU_EDGE_TAIL_PUBLISHED] = { "tail_published",
-                                GPU_STREAM_HOST,
-                                GPU_STREAM_NONE,
-                                GPU_STREAM_COMPRESS,
-                                "d_tail_bytes/d_tail_carry generation",
-                                GPU_EDGE_GEN_COUNTER,
-                                0,
-                                0,
-                                -1,
-                                0 },
   [GPU_EDGE_DRAIN_BEFORE_REKICK] = { "drain_before_rekick",
                                      GPU_STREAM_HOST,
                                      GPU_STREAM_NONE,
@@ -132,7 +122,7 @@ static const struct gpu_edge_desc DESC[GPU_EDGE_COUNT] = {
                                       GPU_STREAM_HOST,
                                       GPU_STREAM_NONE,
                                       GPU_STREAM_HOST,
-                                      "tail-gate GEQ monotonicity",
+                                      "batch delivery order",
                                       GPU_EDGE_HOST_RULE,
                                       1,
                                       0,
@@ -233,11 +223,6 @@ gpu_ordering_destroy(struct gpu_ordering* ord)
       ord->edge[e].ev[i] = NULL;
       ord->edge[e].owned[i] = 0;
     }
-  }
-  if (ord->h_tail_seq_flag) {
-    cuMemFreeHost((void*)ord->h_tail_seq_flag);
-    ord->h_tail_seq_flag = NULL;
-    ord->d_tail_seq = 0;
   }
 }
 
@@ -356,84 +341,6 @@ gpu_ordering_attach_stall_metric(struct gpu_ordering* ord,
                                  struct stream_metric* m)
 {
   ord->edge[e].stall = m;
-}
-
-int
-gpu_ordering_gate_init(struct gpu_ordering* ord, CUstream probe_stream)
-{
-  if (cuMemHostAlloc((void**)&ord->h_tail_seq_flag,
-                     sizeof(uint64_t),
-                     CU_MEMHOSTALLOC_DEVICEMAP) != CUDA_SUCCESS) {
-    ord->h_tail_seq_flag = NULL;
-  } else {
-    *ord->h_tail_seq_flag = 0;
-    if (cuMemHostGetDevicePointer(
-          &ord->d_tail_seq, (void*)ord->h_tail_seq_flag, 0) != CUDA_SUCCESS) {
-      cuMemFreeHost((void*)ord->h_tail_seq_flag);
-      ord->h_tail_seq_flag = NULL;
-      ord->d_tail_seq = 0;
-    }
-  }
-  if (ord->d_tail_seq) {
-    // Support probe: an already-satisfied wait.
-    CUresult pr = cuStreamWaitValue64(
-      probe_stream, ord->d_tail_seq, 0, CU_STREAM_WAIT_VALUE_GEQ);
-    ord->tail_gate_supported = (pr == CUDA_SUCCESS);
-    if (pr != CUDA_SUCCESS && pr != CUDA_ERROR_NOT_SUPPORTED)
-      CU(Fail, pr);
-  }
-  return 0;
-
-Fail:
-  return 1;
-}
-
-int
-gpu_edge_wait_gen(struct gpu_ordering* ord,
-                  enum gpu_edge e,
-                  CUstream stream,
-                  int enable)
-{
-  (void)e;
-  assert(DESC[e].kind == GPU_EDGE_GEN_COUNTER);
-  if (!ord->d_tail_seq)
-    return 0;
-#ifndef NDEBUG
-  check_stream(ord, e, DESC[e].consumer, GPU_STREAM_NONE, stream, "wait_gen");
-  ord->edge[e].waits[0]++;
-#endif
-  if (enable && ord->tail_gate_supported)
-    CU(Error,
-       cuStreamWaitValue64(
-         stream, ord->d_tail_seq, ord->kick_seq, CU_STREAM_WAIT_VALUE_GEQ));
-  // Counts even disabled (chunk-less) kicks: every kick is drained exactly
-  // once, so the count stays the next kick's threshold.
-  ord->kick_seq++;
-  return 0;
-
-Error:
-  return 1;
-}
-
-void
-gpu_edge_publish(struct gpu_ordering* ord, enum gpu_edge e)
-{
-  (void)e;
-  assert(DESC[e].kind == GPU_EDGE_GEN_COUNTER);
-#ifndef NDEBUG
-  ord->edge[e].records[0]++;
-#endif
-  if (ord->h_tail_seq_flag) {
-    ord->tail_seq++;
-    *ord->h_tail_seq_flag = ord->tail_seq;
-  }
-}
-
-void
-gpu_edge_release_all(struct gpu_ordering* ord)
-{
-  if (ord->h_tail_seq_flag)
-    *ord->h_tail_seq_flag = ord->kick_seq;
 }
 
 #ifndef NDEBUG

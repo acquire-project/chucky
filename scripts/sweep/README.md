@@ -84,3 +84,17 @@ page names them.
 the overview leaves those out of comparisons instead of converting them. Bump
 `CURRENT_VERSION` when a metric is renamed, removed, or changes meaning. Adding
 one does not need a bump.
+
+A stored sweep records only its version number, so add a line here when you
+bump it.
+
+### Version history
+
+- **4** — Discard sink reports a fixed 4096-byte shard alignment, so a sweep
+  with no output path measures the page-aligned pipeline. No timing comparable
+  across this bump.
+- **3** — `tail_gate` now measures the compression-to-aggregation delay rather
+  than a device gate's wait. `tail_gate_ms` and `tail_gate_count` retired.
+- **2** — `kick_sync_ms` and `kick_sync_count` retired. Stage `lod_dim0_fold`
+  renamed to `lod_append_fold`.
+- **1** — Predates this rule; not a single shape.

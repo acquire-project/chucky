@@ -2,9 +2,9 @@
 
 // Declared cross-stream / host-stream ordering edges for the GPU pipeline
 // (dev/gpu-orchestration.md). Every cuEventRecord/cuStreamWaitEvent/
-// cuStreamWaitValue64/cuEventQuery pair that orders work between streams (or
-// between the host and a stream) goes through this table; an edge that is
-// not declared here must be timing-only.
+// cuEventQuery pair that orders work between streams (or between the host and
+// a stream) goes through this table; an edge that is not declared here must be
+// timing-only.
 //
 // Timing-only events are excluded (they must not masquerade as ordering):
 //   staging t_h2d_start and the rotated scatter pairs; compress
@@ -31,9 +31,8 @@ enum gpu_stream_id
 
 enum gpu_edge_kind
 {
-  GPU_EDGE_EVENT,       // CUevent record/wait
-  GPU_EDGE_GEN_COUNTER, // host-published generation + cuStreamWaitValue64 GEQ
-  GPU_EDGE_HOST_RULE,   // host call-order invariant; no GPU primitive
+  GPU_EDGE_EVENT,     // CUevent record/wait
+  GPU_EDGE_HOST_RULE, // host call-order invariant; no GPU primitive
 };
 
 enum gpu_edge
@@ -59,14 +58,9 @@ enum gpu_edge
   GPU_EDGE_CHUNK_INDEX_READY, // d2h -> HOST: h_offsets/h_permuted_sizes
                               // landed; drain copy source stable
 
-  // Tail-generation gate (#142).
-  GPU_EDGE_TAIL_PUBLISHED, // HOST -> compress: d_tail_bytes/d_tail_carry
-                           // generation k published by kick k's delivery
-
   // Host call-order invariants (debug-asserted; no GPU primitive).
   GPU_EDGE_DRAIN_BEFORE_REKICK,  // drain pending[fc] before re-kicking fc
-  GPU_EDGE_DELIVER_OLDEST_FIRST, // drains follow kick order (tail gate GEQ
-                                 // relies on this)
+  GPU_EDGE_DELIVER_OLDEST_FIRST, // drains follow batch generation order
 
   GPU_EDGE_COUNT,
 };
@@ -94,8 +88,8 @@ struct gpu_edge_state
   uint8_t owned[2];
   struct stream_metric* stall; // host-poll stall accumulation; may be NULL
 #ifndef NDEBUG
-  uint64_t records[2]; // edge_record/publish calls (seeds excluded)
-  uint64_t waits[2];   // edge_wait/host_wait/wait_gen calls
+  uint64_t records[2]; // edge_record calls (seeds excluded)
+  uint64_t waits[2];   // edge_wait/host_wait calls
 #endif
 };
 
@@ -103,16 +97,6 @@ struct gpu_ordering
 {
   struct gpu_edge_state edge[GPU_EDGE_COUNT];
   CUstream streams[GPU_STREAM_ID_COUNT]; // registered for debug decl checks
-
-  // GEN_COUNTER runtime (GPU_EDGE_TAIL_PUBLISHED). Pinned + device-mapped;
-  // absent (NULL/0) when the gate was never initialized or could not be
-  // allocated/mapped — the lazy flush path then host-drains instead
-  // (SCHEDULE_DRAIN_BEFORE_KICK, schedule.h).
-  volatile uint64_t* h_tail_seq_flag;
-  CUdeviceptr d_tail_seq;
-  uint64_t kick_seq; // kicks enqueued (gate threshold)
-  uint64_t tail_seq; // uploads published (host mirror)
-  int tail_gate_supported;
 };
 
 // Create + seed owned events on seed_stream. External edges stay unbound
@@ -120,8 +104,8 @@ struct gpu_ordering
 int
 gpu_ordering_init(struct gpu_ordering* ord, CUstream seed_stream);
 
-// Destroys owned events and the gate counter. Debug builds log a dead-edge
-// warning for declared edges that were recorded but never waited this run.
+// Destroys owned events. Debug builds log a dead-edge warning for declared
+// edges that were recorded but never waited this run.
 void
 gpu_ordering_destroy(struct gpu_ordering* ord);
 
@@ -163,49 +147,6 @@ void
 gpu_ordering_attach_stall_metric(struct gpu_ordering* ord,
                                  enum gpu_edge e,
                                  struct stream_metric* m);
-
-// --- GEN_COUNTER (tail gate) ---
-
-// Allocate + map the pinned counter and probe cuStreamWaitValue64 support
-// with an already-satisfied wait on probe_stream. Degrades gracefully:
-// alloc/map failure or CUDA_ERROR_NOT_SUPPORTED leaves the gate off
-// (gate_supported 0) and returns 0; only unexpected probe errors return 1.
-int
-gpu_ordering_gate_init(struct gpu_ordering* ord, CUstream probe_stream);
-
-static inline int
-gpu_ordering_gate_supported(const struct gpu_ordering* ord)
-{
-  return ord->tail_gate_supported;
-}
-
-static inline int
-gpu_ordering_gate_active(const struct gpu_ordering* ord)
-{
-  return ord->h_tail_seq_flag != NULL;
-}
-
-// Queue a wait for the published generation to reach this kick's threshold,
-// then advance the threshold. The threshold advances even when enable is 0:
-// every kick is drained (published) exactly once, so the count stays the
-// next kick's threshold. No-op when the gate was never initialized.
-int
-gpu_edge_wait_gen(struct gpu_ordering* ord,
-                  enum gpu_edge e,
-                  CUstream stream,
-                  int enable);
-
-// Publish the drained kick's generation. Must run exactly once per drain,
-// on failure exits too — a skipped publish leaves the gate unsatisfiable.
-void
-gpu_edge_publish(struct gpu_ordering* ord, enum gpu_edge e);
-
-// Satisfy every gate wait ever enqueued. Required before any blocking
-// stream/context sync when a kick may have been left undrained. kick_seq
-// satisfies every threshold; UINT64_MAX would not (CU_STREAM_WAIT_VALUE_GEQ
-// is a signed ring compare).
-void
-gpu_edge_release_all(struct gpu_ordering* ord);
 
 // --- HOST_RULE debug assert ---
 

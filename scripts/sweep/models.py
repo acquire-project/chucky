@@ -61,14 +61,18 @@ def validate_results(data: dict) -> ResultsFile:
 # One version per sweep, since every run in a file comes from one binary. Bump
 # when a metric is renamed, removed, or changes meaning; adding one does not
 # need a bump. Version 1 predates the rule and is not a single shape, so
-# migrating from it cannot assume which keys are present.
-CURRENT_VERSION = 2
+# migrating from it cannot assume which keys are present. A bump also needs a
+# line in README.md, the only record of what a stored version number means.
+CURRENT_VERSION = 4
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
 
 # Keys whose value cannot be recovered, by the version that retired them.
-RETIRED_AT = {2: ("kick_sync_ms", "kick_sync_count")}
+RETIRED_AT = {
+    2: ("kick_sync_ms", "kick_sync_count"),
+    3: ("tail_gate_ms", "tail_gate_count"),
+}
 
 
 def _migrate_1_to_2(data: dict) -> None:
@@ -81,7 +85,23 @@ def _migrate_1_to_2(data: dict) -> None:
                 stages[new_name] = stages.pop(old_name)
 
 
-_MIGRATIONS = {1: _migrate_1_to_2}
+def _migrate_2_to_3(data: dict) -> None:
+    # `tail_gate` now measures the compression-to-aggregation delay while the
+    # host coordinator waits for prior tail readiness. The value itself cannot
+    # be converted, so the migration only advances the file version; RETIRED_AT
+    # prevents older values from being compared with the new measurement.
+    pass
+
+
+def _migrate_3_to_4(data: dict) -> None:
+    # The discard sink now reports a shard alignment, so a default sweep
+    # measures the page-aligned pipeline instead of the contiguous one. Every
+    # timing changes meaning; none of them can be converted, so this only
+    # advances the file version.
+    pass
+
+
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4}
 
 
 def migrate_run(run: dict) -> dict:

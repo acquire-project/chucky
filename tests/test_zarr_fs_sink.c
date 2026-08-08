@@ -999,14 +999,23 @@ test_midstream_metadata_update(const char* tmpdir)
     data[len < 4095 ? len : 4095] = '\0';
     log_info("  midstream metadata: %s", (char*)data);
 
-    int not_zero = strstr((char*)data, "\"shape\":[0,") == NULL;
-    // Lazy delivery: of 6 epochs kicked, epochs 0-3 delivered (pending[0],
-    // pending[1] hold epochs 4,5). dim0_extent = 4 * chunk_size = 4 * 2 = 8.
-    int has_shape = strstr((char*)data, "\"shape\":[8,8,12]") != NULL;
+    // Of the 6 epochs kicked, the two still sitting in their slots have not
+    // been delivered, and a slot is always drained before it is refilled, so
+    // the extent the live metadata may publish is exact.
+    const uint64_t epochs_kicked =
+      total / tile_stream_gpu_layout(s)->epoch_elements;
+    char expected_shape[64];
+    snprintf(expected_shape,
+             sizeof(expected_shape),
+             "\"shape\":[%llu,%llu,%llu]",
+             (unsigned long long)((epochs_kicked - 2) * dims[0].chunk_size),
+             (unsigned long long)dims[1].size,
+             (unsigned long long)dims[2].size);
+
+    int has_shape = strstr((char*)data, expected_shape) != NULL;
     int is_array = strstr((char*)data, "\"node_type\":\"array\"") != NULL;
     free(data);
 
-    CHECK(Fail4, not_zero);
     CHECK(Fail4, has_shape);
     CHECK(Fail4, is_array);
   }

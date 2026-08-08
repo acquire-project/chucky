@@ -102,23 +102,3 @@ gpu_pool_at(struct gpu_pool* p, int slot, size_t byte_offset)
 {
   return (struct gpu_pool_view){ .p = (char*)p->payload[slot] + byte_offset };
 }
-
-int
-gpu_pool_acquire_consume_gen(struct gpu_pool* p, CUstream stream, int enable)
-{
-  return gpu_edge_wait_gen(p->ord, p->ready, stream, enable);
-}
-
-void
-gpu_pool_release_produce_gen(struct gpu_pool* p)
-{
-  gpu_edge_publish(p->ord, p->ready);
-}
-
-void
-gpu_pool_release_all(struct gpu_pool* p)
-{
-  // Callable on a never-initialized pool (failed engine init teardown).
-  if (p->ord)
-    gpu_edge_release_all(p->ord);
-}
