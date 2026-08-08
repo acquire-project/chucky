@@ -99,21 +99,25 @@ larger(size_t a, size_t b)
   return a > b ? a : b;
 }
 
+static size_t
+decompression_alignment(enum compression_codec type)
+{
+  switch (type) {
+    case CODEC_LZ4_NON_STANDARD:
+      return nvcompLZ4RequiredDecompressionAlignment;
+    case CODEC_ZSTD:
+      return nvcompZstdRequiredDecompressionAlignment;
+    default:
+      return 1;
+  }
+}
+
 // Compressed chunks are written by compression and read back by
 // decompression, which asks for the stricter alignment of the two.
 extern "C" size_t
 codec_output_alignment(enum compression_codec type)
 {
-  switch (type) {
-    case CODEC_LZ4_NON_STANDARD:
-      return larger(nvcompLZ4RequiredCompressionAlignment,
-                    nvcompLZ4RequiredDecompressionAlignment);
-    case CODEC_ZSTD:
-      return larger(nvcompZstdRequiredCompressionAlignment,
-                    nvcompZstdRequiredDecompressionAlignment);
-    default:
-      return 1;
-  }
+  return larger(codec_alignment(type), decompression_alignment(type));
 }
 
 // --- codec_max_output_size ---
@@ -211,42 +215,18 @@ codec_init(struct codec* c,
   c->chunk_bytes = chunk_bytes;
   c->batch_size = batch_size;
 
-  if (type == CODEC_BLOSC_LZ4 || type == CODEC_BLOSC_ZSTD) {
+  if (codec_is_blosc(type)) {
     log_error("blosc codecs are not supported on GPU");
     goto Fail;
   }
 
+  CHECK(Fail, codec_is_gpu_supported(type));
+
   c->max_output_size = codec_max_output_size(type, chunk_bytes);
   CHECK(Fail, c->max_output_size > 0);
 
-  switch (type) {
-    case CODEC_NONE:
-      c->temp_bytes = 0;
-      break;
-
-    case CODEC_LZ4_NON_STANDARD:
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetTempSizeAsync(
-               batch_size,
-               chunk_bytes,
-               nvcompBatchedLZ4CompressDefaultOpts,
-               &c->temp_bytes,
-               batch_size * chunk_bytes));
-      break;
-
-    case CODEC_ZSTD:
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetTempSizeAsync(
-               batch_size,
-               chunk_bytes,
-               nvcompBatchedZstdCompressDefaultOpts,
-               &c->temp_bytes,
-               batch_size * chunk_bytes));
-      break;
-
-    default:
-      goto Fail;
-  }
+  c->temp_bytes = codec_temp_bytes(type, chunk_bytes, batch_size);
+  CHECK(Fail, type == CODEC_NONE || c->temp_bytes > 0);
 
   // Allocate device arrays
   CU(Fail,

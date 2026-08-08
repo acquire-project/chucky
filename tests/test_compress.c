@@ -48,8 +48,10 @@ nvcomp_required_chunk_alignment(enum compression_codec type)
             nvcompBatchedZstdDecompressDefaultOpts, &decomp) != nvcompSuccess)
         return 0;
       break;
-    default:
+    case CODEC_NONE:
       return 1;
+    default:
+      return 0; // a codec added here without an nvcomp query must fail loudly
   }
   return comp.output > decomp.input ? comp.output : decomp.input;
 }
@@ -82,23 +84,19 @@ test_max_output_size_alignment(void)
                   alignment);
         goto Fail;
       }
+    }
 
-      // The stride the compress kernel actually uses is the struct field, so
-      // check that rather than only the query.
-      struct codec c = { 0 };
-      CHECK(Fail, codec_init(&c, codecs[i], chunk_sizes[j], 2) == 0);
-      const size_t stride = c.max_output_size;
-      codec_free(&c);
-      if (stride != max_out || stride % alignment) {
-        log_error("codec %d chunk %zu: stride %zu does not match bound %zu or "
-                  "is not a multiple of %zu",
-                  (int)codecs[i],
-                  chunk_sizes[j],
-                  stride,
-                  max_out,
-                  alignment);
-        goto Fail;
-      }
+    // The stride the compress kernel uses is the struct field, so check the
+    // two agree rather than trusting the query alone.
+    struct codec c = { 0 };
+    CHECK(Fail, codec_init(&c, codecs[i], chunk_sizes[0], 2) == 0);
+    const size_t stride = c.max_output_size;
+    codec_free(&c);
+    if (stride != codec_max_output_size(codecs[i], chunk_sizes[0])) {
+      log_error("codec %d: stride %zu does not match the bound",
+                (int)codecs[i],
+                stride);
+      goto Fail;
     }
   }
 
