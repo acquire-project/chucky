@@ -110,9 +110,9 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
   if (engine_limits_accumulate(lim, &desc->cl, config))
     return 1;
 
-  // No tail gate on the multiarray sync-flush path: every kick drains
-  // immediately, so tail uploads are host-ordered.
-  return engine_array_state_init(&desc->st, &desc->ctx, &desc->cl, NULL, NULL);
+  // No delivery coordinator on the multiarray sync-flush path: every kick
+  // drains immediately before per-array state is swapped.
+  return engine_array_state_init(&desc->st, &desc->ctx, &desc->cl, NULL);
 }
 
 static void
@@ -134,18 +134,24 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   if (ms->active >= 0) {
     struct array_descriptor_gpu* departing = &ms->arrays[ms->active];
 
-    // Reject switch mid-epoch
-    if (departing->ctx.cursor_elements % departing->ctx.layout.epoch_elements !=
-        0)
-      return multiarray_writer_not_flushable;
+    // A failed array holds no staging and never reads the pool again, so
+    // leaving it needs nothing. Holding the switch on it would strand every
+    // other array in the stream.
+    if (!departing->ctx.append_failed) {
+      // Reject switch mid-epoch
+      if (departing->ctx.cursor_elements %
+            departing->ctx.layout.epoch_elements !=
+          0)
+        return multiarray_writer_not_flushable;
 
-    // Flush departing array's accumulated batch. The drain-after-kick
-    // schedule leaves no pool swap or kicked state behind, so this is safe
-    // mid-switch.
-    if (e->sched.accumulated > 0) {
-      struct writer_result r = schedule_flush_accumulated(e, &departing->ctx);
-      if (r.error)
-        return multiarray_writer_fail;
+      // Staging is engine-wide, so the departing array's data has to reach its
+      // own pool before another array's geometry binds in. Either step failing
+      // belongs to the array being left, which reports it when it is flushed;
+      // the array being switched to is still usable.
+      if (!stream_dispatch_staged(e, &departing->ctx).error &&
+          e->sched.accumulated > 0 &&
+          schedule_flush_accumulated(e, &departing->ctx).error)
+        departing->ctx.append_failed = 1;
     }
 
     unbind_context(e, departing);
@@ -219,9 +225,18 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
 
-  // Save current array's state
-  if (ms->active >= 0)
-    unbind_context(&ms->engine, &ms->arrays[ms->active]);
+  // One array failing must not leave the others unfinalized, so the whole loop
+  // runs and the first failure is what gets reported.
+  int failed = 0;
+
+  // Save current array's state. Staging is engine-wide, so this array's data
+  // has to reach its own pool before another array's flush reuses the buffer.
+  if (ms->active >= 0) {
+    struct array_descriptor_gpu* desc = &ms->arrays[ms->active];
+    if (stream_dispatch_staged(&ms->engine, &desc->ctx).error)
+      failed = 1;
+    unbind_context(&ms->engine, desc);
+  }
 
   // Flush each array that has data
   for (int a = 0; a < ms->n_arrays; ++a) {
@@ -240,11 +255,12 @@ flush_impl(struct multiarray_writer* self)
     bind_context(&ms->engine, desc);
 
     struct writer_result r = stream_flush_body(&ms->engine, &desc->ctx);
-    if (r.error)
-      goto Error;
 
     unbind_context(&ms->engine, desc);
-    desc->flushed = 1;
+    if (r.error)
+      failed = 1;
+    else
+      desc->flushed = 1;
   }
 
   ms->active = -1;
@@ -252,29 +268,12 @@ flush_impl(struct multiarray_writer* self)
   // Each array's stream_flush_body already drained its sink as a commit
   // point; no additional drain needed here.
 
-  return (struct multiarray_writer_result){ .error = multiarray_writer_ok };
-
-Error:
-  if (ms->active >= 0)
-    unbind_context(&ms->engine, &ms->arrays[ms->active]);
-  ms->active = -1;
-  return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
+  return (struct multiarray_writer_result){
+    .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
+  };
 }
 
 // ---- Create / Destroy ----
-
-static void
-sync_all(struct gpu_streams* streams)
-{
-  if (streams->h2d)
-    cuStreamSynchronize(streams->h2d);
-  if (streams->compute)
-    cuStreamSynchronize(streams->compute);
-  if (streams->compress)
-    cuStreamSynchronize(streams->compress);
-  if (streams->d2h)
-    cuStreamSynchronize(streams->d2h);
-}
 
 void
 multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
@@ -302,13 +301,11 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       log_error("GPU multiarray auto-flush failed during destroy");
   }
 
-  // Safe to sync first only because no array here arms a tail gate, so nothing
-  // can park waiting to be released. A gated schedule would need the single-
-  // array teardown order instead.
-  sync_all(&ms->engine.streams);
+  // Resolve every worker job before synchronizing streams or freeing buffers.
+  gpu_delivery_stop_join(&ms->engine.delivery);
+  gpu_streams_sync(&ms->engine.streams);
 
   // Drain queued IO before teardown frees the buffers it points into.
-  gpu_delivery_stop_join(&ms->engine.delivery);
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a) {
       if (autoflush && !autoflush[a])

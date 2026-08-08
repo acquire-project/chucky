@@ -57,10 +57,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
     gpu_pool_bind(&stage->agg_host, fc, &stage->agg[fc]);
     gpu_pool_bind(&stage->agg_index, fc, &stage->agg[fc]);
   }
-  gpu_pool_init(&stage->tail, ord, GPU_EDGE_TAIL_PUBLISHED, GPU_EDGE_COUNT);
-  // &stage->ar is stable across multiarray binds (swapped by value).
-  gpu_pool_bind(&stage->tail, 0, &stage->ar);
-
   const uint32_t K = lim->epochs_per_batch;
   const uint64_t M = lim->codec_batch;
 
@@ -158,12 +154,6 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
 {
   if (!stage)
     return;
-  if (stage->ord && gpu_ordering_gate_active(stage->ord)) {
-    // An undrained kick (failed flush) parks work on the compress stream;
-    // the frees below can block on pending work, so release first.
-    gpu_pool_release_all(&stage->tail);
-    CUWARN(cuCtxSynchronize());
-  }
   codec_free(&stage->codec);
   free(stage->pool_epochs_scratch);
   free(stage->cached_pool_epochs);
@@ -209,9 +199,7 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
 
 int
 compress_agg_array_init(struct compress_agg_array* ar,
-                        const struct computed_stream_layouts* cl,
-                        struct gpu_ordering* gate_ord,
-                        CUstream gate_stream)
+                        const struct computed_stream_layouts* cl)
 {
   memset(ar, 0, sizeof(*ar));
 
@@ -256,10 +244,9 @@ compress_agg_array_init(struct compress_agg_array* ar,
        cuMemsetD8(
          (CUdeviceptr)ar->d_tail_bytes, 0, total_shards * sizeof(size_t)));
 
-    // Delivery's tail upload is a synchronous HtoD from pageable memory,
-    // which may return before the DMA reaches the device; SYNC_MEMOPS
-    // makes it complete at the device first, so the tail-gate publish
-    // that follows it cannot outrun the copy (flush.d2h_deliver.c).
+    // Delivery's tail upload is a synchronous HtoD from pageable memory.
+    // SYNC_MEMOPS makes return from that host call the authoritative
+    // tail-ready transition observed by the delivery coordinator.
     {
       unsigned int sync_memops = 1;
       CU(Fail,
@@ -279,16 +266,6 @@ compress_agg_array_init(struct compress_agg_array* ar,
         CU(Fail,
            cuPointerSetAttribute(
              &sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, ar->d_tail_carry));
-      }
-
-      // Without stream memops — or when the counter can't be allocated or
-      // mapped — the lazy path host-drains instead
-      // (SCHEDULE_DRAIN_BEFORE_KICK).
-      if (gate_ord) {
-        CHECK(Fail, gpu_ordering_gate_init(gate_ord, gate_stream) == 0);
-        if (!gpu_ordering_gate_supported(gate_ord))
-          log_warn("compress_agg: tail gate unavailable; page-aligned "
-                   "pipeline degrades to host-ordered tail uploads");
       }
     }
   }
@@ -332,7 +309,7 @@ compress_agg_init(struct compress_agg_stage* stage,
   CHECK(Fail,
         compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
           0);
-  CHECK(Fail, compress_agg_array_init(&stage->ar, cl, ord, compute) == 0);
+  CHECK(Fail, compress_agg_array_init(&stage->ar, cl) == 0);
   // d_shard_capacity is constant per array — upload once; the other shard
   // tables depend on per-batch active counts and are uploaded by the kick.
   if (stage->ar.total_shards > 0)
@@ -651,8 +628,8 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                        struct gpu_pool_view pool_buf,
                        CUstream compress_stream)
 {
-  // The schedule places the tail-gate wait before this call, so recording here
-  // keeps a slow sink out of the aggregate interval.
+  // The schedule calls this only after the preceding tail is host-ready, so
+  // the interval excludes time spent waiting for sink delivery.
   CU(Error, cuEventRecord(stage->t_aggregate_start[fc], compress_stream));
   // CODEC_NONE aggregates straight from the pool buffer, skipping compress.
   const CUdeviceptr d_aggregate_src = (stage->codec.type == CODEC_NONE)
@@ -712,7 +689,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->agg_pool = &stage->agg_pool;
   out->agg_host = &stage->agg_host;
   out->agg_index = &stage->agg_index;
-  out->tail = &stage->tail;
+  out->shards = &stage->ar;
   out->layout = plan->layout;
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
   for (uint8_t lv = 0; lv < nlod; ++lv)

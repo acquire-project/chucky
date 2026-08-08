@@ -2,6 +2,7 @@
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
+#include "gpu/transpose.h"
 
 #include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
@@ -140,7 +141,7 @@ stream_engine_init(struct stream_engine* e,
   }
 
   if (gpu_delivery_init(&e->delivery))
-    log_warn("delivery worker unavailable; drains run on the producer");
+    log_warn("delivery worker unavailable; using depth-one producer drains");
 
   e->pool_bytes = lim->pool_bytes;
   gpu_pool_init(
@@ -214,8 +215,7 @@ int
 engine_array_state_init(struct engine_array_state* st,
                         struct stream_context* ctx,
                         struct computed_stream_layouts* cl,
-                        struct gpu_ordering* gate_ord,
-                        CUstream gate_stream)
+                        struct gpu_delivery* delivery)
 {
   memset(st, 0, sizeof(*st));
 
@@ -249,10 +249,8 @@ engine_array_state_init(struct engine_array_state* st,
     CHECK(Fail, st->sched.slot[fc].batch_active_masks);
   }
 
-  CHECK(Fail,
-        compress_agg_array_init(&st->agg, cl, gate_ord, gate_stream) == 0);
-  // After the gate is armed, so support is known.
-  schedule_select(&st->sched, &st->agg, gate_ord);
+  CHECK(Fail, compress_agg_array_init(&st->agg, cl) == 0);
+  schedule_select(&st->sched, &st->agg, delivery);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
   // append body detect the at-capacity case without recomputing each call.
@@ -318,13 +316,6 @@ Fail:
 
 // --- Create / Destroy ---
 
-static void
-sync(CUstream stream)
-{
-  if (stream)
-    cuStreamSynchronize(stream);
-}
-
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 {
@@ -343,20 +334,13 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
     did_autoflush = 1;
   }
 
-  // A failed flush can leave delivery jobs queued; run them out before the
-  // forced gate release below — a worker publish after release_all would
-  // regress the published count and re-park the gate.
+  // A failed flush can leave delivery jobs queued. Run valid jobs out and
+  // cancel PREPARED jobs made unsafe by an earlier coordinator error before
+  // synchronizing or freeing their stage storage.
   gpu_delivery_stop_join(&s->engine.delivery);
 
-  // A failed flush can leave a kick parked on the tail gate; release it or
-  // the syncs below never return.
-  gpu_pool_release_all(&s->engine.compress_agg.tail);
-
   // Ensure all GPU work completes before tearing down events/memory.
-  sync(s->engine.streams.h2d);
-  sync(s->engine.streams.compute);
-  sync(s->engine.streams.compress);
-  sync(s->engine.streams.d2h);
+  gpu_streams_sync(&s->engine.streams);
 
   // Drain queued IO before teardown frees the buffers it points into. Only
   // when we auto-flushed: a caller that flushed itself may have freed its sink.
@@ -409,13 +393,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
         stream_engine_init(
           &out->engine, &lim, config->codec.id, cl.levels.enable_multiscale) ==
           0);
-  // The pipelined (non-sync-flush) path arms the tail gate.
   CHECK(FailPhase2,
-        engine_array_state_init(&out->ar,
-                                &out->ctx,
-                                &cl,
-                                &out->engine.ord,
-                                out->engine.streams.compute) == 0);
+        engine_array_state_init(
+          &out->ar, &out->ctx, &cl, &out->engine.delivery) == 0);
   CHECK(FailPhase2,
         stream_engine_bind_array(&out->engine, &out->ar, &out->ctx) == 0);
 
@@ -498,7 +478,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     goto Fail;
 
   // Staging (ingest_init): 2 slots, device + pinned host each.
-  info->staging_bytes = 2 * lim.buffer_capacity;
+  info->staging_bytes = 2 * (lim.buffer_capacity + TRANSPOSE_SOURCE_PAD_BYTES);
   const size_t staging_host = 2 * lim.buffer_capacity;
 
   // Chunk pools (stream_engine_init): 2 buffers.

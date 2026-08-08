@@ -40,6 +40,16 @@ gpu_streams_destroy(struct gpu_streams* s)
 }
 
 void
+gpu_streams_sync(const struct gpu_streams* s)
+{
+  cu_stream_sync(s->h2d);
+  cu_stream_sync(s->compute);
+  cu_stream_sync(s->compress);
+  cu_stream_sync(s->d2h);
+  cu_stream_sync(s->drain);
+}
+
+void
 gpu_streams_register(const struct gpu_streams* s, struct gpu_ordering* ord)
 {
   gpu_ordering_register_stream(ord, GPU_STREAM_H2D, s->h2d);
@@ -54,15 +64,19 @@ gpu_streams_register(const struct gpu_streams* s, struct gpu_ordering* ord)
 void
 schedule_select(struct gpu_scheduler* sched,
                 const struct compress_agg_array* ar,
-                const struct gpu_ordering* gate_ord)
+                const struct gpu_delivery* delivery)
 {
   const int page_aligned = ar->page_size > 0 && ar->total_shards > 0;
-  if (!gate_ord)
-    sched->depth = SCHEDULE_DRAIN_AFTER_KICK;
-  else if (page_aligned && !gpu_ordering_gate_supported(gate_ord))
-    sched->depth = SCHEDULE_DRAIN_BEFORE_KICK;
+  const int worker = delivery && delivery->thread;
+  if (!delivery)
+    sched->mode = SCHEDULE_DRAIN_AFTER_KICK;
+  else if (!page_aligned)
+    sched->mode = SCHEDULE_PIPELINED_DIRECT;
   else
-    sched->depth = SCHEDULE_PIPELINED;
+    sched->mode =
+      worker ? SCHEDULE_PIPELINED_HOST_COORDINATED : SCHEDULE_DRAIN_BEFORE_KICK;
+  if (sched->next_generation == 0)
+    sched->next_generation = 1;
 }
 
 int
@@ -75,6 +89,72 @@ schedule_lod_active(const struct gpu_ordering* ord, int enable_multiscale)
 // --- Compress+aggregate kick ---
 
 int
+schedule_compress_agg_prepare(struct compress_agg_stage* stage,
+                              const struct compress_agg_input* in,
+                              const struct level_geometry* levels,
+                              struct gpu_pool* chunk_pool,
+                              int lod_active,
+                              CUstream compress_stream,
+                              struct schedule_slot* slot)
+{
+  // Ahead of the pool acquires, so these uploads overlap the previous batch's
+  // drain instead of queueing behind the wait for it.
+  CHECK(Error,
+        compress_agg_prepare(stage, in, levels, compress_stream, &slot->plan) ==
+          0);
+
+  CHECK(Error,
+        gpu_pool_acquire_consume(
+          chunk_pool, in->fc, compress_stream, &slot->pool_buf) == 0);
+  // LOD chunks land in the pool through a second producer edge.
+  if (lod_active)
+    CHECK(Error,
+          gpu_edge_wait(
+            chunk_pool->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
+  // Aggregate must not overwrite agg[fc] before the prior D2H on the same
+  // fc has read it.
+  CHECK(Error,
+        gpu_pool_acquire_produce(
+          &stage->agg_pool, in->fc, compress_stream, &slot->aggregate_slot) ==
+          0);
+
+  CHECK(Error,
+        compress_agg_compress(
+          stage, in, levels, slot->pool_buf, compress_stream) == 0);
+
+  compress_agg_fill_handoff(stage, in, &slot->plan, &slot->handoff);
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+schedule_compress_agg_submit(struct compress_agg_stage* stage,
+                             struct schedule_slot* slot,
+                             CUstream compress_stream)
+{
+  const int fc = slot->handoff.fc;
+
+  CHECK(Error,
+        compress_agg_aggregate(stage,
+                               &slot->plan,
+                               fc,
+                               slot->aggregate_slot.p,
+                               slot->pool_buf,
+                               compress_stream) == 0);
+  // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
+  // record (#140).
+  CHECK(Error,
+        gpu_pool_release_produce(&stage->agg_pool, fc, compress_stream) == 0);
+
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
 schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            const struct compress_agg_input* in,
                            const struct level_geometry* levels,
@@ -83,53 +163,15 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            CUstream compress_stream,
                            struct flush_handoff* out)
 {
-  struct compress_agg_plan plan;
+  struct schedule_slot slot = { 0 };
   CHECK(Error,
-        compress_agg_prepare(stage, in, levels, compress_stream, &plan) == 0);
-
-  struct gpu_pool_view pool_buf;
-  CHECK(Error,
-        gpu_pool_acquire_consume(
-          chunk_pool, in->fc, compress_stream, &pool_buf) == 0);
-  // LOD chunks land in the pool through a second producer edge.
-  if (lod_active)
-    CHECK(Error,
-          gpu_edge_wait(
-            chunk_pool->ord, GPU_EDGE_LOD_DONE, in->fc, compress_stream) == 0);
-  // Aggregate must not overwrite agg[fc] before the prior D2H on the same
-  // fc has read it.
-  struct gpu_pool_view slot;
-  CHECK(Error,
-        gpu_pool_acquire_produce(
-          &stage->agg_pool, in->fc, compress_stream, &slot) == 0);
-
-  CHECK(Error,
-        compress_agg_compress(stage, in, levels, pool_buf, compress_stream) ==
+        schedule_compress_agg_prepare(
+          stage, in, levels, chunk_pool, lod_active, compress_stream, &slot) ==
           0);
-
-  // Page-aligned path only. The aggregate dispatch reads tail state that
-  // the previous kick's delivery uploads AFTER this enqueue (gate state in
-  // gpu_ordering, src/gpu/ordering.h). The wait goes after compress, which
-  // reads no tail state.
-  {
-    const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
-    const int enable = plan.layout.total_batch_chunks > 0 &&
-                       stage->ar.total_shards > 0 && page_size > 0;
-    CHECK(Error,
-          gpu_pool_acquire_consume_gen(&stage->tail, compress_stream, enable) ==
-            0);
-  }
-
   CHECK(Error,
-        compress_agg_aggregate(
-          stage, &plan, in->fc, slot.p, pool_buf, compress_stream) == 0);
-  // Also releases the chunk pool for re-zero: POOL_CONSUMED aliases this
-  // record (#140).
-  CHECK(Error,
-        gpu_pool_release_produce(&stage->agg_pool, in->fc, compress_stream) ==
-          0);
+        schedule_compress_agg_submit(stage, &slot, compress_stream) == 0);
 
-  compress_agg_fill_handoff(stage, in, &plan, out);
+  *out = slot.handoff;
   return 0;
 
 Error:
@@ -260,24 +302,18 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
       &metrics->drain_dispatch, own_ms > 0 ? own_ms : 0.0f, 0, 0);
   }
 
-  {
-    // The consumed direction is the deliver-oldest-first host rule, so no
-    // device wait is queued; the acquire hands out the array whose tail
-    // buffers this delivery uploads.
-    struct gpu_pool_view tv = { 0 };
-    if (gpu_pool_host_acquire_produce(handoff->tail, 0, &tv))
-      goto Done;
-    err = d2h_deliver_drain_sink(
-            stage, handoff, slot, tv.p, levels, layout, config, sink, metrics)
-            .error;
-  }
+  err = d2h_deliver_drain_sink(stage,
+                               handoff,
+                               slot,
+                               handoff->shards,
+                               levels,
+                               layout,
+                               config,
+                               sink,
+                               metrics)
+          .error;
 
 Done:
-  // The drained kick's tail generation releases exactly once, on failure
-  // exits too — the gate threshold counts kicks, so a skipped release
-  // leaves the gate unsatisfiable and destroy's auto-flush hangs polling.
-  // Tail-state content is moot once the drain has failed.
-  gpu_pool_release_produce_gen(handoff->tail);
   if (err)
     return writer_error();
   if (d2h_deliver_update_metadata(
@@ -302,8 +338,6 @@ schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
 
 // --- Delivery worker ---
 
-// The whole drain for one kicked slot; runs on the worker when queued,
-// inline otherwise.
 static struct writer_result
 drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
@@ -318,19 +352,70 @@ drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
                             &e->metadata_update_clock);
 }
 
+static int
+submit_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
+{
+  struct schedule_slot* s = &e->sched.slot[fc];
+  CHECK(Error,
+        schedule_compress_agg_submit(
+          &e->compress_agg, s, e->streams.compress) == 0);
+  CHECK(Error,
+        schedule_d2h_kick(
+          &e->d2h_deliver, &s->handoff, ctx->sink, e->streams.d2h) == 0);
+  return 0;
+
+Error:
+  return 1;
+}
+
+// d->mu must be held. Once one generation fails, a later prepared job must
+// never aggregate from tail state that was not produced by its predecessor,
+// so it is cancelled before anything is queued for it. A job that already
+// submitted still has its aggregation and device-to-host copy queued on the
+// device, and its output has to reach the sink and release its pool slot, so
+// it is left for the loop to drain.
+static void
+delivery_fail_pending_locked(struct gpu_delivery* d)
+{
+  d->sticky_error = 1;
+  for (int i = 0; i < 2; ++i) {
+    struct delivery_job* j = &d->job[i];
+    if (j->state == DELIVERY_JOB_PREPARED) {
+      j->result = writer_error();
+      j->state = DELIVERY_JOB_DONE;
+    }
+  }
+  platform_cond_broadcast(d->cv);
+}
+
+// d->mu must be held.
+static void
+delivery_park(struct gpu_delivery* d, enum delivery_hold_point at)
+{
+  while (d->hold_at == at && !d->stop)
+    platform_cond_wait(d->cv, d->mu);
+}
+
 static void
 delivery_main(void* arg)
 {
   struct gpu_delivery* d = (struct gpu_delivery*)arg;
-  // On failure the first drain's CUDA call fails and surfaces through the
-  // worker result at join; warn so the root cause is visible.
-  CUWARN(cuCtxSetCurrent(d->cuda));
+  CUresult context_result = cuCtxSetCurrent(d->cuda);
+  if (context_result != CUDA_SUCCESS)
+    handle_curesult(
+      LOG_ERROR, context_result, __FILE__, __LINE__, "cuCtxSetCurrent");
+
   platform_mutex_lock(d->mu);
+  if (context_result != CUDA_SUCCESS)
+    delivery_fail_pending_locked(d);
+
   for (;;) {
     int fc = -1;
     for (int i = 0; i < 2; ++i) {
       struct delivery_job* j = &d->job[i];
-      if (j->queued && !j->done && (fc < 0 || j->seq < d->job[fc].seq))
+      if ((j->state == DELIVERY_JOB_PREPARED ||
+           j->state == DELIVERY_JOB_SUBMITTED) &&
+          (fc < 0 || j->generation < d->job[fc].generation))
         fc = i;
     }
     if (fc < 0) {
@@ -339,21 +424,67 @@ delivery_main(void* arg)
       platform_cond_wait(d->cv, d->mu);
       continue;
     }
+
     struct delivery_job* j = &d->job[fc];
-    const struct delivery_job* o = &d->job[fc ^ 1];
-    int oldest = !o->queued || o->done || j->seq < o->seq;
+    const uint64_t generation = j->generation;
+
+    if (j->state == DELIVERY_JOB_PREPARED) {
+      // No GPU operation is queued until the preceding delivery has returned
+      // from its synchronous tail uploads.
+      if (d->tail_ready_generation != generation - 1) {
+        if (d->stop) {
+          delivery_fail_pending_locked(d);
+          continue;
+        }
+        platform_cond_wait(d->cv, d->mu);
+        continue;
+      }
+
+      struct stream_engine* e = j->e;
+      struct stream_context* ctx = j->ctx;
+      platform_mutex_unlock(d->mu);
+      int submit_error = submit_payload(e, ctx, fc);
+      platform_mutex_lock(d->mu);
+
+      if (submit_error) {
+        j->result = writer_error();
+        j->state = DELIVERY_JOB_DONE;
+        delivery_fail_pending_locked(d);
+        continue;
+      }
+
+      j->state = DELIVERY_JOB_SUBMITTED;
+      d->submitted_generation = generation;
+      platform_cond_broadcast(d->cv);
+    }
+
+    delivery_park(d, DELIVERY_HOLD_BEFORE_DRAIN);
+    if (j->state != DELIVERY_JOB_SUBMITTED)
+      continue;
+
+    const struct delivery_job* other = &d->job[fc ^ 1];
+    int oldest = other->state == DELIVERY_JOB_EMPTY ||
+                 other->state == DELIVERY_JOB_DONE ||
+                 generation < other->generation;
+    struct stream_engine* e = j->e;
+    struct stream_context* ctx = j->ctx;
     platform_mutex_unlock(d->mu);
 
-    gpu_edge_host_rule(&j->e->ord, GPU_EDGE_DELIVER_OLDEST_FIRST, oldest);
-    struct writer_result r = drain_payload(j->e, j->ctx, fc);
+    gpu_edge_host_rule(&e->ord, GPU_EDGE_DELIVER_OLDEST_FIRST, oldest);
+    struct writer_result r = drain_payload(e, ctx, fc);
 
     platform_mutex_lock(d->mu);
     j->result = r;
-    j->done = 1;
-    platform_cond_broadcast(d->cv);
-    // Test hook: park so a later job stays queued for teardown to run out.
-    while (d->hold && !d->stop)
-      platform_cond_wait(d->cv, d->mu);
+    j->state = DELIVERY_JOB_DONE;
+    if (r.error) {
+      delivery_fail_pending_locked(d);
+    } else {
+      // d2h_deliver_drain_sink returned only after synchronous tail uploads.
+      d->tail_ready_generation = generation;
+      platform_cond_broadcast(d->cv);
+    }
+
+    delivery_park(d, DELIVERY_HOLD_AFTER_DRAIN);
   }
   platform_mutex_unlock(d->mu);
 }
@@ -378,27 +509,74 @@ Fail:
   return 1;
 }
 
-void
+static int
 gpu_delivery_enqueue(struct gpu_delivery* d,
                      struct stream_engine* e,
                      struct stream_context* ctx,
                      int fc,
-                     uint64_t seq)
+                     uint64_t generation,
+                     enum delivery_job_state state)
 {
   if (!d->thread)
-    return;
+    return 1;
   platform_mutex_lock(d->mu);
   // The drain-before-rekick rule keeps a slot's previous job joined before
   // its next kick can enqueue here.
-  assert(!d->job[fc].queued);
+  assert(d->job[fc].state == DELIVERY_JOB_EMPTY);
   d->job[fc] = (struct delivery_job){
-    .queued = 1,
-    .seq = seq,
+    .state = state,
+    .generation = generation,
     .e = e,
     .ctx = ctx,
   };
+  int error = d->sticky_error;
+  if (error) {
+    d->job[fc].result = writer_error();
+    d->job[fc].state = DELIVERY_JOB_DONE;
+  } else if (state == DELIVERY_JOB_SUBMITTED) {
+    d->submitted_generation = generation;
+  }
   platform_cond_broadcast(d->cv);
   platform_mutex_unlock(d->mu);
+  return error;
+}
+
+int
+gpu_delivery_enqueue_prepared(struct gpu_delivery* d,
+                              struct stream_engine* e,
+                              struct stream_context* ctx,
+                              int fc,
+                              uint64_t generation)
+{
+  return gpu_delivery_enqueue(d, e, ctx, fc, generation, DELIVERY_JOB_PREPARED);
+}
+
+int
+gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
+                               struct stream_engine* e,
+                               struct stream_context* ctx,
+                               int fc,
+                               uint64_t generation)
+{
+  // Aggregation is already queued, so without a worker the producer can drain
+  // this slot itself when it comes to refill it.
+  if (!d->thread)
+    return 0;
+  return gpu_delivery_enqueue(
+    d, e, ctx, fc, generation, DELIVERY_JOB_SUBMITTED);
+}
+
+int
+gpu_delivery_wait_submitted(struct gpu_delivery* d, uint64_t generation)
+{
+  if (!d->thread)
+    return 1;
+  platform_mutex_lock(d->mu);
+  while (!d->sticky_error && d->submitted_generation < generation)
+    platform_cond_wait(d->cv, d->mu);
+  int error = d->sticky_error;
+  platform_mutex_unlock(d->mu);
+  return error;
 }
 
 int
@@ -407,7 +585,7 @@ gpu_delivery_pending(struct gpu_delivery* d, int fc)
   if (!d->thread)
     return 0;
   platform_mutex_lock(d->mu);
-  int p = d->job[fc].queued;
+  int p = d->job[fc].state != DELIVERY_JOB_EMPTY;
   platform_mutex_unlock(d->mu);
   return p;
 }
@@ -416,7 +594,7 @@ struct writer_result
 gpu_delivery_join(struct gpu_delivery* d, int fc)
 {
   platform_mutex_lock(d->mu);
-  while (!d->job[fc].done)
+  while (d->job[fc].state != DELIVERY_JOB_DONE)
     platform_cond_wait(d->cv, d->mu);
   struct writer_result r = d->job[fc].result;
   d->job[fc] = (struct delivery_job){ 0 };
@@ -442,14 +620,44 @@ gpu_delivery_stop_join(struct gpu_delivery* d)
 }
 
 void
-gpu_delivery_set_hold(struct gpu_delivery* d, int on)
+gpu_delivery_set_hold(struct gpu_delivery* d, enum delivery_hold_point at)
 {
   if (!d->thread)
     return;
   platform_mutex_lock(d->mu);
-  d->hold = on;
+  d->hold_at = at;
   platform_cond_broadcast(d->cv);
   platform_mutex_unlock(d->mu);
+}
+
+// The mutex is gone once the worker has been joined, but the counters it
+// protected stay readable.
+enum delivery_job_state
+gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation)
+{
+  if (d->mu)
+    platform_mutex_lock(d->mu);
+  enum delivery_job_state state = d->job[fc].state;
+  if (generation)
+    *generation = d->job[fc].generation;
+  if (d->mu)
+    platform_mutex_unlock(d->mu);
+  return state;
+}
+
+void
+gpu_delivery_generations(struct gpu_delivery* d,
+                         uint64_t* submitted,
+                         uint64_t* tail_ready)
+{
+  if (d->mu)
+    platform_mutex_lock(d->mu);
+  if (submitted)
+    *submitted = d->submitted_generation;
+  if (tail_ready)
+    *tail_ready = d->tail_ready_generation;
+  if (d->mu)
+    platform_mutex_unlock(d->mu);
 }
 
 // --- Helpers ---
@@ -521,11 +729,11 @@ drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
   if (!s->kicked)
     return writer_ok();
 
-  // The tail gate's GEQ threshold assumes drains follow kick order.
+  // Sink delivery and tail publication always follow generation order.
   gpu_edge_host_rule(&e->ord,
                      GPU_EDGE_DELIVER_OLDEST_FIRST,
                      !e->sched.slot[fc ^ 1].kicked ||
-                       s->kick_seq < e->sched.slot[fc ^ 1].kick_seq);
+                       s->generation < e->sched.slot[fc ^ 1].generation);
 
   struct platform_clock stall_clk = { 0 };
   platform_toc(&stall_clk);
@@ -548,29 +756,53 @@ kick_batch(struct stream_engine* e,
   gpu_edge_host_rule(
     &e->ord, GPU_EDGE_DRAIN_BEFORE_REKICK, !e->sched.slot[fc].kicked);
   struct compress_agg_input in = make_compress_input(e, fc, n_epochs);
-  struct flush_handoff handoff = { 0 };
+  struct schedule_slot* s = &e->sched.slot[fc];
+
+  const uint64_t generation = e->sched.next_generation;
+
+  // Shared codec-size arrays, LUTs, and shard tables can be overwritten only
+  // after the previous aggregation has been enqueued on this same stream.
+  if (e->sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED && generation > 1)
+    CHECK(Error,
+          gpu_delivery_wait_submitted(&e->delivery, generation - 1) == 0);
 
   CHECK(Error,
-        schedule_compress_agg_kick(&e->compress_agg,
-                                   &in,
-                                   &ctx->levels,
-                                   &e->pools.p,
-                                   e->sched.lod_active,
-                                   e->streams.compress,
-                                   &handoff) == 0);
+        schedule_compress_agg_prepare(&e->compress_agg,
+                                      &in,
+                                      &ctx->levels,
+                                      &e->pools.p,
+                                      e->sched.lod_active,
+                                      e->streams.compress,
+                                      s) == 0);
 
+  s->generation = generation;
+  e->sched.next_generation = generation + 1;
+
+  if (e->sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED) {
+    // The worker owns submission so aggregation cannot read tail state until
+    // generation-1's synchronous upload has completed.
+    int enqueue_error =
+      gpu_delivery_enqueue_prepared(&e->delivery, e, ctx, fc, generation);
+    s->kicked = 1;
+    CHECK(Error, enqueue_error == 0);
+    return 0;
+  }
+
+  CHECK(Error,
+        schedule_compress_agg_submit(
+          &e->compress_agg, s, e->streams.compress) == 0);
   CHECK(Error,
         schedule_d2h_kick(
-          &e->d2h_deliver, &handoff, ctx->sink, e->streams.d2h) == 0);
+          &e->d2h_deliver, &s->handoff, ctx->sink, e->streams.d2h) == 0);
 
-  e->sched.slot[fc].handoff = handoff;
-  e->sched.slot[fc].kick_seq = e->sched.next_seq++;
-  e->sched.slot[fc].kicked = 1;
+  s->kicked = 1;
 
-  // Depth-1 schedules drain inline right after this kick; the host
-  // ordering they exist for must not move to another thread.
-  if (e->sched.depth == SCHEDULE_PIPELINED)
-    gpu_delivery_enqueue(&e->delivery, e, ctx, fc, e->sched.slot[fc].kick_seq);
+  // Depth-1 schedules drain inline. Contiguous pipelined batches have already
+  // submitted aggregation and queue only their drain.
+  if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT)
+    CHECK(Error,
+          gpu_delivery_enqueue_submitted(
+            &e->delivery, e, ctx, fc, generation) == 0);
 
   return 0;
 
@@ -592,10 +824,9 @@ drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
       return r;
   }
 
-  // Without the gate the tail upload cannot be ordered device-side, so also
-  // drain the other, newer kicked batch — order stays oldest-first, depth
-  // degrades to 1 — and the kick below sees published tail state.
-  if (e->sched.depth == SCHEDULE_DRAIN_BEFORE_KICK) {
+  // Without a worker, drain the other kicked batch too. The next direct
+  // aggregation is enqueued only after its predecessor's tail upload returns.
+  if (e->sched.mode == SCHEDULE_DRAIN_BEFORE_KICK) {
     struct writer_result r = drain_slot(e, ctx, fc ^ 1);
     if (r.error)
       return r;
@@ -629,6 +860,12 @@ Error:
 struct writer_result
 schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
 {
+  // batch_active_masks holds one entry per epoch of a batch, and the slot's
+  // pool region holds one epoch each. A failed kick can leave the batch full
+  // without resetting, and counting another epoch would run past both.
+  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+    return writer_error();
+
   if (run_epoch_lod(e, ctx))
     return writer_error();
 
@@ -641,12 +878,12 @@ schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
   // ordering means this subsumes per-epoch ready signals. The drain-after-kick
   // path releases inside schedule_flush_accumulated, so skip it here to avoid
   // re-recording the same edge on the same stream.
-  if (e->sched.depth != SCHEDULE_DRAIN_AFTER_KICK)
+  if (e->sched.mode != SCHEDULE_DRAIN_AFTER_KICK)
     CHECK(Error,
           gpu_pool_release_produce(
             &e->pools.p, e->sched.fill, e->streams.compute) == 0);
 
-  if (e->sched.depth == SCHEDULE_DRAIN_AFTER_KICK) {
+  if (e->sched.mode == SCHEDULE_DRAIN_AFTER_KICK) {
     struct writer_result r = schedule_flush_accumulated(e, ctx);
     // Host-ordered re-acquire: the drain above host-completed this slot's
     // D2H, so no device wait is queued.
@@ -676,6 +913,8 @@ Error:
 int
 schedule_add_partial_epoch(struct stream_engine* e, struct stream_context* ctx)
 {
+  if (e->sched.accumulated >= e->sched.epochs_per_batch)
+    return 1;
   if (run_epoch_lod(e, ctx))
     return 1;
   e->sched.accumulated++;
@@ -687,12 +926,12 @@ schedule_drain_kicked(struct stream_engine* e, struct stream_context* ctx)
 {
   for (int i = 0; i < 2; ++i) {
     int pick = -1;
-    uint64_t pick_seq = UINT64_MAX;
+    uint64_t pick_generation = UINT64_MAX;
     for (int fc = 0; fc < 2; ++fc) {
       struct schedule_slot* s = &e->sched.slot[fc];
-      if (s->kicked && s->kick_seq < pick_seq) {
+      if (s->kicked && s->generation < pick_generation) {
         pick = fc;
-        pick_seq = s->kick_seq;
+        pick_generation = s->generation;
       }
     }
     if (pick < 0)

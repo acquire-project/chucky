@@ -70,6 +70,11 @@ extern "C"
     if (s)
       cuStreamDestroy(s);
   }
+  static inline void cu_stream_sync(CUstream s)
+  {
+    if (s)
+      cuStreamSynchronize(s);
+  }
   static inline void cu_mem_free(CUdeviceptr p)
   {
     if (p)

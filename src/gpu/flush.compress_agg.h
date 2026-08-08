@@ -17,20 +17,16 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
 void
 compress_agg_destroy_shared(struct compress_agg_stage* stage);
 
-// Per-array slice: aggregate layouts, shard_state, tail buffers. gate_ord
-// arms the tail-generation gate when page-aligned; NULL skips it (multiarray
-// sync-flush path host-orders the tail uploads via immediate drains).
+// Per-array slice: aggregate layouts, shard_state, and tail buffers.
 int
 compress_agg_array_init(struct compress_agg_array* ar,
-                        const struct computed_stream_layouts* cl,
-                        struct gpu_ordering* gate_ord,
-                        CUstream gate_stream);
+                        const struct computed_stream_layouts* cl);
 
 void
 compress_agg_array_destroy(struct compress_agg_array* ar);
 
 // Single-array convenience: shared + array init from one layout, with the
-// tail gate armed and the shard-capacity table uploaded.
+// shard-capacity table uploaded.
 int
 compress_agg_init(struct compress_agg_stage* stage,
                   const struct computed_stream_layouts* cl,
@@ -51,16 +47,6 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
                              size_t* codec_bytes,
                              size_t* aggregate_device_bytes,
                              size_t* aggregate_host_bytes);
-
-// One batch's host-computed aggregation geometry, threaded through the kick
-// phases below. The phases are payload only — the acquires, the tail-gate
-// arm, and the releases between them are placed by the schedule
-// (schedule_compress_agg_kick).
-struct compress_agg_plan
-{
-  struct batch_aggregate_layout layout;
-  uint32_t per_lod_n_active[LOD_MAX_LEVELS];
-};
 
 // Host-side batch planning plus LUT/shard-table uploads. No pool access.
 int

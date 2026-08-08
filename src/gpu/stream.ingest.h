@@ -36,31 +36,41 @@ ingest_collect_scatter_timing(struct staging_state* stage,
 void
 ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m);
 
+// Where one dispatch's data goes in the chunk pool.
+struct scatter_destination
+{
+  struct gpu_pool_view first_epoch; // region for the epoch holding the first
+                                    // element, within the produce generation
+                                    // the caller acquired
+  size_t epoch_bytes;               // one epoch's region in the pool
+  uint32_t epochs; // regions the caller has, counting from first_epoch
+};
+
 // H2D transfer + scatter into chunk pool.
-// pool_epoch: acquired view of the target epoch's chunk region in the pool.
-// cursor: in/out, incremented by elements transferred.
+// first_element: append-cursor position of the buffer's first element.
 // Returns 0 on success, non-zero on error.
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
                         const struct tile_stream_layout_gpu* layout_gpu,
-                        struct gpu_pool_view pool_epoch,
-                        uint64_t* cursor,
+                        struct scatter_destination dst,
+                        uint64_t first_element,
                         size_t bpe,
                         CUstream h2d,
                         CUstream compute);
 
 // H2D transfer + copy to linear epoch buffer for LOD.
 // L0 tiling is deferred to run_lod.
-// d_linear: device pointer to the linear epoch buffer.
+// d_linear: device pointer to the linear epoch buffer, holding one epoch.
 // epoch_elements: elements per epoch (layout.epoch_elements).
-// cursor: in/out, incremented by elements transferred.
+// first_element: append-cursor position of the buffer's first element. The
+// staged bytes may not cross an epoch boundary.
 // Returns 0 on success, non-zero on error.
 int
 ingest_dispatch_multiscale(struct staging_state* stage,
                            CUdeviceptr d_linear,
                            uint64_t epoch_elements,
-                           uint64_t* cursor,
+                           uint64_t first_element,
                            size_t bpe,
                            CUstream h2d,
                            CUstream compute);
