@@ -291,6 +291,72 @@ Fail:
   return 1;
 }
 
+// ---- Test: one array's failure leaves the others alone ----
+
+// The flag that stops a stream taking data is per array. A sink that fails must
+// not cost the other arrays their output, which is complete: a switch drains
+// the array it leaves, and this path drains after every kick.
+static int
+test_one_array_failure_spares_the_others(void)
+{
+  log_info("=== test_one_array_failure_spares_the_others ===");
+
+  struct test_shard_sink sink0, sink1, sink2;
+  test_sink_init_1(&sink0);
+  // A shard too small to hold anything: array 1's every write fails.
+  test_sink_init(&sink1, SINK_N_SHARDS, 1);
+  test_sink_init_1(&sink2);
+
+  struct dimension d0[2], d1[2], d2[2];
+  struct tile_stream_configuration configs[] = {
+    make_2d_config(d0, dtype_u16),
+    make_2d_config(d1, dtype_u16),
+    make_2d_config(d2, dtype_u16),
+  };
+  // One epoch per batch, so array 1's own append fills a batch and hits its
+  // sink. Without this the failure only lands later, during the switch away.
+  configs[1].epochs_per_batch = 1;
+  struct shard_sink* sinks[] = { &sink0.base, &sink1.base, &sink2.base };
+
+  struct multiarray_tile_stream_gpu* ms =
+    multiarray_tile_stream_gpu_create(3, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+  CHECK(Fail,
+        write_fill(w, 0, 8, sizeof(uint16_t), 1).error == multiarray_writer_ok);
+  // Array 1's batch is one epoch, so this append kicks and its sink refuses.
+  CHECK(Fail,
+        write_fill(w, 1, 8, sizeof(uint16_t), 2).error != multiarray_writer_ok);
+  // Switching away from the failed array still works, and array 2 takes data.
+  CHECK(Fail,
+        write_fill(w, 2, 8, sizeof(uint16_t), 3).error == multiarray_writer_ok);
+
+  // The flush reports array 1's failure.
+  CHECK(Fail, w->flush(w).error != multiarray_writer_ok);
+
+  // Arrays 0 and 2 still finalized theirs.
+  CHECK(Fail, sink0.finalize_count > 0);
+  CHECK(Fail, sink2.finalize_count > 0);
+  CHECK(Fail, test_sink_shard_count(&sink0) > 0);
+  CHECK(Fail, test_sink_shard_count(&sink2) > 0);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  test_sink_free(&sink2);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  test_sink_free(&sink2);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- Test: same array repeated ----
 
 static int
@@ -1410,6 +1476,7 @@ main(int ac, char* av[])
   ret |= test_switch_at_epoch_boundary();
   ret |= test_switch_mid_epoch_rejected();
   ret |= test_flush_all();
+  ret |= test_one_array_failure_spares_the_others();
   ret |= test_same_array_repeated();
   ret |= test_content_isolation();
   ret |= test_cross_validate_single_array();

@@ -71,8 +71,10 @@ struct stream_metrics
   // the preceding batch's page-aligned tail state to become host-ready.
   struct stream_metric tail_gate;
 
-  float max_append_ms;       // longest single append
-  size_t peak_pending_bytes; // high-water mark of bytes awaiting write
+  float max_append_ms; // longest single append
+  // High-water mark of bytes awaiting write, read once per staging buffer
+  // handed to the device rather than continuously.
+  size_t peak_pending_bytes;
 
   // How long individual appends took, as counts per time bucket. A caller
   // asking whether it can keep up needs the slow tail, not the average, and
@@ -102,8 +104,9 @@ struct tile_stream_configuration
   uint32_t
     target_batch_bytes; // target uncompressed bytes per batch (default 512 MiB)
   float metadata_update_interval_s;
-  size_t backpressure_bytes; // 0 = disabled; >0 = stall at epoch boundaries
-                             // when sink->pending_bytes exceeds this watermark
+  size_t backpressure_bytes; // 0 = disabled; >0 = stall after handing a
+                             // staging buffer to the device when
+                             // sink->pending_bytes exceeds this watermark
   int max_threads;           // 0 = OpenMP default
 };
 
@@ -116,6 +119,8 @@ struct tile_stream_status
   enum dtype dtype;
   struct codec_config codec;
   size_t codec_batch_size;
+  // Epochs dispatched into the batch being filled. The append cursor can be
+  // ahead of this, by whatever is still in the staging buffer.
   uint32_t batch_accumulated;
   int pool_current;
   int flush_pending;

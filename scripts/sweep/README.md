@@ -90,6 +90,10 @@ bump it.
 
 ### Version history
 
+- **5** — The writer groups appends into one transfer per staging buffer, so
+  the pending-bytes high-water mark and the backpressure wait are sampled far
+  less often. `peak_pending_mib`, `backpressure_ms` and `backpressure_count`
+  retired.
 - **4** — Discard sink reports a fixed 4096-byte shard alignment, so a sweep
   with no output path measures the page-aligned pipeline. No timing comparable
   across this bump.

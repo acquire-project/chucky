@@ -63,7 +63,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 4
+CURRENT_VERSION = 5
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -72,6 +72,7 @@ _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
 RETIRED_AT = {
     2: ("kick_sync_ms", "kick_sync_count"),
     3: ("tail_gate_ms", "tail_gate_count"),
+    5: ("peak_pending_mib", "backpressure_ms", "backpressure_count"),
 }
 
 
@@ -101,7 +102,21 @@ def _migrate_3_to_4(data: dict) -> None:
     pass
 
 
-_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4}
+def _migrate_4_to_5(data: dict) -> None:
+    # The writer stopped starting a transfer per append (#173), so the
+    # pending-bytes high-water mark and the backpressure wait are sampled once
+    # per staging buffer instead of once per epoch. The counts are far apart for
+    # a reason that has nothing to do with the hardware, and neither can be
+    # converted, so this only advances the file version.
+    pass
+
+
+_MIGRATIONS = {
+    1: _migrate_1_to_2,
+    2: _migrate_2_to_3,
+    3: _migrate_3_to_4,
+    4: _migrate_4_to_5,
+}
 
 
 def migrate_run(run: dict) -> dict:
@@ -128,8 +143,10 @@ def migrate_results(data: dict) -> dict:
     """
     version = data.get("version", 1)
     data.setdefault("migrated_from", version)
-    while version < CURRENT_VERSION and version in _MIGRATIONS:
-        _MIGRATIONS[version](data)
+    while version < CURRENT_VERSION:
+        migrate = _MIGRATIONS.get(version)
+        if migrate:
+            migrate(data)
         version += 1
         data["version"] = version
     for run in data.get("runs", []):

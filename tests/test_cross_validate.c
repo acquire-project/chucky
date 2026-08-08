@@ -277,6 +277,114 @@ Fail:
   return 1;
 }
 
+// A staging buffer that is not a whole number of epochs: every dispatch after
+// the first starts partway into an epoch and still covers several, so the
+// scatter runs once per epoch from an unaligned start (#173). Epochs are 9
+// elements, so a slice boundary lands on an odd element and the scatter's
+// combined load starts partway into a word.
+static int
+test_cross_validate_dispatch_spans_epochs(void)
+{
+  log_info("=== test_cross_validate_dispatch_spans_epochs ===");
+
+  struct mem_sink gpu_sink, cpu_sink;
+  ms_init(&gpu_sink);
+  ms_init(&cpu_sink);
+
+  struct dimension dims[] = {
+    { .size = 512,
+      .chunk_size = 1,
+      .chunks_per_shard = 512,
+      .storage_position = 0 },
+    { .size = 3,
+      .chunk_size = 3,
+      .chunks_per_shard = 1,
+      .storage_position = 1 },
+    { .size = 3,
+      .chunk_size = 3,
+      .chunks_per_shard = 1,
+      .storage_position = 2 },
+  };
+
+  struct tile_stream_gpu* gpu = NULL;
+  struct tile_stream_cpu* cpu = NULL;
+  uint16_t* data = NULL;
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 512,
+  };
+
+  gpu = tile_stream_gpu_create(&config, &gpu_sink.base);
+  CHECK(Fail, gpu);
+
+  const struct tile_stream_layout* lay = tile_stream_gpu_layout(gpu);
+  CHECK(Fail, lay->epoch_elements == 9);
+  uint64_t total_elements = 512 * lay->epoch_elements;
+  data = make_input(total_elements);
+  CHECK(Fail, data);
+
+  log_info("  epoch_elements=%lu total=%lu",
+           (unsigned long)lay->epoch_elements,
+           (unsigned long)total_elements);
+
+  {
+    struct writer* w = tile_stream_gpu_writer(gpu);
+    size_t bytes = total_elements * sizeof(uint16_t);
+    struct slice sl = { .beg = data, .end = (const char*)data + bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == 0);
+    r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  cpu = tile_stream_cpu_create(&config, &cpu_sink.base);
+  CHECK(Fail, cpu);
+
+  {
+    struct writer* w = tile_stream_cpu_writer(cpu);
+    size_t bytes = total_elements * sizeof(uint16_t);
+    struct slice sl = { .beg = data, .end = (const char*)data + bytes };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == 0);
+    r = writer_flush(w);
+    CHECK(Fail, r.error == 0);
+  }
+
+  CHECK(Fail, compare_shards(&gpu_sink, &cpu_sink, "spans_epochs") == 0);
+  CHECK(Fail, tile_stream_gpu_cursor(gpu) == total_elements);
+  // compare_shards passes on two empty sinks, so hold it to a byte count. A
+  // shard carries a chunk index as well as the data, so it is the larger.
+  {
+    size_t written = 0;
+    for (int si = 0; si < MAX_SHARDS; ++si)
+      written += gpu_sink.w[0][si].size;
+    log_info("  shard bytes=%zu", written);
+    CHECK(Fail, written > total_elements * sizeof(uint16_t));
+  }
+
+  free(data);
+  tile_stream_gpu_destroy(gpu);
+  tile_stream_cpu_destroy(cpu);
+  ms_free(&gpu_sink);
+  ms_free(&cpu_sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_gpu_destroy(gpu);
+  tile_stream_cpu_destroy(cpu);
+  ms_free(&gpu_sink);
+  ms_free(&cpu_sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 // Multi-shard: dims don't divide evenly into chunks, multiple shards.
 static int
 test_cross_validate_multishard(void)
@@ -1065,6 +1173,8 @@ Fail:
 }
 
 RUN_GPU_TESTS({ "cross_validate_basic", test_cross_validate_basic },
+              { "cross_validate_dispatch_spans_epochs",
+                test_cross_validate_dispatch_spans_epochs },
               { "cross_validate_multishard", test_cross_validate_multishard },
               { "cross_validate_lod", test_cross_validate_lod },
               { "cross_validate_lod_dim0", test_cross_validate_lod_dim0 },

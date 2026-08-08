@@ -28,9 +28,10 @@ struct pool_state
 // pool payloads — non-init code reaches them through d_pool/h_pool only.
 struct staging_slot
 {
-  void* h_in;              // pinned host WC, size = buffer_capacity_bytes
-  CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
-  CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
+  void* h_in;          // pinned host, size = buffer_capacity_bytes
+  CUdeviceptr d_in;    // device, size = buffer_capacity_bytes plus the room the
+                       // scatter reads past its source
+  CUevent t_h2d_start; // recorded before H2D memcpy (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
   int h2d_pending;         // dispatched, interval not yet folded into metrics
 };
@@ -280,6 +281,12 @@ struct stream_context
   uint64_t cursor_elements;
   uint64_t total_element_limit; // configured stream length; 0 = unbounded
   size_t shard_alignment;       // from sink; 0 = no alignment
+
+  // A dispatch that fails partway leaves the epochs it transferred uncounted,
+  // and nothing can un-enqueue them, so this array's cursor no longer says
+  // where data belongs and it stops taking any. Per array: the other arrays of
+  // a multiarray stream are unaffected and still close out normally.
+  int append_failed;
 };
 
 // Shared GPU resources — constant memory, allocated once.
@@ -393,6 +400,14 @@ struct writer_result
 stream_append_body(struct stream_engine* e,
                    struct stream_context* ctx,
                    struct slice input);
+
+// Hand whatever staging holds to the device and count into the batch every
+// epoch that completes. The append cursor runs ahead of the device between
+// dispatches, so anything reading it as the position of delivered data — flush,
+// an array switch — has to call this first. Staging is engine-wide, so ctx must
+// be the array that filled it.
+struct writer_result
+stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx);
 
 // Flush the stream: partial epoch, accumulated batch, partial append
 // accumulators, finalize shards, update metadata.
