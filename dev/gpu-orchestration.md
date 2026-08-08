@@ -10,7 +10,14 @@ using chucky are in `docs/`.
 ## Terms
 
 - **Chunk** — the smallest block of data compressed and stored on its own.
-- **Epoch** — one full set of chunks covering the array once.
+- **Append dimension** — a dimension the stream grows along, outermost in
+  storage order. These are the leading dimensions whose chunk size is one, and
+  there is always at least one of them; `dims_n_append` holds the exact rule,
+  including how a downsampled dimension shortens the run.
+- **Epoch** — one chunk-deep layer of the array, spanning the full extent of
+  every dimension that is not an append dimension. Its chunks all fill at the
+  same time, which is what makes the layer the smallest thing that can go
+  downstream to be compressed.
 - **Batch** — the epochs compressed and gathered together, `epochs_per_batch`
   of them.
 - **Append** — one call handing data to the writer. Appends accumulate in the
