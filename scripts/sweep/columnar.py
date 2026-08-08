@@ -20,11 +20,12 @@ from collections import Counter
 # panel matches runs between sweeps by it.
 EXPLORER_OMITS = ("id",)
 
-# What sweep.py already records, so this only guards against a future sweep
-# writing full float64 text. Cutting deeper is tempting — four digits is another
-# 30 KiB off the overview — but the movers panel reports differences smaller
-# than that, and at four digits some of them round away or change sign.
-SIGNIFICANT_DIGITS = 6
+# About what the benchmarks can actually resolve, and more than any page shows.
+# Keeping the digits below this only adds bytes gzip cannot squeeze, since they
+# look like noise to it. It does move the movers panel, which compares numbers
+# far finer than four digits — but those comparisons were reporting measurement
+# noise, so losing them is the point rather than a cost.
+SIGNIFICANT_DIGITS = 4
 
 
 class StringTable:

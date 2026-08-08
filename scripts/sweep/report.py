@@ -34,6 +34,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -155,6 +157,10 @@ def main():
                     help="Output directory (a path ending in .html names the overview page)")
     ap.add_argument("--machines", type=Path, default=None,
                     help="Machine registry TOML (default: machines.toml beside the results)")
+    ap.add_argument("--serve", nargs="?", type=int, const=8000, default=None,
+                    metavar="PORT",
+                    help="Serve the site after writing it (default port 8000). The pages "
+                         "fetch their data, so they need this rather than a file:// path.")
     args = ap.parse_args()
 
     paths: list[Path] = list(args.input or [])
@@ -186,6 +192,23 @@ def main():
     write_page(OVERVIEW_TEMPLATE, out_dir / overview_name)
     write_page(EXPLORER_TEMPLATE, out_dir / "explore.html")
     write_data(loaded, registry, out_dir / "data")
+
+    if args.serve is not None:
+        serve(out_dir, overview_name, args.serve)
+
+
+def serve(out_dir: Path, overview_name: str, port: int) -> None:
+    handler = partial(SimpleHTTPRequestHandler, directory=str(out_dir))
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError as e:
+        raise SystemExit(f"Cannot serve on port {port}: {e}")
+    print(f"\nServing {out_dir} at http://127.0.0.1:{port}/{overview_name}\n"
+          f"Ctrl-C to stop.", file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
 
 
 if __name__ == "__main__":

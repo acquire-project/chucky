@@ -14,10 +14,11 @@ sweep in `explore.html`.
 ## Generating the site
 
 ```sh
-uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
-python3 -m http.server -d _site      # then open http://localhost:8000/
+uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
+That writes the site and serves it at http://127.0.0.1:8000/index.html. Pass a
+port to `--serve` to use another one, or drop the flag to only write the files.
 Run the command again after you add or change a results file.
 
 The pages are code only. Their data is written beside them and fetched at load:
@@ -31,10 +32,14 @@ The pages are code only. Their data is written beside them and fetched at load:
 So the explorer downloads one sweep instead of all of them, and adding a sweep
 leaves the other sweep files untouched for anything holding a cached copy. The
 cost is that the pages have to be served over http — opening `_site/index.html`
-from disk gets you an empty page, because the browser refuses the fetches.
+from disk gets you an empty page, because the browser refuses the fetches. That
+is what `--serve` is for.
 
 Inside those files the runs are stored as columns rather than one object per
 run, with the text in a shared table (`columnar.py`). The pages undo it on load.
+Floats are cut to four significant figures, which is finer than any page prints
+and about what the benchmarks resolve. `report.py` unpacks every sweep it packs
+and refuses to write one the pages would read back differently.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
