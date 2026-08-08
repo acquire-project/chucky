@@ -62,13 +62,16 @@ def validate_results(data: dict) -> ResultsFile:
 # when a metric is renamed, removed, or changes meaning; adding one does not
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present.
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
 
 # Keys whose value cannot be recovered, by the version that retired them.
-RETIRED_AT = {2: ("kick_sync_ms", "kick_sync_count")}
+RETIRED_AT = {
+    2: ("kick_sync_ms", "kick_sync_count"),
+    3: ("tail_gate_ms", "tail_gate_count"),
+}
 
 
 def _migrate_1_to_2(data: dict) -> None:
@@ -81,7 +84,15 @@ def _migrate_1_to_2(data: dict) -> None:
                 stages[new_name] = stages.pop(old_name)
 
 
-_MIGRATIONS = {1: _migrate_1_to_2}
+def _migrate_2_to_3(data: dict) -> None:
+    # `tail_gate` now measures the compression-to-aggregation delay while the
+    # host coordinator waits for prior tail readiness. The value itself cannot
+    # be converted, so the migration only advances the file version; RETIRED_AT
+    # prevents older values from being compared with the new measurement.
+    pass
+
+
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
 
 
 def migrate_run(run: dict) -> dict:
