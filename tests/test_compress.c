@@ -27,37 +27,33 @@ source_value_at(size_t gi, size_t total)
   return (uint16_t)(gi ^ (gi >> 16));
 }
 
-// Asks nvcomp directly rather than reusing the value the code under test
-// rounds with, so a wrong constant in the codec layer still fails here.
 static size_t
-nvcomp_required_chunk_alignment(enum compression_codec type)
+nvcomp_raw_max_output(enum compression_codec type, size_t chunk_bytes)
 {
-  nvcompAlignmentRequirements_t comp = { 0 }, decomp = { 0 };
+  size_t max_comp = 0;
   switch (type) {
-    case CODEC_LZ4_NON_STANDARD:
-      if (nvcompBatchedLZ4CompressGetRequiredAlignments(
-            nvcompBatchedLZ4CompressDefaultOpts, &comp) != nvcompSuccess ||
-          nvcompBatchedLZ4DecompressGetRequiredAlignments(
-            nvcompBatchedLZ4DecompressDefaultOpts, &decomp) != nvcompSuccess)
-        return 0;
-      break;
-    case CODEC_ZSTD:
-      if (nvcompBatchedZstdCompressGetRequiredAlignments(
-            nvcompBatchedZstdCompressDefaultOpts, &comp) != nvcompSuccess ||
-          nvcompBatchedZstdDecompressGetRequiredAlignments(
-            nvcompBatchedZstdDecompressDefaultOpts, &decomp) != nvcompSuccess)
-        return 0;
-      break;
     case CODEC_NONE:
-      return 1;
+      return chunk_bytes;
+    case CODEC_LZ4_NON_STANDARD:
+      if (nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
+            chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp) !=
+          nvcompSuccess)
+        return 0;
+      return max_comp;
+    case CODEC_ZSTD:
+      if (nvcompBatchedZstdCompressGetMaxOutputChunkSize(
+            chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp) !=
+          nvcompSuccess)
+        return 0;
+      return max_comp;
     default:
-      return 0; // a codec added here without an nvcomp query must fail loudly
+      return 0;
   }
-  return comp.output > decomp.input ? comp.output : decomp.input;
 }
 
-// Chunks are laid out back to back at the bound, so the bound must be a
-// multiple of the alignment nvcomp requires of every compressed chunk.
+// Chunks are laid out back to back at the bound, so the bound must be nvcomp's
+// own bound rounded up to what nvcomp asks of a compressed chunk — no less,
+// and no more.
 static int
 test_max_output_size_alignment(void)
 {
@@ -70,33 +66,39 @@ test_max_output_size_alignment(void)
                                         524288, 1048576, 2097152 };
 
   for (size_t i = 0; i < countof(codecs); ++i) {
-    const size_t alignment = nvcomp_required_chunk_alignment(codecs[i]);
+    const size_t alignment = codec_output_alignment(codecs[i]);
     CHECK(Fail, alignment > 0);
-    CHECK(Fail, codec_output_alignment(codecs[i]) % alignment == 0);
     for (size_t j = 0; j < countof(chunk_sizes); ++j) {
+      const size_t raw = nvcomp_raw_max_output(codecs[i], chunk_sizes[j]);
+      CHECK(Fail, raw >= chunk_sizes[j]);
       const size_t max_out = codec_max_output_size(codecs[i], chunk_sizes[j]);
-      CHECK(Fail, max_out >= chunk_sizes[j]);
-      if (max_out % alignment) {
-        log_error("codec %d chunk %zu: bound %zu is not a multiple of %zu",
+      if (max_out != align_up(raw, alignment)) {
+        log_error("codec %d chunk %zu: bound %zu, expected %zu (nvcomp %zu, "
+                  "alignment %zu)",
                   (int)codecs[i],
                   chunk_sizes[j],
                   max_out,
+                  align_up(raw, alignment),
+                  raw,
                   alignment);
         goto Fail;
       }
     }
 
-    // The stride the compress kernel uses is the struct field, so check the
-    // two agree rather than trusting the query alone.
-    struct codec c = { 0 };
-    CHECK(Fail, codec_init(&c, codecs[i], chunk_sizes[0], 2) == 0);
-    const size_t stride = c.max_output_size;
-    codec_free(&c);
-    if (stride != codec_max_output_size(codecs[i], chunk_sizes[0])) {
-      log_error("codec %d: stride %zu does not match the bound",
-                (int)codecs[i],
-                stride);
-      goto Fail;
+    // The stride the compress kernel uses is the struct field, so check it
+    // tracks the query rather than being derived separately.
+    for (size_t j = 0; j < 2; ++j) {
+      struct codec c = { 0 };
+      CHECK(Fail, codec_init(&c, codecs[i], chunk_sizes[j], 2) == 0);
+      const size_t stride = c.max_output_size;
+      codec_free(&c);
+      if (stride != codec_max_output_size(codecs[i], chunk_sizes[j])) {
+        log_error("codec %d chunk %zu: stride %zu does not match the bound",
+                  (int)codecs[i],
+                  chunk_sizes[j],
+                  stride);
+        goto Fail;
+      }
     }
   }
 

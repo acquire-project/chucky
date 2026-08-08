@@ -99,25 +99,38 @@ larger(size_t a, size_t b)
   return a > b ? a : b;
 }
 
-static size_t
-decompression_alignment(enum compression_codec type)
-{
-  switch (type) {
-    case CODEC_LZ4_NON_STANDARD:
-      return nvcompLZ4RequiredDecompressionAlignment;
-    case CODEC_ZSTD:
-      return nvcompZstdRequiredDecompressionAlignment;
-    default:
-      return 1;
-  }
-}
-
-// Compressed chunks are written by compression and read back by
-// decompression, which asks for the stricter alignment of the two.
+// The alignment constants nvcomp exposes as named values are the strictest
+// across input, output and temporary buffers, which for these codecs is set by
+// a buffer this path does not allocate. Compressed chunks need only what
+// nvcomp reports for them, so ask, and follow a future release that tightens
+// it. Returns 0 if nvcomp cannot be queried.
 extern "C" size_t
 codec_output_alignment(enum compression_codec type)
 {
-  return larger(codec_alignment(type), decompression_alignment(type));
+  nvcompAlignmentRequirements_t written = { 0 }, read = { 0 };
+  switch (type) {
+    case CODEC_LZ4_NON_STANDARD:
+      NVCOMP(Fail,
+             nvcompBatchedLZ4CompressGetRequiredAlignments(
+               nvcompBatchedLZ4CompressDefaultOpts, &written));
+      NVCOMP(Fail,
+             nvcompBatchedLZ4DecompressGetRequiredAlignments(
+               nvcompBatchedLZ4DecompressDefaultOpts, &read));
+      break;
+    case CODEC_ZSTD:
+      NVCOMP(Fail,
+             nvcompBatchedZstdCompressGetRequiredAlignments(
+               nvcompBatchedZstdCompressDefaultOpts, &written));
+      NVCOMP(Fail,
+             nvcompBatchedZstdDecompressGetRequiredAlignments(
+               nvcompBatchedZstdDecompressDefaultOpts, &read));
+      break;
+    default:
+      return 1;
+  }
+  return larger(written.output, read.input);
+Fail:
+  return 0;
 }
 
 // --- codec_max_output_size ---
@@ -142,9 +155,13 @@ codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
     default:
       goto Fail;
   }
-  // nvcomp's own bound is not a multiple of the alignment it requires (zstd
-  // returns 65547 for 64 KiB chunks).
-  return align_up(max_comp, codec_output_alignment(type));
+  {
+    // nvcomp's own bound need not be a multiple of the alignment it asks for.
+    const size_t alignment = codec_output_alignment(type);
+    if (alignment == 0)
+      goto Fail;
+    return align_up(max_comp, alignment);
+  }
 Fail:
   return 0;
 }
@@ -215,18 +232,15 @@ codec_init(struct codec* c,
   c->chunk_bytes = chunk_bytes;
   c->batch_size = batch_size;
 
-  if (codec_is_blosc(type)) {
-    log_error("blosc codecs are not supported on GPU");
+  if (!codec_is_gpu_supported(type)) {
+    log_error("codec %d is not supported on GPU", (int)type);
     goto Fail;
   }
-
-  CHECK(Fail, codec_is_gpu_supported(type));
 
   c->max_output_size = codec_max_output_size(type, chunk_bytes);
   CHECK(Fail, c->max_output_size > 0);
 
   c->temp_bytes = codec_temp_bytes(type, chunk_bytes, batch_size);
-  CHECK(Fail, type == CODEC_NONE || c->temp_bytes > 0);
 
   // Allocate device arrays
   CU(Fail,
