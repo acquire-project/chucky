@@ -152,10 +152,9 @@ Error:
 }
 
 // Sized bulk copies for the drained slot. Goes on drain_stream, never
-// d2h_stream — sharing deadlocks against the tail gate (see
-// gpu_streams.drain). The caller's host poll of the chunk index already
-// proves the copy source is stable. Returns the dispatch error without
-// releasing anything — the schedule owns the releases.
+// d2h_stream. The caller's host poll of the chunk index already proves the
+// copy source is stable. Returns the dispatch error without releasing
+// anything — the schedule owns the releases.
 int
 d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
@@ -199,9 +198,8 @@ d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
   return dispatch_err;
 }
 
-// Deliver the drained host slot to the sink and upload the next batch's
-// tail state. `shards` is the tail pool's acquired payload. No tail-gate
-// release here — the schedule publishes after this returns.
+// Deliver the drained host slot to the sink and synchronously upload the tail
+// state consumed by the next page-aligned aggregation.
 struct writer_result
 d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
@@ -290,8 +288,8 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     }
 
     // SYNC_MEMOPS on the destinations guarantees these copies have
-    // completed at the device before they return, so the schedule's
-    // tail-gate publish cannot outrun them.
+    // completed at the device before they return. Returning from this function
+    // is therefore the coordinator's authoritative tail-ready transition.
     if (shards && shards->total_shards > 0 && page_size > 0) {
       CU(Error,
          cuMemcpyHtoD((CUdeviceptr)shards->d_tail_bytes,

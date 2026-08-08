@@ -174,6 +174,9 @@ target_compile_definitions(
 )
 
 add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driver CUDA::cudart_static test_zarr_helpers stream Zstd::Zstd test_platform test_shard_verify test_voxel_encode)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_zarr_fs_sink PROPERTIES TIMEOUT 120)
+endif()
 add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
@@ -185,7 +188,7 @@ add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platfo
 
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
 add_gpu_test_exe(test_compress_agg test_compress_agg.c LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_gpu_helpers index_ops_util test_shard_verify)
-add_gpu_test_exe(test_batch        test_batch.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
+add_gpu_test_exe(test_batch        test_batch.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers test_shard_verify)
 add_gpu_test_exe(test_d2h_deliver  test_d2h_deliver.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink test_gpu_helpers index_ops_util)
 add_gpu_test_exe(test_flush_orch  test_flush_orchestration.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink test_gpu_helpers)
 add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_log)

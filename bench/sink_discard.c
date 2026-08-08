@@ -32,11 +32,23 @@ discard_shard_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return &s->writer.base;
 }
 
+// Fixed rather than the running platform's page size, so numbers taken on
+// machines with different page sizes stay comparable.
+#define DISCARD_SHARD_ALIGNMENT 4096
+
+static size_t
+discard_required_shard_alignment(const struct shard_sink* self)
+{
+  (void)self;
+  return DISCARD_SHARD_ALIGNMENT;
+}
+
 void
 discard_shard_sink_init(struct discard_shard_sink* s)
 {
   *s = (struct discard_shard_sink){
-    .base = { .open = discard_shard_open },
+    .base = { .open = discard_shard_open,
+              .required_shard_alignment = discard_required_shard_alignment },
   };
   s->writer = (struct discard_shard_writer){
     .base = { .write = discard_shard_write,

@@ -1,8 +1,11 @@
 #include "gpu/prelude.cuda.h"
+#include "gpu/stream.internal.h"
+#include "platform/platform.h"
 #include "stream.gpu.h"
 #include "stream/layouts.h"
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
+#include "test_shard_verify.h"
 #include "util/prelude.h"
 
 #include "test_runner.h"
@@ -34,6 +37,95 @@ make_src(size_t count)
   for (size_t i = 0; i < count; ++i)
     src[i] = (uint16_t)(i % 65536);
   return src;
+}
+
+static struct tile_stream_configuration
+make_coordinator_config(struct dimension* dims, enum compression_codec codec)
+{
+  uint8_t rank = dims_create(dims, "zyx", (uint64_t[]){ 0, 8, 12 });
+  dims_set_chunk_sizes(dims, rank, (uint64_t[]){ 2, 2, 3 });
+  dims[0].chunks_per_shard = 4;
+  dims_set_shard_counts(dims, rank, (uint64_t[]){ 0, 2, 2 });
+  return (struct tile_stream_configuration){
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = { .id = codec },
+    .epochs_per_batch = 1,
+  };
+}
+
+static int
+coordinator_sink_has_output(const struct test_shard_sink* sink,
+                            uint64_t expected_shards)
+{
+  uint64_t finalized = 0;
+  size_t bytes = 0;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    if (sink->writers[0][i].finalized)
+      finalized++;
+    bytes += sink->writers[0][i].size;
+  }
+  return finalized >= expected_shards && bytes > 0;
+}
+
+#define COORDINATOR_MAX_CHUNKS_PER_SHARD 64
+
+// A batch whose aggregation read a stale tail length places its first chunk
+// at the wrong offset. The shard still finalizes with a plausible byte count,
+// so the only thing that catches it is the recorded layout: every chunk must
+// begin exactly where the previous one ended.
+static int
+coordinator_shards_are_packed(const struct test_shard_sink* sink,
+                              const struct compress_agg_array* ar)
+{
+  uint64_t offsets[COORDINATOR_MAX_CHUNKS_PER_SHARD];
+  uint64_t sizes[COORDINATOR_MAX_CHUNKS_PER_SHARD];
+  uint64_t checked = 0;
+
+  for (uint64_t si = 0;
+       si < ar->total_shards && si < TEST_SHARD_SINK_MAX_SHARDS;
+       ++si) {
+    const struct test_shard_writer* w = &sink->writers[0][si];
+    if (!w->finalized)
+      continue;
+
+    const uint64_t nchunks = ar->shard[si].chunks_per_shard_total;
+    if (nchunks > COORDINATOR_MAX_CHUNKS_PER_SHARD ||
+        shard_index_parse(w->buf, w->size, nchunks, offsets, sizes)) {
+      log_error("  shard %llu: cannot read a %llu chunk index from %zu bytes",
+                (unsigned long long)si,
+                (unsigned long long)nchunks,
+                w->size);
+      return 0;
+    }
+
+    uint64_t expected_offset = 0;
+    int past_end = 0;
+    for (uint64_t k = 0; k < nchunks; ++k) {
+      // A partly filled shard leaves its trailing slots unwritten.
+      if (offsets[k] == UINT64_MAX && sizes[k] == UINT64_MAX) {
+        past_end = 1;
+        continue;
+      }
+      if (past_end || sizes[k] == 0 || offsets[k] != expected_offset) {
+        log_error("  shard %llu chunk %llu: offset %llu size %llu, "
+                  "expected offset %llu%s",
+                  (unsigned long long)si,
+                  (unsigned long long)k,
+                  (unsigned long long)offsets[k],
+                  (unsigned long long)sizes[k],
+                  (unsigned long long)expected_offset,
+                  past_end ? " (after an unwritten chunk)" : "");
+        return 0;
+      }
+      expected_offset = offsets[k] + sizes[k];
+    }
+    if (expected_offset > 0)
+      checked++;
+  }
+  return checked > 0;
 }
 
 // --- Test cases ---
@@ -540,6 +632,140 @@ Fail0:
   return 1;
 }
 
+// Hold generation 1 after submission but before drain. Generation 2 may
+// compress and reach PREPARED, but cannot aggregate until generation 1 has
+// delivered and synchronously uploaded its tail state.
+static int
+run_host_coordinator_hold(enum compression_codec codec)
+{
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 2 * 1024 * 1024);
+  sink.shard_alignment = platform_page_alignment();
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config =
+    make_coordinator_config(dims, codec);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &sink.base);
+  uint16_t* src = NULL;
+  int held = 0;
+  int ok = 0;
+  CHECK(Fail, s);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED);
+  CHECK(Fail, s->engine.sched.epochs_per_batch == 1);
+  CHECK(Fail, s->engine.compress_agg.ar.total_shards > 1);
+
+  const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
+  src = make_src(2 * epoch_elements);
+  CHECK(Fail, src);
+
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DRAIN);
+  held = 1;
+  {
+    struct slice input = { .beg = src, .end = src + 2 * epoch_elements };
+    CHECK(Fail, writer_append(tile_stream_gpu_writer(s), input).error == 0);
+  }
+
+  uint64_t generation0 = 0;
+  uint64_t generation1 = 0;
+  CHECK(Fail,
+        gpu_delivery_job_state(&s->engine.delivery, 0, &generation0) ==
+          DELIVERY_JOB_SUBMITTED);
+  CHECK(Fail,
+        gpu_delivery_job_state(&s->engine.delivery, 1, &generation1) ==
+          DELIVERY_JOB_PREPARED);
+  CHECK(Fail, generation0 == 1);
+  CHECK(Fail, generation1 == 2);
+  {
+    uint64_t submitted = 0;
+    uint64_t tail_ready = 0;
+    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
+    CHECK(Fail, submitted == 1);
+    CHECK(Fail, tail_ready == 0);
+  }
+
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
+  held = 0;
+  CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
+  {
+    uint64_t submitted = 0;
+    uint64_t tail_ready = 0;
+    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
+    CHECK(Fail, submitted == 2);
+    CHECK(Fail, tail_ready == 2);
+  }
+  CHECK(
+    Fail,
+    coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
+  ok = 1;
+
+Fail:
+  if (held && s)
+    gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&sink);
+  return ok ? 0 : 1;
+}
+
+static int
+test_host_coordinator_hold(void)
+{
+  log_info("=== test_host_coordinator_hold ===");
+  int error = 0;
+  error |= run_host_coordinator_hold(CODEC_ZSTD);
+  error |= run_host_coordinator_hold(CODEC_NONE);
+  log_info("  %s", error ? "FAIL" : "PASS");
+  return error;
+}
+
+// Force the worker-unavailable selection after construction, before any job
+// is queued. Page-aligned tail carry must remain correct on the direct,
+// drain-before-kick fallback.
+static int
+test_worker_unavailable_fallback(void)
+{
+  log_info("=== test_worker_unavailable_fallback ===");
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 2 * 1024 * 1024);
+  sink.shard_alignment = platform_page_alignment();
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config =
+    make_coordinator_config(dims, CODEC_ZSTD);
+  struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &sink.base);
+  uint16_t* src = NULL;
+  int ok = 0;
+  CHECK(Fail, s);
+
+  gpu_delivery_stop_join(&s->engine.delivery);
+  schedule_select(
+    &s->engine.sched, &s->engine.compress_agg.ar, &s->engine.delivery);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_DRAIN_BEFORE_KICK);
+
+  const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
+  src = make_src(4 * epoch_elements);
+  CHECK(Fail, src);
+  {
+    struct slice input = { .beg = src, .end = src + 4 * epoch_elements };
+    CHECK(Fail, writer_append(tile_stream_gpu_writer(s), input).error == 0);
+  }
+  CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
+  CHECK(
+    Fail,
+    coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
+  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
+  ok = 1;
+
+Fail:
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS(
   { "batch_one_epoch_stays_staged", test_batch_one_epoch_stays_staged },
   { "batch_mid_batch_after_dispatch", test_batch_mid_batch_after_dispatch },
@@ -549,4 +775,6 @@ RUN_GPU_TESTS(
   { "batch_3epochs_flush", test_batch_3epochs_flush },
   { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K },
   { "batch_failed_delivery_writes_no_shape",
-    test_batch_failed_delivery_writes_no_shape }, )
+    test_batch_failed_delivery_writes_no_shape },
+  { "host_coordinator_hold", test_host_coordinator_hold },
+  { "worker_unavailable_fallback", test_worker_unavailable_fallback }, )
