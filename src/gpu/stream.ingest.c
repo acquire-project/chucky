@@ -6,7 +6,6 @@
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
 
-#include <assert.h>
 #include <string.h>
 
 struct copy_slices
@@ -164,7 +163,7 @@ Error:
 // compute_level_layout zeroes the append dims' chunk strides and dims_n_append
 // allows a chunk size above 1 only on the first append dim. So each epoch the
 // buffer covers gets its own call against its own region of the pool.
-static void
+static int
 scatter_by_epoch(const struct tile_stream_layout* layout,
                  const struct tile_stream_layout_gpu* layout_gpu,
                  struct scatter_destination dst,
@@ -180,7 +179,9 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
   uint32_t epoch = 0;
 
   for (size_t at = 0; at < bytes;) {
-    assert(epoch < dst.epochs);
+    // The transpose below writes at d_epoch, so stepping past the regions the
+    // caller acquired would scatter into the next pool slot.
+    CHECK(Error, epoch < dst.epochs);
     const uint64_t in_epoch = element % epoch_elements;
     const uint64_t room = (epoch_elements - in_epoch) * bpe;
     const uint64_t left = bytes - at;
@@ -203,6 +204,10 @@ scatter_by_epoch(const struct tile_stream_layout* layout,
       epoch++;
     }
   }
+  return 0;
+
+Error:
+  return 1;
 }
 
 int
@@ -235,14 +240,15 @@ ingest_dispatch_scatter(struct staging_state* stage,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
-  scatter_by_epoch(layout,
-                   layout_gpu,
-                   dst,
-                   d_in,
-                   ss->dispatched_bytes,
-                   first_element,
-                   bpe,
-                   compute);
+  CHECK(Error,
+        scatter_by_epoch(layout,
+                         layout_gpu,
+                         dst,
+                         d_in,
+                         ss->dispatched_bytes,
+                         first_element,
+                         bpe,
+                         compute) == 0);
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
@@ -284,7 +290,8 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   CU(Error, cuEventRecord(st->t_start, compute));
   {
     uint64_t epoch_offset = (first_element % epoch_elements) * bpe;
-    assert(first_element % epoch_elements + elements <= epoch_elements);
+    // d_linear holds one epoch; the copy below would run past it.
+    CHECK(Error, first_element % epoch_elements + elements <= epoch_elements);
     CU(Error,
        cuMemcpyDtoDAsync(d_linear + epoch_offset,
                          gpu_pool_view_d(d_in),
