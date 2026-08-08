@@ -5,6 +5,7 @@
 #include "stream/layouts.h"
 #include "test_gpu_helpers.h"
 #include "test_shard_sink.h"
+#include "test_shard_verify.h"
 #include "util/prelude.h"
 
 #include "test_runner.h"
@@ -69,6 +70,8 @@ coordinator_sink_has_output(const struct test_shard_sink* sink,
   return finalized >= expected_shards && bytes > 0;
 }
 
+#define COORDINATOR_MAX_CHUNKS_PER_SHARD 64
+
 // A batch whose aggregation read a stale tail length places its first chunk
 // at the wrong offset. The shard still finalizes with a plausible byte count,
 // so the only thing that catches it is the recorded layout: every chunk must
@@ -77,65 +80,50 @@ static int
 coordinator_shards_are_packed(const struct test_shard_sink* sink,
                               const struct compress_agg_array* ar)
 {
+  uint64_t offsets[COORDINATOR_MAX_CHUNKS_PER_SHARD];
+  uint64_t sizes[COORDINATOR_MAX_CHUNKS_PER_SHARD];
   uint64_t checked = 0;
-  for (uint64_t si = 0; si < ar->total_shards; ++si) {
-    if (si >= TEST_SHARD_SINK_MAX_SHARDS)
-      break;
+
+  for (uint64_t si = 0;
+       si < ar->total_shards && si < TEST_SHARD_SINK_MAX_SHARDS;
+       ++si) {
     const struct test_shard_writer* w = &sink->writers[0][si];
     if (!w->finalized)
       continue;
 
     const uint64_t nchunks = ar->shard[si].chunks_per_shard_total;
-    const size_t index_bytes = nchunks * 2 * sizeof(uint64_t) + 4;
-    if (w->size < index_bytes) {
-      log_error("  shard %llu: size %zu below index %zu",
+    if (nchunks > COORDINATOR_MAX_CHUNKS_PER_SHARD ||
+        shard_index_parse(w->buf, w->size, nchunks, offsets, sizes)) {
+      log_error("  shard %llu: cannot read a %llu chunk index from %zu bytes",
                 (unsigned long long)si,
-                w->size,
-                index_bytes);
-      return 0;
-    }
-
-    const uint64_t* idx = (const uint64_t*)(w->buf + (w->size - index_bytes));
-    uint64_t expected_offset = 0;
-    uint64_t written = 0;
-    int past_end = 0;
-    for (uint64_t k = 0; k < nchunks; ++k) {
-      const uint64_t offset = idx[2 * k];
-      const uint64_t size = idx[2 * k + 1];
-      // A partly filled shard leaves its trailing slots unwritten.
-      if (offset == UINT64_MAX && size == UINT64_MAX) {
-        past_end = 1;
-        continue;
-      }
-      if (past_end) {
-        log_error("  shard %llu chunk %llu: written after an unwritten chunk",
-                  (unsigned long long)si,
-                  (unsigned long long)k);
-        return 0;
-      }
-      if (size == 0 || offset != expected_offset) {
-        log_error("  shard %llu chunk %llu: offset %llu size %llu, "
-                  "expected offset %llu",
-                  (unsigned long long)si,
-                  (unsigned long long)k,
-                  (unsigned long long)offset,
-                  (unsigned long long)size,
-                  (unsigned long long)expected_offset);
-        return 0;
-      }
-      expected_offset = offset + size;
-      written++;
-    }
-    if (written == 0)
-      continue;
-    if (expected_offset + index_bytes > w->size) {
-      log_error("  shard %llu: payload %llu overruns size %zu",
-                (unsigned long long)si,
-                (unsigned long long)expected_offset,
+                (unsigned long long)nchunks,
                 w->size);
       return 0;
     }
-    checked++;
+
+    uint64_t expected_offset = 0;
+    int past_end = 0;
+    for (uint64_t k = 0; k < nchunks; ++k) {
+      // A partly filled shard leaves its trailing slots unwritten.
+      if (offsets[k] == UINT64_MAX && sizes[k] == UINT64_MAX) {
+        past_end = 1;
+        continue;
+      }
+      if (past_end || sizes[k] == 0 || offsets[k] != expected_offset) {
+        log_error("  shard %llu chunk %llu: offset %llu size %llu, "
+                  "expected offset %llu%s",
+                  (unsigned long long)si,
+                  (unsigned long long)k,
+                  (unsigned long long)offsets[k],
+                  (unsigned long long)sizes[k],
+                  (unsigned long long)expected_offset,
+                  past_end ? " (after an unwritten chunk)" : "");
+        return 0;
+      }
+      expected_offset = offsets[k] + sizes[k];
+    }
+    if (expected_offset > 0)
+      checked++;
   }
   return checked > 0;
 }
@@ -541,7 +529,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   src = make_src(2 * epoch_elements);
   CHECK(Fail, src);
 
-  gpu_delivery_set_hold_before_drain(&s->engine.delivery, 1);
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DRAIN);
   held = 1;
   {
     struct slice input = { .beg = src, .end = src + 2 * epoch_elements };
@@ -566,7 +554,7 @@ run_host_coordinator_hold(enum compression_codec codec)
     CHECK(Fail, tail_ready == 0);
   }
 
-  gpu_delivery_set_hold_before_drain(&s->engine.delivery, 0);
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
   held = 0;
   CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
   {
@@ -584,7 +572,7 @@ run_host_coordinator_hold(enum compression_codec codec)
 
 Fail:
   if (held && s)
-    gpu_delivery_set_hold_before_drain(&s->engine.delivery, 0);
+    gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
   free(src);
   tile_stream_gpu_destroy(s);
   test_sink_free(&sink);

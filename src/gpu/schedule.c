@@ -40,6 +40,16 @@ gpu_streams_destroy(struct gpu_streams* s)
 }
 
 void
+gpu_streams_sync(const struct gpu_streams* s)
+{
+  cu_stream_sync(s->h2d);
+  cu_stream_sync(s->compute);
+  cu_stream_sync(s->compress);
+  cu_stream_sync(s->d2h);
+  cu_stream_sync(s->drain);
+}
+
+void
 gpu_streams_register(const struct gpu_streams* s, struct gpu_ordering* ord)
 {
   gpu_ordering_register_stream(ord, GPU_STREAM_H2D, s->h2d);
@@ -380,6 +390,14 @@ delivery_fail_pending_locked(struct gpu_delivery* d)
   platform_cond_broadcast(d->cv);
 }
 
+// d->mu must be held.
+static void
+delivery_park(struct gpu_delivery* d, enum delivery_hold_point at)
+{
+  while (d->hold_at == at && !d->stop)
+    platform_cond_wait(d->cv, d->mu);
+}
+
 static void
 delivery_main(void* arg)
 {
@@ -430,7 +448,6 @@ delivery_main(void* arg)
       int submit_error = submit_payload(e, ctx, fc);
       platform_mutex_lock(d->mu);
 
-      j = &d->job[fc];
       if (submit_error) {
         j->result = writer_error();
         j->state = DELIVERY_JOB_DONE;
@@ -443,10 +460,7 @@ delivery_main(void* arg)
       platform_cond_broadcast(d->cv);
     }
 
-    while (d->hold_before_drain && !d->stop)
-      platform_cond_wait(d->cv, d->mu);
-
-    j = &d->job[fc];
+    delivery_park(d, DELIVERY_HOLD_BEFORE_DRAIN);
     if (j->state != DELIVERY_JOB_SUBMITTED)
       continue;
 
@@ -462,7 +476,6 @@ delivery_main(void* arg)
     struct writer_result r = drain_payload(e, ctx, fc);
 
     platform_mutex_lock(d->mu);
-    j = &d->job[fc];
     j->result = r;
     j->state = DELIVERY_JOB_DONE;
     if (r.error) {
@@ -473,9 +486,7 @@ delivery_main(void* arg)
       platform_cond_broadcast(d->cv);
     }
 
-    // Test hook: park so a later job stays queued for teardown to run out.
-    while (d->hold && !d->stop)
-      platform_cond_wait(d->cv, d->mu);
+    delivery_park(d, DELIVERY_HOLD_AFTER_DRAIN);
   }
   platform_mutex_unlock(d->mu);
 }
@@ -611,40 +622,28 @@ gpu_delivery_stop_join(struct gpu_delivery* d)
 }
 
 void
-gpu_delivery_set_hold(struct gpu_delivery* d, int on)
+gpu_delivery_set_hold(struct gpu_delivery* d, enum delivery_hold_point at)
 {
   if (!d->thread)
     return;
   platform_mutex_lock(d->mu);
-  d->hold = on;
+  d->hold_at = at;
   platform_cond_broadcast(d->cv);
   platform_mutex_unlock(d->mu);
 }
 
-void
-gpu_delivery_set_hold_before_drain(struct gpu_delivery* d, int on)
-{
-  if (!d->thread)
-    return;
-  platform_mutex_lock(d->mu);
-  d->hold_before_drain = on;
-  platform_cond_broadcast(d->cv);
-  platform_mutex_unlock(d->mu);
-}
-
+// The mutex is gone once the worker has been joined, but the counters it
+// protected stay readable.
 enum delivery_job_state
 gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation)
 {
-  if (!d->mu) {
-    if (generation)
-      *generation = 0;
-    return DELIVERY_JOB_EMPTY;
-  }
-  platform_mutex_lock(d->mu);
+  if (d->mu)
+    platform_mutex_lock(d->mu);
   enum delivery_job_state state = d->job[fc].state;
   if (generation)
     *generation = d->job[fc].generation;
-  platform_mutex_unlock(d->mu);
+  if (d->mu)
+    platform_mutex_unlock(d->mu);
   return state;
 }
 
@@ -653,19 +652,14 @@ gpu_delivery_generations(struct gpu_delivery* d,
                          uint64_t* submitted,
                          uint64_t* tail_ready)
 {
-  if (!d->mu) {
-    if (submitted)
-      *submitted = d->submitted_generation;
-    if (tail_ready)
-      *tail_ready = d->tail_ready_generation;
-    return;
-  }
-  platform_mutex_lock(d->mu);
+  if (d->mu)
+    platform_mutex_lock(d->mu);
   if (submitted)
     *submitted = d->submitted_generation;
   if (tail_ready)
     *tail_ready = d->tail_ready_generation;
-  platform_mutex_unlock(d->mu);
+  if (d->mu)
+    platform_mutex_unlock(d->mu);
 }
 
 // --- Helpers ---
@@ -766,8 +760,6 @@ kick_batch(struct stream_engine* e,
   struct compress_agg_input in = make_compress_input(e, fc, n_epochs);
   struct schedule_slot* s = &e->sched.slot[fc];
 
-  if (e->sched.next_generation == 0)
-    e->sched.next_generation = 1;
   const uint64_t generation = e->sched.next_generation;
 
   // Shared codec-size arrays, LUTs, and shard tables can be overwritten only

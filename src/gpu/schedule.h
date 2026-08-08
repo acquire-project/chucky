@@ -44,6 +44,9 @@ gpu_streams_init(struct gpu_streams* s);
 void
 gpu_streams_destroy(struct gpu_streams* s);
 
+void
+gpu_streams_sync(const struct gpu_streams* s);
+
 // Lets debug builds check each edge's record/wait stream against its
 // declaration.
 void
@@ -117,6 +120,15 @@ struct delivery_job
   struct writer_result result;
 };
 
+// Test-only: where the worker parks so a test can observe a handoff that is
+// otherwise over before it can be read.
+enum delivery_hold_point
+{
+  DELIVERY_HOLD_NONE = 0,
+  DELIVERY_HOLD_BEFORE_DRAIN,
+  DELIVERY_HOLD_AFTER_DRAIN,
+};
+
 struct gpu_delivery
 {
   struct platform_thread* thread; // NULL = drains run inline on the producer
@@ -124,8 +136,7 @@ struct gpu_delivery
   struct platform_cond* cv;
   CUcontext cuda; // captured at init; made current on the worker
   int stop;
-  int hold;              // test-only: park after a drain for teardown coverage
-  int hold_before_drain; // test-only: park a SUBMITTED job before its drain
+  enum delivery_hold_point hold_at;
   int sticky_error;
   uint64_t submitted_generation;
   uint64_t tail_ready_generation;
@@ -167,13 +178,8 @@ gpu_delivery_join(struct gpu_delivery* d, int fc);
 void
 gpu_delivery_stop_join(struct gpu_delivery* d);
 
-// Test-only: park after a drain so another queued job survives until teardown.
 void
-gpu_delivery_set_hold(struct gpu_delivery* d, int on);
-
-// Test-only: park after submission and before drain/tail publication.
-void
-gpu_delivery_set_hold_before_drain(struct gpu_delivery* d, int on);
+gpu_delivery_set_hold(struct gpu_delivery* d, enum delivery_hold_point at);
 
 enum delivery_job_state
 gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation);

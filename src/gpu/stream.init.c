@@ -315,13 +315,6 @@ Fail:
 
 // --- Create / Destroy ---
 
-static void
-sync(CUstream stream)
-{
-  if (stream)
-    cuStreamSynchronize(stream);
-}
-
 void
 tile_stream_gpu_destroy(struct tile_stream_gpu* s)
 {
@@ -346,11 +339,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   gpu_delivery_stop_join(&s->engine.delivery);
 
   // Ensure all GPU work completes before tearing down events/memory.
-  sync(s->engine.streams.h2d);
-  sync(s->engine.streams.compute);
-  sync(s->engine.streams.compress);
-  sync(s->engine.streams.d2h);
-  sync(s->engine.streams.drain);
+  gpu_streams_sync(&s->engine.streams);
 
   // Drain queued IO before teardown frees the buffers it points into. Only
   // when we auto-flushed: a caller that flushed itself may have freed its sink.

@@ -263,21 +263,6 @@ Error:
 
 // ---- Create / Destroy ----
 
-static void
-sync_all(struct gpu_streams* streams)
-{
-  if (streams->h2d)
-    cuStreamSynchronize(streams->h2d);
-  if (streams->compute)
-    cuStreamSynchronize(streams->compute);
-  if (streams->compress)
-    cuStreamSynchronize(streams->compress);
-  if (streams->d2h)
-    cuStreamSynchronize(streams->d2h);
-  if (streams->drain)
-    cuStreamSynchronize(streams->drain);
-}
-
 void
 multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
@@ -306,7 +291,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 
   // Resolve every worker job before synchronizing streams or freeing buffers.
   gpu_delivery_stop_join(&ms->engine.delivery);
-  sync_all(&ms->engine.streams);
+  gpu_streams_sync(&ms->engine.streams);
 
   // Drain queued IO before teardown frees the buffers it points into.
   if (ms->arrays) {
