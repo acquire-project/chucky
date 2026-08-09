@@ -43,10 +43,6 @@ platform_pwrite(platform_fd fd,
 int
 platform_write(platform_fd fd, const void* buf, size_t nbytes);
 
-// Flush written bytes to the storage device. Returns 0 on success, -1 on error.
-int
-platform_fsync(platform_fd fd);
-
 // Rename from over to, replacing to if it exists. Atomic for readers of to,
 // as long as both paths are on the same filesystem. Returns 0 on success,
 // -1 on error.

@@ -27,6 +27,9 @@ static atomic_uint_least64_t fs_put_sequence;
 // Written to a sibling temporary file and renamed into place, so a reader
 // opening the key while a stream is running sees either the whole previous
 // contents or the whole new ones, never a truncated or half-written file.
+// Not flushed to the device first: shard data is not flushed either, so
+// forcing the metadata out would cost a journal commit mid-stream to make it
+// outlive the data it describes.
 static int
 fs_put(struct store* self, const char* key, const void* data, size_t len)
 {
@@ -45,7 +48,7 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
   platform_fd fd = platform_open_write(strbuf_cstr(&tmp_path), 0);
   if (fd == PLATFORM_FD_INVALID)
     goto done;
-  int written = platform_write(fd, data, len) == 0 && platform_fsync(fd) == 0;
+  int written = platform_write(fd, data, len) == 0;
   platform_close(fd);
 
   rc = !written || platform_rename_replace(strbuf_cstr(&tmp_path),

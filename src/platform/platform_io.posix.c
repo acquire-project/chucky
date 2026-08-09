@@ -80,12 +80,6 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
 }
 
 int
-platform_fsync(platform_fd fd)
-{
-  return fsync(fd) == 0 ? 0 : -1;
-}
-
-int
 platform_rename_replace(const char* from, const char* to)
 {
   return rename(from, to) == 0 ? 0 : -1;

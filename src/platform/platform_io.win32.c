@@ -86,12 +86,6 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
-int
-platform_fsync(platform_fd fd)
-{
-  return FlushFileBuffers(fd) ? 0 : -1;
-}
-
 // Windows refuses to replace a file another handle has open unless that
 // handle allowed delete sharing, which readers generally do not. A reader
 // holds the file only for the length of one read, so wait for it to close
