@@ -12,6 +12,7 @@ add_library(
     STATIC
     bench_util.c
     bench_util.h
+    bench_gpu.h
     sink_discard.c
     sink_discard.h
     sink_throttled.c
@@ -29,7 +30,6 @@ target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
     bench_util
     PUBLIC
-        stream
         stream_cpu
         zarr_array
         ngff_multiscale
@@ -42,9 +42,20 @@ target_link_libraries(
         dimension
         format_bytes
         test_data
-        CUDA::cuda_driver
     PRIVATE warnings
 )
+
+# The GPU pipeline sits behind bench_gpu.h so the rest of the benchmarks build
+# without CUDA. bench_gpu.none.c reports "built without GPU support" instead.
+if(CHUCKY_ENABLE_GPU)
+    target_sources(bench_util PRIVATE bench_gpu.cuda.c)
+    target_link_libraries(
+        bench_util
+        PUBLIC stream CUDA::cuda_driver CUDA::cudart_static
+    )
+else()
+    target_sources(bench_util PRIVATE bench_gpu.none.c)
+endif()
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES
@@ -64,5 +75,5 @@ set(BENCH_STREAM_SOURCES
 
 foreach(src IN LISTS BENCH_STREAM_SOURCES)
     string(REPLACE ".c" "" target ${src})
-    add_bench(${target} ${src} bench_util CUDA::cudart_static Zstd::Zstd)
+    add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()

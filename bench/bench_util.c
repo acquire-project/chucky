@@ -1,12 +1,10 @@
 #include "bench_util.h"
+#include "bench_gpu.h"
 #include "bench_parse.h"
 #include "bench_report.h"
 #include "bench_zarr.h"
 #include "defs.limits.h"
 #include "dimension.h"
-#include "gpu/compress.h"
-#include "gpu/lod.h"
-#include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
 #include "sink_discard.h"
 #include "sink_metering.h"
@@ -45,28 +43,28 @@ static const struct tile_stream_layout*
 bench_layout(const struct bench_handle* h)
 {
   return h->backend == BENCH_CPU ? tile_stream_cpu_layout(h->cpu)
-                                 : tile_stream_gpu_layout(h->gpu);
+                                 : bench_gpu_layout(h->gpu);
 }
 
 static struct stream_metrics
 bench_get_metrics(const struct bench_handle* h)
 {
   return h->backend == BENCH_CPU ? tile_stream_cpu_get_metrics(h->cpu)
-                                 : tile_stream_gpu_get_metrics(h->gpu);
+                                 : bench_gpu_get_metrics(h->gpu);
 }
 
 static struct writer*
 bench_writer(struct bench_handle* h)
 {
   return h->backend == BENCH_CPU ? tile_stream_cpu_writer(h->cpu)
-                                 : tile_stream_gpu_writer(h->gpu);
+                                 : bench_gpu_writer(h->gpu);
 }
 
 static uint64_t
 bench_cursor(const struct bench_handle* h)
 {
   return h->backend == BENCH_CPU ? tile_stream_cpu_cursor(h->cpu)
-                                 : tile_stream_gpu_cursor(h->gpu);
+                                 : bench_gpu_cursor(h->gpu);
 }
 
 static void
@@ -75,7 +73,7 @@ bench_destroy(struct bench_handle* h)
   if (h->backend == BENCH_CPU)
     tile_stream_cpu_destroy(h->cpu);
   else
-    tile_stream_gpu_destroy(h->gpu);
+    bench_gpu_destroy(h->gpu);
 }
 
 static void
@@ -110,8 +108,8 @@ resolve_chunk_sizing(const struct bench_config* cfg,
   if (budget == 0) {
     char buf[32];
     if (cfg->backend == BENCH_GPU) {
-      size_t free_mem = 0, total_mem = 0;
-      if (cuMemGetInfo(&free_mem, &total_mem) == CUDA_SUCCESS && free_mem > 0) {
+      size_t free_mem = bench_gpu_free_memory();
+      if (free_mem > 0) {
         budget = (size_t)((double)free_mem * budget_fraction);
         format_bytes(buf, sizeof(buf), free_mem);
         print_report(
@@ -146,16 +144,16 @@ resolve_chunk_sizing(const struct bench_config* cfg,
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
     if (cfg->backend == BENCH_GPU) {
-      advise_ok = tile_stream_gpu_advise_layout(&fit_config,
-                                                target,
-                                                cfg->min_chunk_bytes,
-                                                cfg->chunk_ratios,
-                                                budget,
-                                                cfg->min_shard_bytes,
-                                                cfg->target_concurrent_shards,
-                                                cfg->min_append_shards,
-                                                0,
-                                                &diag);
+      advise_ok = bench_gpu_advise_layout(&fit_config,
+                                          target,
+                                          cfg->min_chunk_bytes,
+                                          cfg->chunk_ratios,
+                                          budget,
+                                          cfg->min_shard_bytes,
+                                          cfg->target_concurrent_shards,
+                                          cfg->min_append_shards,
+                                          0,
+                                          &diag);
     } else {
       advise_ok = tile_stream_cpu_advise_layout(&fit_config,
                                                 target,
@@ -419,33 +417,9 @@ run_bench(const struct bench_config* cfg)
   size_t est_total_bytes = 0;
   size_t est_pinned_bytes = 0;
 
-  if (cfg->backend == BENCH_GPU) {
-    struct tile_stream_memory_info mem;
-    if (tile_stream_gpu_memory_estimate(&config, 0, &mem) == 0) {
-      est_total_chunks = mem.total_chunks;
-      est_total_bytes = mem.device_bytes;
-      est_pinned_bytes = mem.host_pinned_bytes;
-      char a[32], b[32];
-      format_bytes(a, sizeof(a), mem.device_bytes);
-      format_bytes(b, sizeof(b), mem.host_pinned_bytes);
-      print_report("  GPU memory:  %s device, %s pinned", a, b);
-      format_bytes(a, sizeof(a), mem.staging_bytes);
-      format_bytes(b, sizeof(b), mem.chunk_pool_bytes);
-      print_report("    staging:   %s   chunk_pool: %s", a, b);
-      format_bytes(a, sizeof(a), mem.compressed_pool_bytes);
-      format_bytes(b, sizeof(b), mem.aggregate_bytes);
-      print_report("    comp_pool: %s   aggregate: %s", a, b);
-      format_bytes(a, sizeof(a), mem.lod_bytes);
-      format_bytes(b, sizeof(b), mem.codec_bytes);
-      print_report("    lod:       %s   codec:     %s", a, b);
-      print_report(
-        "    chunks:    %llu/epoch, %llu total (%d LOD levels, batch=%u)",
-        (unsigned long long)mem.chunks_per_epoch,
-        (unsigned long long)mem.total_chunks,
-        mem.nlod,
-        mem.epochs_per_batch);
-    }
-  }
+  if (cfg->backend == BENCH_GPU)
+    bench_gpu_report_memory(
+      &config, &est_total_chunks, &est_total_bytes, &est_pinned_bytes);
 
   if (cfg->backend == BENCH_CPU) {
     struct tile_stream_cpu_memory_info mem;
@@ -479,7 +453,7 @@ run_bench(const struct bench_config* cfg)
   if (cfg->backend == BENCH_CPU)
     h.cpu = tile_stream_cpu_create(&config, sink);
   else
-    h.gpu = tile_stream_gpu_create(&config, sink);
+    h.gpu = bench_gpu_create(&config, sink);
   CHECK(Fail, !bench_is_null(&h));
   float init_s = platform_toc(&init_clock);
 
@@ -488,7 +462,7 @@ run_bench(const struct bench_config* cfg)
   size_t codec_batch_size = 0;
   int nlod = 0;
   if (cfg->backend == BENCH_GPU) {
-    struct tile_stream_status st = tile_stream_gpu_status(h.gpu);
+    struct tile_stream_status st = bench_gpu_status(h.gpu);
     max_compressed_size = st.max_compressed_size;
     codec_batch_size = st.codec_batch_size;
     nlod = st.nlod;
@@ -644,7 +618,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->fill = fill_xor;
   out->codec = (struct codec_config){ .id = CODEC_ZSTD };
   out->reduce = lod_reduce_mean;
-  out->backend = BENCH_GPU;
+  out->backend = bench_gpu_enabled() ? BENCH_GPU : BENCH_CPU;
   out->dtype = dtype_u16;
   out->target_chunk_bytes = 0;
   out->target_batch_bytes = 0;
@@ -742,14 +716,9 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
   if (a.frames > 0)
     dims[0].size = a.frames;
 
-  int ecode = 0;
-  CUcontext ctx = 0;
-
-  if (a.backend == BENCH_GPU) {
-    CUdevice dev;
-    CU(Fail, cuInit(0));
-    CU(Fail, cuDeviceGet(&dev, 0));
-    CU(Fail, cu_ctx_create(&ctx, 0, dev));
+  if (a.backend == BENCH_GPU && bench_gpu_context_create()) {
+    printf("FAIL\n");
+    return 1;
   }
 
   struct bench_config cfg = {
@@ -786,17 +755,11 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
   };
-  ecode = run_bench(&cfg);
+  int ecode = run_bench(&cfg);
 
   if (a.backend == BENCH_GPU)
-    cuCtxDestroy(ctx);
+    bench_gpu_context_destroy();
   return ecode;
-
-Fail:
-  printf("FAIL\n");
-  if (a.backend == BENCH_GPU)
-    cuCtxDestroy(ctx);
-  return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -956,35 +919,23 @@ run_bench_two_streams(const struct bench_config* cfg)
     .max_threads = cfg->max_threads,
   };
 
-  // Memory estimates
-  {
-    struct tile_stream_memory_info mem;
-    if (tile_stream_gpu_memory_estimate(&config, 0, &mem) == 0) {
-      char a[32], b[32];
-      format_bytes(a, sizeof(a), mem.device_bytes);
-      format_bytes(b, sizeof(b), mem.host_pinned_bytes);
-      print_report("  GPU memory (per stream): %s device, %s pinned", a, b);
-      format_bytes(a, sizeof(a), 2 * mem.device_bytes);
-      format_bytes(b, sizeof(b), 2 * mem.host_pinned_bytes);
-      print_report("  GPU memory (total x2):   %s device, %s pinned", a, b);
-    }
-  }
+  bench_gpu_report_memory_pair(&config);
 
   // Create two GPU streams
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
 
-  s0 = tile_stream_gpu_create(&config, sink[0]);
-  s1 = tile_stream_gpu_create(&config, sink[1]);
+  s0 = bench_gpu_create(&config, sink[0]);
+  s1 = bench_gpu_create(&config, sink[1]);
   CHECK(Fail, s0 && s1);
   float init_s = platform_toc(&init_clock);
 
-  const struct tile_stream_layout* layout = tile_stream_gpu_layout(s0);
+  const struct tile_stream_layout* layout = bench_gpu_layout(s0);
   log_bench_header(
     layout, dtype, cfg->codec, 0, 0, total_bytes, total_elements);
 
-  struct writer* w0 = tile_stream_gpu_writer(s0);
-  struct writer* w1 = tile_stream_gpu_writer(s1);
+  struct writer* w0 = bench_gpu_writer(s0);
+  struct writer* w1 = bench_gpu_writer(s1);
 
   // Interleaved pump
   struct platform_clock clock = { 0 };
@@ -1002,13 +953,13 @@ run_bench_two_streams(const struct bench_config* cfg)
   float wall_s = platform_toc(&clock);
 
   // Verify cursors
-  CHECK(Fail, tile_stream_gpu_cursor(s0) == total_elements);
-  CHECK(Fail, tile_stream_gpu_cursor(s1) == total_elements);
+  CHECK(Fail, bench_gpu_cursor(s0) == total_elements);
+  CHECK(Fail, bench_gpu_cursor(s1) == total_elements);
 
   // Collect metrics
   struct stream_metrics m[2] = {
-    tile_stream_gpu_get_metrics(s0),
-    tile_stream_gpu_get_metrics(s1),
+    bench_gpu_get_metrics(s0),
+    bench_gpu_get_metrics(s1),
   };
 
   size_t sink_bytes[2];
@@ -1090,8 +1041,8 @@ run_bench_two_streams(const struct bench_config* cfg)
   }
 
   print_report("  PASS");
-  tile_stream_gpu_destroy(s1);
-  tile_stream_gpu_destroy(s0);
+  bench_gpu_destroy(s1);
+  bench_gpu_destroy(s0);
   bench_zarr_close(&zarr[0]);
   bench_zarr_close(&zarr[1]);
   if (use_throttled) {
@@ -1108,9 +1059,9 @@ Fail:
   for (int k = 0; k < 2; ++k)
     bench_zarr_flush(&zarr[k]);
   if (s1)
-    tile_stream_gpu_destroy(s1);
+    bench_gpu_destroy(s1);
   if (s0)
-    tile_stream_gpu_destroy(s0);
+    bench_gpu_destroy(s0);
   bench_zarr_close(&zarr[0]);
   bench_zarr_close(&zarr[1]);
   if (use_throttled) {
@@ -1132,11 +1083,10 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   if (a.frames > 0)
     dims[0].size = a.frames;
 
-  CUdevice dev;
-  CUcontext ctx = 0;
-  CU(Fail, cuInit(0));
-  CU(Fail, cuDeviceGet(&dev, 0));
-  CU(Fail, cu_ctx_create(&ctx, 0, dev));
+  if (bench_gpu_context_create()) {
+    printf("FAIL\n");
+    return 1;
+  }
 
   struct bench_config cfg = {
     .label = spec.label,
@@ -1168,11 +1118,6 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   };
   int ecode = run_bench_two_streams(&cfg);
 
-  cuCtxDestroy(ctx);
+  bench_gpu_context_destroy();
   return ecode;
-
-Fail:
-  printf("FAIL\n");
-  cuCtxDestroy(ctx);
-  return 1;
 }

@@ -33,9 +33,7 @@ add_subdirectory(src)
 enable_testing()
 add_subdirectory(tests)
 
-if(CHUCKY_ENABLE_GPU)
-    add_subdirectory(bench)
-endif()
+add_subdirectory(bench)
 
 # --- Install rules: aggregate library, public headers, CMake/pkg-config ---
 

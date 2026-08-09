@@ -8,7 +8,6 @@
 #include "sink_discard.h"
 #include "sink_metering.h"
 #include "sink_throttled.h"
-#include "stream.gpu.h"
 #include "test_data.h"
 #include "types.codec.h"
 #include "types.lod.h"
@@ -78,11 +77,14 @@ struct bench_spec
 };
 
 // CLI driver: parses --fill, --codec, --reduce, --dtype, --frames, --json,
-// -o flags, inits CUDA, calls run_bench, handles xor_pattern_init/free.
+// -o flags, creates the GPU context when the backend is gpu, calls run_bench,
+// handles xor_pattern_init/free. The backend defaults to gpu, or to cpu in a
+// build without GPU support.
 int
 bench_stream_main(int ac, char* av[], struct bench_spec spec);
 
 // Two-stream variant: creates two GPU pipelines on the same CUDA context and
-// interleaves writer_append calls for balanced GPU utilisation.
+// interleaves writer_append calls for balanced GPU utilisation. GPU only —
+// fails with a message in a build without GPU support.
 int
 bench_two_streams_main(int ac, char* av[], struct bench_spec spec);
