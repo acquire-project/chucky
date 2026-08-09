@@ -99,7 +99,7 @@ codec_alignment(enum compression_codec type)
 extern "C" size_t
 codec_output_alignment(enum compression_codec type)
 {
-  nvcompAlignmentRequirements_t written = { 0 }, read = { 0 };
+  nvcompAlignmentRequirements_t written = {}, read = {};
   switch (type) {
     case CODEC_LZ4_NON_STANDARD:
       NVCOMP(Fail,
