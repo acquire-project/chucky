@@ -57,10 +57,10 @@ struct staging_state
   int current;            // 0 or 1: which buffer the host is filling
   size_t bytes_written;   // bytes written to current slot's h_in so far
 
-  // One buffer serves every array of a multiarray stream, so the bytes in it
-  // belong to one array at a time. NULL while it holds none.
+  // One buffer serves every array of a multiarray stream, so its bytes belong
+  // to one array at a time. NULL while it holds none.
   struct stream_context* owner;
-  uint64_t first_element; // owner's append position of the first staged byte
+  uint64_t first_element; // append position of the first staged byte
 
   struct scatter_timing timing[SCATTER_TIMING_SLOTS];
   int next_timing;
@@ -408,11 +408,9 @@ stream_append_body(struct stream_engine* e,
                    struct slice input);
 
 // Hand whatever staging holds to the device and count into the batch every
-// epoch that completes. The append cursor runs ahead of the device between
-// dispatches, so flush and array switches have to call this before reading the
-// cursor as the position of delivered data — and while the owner is still the
-// bound array, since the dispatch reads per-array engine state that a bind
-// swaps wholesale.
+// epoch that completes. Callers that read the append cursor as the position of
+// delivered data must call this first. A bind swaps the per-array engine state
+// the dispatch reads, so the owner must still be the bound array.
 struct writer_result
 stream_dispatch_staged(struct stream_engine* e);
 

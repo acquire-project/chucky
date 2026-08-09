@@ -255,7 +255,6 @@ stream_append_body(struct stream_engine* e,
     {
       struct platform_clock mc = { 0 };
       platform_toc(&mc);
-      // Same h_in generation as the acquire above.
       ingest_copy(
         e->copy_pool,
         gpu_pool_at(&e->stage.h_pool, e->stage.current, e->stage.bytes_written)
