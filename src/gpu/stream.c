@@ -105,6 +105,13 @@ engine_dispatch_ingest(struct stream_engine* e,
   }
 }
 
+static void
+staging_release(struct staging_state* stage)
+{
+  stage->bytes_written = 0;
+  stage->owner = NULL;
+}
+
 struct writer_result
 stream_dispatch_staged(struct stream_engine* e)
 {
@@ -115,13 +122,11 @@ stream_dispatch_staged(struct stream_engine* e)
   const uint64_t first = e->stage.first_element;
   if (engine_dispatch_ingest(e, ctx, first)) {
     ctx->append_failed = 1;
-    // These bytes will never reach this array's pool, and the buffer is shared.
-    e->stage.bytes_written = 0;
-    e->stage.owner = NULL;
+    // These bytes will never reach this array's pool.
+    staging_release(&e->stage);
     return writer_error();
   }
-  e->stage.bytes_written = 0;
-  e->stage.owner = NULL;
+  staging_release(&e->stage);
 
   const uint64_t epoch = ctx->layout.epoch_elements;
   const uint64_t crossed = ctx->cursor_elements / epoch - first / epoch;
@@ -225,7 +230,7 @@ stream_append_body(struct stream_engine* e,
 
     const size_t payload = (size_t)(elements * bpe);
 
-    if (e->stage.bytes_written == 0) {
+    if (!e->stage.owner) {
       // Poll instead of cuEventSynchronize to keep the producer thread hot —
       // it has memcpy work queued up immediately after.
       if (gpu_pool_host_acquire_produce(
@@ -349,8 +354,7 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
 
-  // An array that stopped taking data cannot be completed, but what it already
-  // handed to the delivery worker still has to be joined below.
+  // An array that stopped taking data cannot be completed.
   struct writer_result r =
     ctx->append_failed ? writer_error() : stream_dispatch_staged(e);
 

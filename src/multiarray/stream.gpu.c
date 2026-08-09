@@ -144,8 +144,8 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
           0)
         return multiarray_writer_not_flushable;
 
-      // Either failure belongs to the array being left, which reports it when
-      // it is flushed; the array being switched to is still usable.
+      // A failure in either step belongs to the array being left, which reports
+      // it when it is flushed; the array being switched to is still usable.
       if (!stream_dispatch_staged(e).error && e->sched.accumulated > 0 &&
           schedule_flush_accumulated(e, &departing->ctx).error)
         departing->ctx.append_failed = 1;
