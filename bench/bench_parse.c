@@ -1,5 +1,7 @@
 #include "bench_parse.h"
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,24 +12,35 @@ size_t
 parse_bytes(const char* s)
 {
   char* end = NULL;
-  size_t val = (size_t)strtoull(s, &end, 10);
+  unsigned long long val = strtoull(s, &end, 10);
+  unsigned shift = 0;
   if (end && *end) {
     switch (*end) {
       case 'k':
       case 'K':
-        val <<= 10;
+        shift = 10;
         break;
       case 'm':
       case 'M':
-        val <<= 20;
+        shift = 20;
         break;
       case 'g':
       case 'G':
-        val <<= 30;
+        shift = 30;
         break;
     }
   }
-  return val;
+  // Saturate rather than wrap, so callers can range-check the result.
+  if (shift) {
+    if (val > (ULLONG_MAX >> shift))
+      return SIZE_MAX;
+    val <<= shift;
+  }
+#if SIZE_MAX < ULLONG_MAX
+  if (val > SIZE_MAX)
+    return SIZE_MAX;
+#endif
+  return (size_t)val;
 }
 
 // --- dtype helpers ---

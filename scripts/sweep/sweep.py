@@ -298,26 +298,51 @@ def gpu_name() -> str:
 # Runner
 # ---------------------------------------------------------------------------
 
+# Everything CMake treats as false. A value CMake would treat as true, or a
+# cache we cannot read, means we assume the gpu backend is available.
+CMAKE_FALSE = {"", "0", "OFF", "FALSE", "NO", "N", "IGNORE", "NOTFOUND"}
+
+
 @functools.cache
 def build_has_gpu(build_dir: Path) -> bool:
     """Whether this build can run the gpu backend, per its CMake cache."""
     try:
-        cache = (build_dir / "CMakeCache.txt").read_text()
+        cache = (build_dir / "CMakeCache.txt").read_text(errors="replace")
     except OSError:
         return True
-    return "CHUCKY_ENABLE_GPU:BOOL=OFF" not in cache
+    m = re.search(r"^CHUCKY_ENABLE_GPU:BOOL=(.*)$", cache, re.MULTILINE)
+    if not m:
+        return True
+    value = m.group(1).strip().upper()
+    return not (value in CMAKE_FALSE or value.endswith("-NOTFOUND"))
+
+
+def bench_exe(spec: RunSpec, build_dir: Path) -> Path:
+    exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
+    return exe.with_suffix(".exe") if sys.platform == "win32" else exe
+
+
+def save_results(output: Path, data: dict, existing: dict) -> None:
+    data["runs"] = list(existing.values())
+    with open(output, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
+    """Why this spec cannot run here, or None if it can."""
+    if not bench_exe(spec, build_dir).exists():
+        return "exe not found"
+    if spec.backend == "gpu" and not build_has_gpu(build_dir):
+        return "build has no gpu"
+    return None
 
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
             tmpdir_root: Path | None = None) -> dict | None:
     """Execute a single benchmark run, return result dict or None to skip it."""
-    exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
-    if sys.platform == "win32":
-        exe = exe.with_suffix(".exe")
-    if not exe.exists():
-        return None
-    if spec.backend == "gpu" and not build_has_gpu(build_dir):
+    exe = bench_exe(spec, build_dir)
+    if skip_reason(spec, build_dir):
         return None
 
     frames = SCENARIOS[spec.scenario]
@@ -557,6 +582,12 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 tag += f" {spec.sink}"
             progress.update(task, description=f"[bold]{tag}")
 
+            reason = skip_reason(spec, build_dir)
+            if reason:
+                progress.console.print(f"  {tag} [dim]SKIP ({reason})[/dim]")
+                progress.advance(task)
+                continue
+
             try:
                 result = run_one(spec, build_dir,
                                  s3_bucket=s3_bucket,
@@ -569,7 +600,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 result = {**spec.base_result(), "status": "error", "error": str(e)}
 
             if result is None:
-                progress.console.print(f"  {tag} [dim]SKIP (not in this build)[/dim]")
+                progress.console.print(f"  {tag} [dim]SKIP[/dim]")
                 progress.advance(task)
                 continue
 
@@ -580,14 +611,11 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
             existing[spec.id] = result
-
-            # Save incrementally
-            data["runs"] = list(existing.values())
-            with open(output, "w") as f:
-                json.dump(data, f, indent=2)
-
+            save_results(output, data, existing)
             progress.advance(task)
 
+    # Write even when every run was skipped, so the reported path always exists.
+    save_results(output, data, existing)
     console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(existing)} runs)")
 
 

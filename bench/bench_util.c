@@ -579,10 +579,7 @@ run_bench(const struct bench_config* cfg)
   goto Cleanup;
 
 Fail:
-  if (cfg->json_output)
-    print_bench_json_error();
-  print_report("  FAIL");
-  rc = 1;
+  rc = bench_failed(cfg->json_output);
 
 Cleanup:
   // Flush before destroying the stream — pending write_direct jobs
@@ -1103,6 +1100,13 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   struct dimension* dims = spec.dims;
   if (a.frames > 0)
     dims[0].size = a.frames;
+
+  // This driver reports to stderr only, so a JSON error document on the way
+  // out would be the sole thing a caller ever parsed.
+  if (a.json_output) {
+    print_report("  note: the two-stream benchmark does not write JSON");
+    a.json_output = 0;
+  }
 
   if (bench_gpu_context_create())
     return bench_failed(a.json_output);
