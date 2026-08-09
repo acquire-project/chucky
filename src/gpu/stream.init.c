@@ -2,7 +2,6 @@
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
-#include "gpu/transpose.h"
 
 #include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
@@ -478,8 +477,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
     goto Fail;
 
   // Staging (ingest_init): 2 slots, device + pinned host each.
-  info->staging_bytes = 2 * (lim.buffer_capacity + TRANSPOSE_SOURCE_PAD_BYTES);
-  const size_t staging_host = 2 * lim.buffer_capacity;
+  info->staging_bytes = 2 * lim.buffer_capacity;
 
   // Chunk pools (stream_engine_init): 2 buffers.
   info->chunk_pool_bytes = 2 * lim.pool_bytes;
@@ -507,7 +505,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   info->device_bytes = info->staging_bytes + info->chunk_pool_bytes +
                        info->compressed_pool_bytes + info->aggregate_bytes +
                        info->lod_bytes + info->codec_bytes;
-  info->host_pinned_bytes = staging_host + aggregate_host;
+  info->host_pinned_bytes = info->staging_bytes + aggregate_host;
 
   info->chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
   info->total_chunks = cl.levels.total_chunks;

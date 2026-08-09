@@ -78,4 +78,18 @@ build_lifted_layout(int rank,
                     uint64_t* out_chunks_per_epoch,
                     uint64_t* out_epoch_elements);
 
+// The pool pads each chunk out to the codec's alignment, so a region is wider
+// than an epoch's worth of elements.
+#define TEST_REGION_PAD_ELEMENTS 3
+
+// Where a scatter should put the element sitting this many elements past the
+// start of the first epoch's region.
+uint64_t
+expected_scatter_offset(uint8_t lifted_rank,
+                        const uint64_t* lifted_shape,
+                        const int64_t* lifted_strides,
+                        uint64_t epoch_elements,
+                        uint64_t region_elements,
+                        uint64_t offset);
+
 #endif // INDEX_OPS_UTIL_H
