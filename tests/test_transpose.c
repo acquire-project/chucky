@@ -15,12 +15,6 @@ fill_elements(uint8_t* dst, uint64_t n, uint8_t bpe)
       dst[i * bpe + b] = (uint8_t)((i * 131 + b * 17 + 1) & 0xFF);
 }
 
-// The pool pads each chunk out to the codec's alignment, so the distance
-// between epoch regions is wider than an epoch's elements. Any nonzero value
-// here catches a kernel that steps regions by epoch_elements instead of by the
-// stride it is handed.
-#define REGION_PAD_ELEMENTS 3
-
 // Run transpose kernel and verify against CPU ravel() reference.
 // dim_sizes/chunk_sizes: per-dimension sizes.
 // bpe: bytes per element.
@@ -60,7 +54,7 @@ run_transpose_test(const char* name,
                       &chunks_per_epoch,
                       &epoch_elements);
   const uint64_t region_elements =
-    chunks_per_epoch * chunk_stride + REGION_PAD_ELEMENTS;
+    chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS;
   const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bpe;
   // A start partway into an epoch pushes the last elements into one more region

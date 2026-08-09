@@ -168,11 +168,8 @@ ingest_dispatch_scatter(struct staging_state* stage,
   if (elements == 0)
     return 0;
 
-  // The chunk position a scatter computes repeats every epoch_elements, because
-  // compute_level_layout zeroes the append dims' chunk strides and
-  // dims_n_append allows a chunk size above 1 only on the first append dim. So
-  // the kernel gets the position within the epoch and finds the later regions
-  // itself.
+  // A chunk position repeats every epoch, since the append dimensions do not
+  // reach it.
   const uint64_t epoch_elements = layout->epoch_elements;
   const uint64_t in_epoch = first_element % epoch_elements;
   // Regions past the ones the caller acquired belong to the next pool slot.

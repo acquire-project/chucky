@@ -2,9 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 
-// A block covers 4KB of source rather than one element per thread: the loop
-// that implies gives the compiler several destination computations to overlap,
-// worth 50 -> 56 GiB/s on 256cube.
+// Tiling the source per block measures faster than one element per thread.
 template<typename T>
 constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / (int)sizeof(T);
 

@@ -78,10 +78,13 @@ build_lifted_layout(int rank,
                     uint64_t* out_chunks_per_epoch,
                     uint64_t* out_epoch_elements);
 
-// Where a scatter should put the element sitting `offset` elements past the
+// The pool pads each chunk out to the codec's alignment, so a region is wider
+// than an epoch's worth of elements.
+#define TEST_REGION_PAD_ELEMENTS 3
+
+// Where a scatter should put the element sitting this many elements past the
 // start of the first epoch's region: its place within the epoch, plus one
-// region per epoch boundary crossed. region_elements is the distance between
-// regions, which the pool pads and so exceeds epoch_elements.
+// region per epoch boundary crossed.
 uint64_t
 expected_scatter_offset(uint8_t lifted_rank,
                         const uint64_t* lifted_shape,

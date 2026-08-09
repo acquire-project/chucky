@@ -221,7 +221,8 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
                       &epoch_elements);
 
   const size_t epoch_bytes =
-    chunks_per_epoch * chunk_stride * bytes_per_element;
+    (chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS) *
+    bytes_per_element;
   const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bytes_per_element;
   // The dispatch runs past its first epoch by however far first_element sits
