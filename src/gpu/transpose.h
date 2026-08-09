@@ -18,7 +18,7 @@ extern "C"
                  uint8_t bpe,
                  uint64_t i_offset,
                  uint64_t epoch_elements,
-                 uint64_t epoch_bytes,
+                 uint64_t region_bytes,
                  uint8_t rank,
                  const uint64_t* d_shape,
                  const int64_t* d_strides,

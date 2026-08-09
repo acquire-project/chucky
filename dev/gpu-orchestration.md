@@ -284,11 +284,10 @@ pointer with no ordering attached, and has seven non-test callers in
 Each is correct today because a comment says so. Two zero a pool; the rest read
 at an offset inside a generation the caller already holds.
 
-#173 added a third way past the pool API — the scatter stepped a raw device
-pointer from one epoch's region to the next — and #181 removed it by scattering
-a whole buffer in one launch. The kernel derives the region from the element
-index and the stride it is handed, so nothing steps pool memory by hand. The two
-`gpu_pool_at` uses above remain.
+#173 added another way past the pool API — the scatter stepped a raw device
+pointer from one epoch's region to the next — and #181 removed it: the host no
+longer mints pool pointers, since the kernel finds each region from the element
+index and a stride. Both kinds of `gpu_pool_at` call above remain.
 
 Work: give the pool an operation for each of those two uses, then remove
 `gpu_pool_at`.

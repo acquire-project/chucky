@@ -173,9 +173,7 @@ ingest_dispatch_scatter(struct staging_state* stage,
   const uint64_t epoch_elements = layout->epoch_elements;
   const uint64_t in_epoch = first_element % epoch_elements;
   // Regions past the ones the caller acquired belong to the next pool slot.
-  CHECK(Error,
-        (in_epoch + elements + epoch_elements - 1) / epoch_elements <=
-          dst.epochs);
+  CHECK(Error, ceildiv(in_epoch + elements, epoch_elements) <= dst.epochs);
 
   const int idx = stage->current;
   struct staging_slot* ss = &stage->slot[idx];

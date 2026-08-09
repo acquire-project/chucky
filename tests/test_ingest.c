@@ -157,7 +157,13 @@ test_ingest_incremental(void)
   {
     int errors = 0;
     for (uint64_t i = 0; i < epoch_elements; ++i) {
-      uint64_t off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
+      const uint64_t off =
+        expected_scatter_offset(lifted_rank,
+                                lifted_shape,
+                                lifted_strides,
+                                epoch_elements,
+                                pool_bytes / bytes_per_element,
+                                i);
       uint16_t src_val = h_src[i];
       uint16_t dst_val = ((uint16_t*)h_pool)[off];
       if (dst_val != src_val) {
