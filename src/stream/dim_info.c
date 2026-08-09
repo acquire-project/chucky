@@ -1,10 +1,28 @@
 #include "stream/dim_info.h"
+#include "defs.limits.h"
 #include "lod/lod_plan.h"
 
 #include "util/prelude.h"
 
 #include <assert.h>
 #include <string.h>
+
+void
+dim_info_readable_append_sizes(const struct dim_info* info,
+                               uint64_t readable_append_chunks,
+                               uint64_t cursor_elements,
+                               int level,
+                               uint64_t* append_sizes)
+{
+  dim_info_decompose_append_sizes(info, readable_append_chunks, append_sizes);
+
+  // The last chunk of a stream is padded out to full size, so the chunk count
+  // alone would report the padding as data.
+  uint64_t appended[HALF_MAX_RANK];
+  dim_info_final_append_sizes(info, cursor_elements, level, appended);
+  if (appended[0] < append_sizes[0])
+    append_sizes[0] = appended[0];
+}
 
 void
 dim_info_decompose_append_sizes(const struct dim_info* info,

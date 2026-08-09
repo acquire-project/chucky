@@ -86,6 +86,19 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
+int
+platform_fsync(platform_fd fd)
+{
+  return FlushFileBuffers(fd) ? 0 : -1;
+}
+
+int
+platform_rename_replace(const char* from, const char* to)
+{
+  DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+  return MoveFileExA(from, to, flags) ? 0 : -1;
+}
+
 void
 platform_close(platform_fd fd)
 {

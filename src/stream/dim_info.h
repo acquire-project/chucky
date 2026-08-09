@@ -66,6 +66,17 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t total_append_chunks,
                                 uint64_t* append_sizes);
 
+// Append dim sizes describing what a reader can see: derived from the count
+// of append chunks that are finalized on disk, then held to the elements the
+// caller actually appended. Correct whether or not the stream ended cleanly,
+// because both inputs are things that already happened.
+void
+dim_info_readable_append_sizes(const struct dim_info* info,
+                               uint64_t readable_append_chunks,
+                               uint64_t cursor_elements,
+                               int level,
+                               uint64_t* append_sizes);
+
 // Compute exact append dim sizes for final metadata.
 //
 // Bounded append dims (1..n_append-1) report their declared size.

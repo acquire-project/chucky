@@ -200,6 +200,24 @@ write_footer(struct active_shard* sh,
   return err;
 }
 
+// The generation just closed out is now readable, once its writes retire.
+static void
+record_finalized(struct shard_state* ss, struct shard_sink* sink)
+{
+  ss->finalized_append_chunks += ss->epoch_in_shard;
+  if (sink->record_fence)
+    ss->finalized_fence = sink->record_fence(sink);
+}
+
+uint64_t
+shard_state_readable_append_chunks(struct shard_state* ss,
+                                   struct shard_sink* sink)
+{
+  if (sink->wait_fence && ss->finalized_fence.seq > 0)
+    sink->wait_fence(sink, ss->finalized_fence);
+  return ss->finalized_append_chunks;
+}
+
 int
 finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
@@ -249,6 +267,8 @@ finalize_shards(struct shard_state* ss,
     memset(sh->index, 0xFF, index_data_bytes);
   }
 
+  if (!err)
+    record_finalized(ss, sink);
   ss->epoch_in_shard = 0;
   ss->shard_epoch++;
   return err;
@@ -417,7 +437,7 @@ deliver_run_contiguous(struct active_shard* sh,
 // Footer write already emitted the index; just close the writer and reset
 // per-shard state for the next generation.
 static int
-close_finalized_shards(struct shard_state* ss)
+close_finalized_shards(struct shard_state* ss, struct shard_sink* sink)
 {
   size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
   for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
@@ -433,6 +453,7 @@ close_finalized_shards(struct shard_state* ss)
     sh->data_cursor = 0;
     memset(sh->index, 0xFF, index_data_bytes);
   }
+  record_finalized(ss, sink);
   ss->epoch_in_shard = 0;
   ss->shard_epoch++;
   return 0;
@@ -553,7 +574,7 @@ deliver_to_shards_batch(uint8_t level,
 
     if (ss->epoch_in_shard >= ss->chunks_per_shard_append) {
       if (use_carryover)
-        CHECK(Error, close_finalized_shards(ss) == 0);
+        CHECK(Error, close_finalized_shards(ss, sink) == 0);
       else
         CHECK(Error, finalize_shards(ss, sink, sa) == 0);
     }

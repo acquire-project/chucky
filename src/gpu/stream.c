@@ -329,7 +329,7 @@ collect_ingest_timing(struct stream_engine* e)
 }
 
 static struct writer_result
-publish_array_shape(struct stream_context* ctx)
+publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
 {
   if (!ctx->sink->update_append)
     return writer_ok();
@@ -337,9 +337,11 @@ publish_array_shape(struct stream_context* ctx)
   struct writer_result r = writer_ok();
   const uint8_t na = dim_info_n_append(&ctx->dims);
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
+    uint64_t readable = shard_state_readable_append_chunks(
+      &e->compress_agg.ar.shard[lv], ctx->sink);
     uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_final_append_sizes(
-      &ctx->dims, ctx->cursor_elements, lv, append_sizes);
+    dim_info_readable_append_sizes(
+      &ctx->dims, readable, ctx->cursor_elements, lv, append_sizes);
     if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
       r = writer_error();
   }
@@ -368,9 +370,9 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       r = d;
   }
 
-  // A shard index and the array shape both claim the output is complete, so
-  // they only run once everything before them succeeded: a reader cannot tell a
-  // complete array from one whose tail never arrived.
+  // Finalizing the open shards claims the output is complete, so it only runs
+  // once everything before it succeeded: a reader cannot tell a complete array
+  // from one whose tail never arrived.
   if (!r.error) {
     r = finish_accumulated(e, ctx);
     if (r.error)
@@ -382,11 +384,20 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   collect_ingest_timing(e);
 
   // The shape is written after this, so it never names data still queued.
-  if (shard_sink_drain(ctx->sink) && !r.error)
+  const int sink_failed = shard_sink_drain(ctx->sink);
+  if (sink_failed && !r.error)
     r = writer_error();
 
-  if (!r.error)
-    r = publish_array_shape(ctx);
+  // The shape describes the shards that were finalized, not what the caller
+  // handed over, so it is worth writing even when the flush failed: it is the
+  // only way a reader learns about shards written since the last periodic
+  // update. A sink IO error is the exception — it leaves no way to tell which
+  // of those writes landed.
+  if (!sink_failed) {
+    struct writer_result shape = publish_array_shape(e, ctx);
+    if (shape.error && !r.error)
+      r = shape;
+  }
 
   if (!r.error && ctx->sink->flush && ctx->sink->flush(ctx->sink))
     r = writer_error();

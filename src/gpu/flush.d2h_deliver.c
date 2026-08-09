@@ -325,7 +325,9 @@ Error:
   return writer_error();
 }
 
-// Periodic metadata update (append-dim extents per level).
+// Periodic metadata update (append-dim extents per level). Only shards that
+// are closed out and no longer queued are advertised, so a reader that follows
+// the shape into a shard file always finds a parseable index there.
 int
 d2h_deliver_update_metadata(const struct flush_handoff* handoff,
                             const struct dim_info* dims_info,
@@ -347,11 +349,9 @@ d2h_deliver_update_metadata(const struct flush_handoff* handoff,
     struct shard_state* ss = handoff->shards_by_lod[lv];
     if (!ss)
       continue;
-    uint64_t flat_append_chunks =
-      ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+    uint64_t readable = shard_state_readable_append_chunks(ss, sink);
     uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_decompose_append_sizes(
-      dims_info, flat_append_chunks, append_sizes);
+    dim_info_decompose_append_sizes(dims_info, readable, append_sizes);
     if (sink->update_append(sink, (uint8_t)lv, na, append_sizes))
       return 1;
   }

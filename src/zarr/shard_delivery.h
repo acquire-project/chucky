@@ -41,6 +41,12 @@ struct shard_state
   uint64_t chunks_per_shard_append;
   struct active_shard* shards; // [shard_inner_count]
 
+  // Append chunks living in shards that have been closed out, so their index
+  // block is written and a reader can parse them. Grows only at finalize;
+  // finalized_fence retires once those writes have left the IO queue.
+  uint64_t finalized_append_chunks;
+  struct io_event finalized_fence;
+
   // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
   // bulk HtoD upload covers all shards. NULL when page == 0.
   uint8_t* tail_buf_pool;
@@ -62,6 +68,13 @@ shard_state_destroy(struct shard_state* ss);
 // Sizing mirror of init_shard_state, for the memory estimate.
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
+
+// Append chunks a reader can safely see: finalized and no longer queued.
+// Waits for the last finalize's writes to retire, which have normally landed
+// well before the next metadata update asks for this.
+uint64_t
+shard_state_readable_append_chunks(struct shard_state* ss,
+                                   struct shard_sink* sink);
 
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to

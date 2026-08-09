@@ -8,6 +8,7 @@
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -439,6 +440,115 @@ Fail:
   return 1;
 }
 
+// --- Concurrent reads during repeated puts (#123) ---
+
+// Alternates between a long and a short document so a non-atomic rewrite
+// leaves the file either empty or holding a prefix of the long one.
+#define PUT_LONG_BYTES (256 * 1024)
+#define PUT_ROUNDS 200
+
+struct put_reader
+{
+  char path[4096];
+  atomic_int stop;
+  int reads;
+  int torn;
+};
+
+// A complete document starts with '{' and ends with '}'. Truncation breaks
+// one or the other, and O_TRUNC's empty window breaks both.
+static int
+document_is_complete(const char* buf, size_t len)
+{
+  return len >= 2 && buf[0] == '{' && buf[len - 1] == '}';
+}
+
+static void
+put_reader_fn(void* arg)
+{
+  struct put_reader* r = (struct put_reader*)arg;
+  char* buf = (char*)malloc(PUT_LONG_BYTES + 64);
+  if (!buf)
+    return;
+
+  while (!atomic_load(&r->stop)) {
+    FILE* f = fopen(r->path, "rb");
+    if (!f)
+      continue; // not created yet
+    size_t len = fread(buf, 1, PUT_LONG_BYTES + 64, f);
+    fclose(f);
+    r->reads++;
+    if (!document_is_complete(buf, len))
+      r->torn++;
+  }
+  free(buf);
+}
+
+static int
+test_put_is_atomic_for_readers(void)
+{
+  log_info("=== test_put_is_atomic_for_readers ===");
+
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/atomic_put", tmpdir);
+  CHECK(Fail, test_mkdir(root) == 0);
+
+  struct store* s = store_fs_create(root, 0);
+  CHECK(Fail, s);
+
+  char* longdoc = (char*)malloc(PUT_LONG_BYTES);
+  CHECK(Fail2, longdoc);
+  memset(longdoc, 'a', PUT_LONG_BYTES);
+  longdoc[0] = '{';
+  longdoc[PUT_LONG_BYTES - 1] = '}';
+  const char* shortdoc = "{}";
+
+  struct put_reader reader = { 0 };
+  snprintf(reader.path, sizeof(reader.path), "%s/zarr.json", root);
+  atomic_store(&reader.stop, 0);
+
+  CHECK(Fail3, s->put(s, "zarr.json", shortdoc, strlen(shortdoc)) == 0);
+
+  test_thread* t = NULL;
+  CHECK(Fail3, test_thread_start(&t, put_reader_fn, &reader) == 0);
+
+  int put_err = 0;
+  for (int i = 0; i < PUT_ROUNDS && !put_err; ++i) {
+    put_err = (i % 2) ? s->put(s, "zarr.json", shortdoc, strlen(shortdoc))
+                      : s->put(s, "zarr.json", longdoc, PUT_LONG_BYTES);
+  }
+
+  atomic_store(&reader.stop, 1);
+  CHECK(Fail3, test_thread_join(t) == 0);
+  CHECK(Fail3, put_err == 0);
+
+  log_info("  %d reads, %d torn", reader.reads, reader.torn);
+  CHECK(Fail3, reader.reads > 0);
+  CHECK(Fail3, reader.torn == 0);
+
+  // The last round wrote the short document; the rename left exactly that.
+  FILE* f = fopen(reader.path, "rb");
+  CHECK(Fail3, f);
+  char final_doc[64];
+  size_t final_len = fread(final_doc, 1, sizeof(final_doc), f);
+  fclose(f);
+  CHECK(Fail3, final_len == strlen(shortdoc));
+  CHECK(Fail3, memcmp(final_doc, shortdoc, final_len) == 0);
+
+  free(longdoc);
+  store_destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  free(longdoc);
+Fail2:
+  store_destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -448,6 +558,7 @@ main(void)
 
   int err = 0;
   err |= test_store_put();
+  err |= test_put_is_atomic_for_readers();
   err |= test_store_mkdirs();
   err |= test_shard_pool_write();
   err |= test_shard_pool_fence();

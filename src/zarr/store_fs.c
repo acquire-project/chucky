@@ -4,6 +4,7 @@
 #include "util/strbuf.h"
 #include "zarr/shard_pool_fs.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 
 struct store_fs
@@ -21,21 +22,38 @@ fs_join(const struct store_fs* fs, const char* key, struct strbuf* out)
   return strbuf_appendf(out, "%s/%s", strbuf_cstr(&fs->root), key);
 }
 
+static atomic_uint_least64_t fs_put_sequence;
+
+// Written to a sibling temporary file and renamed into place, so a reader
+// opening the key while a stream is running sees either the whole previous
+// contents or the whole new ones, never a truncated or half-written file.
 static int
 fs_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
   struct strbuf path = { 0 };
+  struct strbuf tmp_path = { 0 };
   int rc = 1;
   if (fs_join(fs, key, &path))
     goto done;
 
-  platform_fd fd = platform_open_write(strbuf_cstr(&path), 0);
+  uint64_t seq = atomic_fetch_add(&fs_put_sequence, 1);
+  if (strbuf_appendf(
+        &tmp_path, "%s.tmp.%llu", strbuf_cstr(&path), (unsigned long long)seq))
+    goto done;
+
+  platform_fd fd = platform_open_write(strbuf_cstr(&tmp_path), 0);
   if (fd == PLATFORM_FD_INVALID)
     goto done;
-  rc = platform_write(fd, data, len) != 0;
+  int written = platform_write(fd, data, len) == 0 && platform_fsync(fd) == 0;
   platform_close(fd);
+
+  rc = !written || platform_rename_replace(strbuf_cstr(&tmp_path),
+                                           strbuf_cstr(&path)) != 0;
+  if (rc)
+    platform_remove_tree(strbuf_cstr(&tmp_path));
 done:
+  strbuf_free(&tmp_path);
   strbuf_free(&path);
   return rc;
 }

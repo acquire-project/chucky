@@ -207,11 +207,11 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
           const uint8_t na = dim_info_n_append(&v->cl->dims);
           for (int lv = 0; lv < v->levels->nlod; ++lv) {
             struct shard_state* ss = &v->shard[lv];
-            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append +
-                                ss->epoch_in_shard;
+            uint64_t readable =
+              shard_state_readable_append_chunks(ss, v->sink);
             uint64_t append_sizes[HALF_MAX_RANK];
             dim_info_decompose_append_sizes(
-              &v->cl->dims, total_ac, append_sizes);
+              &v->cl->dims, readable, append_sizes);
             if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
               goto Error;
           }
@@ -333,23 +333,32 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
 Fail:
   failed = 1;
 
-Drain:
-  if (shard_sink_drain(v->sink))
+Drain: {
+  const int sink_failed = shard_sink_drain(v->sink);
+  if (sink_failed)
     failed = 1;
-  if (failed)
-    return writer_error();
 
-  // Final metadata.
-  if (v->sink->update_append) {
+  // The shape describes the shards that were finalized, not what the caller
+  // handed over, so it is worth writing even when the flush failed: it is the
+  // only way a reader learns about shards written since the last periodic
+  // update. A sink IO error is the exception — it leaves no way to tell which
+  // of those writes landed.
+  if (!sink_failed && v->sink->update_append) {
     const uint8_t na = dim_info_n_append(&v->cl->dims);
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
+      uint64_t readable =
+        shard_state_readable_append_chunks(&v->shard[lv], v->sink);
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_final_append_sizes(
-        &v->cl->dims, *v->cursor_elements, lv, append_sizes);
+      dim_info_readable_append_sizes(
+        &v->cl->dims, readable, *v->cursor_elements, lv, append_sizes);
       if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
-        return writer_error();
+        failed = 1;
     }
   }
+}
+
+  if (failed)
+    return writer_error();
 
   if (v->sink->flush && v->sink->flush(v->sink))
     return writer_error();
