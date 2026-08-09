@@ -323,22 +323,29 @@ def bench_exe(spec: RunSpec, build_dir: Path) -> Path:
     return exe.with_suffix(".exe") if sys.platform == "win32" else exe
 
 
-def save_results(output: Path, data: dict, existing: dict,
-                 superseded: dict | None = None) -> None:
+def save_results(output: Path, data: dict, records: dict) -> None:
     """Write the results file. A kill mid-write leaves the old file intact."""
-    merged = {**(superseded or {}), **existing}
-    data["runs"] = list(merged.values())
+    data["runs"] = list(records.values())
     tmp = output.with_suffix(output.suffix + ".tmp")
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, output)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        try:
+            os.replace(tmp, output)
+        except OSError:
+            # Windows cannot rename over a file another process holds open.
+            with open(output, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp.unlink(missing_ok=True)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
-def ensure_results_file(output: Path, data: dict, existing: dict,
-                        superseded: dict | None = None) -> None:
+def ensure_results_file(output: Path, data: dict, records: dict) -> None:
     """Write the file if it is not there yet, so the path we report exists."""
     if not output.exists():
-        save_results(output, data, existing, superseded)
+        save_results(output, data, records)
 
 
 def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
@@ -535,10 +542,11 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
 
     # -- load existing results for resumability --
     output.parent.mkdir(parents=True, exist_ok=True)
+    # `records` is everything the file will hold, in the order it was read;
+    # `existing` is the subset that counts as done. A run held back for a redo
+    # stays in `records`, so a redo that never happens erases nothing.
+    records: dict = {}
     existing: dict = {}
-    # Runs held back for a redo. They stay in the file until a redo replaces
-    # them, so a redo that never happens does not erase what was there.
-    superseded: dict = {}
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
@@ -550,11 +558,10 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         data = raw_data
         for r in data.get("runs", []):
             rid = r["id"]
+            records[rid] = r
             if retry and r.get("status") != "pass":
-                superseded[rid] = r
                 continue
             if rerun and any(pat in rid for pat in rerun):
-                superseded[rid] = r
                 continue
             existing[rid] = r
     else:
@@ -579,7 +586,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         console.print(f"Skipping [bold]{skip_count}[/bold] existing runs")
 
     if not to_run:
-        ensure_results_file(output, data, existing, superseded)
+        ensure_results_file(output, data, records)
         console.print(f"[green]All {len(runs)} runs already complete.[/green]")
         console.print(f"Results: {output}")
         return
@@ -624,11 +631,12 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
             existing[spec.id] = result
-            save_results(output, data, existing, superseded)
+            records[spec.id] = result
+            save_results(output, data, records)
             progress.advance(task)
 
-    ensure_results_file(output, data, existing, superseded)
-    console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(existing)} runs)")
+    ensure_results_file(output, data, records)
+    console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(records)} runs)")
 
 
 if __name__ == "__main__":

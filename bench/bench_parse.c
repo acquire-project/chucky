@@ -9,13 +9,16 @@
 
 // --- Byte-size parser: "256K", "1M", "8G" etc. ---
 
-// Accept the "B", "iB" and "ib" tails people write, so "256KB" and "1GiB"
-// mean what they look like.
+// Accept the "B" and "iB" tails people write, so "256KB" and "1GiB" mean what
+// they look like. A lone "i" or a bare "1Ki" is a typo, not a size.
 static int
 is_byte_tail(const char* s)
 {
-  if (*s == 'i' || *s == 'I')
+  if (*s == 'i' || *s == 'I') {
     ++s;
+    if (*s != 'b' && *s != 'B')
+      return 0;
+  }
   if (*s == 'b' || *s == 'B')
     ++s;
   return *s == '\0';
@@ -24,9 +27,12 @@ is_byte_tail(const char* s)
 int
 parse_bytes(const char* s, size_t* out)
 {
-  while (*s == ' ' || *s == '\t')
+  // strtoull skips leading whitespace and accepts a sign; a negative would
+  // wrap to a huge size, so refuse it before we get there.
+  while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\v' ||
+         *s == '\f')
     ++s;
-  if (*s == '-' || *s == '+')
+  if (*s == '-')
     return 1;
 
   char* end = NULL;
