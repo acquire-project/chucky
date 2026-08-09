@@ -10,13 +10,8 @@ extern "C"
 {
 #endif
 
-  // Write src_bytes worth of elements to the chunk positions the lifted shape
-  // and strides give them. d_src must be aligned to bpe.
-  //
-  // A destination position repeats every epoch_elements, so the elements past
-  // the first epoch go epoch_bytes further along per epoch crossed. d_dst is
-  // the region for the epoch holding the first element, and i_offset is that
-  // element's position within its epoch.
+  // i_offset counts from the start of the epoch d_dst_beg points at, not from
+  // the start of the stream.
   void transpose(CUdeviceptr d_dst_beg,
                  CUdeviceptr d_src_beg,
                  uint64_t src_bytes,

@@ -151,45 +151,6 @@ Error:
   return 1;
 }
 
-// The chunk position a scatter computes repeats every epoch_elements, because
-// compute_level_layout zeroes the append dims' chunk strides and dims_n_append
-// allows a chunk size above 1 only on the first append dim. So the kernel needs
-// only the position within the epoch, and steps to the next pool region itself
-// for the elements past the end of one.
-static int
-scatter(const struct tile_stream_layout* layout,
-        const struct tile_stream_layout_gpu* layout_gpu,
-        struct scatter_destination dst,
-        struct gpu_pool_view d_in,
-        size_t bytes,
-        uint64_t first_element,
-        size_t bpe,
-        CUstream compute)
-{
-  const uint64_t epoch_elements = layout->epoch_elements;
-  const uint64_t in_epoch = first_element % epoch_elements;
-  const uint64_t reach = in_epoch + bytes / bpe;
-
-  // Regions past the ones the caller acquired belong to the next pool slot.
-  CHECK(Error, (reach + epoch_elements - 1) / epoch_elements <= dst.epochs);
-
-  transpose(gpu_pool_view_d(dst.first_epoch),
-            gpu_pool_view_d(d_in),
-            bytes,
-            (uint8_t)bpe,
-            in_epoch,
-            epoch_elements,
-            dst.epoch_bytes,
-            layout->lifted_rank,
-            layout_gpu->d_lifted_shape,
-            layout_gpu->d_lifted_strides,
-            compute);
-  return 0;
-
-Error:
-  return 1;
-}
-
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
@@ -207,6 +168,18 @@ ingest_dispatch_scatter(struct staging_state* stage,
   if (elements == 0)
     return 0;
 
+  // The chunk position a scatter computes repeats every epoch_elements, because
+  // compute_level_layout zeroes the append dims' chunk strides and
+  // dims_n_append allows a chunk size above 1 only on the first append dim. So
+  // the kernel gets the position within the epoch and finds the later regions
+  // itself.
+  const uint64_t epoch_elements = layout->epoch_elements;
+  const uint64_t in_epoch = first_element % epoch_elements;
+  // Regions past the ones the caller acquired belong to the next pool slot.
+  CHECK(Error,
+        (in_epoch + elements + epoch_elements - 1) / epoch_elements <=
+          dst.epochs);
+
   const int idx = stage->current;
   struct staging_slot* ss = &stage->slot[idx];
 
@@ -220,15 +193,17 @@ ingest_dispatch_scatter(struct staging_state* stage,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
-  CHECK(Error,
-        scatter(layout,
-                layout_gpu,
-                dst,
-                d_in,
-                ss->dispatched_bytes,
-                first_element,
-                bpe,
-                compute) == 0);
+  transpose(gpu_pool_view_d(dst.first_epoch),
+            gpu_pool_view_d(d_in),
+            ss->dispatched_bytes,
+            (uint8_t)bpe,
+            in_epoch,
+            epoch_elements,
+            dst.epoch_bytes,
+            layout->lifted_rank,
+            layout_gpu->d_lifted_shape,
+            layout_gpu->d_lifted_strides,
+            compute);
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 

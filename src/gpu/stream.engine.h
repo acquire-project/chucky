@@ -28,10 +28,9 @@ struct pool_state
 // pool payloads — non-init code reaches them through d_pool/h_pool only.
 struct staging_slot
 {
-  void* h_in;          // pinned host, size = buffer_capacity_bytes
-  CUdeviceptr d_in;    // device, size = buffer_capacity_bytes plus the room the
-                       // scatter reads past its source
-  CUevent t_h2d_start; // recorded before H2D memcpy (timing)
+  void* h_in;              // pinned host, size = buffer_capacity_bytes
+  CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
+  CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
   int h2d_pending;         // dispatched, interval not yet folded into metrics
 };

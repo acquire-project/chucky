@@ -22,8 +22,8 @@ using chucky are in `docs/`.
   of them.
 - **Append** — one call handing data to the writer. Appends accumulate in the
   staging buffer and do not reach the device on their own.
-- **Dispatch** — one transfer of a filled staging buffer, and the scatters that
-  place it. Covers as many epochs as the buffer spans.
+- **Dispatch** — one transfer of a filled staging buffer, and the scatter that
+  places it. Covers as many epochs as the buffer spans.
 - **Shard** — a group of chunks written as one file, ending with an index of
   each chunk's offset and size.
 - **Sink** — whatever finished shards are handed to: files, object storage, or
@@ -284,12 +284,12 @@ pointer with no ordering attached, and has seven non-test callers in
 Each is correct today because a comment says so. Two zero a pool; the rest read
 at an offset inside a generation the caller already holds.
 
-#173 added a second way past the pool API: the scatter steps a raw device
-pointer from one epoch's region to the next, so those derivations never appear
-in a search for `gpu_pool_at`. #181 would remove them by scattering a whole
-buffer in one launch.
+#173 added a second way past the pool API — the scatter stepped a raw device
+pointer from one epoch's region to the next — and #181 removed it by scattering
+a whole buffer in one launch. The kernel derives the region from the element
+index and the stride it is handed, so nothing steps pool memory by hand.
 
-Work: give the pool an operation for each of those two uses, then remove
+Work: give the pool an operation for the remaining use, then remove
 `gpu_pool_at`.
 
 *Done when:* the rule is checkable with grep instead of by reading comments.

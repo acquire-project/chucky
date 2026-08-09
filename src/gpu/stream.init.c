@@ -478,7 +478,6 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 
   // Staging (ingest_init): 2 slots, device + pinned host each.
   info->staging_bytes = 2 * lim.buffer_capacity;
-  const size_t staging_host = info->staging_bytes;
 
   // Chunk pools (stream_engine_init): 2 buffers.
   info->chunk_pool_bytes = 2 * lim.pool_bytes;
@@ -506,7 +505,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   info->device_bytes = info->staging_bytes + info->chunk_pool_bytes +
                        info->compressed_pool_bytes + info->aggregate_bytes +
                        info->lod_bytes + info->codec_bytes;
-  info->host_pinned_bytes = staging_host + aggregate_host;
+  info->host_pinned_bytes = info->staging_bytes + aggregate_host;
 
   info->chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
   info->total_chunks = cl.levels.total_chunks;

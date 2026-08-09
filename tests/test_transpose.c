@@ -15,12 +15,17 @@ fill_elements(uint8_t* dst, uint64_t n, uint8_t bpe)
       dst[i * bpe + b] = (uint8_t)((i * 131 + b * 17 + 1) & 0xFF);
 }
 
+// The pool pads each chunk out to the codec's alignment, so the distance
+// between epoch regions is wider than an epoch's elements. Any nonzero value
+// here catches a kernel that steps regions by epoch_elements instead of by the
+// stride it is handed.
+#define REGION_PAD_ELEMENTS 3
+
 // Run transpose kernel and verify against CPU ravel() reference.
 // dim_sizes/chunk_sizes: per-dimension sizes.
 // bpe: bytes per element.
 // n_epochs: epochs worth of source to hand the kernel in one call.
-// first_element: where the source starts in the stream, so it can begin partway
-// into an epoch.
+// in_epoch_offset: how far into its epoch the first element sits.
 // Returns 0 on success.
 static int
 run_transpose_test(const char* name,
@@ -30,13 +35,13 @@ run_transpose_test(const char* name,
                    const uint8_t* storage_order,
                    uint8_t bpe,
                    uint32_t n_epochs,
-                   uint64_t first_element)
+                   uint64_t in_epoch_offset)
 {
   log_info("=== %s (bpe=%u epochs=%u from=%lu) ===",
            name,
            bpe,
            n_epochs,
-           (unsigned long)first_element);
+           (unsigned long)in_epoch_offset);
 
   uint8_t lifted_rank;
   uint64_t lifted_shape[MAX_RANK];
@@ -54,13 +59,14 @@ run_transpose_test(const char* name,
                       &chunk_stride,
                       &chunks_per_epoch,
                       &epoch_elements);
-  const uint64_t pool_elements = chunks_per_epoch * chunk_stride;
+  const uint64_t region_elements =
+    chunks_per_epoch * chunk_stride + REGION_PAD_ELEMENTS;
   const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bpe;
   // A start partway into an epoch pushes the last elements into one more region
   // than the epochs they cover.
   const uint32_t regions = n_epochs + 1;
-  const size_t dst_bytes = regions * pool_elements * bpe;
+  const size_t dst_bytes = regions * region_elements * bpe;
 
   log_info("  rank=%d lifted_rank=%d chunk_elements=%lu chunk_stride=%lu "
            "chunks_per_epoch=%lu epoch_elements=%lu",
@@ -98,9 +104,9 @@ run_transpose_test(const char* name,
             d_src,
             src_bytes,
             bpe,
-            first_element % epoch_elements,
+            in_epoch_offset,
             epoch_elements,
-            pool_elements * bpe,
+            region_elements * bpe,
             lifted_rank,
             (const uint64_t*)d_shape,
             (const int64_t*)d_strides,
@@ -111,20 +117,19 @@ run_transpose_test(const char* name,
 
   // Verify against CPU ravel reference
   int errors = 0;
-  const uint64_t first_epoch = first_element / epoch_elements;
   for (uint64_t i = 0; i < src_elements; ++i) {
-    const uint64_t element = first_element + i;
-    const uint64_t region = element / epoch_elements - first_epoch;
-    const uint64_t expected_off =
-      region * pool_elements +
-      ravel(
-        lifted_rank, lifted_shape, lifted_strides, element % epoch_elements);
+    const uint64_t expected_off = expected_scatter_offset(lifted_rank,
+                                                          lifted_shape,
+                                                          lifted_strides,
+                                                          epoch_elements,
+                                                          region_elements,
+                                                          in_epoch_offset + i);
     if (memcmp((uint8_t*)h_dst + expected_off * bpe,
                (uint8_t*)h_src + i * bpe,
                bpe) != 0) {
       if (errors < 5)
         log_error("  elem %lu: dst[%lu] does not match source",
-                  (unsigned long)element,
+                  (unsigned long)(in_epoch_offset + i),
                   (unsigned long)expected_off);
       errors++;
     }

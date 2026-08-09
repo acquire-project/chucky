@@ -2,6 +2,12 @@
 #include <assert.h>
 #include <stdint.h>
 
+// A block covers 4KB of source rather than one element per thread: the loop
+// that implies gives the compiler several destination computations to overlap,
+// worth 50 -> 56 GiB/s on 256cube.
+template<typename T>
+constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / (int)sizeof(T);
+
 // Transpose data kernel - v0
 // Each element's destination comes from its own index, so one launch covers the
 // buffer however many epochs it spans.
@@ -17,15 +23,12 @@ __global__ void __launch_bounds__(256, 4)
                  const uint64_t* shape,
                  const int64_t* strides)
 {
-  constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / sizeof(T); // 4KB
-
-  const int tid = threadIdx.x;
-  const uint64_t block_offset = (uint64_t)blockIdx.x * ELEMENTS_PER_BLOCK;
+  const uint64_t block_offset = (uint64_t)blockIdx.x * ELEMENTS_PER_BLOCK<T>;
   const uint64_t left = src_size - block_offset;
   const int elements =
-    left < ELEMENTS_PER_BLOCK ? (int)left : ELEMENTS_PER_BLOCK;
+    left < ELEMENTS_PER_BLOCK<T> ? (int)left : ELEMENTS_PER_BLOCK<T>;
 
-  for (int i = tid; i < elements; i += blockDim.x) {
+  for (int i = threadIdx.x; i < elements; i += blockDim.x) {
     uint64_t rest = i_offset + block_offset + i;
     uint64_t out_offset = (rest / epoch_elements) * epoch_stride;
 
@@ -58,13 +61,12 @@ transpose_launch(CUdeviceptr d_dst_beg,
 
   cudaStream_t cuda_stream = (cudaStream_t)stream;
   const int block_size = 256;
-  const int elements_per_block = (1 << 12) / (int)sizeof(T);
 
   assert(d_src_beg % sizeof(T) == 0);
   assert(epoch_bytes % sizeof(T) == 0);
   assert(epoch_elements > 0);
-  const int grid_size =
-    (int)((src_size + elements_per_block - 1) / elements_per_block);
+  const unsigned grid_size =
+    (unsigned)((src_size + ELEMENTS_PER_BLOCK<T> - 1) / ELEMENTS_PER_BLOCK<T>);
 
   transpose_v0_k<T>
     <<<grid_size, block_size, 0, cuda_stream>>>((T*)d_dst_beg,

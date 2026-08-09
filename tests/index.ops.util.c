@@ -171,6 +171,19 @@ build_lifted_layout(int rank,
   *out_epoch_elements = *out_chunks_per_epoch * chunk_elements;
 }
 
+uint64_t
+expected_scatter_offset(uint8_t lifted_rank,
+                        const uint64_t* lifted_shape,
+                        const int64_t* lifted_strides,
+                        uint64_t epoch_elements,
+                        uint64_t region_elements,
+                        uint64_t offset)
+{
+  return (offset / epoch_elements) * region_elements +
+         ravel(
+           lifted_rank, lifted_shape, lifted_strides, offset % epoch_elements);
+}
+
 uint32_t
 cpu_perm(uint64_t i,
          uint8_t lifted_rank,
