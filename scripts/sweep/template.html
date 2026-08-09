@@ -79,6 +79,11 @@ input { accent-color: var(--series-1); }
 #stage-chart { margin-top: var(--gap-md); }
 #chart:empty, #stage-chart:empty { display: none; }
 
+/* Titles, legends and axis names. SVG text is black unless something says
+   otherwise, which is invisible on the dark theme. Text that picks its own
+   colour — the heatmap's cell labels — carries a fill attribute and is left be. */
+#chart text:not([fill]), #stage-chart text:not([fill]) { fill: var(--text-primary); }
+
 /* SVG axes */
 .axis text { font-size: 12px; fill: var(--text-secondary); }
 .axis path, .axis line { stroke: var(--axis); stroke-width: 2; }
