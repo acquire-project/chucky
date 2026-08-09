@@ -83,8 +83,7 @@ build_lifted_layout(int rank,
 #define TEST_REGION_PAD_ELEMENTS 3
 
 // Where a scatter should put the element sitting this many elements past the
-// start of the first epoch's region: its place within the epoch, plus one
-// region per epoch boundary crossed.
+// start of the first epoch's region.
 uint64_t
 expected_scatter_offset(uint8_t lifted_rank,
                         const uint64_t* lifted_shape,

@@ -7,8 +7,6 @@ template<typename T>
 constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / (int)sizeof(T);
 
 // Transpose data kernel - v0
-// Each element's destination comes from its own index, so one launch covers the
-// buffer however many epochs it spans.
 template<typename T>
 __global__ void __launch_bounds__(256, 4)
   transpose_v0_k(T* d_dst,
