@@ -1,9 +1,0 @@
-libdir=/usr/local/lib
-includedir=/usr/local/include
-
-Name: chucky
-Description: chucky streaming zarr writer (GPU + CPU)
-Version: 0.1.0
-Cflags: -I${includedir}
-Libs: -L${libdir} -lchucky
-Libs.private: -lm -llz4 -lzstd -laws-c-s3 -ldl -lrt -lpthread -lcudart_static -lnvcomp

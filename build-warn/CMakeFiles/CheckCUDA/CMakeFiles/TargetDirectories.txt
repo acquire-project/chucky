@@ -1,2 +1,0 @@
-/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/CMakeFiles/CheckCUDA/CMakeFiles/edit_cache.dir
-/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/CMakeFiles/CheckCUDA/CMakeFiles/rebuild_cache.dir
