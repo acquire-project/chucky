@@ -45,8 +45,7 @@ target_link_libraries(
     PRIVATE warnings
 )
 
-# The GPU pipeline sits behind bench_gpu.h so the rest of the benchmarks build
-# without CUDA. bench_gpu.none.c reports "built without GPU support" instead.
+# Without CUDA the benchmarks link a stand-in that fails at startup.
 if(CHUCKY_ENABLE_GPU)
     target_sources(bench_util PRIVATE bench_gpu.cuda.c)
     target_link_libraries(
@@ -69,9 +68,13 @@ set(BENCH_STREAM_SOURCES
     bench_stream_medfmt_multiscale.c
     bench_stream_medfmt_multiscale_dim0.c
     bench_stream_smallepoch_single.c
-    bench_stream_256cube_two_streams.c
     bench_stream_aqz_single.c
 )
+
+# Two streams share one GPU, so there is nothing to run without one.
+if(CHUCKY_ENABLE_GPU)
+    list(APPEND BENCH_STREAM_SOURCES bench_stream_256cube_two_streams.c)
+endif()
 
 foreach(src IN LISTS BENCH_STREAM_SOURCES)
     string(REPLACE ".c" "" target ${src})

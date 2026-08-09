@@ -76,15 +76,11 @@ struct bench_spec
   uint32_t min_append_shards; // 0 = no minimum (see bench_config)
 };
 
-// CLI driver: parses --fill, --codec, --reduce, --dtype, --frames, --json,
-// -o flags, creates the GPU context when the backend is gpu, calls run_bench,
-// handles xor_pattern_init/free. The backend defaults to gpu, or to cpu in a
-// build without GPU support.
+// Parse the shared bench flags and run one benchmark. The backend defaults to
+// gpu, or to cpu in a build without GPU support.
 int
 bench_stream_main(int ac, char* av[], struct bench_spec spec);
 
-// Two-stream variant: creates two GPU pipelines on the same CUDA context and
-// interleaves writer_append calls for balanced GPU utilisation. GPU only —
-// fails with a message in a build without GPU support.
+// Run two pipelines on one GPU, appending to each in turn. Needs a GPU.
 int
 bench_two_streams_main(int ac, char* av[], struct bench_spec spec);

@@ -1,9 +1,8 @@
 #pragma once
 
-// The GPU pipeline behind a CUDA-free interface, so the benchmarks build on
-// machines without CUDA. bench_gpu.cuda.c forwards to tile_stream_gpu;
-// bench_gpu.none.c stands in when CHUCKY_ENABLE_GPU is off, where
-// bench_gpu_enabled() returns 0 and the rest fail.
+// The GPU pipeline behind an interface with no CUDA in it, so the benchmarks
+// build on machines that have no CUDA headers. A build without GPU support
+// links a stand-in whose calls all fail.
 
 #include "types.stream.h"
 

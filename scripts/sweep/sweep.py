@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import functools
 import json
 import platform
 import re
@@ -297,14 +298,26 @@ def gpu_name() -> str:
 # Runner
 # ---------------------------------------------------------------------------
 
+@functools.cache
+def build_has_gpu(build_dir: Path) -> bool:
+    """Whether this build can run the gpu backend, per its CMake cache."""
+    try:
+        cache = (build_dir / "CMakeCache.txt").read_text()
+    except OSError:
+        return True
+    return "CHUCKY_ENABLE_GPU:BOOL=OFF" not in cache
+
+
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
             tmpdir_root: Path | None = None) -> dict | None:
-    """Execute a single benchmark run, return result dict or None if exe missing."""
+    """Execute a single benchmark run, return result dict or None to skip it."""
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if sys.platform == "win32":
         exe = exe.with_suffix(".exe")
     if not exe.exists():
+        return None
+    if spec.backend == "gpu" and not build_has_gpu(build_dir):
         return None
 
     frames = SCENARIOS[spec.scenario]
@@ -556,7 +569,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 result = {**spec.base_result(), "status": "error", "error": str(e)}
 
             if result is None:
-                progress.console.print(f"  {tag} [dim]SKIP (exe not found)[/dim]")
+                progress.console.print(f"  {tag} [dim]SKIP (not in this build)[/dim]")
                 progress.advance(task)
                 continue
 

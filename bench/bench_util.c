@@ -81,6 +81,26 @@ print_advise_failure(const struct advise_layout_diagnostic* diag,
                      size_t budget,
                      size_t min_shard_bytes);
 
+// The stream configuration holds this in 32 bits; the CLI rejects anything
+// that would not fit.
+static uint32_t
+resolved_batch_bytes(const struct bench_config* cfg)
+{
+  return cfg->target_batch_bytes ? (uint32_t)cfg->target_batch_bytes
+                                 : 512u << 20;
+}
+
+// Report a failure that happened before the run started. Keeps stdout to the
+// JSON document alone, so --json output stays parseable.
+static int
+bench_failed(int json_output)
+{
+  if (json_output)
+    print_bench_json_error();
+  print_report("  FAIL");
+  return 1;
+}
+
 // Resolve the chunk + shard geometry for cfg->dims using cfg->chunk_ratios.
 // When cfg->memory_budget is 0, auto-detects from backend free memory using
 // budget_fraction (e.g. 0.8 for single-stream, 0.4 per stream for the
@@ -138,9 +158,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       .codec = cfg->codec,
       .reduce_method = cfg->reduce_method,
       .append_reduce_method = cfg->append_reduce_method,
-      .target_batch_bytes =
-        (uint32_t)(cfg->target_batch_bytes ? cfg->target_batch_bytes
-                                           : 512u << 20),
+      .target_batch_bytes = resolved_batch_bytes(cfg),
     };
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
@@ -409,7 +427,7 @@ run_bench(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .epochs_per_batch = chosen_epochs_per_batch,
-    .target_batch_bytes = 512u << 20,
+    .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
   };
@@ -664,6 +682,10 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       out->target_chunk_bytes = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "--batch-bytes") == 0 && i + 1 < ac) {
       out->target_batch_bytes = parse_bytes(av[++i]);
+      if ((uint64_t)out->target_batch_bytes > UINT32_MAX) {
+        fprintf(stderr, "--batch-bytes must be less than 4 GiB\n");
+        return 1;
+      }
     } else if (strcmp(av[i], "--memory-budget") == 0 && i + 1 < ac) {
       out->memory_budget = parse_bytes(av[++i]);
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
@@ -717,10 +739,8 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
   if (a.frames > 0)
     dims[0].size = a.frames;
 
-  if (a.backend == BENCH_GPU && bench_gpu_context_create()) {
-    printf("FAIL\n");
-    return 1;
-  }
+  if (a.backend == BENCH_GPU && bench_gpu_context_create())
+    return bench_failed(a.json_output);
 
   struct bench_config cfg = {
     .label = spec.label,
@@ -915,7 +935,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .reduce_method = cfg->reduce_method,
     .append_reduce_method = cfg->append_reduce_method,
     .epochs_per_batch = chosen_epochs_per_batch,
-    .target_batch_bytes = 512u << 20,
+    .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
   };
@@ -1084,10 +1104,8 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   if (a.frames > 0)
     dims[0].size = a.frames;
 
-  if (bench_gpu_context_create()) {
-    printf("FAIL\n");
-    return 1;
-  }
+  if (bench_gpu_context_create())
+    return bench_failed(a.json_output);
 
   struct bench_config cfg = {
     .label = spec.label,
