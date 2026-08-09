@@ -45,7 +45,6 @@ target_link_libraries(
     PRIVATE warnings
 )
 
-# Without CUDA the benchmarks link a stand-in, and only a gpu run fails.
 if(CHUCKY_ENABLE_GPU)
     target_sources(bench_util PRIVATE bench_gpu.cuda.c)
     target_link_libraries(

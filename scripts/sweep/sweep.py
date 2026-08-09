@@ -339,11 +339,9 @@ def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
-            tmpdir_root: Path | None = None) -> dict | None:
-    """Execute a single benchmark run, return result dict or None to skip it."""
+            tmpdir_root: Path | None = None) -> dict:
+    """Execute a single benchmark run. Callers gate on skip_reason first."""
     exe = bench_exe(spec, build_dir)
-    if skip_reason(spec, build_dir):
-        return None
 
     frames = SCENARIOS[spec.scenario]
     cmd = [
@@ -554,6 +552,13 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             "runs": [],
         }
 
+    # Create the file up front so the path we report always exists. Never
+    # rewrite one that is already there: --retry and --rerun drop runs from
+    # `existing` on purpose, and those records are only replaced as reruns
+    # finish.
+    if not Path(output).exists():
+        save_results(output, data, existing)
+
     # -- count how many actually need to run --
     to_run = [spec for spec in runs if spec.id not in existing]
     skip_count = len(runs) - len(to_run)
@@ -599,11 +604,6 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             except Exception as e:
                 result = {**spec.base_result(), "status": "error", "error": str(e)}
 
-            if result is None:
-                progress.console.print(f"  {tag} [dim]SKIP[/dim]")
-                progress.advance(task)
-                continue
-
             st = result.get("status", "?")
             tp = result.get("throughput_in_gibs")
             suffix = f" {tp:.2f} GiB/s" if tp else ""
@@ -614,8 +614,6 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             save_results(output, data, existing)
             progress.advance(task)
 
-    # Write even when every run was skipped, so the reported path always exists.
-    save_results(output, data, existing)
     console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(existing)} runs)")
 
 

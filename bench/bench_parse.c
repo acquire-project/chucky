@@ -1,5 +1,6 @@
 #include "bench_parse.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,13 +9,17 @@
 
 // --- Byte-size parser: "256K", "1M", "8G" etc. ---
 
-size_t
-parse_bytes(const char* s)
+int
+parse_bytes(const char* s, size_t* out)
 {
   char* end = NULL;
+  errno = 0;
   unsigned long long val = strtoull(s, &end, 10);
+  if (end == s || errno == ERANGE)
+    return 1;
+
   unsigned shift = 0;
-  if (end && *end) {
+  if (*end) {
     switch (*end) {
       case 'k':
       case 'K':
@@ -28,19 +33,24 @@ parse_bytes(const char* s)
       case 'G':
         shift = 30;
         break;
+      default:
+        return 1;
     }
+    if (end[1])
+      return 1;
   }
-  // Saturate rather than wrap, so callers can range-check the result.
+
   if (shift) {
     if (val > (ULLONG_MAX >> shift))
-      return SIZE_MAX;
+      return 1;
     val <<= shift;
   }
 #if SIZE_MAX < ULLONG_MAX
   if (val > SIZE_MAX)
-    return SIZE_MAX;
+    return 1;
 #endif
-  return (size_t)val;
+  *out = (size_t)val;
+  return 0;
 }
 
 // --- dtype helpers ---
