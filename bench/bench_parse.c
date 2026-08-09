@@ -10,8 +10,8 @@
 
 // --- Byte-size parser: "256K", "1M", "8G" etc. ---
 
-// Accept the "B" and "iB" tails people write, so "256KB" and "1GiB" mean what
-// they look like. A lone "i" or a bare "1Ki" is a typo, not a size.
+// Accept the "B" and "iB" tails people write, so "256KB" and "1GiB" mean
+// what they look like.
 static int
 is_byte_tail(const char* s)
 {
@@ -28,8 +28,7 @@ is_byte_tail(const char* s)
 int
 parse_bytes(const char* s, size_t* out)
 {
-  // strtoull skips leading space and accepts a sign; a negative would wrap
-  // to a huge size, so refuse it before we get there.
+  // strtoull would turn a negative into a huge size, so refuse it first.
   while (isspace((unsigned char)*s))
     ++s;
   if (*s == '-')

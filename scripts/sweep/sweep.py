@@ -309,7 +309,7 @@ def build_has_gpu(build_dir: Path) -> bool:
     m = re.search(r"^CHUCKY_ENABLE_GPU:BOOL=(.*)$", cache, re.MULTILINE)
     if not m:
         return True
-    # A value we cannot read as false means we assume a gpu is available.
+    # Anything we cannot read as false is treated as a gpu build.
     return m.group(1).strip().upper() not in {"", "0", "OFF", "FALSE", "NO", "N"}
 
 
@@ -355,7 +355,7 @@ def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
             tmpdir_root: Path | None = None) -> dict:
-    """Execute a single benchmark run. Callers gate on skip_reason first."""
+    """Execute a single benchmark run. Callers check for a skip first."""
     exe = bench_exe(spec, build_dir)
 
     frames = SCENARIOS[spec.scenario]

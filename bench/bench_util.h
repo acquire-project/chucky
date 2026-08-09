@@ -81,6 +81,6 @@ struct bench_spec
 int
 bench_stream_main(int ac, char* av[], struct bench_spec spec);
 
-// Run two pipelines on one GPU, appending to each in turn. Needs a GPU.
+// Run two pipelines on one GPU, appending to each in turn.
 int
 bench_two_streams_main(int ac, char* av[], struct bench_spec spec);

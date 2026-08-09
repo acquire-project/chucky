@@ -1,8 +1,7 @@
 #pragma once
 
 // The GPU pipeline behind an interface with no CUDA in it, so the benchmarks
-// build and run on machines that have no CUDA headers. A build without GPU
-// support links a stand-in, which reports that there is no GPU to use.
+// build on machines that have no CUDA headers.
 
 #include "types.stream.h"
 

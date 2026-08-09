@@ -1116,8 +1116,8 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   if (a.frames > 0)
     dims[0].size = a.frames;
 
-  // This driver reports to stderr only, so a JSON error document on the way
-  // out would be the sole thing a caller ever parsed.
+  // This driver reports to stderr only, so an error document would be the
+  // only JSON a caller ever saw.
   if (a.json_output)
     print_report("  note: the two-stream benchmark does not write JSON");
 
