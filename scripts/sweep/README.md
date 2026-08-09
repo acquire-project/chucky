@@ -30,6 +30,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | file | holds |
 |---|---|
 | `site.css` | the palette and the title bar, linked by both pages |
+| `theme.js` | light or dark, applied before either page paints |
 | `decode.js` | unpacks the columns, imported by both pages |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |

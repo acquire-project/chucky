@@ -4,27 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Benchmark explorer</title>
-<script>
-document.documentElement.setAttribute("data-theme", (() => {
-  let stored = null;
-  try {
-    stored = localStorage.getItem("bench-theme");
-  } catch {
-    stored = null;
-  }
-  if (stored === "light" || stored === "dark") return stored;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-})());
-</script>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="site.css">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 :root {
   --gap-sm: 4px;
   --gap-md: 12px;
-  --gap-lg: 24px;
 }
-main.container { max-width: 1180px; margin: 0 auto; padding: 24px; overflow: visible; }
 h1 { font-size: 1.4em; margin: 0 0 var(--gap-sm); }
 .subtitle { color: var(--text-secondary); font-size: 0.85em; margin-bottom: 2px; }
 input { accent-color: var(--series-1); }
@@ -37,16 +24,6 @@ input { accent-color: var(--series-1); }
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius); padding: var(--gap-md);
   margin: var(--gap-md) 0;
-}
-.control-group > div > label, .control-row > label {
-  display: block; margin-bottom: 3px;
-  font-size: 0.72em; font-weight: 600; color: var(--text-secondary);
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-.controls select {
-  font: inherit; font-size: 0.85em; padding: 5px 8px; width: auto;
-  color: var(--text-primary); background: var(--plane);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .control-group { display: flex; flex-wrap: wrap; gap: var(--gap-md); align-items: flex-start; }
 .control-row {
@@ -81,11 +58,6 @@ input { accent-color: var(--series-1); }
 }
 #stage-chart { margin-top: var(--gap-md); }
 #chart:empty, #stage-chart:empty { display: none; }
-
-/* Titles, legends and axis names. SVG text is black unless something says
-   otherwise, which is invisible on the dark theme. Text that picks its own
-   colour — the heatmap's cell labels — carries a fill attribute and is left be. */
-#chart text:not([fill]), #stage-chart text:not([fill]) { fill: var(--text-primary); }
 
 /* SVG axes */
 .axis text { font-size: 12px; fill: var(--text-secondary); }
@@ -150,7 +122,7 @@ input { accent-color: var(--series-1); }
 
 /* Mobile */
 @media (max-width: 640px) {
-  main.container { padding: var(--gap-md); }
+  main { padding: var(--gap-md); }
   .controls { flex-direction: column; }
   .control-group { flex-direction: column; }
   .scenario-groups { flex-direction: column; gap: var(--gap-md); }
@@ -168,7 +140,7 @@ input { accent-color: var(--series-1); }
   <a class="repo-link" href="https://github.com/acquire-project/chucky">Source</a>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
 </header>
-<main class="container">
+<main>
 
 <h1>Sweep <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
 <div class="subtitle" id="machine-info"></div>
@@ -211,7 +183,7 @@ input { accent-color: var(--series-1); }
       <div class="radio-group" id="s3-throughput-group"></div>
     </div>
   </div>
-  <div class="control-group" id="draw-controls">
+  <div class="control-group">
     <div id="metric-wrap">
       <label for="metric-sel">Metric</label>
       <select id="metric-sel"></select>
@@ -261,11 +233,13 @@ const DATA = await fetchJson("data/sweeps.json");
 const LAYOUT = {
   margin:    {top: 40, right: 200, bottom: 60, left: 195},
   heatmap:   {cellW: 70, cellH: 50},
-  lines:     {plotW: 600, plotH: 300, margin: {top: 40, right: 140, bottom: 60, left: 62}},
+  lines:     {plotW: 600, plotH: 300, margin: {top: 40, bottom: 60, left: 62}},
   subChart:  {W: 700, H: 200, margin: {top: 30, right: 180, bottom: 40, left: 80}},
   stageBar:  {W: 500, margin: {left: 100, right: 60, top: 30}},
   stageThru: {W: 600, margin: {left: 100, right: 80, top: 40}},
 };
+
+const LEGEND_FONT_PX = 12;
 
 const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_append_fold","lod_morton_chunk","compress","aggregate","d2h","sink"];
 
@@ -280,9 +254,8 @@ const METRIC_LABELS = {
   init_s: "Startup time (s)",
 };
 
-// The run metrics the chart can draw. The stage views swap in their own list
-// and swap this one back, so both come from one place and the wording of an
-// option does not change as the view does.
+// The stage views swap in their own metrics and swap these back, so the wording
+// of an option cannot change with the view.
 const METRIC_OPTS = Object.entries(METRIC_LABELS);
 
 for (const [key, label] of METRIC_OPTS) {
@@ -577,17 +550,12 @@ let prevCodec = "zstd", prevFill = "xor", prevBackend = "gpu", prevDtype = "u16"
 
 function rebuildControls() {
   const file = getActiveFile();
-  const machine = file.machine || {};
-  document.getElementById("machine-info").textContent = [
-    file.machine_name,
-    machine.hostname || "?",
-    machine.gpu || "?",
-    machine.commit || file.commit,
-    machine.date || file.day || "?",
-  ].filter(Boolean).join(" | ");
+  document.getElementById("machine-info").textContent =
+    [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
+      .filter(Boolean).join(" | ");
 
   // S3 metadata from runs (region, bucket, endpoint)
-  const s3Runs = (getActiveFile().runs || []).filter(r => r.sink === "s3");
+  const s3Runs = (file.runs || []).filter(r => r.sink === "s3");
   const s3Info = document.getElementById("s3-info");
   if (s3Runs.length > 0) {
     const regions = [...new Set(s3Runs.map(r => r.s3_region).filter(Boolean))];
@@ -645,8 +613,7 @@ function rebuildControls() {
   rebuildScenarios();
   rebuildStageFilters();
   rebuildFailures();
-  document.getElementById("scenario-controls").style.display =
-    allScenarios.length > 1 ? "" : "none";
+  autoHide("scenario-controls", allScenarios);
 }
 
 // --- Failures table ---
@@ -743,7 +710,6 @@ function updateControlVisibility(viewMode, useOverlay) {
   const showTp = sink === "s3" && allS3Throughputs.length > 1;
   document.getElementById("s3-throughput-wrap").style.display = showTp ? "" : "none";
 
-  hideEmptyGroup("source-controls");
   hideEmptyGroup("filter-controls");
 }
 
@@ -881,8 +847,8 @@ function lineSeries(filtered, presentScenarios, useOverlay) {
 }
 
 /** Room for the widest legend label, so a long scenario name is not cut off. */
-function legendRoom(labels, fontPx) {
-  const widest = Math.max(0, ...labels.map(l => l.length * fontPx * 0.55));
+function legendRoom(labels) {
+  const widest = Math.max(0, ...labels.map(l => l.length * LEGEND_FONT_PX * 0.55));
   return Math.round(Math.min(320, Math.max(120, widest + 34)));
 }
 
@@ -891,14 +857,12 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
   if (allVals.length === 0) { d3.select("#chart").append("p").text("No data for this metric."); return; }
 
   const series = lineSeries(filtered, presentScenarios, useOverlay);
-  const {plotW, plotH} = LAYOUT.lines;
-  const margin = {...LAYOUT.lines.margin, right: legendRoom(series.map(s => s.label), 12)};
-  const W = margin.left + plotW + margin.right;
-  const H = margin.top + plotH + margin.bottom;
+  const {plotW: innerW, plotH: innerH} = LAYOUT.lines;
+  const margin = {...LAYOUT.lines.margin, right: legendRoom(series.map(s => s.label))};
+  const W = margin.left + innerW + margin.right;
+  const H = margin.top + innerH + margin.bottom;
   const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-  const innerW = plotW;
-  const innerH = plotH;
 
   const xVals = presentChunks.map(chunkLabelToBytes);
 
@@ -907,7 +871,7 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
 
   const colors = d3.scaleOrdinal(d3.schemeTableau10).domain(allScenarios);
 
-  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--grid)");
+  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat(""));
 
   const lineLookup = new Map();
   filtered.forEach(r => lineLookup.set(`${r.scenario}__${r.chunk_bytes_label}__${r.backend}`, r));
@@ -949,7 +913,7 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
       .attr("stroke", colors(s.scenario)).attr("stroke-width", 2)
       .attr("stroke-dasharray", s.dashed ? "4,2" : "none");
     lg.append("circle").attr("cx",6).attr("cy",gy+6).attr("r",3).attr("fill",colors(s.scenario));
-    lg.append("text").attr("x",18).attr("y",gy+10).attr("font-size","12px").text(s.label);
+    lg.append("text").attr("x",18).attr("y",gy+10).attr("font-size",`${LEGEND_FONT_PX}px`).text(s.label);
   });
 
   svg.append("text").attr("x", margin.left).attr("y", 20)
@@ -1018,6 +982,7 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
   if (globalYMax === 0) globalYMax = 1;
 
   const selBackend = getRadio("backend-group");
+  const stageMetricLabel = document.getElementById("metric-sel").selectedOptions[0].textContent;
 
   presentScenarios.forEach(sc => {
     const hasData = filtered.some(r => r.scenario === sc && r.stages);
@@ -1029,7 +994,7 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
     const x = d3.scaleLog().domain(xExtent).range([0, innerW]);
     const y = d3.scaleLinear().domain([0, globalYMax]).range([innerH, 0]);
 
-    g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--grid)");
+    g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat(""));
 
     const backends = useOverlay
       ? [...new Set(filtered.filter(r => r.scenario === sc).map(r => r.backend))].sort()
@@ -1071,7 +1036,6 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
       .call(d3.axisBottom(x).tickValues(xVals).tickFormat((_,i) => presentChunks[i]));
     g.append("g").attr("class","axis").call(d3.axisLeft(y).ticks(4));
 
-    const stageMetricLabel = document.getElementById("metric-sel").selectedOptions[0].textContent;
     svg.append("text").attr("x", subMargin.left).attr("y", 16)
       .attr("font-size","13px").attr("font-weight",700)
       .text(`${sc} — ${stageMetricLabel}`);
@@ -1214,27 +1178,26 @@ function renderStagesThroughput(run, stages) {
 
 // Machine, then one of its sweeps. report.py orders the list oldest first, so
 // the last entry is the newest sweep anywhere and that is what opens.
-// ?file=<name> lets the overview link to one sweep.
 const ALL_MACHINES = "";
 
 function sweepsFor(machine) {
-  return machine === ALL_MACHINES ? files.slice() : files.filter(f => f.machine_name === machine);
+  return files.filter(f => machine === ALL_MACHINES || f.machine === machine);
 }
 
 function sweepLabel(file, showMachine) {
   const parts = [file.day];
-  if (showMachine) parts.push(file.machine_name);
+  if (showMachine) parts.push(file.machine);
   parts.push(file.commit);
-  if (file.member !== file.machine_name) parts.push(`(${file.member})`);
+  if (file.member !== file.machine) parts.push(`(${file.member})`);
   return parts.filter(Boolean).join(" ");
 }
 
 function fillMachines() {
-  const names = [...new Set(files.map(f => f.machine_name))]
+  const names = [...new Set(files.map(f => f.machine))]
     .sort((a, b) => a.localeCompare(b, undefined, {sensitivity: "base"}));
   machineSel.appendChild(new Option("All machines", ALL_MACHINES));
   for (const name of names) machineSel.appendChild(new Option(name, name));
-  document.getElementById("machine-wrap").style.display = names.length > 1 ? "" : "none";
+  autoHide("machine-wrap", names);
 }
 
 function fillSweeps(selected) {
@@ -1244,32 +1207,19 @@ function fillSweeps(selected) {
   for (const file of newestFirst) {
     resultsSel.appendChild(new Option(sweepLabel(file, machine === ALL_MACHINES), file.filename));
   }
-  resultsSel.value = newestFirst.some(f => f.filename === selected)
-    ? selected : newestFirst[0].filename;
-  document.getElementById("results-wrap").style.display = newestFirst.length > 1 ? "" : "none";
+  resultsSel.value = selected ?? newestFirst[0].filename;
+  autoHide("results-wrap", newestFirst);
+  hideEmptyGroup("source-controls");
 }
 
+// ?file=<name> lets the overview link to one sweep.
 const requested = new URLSearchParams(location.search).get("file");
 const opening = fileByName.get(requested) || files[files.length - 1];
 fillMachines();
-machineSel.value = opening.machine_name;
+machineSel.value = opening.machine;
 fillSweeps(opening.filename);
 
-const themeToggle = document.getElementById("theme-toggle");
-function currentTheme() { return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"; }
-function paintToggle() { themeToggle.textContent = currentTheme() === "dark" ? "Light" : "Dark"; }
-themeToggle.addEventListener("click", () => {
-  const next = currentTheme() === "dark" ? "light" : "dark";
-  try {
-    localStorage.setItem("bench-theme", next);
-  } catch {
-    // Applies to this page; it just will not be remembered.
-  }
-  document.documentElement.setAttribute("data-theme", next);
-  paintToggle();
-  render();
-});
-paintToggle();
+wireThemeToggle(render);
 
 // Static radio setup
 makeRadio("view-group", ["heatmap", "lines", "stages"], "heatmap");

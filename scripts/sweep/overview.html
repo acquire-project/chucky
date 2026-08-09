@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Benchmarks over time</title>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="site.css">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
-main { max-width: 1180px; margin: 0 auto; padding: 24px; }
 .lede { color: var(--text-secondary); font-size: 0.9em; margin: 0 0 var(--gap); }
 h1 { font-size: 1.35em; margin: 0 0 4px; }
 h2 { font-size: 1.02em; margin: 0; }
@@ -29,17 +29,12 @@ h2 { font-size: 1.02em; margin: 0; }
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px var(--gap); margin-bottom: var(--gap);
 }
-.filters label { display: block; font-size: 0.72em; font-weight: 600; color: var(--text-secondary); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
-.filters select {
-  font: inherit; font-size: 0.88em; padding: 5px 8px; color: var(--text-primary);
-  background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
-}
 .filters .match-count { margin-left: auto; font-size: 0.8em; color: var(--text-secondary); }
 .filters .check {
   display: flex; align-items: center; gap: 5px; cursor: pointer;
   font-size: 0.88em; font-weight: 400; text-transform: none; letter-spacing: 0;
   color: var(--text-primary); padding: 5px 8px;
-  background: var(--plane); border: 1px solid var(--border); border-radius: 6px;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 
 /* Machine tiles */
@@ -574,41 +569,7 @@ sinkSel.addEventListener("change", () => { state.sink = sinkSel.value; render();
 // Theme
 // =========================================================================
 
-const themeToggle = document.getElementById("theme-toggle");
-
-// Reading storage throws in some file:// and private-browsing contexts, and this
-// runs before the page is drawn, so a theme preference must never be fatal.
-function storedTheme() {
-  try {
-    return localStorage.getItem("bench-theme");
-  } catch {
-    return null;
-  }
-}
-
-function currentTheme() {
-  const stored = storedTheme();
-  if (stored === "light" || stored === "dark") return stored;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  themeToggle.textContent = theme === "dark" ? "Light" : "Dark";
-}
-
-themeToggle.addEventListener("click", () => {
-  const next = currentTheme() === "dark" ? "light" : "dark";
-  try {
-    localStorage.setItem("bench-theme", next);
-  } catch {
-    // The choice still applies to this page; it just will not be remembered.
-  }
-  applyTheme(next);
-  render();
-});
-
-applyTheme(currentTheme());
+wireThemeToggle(render);
 
 // =========================================================================
 // Machine tiles

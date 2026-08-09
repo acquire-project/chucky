@@ -13,6 +13,7 @@ Two pages:
 
 The pages are code only; their data sits beside them and is fetched at load:
     site.css                    the palette and the title bar, used by both pages
+    theme.js                    light or dark, applied before either page paints
     decode.js                   unpacks the columns, imported by both pages
     data/overview.json          every sweep, trimmed, for the overview
     data/sweeps.json            the sweep list the explorer offers
@@ -43,26 +44,27 @@ from pydantic import ValidationError
 
 from columnar import pack
 from models import migrate_results, validate_results
-from summary import (
-    build_summary,
-    find_registry,
-    load_registry,
-    machine_identity,
-    match_registry,
-    sweep_day,
-)
+from summary import build_summary, find_registry, load_registry
 
 SOURCE_DIR = Path(__file__).parent
-EXPLORER_PAGE = SOURCE_DIR / "template.html"
 OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
-DECODER = SOURCE_DIR / "decode.js"
-STYLESHEET = SOURCE_DIR / "site.css"
+
+# Copied beside the overview page, which is the only one the -o argument renames.
+SITE_FILES = {
+    "explore.html": SOURCE_DIR / "template.html",
+    "decode.js": SOURCE_DIR / "decode.js",
+    "theme.js": SOURCE_DIR / "theme.js",
+    "site.css": SOURCE_DIR / "site.css",
+}
 
 # The explorer draws from the config fields and never reads the recorded id,
 # which is the longest string in a sweep. The overview keeps it, because its
 # movers panel matches runs between sweeps by it.
 EXPLORER_OMITS = ("id",)
 EXPLORER_VERSION = 4
+
+# What the explorer's sweep list keeps from each summarized sweep.
+EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu")
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
@@ -90,26 +92,13 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
     return loaded
 
 
-def explorer_index(loaded: list[tuple[Path, dict]], registry: list[dict]) -> dict:
+def explorer_index(sweeps: list[dict]) -> dict:
     """The sweep list the explorer shows before anything is opened.
 
-    Ordered oldest first, the way build_summary orders the overview, so the last
-    entry is the newest sweep and that is the one the explorer opens on.
+    The summary already names each machine and orders the sweeps oldest first,
+    so the last entry is the newest one and that is what the explorer opens on.
     """
-    files = []
-    for path, data in loaded:
-        machine = data.get("machine", {})
-        member, commit = machine_identity(path, machine)
-        entry = match_registry(registry, member, machine.get("hostname", ""))
-        files.append({
-            "filename": path.name,
-            "machine_name": entry["name"] if entry else member,
-            "member": member,
-            "commit": commit,
-            "day": sweep_day(machine, path),
-            "machine": machine,
-        })
-    files.sort(key=lambda f: (f["day"], str(f["machine"].get("date", "")), f["machine_name"]))
+    files = [{key: sweep[key] for key in EXPLORER_INDEX_KEYS} for sweep in sweeps]
     return {"version": EXPLORER_VERSION, "files": files}
 
 
@@ -125,7 +114,7 @@ def write_json(payload: dict, output: Path) -> int:
     return len(text.encode())
 
 
-def write_page(source: Path, output: Path) -> None:
+def copy_file(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(source.read_text())
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
@@ -133,6 +122,7 @@ def write_page(source: Path, output: Path) -> None:
 
 def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: Path) -> None:
     overview = build_summary(loaded, registry)
+    write_json(explorer_index(overview["sweeps"]), data_dir / "sweeps.json")
     try:
         strings, blocks = pack([s["runs"] for s in overview["sweeps"]])
     except ValueError as e:
@@ -143,7 +133,6 @@ def write_data(loaded: list[tuple[Path, dict]], registry: list[dict], data_dir: 
     size = write_json(overview, data_dir / "overview.json")
     print(f"Wrote {data_dir / 'overview.json'} ({size / 1024:.0f} KiB)", file=sys.stderr)
 
-    write_json(explorer_index(loaded, registry), data_dir / "sweeps.json")
     biggest = 0
     for path, data in loaded:
         try:
@@ -197,10 +186,9 @@ def main():
     else:
         out_dir, overview_name = args.output, "index.html"
 
-    write_page(OVERVIEW_PAGE, out_dir / overview_name)
-    write_page(EXPLORER_PAGE, out_dir / "explore.html")
-    write_page(DECODER, out_dir / DECODER.name)
-    write_page(STYLESHEET, out_dir / STYLESHEET.name)
+    copy_file(OVERVIEW_PAGE, out_dir / overview_name)
+    for name, source in SITE_FILES.items():
+        copy_file(source, out_dir / name)
     write_data(loaded, registry, out_dir / "data")
 
     if args.serve is not None:
