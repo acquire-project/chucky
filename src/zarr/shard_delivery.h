@@ -46,6 +46,7 @@ struct shard_state
   // finalized_fence retires once those writes have left the IO queue.
   uint64_t finalized_append_chunks;
   struct io_event finalized_fence;
+  uint64_t fenced_append_chunks; // finalized count already waited for
 
   // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
   // bulk HtoD upload covers all shards. NULL when page == 0.

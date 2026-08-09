@@ -213,8 +213,14 @@ uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink)
 {
-  if (sink->wait_fence && ss->finalized_fence.seq > 0)
-    sink->wait_fence(sink, ss->finalized_fence);
+  // Wait once per closed-out generation, not once per caller: the metadata
+  // update runs every batch, and blocking the delivery worker on a fence
+  // already waited for costs real throughput on small epochs.
+  if (ss->fenced_append_chunks != ss->finalized_append_chunks) {
+    if (sink->wait_fence)
+      sink->wait_fence(sink, ss->finalized_fence);
+    ss->fenced_append_chunks = ss->finalized_append_chunks;
+  }
   return ss->finalized_append_chunks;
 }
 
