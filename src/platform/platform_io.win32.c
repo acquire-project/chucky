@@ -92,11 +92,23 @@ platform_fsync(platform_fd fd)
   return FlushFileBuffers(fd) ? 0 : -1;
 }
 
+// Windows refuses to replace a file another handle has open unless that
+// handle allowed delete sharing, which readers generally do not. A reader
+// holds the file only for the length of one read, so wait for it to close
+// instead of failing the write.
 int
 platform_rename_replace(const char* from, const char* to)
 {
   DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
-  return MoveFileExA(from, to, flags) ? 0 : -1;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (MoveFileExA(from, to, flags))
+      return 0;
+    DWORD err = GetLastError();
+    if (err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED)
+      return -1;
+    Sleep(1);
+  }
+  return -1;
 }
 
 void

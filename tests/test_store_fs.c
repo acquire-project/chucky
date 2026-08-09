@@ -480,6 +480,9 @@ put_reader_fn(void* arg)
     r->reads++;
     if (!document_is_complete(buf, len))
       r->torn++;
+    // Poll rather than hold the file open without pause: on Windows no writer
+    // can replace a file a reader never lets go of.
+    platform_sleep_ns(200000);
   }
   free(buf);
 }
