@@ -2,6 +2,7 @@
 #include "gpu/prelude.cuda.h"
 #include "util/prelude.h"
 #include <nvcomp/lz4.h>
+#include <nvcomp/zstd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,78 @@ source_value_at(size_t gi, size_t total)
   if (gi < 2 * total / 3)
     return 42;
   return (uint16_t)(gi ^ (gi >> 16));
+}
+
+static size_t
+nvcomp_raw_max_output(enum compression_codec type, size_t chunk_bytes)
+{
+  size_t max_comp = 0;
+  switch (type) {
+    case CODEC_NONE:
+      return chunk_bytes;
+    case CODEC_LZ4_NON_STANDARD:
+      if (nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
+            chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp) !=
+          nvcompSuccess)
+        return 0;
+      return max_comp;
+    case CODEC_ZSTD:
+      if (nvcompBatchedZstdCompressGetMaxOutputChunkSize(
+            chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp) !=
+          nvcompSuccess)
+        return 0;
+      return max_comp;
+    default:
+      return 0;
+  }
+}
+
+// Chunks are laid out back to back at the bound, so the bound must cover what
+// nvcomp can emit and be a multiple of what nvcomp asks of a compressed chunk.
+static int
+test_max_output_size_alignment(void)
+{
+  log_info("=== test_max_output_size_alignment ===");
+
+  static const enum compression_codec codecs[] = { CODEC_NONE,
+                                                   CODEC_LZ4_NON_STANDARD,
+                                                   CODEC_ZSTD };
+  static const size_t chunk_sizes[] = { 16384,  65536,   131072, 262144,
+                                        524288, 1048576, 2097152 };
+  const size_t init_chunk_bytes = 65536;
+
+  for (size_t i = 0; i < countof(codecs); ++i) {
+    const size_t alignment = codec_output_alignment(codecs[i]);
+    CHECK(Fail, alignment > 0);
+    for (size_t j = 0; j < countof(chunk_sizes); ++j) {
+      const size_t raw = nvcomp_raw_max_output(codecs[i], chunk_sizes[j]);
+      CHECK(Fail, raw >= chunk_sizes[j]);
+      const size_t max_out = codec_max_output_size(codecs[i], chunk_sizes[j]);
+      if (max_out < raw || max_out % alignment) {
+        log_error("codec %d chunk %zu: bound %zu below nvcomp's %zu or not a "
+                  "multiple of %zu",
+                  (int)codecs[i],
+                  chunk_sizes[j],
+                  max_out,
+                  raw,
+                  alignment);
+        goto Fail;
+      }
+    }
+
+    struct codec c = { 0 };
+    CHECK(Fail, codec_init(&c, codecs[i], init_chunk_bytes, 2) == 0);
+    const size_t stride = c.max_output_size;
+    codec_free(&c);
+    CHECK(Fail, stride == codec_max_output_size(codecs[i], init_chunk_bytes));
+  }
+
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
 }
 
 static int
@@ -375,5 +448,6 @@ Fail:
   return 1;
 }
 
-RUN_GPU_TESTS({ "compress_roundtrip", test_compress_roundtrip },
+RUN_GPU_TESTS({ "max_output_size_alignment", test_max_output_size_alignment },
+              { "compress_roundtrip", test_compress_roundtrip },
               { "compress_lz4_roundtrip", test_compress_lz4_roundtrip }, )

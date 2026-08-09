@@ -1,6 +1,7 @@
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
 #include "log/log.h"
+#include "util/prelude.h"
 #include <nvcomp/lz4.h>
 #include <nvcomp/shared_types.h>
 #include <nvcomp/zstd.h>
@@ -90,28 +91,68 @@ codec_alignment(enum compression_codec type)
   }
 }
 
+// --- codec_output_alignment ---
+
+// nvcomp's named alignment constants are the strictest across all its buffers,
+// set by one this path never allocates; compressed chunks need only the
+// alignment nvcomp reports for them.
+extern "C" size_t
+codec_output_alignment(enum compression_codec type)
+{
+  nvcompAlignmentRequirements_t written = { 0 }, read = { 0 };
+  switch (type) {
+    case CODEC_LZ4_NON_STANDARD:
+      NVCOMP(Fail,
+             nvcompBatchedLZ4CompressGetRequiredAlignments(
+               nvcompBatchedLZ4CompressDefaultOpts, &written));
+      NVCOMP(Fail,
+             nvcompBatchedLZ4DecompressGetRequiredAlignments(
+               nvcompBatchedLZ4DecompressDefaultOpts, &read));
+      break;
+    case CODEC_ZSTD:
+      NVCOMP(Fail,
+             nvcompBatchedZstdCompressGetRequiredAlignments(
+               nvcompBatchedZstdCompressDefaultOpts, &written));
+      NVCOMP(Fail,
+             nvcompBatchedZstdDecompressGetRequiredAlignments(
+               nvcompBatchedZstdDecompressDefaultOpts, &read));
+      break;
+    default:
+      return 1;
+  }
+  return written.output > read.input ? written.output : read.input;
+Fail:
+  return 0;
+}
+
 // --- codec_max_output_size ---
 
 extern "C" size_t
 codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
 {
   size_t max_comp = 0;
+  const size_t alignment = codec_output_alignment(type);
+  CHECK(Fail, alignment > 0);
+
   switch (type) {
     case CODEC_NONE:
-      return chunk_bytes;
+      max_comp = chunk_bytes;
+      break;
     case CODEC_LZ4_NON_STANDARD:
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
                chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      return max_comp;
+      break;
     case CODEC_ZSTD:
       NVCOMP(Fail,
              nvcompBatchedZstdCompressGetMaxOutputChunkSize(
                chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      return max_comp;
-    default:
       break;
+    default:
+      goto Fail;
   }
+  // nvcomp's own bound need not be a multiple of the alignment it asks for.
+  return align_up(max_comp, alignment);
 Fail:
   return 0;
 }
@@ -181,54 +222,16 @@ codec_init(struct codec* c,
   c->type = type;
   c->chunk_bytes = chunk_bytes;
   c->batch_size = batch_size;
-  c->alignment = codec_alignment(type);
 
-  switch (type) {
-    case CODEC_BLOSC_LZ4:
-    case CODEC_BLOSC_ZSTD:
-      log_error("blosc codecs are not supported on GPU");
-      goto Fail;
-
-    case CODEC_NONE:
-      c->max_output_size = chunk_bytes;
-      c->temp_bytes = 0;
-      break;
-
-    case CODEC_LZ4_NON_STANDARD: {
-      size_t max_comp = 0;
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      c->max_output_size = max_comp;
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetTempSizeAsync(
-               batch_size,
-               chunk_bytes,
-               nvcompBatchedLZ4CompressDefaultOpts,
-               &c->temp_bytes,
-               batch_size * chunk_bytes));
-      break;
-    }
-
-    case CODEC_ZSTD: {
-      size_t max_comp = 0;
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      c->max_output_size = max_comp;
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetTempSizeAsync(
-               batch_size,
-               chunk_bytes,
-               nvcompBatchedZstdCompressDefaultOpts,
-               &c->temp_bytes,
-               batch_size * chunk_bytes));
-      break;
-    }
-
-    default:
-      goto Fail;
+  if (!codec_is_gpu_supported(type)) {
+    log_error("codec %d is not supported on GPU", (int)type);
+    goto Fail;
   }
+
+  c->max_output_size = codec_max_output_size(type, chunk_bytes);
+  CHECK(Fail, c->max_output_size > 0);
+
+  c->temp_bytes = codec_temp_bytes(type, chunk_bytes, batch_size);
 
   // Allocate device arrays
   CU(Fail,
