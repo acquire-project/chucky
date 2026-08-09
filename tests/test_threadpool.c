@@ -63,7 +63,7 @@ test_for_n(struct threadpool* p, size_t n)
   }
   rc = 0;
 Done:
-  free(hits);
+  free((void*)hits);
   return rc;
 }
 
@@ -98,7 +98,7 @@ test_for_n_dynamic(struct threadpool* p, size_t n)
   }
   rc = 0;
 Done:
-  free(hits);
+  free((void*)hits);
   return rc;
 }
 
@@ -137,7 +137,7 @@ test_for_threads(struct threadpool* p)
   }
   rc = 0;
 Done:
-  free(hits);
+  free((void*)hits);
   return rc;
 }
 

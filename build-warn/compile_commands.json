@@ -1,0 +1,872 @@
+[
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/chucky_log.dir/log/log.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/log/log.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/log/log.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/chucky_log.dir/log/log.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/index_ops.dir/util/index.ops.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/index.ops.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/index.ops.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/index_ops.dir/util/index.ops.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/format_bytes.dir/util/format_bytes.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/format_bytes.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/format_bytes.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/format_bytes.dir/util/format_bytes.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/strbuf.dir/util/strbuf.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/strbuf.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/util/strbuf.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/strbuf.dir/util/strbuf.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/dtype.dir/dtype.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/dtype.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/dtype.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/dtype.dir/dtype.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/dimension.dir/dimension.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/dimension.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/dimension.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/dimension.dir/dimension.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/lod_plan.dir/lod/lod_plan.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/lod/lod_plan.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/lod/lod_plan.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/lod_plan.dir/lod/lod_plan.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/lod_plan.dir/lod/reduce_csr.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/lod/reduce_csr.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/lod/reduce_csr.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/lod_plan.dir/lod/reduce_csr.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/crc32c.dir/zarr/crc32c.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/crc32c.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/crc32c.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/crc32c.dir/zarr/crc32c.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/platform.dir/platform/platform.posix.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform.posix.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform.posix.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/platform.dir/platform/platform.posix.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/threadpool.dir/threadpool/threadpool.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/threadpool/threadpool.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/threadpool/threadpool.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/threadpool.dir/threadpool/threadpool.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/io_queue.dir/zarr/io_queue.posix.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/io_queue.posix.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/io_queue.posix.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/io_queue.dir/zarr/io_queue.posix.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/platform_io.dir/platform/platform_io.posix.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform_io.posix.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform_io.posix.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/platform_io.dir/platform/platform_io.posix.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/platform_cmd.dir/platform/platform_cmd.posix.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform_cmd.posix.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/platform/platform_cmd.posix.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/platform_cmd.dir/platform/platform_cmd.posix.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/writer.dir/writer.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/writer.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/writer.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/writer.dir/writer.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/store_api.dir/store.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/store.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/store.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/store_api.dir/store.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/codec_types.dir/types.codec.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/types.codec.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/types.codec.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/codec_types.dir/types.codec.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/stream_config.dir/stream/config.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/config.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/config.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/stream_config.dir/stream/config.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/stream_config.dir/stream/dim_info.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/dim_info.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/dim_info.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/stream_config.dir/stream/dim_info.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/CMakeFiles/stream_config.dir/stream/types.aggregate.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/types.aggregate.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/stream/types.aggregate.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/CMakeFiles/stream_config.dir/stream/types.aggregate.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc -forward-unknown-to-host-compiler -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG \"--generate-code=arch=compute_89,code=[compute_89,sm_89]\" -Xcompiler=-fPIC --compiler-options=-Wall,-Wextra -x cu -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/transpose.cu -o src/gpu/CMakeFiles/transpose.dir/transpose.cu.o",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/transpose.cu",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/transpose.dir/transpose.cu.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc -forward-unknown-to-host-compiler -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG \"--generate-code=arch=compute_89,code=[compute_89,sm_89]\" -Xcompiler=-fPIC --compiler-options=-Wall,-Wextra -x cu -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/compress.cu -o src/gpu/CMakeFiles/compress.dir/compress.cu.o",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/compress.cu",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/compress.dir/compress.cu.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc -forward-unknown-to-host-compiler -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG \"--generate-code=arch=compute_89,code=[compute_89,sm_89]\" -Xcompiler=-fPIC --compiler-options=-Wall,-Wextra -x cu -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/aggregate.cu -o src/gpu/CMakeFiles/aggregate.dir/aggregate.cu.o",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/aggregate.cu",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/aggregate.dir/aggregate.cu.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc -forward-unknown-to-host-compiler -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG \"--generate-code=arch=compute_89,code=[compute_89,sm_89]\" -Xcompiler=-fPIC --compiler-options=-Wall,-Wextra -x cu -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/lod.cu -o src/gpu/CMakeFiles/lod.dir/lod.cu.o",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/lod.cu",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/lod.dir/lod.cu.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/lod.dir/reduce_csr_gpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/reduce_csr_gpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/reduce_csr_gpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/lod.dir/reduce_csr_gpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/stream.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/stream.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/stream.init.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.init.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.init.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/stream.init.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/stream.ingest.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.ingest.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.ingest.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/stream.ingest.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/stream.lod.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.lod.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/stream.lod.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/stream.lod.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/ordering.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/ordering.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/ordering.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/ordering.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/pool.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/pool.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/pool.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/pool.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/schedule.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/schedule.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/schedule.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/schedule.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/flush.compress_agg.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/flush.compress_agg.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/flush.compress_agg.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/flush.compress_agg.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/gpu/CMakeFiles/stream.dir/flush.d2h_deliver.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/flush.d2h_deliver.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/gpu/flush.d2h_deliver.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/gpu/CMakeFiles/stream.dir/flush.d2h_deliver.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/c++ -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -o src/cpu/CMakeFiles/transpose_cpu.dir/transpose.cpp.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/transpose.cpp",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/transpose.cpp",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/transpose_cpu.dir/transpose.cpp.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/compress_cpu.dir/compress.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/compress.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/compress.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/compress_cpu.dir/compress.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/compress_cpu.dir/compress_blosc.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/compress_blosc.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/compress_blosc.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/compress_cpu.dir/compress_blosc.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/aggregate_cpu.dir/aggregate.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/aggregate.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/aggregate.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/aggregate_cpu.dir/aggregate.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/c++ -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -o src/cpu/CMakeFiles/lod_cpu.dir/lod.cpp.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/lod.cpp",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/lod.cpp",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/lod_cpu.dir/lod.cpp.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/pipeline_cpu.dir/pipeline.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/pipeline.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/pipeline.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/pipeline_cpu.dir/pipeline.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/stream_cpu.dir/stream.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/stream.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/stream.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/stream_cpu.dir/stream.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/cpu/CMakeFiles/stream_cpu.dir/stream.body.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/stream.body.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/cpu/stream.body.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/cpu/CMakeFiles/stream_cpu.dir/stream.body.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/multiarray/CMakeFiles/multiarray_cpu.dir/stream.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/multiarray/stream.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/multiarray/stream.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/multiarray/CMakeFiles/multiarray_cpu.dir/stream.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/multiarray/CMakeFiles/multiarray_gpu.dir/stream.gpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/multiarray/stream.gpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/multiarray/stream.gpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/multiarray/CMakeFiles/multiarray_gpu.dir/stream.gpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/json_writer.dir/json_writer.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/json_writer.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/json_writer.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/json_writer.dir/json_writer.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/json_validate.dir/json_validate.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/json_validate.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/json_validate.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/json_validate.dir/json_validate.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/attr_set.dir/attr_set.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/attr_set.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/attr_set.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/attr_set.dir/attr_set.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/zarr_metadata.dir/zarr_metadata.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_metadata.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_metadata.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/zarr_metadata.dir/zarr_metadata.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/shard_delivery.dir/shard_delivery.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_delivery.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_delivery.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/shard_delivery.dir/shard_delivery.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/shard_pool_fs.dir/shard_pool_fs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_pool_fs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_pool_fs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/shard_pool_fs.dir/shard_pool_fs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/store_fs.dir/store_fs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/store_fs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/store_fs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/store_fs.dir/store_fs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/zarr_group.dir/zarr_group.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_group.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_group.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/zarr_group.dir/zarr_group.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/zarr_array.dir/zarr_array.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_array.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/zarr_array.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/zarr_array.dir/zarr_array.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/s3_client.dir/s3_client.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/s3_client.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/s3_client.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/s3_client.dir/s3_client.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/shard_pool_s3.dir/shard_pool_s3.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_pool_s3.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/shard_pool_s3.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/shard_pool_s3.dir/shard_pool_s3.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/zarr/CMakeFiles/store_s3.dir/store_s3.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/store_s3.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/zarr/store_s3.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/zarr/CMakeFiles/store_s3.dir/store_s3.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/ngff/CMakeFiles/ngff_metadata.dir/ngff_metadata.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/ngff/ngff_metadata.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/ngff/ngff_metadata.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/ngff/CMakeFiles/ngff_metadata.dir/ngff_metadata.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/ngff/CMakeFiles/ngff_multiscale.dir/ngff_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/ngff/ngff_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/ngff/ngff_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/ngff/CMakeFiles/ngff_multiscale.dir/ngff_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/hcs/CMakeFiles/hcs_metadata.dir/hcs_metadata.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/hcs/hcs_metadata.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/hcs/hcs_metadata.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/hcs/CMakeFiles/hcs_metadata.dir/hcs_metadata.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o src/hcs/CMakeFiles/hcs.dir/hcs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/hcs/hcs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src/hcs/hcs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/src/hcs/CMakeFiles/hcs.dir/hcs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/index_ops_util.dir/index.ops.util.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/index.ops.util.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/index.ops.util.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/index_ops_util.dir/index.ops.util.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/morton_util.dir/morton.util.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/morton.util.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/morton.util.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/morton_util.dir/morton.util.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_shard_sink.dir/test_shard_sink.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_shard_sink.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_shard_sink.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_shard_sink.dir/test_shard_sink.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_counting_sink.dir/test_counting_sink.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_counting_sink.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_counting_sink.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_counting_sink.dir/test_counting_sink.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_gpu_helpers.dir/test_gpu_helpers.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_gpu_helpers.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_gpu_helpers.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_gpu_helpers.dir/test_gpu_helpers.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_shard_verify.dir/test_shard_verify.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_shard_verify.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_shard_verify.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_shard_verify.dir/test_shard_verify.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_voxel_encode.dir/test_voxel_encode.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_voxel_encode.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_voxel_encode.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_voxel_encode.dir/test_voxel_encode.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/aggregate_contract.dir/aggregate_contract.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/aggregate_contract.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/aggregate_contract.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/aggregate_contract.dir/aggregate_contract.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_helpers.dir/test_zarr_helpers.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_helpers.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_helpers.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_helpers.dir/test_zarr_helpers.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_threadpool.dir/test_threadpool.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_threadpool.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_threadpool.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_threadpool.dir/test_threadpool.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_index_ops.dir/test_index_ops.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_index_ops.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_index_ops.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_index_ops.dir/test_index_ops.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_transpose.dir/test_transpose.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_transpose.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_transpose.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_transpose.dir/test_transpose.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_transpose_cpu.dir/test_transpose_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_transpose_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_transpose_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_transpose_cpu.dir/test_transpose_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_compress_cpu.dir/test_compress_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_compress_cpu.dir/test_compress_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_aggregate_cpu.dir/test_aggregate_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_aggregate_cpu.dir/test_aggregate_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_aggregate_contract_cpu.dir/test_aggregate_contract_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_contract_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_contract_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_aggregate_contract_cpu.dir/test_aggregate_contract_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_aggregate_contract_gpu.dir/test_aggregate_contract_gpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_contract_gpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_aggregate_contract_gpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_aggregate_contract_gpu.dir/test_aggregate_contract_gpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_lod_cpu.dir/test_lod_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_lod_cpu.dir/test_lod_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_stream_cpu.dir/test_stream_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_stream_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_stream_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_stream_cpu.dir/test_stream_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_sink_flush_error.dir/test_sink_flush_error.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_sink_flush_error.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_sink_flush_error.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_sink_flush_error.dir/test_sink_flush_error.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_ngff_flush_cascade.dir/test_ngff_flush_cascade.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_flush_cascade.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_flush_cascade.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_ngff_flush_cascade.dir/test_ngff_flush_cascade.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_multiarray_cpu.dir/test_multiarray_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_multiarray_cpu.dir/test_multiarray_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_multiarray_gpu.dir/test_multiarray_gpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_gpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_gpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_multiarray_gpu.dir/test_multiarray_gpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_multi_append.dir/test_multi_append.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multi_append.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multi_append.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_multi_append.dir/test_multi_append.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_cpu_zarr_fs.dir/test_cpu_zarr_fs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_cpu_zarr_fs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_cpu_zarr_fs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_cpu_zarr_fs.dir/test_cpu_zarr_fs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -DSOURCE_DIR=\\\"/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold\\\" -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_readback.dir/test_zarr_readback.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_readback.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_readback.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_readback.dir/test_zarr_readback.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_cross_validate.dir/test_cross_validate.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_cross_validate.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_cross_validate.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_cross_validate.dir/test_cross_validate.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_platform.dir/test_platform.posix.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_platform.posix.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_platform.posix.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_platform.dir/test_platform.posix.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_data.dir/test_data.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_data.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_data.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_data.dir/test_data.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_stream.dir/test_stream.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_stream.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_stream.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_stream.dir/test_stream.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_compress.dir/test_compress.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_compress.dir/test_compress.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_json_writer.dir/test_json_writer.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_json_writer.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_json_writer.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_json_writer.dir/test_json_writer.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_io_queue.dir/test_io_queue.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_io_queue.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_io_queue.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_io_queue.dir/test_io_queue.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_store_fs.dir/test_store_fs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_store_fs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_store_fs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_store_fs.dir/test_store_fs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_attribute.dir/test_zarr_attribute.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_attribute.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_attribute.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_attribute.dir/test_zarr_attribute.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_ngff_attribute.dir/test_ngff_attribute.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_attribute.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_attribute.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_ngff_attribute.dir/test_ngff_attribute.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_hcs_attribute.dir/test_hcs_attribute.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_hcs_attribute.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_hcs_attribute.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_hcs_attribute.dir/test_hcs_attribute.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_array.dir/test_zarr_array.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_array.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_array.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_array.dir/test_zarr_array.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_ngff_multiscale.dir/test_ngff_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ngff_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_ngff_multiscale.dir/test_ngff_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_hcs.dir/test_hcs.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_hcs.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_hcs.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_hcs.dir/test_hcs.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DSOURCE_DIR=\\\"/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold\\\" -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_ome_validate.dir/test_ome_validate.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ome_validate.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ome_validate.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_ome_validate.dir/test_ome_validate.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_fs_sink.dir/test_zarr_fs_sink.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_fs_sink.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_fs_sink.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_fs_sink.dir/test_zarr_fs_sink.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_destroy_drain.dir/test_destroy_drain.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_destroy_drain.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_destroy_drain.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_destroy_drain.dir/test_destroy_drain.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_flush_drain_gpu.dir/test_flush_drain_gpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_drain_gpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_drain_gpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_flush_drain_gpu.dir/test_flush_drain_gpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_destroy_midstream.dir/test_destroy_midstream.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_destroy_midstream.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_destroy_midstream.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_destroy_midstream.dir/test_destroy_midstream.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_flush_drain_cpu.dir/test_flush_drain_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_drain_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_drain_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_flush_drain_cpu.dir/test_flush_drain_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DHAVE_BLOSC -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_flush_error_drain_cpu.dir/test_flush_error_drain_cpu.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_error_drain_cpu.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_error_drain_cpu.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_flush_error_drain_cpu.dir/test_flush_error_drain_cpu.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_multiarray_flush_mock.dir/test_multiarray_flush_mock.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_flush_mock.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiarray_flush_mock.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_multiarray_flush_mock.dir/test_multiarray_flush_mock.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_zarr_s3_sink.dir/test_zarr_s3_sink.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_s3_sink.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_zarr_s3_sink.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_zarr_s3_sink.dir/test_zarr_s3_sink.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_store_s3.dir/test_store_s3.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_store_s3.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_store_s3.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_store_s3.dir/test_store_s3.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_ingest.dir/test_ingest.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ingest.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_ingest.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_ingest.dir/test_ingest.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_compress_agg.dir/test_compress_agg.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress_agg.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_compress_agg.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_compress_agg.dir/test_compress_agg.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_batch.dir/test_batch.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_batch.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_batch.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_batch.dir/test_batch.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_d2h_deliver.dir/test_d2h_deliver.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_d2h_deliver.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_d2h_deliver.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_d2h_deliver.dir/test_d2h_deliver.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_flush_orch.dir/test_flush_orchestration.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_orchestration.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_flush_orchestration.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_flush_orch.dir/test_flush_orchestration.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_dimension.dir/test_dimension.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_dimension.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_dimension.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_dimension.dir/test_dimension.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_lz4_warning.dir/test_lz4_warning.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lz4_warning.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lz4_warning.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_lz4_warning.dir/test_lz4_warning.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_chucky_log.dir/test_chucky_log.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_chucky_log.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_chucky_log.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_chucky_log.dir/test_chucky_log.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_strbuf.dir/test_strbuf.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_strbuf.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_strbuf.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_strbuf.dir/test_strbuf.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_append_latency.dir/test_append_latency.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_append_latency.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_append_latency.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_append_latency.dir/test_append_latency.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_lod.dir/test_lod.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_lod.dir/test_lod.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc -forward-unknown-to-host-compiler -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG \"--generate-code=arch=compute_89,code=[compute_89,sm_89]\" -Xcompiler=-fPIE --compiler-options=-Wall,-Wextra -x cu -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod_dtypes.cu -o tests/CMakeFiles/test_lod_dtypes.dir/test_lod_dtypes.cu.o",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_lod_dtypes.cu",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_lod_dtypes.dir/test_lod_dtypes.cu.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/CMakeFiles/test_multiscale.dir/test_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/test_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/CMakeFiles/test_multiscale.dir/test_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/experiments/CMakeFiles/index.ops.dir/index.ops.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/index.ops.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/index.ops.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/experiments/CMakeFiles/index.ops.dir/index.ops.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/experiments/CMakeFiles/index.ops.cuda.dir/index.ops.cuda.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/index.ops.cuda.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/index.ops.cuda.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/experiments/CMakeFiles/index.ops.cuda.dir/index.ops.cuda.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/.. -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o tests/experiments/CMakeFiles/test_morton.dir/morton.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/morton.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests/experiments/morton.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/tests/experiments/CMakeFiles/test_morton.dir/morton.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/bench_util.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_util.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_util.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/bench_util.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/sink_discard.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_discard.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_discard.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/sink_discard.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/sink_throttled.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_throttled.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_throttled.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/sink_throttled.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/sink_metering.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_metering.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/sink_metering.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/sink_metering.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/bench_zarr.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_zarr.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_zarr.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/bench_zarr.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/bench_parse.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_parse.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_parse.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/bench_parse.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_util.dir/bench_report.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_report.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_report.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_util.dir/bench_report.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_256cube_single.dir/bench_stream_256cube_single.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_single.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_single.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_256cube_single.dir/bench_stream_256cube_single.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_256cube_multiscale.dir/bench_stream_256cube_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_256cube_multiscale.dir/bench_stream_256cube_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_256cube_multiscale_dim0.dir/bench_stream_256cube_multiscale_dim0.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_multiscale_dim0.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_multiscale_dim0.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_256cube_multiscale_dim0.dir/bench_stream_256cube_multiscale_dim0.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_orca2_single.dir/bench_stream_orca2_single.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_single.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_single.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_orca2_single.dir/bench_stream_orca2_single.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_orca2_multiscale.dir/bench_stream_orca2_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_orca2_multiscale.dir/bench_stream_orca2_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_orca2_multiscale_dim0.dir/bench_stream_orca2_multiscale_dim0.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_multiscale_dim0.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_orca2_multiscale_dim0.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_orca2_multiscale_dim0.dir/bench_stream_orca2_multiscale_dim0.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_medfmt_single.dir/bench_stream_medfmt_single.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_single.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_single.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_medfmt_single.dir/bench_stream_medfmt_single.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_medfmt_multiscale.dir/bench_stream_medfmt_multiscale.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_multiscale.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_multiscale.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_medfmt_multiscale.dir/bench_stream_medfmt_multiscale.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_medfmt_multiscale_dim0.dir/bench_stream_medfmt_multiscale_dim0.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_multiscale_dim0.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_medfmt_multiscale_dim0.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_medfmt_multiscale_dim0.dir/bench_stream_medfmt_multiscale_dim0.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_smallepoch_single.dir/bench_stream_smallepoch_single.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_smallepoch_single.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_smallepoch_single.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_smallepoch_single.dir/bench_stream_smallepoch_single.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_256cube_two_streams.dir/bench_stream_256cube_two_streams.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_two_streams.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_256cube_two_streams.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_256cube_two_streams.dir/bench_stream_256cube_two_streams.c.o"
+},
+{
+  "directory": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn",
+  "command": "/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc -DAWS_AUTH_USE_IMPORT_EXPORT -DAWS_CAL_USE_IMPORT_EXPORT -DAWS_CHECKSUMS_USE_IMPORT_EXPORT -DAWS_COMMON_USE_IMPORT_EXPORT -DAWS_COMPRESSION_USE_IMPORT_EXPORT -DAWS_ENABLE_EPOLL -DAWS_HTTP_USE_IMPORT_EXPORT -DAWS_IO_USE_IMPORT_EXPORT -DAWS_S3_USE_IMPORT_EXPORT -DAWS_SDKUTILS_USE_IMPORT_EXPORT -DHAVE_BLOSC -DNVCOMP_STATIC_DEFINE -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/src -I/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/tests -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include -isystem /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl -isystem /mnt/main0/home/nclack/opt/include -isystem /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include -O2 -g -DNDEBUG -fPIE -Wall -Wextra -Wpedantic -o bench/CMakeFiles/bench_stream_aqz_single.dir/bench_stream_aqz_single.c.o -c /mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_aqz_single.c",
+  "file": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/bench/bench_stream_aqz_single.c",
+  "output": "/mnt/main0/home/nclack/src/chucky/.claude/worktrees/fix-183-staging-copy-threshold/build-warn/bench/CMakeFiles/bench_stream_aqz_single.dir/bench_stream_aqz_single.c.o"
+}
+]
