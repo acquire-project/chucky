@@ -299,11 +299,6 @@ def gpu_name() -> str:
 # Runner
 # ---------------------------------------------------------------------------
 
-# Everything CMake treats as false. A value CMake would treat as true, or a
-# cache we cannot read, means we assume the gpu backend is available.
-CMAKE_FALSE = {"", "0", "OFF", "FALSE", "NO", "N", "IGNORE", "NOTFOUND"}
-
-
 @functools.cache
 def build_has_gpu(build_dir: Path) -> bool:
     """Whether this build can run the gpu backend, per its CMake cache."""
@@ -314,8 +309,8 @@ def build_has_gpu(build_dir: Path) -> bool:
     m = re.search(r"^CHUCKY_ENABLE_GPU:BOOL=(.*)$", cache, re.MULTILINE)
     if not m:
         return True
-    value = m.group(1).strip().upper()
-    return not (value in CMAKE_FALSE or value.endswith("-NOTFOUND"))
+    # A value we cannot read as false means we assume a gpu is available.
+    return m.group(1).strip().upper() not in {"", "0", "OFF", "FALSE", "NO", "N"}
 
 
 def bench_exe(spec: RunSpec, build_dir: Path) -> Path:
@@ -542,11 +537,10 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
 
     # -- load existing results for resumability --
     output.parent.mkdir(parents=True, exist_ok=True)
-    # `records` is everything the file will hold, in the order it was read;
-    # `existing` is the subset that counts as done. A run held back for a redo
-    # stays in `records`, so a redo that never happens erases nothing.
+    # A run held back for a redo is still written out, so a redo that never
+    # happens erases nothing.
     records: dict = {}
-    existing: dict = {}
+    done: set[str] = set()
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
@@ -563,7 +557,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 continue
             if rerun and any(pat in rid for pat in rerun):
                 continue
-            existing[rid] = r
+            done.add(rid)
     else:
         data = {
             "version": CURRENT_VERSION,
@@ -577,9 +571,8 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             "runs": [],
         }
 
-
     # -- count how many actually need to run --
-    to_run = [spec for spec in runs if spec.id not in existing]
+    to_run = [spec for spec in runs if spec.id not in done]
     skip_count = len(runs) - len(to_run)
 
     if skip_count:
@@ -630,7 +623,6 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             style = status_style(st)
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
-            existing[spec.id] = result
             records[spec.id] = result
             save_results(output, data, records)
             progress.advance(task)

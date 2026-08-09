@@ -13,13 +13,13 @@ enum bench_backend
   BENCH_CPU,
 };
 
-// Byte-size parser: "256K", "1M", "8G" etc. Returns non-zero and leaves *out
-// alone when the text is not a size this platform can hold.
+// Byte-size parser: "256K", "1M", "8G" etc. Leaves *out alone when the text
+// is not a size this platform can hold.
 int
 parse_bytes(const char* s, size_t* out);
 
 // CLI option parsers. parse_fill returns NULL on error.
-// The int-returning parsers below return non-zero on success, 0 on error.
+// The int-returning parsers return non-zero on success, 0 on error.
 fill_fn
 parse_fill(const char* s);
 

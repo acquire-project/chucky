@@ -40,15 +40,12 @@ bench_gpu_advise_layout(struct tile_stream_configuration* config,
                         size_t shard_alignment,
                         struct advise_layout_diagnostic* diag);
 
-// Print the device memory breakdown and report the totals the summary needs.
-// Returns 0 when the estimate succeeded.
-int
+void
 bench_gpu_report_memory(const struct tile_stream_configuration* config,
                         uint64_t* total_chunks,
                         size_t* device_bytes,
                         size_t* pinned_bytes);
 
-// Print per-stream and doubled device memory for the two-stream driver.
 void
 bench_gpu_report_memory_pair(const struct tile_stream_configuration* config);
 

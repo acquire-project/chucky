@@ -59,7 +59,7 @@ bench_gpu_advise_layout(struct tile_stream_configuration* config,
   return 1;
 }
 
-int
+void
 bench_gpu_report_memory(const struct tile_stream_configuration* config,
                         uint64_t* total_chunks,
                         size_t* device_bytes,
@@ -69,7 +69,6 @@ bench_gpu_report_memory(const struct tile_stream_configuration* config,
   (void)total_chunks;
   (void)device_bytes;
   (void)pinned_bytes;
-  return 1;
 }
 
 void

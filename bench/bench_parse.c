@@ -1,5 +1,6 @@
 #include "bench_parse.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -27,19 +28,18 @@ is_byte_tail(const char* s)
 int
 parse_bytes(const char* s, size_t* out)
 {
-  // strtoull skips leading whitespace and accepts a sign; a negative would
-  // wrap to a huge size, so refuse it before we get there.
-  while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\v' ||
-         *s == '\f')
+  // strtoull skips leading space and accepts a sign; a negative would wrap
+  // to a huge size, so refuse it before we get there.
+  while (isspace((unsigned char)*s))
     ++s;
   if (*s == '-')
-    return 1;
+    return 0;
 
   char* end = NULL;
   errno = 0;
   unsigned long long val = strtoull(s, &end, 10);
   if (end == s || errno == ERANGE)
-    return 1;
+    return 0;
 
   unsigned shift = 0;
   const char* tail = end;
@@ -63,19 +63,19 @@ parse_bytes(const char* s, size_t* out)
       break;
   }
   if (!is_byte_tail(tail))
-    return 1;
+    return 0;
 
   if (shift) {
     if (val > (ULLONG_MAX >> shift))
-      return 1;
+      return 0;
     val <<= shift;
   }
 #if SIZE_MAX < ULLONG_MAX
   if (val > SIZE_MAX)
-    return 1;
+    return 0;
 #endif
   *out = (size_t)val;
-  return 0;
+  return 1;
 }
 
 // --- dtype helpers ---

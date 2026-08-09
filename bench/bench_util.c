@@ -90,8 +90,6 @@ resolved_batch_bytes(const struct bench_config* cfg)
                                  : 512u << 20;
 }
 
-// Report a failure that happened before the run started. Keeps stdout to the
-// JSON document alone, so --json output stays parseable.
 static int
 bench_failed(int json_output)
 {
@@ -623,10 +621,9 @@ struct bench_cli_args
 static int
 read_size(const char* flag, const char* text, size_t* out)
 {
-  if (parse_bytes(text, out)) {
-    fprintf(stderr, "%s: cannot read \"%s\" as a size\n", flag, text);
+  if (parse_bytes(text, out))
     return 1;
-  }
+  fprintf(stderr, "%s: cannot read \"%s\" as a size\n", flag, text);
   return 0;
 }
 
@@ -686,11 +683,11 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--json") == 0) {
       out->json_output = 1;
     } else if (strcmp(av[i], "--chunk-bytes") == 0 && i + 1 < ac) {
-      if (read_size(av[i], av[i + 1], &out->target_chunk_bytes))
+      if (!read_size(av[i], av[i + 1], &out->target_chunk_bytes))
         return 1;
       ++i;
     } else if (strcmp(av[i], "--batch-bytes") == 0 && i + 1 < ac) {
-      if (read_size(av[i], av[i + 1], &out->target_batch_bytes))
+      if (!read_size(av[i], av[i + 1], &out->target_batch_bytes))
         return 1;
       ++i;
       if ((uint64_t)out->target_batch_bytes > UINT32_MAX) {
@@ -698,7 +695,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
         return 1;
       }
     } else if (strcmp(av[i], "--memory-budget") == 0 && i + 1 < ac) {
-      if (read_size(av[i], av[i + 1], &out->memory_budget))
+      if (!read_size(av[i], av[i + 1], &out->memory_budget))
         return 1;
       ++i;
     } else if (strcmp(av[i], "-o") == 0 && i + 1 < ac) {
@@ -718,7 +715,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--io-latency-us") == 0 && i + 1 < ac) {
       out->io_latency_us = strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--backpressure") == 0 && i + 1 < ac) {
-      if (read_size(av[i], av[i + 1], &out->backpressure_bytes))
+      if (!read_size(av[i], av[i + 1], &out->backpressure_bytes))
         return 1;
       ++i;
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
@@ -1121,13 +1118,11 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
 
   // This driver reports to stderr only, so a JSON error document on the way
   // out would be the sole thing a caller ever parsed.
-  if (a.json_output) {
+  if (a.json_output)
     print_report("  note: the two-stream benchmark does not write JSON");
-    a.json_output = 0;
-  }
 
   if (bench_gpu_context_create())
-    return bench_failed(a.json_output);
+    return bench_failed(0);
 
   struct bench_config cfg = {
     .label = spec.label,

@@ -66,7 +66,7 @@ bench_gpu_advise_layout(struct tile_stream_configuration* config,
                                        diag);
 }
 
-int
+void
 bench_gpu_report_memory(const struct tile_stream_configuration* config,
                         uint64_t* total_chunks,
                         size_t* device_bytes,
@@ -74,7 +74,7 @@ bench_gpu_report_memory(const struct tile_stream_configuration* config,
 {
   struct tile_stream_memory_info mem;
   if (tile_stream_gpu_memory_estimate(config, 0, &mem) != 0)
-    return 1;
+    return;
 
   *total_chunks = mem.total_chunks;
   *device_bytes = mem.device_bytes;
@@ -99,7 +99,6 @@ bench_gpu_report_memory(const struct tile_stream_configuration* config,
     (unsigned long long)mem.total_chunks,
     mem.nlod,
     mem.epochs_per_batch);
-  return 0;
 }
 
 void
