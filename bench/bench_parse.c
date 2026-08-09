@@ -9,9 +9,26 @@
 
 // --- Byte-size parser: "256K", "1M", "8G" etc. ---
 
+// Accept the "B", "iB" and "ib" tails people write, so "256KB" and "1GiB"
+// mean what they look like.
+static int
+is_byte_tail(const char* s)
+{
+  if (*s == 'i' || *s == 'I')
+    ++s;
+  if (*s == 'b' || *s == 'B')
+    ++s;
+  return *s == '\0';
+}
+
 int
 parse_bytes(const char* s, size_t* out)
 {
+  while (*s == ' ' || *s == '\t')
+    ++s;
+  if (*s == '-' || *s == '+')
+    return 1;
+
   char* end = NULL;
   errno = 0;
   unsigned long long val = strtoull(s, &end, 10);
@@ -19,26 +36,28 @@ parse_bytes(const char* s, size_t* out)
     return 1;
 
   unsigned shift = 0;
-  if (*end) {
-    switch (*end) {
-      case 'k':
-      case 'K':
-        shift = 10;
-        break;
-      case 'm':
-      case 'M':
-        shift = 20;
-        break;
-      case 'g':
-      case 'G':
-        shift = 30;
-        break;
-      default:
-        return 1;
-    }
-    if (end[1])
-      return 1;
+  const char* tail = end;
+  switch (*tail) {
+    case 'k':
+    case 'K':
+      shift = 10;
+      ++tail;
+      break;
+    case 'm':
+    case 'M':
+      shift = 20;
+      ++tail;
+      break;
+    case 'g':
+    case 'G':
+      shift = 30;
+      ++tail;
+      break;
+    default:
+      break;
   }
+  if (!is_byte_tail(tail))
+    return 1;
 
   if (shift) {
     if (val > (ULLONG_MAX >> shift))

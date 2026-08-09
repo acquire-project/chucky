@@ -19,7 +19,7 @@ int
 parse_bytes(const char* s, size_t* out);
 
 // CLI option parsers. parse_fill returns NULL on error.
-// The int-returning parsers return non-zero on success, 0 on error.
+// The int-returning parsers below return non-zero on success, 0 on error.
 fill_fn
 parse_fill(const char* s);
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import platform
 import re
 import subprocess
@@ -322,10 +323,22 @@ def bench_exe(spec: RunSpec, build_dir: Path) -> Path:
     return exe.with_suffix(".exe") if sys.platform == "win32" else exe
 
 
-def save_results(output: Path, data: dict, existing: dict) -> None:
-    data["runs"] = list(existing.values())
-    with open(output, "w") as f:
+def save_results(output: Path, data: dict, existing: dict,
+                 superseded: dict | None = None) -> None:
+    """Write the results file. A kill mid-write leaves the old file intact."""
+    merged = {**(superseded or {}), **existing}
+    data["runs"] = list(merged.values())
+    tmp = output.with_suffix(output.suffix + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, output)
+
+
+def ensure_results_file(output: Path, data: dict, existing: dict,
+                        superseded: dict | None = None) -> None:
+    """Write the file if it is not there yet, so the path we report exists."""
+    if not output.exists():
+        save_results(output, data, existing, superseded)
 
 
 def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
@@ -523,6 +536,9 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
     # -- load existing results for resumability --
     output.parent.mkdir(parents=True, exist_ok=True)
     existing: dict = {}
+    # Runs held back for a redo. They stay in the file until a redo replaces
+    # them, so a redo that never happens does not erase what was there.
+    superseded: dict = {}
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
@@ -535,8 +551,10 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         for r in data.get("runs", []):
             rid = r["id"]
             if retry and r.get("status") != "pass":
+                superseded[rid] = r
                 continue
             if rerun and any(pat in rid for pat in rerun):
+                superseded[rid] = r
                 continue
             existing[rid] = r
     else:
@@ -552,12 +570,6 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             "runs": [],
         }
 
-    # Create the file up front so the path we report always exists. Never
-    # rewrite one that is already there: --retry and --rerun drop runs from
-    # `existing` on purpose, and those records are only replaced as reruns
-    # finish.
-    if not Path(output).exists():
-        save_results(output, data, existing)
 
     # -- count how many actually need to run --
     to_run = [spec for spec in runs if spec.id not in existing]
@@ -567,6 +579,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         console.print(f"Skipping [bold]{skip_count}[/bold] existing runs")
 
     if not to_run:
+        ensure_results_file(output, data, existing, superseded)
         console.print(f"[green]All {len(runs)} runs already complete.[/green]")
         console.print(f"Results: {output}")
         return
@@ -611,9 +624,10 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
             existing[spec.id] = result
-            save_results(output, data, existing)
+            save_results(output, data, existing, superseded)
             progress.advance(task)
 
+    ensure_results_file(output, data, existing, superseded)
     console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(existing)} runs)")
 
 
