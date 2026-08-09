@@ -408,8 +408,11 @@ stream_append_body(struct stream_engine* e,
                    struct slice input);
 
 // Hand whatever staging holds to the device and count into the batch every
-// epoch that completes. Call it while the owner is still the bound array: the
-// dispatch reads the engine's per-array state, which a bind swaps wholesale.
+// epoch that completes. The append cursor runs ahead of the device between
+// dispatches, so flush and array switches have to call this before reading the
+// cursor as the position of delivered data — and while the owner is still the
+// bound array, since the dispatch reads per-array engine state that a bind
+// swaps wholesale.
 struct writer_result
 stream_dispatch_staged(struct stream_engine* e);
 

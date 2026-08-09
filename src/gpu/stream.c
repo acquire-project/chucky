@@ -106,6 +106,13 @@ engine_dispatch_ingest(struct stream_engine* e,
 }
 
 static void
+staging_claim(struct staging_state* stage, struct stream_context* ctx)
+{
+  stage->owner = ctx;
+  stage->first_element = ctx->cursor_elements;
+}
+
+static void
 staging_release(struct staging_state* stage)
 {
   stage->bytes_written = 0;
@@ -120,13 +127,12 @@ stream_dispatch_staged(struct stream_engine* e)
     return writer_ok();
 
   const uint64_t first = e->stage.first_element;
-  if (engine_dispatch_ingest(e, ctx, first)) {
+  const int dispatch_failed = engine_dispatch_ingest(e, ctx, first);
+  staging_release(&e->stage);
+  if (dispatch_failed) {
     ctx->append_failed = 1;
-    // These bytes will never reach this array's pool.
-    staging_release(&e->stage);
     return writer_error();
   }
-  staging_release(&e->stage);
 
   const uint64_t epoch = ctx->layout.epoch_elements;
   const uint64_t crossed = ctx->cursor_elements / epoch - first / epoch;
@@ -243,14 +249,13 @@ stream_append_body(struct stream_engine* e,
       ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
       ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
 
-      e->stage.owner = ctx;
-      e->stage.first_element = ctx->cursor_elements;
+      staging_claim(&e->stage, ctx);
     }
 
     {
       struct platform_clock mc = { 0 };
       platform_toc(&mc);
-      // Same h_in generation as the bytes_written==0 acquire above.
+      // Same h_in generation as the acquire above.
       ingest_copy(
         e->copy_pool,
         gpu_pool_at(&e->stage.h_pool, e->stage.current, e->stage.bytes_written)
