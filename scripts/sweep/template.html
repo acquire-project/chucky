@@ -4,119 +4,73 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Benchmark explorer</title>
-<script>
-document.documentElement.setAttribute("data-theme", (() => {
-  let stored = null;
-  try {
-    stored = localStorage.getItem("bench-theme");
-  } catch {
-    stored = null;
-  }
-  if (stored === "light" || stored === "dark") return stored;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-})());
-</script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="site.css">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 :root {
-  --pico-font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-  --color-primary: #2a78d6;
-  --color-primary-bg: #e0e7ff;
-  --color-primary-text: #1c5cab;
-  --color-text: #0b0b0b;
-  --color-muted: #52514e;
-  --color-border: #c3c2b7;
-  --color-error: #d03b3b;
-  --color-surface: #fcfcfb;
-  --color-plane: #f9f9f7;
-  --color-grid: #e1e0d9;
-  --color-axis: #c3c2b7;
-  --color-axis-text: #52514e;
-  --color-cell-empty: #ededea;
-  --color-ring: #fcfcfb;
-  --color-error-bg: #fef2f2;
   --gap-sm: 4px;
   --gap-md: 12px;
-  --gap-lg: 24px;
-  --radius: 6px;
 }
-:root[data-theme="dark"] {
-  --color-primary: #3987e5;
-  --color-primary-bg: #24304a;
-  --color-primary-text: #b7d3f6;
-  --color-text: #ffffff;
-  --color-muted: #c3c2b7;
-  --color-border: #383835;
-  --color-error: #e66767;
-  --color-surface: #1a1a19;
-  --color-plane: #0d0d0d;
-  --color-grid: #2c2c2a;
-  --color-axis: #383835;
-  --color-axis-text: #c3c2b7;
-  --color-cell-empty: #262624;
-  --color-ring: #1a1a19;
-  --color-error-bg: #2a1a1a;
-}
-html, body { background: var(--color-plane); color: var(--color-text); }
-h1 { font-size: 1.4em; margin-bottom: var(--gap-sm); --pico-typography-spacing-vertical: 0; color: var(--color-text); }
-.subtitle { color: var(--color-muted); font-size: 0.85em; margin-bottom: 2px; }
+h1 { font-size: 1.4em; margin: 0 0 var(--gap-sm); }
+.subtitle { color: var(--text-secondary); font-size: 0.85em; margin-bottom: 2px; }
+input { accent-color: var(--series-1); }
 
-/* Controls bar */
+/* Control strip. Three jobs, spaced apart: which sweep to look at, which runs
+   to keep, and how to draw them. */
 .controls {
-  display: flex; flex-wrap: wrap; gap: var(--gap-md);
-  margin-bottom: var(--gap-md); align-items: flex-start;
+  display: flex; flex-wrap: wrap; gap: var(--gap-md) 34px;
+  align-items: flex-start;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--gap-md);
+  margin: var(--gap-md) 0;
 }
-.controls label { font-size: 0.8em; font-weight: 600; color: var(--color-muted); display: block; margin-bottom: 2px; }
-.controls select {
-  font-size: 0.8em; padding: 4px 24px 4px 8px; margin-bottom: 0; width: auto;
-  --pico-form-element-spacing-vertical: 0.1rem;
-  --pico-form-element-spacing-horizontal: 0.5rem;
-}
-
-/* Control grouping */
 .control-group { display: flex; flex-wrap: wrap; gap: var(--gap-md); align-items: flex-start; }
-.control-group--primary { flex-wrap: nowrap; }
-.control-group--filters {
-  padding-left: var(--gap-md);
-  border-left: 2px solid var(--color-border);
+.control-row {
+  flex: 1 0 100%;
+  border-top: 1px solid var(--border); padding-top: var(--gap-md);
 }
 
-/* Segmented radio buttons — override Pico */
+/* Segmented radio buttons */
 .radio-group { display: flex; gap: 2px; }
 .radio-group label {
-  font-weight: 400; padding: 3px 8px; border: 1px solid var(--color-border);
-  cursor: pointer; font-size: 0.78em; background: var(--color-surface); margin-bottom: 0;
+  font-weight: 400; padding: 3px 8px; border: 1px solid var(--border);
+  cursor: pointer; font-size: 0.78em; background: var(--surface-1); margin-bottom: 0;
 }
-.radio-group label:first-child { border-radius: var(--radius) 0 0 var(--radius); }
-.radio-group label:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.radio-group label:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.radio-group label:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .radio-group input { display: none; }
 .radio-group input:checked + span { font-weight: 700; }
-.radio-group label:has(input:checked) { background: var(--color-primary-bg); border-color: var(--color-primary); }
+.radio-group label:has(input:checked) { background: var(--accent-soft); border-color: var(--series-1); }
 
 /* Checkbox groups */
 .checkbox-group { display: flex; flex-wrap: wrap; gap: var(--gap-sm) 10px; }
 .checkbox-group label { font-size: 0.78em; cursor: pointer; display: flex; align-items: center; gap: 3px; margin-bottom: 0; }
 
-/* Charts */
-main.container { overflow: visible; }
+/* Charts. A chart wider than the panel scrolls inside it — letting the panel
+   grow instead would drag the header and the controls off the side of a narrow
+   window. */
 #chart, #stage-chart {
-  background: var(--color-surface); border-radius: var(--radius); padding: var(--gap-md);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  width: fit-content; min-width: 100%;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: var(--gap-md);
+  display: flex; flex-direction: column; align-items: safe center;
+  overflow-x: auto;
 }
 #stage-chart { margin-top: var(--gap-md); }
 #chart:empty, #stage-chart:empty { display: none; }
 
 /* SVG axes */
-.axis text { font-size: 12px; fill: var(--color-axis-text); }
-.axis path, .axis line { stroke: var(--color-axis); stroke-width: 2; }
-.grid line { stroke: var(--color-grid); }
+.axis text { font-size: 12px; fill: var(--text-secondary); }
+.axis path, .axis line { stroke: var(--axis); stroke-width: 2; }
+.grid line { stroke: var(--grid); }
+/* d3 gives a grid the same outer tick size as its inner one, which draws a full
+   width rule along the top of the plot. */
+.grid path { display: none; }
 
 /* Tooltip */
 .tooltip {
   position: absolute; background: rgba(20,20,40,0.92); color: #fff;
-  padding: 8px 12px; border-radius: var(--radius);
+  padding: 8px 12px; border-radius: var(--radius-sm);
   font-size: 0.75em; pointer-events: none; line-height: 1.5;
   max-width: 320px; white-space: pre-line; z-index: 100;
 }
@@ -124,71 +78,53 @@ main.container { overflow: visible; }
 /* Toggle button */
 .btn-toggle {
   cursor: pointer; font-size: 0.8em; padding: 4px 10px;
-  border: 1px solid var(--color-primary); background: var(--color-primary-bg);
-  border-radius: var(--radius); color: var(--color-primary-text);
+  border: 1px solid var(--series-1); background: var(--accent-soft);
+  border-radius: var(--radius-sm); color: var(--accent-text);
 }
-.btn-toggle.active { background: var(--color-primary); color: var(--color-surface); }
+.btn-toggle.active { background: var(--series-1); color: var(--surface-1); }
 
 /* Scenarios */
 .scenario-groups { display: flex; flex-wrap: wrap; gap: 6px 20px; }
 .scenario-group-box { font-size: 0.78em; }
 .scenario-group-box .group-header {
-  font-weight: 600; color: var(--color-muted); font-size: 0.9em; margin-bottom: 2px;
+  font-weight: 600; color: var(--text-secondary); font-size: 0.9em; margin-bottom: 2px;
   display: flex; align-items: center; gap: 6px;
 }
 .scenario-group-box .group-header button {
   font-size: 0.85em; border: none; background: none;
-  color: var(--color-primary); cursor: pointer; padding: 0;
+  color: var(--series-1); cursor: pointer; padding: 0;
 }
 .scenario-group-box .group-header button:hover { text-decoration: underline; }
 .scenario-group-box .checkbox-group { margin-left: 2px; }
 
 /* Failure badge */
 .fail-badge {
-  font-size: 0.5em; font-weight: 600; color: var(--color-error);
-  background: var(--color-error-bg); border: 1px solid var(--color-error);
-  border-radius: var(--radius); padding: 2px 8px;
+  font-size: 0.5em; font-weight: 600; color: var(--critical);
+  background: var(--critical-soft); border: 1px solid var(--critical);
+  border-radius: var(--radius-sm); padding: 2px 8px;
   vertical-align: middle; white-space: nowrap;
 }
 
 /* Failures details */
-#failures { margin-top: var(--gap-md); }
-#failures summary { font-size: 0.85em; font-weight: 600; cursor: pointer; color: var(--color-error); }
+#failures {
+  margin-top: var(--gap-md);
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: var(--gap-md);
+}
+#failures:empty { display: none; }
+#failures summary { font-size: 0.85em; font-weight: 600; cursor: pointer; color: var(--critical); }
 #failures table { border-collapse: collapse; font-size: 0.75em; margin-top: 6px; width: 100%; }
-#failures th, #failures td { text-align: left; padding: 3px 10px; border-bottom: 1px solid var(--color-grid); }
-#failures th { color: var(--color-muted); font-weight: 600; }
-#failures .status-error { color: var(--color-error); font-weight: 600; }
+#failures th, #failures td { text-align: left; padding: 3px 10px; border-bottom: 1px solid var(--grid); }
+#failures th { color: var(--text-secondary); font-weight: 600; }
+#failures .status-error { color: var(--critical); font-weight: 600; }
 #failures .status-timeout { color: #c2410c; font-weight: 600; }
 #failures .status-missing { color: #6b7280; font-weight: 600; }
 
-/* Site navigation — shared with the overview page */
-.site-head {
-  display: flex; align-items: center; gap: var(--gap-lg); flex-wrap: wrap;
-  padding: 12px 24px; margin-bottom: var(--gap-md);
-  background: var(--color-surface); border-bottom: 1px solid var(--color-border);
-}
-.site-head .brand { font-weight: 650; }
-.site-head nav { display: flex; gap: 4px; margin-right: auto; }
-.site-head nav a {
-  padding: 4px 10px; border-radius: var(--radius); text-decoration: none;
-  color: var(--color-muted); font-size: 0.9em;
-}
-.site-head nav a[aria-current="page"] { background: var(--color-plane); color: var(--color-text); font-weight: 600; }
-.theme-toggle {
-  font: inherit; font-size: 0.85em; padding: 4px 10px; cursor: pointer; width: auto;
-  background: var(--color-surface); color: var(--color-muted);
-  border: 1px solid var(--color-border); border-radius: var(--radius);
-}
-
 /* Mobile */
 @media (max-width: 640px) {
+  main { padding: var(--gap-md); }
   .controls { flex-direction: column; }
   .control-group { flex-direction: column; }
-  .control-group--primary { flex-wrap: wrap; }
-  .control-group--filters {
-    border-left: none; padding-left: 0;
-    border-top: 1px solid var(--color-border); padding-top: var(--gap-md);
-  }
   .scenario-groups { flex-direction: column; gap: var(--gap-md); }
   .checkbox-group { gap: var(--gap-sm) 14px; }
 }
@@ -201,30 +137,27 @@ main.container { overflow: visible; }
     <a href="index.html">Over time</a>
     <a href="explore.html" aria-current="page">Benchmark explorer</a>
   </nav>
+  <a class="repo-link" href="https://github.com/acquire-project/chucky">Source</a>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
 </header>
-<main class="container">
+<main>
 
 <h1>Sweep <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
 <div class="subtitle" id="machine-info"></div>
 <div class="subtitle" id="s3-info" style="display:none"></div>
 
 <div class="controls">
-  <div class="control-group control-group--primary">
+  <div class="control-group" id="source-controls">
+    <div id="machine-wrap">
+      <label for="machine-sel">Machine</label>
+      <select id="machine-sel"></select>
+    </div>
     <div id="results-wrap">
-      <label>Sweep</label>
+      <label for="results-sel">Sweep</label>
       <select id="results-sel"></select>
     </div>
-    <div id="metric-wrap">
-      <label>Metric</label>
-      <select id="metric-sel"></select>
-    </div>
   </div>
-  <div>
-    <label>View</label>
-    <div class="radio-group" id="view-group"></div>
-  </div>
-  <div class="control-group control-group--filters">
+  <div class="control-group" id="filter-controls">
     <div id="codec-wrap">
       <label>Codec</label>
       <div class="radio-group" id="codec-group"></div>
@@ -249,21 +182,29 @@ main.container { overflow: visible; }
       <label>S3 throughput (Gb/s)</label>
       <div class="radio-group" id="s3-throughput-group"></div>
     </div>
+  </div>
+  <div class="control-group">
+    <div id="metric-wrap">
+      <label for="metric-sel">Metric</label>
+      <select id="metric-sel"></select>
+    </div>
+    <div>
+      <label>View</label>
+      <div class="radio-group" id="view-group"></div>
+    </div>
     <div id="overlay-wrap" style="display:none">
       <label>&nbsp;</label>
       <button class="btn-toggle" id="overlay-toggle">Overlay Backends</button>
     </div>
   </div>
-</div>
-
-<div id="scenario-controls" style="margin-bottom: 12px;">
-  <label style="font-size:0.8em;font-weight:600;color:#444;">Scenarios</label>
-  <div class="scenario-groups" id="scenario-group"></div>
-</div>
-
-<div id="stage-filter-controls" style="margin-bottom: 12px; display:none;">
-  <label style="font-size:0.8em;font-weight:600;color:#444;">Stages</label>
-  <div class="checkbox-group" id="stage-filter-group"></div>
+  <div class="control-row" id="scenario-controls">
+    <label>Scenarios</label>
+    <div class="scenario-groups" id="scenario-group"></div>
+  </div>
+  <div class="control-row" id="stage-filter-controls" style="display:none">
+    <label>Stages</label>
+    <div class="checkbox-group" id="stage-filter-group"></div>
+  </div>
 </div>
 
 <div id="chart"></div>
@@ -292,11 +233,13 @@ const DATA = await fetchJson("data/sweeps.json");
 const LAYOUT = {
   margin:    {top: 40, right: 200, bottom: 60, left: 195},
   heatmap:   {cellW: 70, cellH: 50},
-  lines:     {W: 800, H: 400},
+  lines:     {plotW: 600, plotH: 300, margin: {top: 40, bottom: 60, left: 62}},
   subChart:  {W: 700, H: 200, margin: {top: 30, right: 180, bottom: 40, left: 80}},
   stageBar:  {W: 500, margin: {left: 100, right: 60, top: 30}},
   stageThru: {W: 600, margin: {left: 100, right: 80, top: 40}},
 };
+
+const LEGEND_FONT_PX = 12;
 
 const STAGE_ORDER = ["memcpy","h2d","scatter","lod_gather","lod_reduce","lod_append_fold","lod_morton_chunk","compress","aggregate","d2h","sink"];
 
@@ -311,11 +254,12 @@ const METRIC_LABELS = {
   init_s: "Startup time (s)",
 };
 
-for (const [key, label] of Object.entries(METRIC_LABELS)) {
-  const option = document.createElement("option");
-  option.value = key;
-  option.textContent = label;
-  document.getElementById("metric-sel").appendChild(option);
+// The stage views swap in their own metrics and swap these back, so the wording
+// of an option cannot change with the view.
+const METRIC_OPTS = Object.entries(METRIC_LABELS);
+
+for (const [key, label] of METRIC_OPTS) {
+  document.getElementById("metric-sel").appendChild(new Option(label, key));
 }
 
 const COLOR_SCHEMES = {
@@ -358,6 +302,7 @@ function scenarioSort(a, b) {
 }
 
 const files = DATA.files;
+const fileByName = new Map(files.map(f => [f.filename, f]));
 
 // --- Active data (rebuilt on file switch) ---
 let runs = [];
@@ -368,10 +313,11 @@ let allStageNames = [];
 let allS3Throughputs = [];
 
 // --- UI state (declared here, wired in section 5) ---
+const machineSel = document.getElementById("machine-sel");
 const resultsSel = document.getElementById("results-sel");
 let overlayBackends = false;
 
-function getActiveFile() { return files[resultsSel.value]; }
+function getActiveFile() { return fileByName.get(resultsSel.value); }
 
 function rebuildData() {
   const file = getActiveFile();
@@ -491,6 +437,13 @@ function autoHide(wrapId, values) {
   document.getElementById(wrapId).style.display = values.length <= 1 ? "none" : "";
 }
 
+/** A group with every control hidden would otherwise hold its share of the spacing. */
+function hideEmptyGroup(groupId) {
+  const group = document.getElementById(groupId);
+  const shown = [...group.children].some(child => child.style.display !== "none");
+  group.style.display = shown ? "" : "none";
+}
+
 // --- Scenario checkboxes (grouped) ---
 const scenarioGroup = document.getElementById("scenario-group");
 
@@ -596,12 +549,13 @@ function getCheckedStages() {
 let prevCodec = "zstd", prevFill = "xor", prevBackend = "gpu", prevDtype = "u16", prevSink = "discard", prevS3tp = null;
 
 function rebuildControls() {
-  const machine = getActiveFile().machine || {};
+  const file = getActiveFile();
   document.getElementById("machine-info").textContent =
-    `${machine.hostname || "?"} | ${machine.gpu || "?"} | ${machine.commit ? machine.commit + " | " : ""}${machine.date || "?"}`;
+    [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
+      .filter(Boolean).join(" | ");
 
   // S3 metadata from runs (region, bucket, endpoint)
-  const s3Runs = (getActiveFile().runs || []).filter(r => r.sink === "s3");
+  const s3Runs = (file.runs || []).filter(r => r.sink === "s3");
   const s3Info = document.getElementById("s3-info");
   if (s3Runs.length > 0) {
     const regions = [...new Set(s3Runs.map(r => r.s3_region).filter(Boolean))];
@@ -644,7 +598,9 @@ function rebuildControls() {
     makeRadio("s3-throughput-group", allS3Throughputs, allS3Throughputs.includes(prevS3tp) ? prevS3tp : undefined);
   }
 
+  autoHide("codec-wrap", allCodecs);
   autoHide("fill-wrap", allFills);
+  autoHide("backend-wrap", allBackends);
   autoHide("dtype-wrap", allDtypes);
   autoHide("sink-wrap", allSinks);
 
@@ -657,6 +613,7 @@ function rebuildControls() {
   rebuildScenarios();
   rebuildStageFilters();
   rebuildFailures();
+  autoHide("scenario-controls", allScenarios);
 }
 
 // --- Failures table ---
@@ -715,13 +672,6 @@ function rebuildFailures() {
 const tooltip = d3.select("body").append("div").attr("class","tooltip").style("display","none");
 
 // --- Metric/stage-metric option swapping ---
-const METRIC_OPTS = [
-  ["throughput_in_gibs","Input Throughput (GiB/s)"],
-  ["throughput_out_gibs","Output Throughput (GiB/s)"],
-  ["compression_fold","Compression Ratio"],
-  ["wall_s","Wall Time (s)"],
-  ["init_s","Init Time (s)"],
-];
 const STAGE_METRIC_OPTS = [
   ["avg_ms","Avg Time (ms)"],
   ["best_ms","Best Time (ms)"],
@@ -753,11 +703,14 @@ function updateControlVisibility(viewMode, useOverlay) {
   }
   document.getElementById("backend-wrap").style.opacity = useOverlay ? "0.4" : "";
   document.getElementById("backend-wrap").style.pointerEvents = useOverlay ? "none" : "";
-  document.getElementById("stage-filter-controls").style.display = isStages ? "" : "none";
+  document.getElementById("stage-filter-controls").style.display =
+    isStages && allStageNames.length > 1 ? "" : "none";
 
   const sink = getRadio("sink-group");
   const showTp = sink === "s3" && allS3Throughputs.length > 1;
   document.getElementById("s3-throughput-wrap").style.display = showTp ? "" : "none";
+
+  hideEmptyGroup("filter-controls");
 }
 
 function render() {
@@ -824,8 +777,8 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
         .attr("x", x(cl)).attr("y", y(sc))
         .attr("width", x.bandwidth()).attr("height", y.bandwidth())
         .attr("rx", 3)
-        .attr("fill", val != null ? color(val) : "var(--color-cell-empty)")
-        .attr("stroke", "var(--color-ring)").attr("stroke-width", 1)
+        .attr("fill", val != null ? color(val) : "var(--cell-empty)")
+        .attr("stroke", "var(--surface-1)").attr("stroke-width", 1)
         .style("cursor", r ? "pointer" : "default");
 
       if (val != null) {
@@ -852,7 +805,7 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
   g.append("g").attr("class","axis").attr("transform",`translate(0,${innerH})`)
     .call(d3.axisBottom(x)).selectAll("text").attr("font-size","12px");
   g.append("text").attr("x", innerW/2).attr("y", innerH + margin.bottom - 10)
-    .attr("text-anchor","middle").attr("font-size","12px").attr("fill","var(--color-muted)").text("Chunk Size");
+    .attr("text-anchor","middle").attr("font-size","12px").attr("fill","var(--text-secondary)").text("Chunk Size");
   g.append("g").attr("class","axis").call(d3.axisLeft(y))
     .selectAll("text").attr("font-size","12px");
 
@@ -875,28 +828,7 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
     .selectAll("text").attr("font-size","12px");
 }
 
-function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOverlay) {
-  const margin = {...LAYOUT.margin, right: 140};
-  const {W, H} = LAYOUT.lines;
-  const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
-  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-  const innerW = W - margin.left - margin.right;
-  const innerH = H - margin.top - margin.bottom;
-
-  const xVals = presentChunks.map(chunkLabelToBytes);
-
-  const x = d3.scaleLog().domain(d3.extent(xVals)).range([0, innerW]);
-  const allVals = filtered.map(r => r[metricKey]).filter(v => v != null);
-  if (allVals.length === 0) { d3.select("#chart").append("p").text("No data for this metric."); return; }
-  const y = d3.scaleLinear().domain([0, d3.max(allVals)*1.1]).range([innerH, 0]);
-
-  const colors = d3.scaleOrdinal(d3.schemeTableau10).domain(allScenarios);
-
-  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--color-grid)");
-
-  const lineLookup = new Map();
-  filtered.forEach(r => lineLookup.set(`${r.scenario}__${r.chunk_bytes_label}__${r.backend}`, r));
-
+function lineSeries(filtered, presentScenarios, useOverlay) {
   const series = [];
   if (useOverlay) {
     const backends = [...new Set(filtered.map(r => r.backend))].sort();
@@ -911,6 +843,38 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
       series.push({scenario: sc, backend: selBackend, label: sc, dashed: false});
     }
   }
+  return series;
+}
+
+/** Room for the widest legend label, so a long scenario name is not cut off. */
+function legendRoom(labels) {
+  const widest = Math.max(0, ...labels.map(l => l.length * LEGEND_FONT_PX * 0.55));
+  return Math.round(Math.min(320, Math.max(120, widest + 34)));
+}
+
+function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOverlay) {
+  const allVals = filtered.map(r => r[metricKey]).filter(v => v != null);
+  if (allVals.length === 0) { d3.select("#chart").append("p").text("No data for this metric."); return; }
+
+  const series = lineSeries(filtered, presentScenarios, useOverlay);
+  const {plotW: innerW, plotH: innerH} = LAYOUT.lines;
+  const margin = {...LAYOUT.lines.margin, right: legendRoom(series.map(s => s.label))};
+  const W = margin.left + innerW + margin.right;
+  const H = margin.top + innerH + margin.bottom;
+  const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const xVals = presentChunks.map(chunkLabelToBytes);
+
+  const x = d3.scaleLog().domain(d3.extent(xVals)).range([0, innerW]);
+  const y = d3.scaleLinear().domain([0, d3.max(allVals)*1.1]).range([innerH, 0]);
+
+  const colors = d3.scaleOrdinal(d3.schemeTableau10).domain(allScenarios);
+
+  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat(""));
+
+  const lineLookup = new Map();
+  filtered.forEach(r => lineLookup.set(`${r.scenario}__${r.chunk_bytes_label}__${r.backend}`, r));
 
   for (const s of series) {
     const pts = presentChunks.map((cl, i) => {
@@ -927,7 +891,7 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
     pts.forEach(p => {
       const circle = g.append("circle").attr("cx", x(p.x)).attr("cy", y(p.y)).attr("r", 4)
         .attr("fill", colors(s.scenario)).style("cursor","pointer");
-      if (s.dashed) circle.attr("stroke", "var(--color-ring)").attr("stroke-width", 1);
+      if (s.dashed) circle.attr("stroke", "var(--surface-1)").attr("stroke-width", 1);
       circle
         .on("mousemove", (ev) => {
           tooltip.style("display","block")
@@ -949,7 +913,7 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
       .attr("stroke", colors(s.scenario)).attr("stroke-width", 2)
       .attr("stroke-dasharray", s.dashed ? "4,2" : "none");
     lg.append("circle").attr("cx",6).attr("cy",gy+6).attr("r",3).attr("fill",colors(s.scenario));
-    lg.append("text").attr("x",18).attr("y",gy+10).attr("font-size","12px").text(s.label);
+    lg.append("text").attr("x",18).attr("y",gy+10).attr("font-size",`${LEGEND_FONT_PX}px`).text(s.label);
   });
 
   svg.append("text").attr("x", margin.left).attr("y", 20)
@@ -995,11 +959,11 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
     if (useOverlay) {
       const oy = stageNames.length * 15 + 6;
       lg.append("line").attr("x1", 0).attr("y1", oy + 4).attr("x2", 14).attr("y2", oy + 4)
-        .attr("stroke", "var(--color-muted)").attr("stroke-width", 1.5);
-      lg.append("text").attr("x", 18).attr("y", oy + 8).attr("font-size", "9px").attr("fill", "var(--color-muted)").text("gpu");
+        .attr("stroke", "var(--text-secondary)").attr("stroke-width", 1.5);
+      lg.append("text").attr("x", 18).attr("y", oy + 8).attr("font-size", "9px").attr("fill", "var(--text-secondary)").text("gpu");
       lg.append("line").attr("x1", 0).attr("y1", oy + 18).attr("x2", 14).attr("y2", oy + 18)
-        .attr("stroke", "var(--color-muted)").attr("stroke-width", 1.5).attr("stroke-dasharray", "4,2");
-      lg.append("text").attr("x", 18).attr("y", oy + 22).attr("font-size", "9px").attr("fill", "var(--color-muted)").text("cpu");
+        .attr("stroke", "var(--text-secondary)").attr("stroke-width", 1.5).attr("stroke-dasharray", "4,2");
+      lg.append("text").attr("x", 18).attr("y", oy + 22).attr("font-size", "9px").attr("fill", "var(--text-secondary)").text("cpu");
     }
   }
 
@@ -1018,6 +982,7 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
   if (globalYMax === 0) globalYMax = 1;
 
   const selBackend = getRadio("backend-group");
+  const stageMetricLabel = document.getElementById("metric-sel").selectedOptions[0].textContent;
 
   presentScenarios.forEach(sc => {
     const hasData = filtered.some(r => r.scenario === sc && r.stages);
@@ -1029,7 +994,7 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
     const x = d3.scaleLog().domain(xExtent).range([0, innerW]);
     const y = d3.scaleLinear().domain([0, globalYMax]).range([innerH, 0]);
 
-    g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--color-grid)");
+    g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat(""));
 
     const backends = useOverlay
       ? [...new Set(filtered.filter(r => r.scenario === sc).map(r => r.backend))].sort()
@@ -1054,7 +1019,7 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
         pts.forEach(p => {
           const circle = g.append("circle").attr("cx", x(p.x)).attr("cy", y(p.y)).attr("r", 3)
             .attr("fill", stageColors(p.stage)).style("cursor","pointer");
-          if (dashed) circle.attr("stroke", "var(--color-ring)").attr("stroke-width", 1);
+          if (dashed) circle.attr("stroke", "var(--surface-1)").attr("stroke-width", 1);
           circle
             .on("mousemove", (ev) => {
               tooltip.style("display","block")
@@ -1071,7 +1036,6 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
       .call(d3.axisBottom(x).tickValues(xVals).tickFormat((_,i) => presentChunks[i]));
     g.append("g").attr("class","axis").call(d3.axisLeft(y).ticks(4));
 
-    const stageMetricLabel = document.getElementById("metric-sel").selectedOptions[0].textContent;
     svg.append("text").attr("x", subMargin.left).attr("y", 16)
       .attr("font-size","13px").attr("font-weight",700)
       .text(`${sc} — ${stageMetricLabel}`);
@@ -1116,11 +1080,11 @@ function renderStagesTiming(run, stages) {
   stages.forEach(([name, s], i) => {
     const yy = i * (barH + gap);
     g.append("rect").attr("x",0).attr("y", yy).attr("width", x(s.avg_ms)).attr("height", barH)
-      .attr("fill", "var(--color-primary)").attr("rx", 3);
+      .attr("fill", "var(--series-1)").attr("rx", 3);
     g.append("text").attr("x", -6).attr("y", yy + barH/2).attr("text-anchor","end")
       .attr("dominant-baseline","central").attr("font-size","12px").text(name);
     g.append("text").attr("x", x(s.avg_ms) + 4).attr("y", yy + barH/2)
-      .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--color-muted)")
+      .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--text-secondary)")
       .text(`${s.avg_ms.toFixed(1)} ms`);
   });
 
@@ -1134,7 +1098,9 @@ function renderStagesTiming(run, stages) {
 function renderStagesThroughput(run, stages) {
   const {W, margin: {left: mL, right: mR, top: mT}} = LAYOUT.stageThru;
   const rowH = 36, gap = 6;
-  const H = stages.length * (rowH + gap) + 80;
+  const rowsH = stages.length * (rowH + gap);
+  const legY = mT + rowsH + 36;
+  const H = legY + 26;
 
   const svg = d3.select("#stage-chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${mL},${mT})`);
@@ -1164,7 +1130,7 @@ function renderStagesThroughput(run, stages) {
     g.append("rect").attr("x",0).attr("y", yy + 4).attr("width", xMs(s.avg_ms)).attr("height", rowH - 8)
       .attr("fill", "#a5b4fc").attr("rx", 3);
     g.append("text").attr("x", xMs(s.avg_ms) + 3).attr("y", yy + rowH/2)
-      .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--color-muted)")
+      .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--text-secondary)")
       .text(`${s.avg_ms.toFixed(1)} ms`);
 
     const inVal = s.in_gibs || 0;
@@ -1174,32 +1140,31 @@ function renderStagesThroughput(run, stages) {
       g.append("rect").attr("x", thruX0).attr("y", yy).attr("width", xGibs(inVal)).attr("height", barH)
         .attr("fill", colorIn).attr("rx", 2);
       g.append("text").attr("x", thruX0 + xGibs(inVal) + 3).attr("y", yy + barH/2)
-        .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--color-muted)")
+        .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--text-secondary)")
         .text(`${inVal.toFixed(2)}`);
     }
     if (outVal > 0) {
       g.append("rect").attr("x", thruX0).attr("y", yy + barH + 2).attr("width", xGibs(outVal)).attr("height", barH)
         .attr("fill", colorOut).attr("rx", 2);
       g.append("text").attr("x", thruX0 + xGibs(outVal) + 3).attr("y", yy + barH + 2 + barH/2)
-        .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--color-muted)")
+        .attr("dominant-baseline","central").attr("font-size","12px").attr("fill","var(--text-secondary)")
         .text(`${outVal.toFixed(2)}`);
     }
   });
 
   g.append("text").attr("x", timingW/2).attr("y", -8).attr("text-anchor","middle")
-    .attr("font-size","12px").attr("fill","var(--color-muted)").text("avg ms");
+    .attr("font-size","12px").attr("fill","var(--text-secondary)").text("avg ms");
   g.append("text").attr("x", thruX0 + thruW/2).attr("y", -8).attr("text-anchor","middle")
-    .attr("font-size","12px").attr("fill","var(--color-muted)").text("GiB/s");
+    .attr("font-size","12px").attr("fill","var(--text-secondary)").text("GiB/s");
 
-  g.append("g").attr("class","axis").attr("transform",`translate(0,${stages.length*(rowH+gap)})`)
+  g.append("g").attr("class","axis").attr("transform",`translate(0,${rowsH})`)
     .call(d3.axisBottom(xMs).ticks(4).tickFormat(d => d + " ms"));
-  g.append("g").attr("class","axis").attr("transform",`translate(${thruX0},${stages.length*(rowH+gap)})`)
+  g.append("g").attr("class","axis").attr("transform",`translate(${thruX0},${rowsH})`)
     .call(d3.axisBottom(xGibs).ticks(4).tickFormat(d3.format(".1f")));
 
   svg.append("text").attr("x", mL).attr("y", 18).attr("font-size","13px").attr("font-weight",700)
     .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
 
-  const legY = mT + stages.length * (rowH + gap) + 36;
   const leg = svg.append("g").attr("transform", `translate(${mL},${legY})`);
   leg.append("rect").attr("width",12).attr("height",12).attr("fill",colorIn).attr("rx",2);
   leg.append("text").attr("x",16).attr("y",10).attr("font-size","12px").text("in (GiB/s)");
@@ -1211,33 +1176,50 @@ function renderStagesThroughput(run, stages) {
 // 5. INITIALIZATION
 // =========================================================================
 
-// Results file selector. ?file=<name> lets the overview page link to one sweep.
-files.forEach((f, i) => {
-  const opt = document.createElement("option");
-  opt.value = i;
-  opt.textContent = f.label || f.filename;
-  resultsSel.appendChild(opt);
-});
-const requestedFile = new URLSearchParams(location.search).get("file");
-const requestedIndex = requestedFile ? files.findIndex(f => f.filename === requestedFile) : -1;
-resultsSel.value = requestedIndex >= 0 ? requestedIndex : files.length - 1;
-if (files.length <= 1) document.getElementById("results-wrap").style.display = "none";
+// Machine, then one of its sweeps. report.py orders the list oldest first, so
+// the last entry is the newest sweep anywhere and that is what opens.
+const ALL_MACHINES = "";
 
-const themeToggle = document.getElementById("theme-toggle");
-function currentTheme() { return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"; }
-function paintToggle() { themeToggle.textContent = currentTheme() === "dark" ? "Light" : "Dark"; }
-themeToggle.addEventListener("click", () => {
-  const next = currentTheme() === "dark" ? "light" : "dark";
-  try {
-    localStorage.setItem("bench-theme", next);
-  } catch {
-    // Applies to this page; it just will not be remembered.
+function sweepsFor(machine) {
+  return files.filter(f => machine === ALL_MACHINES || f.machine === machine);
+}
+
+function sweepLabel(file, showMachine) {
+  const parts = [file.day];
+  if (showMachine) parts.push(file.machine);
+  parts.push(file.commit);
+  if (file.member !== file.machine) parts.push(`(${file.member})`);
+  return parts.filter(Boolean).join(" ");
+}
+
+function fillMachines() {
+  const names = [...new Set(files.map(f => f.machine))]
+    .sort((a, b) => a.localeCompare(b, undefined, {sensitivity: "base"}));
+  machineSel.appendChild(new Option("All machines", ALL_MACHINES));
+  for (const name of names) machineSel.appendChild(new Option(name, name));
+  autoHide("machine-wrap", names);
+}
+
+function fillSweeps(selected) {
+  const machine = machineSel.value;
+  const newestFirst = sweepsFor(machine).reverse();
+  resultsSel.innerHTML = "";
+  for (const file of newestFirst) {
+    resultsSel.appendChild(new Option(sweepLabel(file, machine === ALL_MACHINES), file.filename));
   }
-  document.documentElement.setAttribute("data-theme", next);
-  paintToggle();
-  render();
-});
-paintToggle();
+  resultsSel.value = selected ?? newestFirst[0].filename;
+  autoHide("results-wrap", newestFirst);
+  hideEmptyGroup("source-controls");
+}
+
+// ?file=<name> lets the overview link to one sweep.
+const requested = new URLSearchParams(location.search).get("file");
+const opening = fileByName.get(requested) || files[files.length - 1];
+fillMachines();
+machineSel.value = opening.machine;
+fillSweeps(opening.filename);
+
+wireThemeToggle(render);
 
 // Static radio setup
 makeRadio("view-group", ["heatmap", "lines", "stages"], "heatmap");
@@ -1260,6 +1242,11 @@ async function showActiveFile() {
 }
 
 resultsSel.addEventListener("change", showActiveFile);
+
+machineSel.addEventListener("change", () => {
+  fillSweeps(null);
+  showActiveFile();
+});
 
 // Initial load
 await showActiveFile();
