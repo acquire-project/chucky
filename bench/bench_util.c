@@ -139,7 +139,8 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       .reduce_method = cfg->reduce_method,
       .append_reduce_method = cfg->append_reduce_method,
       .target_batch_bytes =
-        cfg->target_batch_bytes ? cfg->target_batch_bytes : 512u << 20,
+        (uint32_t)(cfg->target_batch_bytes ? cfg->target_batch_bytes
+                                           : 512u << 20),
     };
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
