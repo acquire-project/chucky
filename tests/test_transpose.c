@@ -18,8 +18,8 @@ fill_elements(uint8_t* dst, uint64_t n, uint8_t bpe)
 // Run transpose kernel and verify against CPU ravel() reference.
 // dim_sizes/chunk_sizes: per-dimension sizes.
 // bpe: bytes per element.
-// element_offset: where the source sits in its buffer, so the kernel can be
-// given a start that is not word aligned.
+// n_epochs: epochs worth of source to hand the kernel in one call.
+// in_epoch_offset: how far into its epoch the first element sits.
 // Returns 0 on success.
 static int
 run_transpose_test(const char* name,
@@ -28,10 +28,14 @@ run_transpose_test(const char* name,
                    const uint64_t* chunk_sizes,
                    const uint8_t* storage_order,
                    uint8_t bpe,
-                   uint64_t element_offset)
+                   uint32_t n_epochs,
+                   uint64_t in_epoch_offset)
 {
-  log_info(
-    "=== %s (bpe=%u offset=%lu) ===", name, bpe, (unsigned long)element_offset);
+  log_info("=== %s (bpe=%u epochs=%u from=%lu) ===",
+           name,
+           bpe,
+           n_epochs,
+           (unsigned long)in_epoch_offset);
 
   uint8_t lifted_rank;
   uint64_t lifted_shape[MAX_RANK];
@@ -49,9 +53,14 @@ run_transpose_test(const char* name,
                       &chunk_stride,
                       &chunks_per_epoch,
                       &epoch_elements);
-  uint64_t pool_elements = chunks_per_epoch * chunk_stride;
-  size_t src_bytes = epoch_elements * bpe;
-  size_t dst_bytes = pool_elements * bpe;
+  const uint64_t region_elements =
+    chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS;
+  const uint64_t src_elements = n_epochs * epoch_elements;
+  const size_t src_bytes = src_elements * bpe;
+  // A start partway into an epoch pushes the last elements into one more region
+  // than the epochs they cover.
+  const uint32_t regions = n_epochs + 1;
+  const size_t dst_bytes = regions * region_elements * bpe;
 
   log_info("  rank=%d lifted_rank=%d chunk_elements=%lu chunk_stride=%lu "
            "chunks_per_epoch=%lu epoch_elements=%lu",
@@ -68,32 +77,30 @@ run_transpose_test(const char* name,
   CUstream stream = 0;
   int ok = 0;
 
-  const size_t src_alloc =
-    element_offset * bpe + src_bytes + TRANSPOSE_SOURCE_PAD_BYTES;
-
   h_src = malloc(src_bytes);
   h_dst = calloc(1, dst_bytes);
   CHECK(Fail, h_src && h_dst);
-  fill_elements((uint8_t*)h_src, epoch_elements, bpe);
+  fill_elements((uint8_t*)h_src, src_elements, bpe);
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuMemAlloc(&d_src, src_alloc));
+  CU(Fail, cuMemAlloc(&d_src, src_bytes));
   CU(Fail, cuMemAlloc(&d_dst, dst_bytes));
-  CU(Fail, cuMemsetD8(d_src, 0, src_alloc));
   CU(Fail, cuMemsetD8(d_dst, 0, dst_bytes));
   CU(Fail, cuMemAlloc(&d_shape, lifted_rank * sizeof(uint64_t)));
   CU(Fail, cuMemAlloc(&d_strides, lifted_rank * sizeof(int64_t)));
 
-  CU(Fail, cuMemcpyHtoD(d_src + element_offset * bpe, h_src, src_bytes));
+  CU(Fail, cuMemcpyHtoD(d_src, h_src, src_bytes));
   CU(Fail, cuMemcpyHtoD(d_shape, lifted_shape, lifted_rank * sizeof(uint64_t)));
   CU(Fail,
      cuMemcpyHtoD(d_strides, lifted_strides, lifted_rank * sizeof(int64_t)));
 
   transpose(d_dst,
-            d_src + element_offset * bpe,
+            d_src,
             src_bytes,
             bpe,
-            0,
+            in_epoch_offset,
+            epoch_elements,
+            region_elements * bpe,
             lifted_rank,
             (const uint64_t*)d_shape,
             (const int64_t*)d_strides,
@@ -104,23 +111,27 @@ run_transpose_test(const char* name,
 
   // Verify against CPU ravel reference
   int errors = 0;
-  for (uint64_t i = 0; i < epoch_elements; ++i) {
-    uint64_t expected_off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
+  for (uint64_t i = 0; i < src_elements; ++i) {
+    const uint64_t expected_off = expected_scatter_offset(lifted_rank,
+                                                          lifted_shape,
+                                                          lifted_strides,
+                                                          epoch_elements,
+                                                          region_elements,
+                                                          in_epoch_offset + i);
     if (memcmp((uint8_t*)h_dst + expected_off * bpe,
                (uint8_t*)h_src + i * bpe,
                bpe) != 0) {
       if (errors < 5)
         log_error("  elem %lu: dst[%lu] does not match source",
-                  (unsigned long)i,
+                  (unsigned long)(in_epoch_offset + i),
                   (unsigned long)expected_off);
       errors++;
     }
   }
 
   if (errors > 0) {
-    log_error("  %d mismatches (of %lu elements)",
-              errors,
-              (unsigned long)epoch_elements);
+    log_error(
+      "  %d mismatches (of %lu elements)", errors, (unsigned long)src_elements);
     goto Fail;
   }
 
@@ -150,7 +161,7 @@ test_transpose_2d(void)
   uint64_t dim_sizes[] = { 4, 6 };
   uint64_t chunk_sizes[] = { 2, 3 };
   return run_transpose_test(
-    "test_transpose_2d", 2, dim_sizes, chunk_sizes, NULL, 2, 0);
+    "test_transpose_2d", 2, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -160,7 +171,7 @@ test_transpose_3d(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_3d", 3, dim_sizes, chunk_sizes, NULL, 2, 0);
+    "test_transpose_3d", 3, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -170,7 +181,7 @@ test_transpose_identity(void)
   uint64_t dim_sizes[] = { 6, 4 };
   uint64_t chunk_sizes[] = { 6, 4 };
   return run_transpose_test(
-    "test_transpose_identity", 2, dim_sizes, chunk_sizes, NULL, 2, 0);
+    "test_transpose_identity", 2, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -180,7 +191,7 @@ test_transpose_bpe4(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_bpe4", 3, dim_sizes, chunk_sizes, NULL, 4, 0);
+    "test_transpose_bpe4", 3, dim_sizes, chunk_sizes, NULL, 4, 1, 0);
 }
 
 static int
@@ -197,6 +208,7 @@ test_transpose_3d_storage_order(void)
                             chunk_sizes,
                             storage_order,
                             2,
+                            1,
                             0);
 }
 
@@ -214,27 +226,29 @@ test_transpose_4d_storage_order(void)
                             chunk_sizes,
                             storage_order,
                             2,
+                            1,
                             0);
 }
 
-// A scatter split across epochs hands the kernel a start partway into the
-// staging buffer, so it has to cope with one that is not word aligned. The
-// shape spans several blocks, since each block offsets the load itself.
+// One call covering several epochs, each landing in its own destination region.
+// The shape spans several blocks, so blocks on either side of an epoch boundary
+// have to find the boundary themselves.
 static int
-test_transpose_unaligned_source(void)
+test_transpose_many_epochs(void)
 {
   uint64_t dim_sizes[] = { 4, 64, 96 };
   uint64_t chunk_sizes[] = { 2, 16, 24 };
   int err = 0;
-  for (uint8_t bpe = 1; bpe <= 2; bpe = (uint8_t)(bpe * 2))
-    for (uint64_t off = 0; off < sizeof(uint32_t) / bpe; ++off)
-      err |= run_transpose_test("test_transpose_unaligned_source",
+  for (uint8_t bpe = 1; bpe <= 8; bpe = (uint8_t)(bpe * 2))
+    for (uint64_t from = 0; from < 2; ++from)
+      err |= run_transpose_test("test_transpose_many_epochs",
                                 3,
                                 dim_sizes,
                                 chunk_sizes,
                                 NULL,
                                 bpe,
-                                off);
+                                3,
+                                from);
   return err;
 }
 
@@ -244,7 +258,7 @@ test_transpose_bpe8(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_bpe8", 3, dim_sizes, chunk_sizes, NULL, 8, 0);
+    "test_transpose_bpe8", 3, dim_sizes, chunk_sizes, NULL, 8, 1, 0);
 }
 
 RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
@@ -254,5 +268,4 @@ RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
               { "transpose_3d_storage_order", test_transpose_3d_storage_order },
               { "transpose_4d_storage_order", test_transpose_4d_storage_order },
               { "transpose_bpe8", test_transpose_bpe8 },
-              { "transpose_unaligned_source",
-                test_transpose_unaligned_source }, )
+              { "transpose_many_epochs", test_transpose_many_epochs }, )

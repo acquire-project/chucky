@@ -278,10 +278,8 @@ Fail:
 }
 
 // A staging buffer that is not a whole number of epochs: every dispatch after
-// the first starts partway into an epoch and still covers several, so the
-// scatter runs once per epoch from an unaligned start (#173). Epochs are 9
-// elements, so a slice boundary lands on an odd element and the scatter's
-// combined load starts partway into a word.
+// the first starts partway into an epoch and still covers several, so one
+// scatter has to place data in several pool regions (#173, #181).
 static int
 test_cross_validate_dispatch_spans_epochs(void)
 {

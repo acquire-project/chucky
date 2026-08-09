@@ -49,15 +49,7 @@ ingest_init(struct staging_state* stage,
   gpu_pool_init(&stage->h_pool, ord, GPU_EDGE_COUNT, GPU_EDGE_STAGING_FREE);
   for (int i = 0; i < 2; ++i) {
     CU(Fail, cuMemHostAlloc(&stage->slot[i].h_in, buffer_capacity_bytes, 0));
-    CU(Fail,
-       cuMemAlloc(&stage->slot[i].d_in,
-                  buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
-    // The scatter's word-aligned reads can run past the last element; see
-    // TRANSPOSE_SOURCE_PAD_BYTES.
-    CU(Fail,
-       cuMemsetD8(stage->slot[i].d_in,
-                  0,
-                  buffer_capacity_bytes + TRANSPOSE_SOURCE_PAD_BYTES));
+    CU(Fail, cuMemAlloc(&stage->slot[i].d_in, buffer_capacity_bytes));
     gpu_pool_bind(&stage->h_pool, i, stage->slot[i].h_in);
     gpu_pool_bind(&stage->d_pool, i, (void*)(uintptr_t)stage->slot[i].d_in);
     CU(Fail, cuEventCreate(&stage->slot[i].t_h2d_start, CU_EVENT_DEFAULT));
@@ -159,57 +151,6 @@ Error:
   return 1;
 }
 
-// The chunk position a scatter computes repeats every epoch_elements, because
-// compute_level_layout zeroes the append dims' chunk strides and dims_n_append
-// allows a chunk size above 1 only on the first append dim. So each epoch the
-// buffer covers gets its own call against its own region of the pool.
-static int
-scatter_by_epoch(const struct tile_stream_layout* layout,
-                 const struct tile_stream_layout_gpu* layout_gpu,
-                 struct scatter_destination dst,
-                 struct gpu_pool_view d_in,
-                 size_t bytes,
-                 uint64_t first_element,
-                 size_t bpe,
-                 CUstream compute)
-{
-  const uint64_t epoch_elements = layout->epoch_elements;
-  uint64_t element = first_element;
-  CUdeviceptr d_epoch = gpu_pool_view_d(dst.first_epoch);
-  uint32_t epoch = 0;
-
-  for (size_t at = 0; at < bytes;) {
-    // The transpose below writes at d_epoch, so stepping past the regions the
-    // caller acquired would scatter into the next pool slot.
-    CHECK(Error, epoch < dst.epochs);
-    const uint64_t in_epoch = element % epoch_elements;
-    const uint64_t room = (epoch_elements - in_epoch) * bpe;
-    const uint64_t left = bytes - at;
-    const uint64_t n = room < left ? room : left;
-
-    transpose(d_epoch,
-              gpu_pool_view_d(d_in) + at,
-              n,
-              (uint8_t)bpe,
-              element,
-              layout->lifted_rank,
-              layout_gpu->d_lifted_shape,
-              layout_gpu->d_lifted_strides,
-              compute);
-
-    at += (size_t)n;
-    element += n / bpe;
-    if (element % epoch_elements == 0) {
-      d_epoch += dst.epoch_bytes;
-      epoch++;
-    }
-  }
-  return 0;
-
-Error:
-  return 1;
-}
-
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
@@ -227,6 +168,13 @@ ingest_dispatch_scatter(struct staging_state* stage,
   if (elements == 0)
     return 0;
 
+  // A chunk position repeats every epoch, since the append dimensions do not
+  // reach it.
+  const uint64_t epoch_elements = layout->epoch_elements;
+  const uint64_t in_epoch = first_element % epoch_elements;
+  // Regions past the ones the caller acquired belong to the next pool slot.
+  CHECK(Error, ceildiv(in_epoch + elements, epoch_elements) <= dst.epochs);
+
   const int idx = stage->current;
   struct staging_slot* ss = &stage->slot[idx];
 
@@ -240,15 +188,17 @@ ingest_dispatch_scatter(struct staging_state* stage,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
-  CHECK(Error,
-        scatter_by_epoch(layout,
-                         layout_gpu,
-                         dst,
-                         d_in,
-                         ss->dispatched_bytes,
-                         first_element,
-                         bpe,
-                         compute) == 0);
+  transpose(gpu_pool_view_d(dst.first_epoch),
+            gpu_pool_view_d(d_in),
+            ss->dispatched_bytes,
+            (uint8_t)bpe,
+            in_epoch,
+            epoch_elements,
+            dst.epoch_bytes,
+            layout->lifted_rank,
+            layout_gpu->d_lifted_shape,
+            layout_gpu->d_lifted_strides,
+            compute);
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 

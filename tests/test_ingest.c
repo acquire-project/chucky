@@ -157,7 +157,13 @@ test_ingest_incremental(void)
   {
     int errors = 0;
     for (uint64_t i = 0; i < epoch_elements; ++i) {
-      uint64_t off = ravel(lifted_rank, lifted_shape, lifted_strides, i);
+      const uint64_t off =
+        expected_scatter_offset(lifted_rank,
+                                lifted_shape,
+                                lifted_strides,
+                                epoch_elements,
+                                pool_bytes / bytes_per_element,
+                                i);
       uint16_t src_val = h_src[i];
       uint16_t dst_val = ((uint16_t*)h_pool)[off];
       if (dst_val != src_val) {
@@ -221,7 +227,8 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
                       &epoch_elements);
 
   const size_t epoch_bytes =
-    chunks_per_epoch * chunk_stride * bytes_per_element;
+    (chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS) *
+    bytes_per_element;
   const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bytes_per_element;
   // The dispatch runs past its first epoch by however far first_element sits
@@ -289,19 +296,20 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   CU(Fail, cuMemcpyDtoH(h_pool, d_pool, pool_bytes));
 
   {
-    const uint64_t first_epoch = first_element / epoch_elements;
     int errors = 0;
     for (uint64_t i = 0; i < src_elements; ++i) {
-      const uint64_t element = first_element + i;
-      const uint64_t region = element / epoch_elements - first_epoch;
-      const uint64_t base = region * epoch_bytes / bytes_per_element;
-      const uint64_t off = ravel(
-        lifted_rank, lifted_shape, lifted_strides, element % epoch_elements);
-      uint16_t dst_val = ((uint16_t*)h_pool)[base + off];
+      const uint64_t off =
+        expected_scatter_offset(lifted_rank,
+                                lifted_shape,
+                                lifted_strides,
+                                epoch_elements,
+                                epoch_bytes / bytes_per_element,
+                                first_element % epoch_elements + i);
+      uint16_t dst_val = ((uint16_t*)h_pool)[off];
       if (dst_val != h_src[i]) {
         if (errors < 5)
           log_error("  element %lu: expected %u, got %u",
-                    (unsigned long)element,
+                    (unsigned long)(first_element + i),
                     h_src[i],
                     dst_val);
         errors++;
@@ -344,8 +352,8 @@ test_ingest_many_epochs_one_dispatch(void)
   return run_epochs_from(3, 0);
 }
 
-// Starting one element in leaves every epoch after the first at an odd element
-// offset, so the scatter's combined load starts partway into a word.
+// Starting one element in splits the dispatch unevenly across epochs, so the
+// first and last regions each take part of one.
 static int
 test_ingest_many_epochs_from_mid_epoch(void)
 {

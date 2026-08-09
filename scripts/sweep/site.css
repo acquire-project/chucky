@@ -1,0 +1,114 @@
+/* The palette, the page frame and the title bar, shared by both pages. Anything
+   only one page draws stays in that page. theme.js picks light or dark before
+   the page paints, so the dark values only need the one selector. */
+
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --plane: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --good-text: #006300;
+  --critical: #d03b3b;
+  --critical-soft: #fef2f2;
+  --cell-empty: #ededea;
+  --accent-soft: #e0e7ff;
+  --accent-text: #1c5cab;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-none: #898781;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --gap: 16px;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --plane: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255,255,255,0.10);
+  --good-text: #0ca30c;
+  --critical: #e66767;
+  --critical-soft: #2a1a1a;
+  --cell-empty: #262624;
+  --accent-soft: #24304a;
+  --accent-text: #b7d3f6;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--text-primary);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--series-1); }
+
+/* Chart titles, legends and axis names inherit this. SVG text is black unless
+   something says otherwise, which is invisible on the dark theme; anything that
+   picks its own colour, like a heatmap cell label, still wins. */
+svg { fill: var(--text-primary); }
+
+.site-head {
+  display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap;
+  padding: 12px 24px; border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.site-head .brand { font-weight: 650; }
+.site-head nav { display: flex; gap: 4px; margin-right: auto; }
+.site-head nav a {
+  padding: 4px 10px; border-radius: var(--radius); text-decoration: none;
+  color: var(--text-secondary); font-size: 0.9em;
+}
+.site-head nav a[aria-current="page"] {
+  background: var(--plane); color: var(--text-primary); font-weight: 600;
+}
+.site-head .repo-link {
+  padding: 4px 10px; text-decoration: none;
+  color: var(--text-secondary); font-size: 0.85em;
+}
+.site-head .repo-link:hover { text-decoration: underline; }
+.theme-toggle {
+  font: inherit; font-size: 0.85em; padding: 4px 10px; cursor: pointer; width: auto;
+  background: var(--surface-1); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+
+/* The two control strips: the overview's filters and the explorer's controls.
+   A caption over each control, and one look for the menus under them. */
+.filters label,
+.control-group > div > label,
+.control-row > label {
+  display: block; margin-bottom: 3px;
+  font-size: 0.72em; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.filters select, .controls select {
+  font: inherit; font-size: 0.85em; padding: 5px 8px; width: auto;
+  color: var(--text-primary); background: var(--plane);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
