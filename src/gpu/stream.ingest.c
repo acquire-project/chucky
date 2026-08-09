@@ -8,9 +8,9 @@
 
 #include <string.h>
 
-// Splitting a copy costs a mutex, a broadcast and some atomics, 100-300 ns.
-// A 64 KiB memcpy runs a few microseconds, so the split still pays; below that
-// the dispatch is most of the cost.
+// A dispatch costs about 1.4 us, so splitting only pays above roughly 24 KiB.
+// 64 KiB keeps margin over that crossover, which moves with core count and
+// memory bandwidth.
 #define COPY_POOL_MIN_BYTES (64u << 10)
 
 struct copy_slices
