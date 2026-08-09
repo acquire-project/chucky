@@ -70,11 +70,14 @@ input { accent-color: var(--series-1); }
 .checkbox-group { display: flex; flex-wrap: wrap; gap: var(--gap-sm) 10px; }
 .checkbox-group label { font-size: 0.78em; cursor: pointer; display: flex; align-items: center; gap: 3px; margin-bottom: 0; }
 
-/* Charts */
+/* Charts. A chart wider than the panel scrolls inside it — letting the panel
+   grow instead would drag the header and the controls off the side of a narrow
+   window. */
 #chart, #stage-chart {
-  background: var(--surface-1); border-radius: var(--radius-sm); padding: var(--gap-md);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  width: fit-content; min-width: 100%;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: var(--gap-md);
+  display: flex; flex-direction: column; align-items: safe center;
+  overflow-x: auto;
 }
 #stage-chart { margin-top: var(--gap-md); }
 #chart:empty, #stage-chart:empty { display: none; }
@@ -88,6 +91,9 @@ input { accent-color: var(--series-1); }
 .axis text { font-size: 12px; fill: var(--text-secondary); }
 .axis path, .axis line { stroke: var(--axis); stroke-width: 2; }
 .grid line { stroke: var(--grid); }
+/* d3 gives a grid the same outer tick size as its inner one, which draws a full
+   width rule along the top of the plot. */
+.grid path { display: none; }
 
 /* Tooltip */
 .tooltip {
@@ -128,7 +134,12 @@ input { accent-color: var(--series-1); }
 }
 
 /* Failures details */
-#failures { margin-top: var(--gap-md); }
+#failures {
+  margin-top: var(--gap-md);
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: var(--gap-md);
+}
+#failures:empty { display: none; }
 #failures summary { font-size: 0.85em; font-weight: 600; cursor: pointer; color: var(--critical); }
 #failures table { border-collapse: collapse; font-size: 0.75em; margin-top: 6px; width: 100%; }
 #failures th, #failures td { text-align: left; padding: 3px 10px; border-bottom: 1px solid var(--grid); }
@@ -250,7 +261,7 @@ const DATA = await fetchJson("data/sweeps.json");
 const LAYOUT = {
   margin:    {top: 40, right: 200, bottom: 60, left: 195},
   heatmap:   {cellW: 70, cellH: 50},
-  lines:     {W: 800, H: 400},
+  lines:     {plotW: 600, plotH: 300, margin: {top: 40, right: 140, bottom: 60, left: 62}},
   subChart:  {W: 700, H: 200, margin: {top: 30, right: 180, bottom: 40, left: 80}},
   stageBar:  {W: 500, margin: {left: 100, right: 60, top: 30}},
   stageThru: {W: 600, margin: {left: 100, right: 80, top: 40}},
@@ -269,11 +280,13 @@ const METRIC_LABELS = {
   init_s: "Startup time (s)",
 };
 
-for (const [key, label] of Object.entries(METRIC_LABELS)) {
-  const option = document.createElement("option");
-  option.value = key;
-  option.textContent = label;
-  document.getElementById("metric-sel").appendChild(option);
+// The run metrics the chart can draw. The stage views swap in their own list
+// and swap this one back, so both come from one place and the wording of an
+// option does not change as the view does.
+const METRIC_OPTS = Object.entries(METRIC_LABELS);
+
+for (const [key, label] of METRIC_OPTS) {
+  document.getElementById("metric-sel").appendChild(new Option(label, key));
 }
 
 const COLOR_SCHEMES = {
@@ -692,13 +705,6 @@ function rebuildFailures() {
 const tooltip = d3.select("body").append("div").attr("class","tooltip").style("display","none");
 
 // --- Metric/stage-metric option swapping ---
-const METRIC_OPTS = [
-  ["throughput_in_gibs","Input Throughput (GiB/s)"],
-  ["throughput_out_gibs","Output Throughput (GiB/s)"],
-  ["compression_fold","Compression Ratio"],
-  ["wall_s","Wall Time (s)"],
-  ["init_s","Init Time (s)"],
-];
 const STAGE_METRIC_OPTS = [
   ["avg_ms","Avg Time (ms)"],
   ["best_ms","Best Time (ms)"],
@@ -856,28 +862,7 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
     .selectAll("text").attr("font-size","12px");
 }
 
-function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOverlay) {
-  const margin = {...LAYOUT.margin, right: 140};
-  const {W, H} = LAYOUT.lines;
-  const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
-  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-  const innerW = W - margin.left - margin.right;
-  const innerH = H - margin.top - margin.bottom;
-
-  const xVals = presentChunks.map(chunkLabelToBytes);
-
-  const x = d3.scaleLog().domain(d3.extent(xVals)).range([0, innerW]);
-  const allVals = filtered.map(r => r[metricKey]).filter(v => v != null);
-  if (allVals.length === 0) { d3.select("#chart").append("p").text("No data for this metric."); return; }
-  const y = d3.scaleLinear().domain([0, d3.max(allVals)*1.1]).range([innerH, 0]);
-
-  const colors = d3.scaleOrdinal(d3.schemeTableau10).domain(allScenarios);
-
-  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--grid)");
-
-  const lineLookup = new Map();
-  filtered.forEach(r => lineLookup.set(`${r.scenario}__${r.chunk_bytes_label}__${r.backend}`, r));
-
+function lineSeries(filtered, presentScenarios, useOverlay) {
   const series = [];
   if (useOverlay) {
     const backends = [...new Set(filtered.map(r => r.backend))].sort();
@@ -892,6 +877,40 @@ function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOv
       series.push({scenario: sc, backend: selBackend, label: sc, dashed: false});
     }
   }
+  return series;
+}
+
+/** Room for the widest legend label, so a long scenario name is not cut off. */
+function legendRoom(labels, fontPx) {
+  const widest = Math.max(0, ...labels.map(l => l.length * fontPx * 0.55));
+  return Math.round(Math.min(320, Math.max(120, widest + 34)));
+}
+
+function renderLines(filtered, presentChunks, presentScenarios, metricKey, useOverlay) {
+  const allVals = filtered.map(r => r[metricKey]).filter(v => v != null);
+  if (allVals.length === 0) { d3.select("#chart").append("p").text("No data for this metric."); return; }
+
+  const series = lineSeries(filtered, presentScenarios, useOverlay);
+  const {plotW, plotH} = LAYOUT.lines;
+  const margin = {...LAYOUT.lines.margin, right: legendRoom(series.map(s => s.label), 12)};
+  const W = margin.left + plotW + margin.right;
+  const H = margin.top + plotH + margin.bottom;
+  const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+  const innerW = plotW;
+  const innerH = plotH;
+
+  const xVals = presentChunks.map(chunkLabelToBytes);
+
+  const x = d3.scaleLog().domain(d3.extent(xVals)).range([0, innerW]);
+  const y = d3.scaleLinear().domain([0, d3.max(allVals)*1.1]).range([innerH, 0]);
+
+  const colors = d3.scaleOrdinal(d3.schemeTableau10).domain(allScenarios);
+
+  g.append("g").attr("class","grid").call(d3.axisLeft(y).tickSize(-innerW).tickFormat("")).selectAll("line").attr("stroke","var(--grid)");
+
+  const lineLookup = new Map();
+  filtered.forEach(r => lineLookup.set(`${r.scenario}__${r.chunk_bytes_label}__${r.backend}`, r));
 
   for (const s of series) {
     const pts = presentChunks.map((cl, i) => {
@@ -1115,7 +1134,9 @@ function renderStagesTiming(run, stages) {
 function renderStagesThroughput(run, stages) {
   const {W, margin: {left: mL, right: mR, top: mT}} = LAYOUT.stageThru;
   const rowH = 36, gap = 6;
-  const H = stages.length * (rowH + gap) + 80;
+  const rowsH = stages.length * (rowH + gap);
+  const legY = mT + rowsH + 36;
+  const H = legY + 26;
 
   const svg = d3.select("#stage-chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${mL},${mT})`);
@@ -1172,15 +1193,14 @@ function renderStagesThroughput(run, stages) {
   g.append("text").attr("x", thruX0 + thruW/2).attr("y", -8).attr("text-anchor","middle")
     .attr("font-size","12px").attr("fill","var(--text-secondary)").text("GiB/s");
 
-  g.append("g").attr("class","axis").attr("transform",`translate(0,${stages.length*(rowH+gap)})`)
+  g.append("g").attr("class","axis").attr("transform",`translate(0,${rowsH})`)
     .call(d3.axisBottom(xMs).ticks(4).tickFormat(d => d + " ms"));
-  g.append("g").attr("class","axis").attr("transform",`translate(${thruX0},${stages.length*(rowH+gap)})`)
+  g.append("g").attr("class","axis").attr("transform",`translate(${thruX0},${rowsH})`)
     .call(d3.axisBottom(xGibs).ticks(4).tickFormat(d3.format(".1f")));
 
   svg.append("text").attr("x", mL).attr("y", 18).attr("font-size","13px").attr("font-weight",700)
     .text(`Stage breakdown: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
 
-  const legY = mT + stages.length * (rowH + gap) + 36;
   const leg = svg.append("g").attr("transform", `translate(${mL},${legY})`);
   leg.append("rect").attr("width",12).attr("height",12).attr("fill",colorIn).attr("rx",2);
   leg.append("text").attr("x",16).attr("y",10).attr("font-size","12px").text("in (GiB/s)");
