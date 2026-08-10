@@ -45,13 +45,9 @@ struct shard_state
   // Append chunks in shards closed out with their index block written, so a
   // reader can parse them. Grows only at finalize.
   uint64_t finalized_append_chunks;
-  // Padding along the append dim in the last of those chunks.
+  // Padding along the append dim in the last of those chunks. Only a flush can
+  // pad one, so every other finalize resets this to zero.
   uint64_t finalized_padding_elements;
-  // Padding the flush in progress will leave in the last chunk it delivers.
-  // Armed before the flush delivers anything, because whichever finalize closes
-  // that chunk has to record it in the same step: a failure between the two
-  // would otherwise leave the padding published as data.
-  uint64_t pending_flush_padding;
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet
 
@@ -83,12 +79,12 @@ uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink);
 
-// Declare how much padding the flush about to run will leave in the last chunk
-// it delivers, so the extent can leave that padding out. Call it before the
-// flush delivers anything, and pass 0 once the flush is over.
+// Record how much of the chunk a flush just closed is padding, so the extent
+// leaves it out. Call it only once the finalize succeeded: until then the
+// padded chunk is not among the ones the extent names.
 void
-shard_state_arm_flush_padding(struct shard_state* ss,
-                              uint64_t padding_elements);
+shard_state_record_flush_padding(struct shard_state* ss,
+                                 uint64_t padding_elements);
 
 // Publish one level's append extent through the sink. Returns non-zero if the
 // sink rejected the update.
@@ -105,15 +101,10 @@ shard_state_publish_append(struct shard_state* ss,
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to
 // keep the footer_buf reuse cycle correct.
-//
-// padding_elements is how much of the last chunk being closed is padding: the
-// armed pending_flush_padding when this closes the chunk a flush padded, 0 when
-// the chunk is full.
 int
 finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
-                size_t shard_alignment,
-                uint64_t padding_elements);
+                size_t shard_alignment);
 
 // Deliver compressed chunks from one batch's aggregate slot to shards.
 //   layout: aggregate layout for shard_capacity / num_shards / page_size.

@@ -306,27 +306,14 @@ finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     struct shard_state* ss = &e->compress_agg.ar.shard[lv];
     if (ss->epoch_in_shard > 0 &&
-        finalize_shards(
-          ss, ctx->sink, ctx->shard_alignment, ss->pending_flush_padding))
+        finalize_shards(ss, ctx->sink, ctx->shard_alignment)) {
       r = writer_error();
+      continue;
+    }
+    shard_state_record_flush_padding(
+      ss, dim_info_append_padding(&ctx->dims, ctx->cursor_elements, lv));
   }
   return r;
-}
-
-// Whichever finalize closes the chunk this flush pads has to record that
-// padding in the same step, so the amount is declared before the flush delivers
-// anything. Passing 0 afterwards covers the appends that follow, which fill
-// whole chunks again.
-static void
-arm_flush_padding(struct stream_engine* e,
-                  struct stream_context* ctx,
-                  int padding)
-{
-  for (int lv = 0; lv < ctx->levels.nlod; ++lv)
-    shard_state_arm_flush_padding(
-      &e->compress_agg.ar.shard[lv],
-      padding ? dim_info_append_padding(&ctx->dims, ctx->cursor_elements, lv)
-              : 0);
 }
 
 // Flush is already a sync point, so waiting here costs nothing and leaves no
@@ -386,9 +373,6 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       r = d;
   }
 
-  // Everything delivered above was whole epochs; the padded one comes next.
-  arm_flush_padding(e, ctx, 1);
-
   // Finalizing the open shards claims the output is complete, so it only runs
   // once everything before it succeeded: a reader cannot tell a complete array
   // from one whose tail never arrived.
@@ -399,8 +383,6 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
     else
       r = finalize_all_levels(e, ctx);
   }
-
-  arm_flush_padding(e, ctx, 0);
 
   collect_ingest_timing(e);
 

@@ -51,8 +51,9 @@ plane_fill(int round)
   return (uint16_t)(0xa500 + round);
 }
 
-// Pins the append positions the shape has to cover, so a shape that is off by a
-// plane in either direction fails here rather than looking plausible.
+// Pins where the planes land, so a shape off by one in either direction fails
+// here. Round 0's plane appears a second time at the chunk's first plane: the
+// flush re-sends the chunk it padded, since nothing clears the pool behind it.
 static int
 verify_planes_in_padded_chunk(const struct test_shard_sink* sink)
 {

@@ -206,13 +206,11 @@ write_footer(struct active_shard* sh,
 // hold: a flush that closes a half-full shard leaves its remaining slots empty
 // and the next generation still starts after them.
 static void
-record_finalized(struct shard_state* ss,
-                 struct shard_sink* sink,
-                 uint64_t padding_elements)
+record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
   ss->finalized_append_chunks =
     ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  ss->finalized_padding_elements = padding_elements;
+  ss->finalized_padding_elements = 0;
   if (sink->record_fence) {
     ss->finalized_fence = sink->record_fence(sink);
     ss->fence_pending = 1;
@@ -235,10 +233,10 @@ shard_state_readable_append_chunks(struct shard_state* ss,
 }
 
 void
-shard_state_arm_flush_padding(struct shard_state* ss,
-                              uint64_t padding_elements)
+shard_state_record_flush_padding(struct shard_state* ss,
+                                 uint64_t padding_elements)
 {
-  ss->pending_flush_padding = padding_elements;
+  ss->finalized_padding_elements = padding_elements;
 }
 
 int
@@ -259,8 +257,7 @@ shard_state_publish_append(struct shard_state* ss,
 int
 finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
-                size_t shard_alignment,
-                uint64_t padding_elements)
+                size_t shard_alignment)
 {
   int err = 0;
   size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
@@ -307,7 +304,7 @@ finalize_shards(struct shard_state* ss,
   }
 
   if (!err)
-    record_finalized(ss, sink, padding_elements);
+    record_finalized(ss, sink);
   ss->epoch_in_shard = 0;
   ss->shard_epoch++;
   return err;
@@ -476,9 +473,7 @@ deliver_run_contiguous(struct active_shard* sh,
 // Footer write already emitted the index; just close the writer and reset
 // per-shard state for the next generation.
 static int
-close_finalized_shards(struct shard_state* ss,
-                       struct shard_sink* sink,
-                       uint64_t padding_elements)
+close_finalized_shards(struct shard_state* ss, struct shard_sink* sink)
 {
   size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
   for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
@@ -494,7 +489,7 @@ close_finalized_shards(struct shard_state* ss,
     sh->data_cursor = 0;
     memset(sh->index, 0xFF, index_data_bytes);
   }
-  record_finalized(ss, sink, padding_elements);
+  record_finalized(ss, sink);
   ss->epoch_in_shard = 0;
   ss->shard_epoch++;
   return 0;
@@ -614,14 +609,10 @@ deliver_to_shards_batch(uint8_t level,
     a += run_len;
 
     if (ss->epoch_in_shard >= ss->chunks_per_shard_append) {
-      // Only the batch's last chunk can be the one a flush padded; every
-      // earlier chunk in the batch is full.
-      const uint64_t padding =
-        (a == n_active) ? ss->pending_flush_padding : 0;
       if (use_carryover)
-        CHECK(Error, close_finalized_shards(ss, sink, padding) == 0);
+        CHECK(Error, close_finalized_shards(ss, sink) == 0);
       else
-        CHECK(Error, finalize_shards(ss, sink, sa, padding) == 0);
+        CHECK(Error, finalize_shards(ss, sink, sa) == 0);
     }
   }
 
