@@ -26,6 +26,7 @@ run_test(const char* name,
   uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
 
   build_lifted_layout(rank,
+                      1,
                       dim_sizes,
                       chunk_sizes,
                       storage_order,
@@ -175,6 +176,7 @@ run_offset_test(const char* name,
   uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
 
   build_lifted_layout(rank,
+                      1,
                       dim_sizes,
                       chunk_sizes,
                       NULL,

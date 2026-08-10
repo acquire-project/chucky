@@ -6,12 +6,6 @@
 
 struct tile_stream_layout;
 
-struct tile_stream_layout_gpu
-{
-  uint64_t* d_lifted_shape;  // device copy (allocated once)
-  int64_t* d_lifted_strides; // device copy (allocated once)
-};
-
 struct tile_stream_memory_info
 {
   size_t device_bytes;      // total GPU memory

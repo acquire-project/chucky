@@ -154,7 +154,6 @@ Error:
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
-                        const struct tile_stream_layout_gpu* layout_gpu,
                         struct scatter_destination dst,
                         uint64_t first_element,
                         size_t bpe,
@@ -188,17 +187,18 @@ ingest_dispatch_scatter(struct staging_state* stage,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
   struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
   CU(Error, cuEventRecord(st->t_start, compute));
-  transpose(gpu_pool_view_d(dst.first_epoch),
-            gpu_pool_view_d(d_in),
-            ss->dispatched_bytes,
-            (uint8_t)bpe,
-            in_epoch,
-            epoch_elements,
-            dst.epoch_bytes,
-            layout->lifted_rank,
-            layout_gpu->d_lifted_shape,
-            layout_gpu->d_lifted_strides,
-            compute);
+  CHECK(Error,
+        transpose(gpu_pool_view_d(dst.first_epoch),
+                  gpu_pool_view_d(d_in),
+                  ss->dispatched_bytes,
+                  (uint8_t)bpe,
+                  in_epoch,
+                  epoch_elements,
+                  dst.epoch_bytes,
+                  layout->lifted_rank,
+                  layout->lifted_shape,
+                  layout->lifted_strides,
+                  compute) == 0);
   CU(Error, cuEventRecord(st->t_end, compute));
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 

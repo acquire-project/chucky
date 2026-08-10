@@ -10,31 +10,6 @@
 
 // ingest_init / ingest_destroy from stream_ingest.h
 
-static int
-upload_layout_gpu(struct tile_stream_layout_gpu* gpu,
-                  uint8_t lifted_rank,
-                  const uint64_t* lifted_shape,
-                  const int64_t* lifted_strides)
-{
-  size_t sb = lifted_rank * sizeof(uint64_t);
-  size_t stb = lifted_rank * sizeof(int64_t);
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, sb));
-  CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, stb));
-  CU(Fail, cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_shape, lifted_shape, sb));
-  CU(Fail,
-     cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_strides, lifted_strides, stb));
-  return 0;
-Fail:
-  return 1;
-}
-
-static void
-destroy_layout_gpu(struct tile_stream_layout_gpu* gpu)
-{
-  cu_mem_free((CUdeviceptr)gpu->d_lifted_shape);
-  cu_mem_free((CUdeviceptr)gpu->d_lifted_strides);
-}
-
 static struct gpu_pool_view
 as_view(CUdeviceptr d)
 {
@@ -60,6 +35,7 @@ test_ingest_incremental(void)
   uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
 
   build_lifted_layout(rank,
+                      1,
                       dim_sizes,
                       chunk_sizes,
                       NULL,
@@ -78,7 +54,6 @@ test_ingest_incremental(void)
   struct staging_state stage = { 0 };
   struct gpu_ordering ord = { 0 };
   struct tile_stream_layout layout = { 0 };
-  struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   void* h_pool = NULL;
@@ -93,7 +68,8 @@ test_ingest_incremental(void)
   CHECK(Fail, ingest_init(&stage, half, &ord, compute) == 0);
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
-  CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
+  // On the scatter's stream, so the clear cannot land after it.
+  CU(Fail, cuMemsetD8Async(d_pool, 0, pool_bytes, compute));
 
   layout.lifted_rank = lifted_rank;
   memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
@@ -102,9 +78,6 @@ test_ingest_incremental(void)
   layout.chunk_stride = chunk_stride;
   layout.chunks_per_epoch = chunks_per_epoch;
   layout.epoch_elements = epoch_elements;
-  CHECK(Fail,
-        upload_layout_gpu(
-          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -121,14 +94,8 @@ test_ingest_incremental(void)
     memcpy(gpu_pool_at(&stage.h_pool, stage.current, 0).p, h_src, half);
     stage.bytes_written = half;
     CHECK(Fail,
-          ingest_dispatch_scatter(&stage,
-                                  &layout,
-                                  &layout_gpu,
-                                  dst,
-                                  0,
-                                  bytes_per_element,
-                                  h2d,
-                                  compute) == 0);
+          ingest_dispatch_scatter(
+            &stage, &layout, dst, 0, bytes_per_element, h2d, compute) == 0);
 
     struct gpu_pool_view h_in;
     CHECK(Fail,
@@ -139,7 +106,6 @@ test_ingest_incremental(void)
     CHECK(Fail,
           ingest_dispatch_scatter(&stage,
                                   &layout,
-                                  &layout_gpu,
                                   dst,
                                   epoch_elements / 2,
                                   bytes_per_element,
@@ -189,7 +155,6 @@ Fail:
   free(h_pool);
   ingest_destroy(&stage);
   gpu_ordering_destroy(&ord);
-  destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_stream_destroy(h2d);
   cu_stream_destroy(compute);
@@ -215,6 +180,7 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
 
   build_lifted_layout(rank,
+                      1,
                       dim_sizes,
                       chunk_sizes,
                       NULL,
@@ -238,7 +204,6 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   struct staging_state stage = { 0 };
   struct gpu_ordering ord = { 0 };
   struct tile_stream_layout layout = { 0 };
-  struct tile_stream_layout_gpu layout_gpu = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   void* h_pool = NULL;
@@ -253,7 +218,8 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
 
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
-  CU(Fail, cuMemsetD8(d_pool, 0, pool_bytes));
+  // On the scatter's stream, so the clear cannot land after it.
+  CU(Fail, cuMemsetD8Async(d_pool, 0, pool_bytes, compute));
 
   layout.lifted_rank = lifted_rank;
   memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
@@ -262,9 +228,6 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   layout.chunk_stride = chunk_stride;
   layout.chunks_per_epoch = chunks_per_epoch;
   layout.epoch_elements = epoch_elements;
-  CHECK(Fail,
-        upload_layout_gpu(
-          &layout_gpu, lifted_rank, lifted_shape, lifted_strides) == 0);
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -277,7 +240,6 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   CHECK(Fail,
         ingest_dispatch_scatter(&stage,
                                 &layout,
-                                &layout_gpu,
                                 (struct scatter_destination){
                                   .first_epoch = as_view(d_pool),
                                   .epoch_bytes = epoch_bytes,
@@ -328,7 +290,6 @@ Fail:
   free(h_pool);
   ingest_destroy(&stage);
   gpu_ordering_destroy(&ord);
-  destroy_layout_gpu(&layout_gpu);
   cu_mem_free(d_pool);
   cu_stream_destroy(h2d);
   cu_stream_destroy(compute);

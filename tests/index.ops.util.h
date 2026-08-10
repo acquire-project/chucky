@@ -63,10 +63,11 @@ cpu_perm(uint64_t i,
          const int64_t* strides);
 
 // Build lifted shape and strides for a chunk decomposition (no codec
-// alignment). The epoch dimension (dim 0) stride is set to 0 so all epochs
-// collapse. storage_order may be NULL for identity order.
+// alignment). The chunk stride of each of the first n_append dimensions is set
+// to 0 so all epochs collapse. storage_order may be NULL for identity order.
 void
 build_lifted_layout(int rank,
+                    uint8_t n_append,
                     const uint64_t* dim_sizes,
                     const uint64_t* chunk_sizes,
                     const uint8_t* storage_order,

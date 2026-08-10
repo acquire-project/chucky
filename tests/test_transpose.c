@@ -24,6 +24,7 @@ fill_elements(uint8_t* dst, uint64_t n, uint8_t bpe)
 static int
 run_transpose_test(const char* name,
                    int rank,
+                   uint8_t n_append,
                    const uint64_t* dim_sizes,
                    const uint64_t* chunk_sizes,
                    const uint8_t* storage_order,
@@ -43,6 +44,7 @@ run_transpose_test(const char* name,
   uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
 
   build_lifted_layout(rank,
+                      n_append,
                       dim_sizes,
                       chunk_sizes,
                       storage_order,
@@ -73,7 +75,7 @@ run_transpose_test(const char* name,
 
   void* h_src = NULL;
   void* h_dst = NULL;
-  CUdeviceptr d_src = 0, d_dst = 0, d_shape = 0, d_strides = 0;
+  CUdeviceptr d_src = 0, d_dst = 0;
   CUstream stream = 0;
   int ok = 0;
 
@@ -85,26 +87,23 @@ run_transpose_test(const char* name,
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuMemAlloc(&d_src, src_bytes));
   CU(Fail, cuMemAlloc(&d_dst, dst_bytes));
-  CU(Fail, cuMemsetD8(d_dst, 0, dst_bytes));
-  CU(Fail, cuMemAlloc(&d_shape, lifted_rank * sizeof(uint64_t)));
-  CU(Fail, cuMemAlloc(&d_strides, lifted_rank * sizeof(int64_t)));
+  // On the kernel's own stream, so the scatter cannot start before the source
+  // lands or race the clear.
+  CU(Fail, cuMemsetD8Async(d_dst, 0, dst_bytes, stream));
+  CU(Fail, cuMemcpyHtoDAsync(d_src, h_src, src_bytes, stream));
 
-  CU(Fail, cuMemcpyHtoD(d_src, h_src, src_bytes));
-  CU(Fail, cuMemcpyHtoD(d_shape, lifted_shape, lifted_rank * sizeof(uint64_t)));
-  CU(Fail,
-     cuMemcpyHtoD(d_strides, lifted_strides, lifted_rank * sizeof(int64_t)));
-
-  transpose(d_dst,
-            d_src,
-            src_bytes,
-            bpe,
-            in_epoch_offset,
-            epoch_elements,
-            region_elements * bpe,
-            lifted_rank,
-            (const uint64_t*)d_shape,
-            (const int64_t*)d_strides,
-            stream);
+  CHECK(Fail,
+        transpose(d_dst,
+                  d_src,
+                  src_bytes,
+                  bpe,
+                  in_epoch_offset,
+                  epoch_elements,
+                  region_elements * bpe,
+                  lifted_rank,
+                  lifted_shape,
+                  lifted_strides,
+                  stream) == 0);
   CU(Fail, cuStreamSynchronize(stream));
 
   CU(Fail, cuMemcpyDtoH(h_dst, d_dst, dst_bytes));
@@ -142,8 +141,6 @@ Fail:
   free(h_dst);
   cuMemFree(d_src);
   cuMemFree(d_dst);
-  cuMemFree(d_shape);
-  cuMemFree(d_strides);
   cuStreamDestroy(stream);
 
   if (ok) {
@@ -161,7 +158,7 @@ test_transpose_2d(void)
   uint64_t dim_sizes[] = { 4, 6 };
   uint64_t chunk_sizes[] = { 2, 3 };
   return run_transpose_test(
-    "test_transpose_2d", 2, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
+    "test_transpose_2d", 2, 1, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -171,7 +168,7 @@ test_transpose_3d(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_3d", 3, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
+    "test_transpose_3d", 3, 1, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -181,7 +178,7 @@ test_transpose_identity(void)
   uint64_t dim_sizes[] = { 6, 4 };
   uint64_t chunk_sizes[] = { 6, 4 };
   return run_transpose_test(
-    "test_transpose_identity", 2, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
+    "test_transpose_identity", 2, 1, dim_sizes, chunk_sizes, NULL, 2, 1, 0);
 }
 
 static int
@@ -191,7 +188,7 @@ test_transpose_bpe4(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_bpe4", 3, dim_sizes, chunk_sizes, NULL, 4, 1, 0);
+    "test_transpose_bpe4", 3, 1, dim_sizes, chunk_sizes, NULL, 4, 1, 0);
 }
 
 static int
@@ -204,6 +201,7 @@ test_transpose_3d_storage_order(void)
   uint8_t storage_order[] = { 0, 2, 1 };
   return run_transpose_test("test_transpose_3d_storage_order",
                             3,
+                            1,
                             dim_sizes,
                             chunk_sizes,
                             storage_order,
@@ -222,6 +220,7 @@ test_transpose_4d_storage_order(void)
   uint8_t storage_order[] = { 0, 3, 1, 2 };
   return run_transpose_test("test_transpose_4d_storage_order",
                             4,
+                            1,
                             dim_sizes,
                             chunk_sizes,
                             storage_order,
@@ -243,6 +242,7 @@ test_transpose_many_epochs(void)
     for (uint64_t from = 0; from < 2; ++from)
       err |= run_transpose_test("test_transpose_many_epochs",
                                 3,
+                                1,
                                 dim_sizes,
                                 chunk_sizes,
                                 NULL,
@@ -258,7 +258,63 @@ test_transpose_bpe8(void)
   uint64_t dim_sizes[] = { 4, 4, 6 };
   uint64_t chunk_sizes[] = { 2, 2, 3 };
   return run_transpose_test(
-    "test_transpose_bpe8", 3, dim_sizes, chunk_sizes, NULL, 8, 1, 0);
+    "test_transpose_bpe8", 3, 1, dim_sizes, chunk_sizes, NULL, 8, 1, 0);
+}
+
+// Two append dimensions collapse, so the decomposition has to stop short of a
+// dimension sitting in the middle of the shape rather than at the front.
+static int
+test_transpose_two_append_dims(void)
+{
+  uint64_t dim_sizes[] = { 4, 3, 64, 96 };
+  uint64_t chunk_sizes[] = { 1, 1, 16, 24 };
+  return run_transpose_test("test_transpose_two_append_dims",
+                            4,
+                            2,
+                            dim_sizes,
+                            chunk_sizes,
+                            NULL,
+                            2,
+                            2,
+                            0);
+}
+
+// A shape whose trailing dimensions cannot make up an epoch is refused, rather
+// than scattered somewhere wrong.
+static int
+test_transpose_rejects_mismatched_epoch(void)
+{
+  log_info("=== test_transpose_rejects_mismatched_epoch ===");
+
+  const uint64_t shape[] = { 2, 4, 6 };
+  const int64_t strides[] = { 0, 6, 1 };
+  CUdeviceptr d_src = 0, d_dst = 0;
+  CUstream stream = 0;
+  int ok = 0;
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuMemAlloc(&d_src, 48 * sizeof(uint16_t)));
+  CU(Fail, cuMemAlloc(&d_dst, 48 * sizeof(uint16_t)));
+
+  // 25 is not a product of any run of trailing extents.
+  ok = transpose(d_dst,
+                 d_src,
+                 48 * sizeof(uint16_t),
+                 2,
+                 0,
+                 25,
+                 24 * sizeof(uint16_t),
+                 3,
+                 shape,
+                 strides,
+                 stream) != 0;
+
+Fail:
+  cuMemFree(d_src);
+  cuMemFree(d_dst);
+  cuStreamDestroy(stream);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
 }
 
 RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
@@ -268,4 +324,7 @@ RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
               { "transpose_3d_storage_order", test_transpose_3d_storage_order },
               { "transpose_4d_storage_order", test_transpose_4d_storage_order },
               { "transpose_bpe8", test_transpose_bpe8 },
-              { "transpose_many_epochs", test_transpose_many_epochs }, )
+              { "transpose_many_epochs", test_transpose_many_epochs },
+              { "transpose_two_append_dims", test_transpose_two_append_dims },
+              { "transpose_rejects_mismatched_epoch",
+                test_transpose_rejects_mismatched_epoch }, )

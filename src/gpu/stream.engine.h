@@ -121,7 +121,6 @@ struct lod_state
 
   // Per-level chunk layouts [0..nlod-1]
   struct tile_stream_layout layouts[LOD_MAX_LEVELS];
-  struct tile_stream_layout_gpu layout_gpu[LOD_MAX_LEVELS];
 
   // Morton-to-chunk scatter LUTs (precomputed)
   CUdeviceptr d_morton_chunk_lut[LOD_MAX_LEVELS];
@@ -280,7 +279,6 @@ struct stream_context
   struct tile_stream_configuration config;
   struct shard_sink* sink;
   struct tile_stream_layout layout;
-  struct tile_stream_layout_gpu layout_gpu;
   struct level_geometry levels;
   struct dim_info dims;
   uint64_t cursor_elements;

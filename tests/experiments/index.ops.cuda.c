@@ -159,7 +159,7 @@ test_transpose_u16_basic(void)
   printf("%30s", "Transposed strides: ");
   println_vi32(rank, transposed_strides);
 
-  CUdeviceptr d_src = 0, d_dst = 0, d_shape = 0, d_strides = 0;
+  CUdeviceptr d_src = 0, d_dst = 0;
   uint16_t *src = 0, *actual = 0, *expected = 0;
 
   const int n = transposed_strides[0] * shape[0];
@@ -189,7 +189,7 @@ test_transpose_u16_basic(void)
   CUstream stream = 0;
   CU(Fail, cuMemcpyHtoDAsync(d_src, src, n * sizeof(uint16_t), stream));
 
-  // Convert shape and strides to uint64_t/int64_t for the API
+  // Convert shape and strides to the widths the API takes
   uint64_t shape64[MAX_RANK] = { 0 };
   int64_t strides64[MAX_RANK] = { 0 };
   for (int i = 0; i < rank; ++i) {
@@ -197,24 +197,19 @@ test_transpose_u16_basic(void)
     strides64[i] = transposed_strides[i];
   }
 
-  // Copy shape and strides to device
-  CU(Fail, cuMemAlloc(&d_shape, rank * sizeof(uint64_t)));
-  CU(Fail, cuMemAlloc(&d_strides, rank * sizeof(int64_t)));
-  CU(Fail, cuMemcpyHtoD(d_shape, shape64, rank * sizeof(uint64_t)));
-  CU(Fail, cuMemcpyHtoD(d_strides, strides64, rank * sizeof(int64_t)));
-
   // Call the CUDA transpose kernel
-  transpose(d_dst,
-            d_src,
-            n * sizeof(uint16_t),
-            sizeof(uint16_t),
-            0, // i_offset (start at input index 0)
-            n, // one epoch holds the whole array
-            0, // so there is no second region to step to
-            rank,
-            (const uint64_t*)d_shape,
-            (const int64_t*)d_strides,
-            stream);
+  CHECK(Fail,
+        transpose(d_dst,
+                  d_src,
+                  n * sizeof(uint16_t),
+                  sizeof(uint16_t),
+                  0, // i_offset (start at input index 0)
+                  n, // one epoch holds the whole array
+                  0, // so there is no second region to step to
+                  rank,
+                  shape64,
+                  strides64,
+                  stream) == 0);
 
   // Copy results back to host
   CU(Fail, cuMemcpyDtoHAsync(actual, d_dst, n * sizeof(uint16_t), stream));
@@ -252,8 +247,6 @@ test_transpose_u16_basic(void)
   }
 
 Finalize:
-  cuMemFree(d_shape);
-  cuMemFree(d_strides);
   cuMemFree(d_src);
   cuMemFree(d_dst);
   free(src);
@@ -279,7 +272,7 @@ test_transpose_u16_with_offset(void)
 
   setup_transpose_strides(rank, shape, p, transposed_shape, transposed_strides);
 
-  CUdeviceptr d_src = 0, d_dst = 0, d_shape = 0, d_strides = 0;
+  CUdeviceptr d_src = 0, d_dst = 0;
   uint16_t *src = 0, *actual = 0, *expected = 0;
 
   const int n = transposed_strides[0] * shape[0];
@@ -332,7 +325,7 @@ test_transpose_u16_with_offset(void)
   // Copy source to device
   CU(Fail, cuMemcpyHtoDAsync(d_src, src, count * sizeof(uint16_t), stream));
 
-  // Convert shape and strides to uint64_t/int64_t for the API
+  // Convert shape and strides to the widths the API takes
   uint64_t shape64[MAX_RANK] = { 0 };
   int64_t strides64[MAX_RANK] = { 0 };
   for (int i = 0; i < rank; ++i) {
@@ -340,24 +333,19 @@ test_transpose_u16_with_offset(void)
     strides64[i] = transposed_strides[i];
   }
 
-  // Copy shape and strides to device
-  CU(Fail, cuMemAlloc(&d_shape, rank * sizeof(uint64_t)));
-  CU(Fail, cuMemAlloc(&d_strides, rank * sizeof(int64_t)));
-  CU(Fail, cuMemcpyHtoD(d_shape, shape64, rank * sizeof(uint64_t)));
-  CU(Fail, cuMemcpyHtoD(d_strides, strides64, rank * sizeof(int64_t)));
-
   // Call the CUDA transpose kernel with offset
-  transpose(d_dst,
-            d_src,
-            count * sizeof(uint16_t),
-            sizeof(uint16_t),
-            i_offset,
-            n, // one epoch holds the whole array
-            0, // so there is no second region to step to
-            rank,
-            (const uint64_t*)d_shape,
-            (const int64_t*)d_strides,
-            stream);
+  CHECK(Fail,
+        transpose(d_dst,
+                  d_src,
+                  count * sizeof(uint16_t),
+                  sizeof(uint16_t),
+                  i_offset,
+                  n, // one epoch holds the whole array
+                  0, // so there is no second region to step to
+                  rank,
+                  shape64,
+                  strides64,
+                  stream) == 0);
 
   // Copy results back to host
   CU(Fail, cuMemcpyDtoHAsync(actual, d_dst, n * sizeof(uint16_t), stream));
@@ -387,8 +375,6 @@ test_transpose_u16_with_offset(void)
   }
 
 Finalize:
-  cuMemFree(d_shape);
-  cuMemFree(d_strides);
   cuMemFree(d_src);
   cuMemFree(d_dst);
   free(src);

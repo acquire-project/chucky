@@ -182,31 +182,6 @@ Fail:
   return 1;
 }
 
-// Upload pre-computed LOD level layouts to GPU.
-// Host fields in lod->layouts must already be populated.
-static int
-upload_lod_level_layouts(struct lod_state* lod)
-{
-  for (int lv = 0; lv < lod->plan.levels.nlod; ++lv) {
-    const struct tile_stream_layout* layout = &lod->layouts[lv];
-    struct tile_stream_layout_gpu* gpu = &lod->layout_gpu[lv];
-    const size_t sb = layout->lifted_rank * sizeof(uint64_t);
-    const size_t stb = layout->lifted_rank * sizeof(int64_t);
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_shape, sb));
-    CU(Fail, cuMemAlloc((CUdeviceptr*)&gpu->d_lifted_strides, stb));
-    CU(
-      Fail,
-      cuMemcpyHtoD((CUdeviceptr)gpu->d_lifted_shape, layout->lifted_shape, sb));
-    CU(Fail,
-       cuMemcpyHtoD(
-         (CUdeviceptr)gpu->d_lifted_strides, layout->lifted_strides, stb));
-  }
-
-  return 0;
-Fail:
-  return 1;
-}
-
 // Upload chunk sizes/strides to GPU and build chunk scatter LUT.
 // Owns d_chunk_sizes and d_chunk_strides — freed in both success and failure.
 static int
@@ -357,9 +332,6 @@ lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
                const struct tile_stream_configuration* config)
 {
-  // Always upload level layouts (L0 included).
-  CHECK(Fail, upload_lod_level_layouts(lod) == 0);
-
   if (!levels->enable_multiscale)
     return 0;
 
@@ -521,10 +493,6 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
   const struct lod_plan* p = &cl->plan;
   size_t bytes = 0;
 
-  // upload_lod_level_layouts: every level, L0 included.
-  for (int lv = 0; lv < p->levels.nlod; ++lv)
-    bytes += cl->layouts[lv].lifted_rank * (sizeof(uint64_t) + sizeof(int64_t));
-
   if (!cl->levels.enable_multiscale)
     return bytes;
 
@@ -602,10 +570,6 @@ lod_state_destroy(struct lod_state* lod)
   }
   for (int i = 0; i < lod->plan.levels.nlod - 1; ++i) {
     reduce_csr_gpu_free(&lod->csrs[i]);
-  }
-  for (int i = 0; i < lod->plan.levels.nlod; ++i) {
-    CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_shape));
-    CUWARN(cuMemFree((CUdeviceptr)lod->layout_gpu[i].d_lifted_strides));
   }
   lod_plan_free(&lod->plan);
   // Zero so a second destroy (init-failure cleanup, then owner teardown)
