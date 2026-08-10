@@ -108,7 +108,7 @@ dim_info_final_append_sizes(const struct dim_info* info,
 }
 
 // Elements a flush has to pad to close the chunk the append cursor sits in.
-// Zero when the cursor sits on a chunk boundary and nothing needs padding.
+// Zero on a chunk boundary.
 uint64_t
 dim_info_append_padding(const struct dim_info* info,
                         uint64_t cursor_elements,

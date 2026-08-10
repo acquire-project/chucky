@@ -28,7 +28,7 @@ dim_info_finalized_append_sizes(const struct dim_info* info,
   dim_info_decompose_append_sizes(info, finalized_append_chunks, append_sizes);
 
   // A flush that failed before delivering the chunk it padded records padding
-  // that no finalized chunk holds.
+  // no finalized chunk holds.
   const uint64_t reach = append_sizes[0];
   append_sizes[0] = append_padding < reach ? reach - append_padding : 0;
 }

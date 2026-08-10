@@ -45,8 +45,8 @@ struct shard_state
   // Append chunks in shards closed out with their index block written, so a
   // reader can parse them. Grows only at finalize.
   uint64_t finalized_append_chunks;
-  // Padding along the append dim in the last of those chunks. Only a flush can
-  // pad one, so every other finalize resets this to zero.
+  // Padding along the append dim in the last of those chunks. Only a flush pads
+  // a chunk, so every other finalize clears this.
   uint64_t finalized_padding_elements;
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet

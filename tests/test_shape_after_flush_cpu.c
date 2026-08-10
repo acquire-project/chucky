@@ -1,8 +1,7 @@
 // What the shape says after a flush, on the CPU backend.
 //
 // #175: a failed flush leaves shards on disk that a reader cannot see unless
-// the shape is written. The shape names finalized shards, so it is truthful on
-// the failing path and worth writing.
+// the shape is written.
 //
 // #193: a flush pads the chunk it lands in and closes the shard, so chunks
 // appended afterwards start past the padding and past the slots the flush left
@@ -43,8 +42,8 @@ struct shape_case
 
 #define PLANE_ELEMS 16
 
-// Each round fills its planes with its own value, so a check can say which
-// round's plane it is looking at.
+// Each round fills its planes with its own value, so a check can tell them
+// apart.
 static uint16_t
 plane_fill(int round)
 {
