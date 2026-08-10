@@ -1,5 +1,7 @@
 #include "zarr/shard_delivery.h"
 
+#include "defs.limits.h"
+
 #include "log/log.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
@@ -209,8 +211,10 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
   ss->finalized_append_chunks =
     ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  if (sink->record_fence)
+  if (sink->record_fence) {
     ss->finalized_fence = sink->record_fence(sink);
+    ss->fence_pending = 1;
+  }
 }
 
 uint64_t
@@ -218,14 +222,32 @@ shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink)
 {
   // Wait once per closed-out generation, not once per caller: the metadata
-  // update runs every batch, and blocking the delivery worker on a fence
-  // already waited for costs real throughput on small epochs.
-  if (ss->fenced_append_chunks != ss->finalized_append_chunks) {
+  // update runs every batch, and blocking on a fence already waited for costs
+  // real throughput on small epochs.
+  if (ss->fence_pending) {
     if (sink->wait_fence)
       sink->wait_fence(sink, ss->finalized_fence);
-    ss->fenced_append_chunks = ss->finalized_append_chunks;
+    ss->fence_pending = 0;
   }
-  return ss->fenced_append_chunks;
+  return ss->finalized_append_chunks;
+}
+
+int
+shard_state_publish_append(struct shard_state* ss,
+                           struct shard_sink* sink,
+                           const struct dim_info* dims,
+                           uint8_t level,
+                           const uint64_t* cursor_elements)
+{
+  uint64_t readable = shard_state_readable_append_chunks(ss, sink);
+  uint64_t append_sizes[HALF_MAX_RANK];
+  if (cursor_elements)
+    dim_info_readable_append_sizes(
+      dims, readable, *cursor_elements, level, append_sizes);
+  else
+    dim_info_decompose_append_sizes(dims, readable, append_sizes);
+  return sink->update_append(
+    sink, level, dim_info_n_append(dims), append_sizes);
 }
 
 int

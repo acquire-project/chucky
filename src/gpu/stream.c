@@ -335,16 +335,13 @@ publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   struct writer_result r = writer_ok();
-  const uint8_t na = dim_info_n_append(&ctx->dims);
-  for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    struct shard_state* ss = &e->compress_agg.ar.shard[lv];
-    uint64_t readable = shard_state_readable_append_chunks(ss, ctx->sink);
-    uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_readable_append_sizes(
-      &ctx->dims, readable, ctx->cursor_elements, lv, append_sizes);
-    if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
+  for (int lv = 0; lv < ctx->levels.nlod; ++lv)
+    if (shard_state_publish_append(&e->compress_agg.ar.shard[lv],
+                                   ctx->sink,
+                                   &ctx->dims,
+                                   (uint8_t)lv,
+                                   &ctx->cursor_elements))
       r = writer_error();
-  }
   return r;
 }
 
@@ -388,10 +385,8 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (sink_failed && !r.error)
     r = writer_error();
 
-  // The shape names only finalized shards, so it is truthful after a failure
-  // too, and is the only way a reader learns about shards written since the
-  // last periodic update. A sink IO error is the exception: which of those
-  // writes landed is unknowable.
+  // A sink IO error is the one case the shape is withheld: which writes landed
+  // is unknowable.
   if (!sink_failed) {
     struct writer_result shape = publish_array_shape(e, ctx);
     if (shape.error && !r.error)

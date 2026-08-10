@@ -1,5 +1,6 @@
 #pragma once
 
+#include "stream/dim_info.h"
 #include "stream/layouts.h"
 #include "stream/types.aggregate.h"
 #include "writer.h"
@@ -46,7 +47,7 @@ struct shard_state
   // finalized_fence retires once those writes have left the IO queue.
   uint64_t finalized_append_chunks;
   struct io_event finalized_fence;
-  uint64_t fenced_append_chunks; // finalized count already waited for
+  int fence_pending; // finalized_fence not waited on yet
 
   // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
   // bulk HtoD upload covers all shards. NULL when page == 0.
@@ -76,6 +77,21 @@ shard_state_heap_bytes(const struct level_layout_info* li);
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink);
+
+// Publish one level's append extent through the sink. Pass cursor_elements to
+// hold the extent down to what the caller appended; pass NULL from the
+// periodic path, where the cursor belongs to another thread. Returns non-zero
+// if the sink rejected the update.
+//
+// The extent names only closed-out shards, so it stays truthful after a failed
+// flush and is the only way a reader learns about shards written since the
+// last periodic update.
+int
+shard_state_publish_append(struct shard_state* ss,
+                           struct shard_sink* sink,
+                           const struct dim_info* dims,
+                           uint8_t level,
+                           const uint64_t* cursor_elements);
 
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to

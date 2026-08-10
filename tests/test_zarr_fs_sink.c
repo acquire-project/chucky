@@ -1031,8 +1031,12 @@ test_midstream_metadata_update(const char* tmpdir)
     // being written has chunk data where the index belongs.
     const uint64_t append_shards =
       finalized_chunks / dims[0].chunks_per_shard;
-    const size_t chunks_per_shard_total = 3 * 2 * 2;
-    const int x_shards = 2;
+    const size_t chunks_per_shard_total = (size_t)dims[0].chunks_per_shard *
+                                          dims[1].chunks_per_shard *
+                                          dims[2].chunks_per_shard;
+    const int x_shards =
+      (int)ceildiv(ceildiv(dims[2].size, dims[2].chunk_size),
+                   dims[2].chunks_per_shard);
     for (uint64_t sz = 0; sz < append_shards; ++sz) {
       for (int sx = 0; sx < x_shards; ++sx) {
         char spath[4096];

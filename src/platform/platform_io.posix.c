@@ -80,6 +80,12 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
 }
 
 int
+platform_remove_file(const char* path)
+{
+  return unlink(path) == 0 ? 0 : -1;
+}
+
+int
 platform_rename_replace(const char* from, const char* to)
 {
   return rename(from, to) == 0 ? 0 : -1;

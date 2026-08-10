@@ -66,15 +66,13 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t total_append_chunks,
                                 uint64_t* append_sizes);
 
-// Append dim sizes describing what a reader can see: how far along the append
-// dim the finalized chunks reach, held down to the elements the caller
-// appended. Both inputs describe things that already happened, so the result
-// is truthful whether or not the stream ended cleanly.
+// Append dim sizes for data a reader can reach: the smaller of how far the
+// finalized chunks reach and how many elements the caller appended. Both
+// describe work that already happened, so neither claims data that a failed
+// flush never delivered.
 //
-// Known gap: a flush partway through a chunk pads it and closes the shard, and
-// anything appended after that sits past the padding. The element count then
-// stops short of the real extent and this reports the short value, same as it
-// did before shard state was consulted at all.
+// Underreports once a flush lands partway through a chunk: the padding and
+// skipped shard slots push later chunks past where the element count stops.
 void
 dim_info_readable_append_sizes(const struct dim_info* info,
                                uint64_t readable_append_chunks,

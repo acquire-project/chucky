@@ -344,15 +344,9 @@ d2h_deliver_update_metadata(const struct flush_handoff* handoff,
     return 0;
 
   *metadata_update_clock = peek;
-  const uint8_t na = dim_info_n_append(dims_info);
   for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
     struct shard_state* ss = handoff->shards_by_lod[lv];
-    if (!ss)
-      continue;
-    uint64_t readable = shard_state_readable_append_chunks(ss, sink);
-    uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_decompose_append_sizes(dims_info, readable, append_sizes);
-    if (sink->update_append(sink, (uint8_t)lv, na, append_sizes))
+    if (ss && shard_state_publish_append(ss, sink, dims_info, lv, NULL))
       return 1;
   }
   return 0;

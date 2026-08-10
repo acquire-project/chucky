@@ -5,7 +5,6 @@
 #include "util/strbuf.h"
 #include "zarr/shard_pool_fs.h"
 
-#include <stdatomic.h>
 #include <stdlib.h>
 
 struct store_fs
@@ -22,8 +21,6 @@ fs_join(const struct store_fs* fs, const char* key, struct strbuf* out)
 {
   return strbuf_appendf(out, "%s/%s", strbuf_cstr(&fs->root), key);
 }
-
-static atomic_uint_least64_t fs_put_sequence;
 
 // Written to a sibling temporary file and renamed into place, so a reader
 // opening the key while a stream is running sees either the whole previous
@@ -42,14 +39,12 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
     goto done;
 
   // The process id keeps two writers sharing a directory off the same
-  // temporary name, where each would otherwise rename the other's half-written
-  // file over the key.
-  uint64_t seq = atomic_fetch_add(&fs_put_sequence, 1);
+  // temporary name, where each would otherwise rename the other's
+  // half-written file over the key.
   if (strbuf_appendf(&tmp_path,
-                     "%s.tmp.%llu.%llu",
+                     "%s.tmp.%llu",
                      strbuf_cstr(&path),
-                     (unsigned long long)platform_process_id(),
-                     (unsigned long long)seq))
+                     (unsigned long long)platform_process_id()))
     goto done;
 
   platform_fd fd = platform_open_write(strbuf_cstr(&tmp_path), 0);
@@ -58,10 +53,11 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
   int written = platform_write(fd, data, len) == 0;
   platform_close(fd);
 
-  rc = !written || platform_rename_replace(strbuf_cstr(&tmp_path),
-                                           strbuf_cstr(&path)) != 0;
-  if (rc)
-    platform_remove_tree(strbuf_cstr(&tmp_path));
+  if (written &&
+      platform_rename_replace(strbuf_cstr(&tmp_path), strbuf_cstr(&path)) == 0)
+    rc = 0;
+  else
+    platform_remove_file(strbuf_cstr(&tmp_path));
 done:
   strbuf_free(&tmp_path);
   strbuf_free(&path);
