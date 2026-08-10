@@ -116,9 +116,9 @@ metering_update_append(struct shard_sink* self,
                        uint8_t n_append,
                        const uint64_t* append_sizes)
 {
-  // Left out of the sink metric on purpose: that metric pairs times with byte
-  // counts, and a zero-byte sample becomes the best entry and reports the sink
-  // stage as running at no bandwidth at all.
+  // Kept out of the sink metric: it pairs times with byte counts, and a
+  // zero-byte sample becomes the best entry and reports the stage at no
+  // bandwidth at all.
   struct metering_sink* ms = (struct metering_sink*)self;
   return ms->inner->update_append(ms->inner, level, n_append, append_sizes);
 }

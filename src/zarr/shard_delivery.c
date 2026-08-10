@@ -202,10 +202,9 @@ write_footer(struct active_shard* sh,
   return err;
 }
 
-// The generation just closed out is now readable, once its writes retire.
-// This is how far along the append dim the shards now reach, not how many
-// chunks they hold: a flush that closes a half-full shard leaves the rest of
-// its slots empty, and the next generation still starts after them.
+// How far along the append dim the shards reach, not how many chunks they
+// hold: a flush that closes a half-full shard leaves its remaining slots empty
+// and the next generation still starts after them.
 static void
 record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
@@ -221,9 +220,9 @@ uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink)
 {
-  // Wait once per closed-out generation, not once per caller: the metadata
-  // update runs every batch, and blocking on a fence already waited for costs
-  // real throughput on small epochs.
+  // Once per closed-out generation, not once per caller: the metadata update
+  // runs every batch, and re-waiting a retired fence costs real throughput on
+  // small epochs.
   if (ss->fence_pending) {
     if (sink->wait_fence)
       sink->wait_fence(sink, ss->finalized_fence);

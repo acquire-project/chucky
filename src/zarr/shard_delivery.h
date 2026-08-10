@@ -42,9 +42,8 @@ struct shard_state
   uint64_t chunks_per_shard_append;
   struct active_shard* shards; // [shard_inner_count]
 
-  // Append chunks living in shards that have been closed out, so their index
-  // block is written and a reader can parse them. Grows only at finalize;
-  // finalized_fence retires once those writes have left the IO queue.
+  // Append chunks in shards closed out with their index block written, so a
+  // reader can parse them. Grows only at finalize.
   uint64_t finalized_append_chunks;
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet
@@ -71,21 +70,19 @@ shard_state_destroy(struct shard_state* ss);
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
-// How far along the append dim a reader can safely see: finalized and no
-// longer queued. Waits for the last finalize's writes to retire, which have
-// normally landed well before the next metadata update asks for this.
+// How far along the append dim a reader can safely see. Waits for the last
+// finalize's writes to retire, which have normally landed already.
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink);
 
 // Publish one level's append extent through the sink. Pass cursor_elements to
-// hold the extent down to what the caller appended; pass NULL from the
-// periodic path, where the cursor belongs to another thread. Returns non-zero
-// if the sink rejected the update.
+// hold the extent down to what the caller appended, or NULL where the cursor
+// belongs to another thread. Returns non-zero if the sink rejected the update.
 //
 // The extent names only closed-out shards, so it stays truthful after a failed
-// flush and is the only way a reader learns about shards written since the
-// last periodic update.
+// flush, and is the only way a reader learns of shards written since the last
+// periodic update.
 int
 shard_state_publish_append(struct shard_state* ss,
                            struct shard_sink* sink,

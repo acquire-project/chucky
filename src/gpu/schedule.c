@@ -921,10 +921,8 @@ schedule_add_partial_epoch(struct stream_engine* e, struct stream_context* ctx)
   return 0;
 }
 
-// Drains every kicked slot even after one fails. Each slot's delivery worker
-// writes shard state the caller goes on to read and holds buffers destroy
-// frees, so leaving one running to report the error sooner would hand back a
-// stream nobody can safely finish.
+// A worker left running owns shard state the caller reads and buffers destroy
+// frees, so every kicked slot is drained even after one fails.
 struct writer_result
 schedule_drain_kicked(struct stream_engine* e, struct stream_context* ctx)
 {

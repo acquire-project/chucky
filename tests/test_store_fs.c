@@ -449,7 +449,7 @@ Fail:
 
 struct put_reader
 {
-  char path[4096];
+  char path[4200];
   atomic_int stop;
   int reads;
   int torn;

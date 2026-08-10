@@ -94,11 +94,9 @@ platform_remove_file(const char* path)
 
 // Windows refuses to replace a file another handle has open unless that
 // handle allowed delete sharing, which readers generally do not. A reader
-// holds the file only for the length of one read, so wait for it to close
-// instead of failing the write. Bounded by elapsed time rather than a retry
-// count: Sleep(1) rounds up to the system timer tick, so counting attempts
-// would wait an order of magnitude longer than intended. The caller is often
-// an ingest thread, so the bound is short enough to not cost frames.
+// holds it only for one read, so waiting beats failing the write. The bound is
+// elapsed time, not attempts: Sleep(1) rounds up to the system timer tick. It
+// stays short because an ingest thread is usually waiting on it.
 #define RENAME_REPLACE_TIMEOUT_MS 250
 
 int

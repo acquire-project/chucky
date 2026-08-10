@@ -325,9 +325,6 @@ Error:
   return writer_error();
 }
 
-// Periodic metadata update (append-dim extents per level). Only shards that
-// are closed out and no longer queued are advertised, so a reader that follows
-// the shape into a shard file always finds a parseable index there.
 int
 d2h_deliver_update_metadata(const struct flush_handoff* handoff,
                             const struct dim_info* dims_info,
