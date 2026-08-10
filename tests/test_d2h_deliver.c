@@ -6,6 +6,7 @@
 
 #include "index.ops.util.h"
 #include "test_gpu_helpers.h"
+#include "test_metric_check.h"
 #include "test_runner.h"
 #include "test_shard_sink.h"
 
@@ -117,6 +118,7 @@ test_ctx_setup(struct test_ctx* c,
   c->metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
   c->metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
   c->metrics.lod_gather = mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
+  c->metrics.tail_gate = mk_stream_metric("TailGate", METRIC_OWNER_COMPRESS);
 
   memset(&c->lod, 0, sizeof(c->lod));
   memset(&c->lod_shared, 0, sizeof(c->lod_shared));
@@ -229,6 +231,15 @@ test_d2h_single_epoch_none(void)
   // Verify metrics (sink uses platform_toc, always fires)
   CHECK(Fail, c.metrics.sink.count == 1);
   CHECK(Fail, c.metrics.lod_gather.count == 0);
+
+  // Pass-through runs no codec, so a missing compress row is the truth here
+  // rather than a lost measurement. Everything else the drain times must
+  // arrive.
+  CHECK(Fail, c.metrics.compress.count == 0);
+  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.d2h, 1));
+  // The gate is a wait, and a wait that never had to wait measures zero.
+  CHECK(Fail, c.metrics.tail_gate.count == 1);
 
   // Tile data correctness verified by test_compress_agg
 
@@ -436,6 +447,13 @@ test_d2h_zstd_single_epoch(void)
 
   CHECK(Fail, sink.finalize_count == 1);
   CHECK(Fail, sink.writers[0][0].size > 0);
+
+  // Every stage the drain times must report one measurement. A codec runs
+  // here, so compress has an interval to report as well.
+  CHECK(Fail, metric_arrived(&c.metrics.compress, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.d2h, 1));
+  CHECK(Fail, c.metrics.tail_gate.count == 1);
 
   // Decompress and verify chunk data via the on-disk index.
   {
@@ -736,6 +754,13 @@ test_d2h_zstd_double_buffer(void)
   }
 
   CHECK(Fail, sink.finalize_count == 2);
+
+  // Four cycles, four measurements per stage. The timing events belong to the
+  // slot, not the cycle, so a slot reused on cycle 3 has to re-record them.
+  CHECK(Fail, metric_arrived(&c.metrics.compress, 4));
+  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 4));
+  CHECK(Fail, metric_arrived(&c.metrics.d2h, 4));
+  CHECK(Fail, c.metrics.tail_gate.count == 4);
 
   {
     struct shard_state* ss = &c.ca.ar.shard[0];

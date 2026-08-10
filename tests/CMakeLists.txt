@@ -200,5 +200,6 @@ add_test_exe(test_append_latency test_append_latency.c stream_config chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)
 add_gpu_test_exe(test_multiscale  test_multiscale.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_data test_shard_sink)
+add_gpu_test_exe(test_metrics     test_metrics.c     LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd test_shard_sink)
 
 add_subdirectory(experiments)

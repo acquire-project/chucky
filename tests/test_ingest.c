@@ -1,8 +1,10 @@
 #include "gpu/prelude.cuda.h"
 #include "gpu/stream.ingest.h"
 #include "index.ops.util.h"
+#include "stream/config.h"
 #include "util/prelude.h"
 
+#include "test_metric_check.h"
 #include "test_runner.h"
 
 #include <stdlib.h>
@@ -14,6 +16,32 @@ static struct gpu_pool_view
 as_view(CUdeviceptr d)
 {
   return (struct gpu_pool_view){ .p = (void*)(uintptr_t)d };
+}
+
+// Both dispatch paths record the same two events and mark the same ring, and
+// nothing downstream notices when a mark goes missing: a metric that never
+// arrives keeps count 0, and the bench report drops the row. Call after both
+// streams are synchronized, once per dispatch count of 2 or fewer — the H2D
+// side has one entry per staging slot, of which there are two.
+static int
+check_ingest_timing(struct staging_state* stage, int dispatches)
+{
+  struct stream_metric h2d = mk_stream_metric("H2D", METRIC_OWNER_H2D);
+  struct stream_metric scatter =
+    mk_stream_metric("Scatter", METRIC_OWNER_COMPUTE);
+
+  ingest_collect_h2d_timing(stage, &h2d);
+  ingest_collect_scatter_timing(stage, &scatter);
+
+  if (!metric_arrived(&h2d, dispatches) ||
+      !metric_arrived(&scatter, dispatches))
+    return 1;
+  if (stage->scatter_samples_lost != 0) {
+    log_error("  scatter ring wrapped %llu times",
+              (unsigned long long)stage->scatter_samples_lost);
+    return 1;
+  }
+  return 0;
 }
 
 // --- Tests ---
@@ -115,6 +143,8 @@ test_ingest_incremental(void)
 
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
+
+  CHECK(Fail, check_ingest_timing(&stage, 2) == 0);
 
   h_pool = calloc(1, pool_bytes);
   CHECK(Fail, h_pool);
@@ -253,6 +283,8 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
 
+  CHECK(Fail, check_ingest_timing(&stage, 1) == 0);
+
   h_pool = calloc(1, pool_bytes);
   CHECK(Fail, h_pool);
   CU(Fail, cuMemcpyDtoH(h_pool, d_pool, pool_bytes));
@@ -367,6 +399,11 @@ test_ingest_multiscale(void)
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
 
+  // The ring mark lives in each caller rather than the helper they share, so
+  // it has to be repeated here. #191 left it out of this path, throwing away
+  // every measurement and losing the report's Copy row. Nothing else noticed.
+  CHECK(Fail, check_ingest_timing(&stage, 1) == 0);
+
   h_out = malloc(src_bytes);
   CHECK(Fail, h_out);
   CU(Fail, cuMemcpyDtoH(h_out, d_linear, src_bytes));
@@ -388,10 +425,80 @@ Fail:
   return ok ? 0 : 1;
 }
 
+// Dispatching more times than the ring holds without collecting overwrites the
+// oldest measurements. Those show up only in scatter_samples_lost, so a test
+// that asserts the counter is zero elsewhere needs this one to prove the
+// counter can be non-zero at all.
+static int
+test_ingest_timing_ring_wraps(void)
+{
+  log_info("=== test_ingest_timing_ring_wraps ===");
+
+  const size_t bytes_per_element = 2;
+  const uint64_t epoch_elements = 48;
+  const size_t src_bytes = epoch_elements * bytes_per_element;
+  const int extra = 2;
+  const int dispatches = SCATTER_TIMING_SLOTS + extra;
+
+  struct staging_state stage = { 0 };
+  struct gpu_ordering ord = { 0 };
+  CUstream h2d = 0, compute = 0;
+  CUdeviceptr d_linear = 0;
+  int ok = 0;
+
+  CU(Fail, cuStreamCreate(&h2d, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&compute, CU_STREAM_NON_BLOCKING));
+  CHECK(Fail, gpu_ordering_init(&ord, compute) == 0);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_H2D, h2d);
+  gpu_ordering_register_stream(&ord, GPU_STREAM_COMPUTE, compute);
+  CHECK(Fail, ingest_init(&stage, src_bytes, &ord, compute) == 0);
+
+  CU(Fail, cuMemAlloc(&d_linear, src_bytes));
+
+  for (int i = 0; i < dispatches; ++i) {
+    struct gpu_pool_view h_in;
+    CHECK(Fail,
+          gpu_pool_host_acquire_produce(&stage.h_pool, stage.current, &h_in) ==
+            0);
+    memset(h_in.p, i + 1, src_bytes);
+    stage.bytes_written = src_bytes;
+    CHECK(
+      Fail,
+      ingest_dispatch_multiscale(
+        &stage, d_linear, epoch_elements, 0, bytes_per_element, h2d, compute) ==
+        0);
+  }
+
+  CU(Fail, cuStreamSynchronize(compute));
+  CU(Fail, cuStreamSynchronize(h2d));
+
+  CHECK(Fail, stage.scatter_samples_lost == (uint64_t)extra);
+
+  {
+    struct stream_metric scatter =
+      mk_stream_metric("Scatter", METRIC_OWNER_COMPUTE);
+    ingest_collect_scatter_timing(&stage, &scatter);
+    CHECK(Fail, metric_arrived(&scatter, SCATTER_TIMING_SLOTS));
+  }
+
+  ok = 1;
+
+Fail:
+  ingest_destroy(&stage);
+  gpu_ordering_destroy(&ord);
+  cu_mem_free(d_linear);
+  cu_stream_destroy(h2d);
+  cu_stream_destroy(compute);
+
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
 RUN_GPU_TESTS({ "ingest_single_epoch", test_ingest_single_epoch },
               { "ingest_incremental", test_ingest_incremental },
               { "ingest_many_epochs_one_dispatch",
                 test_ingest_many_epochs_one_dispatch },
               { "ingest_many_epochs_from_mid_epoch",
                 test_ingest_many_epochs_from_mid_epoch },
-              { "ingest_multiscale", test_ingest_multiscale }, )
+              { "ingest_multiscale", test_ingest_multiscale },
+              { "ingest_timing_ring_wraps", test_ingest_timing_ring_wraps }, )
