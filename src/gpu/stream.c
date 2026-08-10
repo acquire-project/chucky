@@ -303,14 +303,10 @@ finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
 {
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    struct shard_state* ss = &e->compress_agg.ar.shard[lv];
-    if (ss->epoch_in_shard > 0 &&
-        finalize_shards(ss, ctx->sink, ctx->shard_alignment)) {
+    if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
+        finalize_shards(
+          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
       r = writer_error();
-      continue;
-    }
-    shard_state_record_flush_padding(
-      ss, dim_info_append_padding(&ctx->dims, ctx->cursor_elements, lv));
   }
   return r;
 }
@@ -342,8 +338,11 @@ publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
 
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv)
-    if (shard_state_publish_append(
-          &e->compress_agg.ar.shard[lv], ctx->sink, &ctx->dims, (uint8_t)lv))
+    if (shard_state_publish_append(&e->compress_agg.ar.shard[lv],
+                                   ctx->sink,
+                                   &ctx->dims,
+                                   (uint8_t)lv,
+                                   &ctx->cursor_elements))
       r = writer_error();
   return r;
 }
@@ -420,6 +419,9 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
 
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
   struct writer_result r = stream_append_body(&s->engine, &s->ctx, input);
@@ -428,8 +430,6 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     s->engine.metrics.max_append_ms = ms;
   if (r.rest.beg != input.beg)
     record_append_ms(&s->engine.metrics, ms);
-  if (s->flushed && r.rest.beg != input.beg)
-    s->flushed = 0;
   return r;
 }
 
@@ -438,13 +438,13 @@ tile_stream_gpu_flush_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Idempotency: mirrors the CPU guard. Reset by tile_stream_gpu_append when
-  // new data arrives.
   if (s->flushed)
-    return writer_ok();
+    return s->flush_failed ? writer_error() : writer_ok();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
-  if (r.error == 0)
-    s->flushed = 1;
+  // Finalized either way: a flush that failed partway may have closed some
+  // shards already, so taking more input would append past them.
+  s->flushed = 1;
+  s->flush_failed = (r.error != 0);
   return r;
 }
 

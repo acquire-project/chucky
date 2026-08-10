@@ -595,8 +595,15 @@ The caller interacts with the pipeline through a `struct writer` vtable:
   elements. Returns a `struct writer_result` with an error code and a `rest`
   slice pointing to any unconsumed input (empty on success).
 
-- **`flush(self)`** — drain any partially filled epochs. Call once at end of
-  stream to ensure all data is written.
+- **`flush(self)`** — finalize the stream. Writes out everything appended,
+  including the chunk the cursor stopped partway through, and then stops taking
+  input: a later `append` consumes nothing and reports `finished`. Idempotent.
+  Call once at end of stream.
+
+  Finalizing is what makes that last partial chunk readable — it is padded out
+  and its shard is closed. Taking more input afterwards would have to start past
+  the padding and past the shard slots the close left empty, putting later data
+  at append positions the caller never asked for.
 
 #### Shard sink interface
 

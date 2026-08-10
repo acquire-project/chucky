@@ -47,7 +47,7 @@ struct array_descriptor
   struct batch_aggregate_layout max_batch_layout;
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 once flush body has run for this array
+  int flushed;            // 1 once finalized; no further input is taken
 };
 
 // ---- Main struct ----
@@ -690,6 +690,12 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct array_descriptor* desc = &ms->arrays[array_index];
 
+  if (desc->flushed)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_finished,
+      .rest = data,
+    };
+
   // Switch arrays if needed.
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
@@ -699,11 +705,9 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 
   struct cpu_stream_view v = make_multiarray_view(ms, desc);
   struct writer_result r = cpu_stream_append_body(&v, data);
-  if (desc->flushed && r.rest.beg != data.beg)
-    desc->flushed = 0;
 
-  // `writer_finished` here means "stream is at capacity (total_element_limit)";
-  // finalization happens on explicit `flush()` or on destroy, not here.
+  // `writer_finished` here means the array is at capacity
+  // (total_element_limit); an already-finalized array is refused above.
   return (struct multiarray_writer_result){
     .error = r.error,
     .rest = r.rest,
@@ -720,9 +724,8 @@ flush_impl(struct multiarray_writer* self)
 
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
-    // Idempotency: a redundant flush with no intervening updates re-finalizes
-    // already-closed sinks (deadlock on Windows). The flag is reset by
-    // update_impl when new data arrives.
+    // Finalizing twice would re-finalize an already-closed sink, which
+    // deadlocks on Windows.
     if (desc->flushed)
       continue;
     if (desc->cursor_elements == 0 && desc->batch_accumulated == 0) {

@@ -959,48 +959,6 @@ Error:
   return !ok;
 }
 
-static int
-test_dim_info_finalized_append_sizes(void)
-{
-  // 12 frames of 64x64 with chunk_size 5: the cursor sits 2 into chunk 2, so a
-  // flush there pads 3.
-  int ok = 0;
-  struct dimension dims[3];
-  uint64_t sizes[] = { 0, 64, 64 };
-  dims_create(dims, "tyx", sizes);
-  uint64_t cs[] = { 5, 32, 32 };
-  dims_set_chunk_sizes(dims, 3, cs);
-  dims[0].chunks_per_shard = 4;
-
-  struct dim_info info;
-  CHECK(Error, dim_info_init(&info, dims, 3) == 0);
-
-  const uint64_t cursor = 12 * 64 * 64;
-  CHECK(Error, dim_info_append_padding(&info, cursor, 0) == 3);
-  CHECK(Error, dim_info_append_padding(&info, 10 * 64 * 64, 0) == 0);
-
-  uint64_t append_sizes[1];
-
-  // Three finalized chunks reach 15; the flush's padding takes it back to 12.
-  dim_info_finalized_append_sizes(&info, 3, 3, append_sizes);
-  CHECK(Error, append_sizes[0] == 12);
-
-  // Chunks appended after that flush start past the padding and past the shard
-  // slots it left empty, and the extent follows them.
-  dim_info_finalized_append_sizes(&info, 6, 3, append_sizes);
-  CHECK(Error, append_sizes[0] == 27);
-
-  // Nothing finalized: a flush that failed before delivering the chunk it
-  // padded claims nothing.
-  dim_info_finalized_append_sizes(&info, 0, 3, append_sizes);
-  CHECK(Error, append_sizes[0] == 0);
-
-  ok = 1;
-Error:
-  REPORT_TEST(ok);
-  return !ok;
-}
-
 // --- LOD epoch shard geometry tests (issue #72) ---
 
 // Helper: build dims, run both full and epoch plans, compare shard geometry.
@@ -1177,8 +1135,6 @@ main(void)
       test_dim_info_rejects_unbounded_non_dim0 },
     { "dim_info_final_append_sizes", test_dim_info_final_append_sizes },
     { "dim_info_final_append_sizes_lod", test_dim_info_final_append_sizes_lod },
-    { "dim_info_finalized_append_sizes",
-      test_dim_info_finalized_append_sizes },
     { "epoch_shard_geometry_1_append", test_epoch_shard_geometry_1_append },
     { "epoch_shard_geometry_2_append", test_epoch_shard_geometry_2_append },
     { "epoch_shard_geometry_cps_zero", test_epoch_shard_geometry_cps_zero },

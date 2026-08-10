@@ -18,7 +18,7 @@ enum writer_error_code
 {
   writer_error_ok = 0,
   writer_error_fail = 1,
-  writer_error_finished = 2, // stream complete: total_element_limit reached
+  writer_error_finished = 2, // stream complete: flushed, or limit reached
 };
 
 struct writer_result
@@ -30,8 +30,15 @@ struct writer_result
 struct writer
 {
   struct writer_result (*append)(struct writer* self, struct slice data);
-  // explicit sync; stream remains appendable. Returns when all writes prior
-  // to the call are durable.
+  // Finalizes the stream: writes out everything appended so far, including the
+  // chunk the append cursor stopped partway through, and stops taking input.
+  // Returns once those bytes are durable. Idempotent. A later append consumes
+  // nothing and reports `finished`.
+  //
+  // Finalizing is what makes the partial chunk readable: it is padded out and
+  // its shard is closed. Taking more input afterwards would have to start past
+  // that padding and past the shard slots the close left empty, which puts
+  // later data at append positions the caller never asked for.
   struct writer_result (*flush)(struct writer* self);
 };
 

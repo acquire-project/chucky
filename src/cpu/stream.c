@@ -740,11 +740,11 @@ cpu_append(struct writer* self, struct slice input)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
 
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   struct cpu_stream_view v = make_view(s);
-  struct writer_result r = cpu_stream_append_body(&v, input);
-  if (s->flushed && r.rest.beg != input.beg)
-    s->flushed = 0;
-  return r;
+  return cpu_stream_append_body(&v, input);
 }
 
 static struct writer_result
@@ -752,14 +752,13 @@ cpu_flush_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  // Idempotency: a redundant flush with no intervening appends re-finalizes
-  // already-closed sinks (deadlock on Windows, wasted work elsewhere).
-  // The flag is reset by cpu_append when new data arrives.
   if (s->flushed)
-    return writer_ok();
+    return s->flush_failed ? writer_error() : writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_flush_body(&v);
-  if (r.error == 0)
-    s->flushed = 1;
+  // Finalized either way: a flush that failed partway may have closed some
+  // shards already, so taking more input would append past them.
+  s->flushed = 1;
+  s->flush_failed = (r.error != 0);
   return r;
 }

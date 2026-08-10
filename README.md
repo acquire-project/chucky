@@ -209,7 +209,7 @@ struct tile_stream_gpu* s = tile_stream_gpu_create(&config, sink);
 struct writer* w = tile_stream_gpu_writer(s);
 struct slice frame = { .beg = data, .end = (const char*)data + nbytes };
 writer_append(w, frame);   // call repeatedly as data arrives
-writer_flush(w);            // finalize
+writer_flush(w);           // finalize: takes no input after this
 
 // 4. Query metrics and tear down
 struct stream_metrics m = tile_stream_gpu_get_metrics(s);

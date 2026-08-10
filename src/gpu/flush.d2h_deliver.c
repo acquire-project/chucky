@@ -343,7 +343,7 @@ d2h_deliver_update_metadata(const struct flush_handoff* handoff,
   *metadata_update_clock = peek;
   for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
     struct shard_state* ss = handoff->shards_by_lod[lv];
-    if (ss && shard_state_publish_append(ss, sink, dims_info, lv))
+    if (ss && shard_state_publish_append(ss, sink, dims_info, lv, NULL))
       return 1;
   }
   return 0;

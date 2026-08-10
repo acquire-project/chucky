@@ -1,7 +1,7 @@
 // What the shape says after a flush, on the GPU backend (#193). A flush pads
-// the chunk it lands in and closes the shard, so chunks appended afterwards
-// start past the padding and past the slots the flush left empty. The shape has
-// to reach them. Mirrors tests/test_shape_after_flush_cpu.c.
+// the chunk the cursor stopped in and closes its shard, so it finalizes the
+// stream: anything appended afterwards would land at append positions the
+// caller never asked for. Mirrors tests/test_shape_after_flush_cpu.c.
 
 #include "stream.gpu.h"
 #include "test_shard_sink.h"
@@ -12,20 +12,13 @@
 #include <stdlib.h>
 
 #define SHARD_CAP (1 << 20)
-#define MAX_ROUNDS 2
-
-// One round of appends followed by a flush.
-struct flush_round
-{
-  int planes; // handed over before this round's flush
-  uint64_t expect_shape0;
-};
+#define PLANE_ELEMS 16
 
 struct shape_case
 {
   uint64_t chunk_size; // along the append dim
-  int n_rounds;
-  struct flush_round rounds[MAX_ROUNDS];
+  int planes;
+  uint64_t expect_shape0;
 };
 
 static int
@@ -53,7 +46,7 @@ run_shape_case(const struct shape_case* c)
   };
 
   // A long interval keeps the periodic update from firing, so every recorded
-  // update is one a flush wrote.
+  // update is one the flush wrote.
   struct tile_stream_configuration config = {
     .buffer_capacity_bytes = 4096,
     .dtype = dtype_u16,
@@ -68,28 +61,35 @@ run_shape_case(const struct shape_case* c)
   struct tile_stream_gpu* s = tile_stream_gpu_create(&config, &sink.base);
   CHECK(Fail, s);
 
-  const uint64_t plane_elems = 4 * 4;
-  data = (uint16_t*)calloc(plane_elems, sizeof(uint16_t));
+  data = (uint16_t*)calloc(PLANE_ELEMS, sizeof(uint16_t));
   CHECK(Fail, data);
 
   struct writer* w = tile_stream_gpu_writer(s);
   CHECK(Fail, sink.update_append_count == 0);
 
-  for (int round = 0; round < c->n_rounds; ++round) {
-    const struct flush_round* r = &c->rounds[round];
-    for (int i = 0; i < r->planes; ++i) {
-      struct slice sl = { .beg = data, .end = data + plane_elems };
-      CHECK(Fail, writer_append(w, sl).error == 0);
-    }
-
-    CHECK(Fail, writer_flush(w).error == 0);
-    log_info("  round %d: updates=%d shape0=%llu",
-             round,
-             sink.update_append_count,
-             (unsigned long long)sink.last_append_size0);
-    CHECK(Fail, sink.update_append_count == round + 1);
-    CHECK(Fail, sink.last_append_size0 == r->expect_shape0);
+  for (int i = 0; i < c->planes; ++i) {
+    struct slice sl = { .beg = data, .end = data + PLANE_ELEMS };
+    CHECK(Fail, writer_append(w, sl).error == 0);
   }
+
+  CHECK(Fail, writer_flush(w).error == 0);
+  log_info("  updates=%d shape0=%llu",
+           sink.update_append_count,
+           (unsigned long long)sink.last_append_size0);
+  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
+
+  // The flush finalized the stream: no more input, and the shape it published
+  // is the last word.
+  {
+    struct slice sl = { .beg = data, .end = data + PLANE_ELEMS };
+    struct writer_result r = writer_append(w, sl);
+    CHECK(Fail, r.error == writer_error_finished);
+    CHECK(Fail, r.rest.beg == sl.beg && r.rest.end == sl.end);
+  }
+  CHECK(Fail, writer_flush(w).error == 0);
+  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
 
   free(data);
   tile_stream_gpu_destroy(s);
@@ -103,37 +103,28 @@ Fail:
   return 1;
 }
 
-// The first flush closes shard 0 holding one chunk, leaving its second slot
-// empty. The next two chunks go to shard 1, at append positions 4 through 7, so
-// the shape has to reach 8 to cover them.
+// One plane leaves the chunk two thirds full; the flush pads it and the shape
+// reports the plane appended, not the padding.
 static int
-test_shape_covers_chunks_after_flush(void)
-{
-  const struct shape_case c = { .chunk_size = 2,
-                                .n_rounds = 2,
-                                .rounds = { { .planes = 2,
-                                              .expect_shape0 = 2 },
-                                            { .planes = 4,
-                                              .expect_shape0 = 8 } } };
-  return run_shape_case(&c);
-}
-
-// The first flush pads a chunk as well as closing the shard. The plane appended
-// after it lands in chunk 2, whose padding stops one element short of the
-// chunk's end, so the shape is 8 rather than 9.
-static int
-test_shape_covers_padded_chunk_after_flush(void)
+test_shape_exact_on_partial_chunk(void)
 {
   const struct shape_case c = { .chunk_size = 3,
-                                .n_rounds = 2,
-                                .rounds = { { .planes = 1,
-                                              .expect_shape0 = 1 },
-                                            { .planes = 1,
-                                              .expect_shape0 = 8 } } };
+                                .planes = 1,
+                                .expect_shape0 = 1 };
   return run_shape_case(&c);
 }
 
-RUN_GPU_TESTS({ "shape_covers_chunks_after_flush",
-                test_shape_covers_chunks_after_flush },
-              { "shape_covers_padded_chunk_after_flush",
-                test_shape_covers_padded_chunk_after_flush }, )
+// Whole chunks need no padding, and two of them fill the shard.
+static int
+test_shape_exact_on_whole_chunks(void)
+{
+  const struct shape_case c = { .chunk_size = 2,
+                                .planes = 4,
+                                .expect_shape0 = 4 };
+  return run_shape_case(&c);
+}
+
+RUN_GPU_TESTS({ "shape_exact_on_partial_chunk",
+                test_shape_exact_on_partial_chunk },
+              { "shape_exact_on_whole_chunks",
+                test_shape_exact_on_whole_chunks }, )

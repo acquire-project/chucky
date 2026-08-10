@@ -45,9 +45,6 @@ struct shard_state
   // Append chunks in shards closed out with their index block written, so a
   // reader can parse them. Grows only at finalize.
   uint64_t finalized_append_chunks;
-  // Padding along the append dim in the last of those chunks. Only a flush pads
-  // a chunk, so every other finalize clears this.
-  uint64_t finalized_padding_elements;
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet
 
@@ -79,15 +76,9 @@ uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink);
 
-// Record how much of the chunk a flush just closed is padding, so the extent
-// leaves it out. Call it only once the finalize succeeded: until then the
-// padded chunk is not among the ones the extent names.
-void
-shard_state_record_flush_padding(struct shard_state* ss,
-                                 uint64_t padding_elements);
-
-// Publish one level's append extent through the sink. Returns non-zero if the
-// sink rejected the update.
+// Publish one level's append extent through the sink. Pass cursor_elements to
+// hold the extent down to what the caller appended, or NULL where the cursor
+// belongs to another thread. Returns non-zero if the sink rejected the update.
 //
 // The extent names only closed-out shards, so it stays truthful after a failed
 // flush, and is the only way a reader learns of shards written since the last
@@ -96,7 +87,8 @@ int
 shard_state_publish_append(struct shard_state* ss,
                            struct shard_sink* sink,
                            const struct dim_info* dims,
-                           uint8_t level);
+                           uint8_t level,
+                           const uint64_t* cursor_elements);
 
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to

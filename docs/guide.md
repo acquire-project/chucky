@@ -102,6 +102,8 @@ do not read from the host side; copy data out first.
 **Writer vtable.** `struct writer` has two methods:
 `append(self, slice) -> writer_result` and `flush(self) -> writer_result`.
 Free functions `writer_append()` / `writer_flush()` dispatch through the vtable.
+`flush` finalizes: it writes out everything appended so far and then stops
+taking input, so it is the last call on a stream rather than a mid-stream sync.
 
 **Two-phase init.** `compute_stream_layouts()` does all pure-CPU layout math
 (lifted shape, strides, chunk geometry), then the GPU path uploads to device

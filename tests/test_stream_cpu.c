@@ -140,12 +140,12 @@ Fail:
   return 1;
 }
 
-// Test that flush is a resumable explicit sync: append after flush succeeds
-// and a subsequent flush commits the new data.
+// Flush finalizes: it writes out what was appended and then takes no more
+// input, and calling it again does nothing.
 static int
-test_append_after_flush(void)
+test_no_append_after_flush(void)
 {
-  log_info("=== test_stream_cpu_append_after_flush ===");
+  log_info("=== test_stream_cpu_no_append_after_flush ===");
 
   struct test_shard_sink sink;
   test_sink_init(&sink, 16, SHARD_CAP);
@@ -205,28 +205,27 @@ test_append_after_flush(void)
   }
   CHECK(Fail, shards_after_first_flush > 0);
 
-  // Second batch: append after flush succeeds — stream is still appendable.
+  // The flush finalized the stream, so it takes no more input and consumes
+  // none of what it is offered.
   {
     struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
     struct writer_result r = writer_append(w, sl);
-    CHECK(Fail, r.error == 0);
+    CHECK(Fail, r.error == writer_error_finished);
+    CHECK(Fail, r.rest.beg == sl.beg && r.rest.end == sl.end);
   }
-  // Second flush commits the new data.
+  CHECK(Fail, tile_stream_cpu_cursor(s) == epoch_elems);
+
+  // Finalizing again is a no-op rather than a second close-out.
   {
     struct writer_result r = writer_flush(w);
     CHECK(Fail, r.error == 0);
   }
-
-  // Cursor reflects both batches.
-  CHECK(Fail, tile_stream_cpu_cursor(s) == 2 * epoch_elems);
-
-  // The second flush produced additional shard output.
   int shards_after_second_flush = 0;
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     if (sink.writers[0][i].buf && sink.writers[0][i].size > 0)
       shards_after_second_flush++;
   }
-  CHECK(Fail, shards_after_second_flush > shards_after_first_flush);
+  CHECK(Fail, shards_after_second_flush == shards_after_first_flush);
 
   free(data);
   tile_stream_cpu_destroy(s);
@@ -600,7 +599,7 @@ main(int ac, char* av[])
   int rc = 0;
   rc |= test_basic_pipeline();
   rc |= test_f16_rejected();
-  rc |= test_append_after_flush();
+  rc |= test_no_append_after_flush();
   rc |= test_advise_basic_fit();
   rc |= test_advise_invalid_config();
   rc |= test_advise_chunk_budget_infeasible();

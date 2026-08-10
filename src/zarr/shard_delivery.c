@@ -210,7 +210,6 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
   ss->finalized_append_chunks =
     ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  ss->finalized_padding_elements = 0;
   if (sink->record_fence) {
     ss->finalized_fence = sink->record_fence(sink);
     ss->fence_pending = 1;
@@ -232,24 +231,20 @@ shard_state_readable_append_chunks(struct shard_state* ss,
   return ss->finalized_append_chunks;
 }
 
-void
-shard_state_record_flush_padding(struct shard_state* ss,
-                                 uint64_t padding_elements)
-{
-  ss->finalized_padding_elements = padding_elements;
-}
-
 int
 shard_state_publish_append(struct shard_state* ss,
                            struct shard_sink* sink,
                            const struct dim_info* dims,
-                           uint8_t level)
+                           uint8_t level,
+                           const uint64_t* cursor_elements)
 {
+  uint64_t readable = shard_state_readable_append_chunks(ss, sink);
   uint64_t append_sizes[HALF_MAX_RANK];
-  dim_info_finalized_append_sizes(dims,
-                                  shard_state_readable_append_chunks(ss, sink),
-                                  ss->finalized_padding_elements,
-                                  append_sizes);
+  if (cursor_elements)
+    dim_info_readable_append_sizes(
+      dims, readable, *cursor_elements, level, append_sizes);
+  else
+    dim_info_decompose_append_sizes(dims, readable, append_sizes);
   return sink->update_append(
     sink, level, dim_info_n_append(dims), append_sizes);
 }
