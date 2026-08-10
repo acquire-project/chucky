@@ -184,8 +184,13 @@ jobs:
     env:
       CUDA_VERSION: ${{ matrix.cuda.version }}
       CUDA_MAJOR: ${{ matrix.cuda.major }}
+      # One image and one set of containers per CUDA major version.
+      COMPOSE_PROJECT_NAME: chucky-cuda${{ matrix.cuda.major }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build image (CUDA ${{ matrix.cuda.version }})
+        run: docker compose build test
 
       - name: Build and test (GPU, CUDA ${{ matrix.cuda.version }})
         run: docker compose run --rm test
