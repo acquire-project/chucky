@@ -13,6 +13,7 @@
 #include <stddef.h>
 
 struct threadpool;
+struct stream_context;
 
 // --- Sub-struct definitions (shared between engine and internal headers) ---
 
@@ -28,10 +29,9 @@ struct pool_state
 // pool payloads — non-init code reaches them through d_pool/h_pool only.
 struct staging_slot
 {
-  void* h_in;          // pinned host, size = buffer_capacity_bytes
-  CUdeviceptr d_in;    // device, size = buffer_capacity_bytes plus the room the
-                       // scatter reads past its source
-  CUevent t_h2d_start; // recorded before H2D memcpy (timing)
+  void* h_in;              // pinned host, size = buffer_capacity_bytes
+  CUdeviceptr d_in;        // device, size = buffer_capacity_bytes
+  CUevent t_h2d_start;     // recorded before H2D memcpy (timing)
   size_t dispatched_bytes; // bytes transferred in last dispatch
   int h2d_pending;         // dispatched, interval not yet folded into metrics
 };
@@ -55,6 +55,11 @@ struct staging_state
                           //       order (fill precedes dispatch)
   int current;            // 0 or 1: which buffer the host is filling
   size_t bytes_written;   // bytes written to current slot's h_in so far
+
+  // One buffer serves every array of a multiarray stream, so its bytes belong
+  // to one array at a time. NULL while it holds none.
+  struct stream_context* owner;
+  uint64_t first_element; // append position of the first staged byte
 
   struct scatter_timing timing[SCATTER_TIMING_SLOTS];
   int next_timing;
@@ -402,12 +407,11 @@ stream_append_body(struct stream_engine* e,
                    struct slice input);
 
 // Hand whatever staging holds to the device and count into the batch every
-// epoch that completes. The append cursor runs ahead of the device between
-// dispatches, so anything reading it as the position of delivered data — flush,
-// an array switch — has to call this first. Staging is engine-wide, so ctx must
-// be the array that filled it.
+// epoch that completes. Callers that read the append cursor as the position of
+// delivered data must call this first. A bind swaps the per-array engine state
+// the dispatch reads, so the owner must still be the bound array.
 struct writer_result
-stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx);
+stream_dispatch_staged(struct stream_engine* e);
 
 // Flush the stream: partial epoch, accumulated batch, partial append
 // accumulators, finalize shards, update metadata.

@@ -75,16 +75,6 @@ stream_engine_pool_epoch(struct stream_engine* e,
     &e->pools.p, e->sched.fill, (size_t)epoch_in_batch * pool_epoch_bytes(ctx));
 }
 
-// The append cursor counts everything the caller has passed in, including what
-// is still sitting in staging.
-static uint64_t
-dispatched_elements(const struct stream_engine* e,
-                    const struct stream_context* ctx)
-{
-  return ctx->cursor_elements -
-         e->stage.bytes_written / dtype_bpe(ctx->config.dtype);
-}
-
 static int
 engine_dispatch_ingest(struct stream_engine* e,
                        struct stream_context* ctx,
@@ -115,23 +105,34 @@ engine_dispatch_ingest(struct stream_engine* e,
   }
 }
 
-struct writer_result
-stream_dispatch_staged(struct stream_engine* e, struct stream_context* ctx)
+static void
+staging_claim(struct staging_state* stage, struct stream_context* ctx)
 {
-  if (ctx->append_failed)
-    return writer_error();
-  if (e->stage.bytes_written == 0)
+  stage->owner = ctx;
+  stage->first_element = ctx->cursor_elements;
+}
+
+static void
+staging_release(struct staging_state* stage)
+{
+  stage->bytes_written = 0;
+  stage->owner = NULL;
+}
+
+struct writer_result
+stream_dispatch_staged(struct stream_engine* e)
+{
+  struct stream_context* ctx = e->stage.owner;
+  if (!ctx)
     return writer_ok();
 
-  const uint64_t first = dispatched_elements(e, ctx);
-  if (engine_dispatch_ingest(e, ctx, first)) {
+  const uint64_t first = e->stage.first_element;
+  const int dispatch_failed = engine_dispatch_ingest(e, ctx, first);
+  staging_release(&e->stage);
+  if (dispatch_failed) {
     ctx->append_failed = 1;
-    // Staging is shared with the stream's other arrays, and these bytes are
-    // never going to reach this one's pool, so let go of them.
-    e->stage.bytes_written = 0;
     return writer_error();
   }
-  e->stage.bytes_written = 0;
 
   const uint64_t epoch = ctx->layout.epoch_elements;
   const uint64_t crossed = ctx->cursor_elements / epoch - first / epoch;
@@ -156,9 +157,10 @@ dispatch_target_bytes(const struct stream_engine* e,
   const uint32_t epochs = ctx->levels.enable_multiscale
                             ? 1
                             : e->sched.epochs_per_batch - e->sched.accumulated;
-  const uint64_t room =
-    ((uint64_t)epochs * epoch - dispatched_elements(e, ctx) % epoch) *
-    dtype_bpe(ctx->config.dtype);
+  const uint64_t staged_from =
+    e->stage.owner ? e->stage.first_element : ctx->cursor_elements;
+  const uint64_t room = ((uint64_t)epochs * epoch - staged_from % epoch) *
+                        dtype_bpe(ctx->config.dtype);
   const size_t capacity = ctx->config.buffer_capacity_bytes;
   return room < capacity ? (size_t)room : capacity;
 }
@@ -234,7 +236,7 @@ stream_append_body(struct stream_engine* e,
 
     const size_t payload = (size_t)(elements * bpe);
 
-    if (e->stage.bytes_written == 0) {
+    if (!e->stage.owner) {
       // Poll instead of cuEventSynchronize to keep the producer thread hot —
       // it has memcpy work queued up immediately after.
       if (gpu_pool_host_acquire_produce(
@@ -246,12 +248,13 @@ stream_append_body(struct stream_engine* e,
       // samples come from the ring whenever they finish.
       ingest_collect_h2d_timing(&e->stage, &e->metrics.h2d);
       ingest_collect_scatter_timing(&e->stage, &e->metrics.scatter);
+
+      staging_claim(&e->stage, ctx);
     }
 
     {
       struct platform_clock mc = { 0 };
       platform_toc(&mc);
-      // Same h_in generation as the bytes_written==0 acquire above.
       ingest_copy(
         e->copy_pool,
         gpu_pool_at(&e->stage.h_pool, e->stage.current, e->stage.bytes_written)
@@ -270,7 +273,7 @@ stream_append_body(struct stream_engine* e,
     if (e->stage.bytes_written < target)
       continue;
 
-    struct writer_result r = stream_dispatch_staged(e, ctx);
+    struct writer_result r = stream_dispatch_staged(e);
     if (r.error)
       return writer_error_at(src, end);
     apply_backpressure(e, ctx);
@@ -355,7 +358,9 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
 
-  struct writer_result r = stream_dispatch_staged(e, ctx);
+  // An array that stopped taking data cannot be completed.
+  struct writer_result r =
+    ctx->append_failed ? writer_error() : stream_dispatch_staged(e);
 
   // Whatever happened above, batches already handed to the delivery worker have
   // to be joined: the worker writes the shard state this function goes on to
