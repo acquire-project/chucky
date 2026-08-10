@@ -27,9 +27,9 @@ compute_epochs_per_batch(const struct tile_stream_configuration* config,
   if (config->epochs_per_batch > 0)
     return config->epochs_per_batch;
 
-  size_t target = config->target_batch_bytes;
+  uint64_t target = config->target_batch_bytes;
   if (target == 0)
-    target = (size_t)512 << 20; // 512 MiB default
+    target = (uint64_t)512 << 20; // 512 MiB default
   if (bytes_per_epoch == 0)
     return 1;
   uint64_t K = ceildiv(target, bytes_per_epoch);

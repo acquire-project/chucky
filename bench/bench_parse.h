@@ -6,6 +6,7 @@
 #include "types.lod.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 enum bench_backend
 {
@@ -13,9 +14,10 @@ enum bench_backend
   BENCH_CPU,
 };
 
-// Byte-size parser: "256K", "1M", "8G" etc.
-size_t
-parse_bytes(const char* s);
+// Byte-size parser: "256K", "1M", "8G" etc. Leaves *out alone when the text
+// is not a size that fits.
+int
+parse_bytes(const char* s, uint64_t* out);
 
 // CLI option parsers. parse_fill returns NULL on error.
 // The int-returning parsers return non-zero on success, 0 on error.

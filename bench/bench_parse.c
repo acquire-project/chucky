@@ -1,33 +1,76 @@
 #include "bench_parse.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 // --- Byte-size parser: "256K", "1M", "8G" etc. ---
 
-size_t
-parse_bytes(const char* s)
+// Accept the "B" and "iB" tails people write, so "256KB" and "1GiB" mean
+// what they look like.
+static int
+is_byte_tail(const char* s)
 {
-  char* end = NULL;
-  size_t val = (size_t)strtoull(s, &end, 10);
-  if (end && *end) {
-    switch (*end) {
-      case 'k':
-      case 'K':
-        val <<= 10;
-        break;
-      case 'm':
-      case 'M':
-        val <<= 20;
-        break;
-      case 'g':
-      case 'G':
-        val <<= 30;
-        break;
-    }
+  if (*s == 'i' || *s == 'I') {
+    ++s;
+    if (*s != 'b' && *s != 'B')
+      return 0;
   }
-  return val;
+  if (*s == 'b' || *s == 'B')
+    ++s;
+  return *s == '\0';
+}
+
+int
+parse_bytes(const char* s, uint64_t* out)
+{
+  // strtoull would turn a negative into a huge size, so refuse it first.
+  while (isspace((unsigned char)*s))
+    ++s;
+  if (*s == '-')
+    return 0;
+
+  char* end = NULL;
+  errno = 0;
+  unsigned long long val = strtoull(s, &end, 10);
+  if (end == s || errno == ERANGE)
+    return 0;
+
+  unsigned shift = 0;
+  const char* tail = end;
+  switch (*tail) {
+    case 'k':
+    case 'K':
+      shift = 10;
+      ++tail;
+      break;
+    case 'm':
+    case 'M':
+      shift = 20;
+      ++tail;
+      break;
+    case 'g':
+    case 'G':
+      shift = 30;
+      ++tail;
+      break;
+    default:
+      break;
+  }
+  if (!is_byte_tail(tail))
+    return 0;
+
+  if (shift) {
+    if (val > (ULLONG_MAX >> shift))
+      return 0;
+    val <<= shift;
+  }
+  *out = val;
+  return 1;
 }
 
 // --- dtype helpers ---

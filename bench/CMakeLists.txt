@@ -12,6 +12,7 @@ add_library(
     STATIC
     bench_util.c
     bench_util.h
+    bench_gpu.h
     sink_discard.c
     sink_discard.h
     sink_throttled.c
@@ -29,7 +30,6 @@ target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
     bench_util
     PUBLIC
-        stream
         stream_cpu
         zarr_array
         ngff_multiscale
@@ -42,9 +42,18 @@ target_link_libraries(
         dimension
         format_bytes
         test_data
-        CUDA::cuda_driver
     PRIVATE warnings
 )
+
+if(CHUCKY_ENABLE_GPU)
+    target_sources(bench_util PRIVATE bench_gpu.cuda.c)
+    target_link_libraries(
+        bench_util
+        PUBLIC stream CUDA::cuda_driver CUDA::cudart_static
+    )
+else()
+    target_sources(bench_util PRIVATE bench_gpu.none.c)
+endif()
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES
@@ -58,11 +67,15 @@ set(BENCH_STREAM_SOURCES
     bench_stream_medfmt_multiscale.c
     bench_stream_medfmt_multiscale_dim0.c
     bench_stream_smallepoch_single.c
-    bench_stream_256cube_two_streams.c
     bench_stream_aqz_single.c
 )
 
+# Two streams share one GPU, so there is nothing to run without one.
+if(CHUCKY_ENABLE_GPU)
+    list(APPEND BENCH_STREAM_SOURCES bench_stream_256cube_two_streams.c)
+endif()
+
 foreach(src IN LISTS BENCH_STREAM_SOURCES)
     string(REPLACE ".c" "" target ${src})
-    add_bench(${target} ${src} bench_util CUDA::cudart_static Zstd::Zstd)
+    add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()

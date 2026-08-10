@@ -101,7 +101,7 @@ struct tile_stream_configuration
   int preserve_aspect_ratio; // 0 = drop dims independently (default),
                              // 1 = stop when any dim reaches chunk_size
   uint32_t epochs_per_batch; // K: 0 = auto (from target_batch_bytes)
-  uint32_t
+  uint64_t
     target_batch_bytes; // target uncompressed bytes per batch (default 512 MiB)
   float metadata_update_interval_s;
   size_t backpressure_bytes; // 0 = disabled; >0 = stall after handing a
