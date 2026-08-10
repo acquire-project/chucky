@@ -8,6 +8,11 @@
 
 #include <string.h>
 
+// Splitting pays above ~24 KiB, where the ~1.4 us dispatch stops dominating,
+// so 64 KiB keeps margin. Parked helpers cost 15 us, but a producer idle that
+// long has slack to absorb it.
+#define COPY_POOL_MIN_BYTES (64u << 10)
+
 struct copy_slices
 {
   uint8_t* dst;
@@ -25,7 +30,7 @@ copy_slice(size_t beg, size_t end, int tid, void* vctx)
 void
 ingest_copy(struct threadpool* pool, void* dst, const void* src, size_t n)
 {
-  if (!pool || n < (2u << 20)) {
+  if (!pool || n < COPY_POOL_MIN_BYTES) {
     memcpy(dst, src, n);
     return;
   }
