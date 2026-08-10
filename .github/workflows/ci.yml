@@ -184,8 +184,18 @@ jobs:
     env:
       CUDA_VERSION: ${{ matrix.cuda.version }}
       CUDA_MAJOR: ${{ matrix.cuda.major }}
+      # One image and one set of containers per CUDA major. Without this both
+      # legs share the name, so whichever ran first decides what the other
+      # tests, and either one's cleanup tears down the other's containers.
+      COMPOSE_PROJECT_NAME: chucky-cuda${{ matrix.cuda.major }}
     steps:
       - uses: actions/checkout@v4
+
+      # `docker compose run` alone reuses whatever image the runner already has.
+      # The image carries the sources, so without this the job tests whatever
+      # commit the image was first built from.
+      - name: Build image (CUDA ${{ matrix.cuda.version }})
+        run: docker compose build test
 
       - name: Build and test (GPU, CUDA ${{ matrix.cuda.version }})
         run: docker compose run --rm test
