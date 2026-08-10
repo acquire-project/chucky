@@ -80,7 +80,6 @@ gpu_run_destroy(struct gpu_run* r)
   if (r->slot.h_aggregated || r->slot.d_aggregated)
     aggregate_slot_destroy(&r->slot);
   cu_stream_destroy(r->stream);
-  aggregate_layout_destroy(&r->layout);
   memset(r, 0, sizeof(*r));
 }
 
@@ -114,7 +113,6 @@ run_gpu_aggregate(struct gpu_run* r,
                                  g->batch_count,
                                  page_size,
                                  g->cps_append) == 0);
-  CHECK(Fail, aggregate_layout_upload(&r->layout) == 0);
 
   CU(Fail, cuStreamCreate(&r->stream, CU_STREAM_NON_BLOCKING));
 

@@ -4,6 +4,7 @@
 #include "gpu/lod.h"
 #include "gpu/metric.cuda.h"
 #include "gpu/prelude.cuda.h"
+#include "gpu/transpose.h"
 #include "lod/lod_plan.h"
 #include "util/prelude.h"
 
@@ -332,6 +333,19 @@ lod_state_init(struct lod_state* lod,
                struct level_geometry* levels,
                const struct tile_stream_configuration* config)
 {
+  // Every level scatters, so refuse a layout the scatter cannot place here
+  // rather than on the first append that reaches it.
+  for (int lv = 0; lv < levels->nlod; ++lv) {
+    const struct tile_stream_layout* l = &lod->layouts[lv];
+    if (transpose_check_layout(l->epoch_elements,
+                               l->lifted_rank,
+                               l->lifted_shape,
+                               l->lifted_strides)) {
+      log_error("level %d has a layout the scatter cannot place", lv);
+      goto Fail;
+    }
+  }
+
   if (!levels->enable_multiscale)
     return 0;
 

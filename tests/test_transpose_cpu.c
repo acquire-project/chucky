@@ -12,7 +12,7 @@ static struct threadpool* g_pool;
 // Run CPU transpose and verify against ravel() reference.
 static int
 run_test(const char* name,
-         int rank,
+         uint8_t rank,
          const uint64_t* dim_sizes,
          const uint64_t* chunk_sizes,
          const uint8_t* storage_order,
@@ -20,25 +20,23 @@ run_test(const char* name,
 {
   log_info("=== %s ===", name);
 
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+  struct tile_stream_layout layout;
+  if (test_level_layout(&layout,
+                        rank,
+                        1,
+                        dim_sizes,
+                        chunk_sizes,
+                        storage_order,
+                        bpe,
+                        TEST_CHUNK_ALIGNMENT))
+    return 1;
 
-  build_lifted_layout(rank,
-                      1,
-                      dim_sizes,
-                      chunk_sizes,
-                      storage_order,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
+  const uint8_t lifted_rank = layout.lifted_rank;
+  const uint64_t* lifted_shape = layout.lifted_shape;
+  const int64_t* lifted_strides = layout.lifted_strides;
+  const uint64_t epoch_elements = layout.epoch_elements;
 
-  uint64_t pool_elements = chunks_per_epoch * chunk_stride;
+  uint64_t pool_elements = layout.chunks_per_epoch * layout.chunk_stride;
   size_t src_bytes = epoch_elements * bpe;
   size_t dst_bytes = pool_elements * bpe;
 
@@ -46,9 +44,9 @@ run_test(const char* name,
            "chunks_per_epoch=%lu epoch_elements=%lu",
            rank,
            lifted_rank,
-           (unsigned long)chunk_elements,
-           (unsigned long)chunk_stride,
-           (unsigned long)chunks_per_epoch,
+           (unsigned long)layout.chunk_elements,
+           (unsigned long)layout.chunk_stride,
+           (unsigned long)layout.chunks_per_epoch,
            (unsigned long)epoch_elements);
 
   void* src = malloc(src_bytes);
@@ -163,32 +161,30 @@ Fail:
 // Test with i_offset > 0 (multi-call accumulation).
 static int
 run_offset_test(const char* name,
-                int rank,
+                uint8_t rank,
                 const uint64_t* dim_sizes,
                 const uint64_t* chunk_sizes,
                 uint8_t bpe)
 {
   log_info("=== %s ===", name);
 
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+  struct tile_stream_layout layout;
+  if (test_level_layout(&layout,
+                        rank,
+                        1,
+                        dim_sizes,
+                        chunk_sizes,
+                        NULL,
+                        bpe,
+                        TEST_CHUNK_ALIGNMENT))
+    return 1;
 
-  build_lifted_layout(rank,
-                      1,
-                      dim_sizes,
-                      chunk_sizes,
-                      NULL,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
+  const uint8_t lifted_rank = layout.lifted_rank;
+  const uint64_t* lifted_shape = layout.lifted_shape;
+  const int64_t* lifted_strides = layout.lifted_strides;
+  const uint64_t epoch_elements = layout.epoch_elements;
 
-  uint64_t pool_elements = chunks_per_epoch * chunk_stride;
+  uint64_t pool_elements = layout.chunks_per_epoch * layout.chunk_stride;
   size_t src_bytes = epoch_elements * bpe;
   size_t dst_bytes = pool_elements * bpe;
 

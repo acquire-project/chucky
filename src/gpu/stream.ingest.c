@@ -166,6 +166,29 @@ Fail:
   return 1;
 }
 
+// Same measurement rule as scatter_with_timing: the interval only counts once
+// both ends are recorded.
+static int
+copy_to_linear_with_timing(struct staging_state* stage,
+                           CUdeviceptr d_linear,
+                           struct gpu_pool_view d_in,
+                           uint64_t bytes,
+                           uint64_t epoch_offset_bytes,
+                           CUstream compute)
+{
+  struct scatter_timing* st = scatter_timing_begin(stage, bytes);
+  CU(Fail, cuEventRecord(st->t_start, compute));
+  CU(Fail,
+     cuMemcpyDtoDAsync(
+       d_linear + epoch_offset_bytes, gpu_pool_view_d(d_in), bytes, compute));
+  CU(Fail, cuEventRecord(st->t_end, compute));
+  st->pending = 1;
+  return 0;
+
+Fail:
+  return 1;
+}
+
 // The produce-acquire keeps the H2D copy from overwriting d_in while the
 // prior generation's scatter still reads it; the release also frees h_in
 // for host refill (STAGING_FREE aliases it).
@@ -256,6 +279,10 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   if (elements == 0)
     return 0;
 
+  const uint64_t in_epoch = first_element % epoch_elements;
+  // d_linear holds one epoch; the copy below would run past it.
+  CHECK(Error, in_epoch + elements <= epoch_elements);
+
   const int idx = stage->current;
   struct staging_slot* ss = &stage->slot[idx];
 
@@ -267,21 +294,12 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   // Copy raw input to linear epoch buffer for LOD downsampling
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
-  CU(Error, cuEventRecord(st->t_start, compute));
-  {
-    uint64_t epoch_offset = (first_element % epoch_elements) * bpe;
-    // d_linear holds one epoch; the copy below would run past it.
-    CHECK(Error, first_element % epoch_elements + elements <= epoch_elements);
-    CU(Error,
-       cuMemcpyDtoDAsync(d_linear + epoch_offset,
-                         gpu_pool_view_d(d_in),
-                         elements * bpe,
-                         compute));
-  }
-  CU(Error, cuEventRecord(st->t_end, compute));
-  st->pending = 1;
+  const int copied =
+    copy_to_linear_with_timing(
+      stage, d_linear, d_in, elements * bpe, in_epoch * bpe, compute) == 0;
+  // Nothing reads the input either way, so hand the slot back before failing.
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
+  CHECK_SILENT(Error, copied);
 
   stage->current ^= 1;
   return 0;

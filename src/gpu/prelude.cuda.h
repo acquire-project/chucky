@@ -3,6 +3,7 @@
 
 #include "log/log.h"
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 #define CU(lbl, e)                                                             \
   do {                                                                         \
@@ -17,6 +18,13 @@
   do {                                                                         \
     handle_curesult(LOG_WARN, (e), __FILE__, __LINE__, #e);                    \
   } while (0)
+
+// Wraps a kernel launch. A launch the driver turns away queues nothing and
+// leaves its reason in the runtime's per-thread error, which the driver-API
+// calls around it never see. Yields 0 when the launch was accepted.
+#define CUDA_LAUNCH(...)                                                       \
+  ((__VA_ARGS__),                                                              \
+   handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
 
 #ifdef __cplusplus
 extern "C"
@@ -44,6 +52,22 @@ extern "C"
               expr,
               ecode);
     }
+    return 1;
+  }
+
+  static inline int handle_cudaerror(cudaError_t ecode,
+                                     const char* file,
+                                     int line,
+                                     const char* expr)
+  {
+    if (ecode == cudaSuccess)
+      return 0;
+    log_log(LOG_ERROR,
+            file,
+            line,
+            "CUDA launch refused: %s %s\n",
+            cudaGetErrorString(ecode),
+            expr);
     return 1;
   }
 

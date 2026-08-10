@@ -148,7 +148,7 @@ Fail:
 // n_epochs: epochs worth of source to hand the kernel in one call.
 static int
 run_transpose_test(const char* name,
-                   int rank,
+                   uint8_t rank,
                    uint8_t n_append,
                    const uint64_t* dim_sizes,
                    const uint64_t* chunk_sizes,
@@ -157,44 +157,37 @@ run_transpose_test(const char* name,
                    uint32_t n_epochs,
                    uint64_t in_epoch_offset)
 {
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
-
-  build_lifted_layout(rank,
-                      n_append,
-                      dim_sizes,
-                      chunk_sizes,
-                      storage_order,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
+  struct tile_stream_layout layout;
+  if (test_level_layout(&layout,
+                        rank,
+                        n_append,
+                        dim_sizes,
+                        chunk_sizes,
+                        storage_order,
+                        bpe,
+                        TEST_CHUNK_ALIGNMENT))
+    return 1;
 
   char detail[128];
   snprintf(detail,
            sizeof(detail),
            "rank=%d chunk_elements=%lu chunk_stride=%lu chunks_per_epoch=%lu",
            rank,
-           (unsigned long)chunk_elements,
-           (unsigned long)chunk_stride,
-           (unsigned long)chunks_per_epoch);
+           (unsigned long)layout.chunk_elements,
+           (unsigned long)layout.chunk_stride,
+           (unsigned long)layout.chunks_per_epoch);
 
   return scatter_and_verify((struct scatter_case){
     .name = name,
     .detail = detail,
-    .lifted_rank = lifted_rank,
-    .lifted_shape = lifted_shape,
-    .lifted_strides = lifted_strides,
-    .epoch_elements = epoch_elements,
+    .lifted_rank = layout.lifted_rank,
+    .lifted_shape = layout.lifted_shape,
+    .lifted_strides = layout.lifted_strides,
+    .epoch_elements = layout.epoch_elements,
     .region_elements =
-      chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS,
+      layout.chunks_per_epoch * layout.chunk_stride + TEST_REGION_PAD_ELEMENTS,
     .bpe = bpe,
-    .src_elements = n_epochs * epoch_elements,
+    .src_elements = n_epochs * layout.epoch_elements,
     .in_epoch_offset = in_epoch_offset,
   });
 }
@@ -328,7 +321,8 @@ test_transpose_two_append_dims(void)
 }
 
 // A layout the kernel cannot scatter is refused, rather than scattered
-// somewhere wrong.
+// somewhere wrong. The stream-open check has to refuse the same layouts the
+// dispatch does, since it stands in for the dispatch's refusal.
 static int
 expect_rejected(const char* what,
                 uint8_t rank,
@@ -356,7 +350,8 @@ expect_rejected(const char* what,
                  rank,
                  shape,
                  strides,
-                 stream) != 0;
+                 stream) != 0 &&
+       transpose_check_layout(epoch_elements, rank, shape, strides) != 0;
 
 Fail:
   cuMemFree(d_src);
@@ -390,6 +385,15 @@ test_transpose_rejects_bad_layouts(void)
                            shape,
                            strides,
                            24);
+  }
+  // The same check accepts the layout those two vary from.
+  {
+    const int64_t strides[] = { 0, 6, 1 };
+    log_info("=== accepts the layout they vary from ===");
+    const int ok =
+      transpose_check_layout(24, countof(shape), shape, strides) == 0;
+    log_info("  %s", ok ? "PASS" : "FAIL");
+    err |= ok ? 0 : 1;
   }
   return err;
 }
