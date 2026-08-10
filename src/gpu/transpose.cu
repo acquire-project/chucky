@@ -2,24 +2,19 @@
 #include "gpu/transpose.h"
 #include "util/prelude.h"
 #include <stdint.h>
-#include <type_traits>
 
 // Tiling the source per block measures faster than one element per thread.
 template<typename T>
 constexpr int ELEMENTS_PER_BLOCK = (1 << 12) / (int)sizeof(T);
 
-// Riding along in the launch parameters puts the shape and strides in the
-// constant bank, so the kernel no longer loads one of each from global memory
-// per dimension per element.
+// Travels in the launch parameters, so the kernel reads it from the constant
+// bank instead of paying a load per dimension per element.
 template<typename Index>
 struct scatter_layout
 {
-  typedef typename std::make_signed<Index>::type stride_type;
-
   Index shape[MAX_RANK];
-  stride_type strides[MAX_RANK];
-  int rank;
-  int first_dim; // dimensions before this one never move the destination
+  Index strides[MAX_RANK];
+  int ndims;
 };
 
 // Transpose data kernel - v0
@@ -41,14 +36,13 @@ __global__ void __launch_bounds__(256, 4)
     Index rest = i_offset + block_offset + (Index)i;
     Index out_offset = 0;
 
-    for (int d = layout.rank - 1; d >= layout.first_dim; --d) {
+    for (int d = layout.ndims - 1; d >= 0; --d) {
       const Index coord = rest % layout.shape[d];
       rest /= layout.shape[d];
-      out_offset += coord * (Index)layout.strides[d];
+      out_offset += coord * layout.strides[d];
     }
 
-    // What the decomposition left over counts whole epochs, and each epoch
-    // lands in the next region of the destination.
+    // The visited extents span one epoch, so what is left counts epochs.
     d_dst[out_offset + rest * region_stride] = d_src[block_offset + i];
   }
 }
@@ -67,11 +61,24 @@ struct transpose_args
   CUstream stream;
 };
 
-// The trailing dimensions multiply out to one epoch, so dividing the element
-// index by them leaves the epoch number — no separate division by
-// epoch_elements, and no iterations for the dimensions in front. Returns the
-// dimension the decomposition can stop at, or -1 when the shape does not
-// factor that way or a skipped dimension would have moved the destination.
+template<typename T>
+static int
+args_valid(const struct transpose_args& a)
+{
+  CHECK(Invalid, a.rank <= MAX_RANK);
+  CHECK(Invalid, a.d_src_beg % sizeof(T) == 0);
+  CHECK(Invalid, a.region_bytes % sizeof(T) == 0);
+  CHECK(Invalid, a.epoch_elements > 0);
+  return 1;
+
+Invalid:
+  return 0;
+}
+
+// Finds where to start decomposing an element index so that what the
+// decomposition leaves behind is the epoch number. Returns -1 when no run of
+// trailing extents makes an epoch, or when a dimension it would skip can still
+// reach the destination.
 static int
 first_decomposed_dim(const struct transpose_args& a)
 {
@@ -80,19 +87,31 @@ first_decomposed_dim(const struct transpose_args& a)
 
   while (product != a.epoch_elements) {
     if (first == 0)
-      return -1;
+      goto NoEpoch;
     const uint64_t n = a.shape[first - 1];
     if (n == 0 || n > a.epoch_elements / product)
-      return -1;
+      goto NoEpoch;
     product *= n;
     --first;
   }
 
   for (int d = 0; d < first; ++d) {
-    if (a.strides[d] != 0 && a.shape[d] != 1)
+    if (a.strides[d] != 0 && a.shape[d] != 1) {
+      log_error("transpose: lifted dimension %d lies outside an epoch, but its "
+                "extent %llu and stride %lld still reach the destination",
+                d,
+                (unsigned long long)a.shape[d],
+                (long long)a.strides[d]);
       return -1;
+    }
   }
   return first;
+
+NoEpoch:
+  log_error("transpose: no run of trailing extents multiplies out to an epoch "
+            "of %llu elements",
+            (unsigned long long)a.epoch_elements);
+  return -1;
 }
 
 static int
@@ -104,8 +123,8 @@ add_within_32_bits(uint64_t* total, uint64_t count, uint64_t step)
   return 1;
 }
 
-// 32-bit indexing takes the per-element divisions off the 64-bit division
-// subroutine, so use it whenever every index the kernel forms fits.
+// 32-bit division inlines where the 64-bit routine does not, so narrow indexing
+// is worth taking wherever every index the kernel forms fits.
 static int
 indices_fit_32_bits(const struct transpose_args& a,
                     uint64_t src_size,
@@ -113,7 +132,7 @@ indices_fit_32_bits(const struct transpose_args& a,
                     uint64_t region_stride)
 {
   const uint64_t last = a.i_offset + src_size - 1;
-  if (last < a.i_offset || last > UINT32_MAX)
+  if (src_size > UINT32_MAX || last < a.i_offset || last > UINT32_MAX)
     return 0;
 
   uint64_t max_offset = 0;
@@ -131,25 +150,26 @@ indices_fit_32_bits(const struct transpose_args& a,
 }
 
 template<typename T, typename Index>
-static void
-launch(const struct transpose_args& a,
-       uint64_t src_size,
-       uint64_t region_stride,
-       int first_dim)
+static int
+launch(const struct transpose_args& a, int first_dim)
 {
+  const uint64_t src_size = a.src_bytes / sizeof(T);
+  const uint64_t region_stride = a.region_bytes / sizeof(T);
+
   scatter_layout<Index> layout = {};
-  layout.rank = a.rank;
-  layout.first_dim = first_dim;
-  for (int d = first_dim; d < a.rank; ++d) {
-    layout.shape[d] = (Index)a.shape[d];
-    layout.strides[d] =
-      (typename scatter_layout<Index>::stride_type)a.strides[d];
+  layout.ndims = a.rank - first_dim;
+  for (int d = 0; d < layout.ndims; ++d) {
+    layout.shape[d] = (Index)a.shape[first_dim + d];
+    layout.strides[d] = (Index)a.strides[first_dim + d];
   }
 
   const int block_size = 256;
   const unsigned grid_size =
-    (unsigned)((src_size + ELEMENTS_PER_BLOCK<T> - 1) / ELEMENTS_PER_BLOCK<T>);
+    (unsigned)ceildiv(src_size, (uint64_t)ELEMENTS_PER_BLOCK<T>);
 
+  // Kernels elsewhere never read this per-thread error, so clear it or one of
+  // their leftovers arrives below as a refused scatter.
+  cudaGetLastError();
   transpose_v0_k<T, Index>
     <<<grid_size, block_size, 0, (cudaStream_t)a.stream>>>(
       (T*)a.d_dst_beg,
@@ -158,6 +178,13 @@ launch(const struct transpose_args& a,
       (Index)a.i_offset,
       (Index)region_stride,
       layout);
+
+  const cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    log_error("transpose: launch failed: %s", cudaGetErrorString(err));
+    return 1;
+  }
+  return 0;
 }
 
 template<typename T>
@@ -167,25 +194,16 @@ transpose_launch(const struct transpose_args& a)
   const uint64_t src_size = a.src_bytes / sizeof(T);
   if (src_size == 0)
     return 0;
+  if (!args_valid<T>(a))
+    return 1;
 
-  // Every declaration comes before the checks: a goto may not jump past one.
   const int first_dim = first_decomposed_dim(a);
-  const uint64_t region_stride = a.region_bytes / sizeof(T);
+  if (first_dim < 0)
+    return 1;
 
-  CHECK(Error, a.d_src_beg % sizeof(T) == 0);
-  CHECK(Error, a.region_bytes % sizeof(T) == 0);
-  CHECK(Error, a.epoch_elements > 0);
-  CHECK(Error, a.rank <= MAX_RANK);
-  CHECK(Error, first_dim >= 0);
-
-  if (indices_fit_32_bits(a, src_size, first_dim, region_stride))
-    launch<T, uint32_t>(a, src_size, region_stride, first_dim);
-  else
-    launch<T, uint64_t>(a, src_size, region_stride, first_dim);
-  return 0;
-
-Error:
-  return 1;
+  if (indices_fit_32_bits(a, src_size, first_dim, a.region_bytes / sizeof(T)))
+    return launch<T, uint32_t>(a, first_dim);
+  return launch<T, uint64_t>(a, first_dim);
 }
 
 extern "C" int

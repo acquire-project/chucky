@@ -226,9 +226,9 @@ engine_array_state_init(struct engine_array_state* st,
 
   st->sched.epochs_per_batch = cl->epochs_per_batch;
 
-  // Move LOD plan and level layouts (always, including L0). st->lod owns
-  // plan, layouts[], CSRs, accumulators, and LOD LUTs — but
-  // NOT d_linear/d_morton/timing, which are engine-owned shared resources.
+  // Move LOD plan and level layouts (always, including L0). st->lod owns plan,
+  // layouts[], CSRs, accumulators, and LOD LUTs — but NOT
+  // d_linear/d_morton/timing, which are engine-owned shared resources.
   st->lod.plan = cl->plan;
   cl->plan = (struct lod_plan){ 0 }; // ownership transferred
   for (int lv = 0; lv < cl->levels.nlod; ++lv)

@@ -122,8 +122,42 @@ scatter_timing_begin(struct staging_state* stage, size_t bytes)
     stage->scatter_samples_lost++;
   stage->next_timing = (stage->next_timing + 1) % SCATTER_TIMING_SLOTS;
   st->bytes = bytes;
-  st->pending = 1;
+  st->pending = 0;
   return st;
+}
+
+// The measurement only counts once both ends are recorded: an interval with one
+// end reports whatever its events still hold.
+static int
+scatter_with_timing(struct staging_state* stage,
+                    const struct tile_stream_layout* layout,
+                    struct scatter_destination dst,
+                    struct gpu_pool_view d_in,
+                    uint64_t bytes,
+                    uint64_t in_epoch,
+                    size_t bpe,
+                    CUstream compute)
+{
+  struct scatter_timing* st = scatter_timing_begin(stage, bytes);
+  CU(Fail, cuEventRecord(st->t_start, compute));
+  CHECK_SILENT(Fail,
+               transpose(gpu_pool_view_d(dst.first_epoch),
+                         gpu_pool_view_d(d_in),
+                         bytes,
+                         (uint8_t)bpe,
+                         in_epoch,
+                         layout->epoch_elements,
+                         dst.epoch_bytes,
+                         layout->lifted_rank,
+                         layout->lifted_shape,
+                         layout->lifted_strides,
+                         compute) == 0);
+  CU(Fail, cuEventRecord(st->t_end, compute));
+  st->pending = 1;
+  return 0;
+
+Fail:
+  return 1;
 }
 
 // The produce-acquire keeps the H2D copy from overwriting d_in while the
@@ -185,22 +219,13 @@ ingest_dispatch_scatter(struct staging_state* stage,
   // Scatter into chunk pool
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  struct scatter_timing* st = scatter_timing_begin(stage, ss->dispatched_bytes);
-  CU(Error, cuEventRecord(st->t_start, compute));
-  CHECK(Error,
-        transpose(gpu_pool_view_d(dst.first_epoch),
-                  gpu_pool_view_d(d_in),
-                  ss->dispatched_bytes,
-                  (uint8_t)bpe,
-                  in_epoch,
-                  epoch_elements,
-                  dst.epoch_bytes,
-                  layout->lifted_rank,
-                  layout->lifted_shape,
-                  layout->lifted_strides,
-                  compute) == 0);
-  CU(Error, cuEventRecord(st->t_end, compute));
+  const int scattered =
+    scatter_with_timing(
+      stage, layout, dst, d_in, ss->dispatched_bytes, in_epoch, bpe, compute) ==
+    0;
+  // Nothing reads the input either way, so hand the slot back before failing.
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
+  CHECK_SILENT(Error, scattered);
 
   stage->current ^= 1;
   return 0;

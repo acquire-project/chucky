@@ -2,6 +2,7 @@
 #include "gpu/transpose.h"
 #include "index.ops.util.h"
 #include "util/prelude.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,63 +16,54 @@ fill_elements(uint8_t* dst, uint64_t n, uint8_t bpe)
       dst[i * bpe + b] = (uint8_t)((i * 131 + b * 17 + 1) & 0xFF);
 }
 
-// Run transpose kernel and verify against CPU ravel() reference.
-// dim_sizes/chunk_sizes: per-dimension sizes.
-// bpe: bytes per element.
-// n_epochs: epochs worth of source to hand the kernel in one call.
-// in_epoch_offset: how far into its epoch the first element sits.
+// One scatter to run and check against the CPU reference. An omitted offset
+// starts at the first epoch; detail is extra geometry to log.
+struct scatter_case
+{
+  const char* name;
+  const char* detail;
+  uint8_t lifted_rank;
+  const uint64_t* lifted_shape;
+  const int64_t* lifted_strides;
+  uint64_t epoch_elements;
+  uint64_t region_elements;
+  uint8_t bpe;
+  uint64_t src_elements;
+  uint64_t in_epoch_offset;
+};
+
 // Returns 0 on success.
 static int
-run_transpose_test(const char* name,
-                   int rank,
-                   uint8_t n_append,
-                   const uint64_t* dim_sizes,
-                   const uint64_t* chunk_sizes,
-                   const uint8_t* storage_order,
-                   uint8_t bpe,
-                   uint32_t n_epochs,
-                   uint64_t in_epoch_offset)
+scatter_and_verify(struct scatter_case c)
 {
-  log_info("=== %s (bpe=%u epochs=%u from=%lu) ===",
-           name,
-           bpe,
-           n_epochs,
-           (unsigned long)in_epoch_offset);
+  const char* name = c.name;
+  const uint8_t lifted_rank = c.lifted_rank;
+  const uint64_t* lifted_shape = c.lifted_shape;
+  const int64_t* lifted_strides = c.lifted_strides;
+  const uint64_t epoch_elements = c.epoch_elements;
+  const uint64_t region_elements = c.region_elements;
+  const uint8_t bpe = c.bpe;
+  const uint64_t src_elements = c.src_elements;
+  const uint64_t in_epoch_offset = c.in_epoch_offset;
+  // Every epoch the call reaches, counting the one it starts partway into.
+  const uint64_t regions =
+    ceildiv(in_epoch_offset + src_elements, epoch_elements);
 
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
-
-  build_lifted_layout(rank,
-                      n_append,
-                      dim_sizes,
-                      chunk_sizes,
-                      storage_order,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
-  const uint64_t region_elements =
-    chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS;
-  const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bpe;
-  // A start partway into an epoch pushes the last elements into one more region
-  // than the epochs they cover.
-  const uint32_t regions = n_epochs + 1;
   const size_t dst_bytes = regions * region_elements * bpe;
 
-  log_info("  rank=%d lifted_rank=%d chunk_elements=%lu chunk_stride=%lu "
-           "chunks_per_epoch=%lu epoch_elements=%lu",
-           rank,
+  log_info("=== %s (bpe=%u elements=%lu regions=%lu from=%lu) ===",
+           name,
+           bpe,
+           (unsigned long)src_elements,
+           (unsigned long)regions,
+           (unsigned long)in_epoch_offset);
+  if (c.detail)
+    log_info("  %s", c.detail);
+  log_info("  lifted_rank=%d epoch_elements=%lu region_elements=%lu",
            lifted_rank,
-           (unsigned long)chunk_elements,
-           (unsigned long)chunk_stride,
-           (unsigned long)chunks_per_epoch,
-           (unsigned long)epoch_elements);
+           (unsigned long)epoch_elements,
+           (unsigned long)region_elements);
 
   void* h_src = NULL;
   void* h_dst = NULL;
@@ -149,6 +141,62 @@ Fail:
   }
   log_error("  FAIL");
   return 1;
+}
+
+// dim_sizes/chunk_sizes: per-dimension sizes.
+// n_append: leading dimensions whose chunk position never moves.
+// n_epochs: epochs worth of source to hand the kernel in one call.
+static int
+run_transpose_test(const char* name,
+                   int rank,
+                   uint8_t n_append,
+                   const uint64_t* dim_sizes,
+                   const uint64_t* chunk_sizes,
+                   const uint8_t* storage_order,
+                   uint8_t bpe,
+                   uint32_t n_epochs,
+                   uint64_t in_epoch_offset)
+{
+  uint8_t lifted_rank;
+  uint64_t lifted_shape[MAX_RANK];
+  int64_t lifted_strides[MAX_RANK];
+  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+
+  build_lifted_layout(rank,
+                      n_append,
+                      dim_sizes,
+                      chunk_sizes,
+                      storage_order,
+                      &lifted_rank,
+                      lifted_shape,
+                      lifted_strides,
+                      &chunk_elements,
+                      &chunk_stride,
+                      &chunks_per_epoch,
+                      &epoch_elements);
+
+  char detail[128];
+  snprintf(detail,
+           sizeof(detail),
+           "rank=%d chunk_elements=%lu chunk_stride=%lu chunks_per_epoch=%lu",
+           rank,
+           (unsigned long)chunk_elements,
+           (unsigned long)chunk_stride,
+           (unsigned long)chunks_per_epoch);
+
+  return scatter_and_verify((struct scatter_case){
+    .name = name,
+    .detail = detail,
+    .lifted_rank = lifted_rank,
+    .lifted_shape = lifted_shape,
+    .lifted_strides = lifted_strides,
+    .epoch_elements = epoch_elements,
+    .region_elements =
+      chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS,
+    .bpe = bpe,
+    .src_elements = n_epochs * epoch_elements,
+    .in_epoch_offset = in_epoch_offset,
+  });
 }
 
 static int
@@ -279,15 +327,17 @@ test_transpose_two_append_dims(void)
                             0);
 }
 
-// A shape whose trailing dimensions cannot make up an epoch is refused, rather
-// than scattered somewhere wrong.
+// A layout the kernel cannot scatter is refused, rather than scattered
+// somewhere wrong.
 static int
-test_transpose_rejects_mismatched_epoch(void)
+expect_rejected(const char* what,
+                uint8_t rank,
+                const uint64_t* shape,
+                const int64_t* strides,
+                uint64_t epoch_elements)
 {
-  log_info("=== test_transpose_rejects_mismatched_epoch ===");
+  log_info("=== rejects %s ===", what);
 
-  const uint64_t shape[] = { 2, 4, 6 };
-  const int64_t strides[] = { 0, 6, 1 };
   CUdeviceptr d_src = 0, d_dst = 0;
   CUstream stream = 0;
   int ok = 0;
@@ -296,15 +346,14 @@ test_transpose_rejects_mismatched_epoch(void)
   CU(Fail, cuMemAlloc(&d_src, 48 * sizeof(uint16_t)));
   CU(Fail, cuMemAlloc(&d_dst, 48 * sizeof(uint16_t)));
 
-  // 25 is not a product of any run of trailing extents.
   ok = transpose(d_dst,
                  d_src,
                  48 * sizeof(uint16_t),
                  2,
                  0,
-                 25,
+                 epoch_elements,
                  24 * sizeof(uint16_t),
-                 3,
+                 rank,
                  shape,
                  strides,
                  stream) != 0;
@@ -317,6 +366,92 @@ Fail:
   return ok ? 0 : 1;
 }
 
+static int
+test_transpose_rejects_bad_layouts(void)
+{
+  const uint64_t shape[] = { 2, 4, 6 };
+  int err = 0;
+
+  // No run of trailing extents multiplies out to 25.
+  {
+    const int64_t strides[] = { 0, 6, 1 };
+    err |= expect_rejected("an epoch no run of extents can make",
+                           countof(shape),
+                           shape,
+                           strides,
+                           25);
+  }
+  // The trailing extents make up the epoch, but the skipped dimension has both
+  // a stride and more than one position, so it reaches the destination.
+  {
+    const int64_t strides[] = { 5, 6, 1 };
+    err |= expect_rejected("a skipped dimension that moves the destination",
+                           countof(shape),
+                           shape,
+                           strides,
+                           24);
+  }
+  return err;
+}
+
+// The only cases that reach the wide kernel, one per route into it. An offset
+// past UINT32_MAX is the route left out, since it needs a 4 GiB destination.
+static int
+test_transpose_wide_index(void)
+{
+  const uint64_t huge = 1ull << 33;
+  const uint64_t wide_shape[] = { 1, huge, 4, 6 };
+  const int64_t no_stride[] = { 0, 0, 6, 1 };
+  const uint64_t wide_epoch = huge * 24;
+  const uint64_t region_elements = 24 + TEST_REGION_PAD_ELEMENTS;
+  int err = 0;
+
+  // An element index past UINT32_MAX, straddling an epoch boundary so the epoch
+  // step runs at full width too.
+  err |= scatter_and_verify((struct scatter_case){
+    .name = "wide_index",
+    .lifted_rank = 4,
+    .lifted_shape = wide_shape,
+    .lifted_strides = no_stride,
+    .epoch_elements = wide_epoch,
+    .region_elements = region_elements,
+    .bpe = 2,
+    .src_elements = 24,
+    .in_epoch_offset = wide_epoch - 12,
+  });
+
+  // The same extent, reached from index 0 so the extent picks the kernel.
+  err |= scatter_and_verify((struct scatter_case){
+    .name = "wide_extent",
+    .lifted_rank = 4,
+    .lifted_shape = wide_shape,
+    .lifted_strides = no_stride,
+    .epoch_elements = wide_epoch,
+    .region_elements = region_elements,
+    .bpe = 2,
+    .src_elements = 24,
+  });
+
+  // A backward stride, which no 32-bit index can carry. The epoch step puts
+  // every offset back above zero.
+  {
+    const uint64_t shape[] = { 1, 4, 6 };
+    const int64_t strides[] = { 0, -6, 1 };
+    err |= scatter_and_verify((struct scatter_case){
+      .name = "backward_stride",
+      .lifted_rank = 3,
+      .lifted_shape = shape,
+      .lifted_strides = strides,
+      .epoch_elements = 24,
+      .region_elements = 30,
+      .bpe = 2,
+      .src_elements = 24,
+      .in_epoch_offset = 24,
+    });
+  }
+  return err;
+}
+
 RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
               { "transpose_3d", test_transpose_3d },
               { "transpose_identity", test_transpose_identity },
@@ -326,5 +461,6 @@ RUN_GPU_TESTS({ "transpose_2d", test_transpose_2d },
               { "transpose_bpe8", test_transpose_bpe8 },
               { "transpose_many_epochs", test_transpose_many_epochs },
               { "transpose_two_append_dims", test_transpose_two_append_dims },
-              { "transpose_rejects_mismatched_epoch",
-                test_transpose_rejects_mismatched_epoch }, )
+              { "transpose_wide_index", test_transpose_wide_index },
+              { "transpose_rejects_bad_layouts",
+                test_transpose_rejects_bad_layouts }, )

@@ -491,10 +491,11 @@ lod_state_device_bytes(const struct computed_stream_layouts* cl,
                        const struct tile_stream_configuration* config)
 {
   const struct lod_plan* p = &cl->plan;
-  size_t bytes = 0;
 
   if (!cl->levels.enable_multiscale)
-    return bytes;
+    return 0;
+
+  size_t bytes = 0;
 
   const struct level_dims* l0 = &p->levels.level[0];
 

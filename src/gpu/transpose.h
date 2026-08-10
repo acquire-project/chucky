@@ -13,14 +13,13 @@ extern "C"
   // i_offset counts from the start of the epoch d_dst_beg points at, not from
   // the start of the stream.
   //
-  // shape and strides are host arrays; they travel to the device in the launch
-  // parameters. The trailing dimensions must multiply out to epoch_elements,
-  // and each dimension in front of those must have either a zero stride or an
-  // extent of one — that is what lets the kernel treat the leftover of the
-  // index decomposition as the epoch number. A shape that does not meet this
-  // returns non-zero without launching.
+  // shape and strides are host arrays. Some run of trailing extents must
+  // multiply out to epoch_elements, and every dimension in front of that run
+  // must have a zero stride or a single position.
   //
-  // Returns 0 on success, non-zero on error.
+  // Returns 0 once the scatter is queued, or when there is nothing to scatter.
+  // Non-zero means nothing was queued. What the device reports while running
+  // surfaces on the stream instead.
   int transpose(CUdeviceptr d_dst_beg,
                 CUdeviceptr d_src_beg,
                 uint64_t src_bytes,

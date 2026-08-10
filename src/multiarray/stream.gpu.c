@@ -25,8 +25,8 @@ struct array_descriptor_gpu
   struct stream_context ctx;
   struct computed_stream_layouts cl; // owned, freed on destroy
 
-  // Whole-struct swapped on bind/unbind. st.lod owns plan, layouts[],
-  // CSRs, append accumulator device memory, and LOD LUTs — but
+  // Whole-struct swapped on bind/unbind. st.lod owns plan, layouts[], CSRs,
+  // append accumulator device memory, and LOD LUTs — but
   // NOT d_linear/d_morton/timing, which are shared and owned by the engine.
   // st.agg owns per-LOD layouts, shard_state, and the per-array tail buffers.
   struct engine_array_state st;
