@@ -19,9 +19,7 @@ Usage:
 
 from __future__ import annotations
 
-import functools
 import json
-import os
 import platform
 import re
 import subprocess
@@ -299,64 +297,15 @@ def gpu_name() -> str:
 # Runner
 # ---------------------------------------------------------------------------
 
-@functools.cache
-def build_has_gpu(build_dir: Path) -> bool:
-    """Whether this build can run the gpu backend, per its CMake cache."""
-    try:
-        cache = (build_dir / "CMakeCache.txt").read_text(errors="replace")
-    except OSError:
-        return True
-    m = re.search(r"^CHUCKY_ENABLE_GPU:BOOL=(.*)$", cache, re.MULTILINE)
-    if not m:
-        return True
-    # Anything we cannot read as false is treated as a gpu build.
-    return m.group(1).strip().upper() not in {"", "0", "OFF", "FALSE", "NO", "N"}
-
-
-def bench_exe(spec: RunSpec, build_dir: Path) -> Path:
-    exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
-    return exe.with_suffix(".exe") if sys.platform == "win32" else exe
-
-
-def save_results(output: Path, data: dict, records: dict) -> None:
-    """Write the results file. A kill mid-write leaves the old file intact."""
-    data["runs"] = list(records.values())
-    tmp = output.with_suffix(output.suffix + ".tmp")
-    try:
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=2)
-        try:
-            os.replace(tmp, output)
-        except OSError:
-            # Windows cannot rename over a file another process holds open.
-            with open(output, "w") as f:
-                json.dump(data, f, indent=2)
-            tmp.unlink(missing_ok=True)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
-def ensure_results_file(output: Path, data: dict, records: dict) -> None:
-    """Write the file if it is not there yet, so the path we report exists."""
-    if not output.exists():
-        save_results(output, data, records)
-
-
-def skip_reason(spec: RunSpec, build_dir: Path) -> str | None:
-    """Why this spec cannot run here, or None if it can."""
-    if not bench_exe(spec, build_dir).exists():
-        return "exe not found"
-    if spec.backend == "gpu" and not build_has_gpu(build_dir):
-        return "build has no gpu"
-    return None
-
-
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
-            tmpdir_root: Path | None = None) -> dict:
-    """Execute a single benchmark run. Callers check for a skip first."""
-    exe = bench_exe(spec, build_dir)
+            tmpdir_root: Path | None = None) -> dict | None:
+    """Execute a single benchmark run, return result dict or None if exe missing."""
+    exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
+    if sys.platform == "win32":
+        exe = exe.with_suffix(".exe")
+    if not exe.exists():
+        return None
 
     frames = SCENARIOS[spec.scenario]
     cmd = [
@@ -537,10 +486,7 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
 
     # -- load existing results for resumability --
     output.parent.mkdir(parents=True, exist_ok=True)
-    # A run held back for a redo is still written out, so a redo that never
-    # happens erases nothing.
-    records: dict = {}
-    done: set[str] = set()
+    existing: dict = {}
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
@@ -552,12 +498,11 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         data = raw_data
         for r in data.get("runs", []):
             rid = r["id"]
-            records[rid] = r
             if retry and r.get("status") != "pass":
                 continue
             if rerun and any(pat in rid for pat in rerun):
                 continue
-            done.add(rid)
+            existing[rid] = r
     else:
         data = {
             "version": CURRENT_VERSION,
@@ -572,14 +517,13 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
         }
 
     # -- count how many actually need to run --
-    to_run = [spec for spec in runs if spec.id not in done]
+    to_run = [spec for spec in runs if spec.id not in existing]
     skip_count = len(runs) - len(to_run)
 
     if skip_count:
         console.print(f"Skipping [bold]{skip_count}[/bold] existing runs")
 
     if not to_run:
-        ensure_results_file(output, data, records)
         console.print(f"[green]All {len(runs)} runs already complete.[/green]")
         console.print(f"Results: {output}")
         return
@@ -600,12 +544,6 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 tag += f" {spec.sink}"
             progress.update(task, description=f"[bold]{tag}")
 
-            reason = skip_reason(spec, build_dir)
-            if reason:
-                progress.console.print(f"  {tag} [dim]SKIP ({reason})[/dim]")
-                progress.advance(task)
-                continue
-
             try:
                 result = run_one(spec, build_dir,
                                  s3_bucket=s3_bucket,
@@ -617,18 +555,27 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
             except Exception as e:
                 result = {**spec.base_result(), "status": "error", "error": str(e)}
 
+            if result is None:
+                progress.console.print(f"  {tag} [dim]SKIP (exe not found)[/dim]")
+                progress.advance(task)
+                continue
+
             st = result.get("status", "?")
             tp = result.get("throughput_in_gibs")
             suffix = f" {tp:.2f} GiB/s" if tp else ""
             style = status_style(st)
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
-            records[spec.id] = result
-            save_results(output, data, records)
+            existing[spec.id] = result
+
+            # Save incrementally
+            data["runs"] = list(existing.values())
+            with open(output, "w") as f:
+                json.dump(data, f, indent=2)
+
             progress.advance(task)
 
-    ensure_results_file(output, data, records)
-    console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(records)} runs)")
+    console.print(f"\n[bold green]Done.[/bold green] Results: {output} ({len(existing)} runs)")
 
 
 if __name__ == "__main__":
