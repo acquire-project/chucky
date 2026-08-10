@@ -51,12 +51,8 @@ plane_fill(int round)
   return (uint16_t)(0xa500 + round);
 }
 
-// Where the two planes of shape_covers_padded_chunk_after_flush end up. The
-// first flush leaves the append cursor one plane into a chunk, so round 1's
-// plane lands at that chunk's second plane, at append position 7 — which only a
-// shape of 8 or more reaches. The shape stops there, because the chunk's third
-// plane is padding. Position 6 holds round 0's plane a second time: the flush
-// re-sends the chunk it padded, since nothing clears the pool behind it.
+// Pins the append positions the shape has to cover, so a shape that is off by a
+// plane in either direction fails here rather than looking plausible.
 static int
 verify_planes_in_padded_chunk(const struct test_shard_sink* sink)
 {

@@ -31,6 +31,13 @@ dim_info_finalized_append_sizes(const struct dim_info* info,
   // that no finalized chunk holds.
   const uint64_t reach = append_sizes[0];
   append_sizes[0] = append_padding < reach ? reach - append_padding : 0;
+
+  // A bounded append dim cannot report more than it was declared with, however
+  // far the chunks reach: a flush that skips shard slots can push data past the
+  // end of the array, and no shape makes that readable.
+  const uint64_t declared = info->append.beg[0].size;
+  if (declared > 0 && append_sizes[0] > declared)
+    append_sizes[0] = declared;
 }
 
 void

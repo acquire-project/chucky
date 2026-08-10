@@ -245,6 +245,13 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
   // complete, so they are skipped once anything above them failed.
   int failed = 0;
 
+  // Before anything is delivered: whichever finalize closes the chunk this
+  // flush pads has to record that padding in the same step.
+  for (int lv = 0; lv < v->levels->nlod; ++lv)
+    shard_state_arm_flush_padding(
+      &v->shard[lv],
+      dim_info_append_padding(&v->cl->dims, *v->cursor_elements, lv));
+
   // Flush partial epoch into the batch.
   if (*v->cursor_elements % v->layout->epoch_elements != 0) {
     uint32_t active_mask = 1;
@@ -313,10 +320,10 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0)
         CHECK(Fail,
-              finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
-      shard_state_record_flush_padding(
-        &v->shard[lv],
-        dim_info_append_padding(&v->cl->dims, *v->cursor_elements, lv));
+              finalize_shards(&v->shard[lv],
+                              v->sink,
+                              v->shard_alignment,
+                              v->shard[lv].pending_flush_padding) == 0);
     }
 
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
@@ -330,6 +337,11 @@ Fail:
   failed = 1;
 
 Drain:
+  // Appends after this flush fill whole chunks again, so nothing they deliver
+  // carries padding.
+  for (int lv = 0; lv < v->levels->nlod; ++lv)
+    shard_state_arm_flush_padding(&v->shard[lv], 0);
+
   // A sink IO error is the one case the shape is withheld: which writes landed
   // is unknowable.
   if (shard_sink_drain(v->sink))

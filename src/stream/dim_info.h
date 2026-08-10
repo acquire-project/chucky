@@ -67,8 +67,9 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t* append_sizes);
 
 // Append dim sizes for data a reader can reach: how far the finalized chunks
-// reach, less the padding in the last of them. Both describe work that already
-// happened, so neither claims data that a failed flush never delivered.
+// reach, less the padding in the last of them, and never past a bounded dim's
+// declared size. Only finalized chunks count, so a failed flush cannot make
+// this claim data it never delivered.
 void
 dim_info_finalized_append_sizes(const struct dim_info* info,
                                 uint64_t finalized_append_chunks,
