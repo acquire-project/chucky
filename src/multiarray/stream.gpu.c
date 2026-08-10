@@ -43,7 +43,22 @@ struct multiarray_tile_stream_gpu
   int n_arrays;
   int active; // -1 = none
   struct array_descriptor_gpu* arrays;
+  CUcontext cuda; // captured at create; made current at every entry point
 };
+
+// Kernel launches go through the runtime API, which binds the calling thread's
+// own context rather than the one owning the streams, and rejects the launch
+// when they differ. A caller may update or flush from any thread.
+static void
+bind_cuda_context(struct multiarray_tile_stream_gpu* ms)
+{
+  if (!ms->cuda)
+    return;
+  CUcontext current = NULL;
+  if (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ms->cuda)
+    return;
+  CUWARN(cuCtxSetCurrent(ms->cuda));
+}
 
 // ---- Forward declarations ----
 
@@ -186,6 +201,7 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
+  bind_cuda_context(ms);
 
   if (array_index < 0 || array_index >= ms->n_arrays)
     return (struct multiarray_writer_result){
@@ -221,6 +237,7 @@ flush_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
+  bind_cuda_context(ms);
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.
@@ -276,6 +293,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
   if (!ms)
     return;
+
+  bind_cuda_context(ms);
 
   // Remember which arrays we will auto-flush: only their sinks are sure to be
   // alive at drain time, since a caller may free a sink after flushing itself.
@@ -349,6 +368,8 @@ multiarray_tile_stream_gpu_create(
   ms->active = -1;
   ms->writer.update = update_impl;
   ms->writer.flush = flush_impl;
+  if (cuCtxGetCurrent(&ms->cuda) != CUDA_SUCCESS)
+    ms->cuda = NULL;
 
   ms->arrays = (struct array_descriptor_gpu*)calloc(
     n_arrays, sizeof(struct array_descriptor_gpu));

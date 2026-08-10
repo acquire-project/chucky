@@ -319,6 +319,8 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (!s)
     return;
 
+  tile_stream_gpu_bind_context(s);
+
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
@@ -381,6 +383,10 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   out->ctx.config = *config;
   out->ctx.sink = sink;
   out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
+  // gpu_delivery_init rejects a create with no context, so leaving this null
+  // on failure only skips the rebind on a stream that is about to fail anyway.
+  if (cuCtxGetCurrent(&out->cuda) != CUDA_SUCCESS)
+    out->cuda = NULL;
   tile_stream_gpu_init_writer(out);
 
   struct engine_limits lim;

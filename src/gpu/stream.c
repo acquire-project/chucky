@@ -413,11 +413,23 @@ tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s)
 
 // --- tile_stream_gpu writer wrappers ---
 
+void
+tile_stream_gpu_bind_context(struct tile_stream_gpu* s)
+{
+  if (!s->cuda)
+    return;
+  CUcontext current = NULL;
+  if (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == s->cuda)
+    return;
+  CUWARN(cuCtxSetCurrent(s->cuda));
+}
+
 static struct writer_result
 tile_stream_gpu_append(struct writer* self, struct slice input)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
+  tile_stream_gpu_bind_context(s);
 
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
@@ -441,6 +453,7 @@ tile_stream_gpu_flush_final(struct writer* self)
   // new data arrives.
   if (s->flushed)
     return writer_ok();
+  tile_stream_gpu_bind_context(s);
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
   if (r.error == 0)
     s->flushed = 1;
