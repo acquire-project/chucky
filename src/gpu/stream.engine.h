@@ -282,6 +282,11 @@ struct stream_context
   uint64_t total_element_limit; // configured stream length; 0 = unbounded
   size_t shard_alignment;       // from sink; 0 = no alignment
 
+  // Set once data is appended after a flush. A flush pads the open chunk and
+  // closes the shard, so what follows sits past that padding and the appended
+  // element count no longer says where the data ends.
+  int appended_after_flush;
+
   // A dispatch that fails partway leaves the epochs it transferred uncounted,
   // and nothing can un-enqueue them, so this array's cursor no longer says
   // where data belongs and it stops taking any. Per array: the other arrays of

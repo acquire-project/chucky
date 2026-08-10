@@ -70,6 +70,11 @@ struct tile_stream_cpu
   int pool_fully_covered;       // 1 if scatter overwrites every pool position
   int flushed; // 1 after flush; reset by append for idempotency
 
+  // Set once data is appended after a flush. A flush pads the open chunk and
+  // closes the shard, so what follows sits past that padding and the appended
+  // element count no longer says where the data ends.
+  int appended_after_flush;
+
   // Batch accumulation state (K = cl.epochs_per_batch).
   uint32_t batch_accumulated;    // 0..K-1
   uint32_t* batch_active_masks;  // [K] per-epoch active level mask

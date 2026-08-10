@@ -48,13 +48,6 @@ struct shard_state
   struct io_event finalized_fence;
   uint64_t fenced_append_chunks; // finalized count already waited for
 
-  // Chunks actually written, as opposed to how far along the append dim they
-  // reach. A flush that closes a shard early, or one that fails, leaves its
-  // remaining slots empty and everything after them sits past the gap. The
-  // difference between the two is how far the appended element count falls
-  // short of describing the extent.
-  uint64_t written_append_chunks;
-
   // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
   // bulk HtoD upload covers all shards. NULL when page == 0.
   uint8_t* tail_buf_pool;
@@ -80,12 +73,9 @@ shard_state_heap_bytes(const struct level_layout_info* li);
 // How far along the append dim a reader can safely see: finalized and no
 // longer queued. Waits for the last finalize's writes to retire, which have
 // normally landed well before the next metadata update asks for this.
-// out_skipped, when given, reports how many of the slots below that point a
-// flush left empty.
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
-                                   struct shard_sink* sink,
-                                   uint64_t* out_skipped);
+                                   struct shard_sink* sink);
 
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to

@@ -272,6 +272,88 @@ Fail:
   return 1;
 }
 
+// A flush partway through a chunk pads it out rather than leaving a slot
+// empty, so the hole is inside the grid. The extent still has to reach the
+// data written after it; covering some padding is the price, hiding frames is
+// not acceptable.
+static int
+test_shape_covers_padding_from_midstream_flush(void)
+{
+  log_info("=== test_shape_covers_padding_from_midstream_flush ===");
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, OPENABLE_SHARDS, SHARD_CAP);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 3,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 1,
+    .metadata_update_interval_s = 3600.0f,
+  };
+
+  uint16_t* data = NULL;
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
+  CHECK(Fail, s);
+
+  // One plane, a third of a chunk.
+  const uint64_t plane_elems = 4 * 4;
+  const size_t plane_bytes = plane_elems * sizeof(uint16_t);
+  data = (uint16_t*)calloc(plane_elems, sizeof(uint16_t));
+  CHECK(Fail, data);
+
+  struct writer* w = tile_stream_cpu_writer(s);
+  struct slice sl = { .beg = data, .end = (const char*)data + plane_bytes };
+
+  // Nothing follows this flush yet, so the one appended plane is the extent.
+  CHECK(Fail, writer_append(w, sl).error == 0);
+  CHECK(Fail, writer_flush(w).error == 0);
+  CHECK(Fail, sink.last_append_size0 == 1);
+
+  // The second plane lands in a fresh chunk in the next shard, at position 6.
+  // The extent runs to the end of that chunk: it covers two elements of
+  // padding, but a clamp back to the two appended planes would lose the plane
+  // at position 6 entirely.
+  CHECK(Fail, writer_append(w, sl).error == 0);
+  CHECK(Fail, writer_flush(w).error == 0);
+
+  log_info("  shape0=%llu", (unsigned long long)sink.last_append_size0);
+  CHECK(Fail, sink.last_append_size0 == 9);
+
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -279,5 +361,6 @@ main(void)
   err |= test_shape_catches_up_after_flush_error();
   err |= test_shape_exact_on_clean_flush();
   err |= test_shape_covers_gap_from_midstream_flush();
+  err |= test_shape_covers_padding_from_midstream_flush();
   return err;
 }
