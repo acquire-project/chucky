@@ -112,8 +112,9 @@ ingest_collect_scatter_timing(struct staging_state* stage,
   }
 }
 
-// Claims the next measurement in the ring. An entry still outstanding here has
-// outlived its slack, so count it rather than lose it silently.
+// Claims the next measurement in the ring; the caller marks it once both ends
+// are recorded. An entry still outstanding here has outlived its slack, so
+// count it rather than lose it silently.
 static struct scatter_timing*
 scatter_timing_begin(struct staging_state* stage, size_t bytes)
 {
@@ -274,6 +275,7 @@ ingest_dispatch_multiscale(struct staging_state* stage,
                          compute));
   }
   CU(Error, cuEventRecord(st->t_end, compute));
+  st->pending = 1;
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
 
   stage->current ^= 1;
