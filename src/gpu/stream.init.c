@@ -226,17 +226,15 @@ engine_array_state_init(struct engine_array_state* st,
 
   st->sched.epochs_per_batch = cl->epochs_per_batch;
 
-  // Move LOD plan and level layouts (always, including L0). st->lod owns
-  // plan, layouts[], layout_gpu[], CSRs, accumulators, and LOD LUTs — but
-  // NOT d_linear/d_morton/timing, which are engine-owned shared resources.
+  // Move LOD plan and level layouts (always, including L0). st->lod owns plan,
+  // layouts[], CSRs, accumulators, and LOD LUTs — but NOT
+  // d_linear/d_morton/timing, which are engine-owned shared resources.
   st->lod.plan = cl->plan;
   cl->plan = (struct lod_plan){ 0 }; // ownership transferred
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     st->lod.layouts[lv] = cl->layouts[lv];
 
   CHECK(Fail, lod_state_init(&st->lod, &ctx->levels, &ctx->config) == 0);
-  // View, not owned — freed with st->lod.
-  ctx->layout_gpu = st->lod.layout_gpu[0];
 
   if (ctx->levels.enable_multiscale && ctx->dims.append_downsample)
     CHECK(Fail, lod_state_init_accumulators(&st->lod, &ctx->config) == 0);

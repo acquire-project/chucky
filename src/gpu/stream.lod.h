@@ -3,8 +3,8 @@
 #include "gpu/stream.internal.h"
 #include "stream/dim_info.h"
 
-// Upload level layouts to GPU (always, including L0). When multiscale is
-// enabled, also uploads LOD plan shapes and builds scatter/reduce LUTs.
+// When multiscale is enabled, uploads LOD plan shapes and builds
+// scatter/reduce LUTs; does nothing otherwise.
 // Plan and level layouts must already be populated in lod->plan and
 // lod->layouts (from compute_stream_layouts). Sets levels->nlod.
 // Returns 0 on success.
