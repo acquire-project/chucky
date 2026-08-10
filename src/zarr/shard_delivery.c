@@ -209,16 +209,18 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
   ss->finalized_append_chunks =
     ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
-  if (ss->epoch_in_shard < ss->chunks_per_shard_append)
-    ss->closed_partial_shard = 1;
+  ss->written_append_chunks += ss->epoch_in_shard;
   if (sink->record_fence)
     ss->finalized_fence = sink->record_fence(sink);
 }
 
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
-                                   struct shard_sink* sink)
+                                   struct shard_sink* sink,
+                                   uint64_t* out_skipped)
 {
+  if (out_skipped)
+    *out_skipped = ss->finalized_append_chunks - ss->written_append_chunks;
   // Wait once per closed-out generation, not once per caller: the metadata
   // update runs every batch, and blocking the delivery worker on a fence
   // already waited for costs real throughput on small epochs.

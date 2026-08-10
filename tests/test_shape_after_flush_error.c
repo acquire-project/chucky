@@ -121,11 +121,12 @@ test_shape_exact_on_clean_flush(void)
   test_sink_init(&sink, OPENABLE_SHARDS, SHARD_CAP);
 
   // Three elements per chunk along dim0, so a single epoch leaves the chunk
-  // two thirds full and the flush pads the rest.
+  // two thirds full and the flush pads the rest. Two chunks per shard, so that
+  // same flush also closes the shard with a slot to spare.
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 3,
-      .chunks_per_shard = 1,
+      .chunks_per_shard = 2,
       .name = "t",
       .storage_position = 0 },
     { .size = 4,
@@ -202,7 +203,7 @@ test_shape_covers_gap_from_midstream_flush(void)
 
   struct dimension dims[] = {
     { .size = 0,
-      .chunk_size = 1,
+      .chunk_size = 2,
       .chunks_per_shard = 2,
       .name = "t",
       .storage_position = 0 },
@@ -240,18 +241,22 @@ test_shape_covers_gap_from_midstream_flush(void)
   struct writer* w = tile_stream_cpu_writer(s);
   struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
 
-  // One epoch, then flush: shard 0 closes holding chunk 0 and an empty slot.
+  // One append is one chunk of 2 along the append dim. After the flush shard 0
+  // holds that chunk and closes with its second slot unused, so the extent is
+  // the 2 appended.
   CHECK(Fail, writer_append(w, sl).error == 0);
   CHECK(Fail, writer_flush(w).error == 0);
-  CHECK(Fail, sink.last_append_size0 == 1);
+  CHECK(Fail, sink.last_append_size0 == 2);
 
-  // Two more epochs land in shard 1, at append positions 2 and 3.
+  // Two more chunks fill shard 1, past the slot shard 0 left empty. They cover
+  // append positions 4 through 7, so the extent is 8. The appended count of 6
+  // would stop short and hide the last chunk.
   CHECK(Fail, writer_append(w, sl).error == 0);
   CHECK(Fail, writer_append(w, sl).error == 0);
   CHECK(Fail, writer_flush(w).error == 0);
 
   log_info("  shape0=%llu", (unsigned long long)sink.last_append_size0);
-  CHECK(Fail, sink.last_append_size0 == 4);
+  CHECK(Fail, sink.last_append_size0 == 8);
 
   free(data);
   tile_stream_cpu_destroy(s);

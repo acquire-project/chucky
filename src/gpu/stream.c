@@ -338,13 +338,12 @@ publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
   const uint8_t na = dim_info_n_append(&ctx->dims);
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     struct shard_state* ss = &e->compress_agg.ar.shard[lv];
-    uint64_t readable = shard_state_readable_append_chunks(ss, ctx->sink);
+    uint64_t skipped = 0;
+    uint64_t readable =
+      shard_state_readable_append_chunks(ss, ctx->sink, &skipped);
     uint64_t append_sizes[HALF_MAX_RANK];
-    if (ss->closed_partial_shard)
-      dim_info_decompose_append_sizes(&ctx->dims, readable, append_sizes);
-    else
-      dim_info_readable_append_sizes(
-        &ctx->dims, readable, ctx->cursor_elements, lv, append_sizes);
+    dim_info_readable_append_sizes(
+      &ctx->dims, readable, skipped, ctx->cursor_elements, lv, append_sizes);
     if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
       r = writer_error();
   }

@@ -10,14 +10,22 @@
 void
 dim_info_readable_append_sizes(const struct dim_info* info,
                                uint64_t readable_append_chunks,
+                               uint64_t skipped_append_chunks,
                                uint64_t cursor_elements,
                                int level,
                                uint64_t* append_sizes)
 {
   dim_info_decompose_append_sizes(info, readable_append_chunks, append_sizes);
 
-  // The last chunk of a stream is padded out to full size, so the chunk count
-  // alone would report the padding as data.
+  // Skipped slots put the chunks above them past a hole, so the data no longer
+  // runs end to end and the element count says nothing about where it stops.
+  // The grid position is all there is to go on.
+  if (skipped_append_chunks > 0)
+    return;
+
+  // Densely packed, so the count is exact and worth preferring: the final
+  // chunk of a stream is padded out to full size, and the grid position alone
+  // would report that padding as data.
   uint64_t appended[HALF_MAX_RANK];
   dim_info_final_append_sizes(info, cursor_elements, level, appended);
   if (appended[0] < append_sizes[0])
