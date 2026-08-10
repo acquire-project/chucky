@@ -43,22 +43,7 @@ struct multiarray_tile_stream_gpu
   int n_arrays;
   int active; // -1 = none
   struct array_descriptor_gpu* arrays;
-  CUcontext cuda; // captured at create; made current at every entry point
 };
-
-// Kernel launches go through the runtime API, which binds the calling thread's
-// own context rather than the one owning the streams, and rejects the launch
-// when they differ. A caller may update or flush from any thread.
-static void
-bind_cuda_context(struct multiarray_tile_stream_gpu* ms)
-{
-  if (!ms->cuda)
-    return;
-  CUcontext current = NULL;
-  if (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ms->cuda)
-    return;
-  CUWARN(cuCtxSetCurrent(ms->cuda));
-}
 
 // ---- Forward declarations ----
 
@@ -201,27 +186,29 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
-  bind_cuda_context(ms);
-
   if (array_index < 0 || array_index >= ms->n_arrays)
     return (struct multiarray_writer_result){
       .error = multiarray_writer_fail,
       .rest = data,
     };
 
+  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
   struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
   // Switch arrays if needed
   if (array_index != ms->active) {
     int err = switch_to_array(ms, array_index);
-    if (err)
+    if (err) {
+      cu_ctx_pop(pushed);
       return (struct multiarray_writer_result){ .error = err, .rest = data };
+    }
   }
 
   struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
   if (desc->flushed && r.rest.beg != data.beg)
     desc->flushed = 0;
 
+  cu_ctx_pop(pushed);
   // `writer_finished` here means "stream is at capacity (total_element_limit)";
   // finalization happens on explicit `flush()` or on destroy, not here.
   return (struct multiarray_writer_result){
@@ -237,7 +224,7 @@ flush_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
-  bind_cuda_context(ms);
+  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.
@@ -281,6 +268,7 @@ flush_impl(struct multiarray_writer* self)
   // Each array's stream_flush_body already drained its sink as a commit
   // point; no additional drain needed here.
 
+  cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
@@ -294,7 +282,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (!ms)
     return;
 
-  bind_cuda_context(ms);
+  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
 
   // Remember which arrays we will auto-flush: only their sinks are sure to be
   // alive at drain time, since a caller may free a sink after flushing itself.
@@ -341,6 +329,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // last-bound descriptor (freed above by destroy_array_descriptor).
   stream_engine_destroy(&ms->engine);
 
+  cu_ctx_pop(pushed);
   free(ms);
 }
 
@@ -368,8 +357,6 @@ multiarray_tile_stream_gpu_create(
   ms->active = -1;
   ms->writer.update = update_impl;
   ms->writer.flush = flush_impl;
-  if (cuCtxGetCurrent(&ms->cuda) != CUDA_SUCCESS)
-    ms->cuda = NULL;
 
   ms->arrays = (struct array_descriptor_gpu*)calloc(
     n_arrays, sizeof(struct array_descriptor_gpu));

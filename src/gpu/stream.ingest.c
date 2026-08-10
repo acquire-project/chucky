@@ -166,8 +166,6 @@ Fail:
   return 1;
 }
 
-// Same measurement rule as scatter_with_timing: the interval only counts once
-// both ends are recorded.
 static int
 copy_to_linear_with_timing(struct staging_state* stage,
                            CUdeviceptr d_linear,

@@ -327,12 +327,20 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
   {
     size_t temp = slot->temp_bytes;
-    cub::DeviceScan::ExclusiveSum(slot->d_temp,
-                                  temp,
-                                  slot->d_permuted_sizes,
-                                  slot->d_offsets,
-                                  (int)C,
-                                  cuda_stream);
+    // A scan that never ran leaves d_offsets holding whatever the last batch
+    // wrote, and the passes below would pack this batch's chunks at those
+    // offsets rather than report anything.
+    CHECK_SILENT(
+      Error,
+      handle_cudaerror(cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                                     temp,
+                                                     slot->d_permuted_sizes,
+                                                     slot->d_offsets,
+                                                     (int)C,
+                                                     cuda_stream),
+                       __FILE__,
+                       __LINE__,
+                       "cub::DeviceScan::ExclusiveSum") == 0);
 
     CHECK_SILENT(Error,
                  CUDA_LAUNCH(write_total_k<<<1, 1, 0, cuda_stream>>>(
@@ -455,12 +463,17 @@ aggregate_batch_unified_async(const void* d_compressed,
   // tail-sentinel position; no separate write_total fixup needed.
   {
     size_t temp = slot->temp_bytes;
-    cub::DeviceScan::ExclusiveSum(slot->d_temp,
-                                  temp,
-                                  slot->d_permuted_sizes,
-                                  slot->d_offsets,
-                                  (int)(C + nlod),
-                                  cuda_stream);
+    CHECK_SILENT(
+      Error,
+      handle_cudaerror(cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                                     temp,
+                                                     slot->d_permuted_sizes,
+                                                     slot->d_offsets,
+                                                     (int)(C + nlod),
+                                                     cuda_stream),
+                       __FILE__,
+                       __LINE__,
+                       "cub::DeviceScan::ExclusiveSum") == 0);
   }
 
   if (page_size > 0 && total_shards > 0) {

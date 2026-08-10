@@ -22,8 +22,15 @@
 // Wraps a kernel launch. A launch the driver turns away queues nothing and
 // leaves its reason in the runtime's per-thread error, which the driver-API
 // calls around it never see. Yields 0 when the launch was accepted.
+//
+// The read at the front is what scopes the check to this launch. nvcomp runs
+// kernels on this same host thread, and a launch that succeeds does not clear
+// an error already stored there, so without it one of nvcomp's would come back
+// here and fail an append the GPU handled fine. A fault that poisoned the
+// context still reports: the read after the launch returns it again.
 #define CUDA_LAUNCH(...)                                                       \
-  ((__VA_ARGS__),                                                              \
+  (cudaGetLastError(),                                                         \
+   (__VA_ARGS__),                                                              \
    handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
 
 #ifdef __cplusplus
@@ -65,10 +72,30 @@ extern "C"
     log_log(LOG_ERROR,
             file,
             line,
-            "CUDA launch refused: %s %s\n",
+            "CUDA error: %s %s\n",
             cudaGetErrorString(ecode),
             expr);
     return 1;
+  }
+
+  // Kernel launches go through the runtime API, which uses the calling
+  // thread's context and refuses a stream that belongs to another one, so an
+  // entry point a caller can reach from any thread makes ctx current first.
+  // Pushing rather than setting leaves a caller that keeps its own context
+  // holding it again on return. Yields what to hand cu_ctx_pop.
+  static inline int cu_ctx_push(CUcontext ctx)
+  {
+    CUcontext current = NULL;
+    if (!ctx || (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ctx))
+      return 0;
+    return cuCtxPushCurrent(ctx) == CUDA_SUCCESS;
+  }
+
+  static inline void cu_ctx_pop(int pushed)
+  {
+    CUcontext prev = NULL;
+    if (pushed)
+      CUWARN(cuCtxPopCurrent(&prev));
   }
 
   // CUDA 13 added a CUctxCreateParams* argument in position 2; pass NULL to

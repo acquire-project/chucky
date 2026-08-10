@@ -3,10 +3,11 @@
 #include "gpu/stream.internal.h"
 #include "stream/dim_info.h"
 
-// When multiscale is enabled, uploads LOD plan shapes and builds
-// scatter/reduce LUTs; does nothing otherwise.
+// Refuses any level whose layout the scatter cannot place, then, when
+// multiscale is enabled, uploads LOD plan shapes and builds scatter/reduce
+// LUTs and sets levels->nlod.
 // Plan and level layouts must already be populated in lod->plan and
-// lod->layouts (from compute_stream_layouts). Sets levels->nlod.
+// lod->layouts (from compute_stream_layouts).
 // Returns 0 on success.
 int
 lod_state_init(struct lod_state* lod,
