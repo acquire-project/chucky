@@ -22,8 +22,15 @@
 // Wraps a kernel launch. A launch the driver turns away queues nothing and
 // leaves its reason in the runtime's per-thread error, which the driver-API
 // calls around it never see. Yields 0 when the launch was accepted.
+//
+// The clear first scopes the check to this launch. nvcomp and CUB also run
+// kernels on this host thread and leave their errors unread, and a launch that
+// succeeds does not clear what is already stored, so without the clear one of
+// theirs comes back here as a refused launch. A fault that poisoned the context
+// is unaffected: it is returned again by the call after the clear.
 #define CUDA_LAUNCH(...)                                                       \
-  ((__VA_ARGS__),                                                              \
+  (cudaGetLastError(),                                                         \
+   (__VA_ARGS__),                                                              \
    handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
 
 #ifdef __cplusplus
