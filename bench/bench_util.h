@@ -33,15 +33,15 @@ struct bench_config
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
   enum bench_backend backend;
-  enum dtype dtype;          // element type (default dtype_u16)
-  const int* chunk_ratios;   // power-of-2 distribution ratios; see
-                             // dims_budget_chunk_size for the -1/0/>0
-                             // conventions
-  size_t target_chunk_bytes; // 0 = use 1MB default
-  size_t min_chunk_bytes;    // auto-fit floor; 0 = no floor
-  size_t target_batch_bytes; // 0 = 512 MiB default; controls auto-K
-  size_t memory_budget;      // 0 = auto-detect
-  size_t min_shard_bytes;    // minimum uncompressed bytes per shard
+  enum dtype dtype;            // element type (default dtype_u16)
+  const int* chunk_ratios;     // power-of-2 distribution ratios; see
+                               // dims_budget_chunk_size for the -1/0/>0
+                               // conventions
+  size_t target_chunk_bytes;   // 0 = use 1MB default
+  size_t min_chunk_bytes;      // auto-fit floor; 0 = no floor
+  uint64_t target_batch_bytes; // 0 = 512 MiB default; controls auto-K
+  size_t memory_budget;        // 0 = auto-detect
+  size_t min_shard_bytes;      // minimum uncompressed bytes per shard
   uint32_t
     target_concurrent_shards; // cap on inner shard product (active files)
   uint32_t min_append_shards; // require at least N shards along the outer

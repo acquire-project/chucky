@@ -81,13 +81,11 @@ print_advise_failure(const struct advise_layout_diagnostic* diag,
                      size_t budget,
                      size_t min_shard_bytes);
 
-// The stream configuration holds this in 32 bits; the CLI rejects anything
-// that would not fit.
-static uint32_t
+static uint64_t
 resolved_batch_bytes(const struct bench_config* cfg)
 {
-  return cfg->target_batch_bytes ? (uint32_t)cfg->target_batch_bytes
-                                 : 512u << 20;
+  return cfg->target_batch_bytes ? cfg->target_batch_bytes
+                                 : (uint64_t)512 << 20;
 }
 
 static int
@@ -600,9 +598,9 @@ struct bench_cli_args
   enum lod_reduce_method reduce;
   enum bench_backend backend;
   enum dtype dtype;
-  size_t target_chunk_bytes;
-  size_t target_batch_bytes;
-  size_t memory_budget;
+  uint64_t target_chunk_bytes;
+  uint64_t target_batch_bytes;
+  uint64_t memory_budget;
   uint64_t frames;
   size_t append_elements; // 0 = default block
   int json_output;
@@ -614,12 +612,12 @@ struct bench_cli_args
   double s3_throughput_gbps;
   uint64_t io_bw_mbps;
   uint64_t io_latency_us;
-  size_t backpressure_bytes;
+  uint64_t backpressure_bytes;
   int max_threads;
 };
 
 static int
-read_size(const char* flag, const char* text, size_t* out)
+read_size(const char* flag, const char* text, uint64_t* out)
 {
   if (parse_bytes(text, out))
     return 1;
@@ -690,10 +688,6 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       if (!read_size(av[i], av[i + 1], &out->target_batch_bytes))
         return 1;
       ++i;
-      if ((uint64_t)out->target_batch_bytes > UINT32_MAX) {
-        fprintf(stderr, "--batch-bytes must be less than 4 GiB\n");
-        return 1;
-      }
     } else if (strcmp(av[i], "--memory-budget") == 0 && i + 1 < ac) {
       if (!read_size(av[i], av[i + 1], &out->memory_budget))
         return 1;

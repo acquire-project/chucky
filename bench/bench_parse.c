@@ -26,7 +26,7 @@ is_byte_tail(const char* s)
 }
 
 int
-parse_bytes(const char* s, size_t* out)
+parse_bytes(const char* s, uint64_t* out)
 {
   // strtoull would turn a negative into a huge size, so refuse it first.
   while (isspace((unsigned char)*s))
@@ -69,11 +69,7 @@ parse_bytes(const char* s, size_t* out)
       return 0;
     val <<= shift;
   }
-#if SIZE_MAX < ULLONG_MAX
-  if (val > SIZE_MAX)
-    return 0;
-#endif
-  *out = (size_t)val;
+  *out = val;
   return 1;
 }
 
