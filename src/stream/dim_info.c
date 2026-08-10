@@ -7,21 +7,30 @@
 #include <assert.h>
 #include <string.h>
 
-void
-dim_info_readable_append_sizes(const struct dim_info* info,
-                               uint64_t readable_append_chunks,
-                               uint64_t cursor_elements,
-                               int level,
-                               uint64_t* append_sizes)
+uint64_t
+dim_info_append_padding(const struct dim_info* info,
+                        uint64_t cursor_elements,
+                        int level)
 {
-  dim_info_decompose_append_sizes(info, readable_append_chunks, append_sizes);
-
-  // The final chunk of a stream is padded out to full size, so the grid
-  // position alone would report that padding as data.
   uint64_t appended[HALF_MAX_RANK];
   dim_info_final_append_sizes(info, cursor_elements, level, appended);
-  if (appended[0] < append_sizes[0])
-    append_sizes[0] = appended[0];
+  const uint64_t chunk_size = info->append.beg[0].chunk_size;
+  const uint64_t filled = appended[0] % chunk_size;
+  return filled ? chunk_size - filled : 0;
+}
+
+void
+dim_info_finalized_append_sizes(const struct dim_info* info,
+                                uint64_t finalized_append_chunks,
+                                uint64_t append_padding,
+                                uint64_t* append_sizes)
+{
+  dim_info_decompose_append_sizes(info, finalized_append_chunks, append_sizes);
+
+  // A flush that failed before delivering the chunk it padded records padding
+  // that no finalized chunk holds.
+  const uint64_t reach = append_sizes[0];
+  append_sizes[0] = append_padding < reach ? reach - append_padding : 0;
 }
 
 void

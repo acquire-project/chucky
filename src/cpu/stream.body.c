@@ -206,7 +206,7 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
           *v->metadata_update_clock = peek;
           for (int lv = 0; lv < v->levels->nlod; ++lv)
             if (shard_state_publish_append(
-                  &v->shard[lv], v->sink, &v->cl->dims, (uint8_t)lv, NULL))
+                  &v->shard[lv], v->sink, &v->cl->dims, (uint8_t)lv))
               goto Error;
         }
       }
@@ -314,6 +314,9 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       if (v->shard[lv].epoch_in_shard > 0)
         CHECK(Fail,
               finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
+      shard_state_record_flush_padding(
+        &v->shard[lv],
+        dim_info_append_padding(&v->cl->dims, *v->cursor_elements, lv));
     }
 
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
@@ -333,11 +336,8 @@ Drain:
     failed = 1;
   else if (v->sink->update_append)
     for (int lv = 0; lv < v->levels->nlod; ++lv)
-      if (shard_state_publish_append(&v->shard[lv],
-                                     v->sink,
-                                     &v->cl->dims,
-                                     (uint8_t)lv,
-                                     v->cursor_elements))
+      if (shard_state_publish_append(
+            &v->shard[lv], v->sink, &v->cl->dims, (uint8_t)lv))
         failed = 1;
 
   if (failed)

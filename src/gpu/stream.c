@@ -304,10 +304,14 @@ finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
 {
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
-        finalize_shards(
-          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+    struct shard_state* ss = &e->compress_agg.ar.shard[lv];
+    if (ss->epoch_in_shard > 0 &&
+        finalize_shards(ss, ctx->sink, ctx->shard_alignment)) {
       r = writer_error();
+      continue;
+    }
+    shard_state_record_flush_padding(
+      ss, dim_info_append_padding(&ctx->dims, ctx->cursor_elements, lv));
   }
   return r;
 }
@@ -339,11 +343,8 @@ publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
 
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv)
-    if (shard_state_publish_append(&e->compress_agg.ar.shard[lv],
-                                   ctx->sink,
-                                   &ctx->dims,
-                                   (uint8_t)lv,
-                                   &ctx->cursor_elements))
+    if (shard_state_publish_append(
+          &e->compress_agg.ar.shard[lv], ctx->sink, &ctx->dims, (uint8_t)lv))
       r = writer_error();
   return r;
 }
