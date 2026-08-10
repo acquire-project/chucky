@@ -7,6 +7,11 @@
 void
 platform_sleep_ns(int64_t ns);
 
+// Return the id of the running process. Used to keep temporary file names
+// from colliding between processes sharing a directory.
+uint64_t
+platform_process_id(void);
+
 // Return the OS page size in bytes.
 size_t
 platform_page_size(void);

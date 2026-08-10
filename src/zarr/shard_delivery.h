@@ -48,6 +48,11 @@ struct shard_state
   struct io_event finalized_fence;
   uint64_t fenced_append_chunks; // finalized count already waited for
 
+  // Set once a flush closes a shard before its append slots are full. The
+  // chunks after that gap sit past it, so the data no longer runs end to end
+  // and the element count the caller appended stops describing the extent.
+  int closed_partial_shard;
+
   // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
   // bulk HtoD upload covers all shards. NULL when page == 0.
   uint8_t* tail_buf_pool;

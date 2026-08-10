@@ -201,10 +201,16 @@ write_footer(struct active_shard* sh,
 }
 
 // The generation just closed out is now readable, once its writes retire.
+// This is how far along the append dim the shards now reach, not how many
+// chunks they hold: a flush that closes a half-full shard leaves the rest of
+// its slots empty, and the next generation still starts after them.
 static void
 record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {
-  ss->finalized_append_chunks += ss->epoch_in_shard;
+  ss->finalized_append_chunks =
+    ss->shard_epoch * ss->chunks_per_shard_append + ss->epoch_in_shard;
+  if (ss->epoch_in_shard < ss->chunks_per_shard_append)
+    ss->closed_partial_shard = 1;
   if (sink->record_fence)
     ss->finalized_fence = sink->record_fence(sink);
 }
@@ -221,7 +227,7 @@ shard_state_readable_append_chunks(struct shard_state* ss,
       sink->wait_fence(sink, ss->finalized_fence);
     ss->fenced_append_chunks = ss->finalized_append_chunks;
   }
-  return ss->finalized_append_chunks;
+  return ss->fenced_append_chunks;
 }
 
 int

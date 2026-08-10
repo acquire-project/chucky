@@ -5,6 +5,12 @@
 
 #include <malloc.h>
 
+uint64_t
+platform_process_id(void)
+{
+  return (uint64_t)GetCurrentProcessId();
+}
+
 size_t
 platform_page_size(void)
 {

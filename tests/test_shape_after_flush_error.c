@@ -189,11 +189,90 @@ Fail:
   return 1;
 }
 
+// A flush partway through a shard closes it with slots to spare. Later chunks
+// start after the empty slots, so the shape has to cover the gap or the frames
+// past it are invisible even though their shard carries a valid index.
+static int
+test_shape_covers_gap_from_midstream_flush(void)
+{
+  log_info("=== test_shape_covers_gap_from_midstream_flush ===");
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, OPENABLE_SHARDS, SHARD_CAP);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 4,
+      .chunk_size = 4,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 1,
+    .metadata_update_interval_s = 3600.0f,
+  };
+
+  uint16_t* data = NULL;
+  struct tile_stream_cpu* s = tile_stream_cpu_create(&config, &sink.base);
+  CHECK(Fail, s);
+
+  const uint64_t epoch_elems = tile_stream_cpu_layout(s)->epoch_elements;
+  const size_t epoch_bytes = epoch_elems * sizeof(uint16_t);
+  data = (uint16_t*)calloc(epoch_elems, sizeof(uint16_t));
+  CHECK(Fail, data);
+
+  struct writer* w = tile_stream_cpu_writer(s);
+  struct slice sl = { .beg = data, .end = (const char*)data + epoch_bytes };
+
+  // One epoch, then flush: shard 0 closes holding chunk 0 and an empty slot.
+  CHECK(Fail, writer_append(w, sl).error == 0);
+  CHECK(Fail, writer_flush(w).error == 0);
+  CHECK(Fail, sink.last_append_size0 == 1);
+
+  // Two more epochs land in shard 1, at append positions 2 and 3.
+  CHECK(Fail, writer_append(w, sl).error == 0);
+  CHECK(Fail, writer_append(w, sl).error == 0);
+  CHECK(Fail, writer_flush(w).error == 0);
+
+  log_info("  shape0=%llu", (unsigned long long)sink.last_append_size0);
+  CHECK(Fail, sink.last_append_size0 == 4);
+
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  free(data);
+  tile_stream_cpu_destroy(s);
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
   int err = 0;
   err |= test_shape_catches_up_after_flush_error();
   err |= test_shape_exact_on_clean_flush();
+  err |= test_shape_covers_gap_from_midstream_flush();
   return err;
 }

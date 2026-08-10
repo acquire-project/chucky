@@ -338,19 +338,21 @@ Drain: {
   if (sink_failed)
     failed = 1;
 
-  // The shape describes the shards that were finalized, not what the caller
-  // handed over, so it is worth writing even when the flush failed: it is the
-  // only way a reader learns about shards written since the last periodic
-  // update. A sink IO error is the exception — it leaves no way to tell which
-  // of those writes landed.
+  // The shape names only finalized shards, so it is truthful after a failure
+  // too, and is the only way a reader learns about shards written since the
+  // last periodic update. A sink IO error is the exception: which of those
+  // writes landed is unknowable.
   if (!sink_failed && v->sink->update_append) {
     const uint8_t na = dim_info_n_append(&v->cl->dims);
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
-      uint64_t readable =
-        shard_state_readable_append_chunks(&v->shard[lv], v->sink);
+      struct shard_state* ss = &v->shard[lv];
+      uint64_t readable = shard_state_readable_append_chunks(ss, v->sink);
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_readable_append_sizes(
-        &v->cl->dims, readable, *v->cursor_elements, lv, append_sizes);
+      if (ss->closed_partial_shard)
+        dim_info_decompose_append_sizes(&v->cl->dims, readable, append_sizes);
+      else
+        dim_info_readable_append_sizes(
+          &v->cl->dims, readable, *v->cursor_elements, lv, append_sizes);
       if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
         failed = 1;
     }

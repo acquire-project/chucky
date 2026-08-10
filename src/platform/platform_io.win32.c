@@ -89,20 +89,26 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
 // Windows refuses to replace a file another handle has open unless that
 // handle allowed delete sharing, which readers generally do not. A reader
 // holds the file only for the length of one read, so wait for it to close
-// instead of failing the write.
+// instead of failing the write. Bounded by elapsed time rather than a retry
+// count: Sleep(1) rounds up to the system timer tick, so counting attempts
+// would wait an order of magnitude longer than intended.
+#define RENAME_REPLACE_TIMEOUT_MS 2000
+
 int
 platform_rename_replace(const char* from, const char* to)
 {
   DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
-  for (int attempt = 0; attempt < 100; ++attempt) {
+  ULONGLONG deadline = GetTickCount64() + RENAME_REPLACE_TIMEOUT_MS;
+  for (;;) {
     if (MoveFileExA(from, to, flags))
       return 0;
     DWORD err = GetLastError();
     if (err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED)
       return -1;
+    if (GetTickCount64() >= deadline)
+      return -1;
     Sleep(1);
   }
-  return -1;
 }
 
 void

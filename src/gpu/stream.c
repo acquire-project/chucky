@@ -337,11 +337,14 @@ publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
   struct writer_result r = writer_ok();
   const uint8_t na = dim_info_n_append(&ctx->dims);
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
-    uint64_t readable = shard_state_readable_append_chunks(
-      &e->compress_agg.ar.shard[lv], ctx->sink);
+    struct shard_state* ss = &e->compress_agg.ar.shard[lv];
+    uint64_t readable = shard_state_readable_append_chunks(ss, ctx->sink);
     uint64_t append_sizes[HALF_MAX_RANK];
-    dim_info_readable_append_sizes(
-      &ctx->dims, readable, ctx->cursor_elements, lv, append_sizes);
+    if (ss->closed_partial_shard)
+      dim_info_decompose_append_sizes(&ctx->dims, readable, append_sizes);
+    else
+      dim_info_readable_append_sizes(
+        &ctx->dims, readable, ctx->cursor_elements, lv, append_sizes);
     if (ctx->sink->update_append(ctx->sink, (uint8_t)lv, na, append_sizes))
       r = writer_error();
   }
@@ -388,11 +391,10 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   if (sink_failed && !r.error)
     r = writer_error();
 
-  // The shape describes the shards that were finalized, not what the caller
-  // handed over, so it is worth writing even when the flush failed: it is the
-  // only way a reader learns about shards written since the last periodic
-  // update. A sink IO error is the exception — it leaves no way to tell which
-  // of those writes landed.
+  // The shape names only finalized shards, so it is truthful after a failure
+  // too, and is the only way a reader learns about shards written since the
+  // last periodic update. A sink IO error is the exception: which of those
+  // writes landed is unknowable.
   if (!sink_failed) {
     struct writer_result shape = publish_array_shape(e, ctx);
     if (shape.error && !r.error)

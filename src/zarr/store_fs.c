@@ -1,4 +1,5 @@
 #include "zarr/store_fs.h"
+#include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -40,9 +41,15 @@ fs_put(struct store* self, const char* key, const void* data, size_t len)
   if (fs_join(fs, key, &path))
     goto done;
 
+  // The process id keeps two writers sharing a directory off the same
+  // temporary name, where each would otherwise rename the other's half-written
+  // file over the key.
   uint64_t seq = atomic_fetch_add(&fs_put_sequence, 1);
-  if (strbuf_appendf(
-        &tmp_path, "%s.tmp.%llu", strbuf_cstr(&path), (unsigned long long)seq))
+  if (strbuf_appendf(&tmp_path,
+                     "%s.tmp.%llu.%llu",
+                     strbuf_cstr(&path),
+                     (unsigned long long)platform_process_id(),
+                     (unsigned long long)seq))
     goto done;
 
   platform_fd fd = platform_open_write(strbuf_cstr(&tmp_path), 0);
