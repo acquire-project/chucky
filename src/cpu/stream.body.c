@@ -348,10 +348,8 @@ Drain: {
       struct shard_state* ss = &v->shard[lv];
       uint64_t readable = shard_state_readable_append_chunks(ss, v->sink);
       uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_decompose_append_sizes(&v->cl->dims, readable, append_sizes);
-      if (!v->appended_after_flush)
-        dim_info_clamp_append_to_cursor(
-          &v->cl->dims, *v->cursor_elements, lv, append_sizes);
+      dim_info_readable_append_sizes(
+        &v->cl->dims, readable, *v->cursor_elements, lv, append_sizes);
       if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
         failed = 1;
     }

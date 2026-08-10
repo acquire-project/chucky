@@ -8,11 +8,16 @@
 #include <string.h>
 
 void
-dim_info_clamp_append_to_cursor(const struct dim_info* info,
-                                uint64_t cursor_elements,
-                                int level,
-                                uint64_t* append_sizes)
+dim_info_readable_append_sizes(const struct dim_info* info,
+                               uint64_t readable_append_chunks,
+                               uint64_t cursor_elements,
+                               int level,
+                               uint64_t* append_sizes)
 {
+  dim_info_decompose_append_sizes(info, readable_append_chunks, append_sizes);
+
+  // The final chunk of a stream is padded out to full size, so the grid
+  // position alone would report that padding as data.
   uint64_t appended[HALF_MAX_RANK];
   dim_info_final_append_sizes(info, cursor_elements, level, appended);
   if (appended[0] < append_sizes[0])

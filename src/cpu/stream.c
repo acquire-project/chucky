@@ -697,7 +697,6 @@ make_view(struct tile_stream_cpu* s)
     .layout = &s->layout,
     .levels = &s->levels,
     .cursor_elements = &s->cursor_elements,
-    .appended_after_flush = s->appended_after_flush,
     .total_element_limit = s->total_element_limit,
     .batch_accumulated = &s->batch_accumulated,
     .batch_active_masks = s->batch_active_masks,
@@ -743,10 +742,8 @@ cpu_append(struct writer* self, struct slice input)
 
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_append_body(&v, input);
-  if (s->flushed && r.rest.beg != input.beg) {
+  if (s->flushed && r.rest.beg != input.beg)
     s->flushed = 0;
-    s->appended_after_flush = 1;
-  }
   return r;
 }
 

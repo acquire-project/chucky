@@ -66,17 +66,21 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t total_append_chunks,
                                 uint64_t* append_sizes);
 
-// Hold append sizes down to the elements the caller actually appended, so the
-// padding of a final partial chunk is not reported as data.
+// Append dim sizes describing what a reader can see: how far along the append
+// dim the finalized chunks reach, held down to the elements the caller
+// appended. Both inputs describe things that already happened, so the result
+// is truthful whether or not the stream ended cleanly.
 //
-// Only valid while the written chunks run end to end. A flush pads the open
-// chunk and closes the shard, so anything appended afterwards sits past that
-// padding and the element count stops describing where the data ends.
+// Known gap: a flush partway through a chunk pads it and closes the shard, and
+// anything appended after that sits past the padding. The element count then
+// stops short of the real extent and this reports the short value, same as it
+// did before shard state was consulted at all.
 void
-dim_info_clamp_append_to_cursor(const struct dim_info* info,
-                                uint64_t cursor_elements,
-                                int level,
-                                uint64_t* append_sizes);
+dim_info_readable_append_sizes(const struct dim_info* info,
+                               uint64_t readable_append_chunks,
+                               uint64_t cursor_elements,
+                               int level,
+                               uint64_t* append_sizes);
 
 // Compute exact append dim sizes for final metadata.
 //

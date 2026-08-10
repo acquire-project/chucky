@@ -21,7 +21,6 @@ struct cpu_stream_view
 
   // Mutable per-array cursor + batch state
   uint64_t* cursor_elements;
-  int appended_after_flush;
   uint64_t total_element_limit;
   uint32_t* batch_accumulated;
   uint32_t* batch_active_masks;  // [K]
