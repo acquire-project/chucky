@@ -132,6 +132,7 @@ random_vu64(int count, uint64_t max)
 
 void
 build_lifted_layout(int rank,
+                    uint8_t n_append,
                     const uint64_t* dim_sizes,
                     const uint64_t* chunk_sizes,
                     const uint8_t* storage_order,
@@ -163,12 +164,16 @@ build_lifted_layout(int rank,
                          (int64_t)chunk_stride,
                          lifted_strides);
 
-  *out_chunks_per_epoch = (uint64_t)lifted_strides[0] / chunk_stride;
-  lifted_strides[0] = 0; // collapse epoch dim
+  uint64_t chunks_per_epoch = 1;
+  for (int i = n_append; i < rank; ++i)
+    chunks_per_epoch *= chunk_count[i];
+  for (int d = 0; d < n_append; ++d)
+    lifted_strides[2 * d] = 0; // an append dim's chunk position never moves
 
+  *out_chunks_per_epoch = chunks_per_epoch;
   *out_chunk_elements = chunk_elements;
   *out_chunk_stride = chunk_stride;
-  *out_epoch_elements = *out_chunks_per_epoch * chunk_elements;
+  *out_epoch_elements = chunks_per_epoch * chunk_elements;
 }
 
 uint64_t

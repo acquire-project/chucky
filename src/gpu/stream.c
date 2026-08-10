@@ -96,7 +96,6 @@ engine_dispatch_ingest(struct stream_engine* e,
     };
     return ingest_dispatch_scatter(&e->stage,
                                    &ctx->layout,
-                                   &ctx->layout_gpu,
                                    dst,
                                    first_element,
                                    dtype_bpe(ctx->config.dtype),

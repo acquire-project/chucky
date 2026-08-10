@@ -52,7 +52,6 @@ struct scatter_destination
 int
 ingest_dispatch_scatter(struct staging_state* stage,
                         const struct tile_stream_layout* layout,
-                        const struct tile_stream_layout_gpu* layout_gpu,
                         struct scatter_destination dst,
                         uint64_t first_element,
                         size_t bpe,
