@@ -578,12 +578,13 @@ Fail0:
 }
 
 // 7. A failed delivery leaves the stream unable to say where new data belongs,
-// so it stops taking any. Queued writes are still drained, but the array shape
-// is not written: it would claim frames that never reached the sink.
+// so it stops taking any. Queued writes are still drained and the array shape
+// is still written, but it names only what reached a closed-out shard — here
+// the very first delivery failed, so it names nothing.
 static int
-test_batch_failed_delivery_writes_no_shape(void)
+test_batch_failed_delivery_claims_nothing(void)
 {
-  log_info("=== test_batch_failed_delivery_writes_no_shape ===");
+  log_info("=== test_batch_failed_delivery_claims_nothing ===");
 
   struct test_shard_sink css;
   // Far too small for one batch, so a shard write fails during delivery.
@@ -614,7 +615,8 @@ test_batch_failed_delivery_writes_no_shape(void)
            css.update_append_count,
            css.finalize_count);
   CHECK(Fail2, fr.error != 0);
-  CHECK(Fail2, css.update_append_count == 0);
+  CHECK(Fail2, css.update_append_count == 1);
+  CHECK(Fail2, css.last_append_size0 == 0);
 
   free(src);
   tile_stream_gpu_destroy(s);
@@ -774,7 +776,7 @@ RUN_GPU_TESTS(
   { "batch_partial_flush", test_batch_partial_flush },
   { "batch_3epochs_flush", test_batch_3epochs_flush },
   { "batch_multiscale_unaligned_K", test_batch_multiscale_unaligned_K },
-  { "batch_failed_delivery_writes_no_shape",
-    test_batch_failed_delivery_writes_no_shape },
+  { "batch_failed_delivery_claims_nothing",
+    test_batch_failed_delivery_claims_nothing },
   { "host_coordinator_hold", test_host_coordinator_hold },
   { "worker_unavailable_fallback", test_worker_unavailable_fallback }, )

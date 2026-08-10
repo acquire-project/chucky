@@ -1001,14 +1001,21 @@ test_midstream_metadata_update(const char* tmpdir)
 
     // Of the 6 epochs kicked, the two still sitting in their slots have not
     // been delivered, and a slot is always drained before it is refilled, so
-    // the extent the live metadata may publish is exact.
+    // the delivered count is exact. Of those, only the chunks filling a whole
+    // shard may be advertised: the remainder sits in a shard that has no
+    // index on disk yet (#123).
     const uint64_t epochs_kicked =
       total / tile_stream_gpu_layout(s)->epoch_elements;
+    const uint64_t chunks_delivered = epochs_kicked - 2;
+    const uint64_t finalized_chunks =
+      (chunks_delivered / dims[0].chunks_per_shard) * dims[0].chunks_per_shard;
+    CHECK(Fail4, finalized_chunks < chunks_delivered); // else nothing is gated
+
     char expected_shape[64];
     snprintf(expected_shape,
              sizeof(expected_shape),
              "\"shape\":[%llu,%llu,%llu]",
-             (unsigned long long)((epochs_kicked - 2) * dims[0].chunk_size),
+             (unsigned long long)(finalized_chunks * dims[0].chunk_size),
              (unsigned long long)dims[1].size,
              (unsigned long long)dims[2].size);
 
@@ -1018,6 +1025,41 @@ test_midstream_metadata_update(const char* tmpdir)
 
     CHECK(Fail4, has_shape);
     CHECK(Fail4, is_array);
+
+    // Follow the advertised extent into the shard files the way a reader
+    // would. Every shard it names must carry a real index; a shard still
+    // being written has chunk data where the index belongs.
+    const uint64_t append_shards =
+      finalized_chunks / dims[0].chunks_per_shard;
+    const size_t chunks_per_shard_total = (size_t)dims[0].chunks_per_shard *
+                                          dims[1].chunks_per_shard *
+                                          dims[2].chunks_per_shard;
+    const int x_shards =
+      (int)ceildiv(ceildiv(dims[2].size, dims[2].chunk_size),
+                   dims[2].chunks_per_shard);
+    for (uint64_t sz = 0; sz < append_shards; ++sz) {
+      for (int sx = 0; sx < x_shards; ++sx) {
+        char spath[4096];
+        snprintf(spath,
+                 sizeof(spath),
+                 "%s/0/c/%llu/0/%d",
+                 tmpdir,
+                 (unsigned long long)sz,
+                 sx);
+        CHECK(Fail4, test_file_exists(spath));
+
+        uint8_t* shard_data;
+        size_t shard_len;
+        CHECK(Fail4, read_file_all(spath, &shard_data, &shard_len) == 0);
+        int index_ok =
+          shard_index_check_crc(shard_data, shard_len, chunks_per_shard_total) ==
+          0;
+        free(shard_data);
+        CHECK(Fail4, index_ok);
+      }
+    }
+    log_info("  %llu advertised shard(s) carry a valid index",
+             (unsigned long long)(append_shards * x_shards));
   }
 
   // Now flush and verify final state

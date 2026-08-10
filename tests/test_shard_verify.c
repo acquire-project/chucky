@@ -1,6 +1,7 @@
 #include "test_shard_verify.h"
 
 #include "util/prelude.h"
+#include "zarr/crc32c.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,20 @@ shard_index_parse(const uint8_t* buf,
     memcpy(&sizes[i], index_ptr + i * 16 + 8, sizeof(uint64_t));
   }
   return 0;
+}
+
+int
+shard_index_check_crc(const uint8_t* buf,
+                      size_t shard_size,
+                      size_t chunks_per_shard)
+{
+  size_t index_data_bytes = chunks_per_shard * 2 * sizeof(uint64_t);
+  if (shard_size <= index_data_bytes + 4)
+    return 1;
+  const uint8_t* index_ptr = buf + shard_size - index_data_bytes - 4;
+  uint32_t stored;
+  memcpy(&stored, index_ptr + index_data_bytes, sizeof(stored));
+  return crc32c(index_ptr, index_data_bytes) == stored ? 0 : 1;
 }
 
 int

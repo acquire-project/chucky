@@ -34,6 +34,7 @@ struct test_shard_sink
   int open_count;
   int finalize_count;
   int update_append_count;
+  uint64_t last_append_size0; // extent along the growing dim, last published
   // Counts write_direct vs write calls so tests can verify the deliver path
   // takes the zero-copy direct path on aligned runs.
   int write_count;

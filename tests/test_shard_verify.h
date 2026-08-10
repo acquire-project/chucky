@@ -14,6 +14,15 @@ shard_index_parse(const uint8_t* buf,
                   uint64_t* offsets,
                   uint64_t* sizes);
 
+// Check the trailing index block against its stored checksum. A shard that
+// has not been closed out has chunk data where the index belongs, so this is
+// how a test tells a finalized shard from one still being written.
+// Returns 0 if the checksum matches, 1 otherwise.
+int
+shard_index_check_crc(const uint8_t* buf,
+                      size_t shard_size,
+                      size_t chunks_per_shard);
+
 // Verify that offsets are monotonically non-decreasing, starting at 0.
 // offsets[0..n] inclusive (n+1 entries).
 // Returns 0 on success, 1 on failure.

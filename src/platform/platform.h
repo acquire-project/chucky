@@ -7,6 +7,9 @@
 void
 platform_sleep_ns(int64_t ns);
 
+uint64_t
+platform_process_id(void);
+
 // Return the OS page size in bytes.
 size_t
 platform_page_size(void);

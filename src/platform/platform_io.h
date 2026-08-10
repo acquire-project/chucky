@@ -43,6 +43,15 @@ platform_pwrite(platform_fd fd,
 int
 platform_write(platform_fd fd, const void* buf, size_t nbytes);
 
+// Delete a single file. Returns 0 on success, -1 on error.
+int
+platform_remove_file(const char* path);
+
+// Replaces to if it exists. Atomic for readers of to, as long as both paths
+// are on the same filesystem. Returns 0 on success, -1 on error.
+int
+platform_rename_replace(const char* from, const char* to);
+
 // Close a file descriptor/handle.
 void
 platform_close(platform_fd fd);

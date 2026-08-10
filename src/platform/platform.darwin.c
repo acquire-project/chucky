@@ -7,6 +7,12 @@
 #include <time.h>
 #include <unistd.h>
 
+uint64_t
+platform_process_id(void)
+{
+  return (uint64_t)getpid();
+}
+
 size_t
 platform_page_size(void)
 {

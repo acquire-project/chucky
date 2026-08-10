@@ -204,17 +204,10 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
         float elapsed = platform_toc(&peek);
         if (elapsed >= v->config->metadata_update_interval_s) {
           *v->metadata_update_clock = peek;
-          const uint8_t na = dim_info_n_append(&v->cl->dims);
-          for (int lv = 0; lv < v->levels->nlod; ++lv) {
-            struct shard_state* ss = &v->shard[lv];
-            uint64_t total_ac = ss->shard_epoch * ss->chunks_per_shard_append +
-                                ss->epoch_in_shard;
-            uint64_t append_sizes[HALF_MAX_RANK];
-            dim_info_decompose_append_sizes(
-              &v->cl->dims, total_ac, append_sizes);
-            if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
+          for (int lv = 0; lv < v->levels->nlod; ++lv)
+            if (shard_state_publish_append(
+                  &v->shard[lv], v->sink, &v->cl->dims, (uint8_t)lv, NULL))
               goto Error;
-          }
         }
       }
     }
@@ -334,22 +327,21 @@ Fail:
   failed = 1;
 
 Drain:
+  // A sink IO error is the one case the shape is withheld: which writes landed
+  // is unknowable.
   if (shard_sink_drain(v->sink))
     failed = 1;
+  else if (v->sink->update_append)
+    for (int lv = 0; lv < v->levels->nlod; ++lv)
+      if (shard_state_publish_append(&v->shard[lv],
+                                     v->sink,
+                                     &v->cl->dims,
+                                     (uint8_t)lv,
+                                     v->cursor_elements))
+        failed = 1;
+
   if (failed)
     return writer_error();
-
-  // Final metadata.
-  if (v->sink->update_append) {
-    const uint8_t na = dim_info_n_append(&v->cl->dims);
-    for (int lv = 0; lv < v->levels->nlod; ++lv) {
-      uint64_t append_sizes[HALF_MAX_RANK];
-      dim_info_final_append_sizes(
-        &v->cl->dims, *v->cursor_elements, lv, append_sizes);
-      if (v->sink->update_append(v->sink, (uint8_t)lv, na, append_sizes))
-        return writer_error();
-    }
-  }
 
   if (v->sink->flush && v->sink->flush(v->sink))
     return writer_error();

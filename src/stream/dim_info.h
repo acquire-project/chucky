@@ -66,6 +66,20 @@ dim_info_decompose_append_sizes(const struct dim_info* info,
                                 uint64_t total_append_chunks,
                                 uint64_t* append_sizes);
 
+// Append dim sizes for data a reader can reach: the smaller of how far the
+// finalized chunks reach and how many elements the caller appended. Both
+// describe work that already happened, so neither claims data that a failed
+// flush never delivered.
+//
+// Underreports once a flush lands partway through a chunk: the padding and
+// skipped shard slots push later chunks past where the element count stops.
+void
+dim_info_readable_append_sizes(const struct dim_info* info,
+                               uint64_t readable_append_chunks,
+                               uint64_t cursor_elements,
+                               int level,
+                               uint64_t* append_sizes);
+
 // Compute exact append dim sizes for final metadata.
 //
 // Bounded append dims (1..n_append-1) report their declared size.

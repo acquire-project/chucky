@@ -86,6 +86,36 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
+int
+platform_remove_file(const char* path)
+{
+  return DeleteFileA(path) ? 0 : -1;
+}
+
+// Windows refuses to replace a file another handle has open unless that
+// handle allowed delete sharing, which readers generally do not. A reader
+// holds it only for one read, so waiting beats failing the write. The bound is
+// elapsed time, not attempts: Sleep(1) rounds up to the system timer tick. It
+// stays short because an ingest thread is usually waiting on it.
+#define RENAME_REPLACE_TIMEOUT_MS 250
+
+int
+platform_rename_replace(const char* from, const char* to)
+{
+  DWORD flags = MOVEFILE_REPLACE_EXISTING;
+  ULONGLONG deadline = GetTickCount64() + RENAME_REPLACE_TIMEOUT_MS;
+  for (;;) {
+    if (MoveFileExA(from, to, flags))
+      return 0;
+    DWORD err = GetLastError();
+    if (err != ERROR_SHARING_VIOLATION && err != ERROR_ACCESS_DENIED)
+      return -1;
+    if (GetTickCount64() >= deadline)
+      return -1;
+    Sleep(1);
+  }
+}
+
 void
 platform_close(platform_fd fd)
 {

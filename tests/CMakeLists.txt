@@ -55,7 +55,7 @@ add_gpu_test_lib(test_gpu_helpers test_gpu_helpers.c test_gpu_helpers.h LINKS st
 
 # Shared shard verification helpers (index parse, decompress+verify)
 add_test_lib(test_shard_verify test_shard_verify.c test_shard_verify.h)
-target_link_libraries(test_shard_verify PUBLIC chucky_log Zstd::Zstd)
+target_link_libraries(test_shard_verify PUBLIC chucky_log crc32c Zstd::Zstd)
 
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
@@ -158,7 +158,7 @@ add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_dr
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
-add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group test_platform chucky_log)
+add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform test_platform chucky_log)
 add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api stream_cpu writer test_platform chucky_log)
 add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs store_api test_platform chucky_log)
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
@@ -182,6 +182,7 @@ add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log)
 add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log)
+add_test_exe(test_shape_after_flush_error test_shape_after_flush_error.c stream_cpu test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)

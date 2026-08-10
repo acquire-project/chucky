@@ -110,12 +110,26 @@ metering_required_shard_alignment(const struct shard_sink* self)
   return ms->inner->required_shard_alignment(ms->inner);
 }
 
+static int
+metering_update_append(struct shard_sink* self,
+                       uint8_t level,
+                       uint8_t n_append,
+                       const uint64_t* append_sizes)
+{
+  // Kept out of the sink metric: it pairs times with byte counts, and a
+  // zero-byte sample becomes the best entry and reports the stage at no
+  // bandwidth at all.
+  struct metering_sink* ms = (struct metering_sink*)self;
+  return ms->inner->update_append(ms->inner, level, n_append, append_sizes);
+}
+
 void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
   *ms = (struct metering_sink){
     .base = {
       .open = metering_open,
+      .update_append = inner->update_append ? metering_update_append : NULL,
       .record_fence = inner->record_fence ? metering_record_fence : NULL,
       .wait_fence = inner->wait_fence ? metering_wait_fence : NULL,
       .has_error = inner->has_error ? metering_has_error : NULL,

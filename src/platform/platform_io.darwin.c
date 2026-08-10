@@ -84,6 +84,18 @@ platform_write(platform_fd fd, const void* buf, size_t nbytes)
   return 0;
 }
 
+int
+platform_remove_file(const char* path)
+{
+  return unlink(path) == 0 ? 0 : -1;
+}
+
+int
+platform_rename_replace(const char* from, const char* to)
+{
+  return rename(from, to) == 0 ? 0 : -1;
+}
+
 void
 platform_close(platform_fd fd)
 {

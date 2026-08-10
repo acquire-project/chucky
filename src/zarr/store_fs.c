@@ -1,4 +1,5 @@
 #include "zarr/store_fs.h"
+#include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -21,21 +22,44 @@ fs_join(const struct store_fs* fs, const char* key, struct strbuf* out)
   return strbuf_appendf(out, "%s/%s", strbuf_cstr(&fs->root), key);
 }
 
+// Written to a sibling temporary file and renamed into place, so a reader
+// opening the key while a stream is running sees either the whole previous
+// contents or the whole new ones, never a truncated or half-written file.
+// Not flushed to the device first: shard data is not flushed either, so
+// forcing the metadata out would cost a journal commit mid-stream to make it
+// outlive the data it describes.
 static int
 fs_put(struct store* self, const char* key, const void* data, size_t len)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
   struct strbuf path = { 0 };
+  struct strbuf tmp_path = { 0 };
   int rc = 1;
   if (fs_join(fs, key, &path))
     goto done;
 
-  platform_fd fd = platform_open_write(strbuf_cstr(&path), 0);
+  // The process id keeps two writers sharing a directory off the same
+  // temporary name, where each would otherwise rename the other's
+  // half-written file over the key.
+  if (strbuf_appendf(&tmp_path,
+                     "%s.tmp.%llu",
+                     strbuf_cstr(&path),
+                     (unsigned long long)platform_process_id()))
+    goto done;
+
+  platform_fd fd = platform_open_write(strbuf_cstr(&tmp_path), 0);
   if (fd == PLATFORM_FD_INVALID)
     goto done;
-  rc = platform_write(fd, data, len) != 0;
+  int written = platform_write(fd, data, len) == 0;
   platform_close(fd);
+
+  if (written &&
+      platform_rename_replace(strbuf_cstr(&tmp_path), strbuf_cstr(&path)) == 0)
+    rc = 0;
+  else
+    platform_remove_file(strbuf_cstr(&tmp_path));
 done:
+  strbuf_free(&tmp_path);
   strbuf_free(&path);
   return rc;
 }

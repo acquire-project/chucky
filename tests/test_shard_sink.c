@@ -84,9 +84,9 @@ test_sink_update_append(struct shard_sink* self,
 {
   (void)level;
   (void)n_append;
-  (void)append_sizes;
   struct test_shard_sink* s = (struct test_shard_sink*)self;
   s->update_append_count++;
+  s->last_append_size0 = append_sizes[0];
   return 0;
 }
 
