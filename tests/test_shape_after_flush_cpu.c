@@ -13,7 +13,6 @@
 #include "util/prelude.h"
 
 #include <stdlib.h>
-#include <string.h>
 
 #define SHARD_CAP (1 << 20)
 
@@ -52,14 +51,6 @@ plane_fill(int round)
   return (uint16_t)(0xa500 + round);
 }
 
-// Elements of one shard's payload, which with CODEC_NONE and no alignment is
-// the raw chunk data starting at offset 0.
-static const uint16_t*
-shard_elements(const struct test_shard_sink* sink, int shard)
-{
-  return (const uint16_t*)sink->writers[0][shard].buf;
-}
-
 // Where the two planes of shape_covers_padded_chunk_after_flush end up. The
 // first flush leaves the append cursor one plane into a chunk, so round 1's
 // plane lands at that chunk's second plane, at append position 7 — which only a
@@ -69,7 +60,9 @@ shard_elements(const struct test_shard_sink* sink, int shard)
 static int
 verify_planes_in_padded_chunk(const struct test_shard_sink* sink)
 {
-  const uint16_t* el = shard_elements(sink, 1);
+  // With CODEC_NONE and no alignment, a shard's payload is its raw chunk data
+  // starting at offset 0.
+  const uint16_t* el = (const uint16_t*)sink->writers[0][1].buf;
   for (uint64_t i = 0; i < PLANE_ELEMS; ++i) {
     CHECK(Fail, el[i] == plane_fill(0));
     CHECK(Fail, el[PLANE_ELEMS + i] == plane_fill(1));
