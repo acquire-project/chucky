@@ -89,10 +89,6 @@ aggregate_cub_temp_bytes(uint64_t count, size_t* out_bytes)
     return 0;
   }
   *out_bytes = 0;
-  // The memory estimate reaches this without a device, and refusing to size a
-  // layout there would report a valid configuration as a bad one. A query that
-  // could not answer leaves 0, which only understates the estimate by the
-  // scratch term; the allocating path checks the same query for real.
   (void)cub::DeviceScan::ExclusiveSum(
     nullptr, *out_bytes, (size_t*)nullptr, (size_t*)nullptr, (int)count);
   return 0;
@@ -328,8 +324,8 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
   {
     size_t temp = slot->temp_bytes;
-    // A scan that never ran leaves the offsets the last batch wrote, and the
-    // passes below would pack this batch's chunks at those.
+    // A scan that never ran leaves the last batch's offsets, and the passes
+    // below would pack this batch's chunks at those.
     CUDA_CALL_OR(Error,
                  cub::DeviceScan::ExclusiveSum(slot->d_temp,
                                                temp,

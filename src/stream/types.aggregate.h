@@ -24,7 +24,6 @@ extern "C"
   struct aggregate_layout;
   size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
 
-  // Aggregate layout fields.
   struct aggregate_layout
   {
     uint8_t lifted_rank; // 2 * (rank - n_append)

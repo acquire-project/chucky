@@ -309,9 +309,8 @@ struct stream_engine
   struct lod_state lod;               // per-array; overwritten on array switch
   struct threadpool* copy_pool;       // staging-copy helpers (append body)
   struct gpu_delivery delivery;       // drain worker (pipelined schedule)
-  // Owns the streams and device memory. Held here rather than read back from
-  // the delivery worker, which zeroes its copy when it fails to start and
-  // leaves the engine running without it.
+  // The context the streams and device memory belong to. The drain worker
+  // clears its own copy when it fails to start, and the engine runs on.
   CUcontext cuda;
   struct stream_metrics metrics;
   struct platform_clock metadata_update_clock;

@@ -118,7 +118,7 @@ ingest_collect_scatter_timing(struct staging_state* stage,
 }
 
 // Claims the next measurement in the ring and opens it. An entry still
-// outstanding here has outlived its slack, so count it rather than lose it
+// outstanding has outlived its slack, so count it rather than lose it
 // silently. Returns NULL when the start could not be recorded.
 static struct scatter_timing*
 timing_begin(struct staging_state* stage, uint64_t bytes, CUstream compute)

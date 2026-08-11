@@ -19,15 +19,11 @@
     handle_curesult(LOG_WARN, (e), __FILE__, __LINE__, #e);                    \
   } while (0)
 
-// Wraps a kernel launch. A launch the driver turns away queues nothing and
-// leaves its reason in the runtime's per-thread error, which the driver-API
-// calls around it never see. Yields 0 when the launch was accepted.
-//
-// Taking the pending error first is what scopes the check to this launch:
-// nvcomp runs kernels on this same host thread, and a launch that succeeds
-// leaves an error already stored there for this check to find. A fault that
-// poisoned the context still reports, since the read after the launch returns
-// it again.
+// Queues a kernel launch and yields 0 when the driver accepted it. The
+// surrounding driver-API calls never see a refusal, which lands in the
+// runtime's per-thread error instead. Taking the pending error first scopes
+// the check to this launch: nvcomp runs kernels on the same thread, and a
+// launch that succeeds leaves an error already stored there.
 #define CUDA_LAUNCH(...)                                                       \
   (take_stale_cudaerror(__FILE__, __LINE__),                                   \
    (__VA_ARGS__),                                                              \
@@ -36,7 +32,7 @@
 // Wraps a runtime-API call that returns its own status. Yields 0 on success.
 #define CUDA_CALL(e) handle_cudaerror((e), __FILE__, __LINE__, #e)
 
-// The same two, in the goto form CU uses, for the sites that clean up.
+// The same two in goto form, for the sites that clean up.
 #define CUDA_LAUNCH_OR(lbl, ...)                                               \
   do {                                                                         \
     if (CUDA_LAUNCH(__VA_ARGS__))                                              \
@@ -94,11 +90,10 @@ extern "C"
     return 1;
   }
 
-  // Takes the error another runtime user left unread, so the check after the
+  // Takes an error another runtime user left unread, so the check after the
   // launch answers for the launch alone. Debug rather than warn: a sticky
-  // fault is returned again by every later call, so warning here would print
-  // once per launch for the rest of the run, and the launch's own check
-  // reports that fault anyway.
+  // fault comes back from every later call, and the launch's own check
+  // reports it.
   static inline void take_stale_cudaerror(const char* file, int line)
   {
     const cudaError_t stale = cudaGetLastError();
@@ -110,15 +105,13 @@ extern "C"
               cudaGetErrorString(stale));
   }
 
-  // Kernel launches go through the runtime API, which uses the calling
-  // thread's context and refuses a stream that belongs to another one, so an
-  // entry point a caller can reach from any thread makes ctx current first.
-  // Pushing rather than setting leaves a caller that keeps its own context
-  // holding it again on return.
+  // Makes ctx current for work on this thread. A kernel launch goes through
+  // the runtime API, which uses the calling thread's context and refuses a
+  // stream belonging to another. Pushing rather than setting leaves a caller
+  // that keeps its own context holding it again on return.
   //
-  // Yields 1 when it pushed, 0 when the thread already holds ctx, and -1 when
-  // the push failed. Work done after a -1 would run against whatever context
-  // the thread does hold, so callers that can report an error should.
+  // Yields 1 when it pushed, 0 when the thread already holds ctx, -1 when the
+  // push failed. After a -1 the work would run on the wrong context.
   static inline int cu_ctx_push(CUcontext ctx)
   {
     CUcontext current = NULL;

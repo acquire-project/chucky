@@ -20,11 +20,9 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t shard_alignment,
                        struct computed_stream_layouts* out);
 
-// Compute host-side tile_stream_layout fields for a single level (no GPU).
-// level_shape is that level's shape in elements; alignment is the codec's
-// chunk alignment, which sets how far each chunk is padded. storage_order is
-// the forward permutation: storage_order[j] is the dimension stored at
-// position j.
+// One level's layout, host-side. level_shape is that level's shape in
+// elements, alignment is how far each chunk is padded, and storage_order is
+// the forward permutation: entry j is the dimension stored at position j.
 // Returns 0 on success, 1 on overflow.
 int
 compute_level_layout(struct tile_stream_layout* layout,

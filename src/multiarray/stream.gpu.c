@@ -199,7 +199,7 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       .rest = data,
     };
 
-  // One exit from here on, so the context is popped once however this goes.
+  // One exit from here, so the context is popped once.
   struct multiarray_writer_result out = { .error = multiarray_writer_ok,
                                           .rest = data };
 

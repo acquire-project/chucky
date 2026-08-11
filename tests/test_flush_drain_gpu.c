@@ -183,9 +183,8 @@ struct foreign_args
   int consumed_all; // 1 if the append took the whole slice
 };
 
-// The writer runs on whatever thread the caller hands it. Kernel launches go
-// through the runtime API, which uses the calling thread's context, so a
-// thread holding a context of its own must come back holding it.
+// The writer runs on whatever thread the caller hands it, and a thread
+// holding a context of its own must come back holding it.
 static void
 foreign_context_thread_fn(void* arg)
 {
@@ -196,8 +195,8 @@ foreign_context_thread_fn(void* arg)
   }
 
   struct writer_result r = writer_append(fa->w, fa->input);
-  // An append that reports success while consuming nothing is the shape a
-  // wrong-context run would take, so the whole slice has to be gone.
+  // Reporting success while consuming nothing is the shape a wrong-context
+  // run would take, so the whole slice has to be gone.
   fa->consumed_all = r.error == 0 && r.rest.beg == fa->input.end;
   if (r.error == 0)
     r = writer_flush(fa->w);
@@ -266,8 +265,8 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
   CUcontext mine = NULL;
   CU(Cleanup, cuCtxGetCurrent(&mine));
   CU(Cleanup, cu_ctx_create(&other, 0, dev));
-  // Creating a context makes it current here too. Only the writer's thread
-  // should hold it, so take this one back to the stream's.
+  // Creating a context makes it current here too, and only the writer's
+  // thread should hold it.
   CU(Cleanup, cuCtxSetCurrent(mine));
 
   struct foreign_args fa = {

@@ -63,9 +63,9 @@ cpu_perm(uint64_t i,
          const uint64_t* shape,
          const int64_t* strides);
 
-// Chunk alignment for test layouts. Production pads each chunk out to the
-// codec's alignment; a value wider than the test chunks keeps that padding
-// visible, which an alignment of a few bytes would not.
+// Chunk alignment for test layouts. The codec's own alignment is a few bytes,
+// which pads nothing at these chunk sizes; a wider one keeps the padding a
+// real stream has.
 #define TEST_CHUNK_ALIGNMENT 4096
 
 // The layout the stream computes for one level, so tests scatter with the
