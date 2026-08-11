@@ -610,6 +610,8 @@ test_batch_failed_delivery_claims_nothing(void)
   CHECK(Fail2, again.error != 0);
 
   struct writer_result fr = writer_flush(tile_stream_gpu_writer(s));
+  // The shape publishes in close, which runs even after a failed flush.
+  writer_close(tile_stream_gpu_writer(s));
   log_info("  flush err=%d update_append=%d finalize=%d",
            fr.error,
            css.update_append_count,

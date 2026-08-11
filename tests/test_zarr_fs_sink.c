@@ -788,10 +788,12 @@ test_unbounded_metadata_update(const char* tmpdir)
 
   r = writer_flush(tile_stream_gpu_writer(s));
   CHECK(Fail4, r.error == 0);
+  // The extent publishes in close, not flush.
+  CHECK(Fail4, writer_close(tile_stream_gpu_writer(s)).error == 0);
 
   test_zarr_sink_flush(&z);
 
-  // After flush, zarr.json shape[0] should reflect data written.
+  // After closing, zarr.json shape[0] should reflect data written.
   // 4 epochs of chunk_size=2 → shape[0] = 8.
   {
     char path[4096];

@@ -73,6 +73,8 @@ run_shape_case(const struct shape_case* c)
   }
 
   CHECK(Fail, writer_flush(w).error == 0);
+  // flush queues the writes; the extent is published once they have landed.
+  CHECK(Fail, writer_close(w).error == 0);
   log_info("  updates=%d shape0=%llu",
            sink.update_append_count,
            (unsigned long long)sink.last_append_size0);
@@ -88,6 +90,7 @@ run_shape_case(const struct shape_case* c)
     CHECK(Fail, r.rest.beg == sl.beg && r.rest.end == sl.end);
   }
   CHECK(Fail, writer_flush(w).error == 0);
+  CHECK(Fail, writer_close(w).error == 0);
   CHECK(Fail, sink.update_append_count == 1);
   CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
 
