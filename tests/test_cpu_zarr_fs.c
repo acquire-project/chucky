@@ -1028,6 +1028,8 @@ test_unbuffered_invariant(const char* tmpdir)
     struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
+  // The sink's store is released next, so the stream has to be done with it.
+  CHECK(Fail4, writer_close(tile_stream_cpu_writer(s)).error == 0);
 
   test_zarr_sink_close(&z);
 

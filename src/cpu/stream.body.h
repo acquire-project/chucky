@@ -68,10 +68,21 @@ struct cpu_stream_view
 struct writer_result
 cpu_stream_append_body(struct cpu_stream_view* v, struct slice input);
 
-// Shared flush body: partial epoch + batch + append drain + shard finalize +
-// metadata. Used by both single-array and multiarray CPU streams.
+// Shared flush body: partial epoch + batch + append drain + shard finalize.
+// Used by both single-array and multiarray CPU streams.
+//
+// Queues the writes and returns; it does not wait for them to retire. Pair it
+// with cpu_stream_close_body before the buffers those writes point into are
+// freed.
 struct writer_result
 cpu_stream_flush_body(struct cpu_stream_view* v);
+
+// Waits for queued writes to retire, then publishes the append extent and lets
+// the sink write its own metadata. Runs once per array at teardown, after every
+// flush body has queued its work, so several arrays' writes overlap instead of
+// draining one at a time.
+struct writer_result
+cpu_stream_close_body(struct cpu_stream_view* v);
 
 // Flush only the accumulated batch (no shard finalize or metadata).
 // For multiarray array-switch: delivers batch data then resets accumulated.

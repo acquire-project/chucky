@@ -20,6 +20,8 @@ static struct writer_result
 cpu_append(struct writer* self, struct slice input);
 static struct writer_result
 cpu_flush_final(struct writer* self);
+static struct writer_result
+cpu_close_final(struct writer* self);
 static struct cpu_stream_view
 make_view(struct tile_stream_cpu* s);
 
@@ -282,6 +284,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
 
   s->writer.append = cpu_append;
   s->writer.flush = cpu_flush_final;
+  s->writer.close = cpu_close_final;
 
   platform_toc(&s->metadata_update_clock);
 
@@ -301,15 +304,18 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
-  if (!s->flushed) {
+  {
     struct cpu_stream_view v = make_view(s);
-    struct writer_result r = cpu_stream_flush_body(&v);
-    if (r.error)
-      log_error("CPU stream auto-flush failed during destroy");
-    // A bailed flush can leave queued IO pointing into buffers teardown frees.
-    if (s->shard_sink)
-      shard_sink_drain(s->shard_sink);
-    s->flushed = 1;
+    if (!s->flushed) {
+      if (cpu_stream_flush_body(&v).error)
+        log_error("CPU stream auto-flush failed during destroy");
+      s->flushed = 1;
+    }
+    // Only when the caller did not close: flush leaves writes queued into
+    // buffers teardown frees, and closing waits them out. A caller that closed
+    // may already have released the sink.
+    if (!s->closed && cpu_close_final(&s->writer).error)
+      log_error("CPU stream close failed during destroy");
   }
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
@@ -760,5 +766,19 @@ cpu_flush_final(struct writer* self)
   // shards already, so taking more input would append past them.
   s->flushed = 1;
   s->flush_failed = (r.error != 0);
+  return r;
+}
+
+static struct writer_result
+cpu_close_final(struct writer* self)
+{
+  struct tile_stream_cpu* s =
+    container_of(self, struct tile_stream_cpu, writer);
+  if (s->closed)
+    return s->close_failed ? writer_error() : writer_ok();
+  struct cpu_stream_view v = make_view(s);
+  struct writer_result r = cpu_stream_close_body(&v);
+  s->closed = 1;
+  s->close_failed = (r.error != 0);
   return r;
 }

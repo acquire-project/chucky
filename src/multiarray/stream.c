@@ -48,6 +48,7 @@ struct array_descriptor
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
   int flushed;            // 1 once finalized; no further input is taken
+  int closed;             // 1 once this array's writes have been waited out
 };
 
 // ---- Main struct ----
@@ -94,6 +95,11 @@ static struct multiarray_writer_result
 update_impl(struct multiarray_writer* self, int array_index, struct slice data);
 static struct multiarray_writer_result
 flush_impl(struct multiarray_writer* self);
+static struct multiarray_writer_result
+close_impl(struct multiarray_writer* self);
+static struct cpu_stream_view
+make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
+                     struct array_descriptor* desc);
 
 // ---- Helpers ----
 
@@ -438,6 +444,7 @@ multiarray_tile_stream_cpu_create(
 
   ms->writer.update = update_impl;
   ms->writer.flush = flush_impl;
+  ms->writer.close = close_impl;
 
   if (enable_metrics) {
     ms->metrics_enabled = 1;
@@ -474,17 +481,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
   if (!ms)
     return;
 
-  // Remember which arrays we will auto-flush: only their sinks are sure to be
-  // alive at drain time, since a caller may free a sink after flushing itself.
-  // On alloc failure, drain all — the rarer hazard.
-  int* autoflush = NULL;
-  if (ms->arrays && ms->n_arrays > 0) {
-    autoflush = (int*)calloc((size_t)ms->n_arrays, sizeof(int));
-    if (autoflush)
-      for (int i = 0; i < ms->n_arrays; ++i)
-        autoflush[i] = !ms->arrays[i].flushed;
-  }
-
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
   // for callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
@@ -494,16 +490,8 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       log_error("CPU multiarray auto-flush failed during destroy");
   }
 
-  // Drain queued IO before teardown frees the buffers it points into.
-  if (ms->arrays) {
-    for (int i = 0; i < ms->n_arrays; ++i) {
-      if (autoflush && !autoflush[i])
-        continue;
-      if (ms->arrays[i].sink)
-        shard_sink_drain(ms->arrays[i].sink);
-    }
-  }
-  free(autoflush);
+  if (ms->arrays && close_impl(&ms->writer).error)
+    log_error("CPU multiarray close failed during destroy");
 
   if (ms->arrays) {
     for (int i = 0; i < ms->n_arrays; ++i) {
@@ -752,5 +740,25 @@ flush_impl(struct multiarray_writer* self)
 Error:
   return (struct multiarray_writer_result){
     .error = multiarray_writer_fail,
+  };
+}
+
+static struct multiarray_writer_result
+close_impl(struct multiarray_writer* self)
+{
+  struct multiarray_tile_stream_cpu* ms =
+    container_of(self, struct multiarray_tile_stream_cpu, writer);
+  int failed = 0;
+  for (int a = 0; a < ms->n_arrays; ++a) {
+    struct array_descriptor* desc = &ms->arrays[a];
+    if (desc->closed || !desc->sink)
+      continue;
+    struct cpu_stream_view v = make_multiarray_view(ms, desc);
+    if (cpu_stream_close_body(&v).error)
+      failed = 1;
+    desc->closed = 1;
+  }
+  return (struct multiarray_writer_result){
+    .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }

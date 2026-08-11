@@ -11,6 +11,8 @@ struct tile_stream_gpu
   struct engine_array_state ar;
   int flushed;      // 1 once finalized; no further input is taken
   int flush_failed; // outcome of that finalize, re-reported by later calls
+  int closed;       // 1 once the queued writes have been waited out
+  int close_failed; // outcome of that close, re-reported by later calls
 };
 
 // Set writer vtable (append/flush).

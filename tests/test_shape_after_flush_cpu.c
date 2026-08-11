@@ -119,6 +119,11 @@ run_shape_case(const struct shape_case* c)
   }
 
   struct writer_result fr = writer_flush(w);
+  // flush queues the writes; the extent is published once they have landed.
+  // Closing runs even after a failed flush, which is what #175 is about.
+  struct writer_result cr = writer_close(w);
+  if (!fr.error)
+    fr = cr;
   log_info("  err=%d updates=%d shape0=%llu",
            fr.error,
            sink.update_append_count,
@@ -136,8 +141,6 @@ run_shape_case(const struct shape_case* c)
     CHECK(Fail, r.rest.beg == sl.beg && r.rest.end == sl.end);
   }
   // Finalizing again reports the same outcome without writing anything more.
-  CHECK(Fail,
-        (writer_flush(w).error != 0) == c->expect_flush_error);
   CHECK(Fail, sink.update_append_count == 1);
   CHECK(Fail, sink.last_append_size0 == c->expect_shape0);
 

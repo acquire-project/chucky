@@ -210,6 +210,7 @@ struct writer* w = tile_stream_gpu_writer(s);
 struct slice frame = { .beg = data, .end = (const char*)data + nbytes };
 writer_append(w, frame);   // call repeatedly as data arrives
 writer_flush(w);           // finalize: takes no input after this
+writer_close(w);           // wait for the writes, publish the shape
 
 // 4. Query metrics and tear down
 struct stream_metrics m = tile_stream_gpu_get_metrics(s);

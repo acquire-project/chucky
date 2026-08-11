@@ -564,7 +564,7 @@ Fail:
   return 1;
 }
 
-// Regression: writer_flush must cascade to the sink's flush hook so
+// Regression: closing the writer must cascade to the sink's flush hook so
 // dirty attribute metadata is written without going through destroy.
 static int
 test_writer_flush_cascades_to_sink(void)
@@ -604,8 +604,9 @@ test_writer_flush_cascades_to_sink(void)
   CHECK(Fail3, ts);
 
   struct writer* w = tile_stream_cpu_writer(ts);
-  struct writer_result r = writer_flush(w);
-  CHECK(Fail4, r.error == 0);
+  CHECK(Fail4, writer_flush(w).error == 0);
+  // The sink's flush hook runs in close, not flush.
+  CHECK(Fail4, writer_close(w).error == 0);
 
   // The cascade should have cleared the dirty bit and persisted the attr.
   char* out = read_file("cascade/zarr.json", NULL);

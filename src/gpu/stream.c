@@ -17,6 +17,8 @@ static struct writer_result
 tile_stream_gpu_append(struct writer* self, struct slice input);
 static struct writer_result
 tile_stream_gpu_flush_final(struct writer* self);
+static struct writer_result
+tile_stream_gpu_close_final(struct writer* self);
 
 // --- Shared helpers (engine + context) ---
 
@@ -384,20 +386,31 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 
   collect_ingest_timing(e);
 
+  return r;
+}
+
+struct writer_result
+stream_close_body(struct stream_engine* e, struct stream_context* ctx)
+{
+  if (ctx->layout.epoch_elements == 0)
+    return writer_ok();
+
+  struct writer_result r = writer_ok();
+
   // The shape is written after this, so it never names data still queued.
   const int sink_failed = shard_sink_drain(ctx->sink);
-  if (sink_failed && !r.error)
+  if (sink_failed)
     r = writer_error();
 
   // A sink IO error is the one case the shape is withheld: which writes landed
   // is unknowable.
   if (!sink_failed) {
     struct writer_result shape = publish_array_shape(e, ctx);
-    if (shape.error && !r.error)
+    if (shape.error)
       r = shape;
   }
 
-  if (!r.error && ctx->sink->flush && ctx->sink->flush(ctx->sink))
+  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
     r = writer_error();
 
   return r;
@@ -448,9 +461,23 @@ tile_stream_gpu_flush_final(struct writer* self)
   return r;
 }
 
+static struct writer_result
+tile_stream_gpu_close_final(struct writer* self)
+{
+  struct tile_stream_gpu* s =
+    container_of(self, struct tile_stream_gpu, writer);
+  if (s->closed)
+    return s->close_failed ? writer_error() : writer_ok();
+  struct writer_result r = stream_close_body(&s->engine, &s->ctx);
+  s->closed = 1;
+  s->close_failed = (r.error != 0);
+  return r;
+}
+
 void
 tile_stream_gpu_init_writer(struct tile_stream_gpu* s)
 {
   s->writer.append = tile_stream_gpu_append;
   s->writer.flush = tile_stream_gpu_flush_final;
+  s->writer.close = tile_stream_gpu_close_final;
 }
