@@ -34,8 +34,6 @@ struct multiarray_writer
   // input. Returns once the writes are queued; `close` waits for them.
   struct multiarray_writer_result (*flush)(struct multiarray_writer* self);
   // Waits for those writes to land and publishes each array's append extent.
-  // Every array has queued its work by then, so the waits overlap instead of
-  // draining one array at a time. Idempotent; destroy runs it if the caller did
-  // not.
+  // Idempotent; destroy runs it if the caller did not.
   struct multiarray_writer_result (*close)(struct multiarray_writer* self);
 };

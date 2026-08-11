@@ -423,8 +423,6 @@ struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx);
 
 // Waits for queued writes to retire, then publishes the append extent and lets
-// the sink write its own metadata. Runs once per array at teardown, after every
-// flush body has queued its work, so several arrays' writes overlap instead of
-// draining one at a time.
+// the sink write its own metadata.
 struct writer_result
 stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx);

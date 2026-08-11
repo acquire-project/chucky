@@ -604,8 +604,7 @@ The caller interacts with the pipeline through a `struct writer` vtable:
   extent, and lets the sink write its own metadata. This is where a caller
   learns its data reached storage and where the array becomes readable.
   Idempotent, and destroy runs it if the caller did not — so the sink has to
-  outlive the stream. Splitting it from `flush` lets several arrays' writes
-  overlap instead of draining one array at a time.
+  outlive the stream.
 
   Finalizing is what makes that last partial chunk readable — it is padded out
   and its shard is closed. Taking more input afterwards would have to start past
