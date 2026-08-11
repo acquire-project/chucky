@@ -36,6 +36,19 @@
 // Wraps a runtime-API call that returns its own status. Yields 0 on success.
 #define CUDA_CALL(e) handle_cudaerror((e), __FILE__, __LINE__, #e)
 
+// The same two, in the goto form CU uses, for the sites that clean up.
+#define CUDA_LAUNCH_OR(lbl, ...)                                               \
+  do {                                                                         \
+    if (CUDA_LAUNCH(__VA_ARGS__))                                              \
+      goto lbl;                                                                \
+  } while (0)
+
+#define CUDA_CALL_OR(lbl, e)                                                   \
+  do {                                                                         \
+    if (CUDA_CALL(e))                                                          \
+      goto lbl;                                                                \
+  } while (0)
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -121,9 +134,10 @@ extern "C"
 
   static inline void cu_ctx_pop(int pushed)
   {
-    CUcontext prev = NULL;
-    if (pushed == 1)
+    if (pushed == 1) {
+      CUcontext prev = NULL;
       CUWARN(cuCtxPopCurrent(&prev));
+    }
   }
 
   // CUDA 13 added a CUctxCreateParams* argument in position 2; pass NULL to

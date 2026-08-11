@@ -993,41 +993,35 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
     goto cleanup;
 
   // Step 1+2: Map + histogram.
-  if (CUDA_LAUNCH(csr_map_k<NdimMax><<<grid, LOD_BLOCK, 0, stream>>>(
-        (uint64_t*)d_map,
-        (uint64_t*)d_counts,
-        (const csr_level_params*)d_params,
-        src_total)))
-    goto cleanup;
+  CUDA_LAUNCH_OR(cleanup,
+                 csr_map_k<NdimMax><<<grid, LOD_BLOCK, 0, stream>>>(
+                   (uint64_t*)d_map,
+                   (uint64_t*)d_counts,
+                   (const csr_level_params*)d_params,
+                   src_total));
 
   // Step 3: Prefix sum on counts → starts.
   {
     size_t cub_temp_bytes = 0;
-    cudaError_t ce = cub::DeviceScan::ExclusiveSum(nullptr,
-                                                   cub_temp_bytes,
-                                                   (uint64_t*)d_counts,
-                                                   (uint64_t*)d_starts,
-                                                   (int)dst_total,
-                                                   stream);
-    if (ce != cudaSuccess) {
-      log_error("CUB ExclusiveSum query failed: %d", (int)ce);
-      goto cleanup;
-    }
+    CUDA_CALL_OR(cleanup,
+                 cub::DeviceScan::ExclusiveSum(nullptr,
+                                               cub_temp_bytes,
+                                               (uint64_t*)d_counts,
+                                               (uint64_t*)d_starts,
+                                               (int)dst_total,
+                                               stream));
     if (cub_temp_bytes > 0) {
       r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
       if (r != CUDA_SUCCESS)
         goto cleanup;
     }
-    ce = cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
-                                       cub_temp_bytes,
-                                       (uint64_t*)d_counts,
-                                       (uint64_t*)d_starts,
-                                       (int)dst_total,
-                                       stream);
-    if (ce != cudaSuccess) {
-      log_error("CUB ExclusiveSum exec failed: %d", (int)ce);
-      goto cleanup;
-    }
+    CUDA_CALL_OR(cleanup,
+                 cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
+                                               cub_temp_bytes,
+                                               (uint64_t*)d_counts,
+                                               (uint64_t*)d_starts,
+                                               (int)dst_total,
+                                               stream));
   }
 
   // Sentinel: starts[dst_total] = src_total.  Writes a non-overlapping
@@ -1047,12 +1041,12 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
   if (r != CUDA_SUCCESS)
     goto cleanup;
 
-  if (CUDA_LAUNCH(
-        csr_scatter_k<<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_indices,
-                                                      (uint64_t*)d_write_pos,
-                                                      (const uint64_t*)d_map,
-                                                      src_total)))
-    goto cleanup;
+  CUDA_LAUNCH_OR(
+    cleanup,
+    csr_scatter_k<<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_indices,
+                                                  (uint64_t*)d_write_pos,
+                                                  (const uint64_t*)d_map,
+                                                  src_total));
 
   ret = 0;
 

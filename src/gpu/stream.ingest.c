@@ -117,11 +117,11 @@ ingest_collect_scatter_timing(struct staging_state* stage,
   }
 }
 
-// Claims the next measurement in the ring; the caller marks it once both ends
-// are recorded. An entry still outstanding here has outlived its slack, so
-// count it rather than lose it silently.
+// Claims the next measurement in the ring and opens it. An entry still
+// outstanding here has outlived its slack, so count it rather than lose it
+// silently. Returns NULL when the start could not be recorded.
 static struct scatter_timing*
-scatter_timing_begin(struct staging_state* stage, size_t bytes)
+timing_begin(struct staging_state* stage, uint64_t bytes, CUstream compute)
 {
   struct scatter_timing* st = &stage->timing[stage->next_timing];
   if (st->pending)
@@ -129,11 +129,28 @@ scatter_timing_begin(struct staging_state* stage, size_t bytes)
   stage->next_timing = (stage->next_timing + 1) % SCATTER_TIMING_SLOTS;
   st->bytes = bytes;
   st->pending = 0;
+  if (handle_curesult(LOG_ERROR,
+                      cuEventRecord(st->t_start, compute),
+                      __FILE__,
+                      __LINE__,
+                      "cuEventRecord"))
+    return NULL;
   return st;
 }
 
 // The measurement only counts once both ends are recorded: an interval with one
 // end reports whatever its events still hold.
+static int
+timing_end(struct scatter_timing* st, CUstream compute)
+{
+  CU(Fail, cuEventRecord(st->t_end, compute));
+  st->pending = 1;
+  return 0;
+
+Fail:
+  return 1;
+}
+
 static int
 scatter_with_timing(struct staging_state* stage,
                     const struct tile_stream_layout* layout,
@@ -144,8 +161,8 @@ scatter_with_timing(struct staging_state* stage,
                     size_t bpe,
                     CUstream compute)
 {
-  struct scatter_timing* st = scatter_timing_begin(stage, bytes);
-  CU(Fail, cuEventRecord(st->t_start, compute));
+  struct scatter_timing* st = timing_begin(stage, bytes, compute);
+  CHECK_SILENT(Fail, st);
   CHECK_SILENT(Fail,
                transpose(gpu_pool_view_d(dst.first_epoch),
                          gpu_pool_view_d(d_in),
@@ -158,9 +175,7 @@ scatter_with_timing(struct staging_state* stage,
                          layout->lifted_shape,
                          layout->lifted_strides,
                          compute) == 0);
-  CU(Fail, cuEventRecord(st->t_end, compute));
-  st->pending = 1;
-  return 0;
+  return timing_end(st, compute);
 
 Fail:
   return 1;
@@ -174,14 +189,12 @@ copy_to_linear_with_timing(struct staging_state* stage,
                            uint64_t epoch_offset_bytes,
                            CUstream compute)
 {
-  struct scatter_timing* st = scatter_timing_begin(stage, bytes);
-  CU(Fail, cuEventRecord(st->t_start, compute));
+  struct scatter_timing* st = timing_begin(stage, bytes, compute);
+  CHECK_SILENT(Fail, st);
   CU(Fail,
      cuMemcpyDtoDAsync(
        d_linear + epoch_offset_bytes, gpu_pool_view_d(d_in), bytes, compute));
-  CU(Fail, cuEventRecord(st->t_end, compute));
-  st->pending = 1;
-  return 0;
+  return timing_end(st, compute);
 
 Fail:
   return 1;
@@ -246,13 +259,11 @@ ingest_dispatch_scatter(struct staging_state* stage,
   // Scatter into chunk pool
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  const int scattered =
-    scatter_with_timing(
-      stage, layout, dst, d_in, ss->dispatched_bytes, in_epoch, bpe, compute) ==
-    0;
+  const int failed = scatter_with_timing(
+    stage, layout, dst, d_in, ss->dispatched_bytes, in_epoch, bpe, compute);
   // Nothing reads the input either way, so hand the slot back before failing.
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
-  CHECK_SILENT(Error, scattered);
+  CHECK_SILENT(Error, !failed);
 
   stage->current ^= 1;
   return 0;
@@ -292,12 +303,11 @@ ingest_dispatch_multiscale(struct staging_state* stage,
   // Copy raw input to linear epoch buffer for LOD downsampling
   CHECK(Error,
         gpu_pool_acquire_consume(&stage->d_pool, idx, compute, &d_in) == 0);
-  const int copied =
-    copy_to_linear_with_timing(
-      stage, d_linear, d_in, elements * bpe, in_epoch * bpe, compute) == 0;
+  const int failed = copy_to_linear_with_timing(
+    stage, d_linear, d_in, elements * bpe, in_epoch * bpe, compute);
   // Nothing reads the input either way, so hand the slot back before failing.
   CHECK(Error, gpu_pool_release_consume(&stage->d_pool, idx, compute) == 0);
-  CHECK_SILENT(Error, copied);
+  CHECK_SILENT(Error, !failed);
 
   stage->current ^= 1;
   return 0;

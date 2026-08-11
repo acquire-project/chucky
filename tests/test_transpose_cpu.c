@@ -1,5 +1,4 @@
 #include "cpu/transpose.h"
-#include "defs.limits.h"
 #include "index.ops.util.h"
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"

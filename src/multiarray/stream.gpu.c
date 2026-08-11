@@ -198,28 +198,28 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       .error = multiarray_writer_fail,
       .rest = data,
     };
-  struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
-  // Switch arrays if needed
-  if (array_index != ms->active) {
-    int err = switch_to_array(ms, array_index);
-    if (err) {
-      cu_ctx_pop(pushed);
-      return (struct multiarray_writer_result){ .error = err, .rest = data };
-    }
+  // One exit from here on, so the context is popped once however this goes.
+  struct multiarray_writer_result out = { .error = multiarray_writer_ok,
+                                          .rest = data };
+
+  if (array_index != ms->active)
+    out.error = switch_to_array(ms, array_index);
+
+  if (out.error == multiarray_writer_ok) {
+    struct array_descriptor_gpu* desc = &ms->arrays[array_index];
+    struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+    if (desc->flushed && r.rest.beg != data.beg)
+      desc->flushed = 0;
+    // `writer_finished` here means "stream is at capacity
+    // (total_element_limit)"; finalization happens on explicit `flush()` or on
+    // destroy, not here.
+    out.error = r.error;
+    out.rest = r.rest;
   }
 
-  struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
-  if (desc->flushed && r.rest.beg != data.beg)
-    desc->flushed = 0;
-
   cu_ctx_pop(pushed);
-  // `writer_finished` here means "stream is at capacity (total_element_limit)";
-  // finalization happens on explicit `flush()` or on destroy, not here.
-  return (struct multiarray_writer_result){
-    .error = r.error,
-    .rest = r.rest,
-  };
+  return out;
 }
 
 // ---- Writer: flush ----

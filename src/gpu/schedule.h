@@ -138,7 +138,7 @@ struct gpu_delivery
   struct platform_thread* thread; // NULL = drains run inline on the producer
   struct platform_mutex* mu;
   struct platform_cond* cv;
-  CUcontext cuda; // captured at init; made current on the worker
+  CUcontext cuda; // the engine's, made current on the worker
   int stop;
   enum delivery_hold_point hold_at;
   int sticky_error;
@@ -150,7 +150,7 @@ struct gpu_delivery
 // Captures the calling thread's CUDA context and starts the worker.
 // Failure leaves the worker absent; callers may degrade rather than abort.
 int
-gpu_delivery_init(struct gpu_delivery* d);
+gpu_delivery_init(struct gpu_delivery* d, CUcontext cuda);
 
 int
 gpu_delivery_enqueue_prepared(struct gpu_delivery* d,

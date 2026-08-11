@@ -209,13 +209,13 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
      cuMemHostAlloc((void**)&slot->h_permuted_sizes, C * sizeof(size_t), 0));
 
   slot->temp_bytes = 0;
-  CHECK_SILENT(Error,
-               CUDA_CALL(cub::DeviceScan::ExclusiveSum(nullptr,
-                                                       slot->temp_bytes,
-                                                       slot->d_permuted_sizes,
-                                                       slot->d_offsets,
-                                                       (int)C,
-                                                       (cudaStream_t)0)) == 0);
+  CUDA_CALL_OR(Error,
+               cub::DeviceScan::ExclusiveSum(nullptr,
+                                             slot->temp_bytes,
+                                             slot->d_permuted_sizes,
+                                             slot->d_offsets,
+                                             (int)C,
+                                             (cudaStream_t)0));
 
   if (slot->temp_bytes > 0)
     CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
@@ -319,14 +319,10 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   {
     const int block = 256;
     const int grid = (int)((N + block - 1) / block);
-    CHECK_SILENT(
+    CUDA_LAUNCH_OR(
       Error,
-      CUDA_LAUNCH(permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
-        d_comp_sizes,
-        slot->d_permuted_sizes,
-        d_batch_gather,
-        d_batch_perm,
-        N)) == 0);
+      permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
+        d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N));
   }
 
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
@@ -334,17 +330,17 @@ aggregate_batch_by_shard_async(const void* d_compressed,
     size_t temp = slot->temp_bytes;
     // A scan that never ran leaves the offsets the last batch wrote, and the
     // passes below would pack this batch's chunks at those.
-    CHECK_SILENT(Error,
-                 CUDA_CALL(cub::DeviceScan::ExclusiveSum(slot->d_temp,
-                                                         temp,
-                                                         slot->d_permuted_sizes,
-                                                         slot->d_offsets,
-                                                         (int)C,
-                                                         cuda_stream)) == 0);
+    CUDA_CALL_OR(Error,
+                 cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                               temp,
+                                               slot->d_permuted_sizes,
+                                               slot->d_offsets,
+                                               (int)C,
+                                               cuda_stream));
 
-    CHECK_SILENT(Error,
-                 CUDA_LAUNCH(write_total_k<<<1, 1, 0, cuda_stream>>>(
-                   slot->d_offsets, slot->d_permuted_sizes, C)) == 0);
+    CUDA_LAUNCH_OR(Error,
+                   write_total_k<<<1, 1, 0, cuda_stream>>>(
+                     slot->d_offsets, slot->d_permuted_sizes, C));
   }
 
   if (page_size > 0 && num_shards > 0) {
@@ -354,29 +350,27 @@ aggregate_batch_by_shard_async(const void* d_compressed,
     // intra-batch fresh-gen runs land mid-shard and take the bounce path.
     {
       const int block = 256;
-      CHECK_SILENT(
+      CUDA_LAUNCH_OR(
         Error,
-        CUDA_LAUNCH(
-          add_shard_bias_k<<<(int)num_shards, block, 0, cuda_stream>>>(
-            slot->d_offsets,
-            d_tail_bytes,
-            tps_group,
-            num_shards,
-            shard_capacity)) == 0);
+        add_shard_bias_k<<<(int)num_shards, block, 0, cuda_stream>>>(
+          slot->d_offsets,
+          d_tail_bytes,
+          tps_group,
+          num_shards,
+          shard_capacity));
     }
     // Pass 3b: stage prior batch's ragged tail at the head of each shard's
     // region so chunks pack just past it.
     {
       const int block = 256;
-      CHECK_SILENT(
+      CUDA_LAUNCH_OR(
         Error,
-        CUDA_LAUNCH(
-          copy_leading_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
-            slot->d_aggregated,
-            (const void*)d_tail_carry,
-            d_tail_bytes,
-            shard_capacity,
-            page_size)) == 0);
+        copy_leading_tail_k<<<(int)num_shards, block, 0, cuda_stream>>>(
+          slot->d_aggregated,
+          (const void*)d_tail_carry,
+          d_tail_bytes,
+          shard_capacity,
+          page_size));
     }
   }
 
@@ -384,15 +378,15 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   {
     const int block = 256;
     const int grid = (int)N;
-    CHECK_SILENT(Error,
-                 CUDA_LAUNCH(gather_batch_k<<<grid, block, 0, cuda_stream>>>(
-                   d_compressed,
-                   slot->d_aggregated,
-                   d_comp_sizes,
-                   slot->d_offsets,
-                   d_batch_gather,
-                   d_batch_perm,
-                   max_comp_chunk_bytes)) == 0);
+    CUDA_LAUNCH_OR(
+      Error,
+      gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
+                                                      slot->d_aggregated,
+                                                      d_comp_sizes,
+                                                      slot->d_offsets,
+                                                      d_batch_gather,
+                                                      d_batch_perm,
+                                                      max_comp_chunk_bytes));
   }
 
   // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
@@ -448,14 +442,10 @@ aggregate_batch_unified_async(const void* d_compressed,
   {
     const int block = 256;
     const int grid = (int)((N + block - 1) / block);
-    CHECK_SILENT(
+    CUDA_LAUNCH_OR(
       Error,
-      CUDA_LAUNCH(permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
-        d_comp_sizes,
-        slot->d_permuted_sizes,
-        d_batch_gather,
-        d_batch_perm,
-        N)) == 0);
+      permute_sizes_batch_k<<<grid, block, 0, cuda_stream>>>(
+        d_comp_sizes, slot->d_permuted_sizes, d_batch_gather, d_batch_perm, N));
   }
 
   // Pass 2: single exclusive prefix sum across the unified covering range
@@ -463,13 +453,13 @@ aggregate_batch_unified_async(const void* d_compressed,
   // tail-sentinel position; no separate write_total fixup needed.
   {
     size_t temp = slot->temp_bytes;
-    CHECK_SILENT(Error,
-                 CUDA_CALL(cub::DeviceScan::ExclusiveSum(slot->d_temp,
-                                                         temp,
-                                                         slot->d_permuted_sizes,
-                                                         slot->d_offsets,
-                                                         (int)(C + nlod),
-                                                         cuda_stream)) == 0);
+    CUDA_CALL_OR(Error,
+                 cub::DeviceScan::ExclusiveSum(slot->d_temp,
+                                               temp,
+                                               slot->d_permuted_sizes,
+                                               slot->d_offsets,
+                                               (int)(C + nlod),
+                                               cuda_stream));
   }
 
   if (page_size > 0 && total_shards > 0) {
@@ -477,32 +467,30 @@ aggregate_batch_unified_async(const void* d_compressed,
     // base byte offset + tail_in, packs subsequent chunks tightly.
     {
       const int block = 256;
-      CHECK_SILENT(Error,
-                   CUDA_LAUNCH(add_shard_bias_unified_k<<<(int)total_shards,
-                                                          block,
-                                                          0,
-                                                          cuda_stream>>>(
-                     slot->d_offsets,
-                     d_tail_bytes,
-                     d_shard_base_offsets,
-                     d_shard_tps_group,
-                     d_shard_offsets_base,
-                     total_shards)) == 0);
+      CUDA_LAUNCH_OR(
+        Error,
+        add_shard_bias_unified_k<<<(int)total_shards, block, 0, cuda_stream>>>(
+          slot->d_offsets,
+          d_tail_bytes,
+          d_shard_base_offsets,
+          d_shard_tps_group,
+          d_shard_offsets_base,
+          total_shards));
     }
     // Pass 3b: stage prior batch's ragged tail at the head of each shard's
     // region so chunks pack just past it.
     {
       const int block = 256;
-      CHECK_SILENT(Error,
-                   CUDA_LAUNCH(copy_leading_tail_unified_k<<<(int)total_shards,
-                                                             block,
-                                                             0,
-                                                             cuda_stream>>>(
-                     slot->d_aggregated,
-                     (const void*)d_tail_carry,
-                     d_tail_bytes,
-                     d_shard_base_offsets,
-                     page_size)) == 0);
+      CUDA_LAUNCH_OR(
+        Error,
+        copy_leading_tail_unified_k<<<(int)total_shards,
+                                      block,
+                                      0,
+                                      cuda_stream>>>(slot->d_aggregated,
+                                                     (const void*)d_tail_carry,
+                                                     d_tail_bytes,
+                                                     d_shard_base_offsets,
+                                                     page_size));
     }
   }
 
@@ -510,15 +498,15 @@ aggregate_batch_unified_async(const void* d_compressed,
   {
     const int block = 256;
     const int grid = (int)N;
-    CHECK_SILENT(Error,
-                 CUDA_LAUNCH(gather_batch_k<<<grid, block, 0, cuda_stream>>>(
-                   d_compressed,
-                   slot->d_aggregated,
-                   d_comp_sizes,
-                   slot->d_offsets,
-                   d_batch_gather,
-                   d_batch_perm,
-                   max_comp_chunk_bytes)) == 0);
+    CUDA_LAUNCH_OR(
+      Error,
+      gather_batch_k<<<grid, block, 0, cuda_stream>>>(d_compressed,
+                                                      slot->d_aggregated,
+                                                      d_comp_sizes,
+                                                      slot->d_offsets,
+                                                      d_batch_gather,
+                                                      d_batch_perm,
+                                                      max_comp_chunk_bytes));
   }
 
   // d_tail_bytes / d_tail_carry are uploaded by host post-delivery
