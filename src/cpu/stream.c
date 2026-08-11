@@ -304,19 +304,18 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
-  {
+  if (!s->flushed) {
     struct cpu_stream_view v = make_view(s);
-    if (!s->flushed) {
-      if (cpu_stream_flush_body(&v).error)
-        log_error("CPU stream auto-flush failed during destroy");
-      s->flushed = 1;
-    }
-    // Only when the caller did not close: flush leaves writes queued into
-    // buffers teardown frees, and closing waits them out. A caller that closed
-    // may already have released the sink.
-    if (!s->closed && cpu_close_final(&s->writer).error)
-      log_error("CPU stream close failed during destroy");
+    if (cpu_stream_flush_body(&v).error)
+      log_error("CPU stream auto-flush failed during destroy");
+    s->flushed = 1;
+    s->closed = 0;
   }
+  // Whatever queued those writes, they point into buffers teardown frees, so
+  // they have to be waited out here. Skipped only when a close already did it,
+  // which is also the case where the caller may have released the sink.
+  if (cpu_close_final(&s->writer).error)
+    log_error("CPU stream close failed during destroy");
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     shard_state_destroy(&s->shard[lv]);
@@ -766,6 +765,8 @@ cpu_flush_final(struct writer* self)
   // shards already, so taking more input would append past them.
   s->flushed = 1;
   s->flush_failed = (r.error != 0);
+  // Those writes are new, so an earlier close no longer covers them.
+  s->closed = 0;
   return r;
 }
 
@@ -774,7 +775,9 @@ cpu_close_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  if (s->closed)
+  // Nothing is queued until a flush runs, and close only completes what a
+  // flush queued.
+  if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_close_body(&v);

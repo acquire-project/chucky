@@ -49,6 +49,7 @@ struct array_descriptor
   int pool_fully_covered; // 1 if scatter overwrites every pool position
   int flushed;            // 1 once finalized; no further input is taken
   int closed;             // 1 once this array's writes have been waited out
+  int close_failed;       // outcome of that close, re-reported by later calls
 };
 
 // ---- Main struct ----
@@ -728,9 +729,13 @@ flush_impl(struct multiarray_writer* self)
 
     struct cpu_stream_view v = make_multiarray_view(ms, desc);
     struct writer_result r = cpu_stream_flush_body(&v);
+    // Latched even on failure: a flush that died partway may already have
+    // closed shards, so taking more input would append past them. Those writes
+    // are new, so an earlier close no longer covers them.
+    desc->flushed = 1;
+    desc->closed = 0;
     if (r.error)
       goto Error;
-    desc->flushed = 1;
   }
 
   return (struct multiarray_writer_result){
@@ -751,11 +756,13 @@ close_impl(struct multiarray_writer* self)
   int failed = 0;
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor* desc = &ms->arrays[a];
-    if (desc->closed || !desc->sink)
+    if (desc->closed || !desc->flushed || !desc->sink) {
+      failed |= desc->close_failed;
       continue;
+    }
     struct cpu_stream_view v = make_multiarray_view(ms, desc);
-    if (cpu_stream_close_body(&v).error)
-      failed = 1;
+    desc->close_failed = (cpu_stream_close_body(&v).error != 0);
+    failed |= desc->close_failed;
     desc->closed = 1;
   }
   return (struct multiarray_writer_result){

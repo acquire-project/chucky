@@ -458,6 +458,8 @@ tile_stream_gpu_flush_final(struct writer* self)
   // shards already, so taking more input would append past them.
   s->flushed = 1;
   s->flush_failed = (r.error != 0);
+  // Those writes are new, so an earlier close no longer covers them.
+  s->closed = 0;
   return r;
 }
 
@@ -466,7 +468,9 @@ tile_stream_gpu_close_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  if (s->closed)
+  // Nothing is queued until a flush runs, and close only completes what a
+  // flush queued.
+  if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   struct writer_result r = stream_close_body(&s->engine.compress_agg.ar, &s->ctx);
   s->closed = 1;

@@ -329,11 +329,6 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
     s->flushed = 1;
   }
 
-  // Only when the caller did not close: a caller that closed may already have
-  // released the sink.
-  if (!s->closed && writer_close(&s->writer).error)
-    log_error("GPU stream close failed during destroy");
-
   // A failed flush can leave delivery jobs queued. Run valid jobs out and
   // cancel PREPARED jobs made unsafe by an earlier coordinator error before
   // synchronizing or freeing their stage storage.
@@ -342,9 +337,11 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   // Ensure all GPU work completes before tearing down events/memory.
   gpu_streams_sync(&s->engine.streams);
 
-  // Drain queued IO before teardown frees the buffers it points into.
-  if (!s->closed && s->ctx.sink)
-    shard_sink_drain(s->ctx.sink);
+  // After the join, so the writes it lets the worker issue are waited out too.
+  // Skipped only when a close already did it, which is also the case where the
+  // caller may have released the sink.
+  if (writer_close(&s->writer).error)
+    log_error("GPU stream close failed during destroy");
 
   // s->ar owns the per-array allocations; the engine holds a bound copy of
   // the same pointers, so destroy strictly after engine teardown would

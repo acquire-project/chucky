@@ -240,6 +240,11 @@ cpu_stream_flush_batch(struct cpu_stream_view* v)
 struct writer_result
 cpu_stream_flush_body(struct cpu_stream_view* v)
 {
+  // A create that failed before sizing the layout leaves epoch_elements at 0
+  // and the divisions below would fault. Nothing was sized, so nothing to do.
+  if (v->layout->epoch_elements == 0)
+    return writer_ok();
+
   // Every exit runs the drain: queued IO points into buffers destroy frees.
   // Finalizing shards and writing the array shape both claim the output is
   // complete, so they are skipped once anything above them failed.

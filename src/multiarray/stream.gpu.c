@@ -31,8 +31,9 @@ struct array_descriptor_gpu
   // st.agg owns per-LOD layouts, shard_state, and the per-array tail buffers.
   struct engine_array_state st;
 
-  int flushed; // 1 once finalized; no further input is taken
-  int closed;  // 1 once this array's writes have been waited out
+  int flushed;      // 1 once finalized; no further input is taken
+  int closed;       // 1 once this array's writes have been waited out
+  int close_failed; // outcome of that close, re-reported by later calls
 };
 
 // ---- Main struct ----
@@ -258,10 +259,13 @@ flush_impl(struct multiarray_writer* self)
     struct writer_result r = stream_flush_body(&ms->engine, &desc->ctx);
 
     unbind_context(&ms->engine, desc);
+    // Latched even on failure: a flush that died partway may already have
+    // closed shards, so taking more input would append past them. Those writes
+    // are new, so an earlier close no longer covers them.
+    desc->flushed = 1;
+    desc->closed = 0;
     if (r.error)
       failed = 1;
-    else
-      desc->flushed = 1;
   }
 
   ms->active = -1;
@@ -282,10 +286,17 @@ close_impl(struct multiarray_writer* self)
   int failed = 0;
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
-    if (desc->closed || !desc->ctx.sink)
+    if (desc->closed || !desc->flushed || !desc->ctx.sink) {
+      failed |= desc->close_failed;
       continue;
-    if (stream_close_body(&desc->st.agg, &desc->ctx).error)
-      failed = 1;
+    }
+    // desc->st.agg is only refreshed by unbind_context, so a still-bound array
+    // has its live shard state in the engine.
+    struct compress_agg_array* agg = (ms->active == a)
+                                       ? &ms->engine.compress_agg.ar
+                                       : &desc->st.agg;
+    desc->close_failed = (stream_close_body(agg, &desc->ctx).error != 0);
+    failed |= desc->close_failed;
     desc->closed = 1;
   }
   return (struct multiarray_writer_result){
@@ -310,12 +321,13 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       log_error("GPU multiarray auto-flush failed during destroy");
   }
 
-  if (ms->arrays && close_impl(&ms->writer).error)
-    log_error("GPU multiarray close failed during destroy");
-
   // Resolve every worker job before synchronizing streams or freeing buffers.
   gpu_delivery_stop_join(&ms->engine.delivery);
   gpu_streams_sync(&ms->engine.streams);
+
+  // After the join, so the writes it lets the worker issue are waited out too.
+  if (ms->arrays && close_impl(&ms->writer).error)
+    log_error("GPU multiarray close failed during destroy");
 
 
 

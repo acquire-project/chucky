@@ -849,8 +849,12 @@ pump_data_interleaved(struct writer* w0,
 
   struct writer_result r0 = writer_flush(w0);
   struct writer_result r1 = writer_flush(w1);
+  // flush only queues the writes; close waits for them, so the measured time
+  // covers the drain and a write error is not lost.
+  struct writer_result c0 = writer_close(w0);
+  struct writer_result c1 = writer_close(w1);
   if (!err)
-    err = r0.error || r1.error;
+    err = r0.error || r1.error || c0.error || c1.error;
   free(data);
   return err;
 }

@@ -1090,6 +1090,71 @@ Fail:
   return 1;
 }
 
+// ---- Test: close before flush, and close after a flush ----
+//
+// close completes what flush queued, so on its own it does nothing and must not
+// latch: a later flush still has to be waited out and its extent published.
+static int
+test_close_before_flush(void)
+{
+  log_info("=== test_close_before_flush ===");
+
+  struct test_shard_sink sink;
+  test_sink_init_1(&sink);
+
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .storage_position = 0 },
+    { .size = 4,
+      .chunk_size = 2,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  struct tile_stream_configuration configs[] = { config };
+  struct shard_sink* sinks[] = { &sink.base };
+
+  struct multiarray_tile_stream_cpu* ms =
+    multiarray_tile_stream_cpu_create(1, configs, sinks, 0);
+  CHECK(Fail, ms);
+
+  struct multiarray_writer* w = multiarray_tile_stream_cpu_writer(ms);
+  CHECK(Fail,
+        write_fill(w, 0, 4, sizeof(uint16_t), 0xAA).error ==
+          multiarray_writer_ok);
+
+  // Nothing is queued yet, so close publishes nothing and leaves the array
+  // open to the flush that follows.
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.update_append_count == 0);
+
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.update_append_count == 1);
+  CHECK(Fail, sink.last_append_size0 == 1);
+
+  multiarray_tile_stream_cpu_destroy(ms);
+  CHECK(Fail2, sink.update_append_count == 1);
+  test_sink_free(&sink);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_cpu_destroy(ms);
+Fail2:
+  test_sink_free(&sink);
+  log_error("  FAIL");
+  return 1;
+}
+
 // ---- Test: flush finalizes an array-stream ----
 //
 // After flush(), the array takes no more input and a second flush writes
@@ -1248,6 +1313,7 @@ main(int ac, char* av[])
   rc |= test_write_past_total_element_limit();
   rc |= test_flush_no_data();
   rc |= test_flush_idempotent_after_finished();
+  rc |= test_close_before_flush();
   rc |= test_flush_finalizes();
   rc |= test_metrics_enabled();
   return rc;

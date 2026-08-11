@@ -33,7 +33,7 @@ zarr_array_create(struct store* store,
                   const struct zarr_array_config* cfg);
 
 // Auto-flushes pending metadata best-effort; ignores flush errors. Call
-// writer_flush on the owning stream/writer before destroy if you need to
+// writer_flush then writer_close on the owning stream before destroy if you
 // detect failures.
 void
 zarr_array_destroy(struct zarr_array* a);

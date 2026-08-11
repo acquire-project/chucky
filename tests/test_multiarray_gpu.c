@@ -867,8 +867,8 @@ test_flush_finalizes(void)
   CHECK(Fail, sink.finalize_count == finalize_after_first);
   CHECK(Fail, test_sink_shard_count(&sink) == shards_after_first);
 
-  // Scan all finalized shards: at least one byte 0xAA (batch 1) and at least
-  // one byte 0xBB (batch 2) must be present in the durable output.
+  // Scan all finalized shards: batch 1's 0xAA must be there, and batch 2's
+  // 0xBB must not, since the finalized array refused it.
   int found_aa = 0, found_bb = 0;
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     const struct test_shard_writer* sw = &sink.writers[0][i];

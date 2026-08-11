@@ -18,7 +18,7 @@ zarr_array_create_with_pool(struct store* store,
                             const struct zarr_array_config* cfg);
 
 // Private: force the array's zarr.json to be rewritten now with current shape
-// and buffered attributes. Production callers go through writer_flush, which
+// and buffered attributes. Production callers go through writer_close, which
 // drives the sink-level flush hook; this remains exposed for low-level tests
 // that exercise zarr_array without a stream.
 int
