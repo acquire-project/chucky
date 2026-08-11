@@ -29,9 +29,12 @@
 // poisoned the context still reports, since the read after the launch returns
 // it again.
 #define CUDA_LAUNCH(...)                                                       \
-  (warn_stale_cudaerror(__FILE__, __LINE__),                                   \
+  (take_stale_cudaerror(__FILE__, __LINE__),                                   \
    (__VA_ARGS__),                                                              \
    handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
+
+// Wraps a runtime-API call that returns its own status. Yields 0 on success.
+#define CUDA_CALL(e) handle_cudaerror((e), __FILE__, __LINE__, #e)
 
 #ifdef __cplusplus
 extern "C"
@@ -78,15 +81,16 @@ extern "C"
     return 1;
   }
 
-  // Takes the error another runtime user left unread. Reporting it here is
-  // the only account of it anyone gets: whoever produced it returned success
-  // to its own caller, and clearing is what keeps it from being read back as
-  // the next launch's failure.
-  static inline void warn_stale_cudaerror(const char* file, int line)
+  // Takes the error another runtime user left unread, so the check after the
+  // launch answers for the launch alone. Debug rather than warn: a sticky
+  // fault is returned again by every later call, so warning here would print
+  // once per launch for the rest of the run, and the launch's own check
+  // reports that fault anyway.
+  static inline void take_stale_cudaerror(const char* file, int line)
   {
     const cudaError_t stale = cudaGetLastError();
     if (stale != cudaSuccess)
-      log_log(LOG_WARN,
+      log_log(LOG_DEBUG,
               file,
               line,
               "CUDA error left by an earlier call on this thread: %s\n",
@@ -97,18 +101,20 @@ extern "C"
   // thread's context and refuses a stream that belongs to another one, so an
   // entry point a caller can reach from any thread makes ctx current first.
   // Pushing rather than setting leaves a caller that keeps its own context
-  // holding it again on return. Yields what to hand cu_ctx_pop.
+  // holding it again on return.
+  //
+  // Yields 1 when it pushed, 0 when the thread already holds ctx, and -1 when
+  // the push failed. Work done after a -1 would run against whatever context
+  // the thread does hold, so callers that can report an error should.
   static inline int cu_ctx_push(CUcontext ctx)
   {
     CUcontext current = NULL;
     if (!ctx || (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ctx))
       return 0;
     const CUresult res = cuCtxPushCurrent(ctx);
-    // Say so rather than let the caller read the 0 as "already current" and
-    // run the whole append against whatever context this thread does hold.
     if (res != CUDA_SUCCESS) {
       handle_curesult(LOG_ERROR, res, __FILE__, __LINE__, "cuCtxPushCurrent");
-      return 0;
+      return -1;
     }
     return 1;
   }
@@ -116,7 +122,7 @@ extern "C"
   static inline void cu_ctx_pop(int pushed)
   {
     CUcontext prev = NULL;
-    if (pushed)
+    if (pushed == 1)
       CUWARN(cuCtxPopCurrent(&prev));
   }
 

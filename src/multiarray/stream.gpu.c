@@ -193,6 +193,11 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
     };
 
   const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_fail,
+      .rest = data,
+    };
   struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
   // Switch arrays if needed
@@ -225,6 +230,8 @@ flush_impl(struct multiarray_writer* self)
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
   const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.

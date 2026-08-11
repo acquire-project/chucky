@@ -283,6 +283,10 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
     log_error("the writer left the calling thread on a different context");
     goto Cleanup;
   }
+  if (zarr_array_has_error(arr)) {
+    log_error("zarr_array reported an IO error");
+    goto Cleanup;
+  }
 
   rc = 0;
   log_info("  PASS");

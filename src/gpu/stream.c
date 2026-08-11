@@ -419,6 +419,8 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
   const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error();
 
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
@@ -444,6 +446,8 @@ tile_stream_gpu_flush_final(struct writer* self)
   if (s->flushed)
     return writer_ok();
   const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error();
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
   if (r.error == 0)
     s->flushed = 1;
