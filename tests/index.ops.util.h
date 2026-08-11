@@ -1,6 +1,7 @@
 #ifndef INDEX_OPS_UTIL_H
 #define INDEX_OPS_UTIL_H
 
+#include "stream/layouts.h"
 #include "util/index.ops.h"
 
 #include <stddef.h>
@@ -62,22 +63,23 @@ cpu_perm(uint64_t i,
          const uint64_t* shape,
          const int64_t* strides);
 
-// Build lifted shape and strides for a chunk decomposition (no codec
-// alignment). The chunk stride of each of the first n_append dimensions is set
-// to 0 so all epochs collapse. storage_order may be NULL for identity order.
-void
-build_lifted_layout(int rank,
-                    uint8_t n_append,
-                    const uint64_t* dim_sizes,
-                    const uint64_t* chunk_sizes,
-                    const uint8_t* storage_order,
-                    uint8_t* out_lifted_rank,
-                    uint64_t* lifted_shape,
-                    int64_t* lifted_strides,
-                    uint64_t* out_chunk_elements,
-                    uint64_t* out_chunk_stride,
-                    uint64_t* out_chunks_per_epoch,
-                    uint64_t* out_epoch_elements);
+// Chunk alignment for test layouts. The codec's own alignment is a few bytes,
+// which pads nothing at these chunk sizes; a wider one keeps the padding a
+// real stream has.
+#define TEST_CHUNK_ALIGNMENT 4096
+
+// The layout the stream computes for one level, so tests scatter with the
+// chunk stride and lifted strides production uses. storage_order may be NULL
+// for identity order. Returns 0 on success.
+int
+test_level_layout(struct tile_stream_layout* out,
+                  uint8_t rank,
+                  uint8_t n_append,
+                  const uint64_t* dim_sizes,
+                  const uint64_t* chunk_sizes,
+                  const uint8_t* storage_order,
+                  size_t bytes_per_element,
+                  size_t alignment);
 
 // The pool pads each chunk out to the codec's alignment, so a region is wider
 // than an epoch's worth of elements.

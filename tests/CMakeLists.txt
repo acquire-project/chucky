@@ -36,7 +36,7 @@ endfunction()
 
 # Index operations utility library (shared between tests)
 add_test_lib(index_ops_util index.ops.util.c)
-target_link_libraries(index_ops_util PUBLIC index_ops)
+target_link_libraries(index_ops_util PUBLIC index_ops stream_config)
 
 # Morton/LOD CPU reference library (shared between tests)
 add_test_lib(morton_util morton.util.c morton.util.h)

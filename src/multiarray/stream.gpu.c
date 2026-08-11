@@ -190,36 +190,44 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
-
   if (array_index < 0 || array_index >= ms->n_arrays)
     return (struct multiarray_writer_result){
       .error = multiarray_writer_fail,
       .rest = data,
     };
 
-  struct array_descriptor_gpu* desc = &ms->arrays[array_index];
-
-  if (desc->flushed)
+  // Ahead of the context push: refusing input touches no GPU state.
+  if (ms->arrays[array_index].flushed)
     return (struct multiarray_writer_result){
       .error = multiarray_writer_finished,
       .rest = data,
     };
 
-  // Switch arrays if needed
-  if (array_index != ms->active) {
-    int err = switch_to_array(ms, array_index);
-    if (err)
-      return (struct multiarray_writer_result){ .error = err, .rest = data };
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_fail,
+      .rest = data,
+    };
+
+  // One exit from here, so the context is popped once.
+  struct multiarray_writer_result out = { .error = multiarray_writer_ok,
+                                          .rest = data };
+
+  if (array_index != ms->active)
+    out.error = switch_to_array(ms, array_index);
+
+  if (out.error == multiarray_writer_ok) {
+    struct array_descriptor_gpu* desc = &ms->arrays[array_index];
+    struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+    // `writer_finished` here means the array is at capacity
+    // (total_element_limit); an already-finalized array is refused above.
+    out.error = r.error;
+    out.rest = r.rest;
   }
 
-  struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
-
-  // `writer_finished` here means the array is at capacity
-  // (total_element_limit); an already-finalized array is refused above.
-  return (struct multiarray_writer_result){
-    .error = r.error,
-    .rest = r.rest,
-  };
+  cu_ctx_pop(pushed);
+  return out;
 }
 
 // ---- Writer: flush ----
@@ -229,6 +237,9 @@ flush_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.
@@ -270,6 +281,7 @@ flush_impl(struct multiarray_writer* self)
 
   ms->active = -1;
 
+  cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
@@ -283,6 +295,10 @@ close_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
+
   int failed = 0;
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
@@ -299,10 +315,13 @@ close_impl(struct multiarray_writer* self)
     failed |= desc->close_failed;
     desc->closed = 1;
   }
+
+  cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }
+
 
 // ---- Create / Destroy ----
 
@@ -311,6 +330,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
   if (!ms)
     return;
+
+  const int pushed = cu_ctx_push(ms->engine.cuda);
 
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
   // for callers that didn't explicitly flush. Errors are logged but not
@@ -329,8 +350,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (ms->arrays && close_impl(&ms->writer).error)
     log_error("GPU multiarray close failed during destroy");
 
-
-
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
@@ -341,6 +360,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // last-bound descriptor (freed above by destroy_array_descriptor).
   stream_engine_destroy(&ms->engine);
 
+  cu_ctx_pop(pushed);
   free(ms);
 }
 

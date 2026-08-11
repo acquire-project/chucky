@@ -490,11 +490,12 @@ delivery_main(void* arg)
 }
 
 int
-gpu_delivery_init(struct gpu_delivery* d)
+gpu_delivery_init(struct gpu_delivery* d, CUcontext cuda)
 {
   memset(d, 0, sizeof(*d));
-  if (cuCtxGetCurrent(&d->cuda) != CUDA_SUCCESS || !d->cuda)
+  if (!cuda)
     return 1;
+  d->cuda = cuda;
   d->mu = platform_mutex_new();
   d->cv = platform_cond_new();
   CHECK(Fail, d->mu && d->cv);

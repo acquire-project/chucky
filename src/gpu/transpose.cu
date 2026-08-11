@@ -1,4 +1,5 @@
 #include "defs.limits.h"
+#include "gpu/prelude.cuda.h"
 #include "gpu/transpose.h"
 #include "util/prelude.h"
 #include <stdint.h>
@@ -80,28 +81,31 @@ Invalid:
 // trailing extents makes an epoch, or when a dimension it would skip can still
 // reach the destination.
 static int
-first_decomposed_dim(const struct transpose_args& a)
+first_decomposed_dim(uint64_t epoch_elements,
+                     uint8_t rank,
+                     const uint64_t* shape,
+                     const int64_t* strides)
 {
   uint64_t product = 1;
-  int first = a.rank;
+  int first = rank;
 
-  while (product != a.epoch_elements) {
+  while (product != epoch_elements) {
     if (first == 0)
       goto NoEpoch;
-    const uint64_t n = a.shape[first - 1];
-    if (n == 0 || n > a.epoch_elements / product)
+    const uint64_t n = shape[first - 1];
+    if (n == 0 || n > epoch_elements / product)
       goto NoEpoch;
     product *= n;
     --first;
   }
 
   for (int d = 0; d < first; ++d) {
-    if (a.strides[d] != 0 && a.shape[d] != 1) {
+    if (strides[d] != 0 && shape[d] != 1) {
       log_error("transpose: lifted dimension %d lies outside an epoch, but its "
                 "extent %llu and stride %lld still reach the destination",
                 d,
-                (unsigned long long)a.shape[d],
-                (long long)a.strides[d]);
+                (unsigned long long)shape[d],
+                (long long)strides[d]);
       return -1;
     }
   }
@@ -110,8 +114,23 @@ first_decomposed_dim(const struct transpose_args& a)
 NoEpoch:
   log_error("transpose: no run of trailing extents multiplies out to an epoch "
             "of %llu elements",
-            (unsigned long long)a.epoch_elements);
+            (unsigned long long)epoch_elements);
   return -1;
+}
+
+extern "C" int
+transpose_check_layout(uint64_t epoch_elements,
+                       uint8_t rank,
+                       const uint64_t* shape,
+                       const int64_t* strides)
+{
+  CHECK(Invalid, rank <= MAX_RANK);
+  CHECK_SILENT(Invalid,
+               first_decomposed_dim(epoch_elements, rank, shape, strides) >= 0);
+  return 0;
+
+Invalid:
+  return 1;
 }
 
 static int
@@ -167,24 +186,14 @@ launch(const struct transpose_args& a, int first_dim)
   const unsigned grid_size =
     (unsigned)ceildiv(src_size, (uint64_t)ELEMENTS_PER_BLOCK<T>);
 
-  // Kernels elsewhere never read this per-thread error, so clear it or one of
-  // their leftovers arrives below as a refused scatter.
-  cudaGetLastError();
-  transpose_v0_k<T, Index>
-    <<<grid_size, block_size, 0, (cudaStream_t)a.stream>>>(
-      (T*)a.d_dst_beg,
-      (const T*)a.d_src_beg,
-      (Index)src_size,
-      (Index)a.i_offset,
-      (Index)region_stride,
-      layout);
-
-  const cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    log_error("transpose: launch failed: %s", cudaGetErrorString(err));
-    return 1;
-  }
-  return 0;
+  return CUDA_LAUNCH(transpose_v0_k<T, Index>
+                     <<<grid_size, block_size, 0, (cudaStream_t)a.stream>>>(
+                       (T*)a.d_dst_beg,
+                       (const T*)a.d_src_beg,
+                       (Index)src_size,
+                       (Index)a.i_offset,
+                       (Index)region_stride,
+                       layout));
 }
 
 template<typename T>
@@ -197,7 +206,8 @@ transpose_launch(const struct transpose_args& a)
   if (!args_valid<T>(a))
     return 1;
 
-  const int first_dim = first_decomposed_dim(a);
+  const int first_dim =
+    first_decomposed_dim(a.epoch_elements, a.rank, a.shape, a.strides);
   if (first_dim < 0)
     return 1;
 

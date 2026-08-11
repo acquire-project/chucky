@@ -431,9 +431,13 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-
+  // Ahead of the context push: refusing input touches no GPU state.
   if (s->flushed)
     return writer_finished_at(input.beg, input.end);
+
+  const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error_at(input.beg, input.end); // nothing was consumed
 
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
@@ -443,6 +447,7 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     s->engine.metrics.max_append_ms = ms;
   if (r.rest.beg != input.beg)
     record_append_ms(&s->engine.metrics, ms);
+  cu_ctx_pop(pushed);
   return r;
 }
 
@@ -453,6 +458,9 @@ tile_stream_gpu_flush_final(struct writer* self)
     container_of(self, struct tile_stream_gpu, writer);
   if (s->flushed)
     return s->flush_failed ? writer_error() : writer_ok();
+  const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error(); // nothing ran, so the stream stays appendable
   struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
   // Finalized either way: a flush that failed partway may have closed some
   // shards already, so taking more input would append past them.
@@ -460,6 +468,7 @@ tile_stream_gpu_flush_final(struct writer* self)
   s->flush_failed = (r.error != 0);
   // Those writes are new, so an earlier close no longer covers them.
   s->closed = 0;
+  cu_ctx_pop(pushed);
   return r;
 }
 
@@ -472,9 +481,14 @@ tile_stream_gpu_close_final(struct writer* self)
   // flush queued.
   if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
-  struct writer_result r = stream_close_body(&s->engine.compress_agg.ar, &s->ctx);
+  const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error();
+  struct writer_result r =
+    stream_close_body(&s->engine.compress_agg.ar, &s->ctx);
   s->closed = 1;
   s->close_failed = (r.error != 0);
+  cu_ctx_pop(pushed);
   return r;
 }
 

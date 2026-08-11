@@ -3,6 +3,7 @@
 
 #include "log/log.h"
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 #define CU(lbl, e)                                                             \
   do {                                                                         \
@@ -16,6 +17,32 @@
 #define CUWARN(e)                                                              \
   do {                                                                         \
     handle_curesult(LOG_WARN, (e), __FILE__, __LINE__, #e);                    \
+  } while (0)
+
+// Queues a kernel launch and yields 0 when the driver accepted it. The
+// surrounding driver-API calls never see a refusal, which lands in the
+// runtime's per-thread error instead. Taking the pending error first scopes
+// the check to this launch: nvcomp runs kernels on the same thread, and a
+// launch that succeeds leaves an error already stored there.
+#define CUDA_LAUNCH(...)                                                       \
+  (take_stale_cudaerror(__FILE__, __LINE__),                                   \
+   (__VA_ARGS__),                                                              \
+   handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
+
+// Wraps a runtime-API call that returns its own status. Yields 0 on success.
+#define CUDA_CALL(e) handle_cudaerror((e), __FILE__, __LINE__, #e)
+
+// The same two in goto form, for the sites that clean up.
+#define CUDA_LAUNCH_OR(lbl, ...)                                               \
+  do {                                                                         \
+    if (CUDA_LAUNCH(__VA_ARGS__))                                              \
+      goto lbl;                                                                \
+  } while (0)
+
+#define CUDA_CALL_OR(lbl, e)                                                   \
+  do {                                                                         \
+    if (CUDA_CALL(e))                                                          \
+      goto lbl;                                                                \
   } while (0)
 
 #ifdef __cplusplus
@@ -45,6 +72,65 @@ extern "C"
               ecode);
     }
     return 1;
+  }
+
+  static inline int handle_cudaerror(cudaError_t ecode,
+                                     const char* file,
+                                     int line,
+                                     const char* expr)
+  {
+    if (ecode == cudaSuccess)
+      return 0;
+    log_log(LOG_ERROR,
+            file,
+            line,
+            "CUDA error: %s %s\n",
+            cudaGetErrorString(ecode),
+            expr);
+    return 1;
+  }
+
+  // Takes an error another runtime user left unread, so the check after the
+  // launch answers for the launch alone. Debug rather than warn: a sticky
+  // fault comes back from every later call, and the launch's own check
+  // reports it.
+  static inline void take_stale_cudaerror(const char* file, int line)
+  {
+    const cudaError_t stale = cudaGetLastError();
+    if (stale != cudaSuccess)
+      log_log(LOG_DEBUG,
+              file,
+              line,
+              "CUDA error left by an earlier call on this thread: %s\n",
+              cudaGetErrorString(stale));
+  }
+
+  // Makes ctx current for work on this thread. A kernel launch goes through
+  // the runtime API, which uses the calling thread's context and refuses a
+  // stream belonging to another. Pushing rather than setting leaves a caller
+  // that keeps its own context holding it again on return.
+  //
+  // Yields 1 when it pushed, 0 when the thread already holds ctx, -1 when the
+  // push failed. After a -1 the work would run on the wrong context.
+  static inline int cu_ctx_push(CUcontext ctx)
+  {
+    CUcontext current = NULL;
+    if (!ctx || (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ctx))
+      return 0;
+    const CUresult res = cuCtxPushCurrent(ctx);
+    if (res != CUDA_SUCCESS) {
+      handle_curesult(LOG_ERROR, res, __FILE__, __LINE__, "cuCtxPushCurrent");
+      return -1;
+    }
+    return 1;
+  }
+
+  static inline void cu_ctx_pop(int pushed)
+  {
+    if (pushed == 1) {
+      CUcontext prev = NULL;
+      CUWARN(cuCtxPopCurrent(&prev));
+    }
   }
 
   // CUDA 13 added a CUctxCreateParams* argument in position 2; pass NULL to

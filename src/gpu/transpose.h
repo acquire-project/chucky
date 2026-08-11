@@ -10,6 +10,14 @@ extern "C"
 {
 #endif
 
+  // The layout half of what transpose checks, so a stream can refuse a layout
+  // it could never scatter when it opens rather than partway through an
+  // append. Returns 0 when the scatter can place the layout.
+  int transpose_check_layout(uint64_t epoch_elements,
+                             uint8_t rank,
+                             const uint64_t* shape,
+                             const int64_t* strides);
+
   // i_offset counts from the start of the epoch d_dst_beg points at, not from
   // the start of the stream.
   //
