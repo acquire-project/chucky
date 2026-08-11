@@ -745,9 +745,8 @@ test_d2h_zstd_double_buffer(void)
 
   CHECK(Fail, sink.finalize_count == 2);
 
-  // Counts only reach so far. These events are seeded at setup, so a cycle
-  // that skipped its record still reports a plausible interval; catching that
-  // needs the ordering check the ingest tests use.
+  // These events are seeded at setup, so a cycle that skipped its record
+  // still reports a plausible interval. Counting alone cannot see that.
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));

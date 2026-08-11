@@ -19,9 +19,8 @@ as_view(CUdeviceptr d)
 }
 
 // A timestamp for the dispatches' timing events to be ordered against. The
-// synchronize is the point of it: the events seeded when the staging state was
-// created must run first, or the marker lands before them and nothing below
-// can ever fail.
+// synchronize matters: events seeded when the staging state was created must
+// run first, or the marker lands before them and nothing below can fail.
 static int
 record_marker(CUevent* marker, CUstream compute, CUstream h2d)
 {
@@ -434,9 +433,7 @@ test_ingest_multiscale(void)
   CU(Fail, cuStreamSynchronize(compute));
   CU(Fail, cuStreamSynchronize(h2d));
 
-  // The ring mark lives in each caller rather than the helper they share, so
-  // it has to be repeated here. #191 left it out of this path, throwing away
-  // every measurement and losing the report's Copy row. Nothing else noticed.
+  // #191 lost this path's measurements and the report lost its Copy row.
   CHECK(Fail, check_ingest_timing(&stage, marker, 1, 1, 0));
 
   h_out = malloc(src_bytes);
@@ -463,9 +460,9 @@ Fail:
   return ok ? 0 : 1;
 }
 
-// Overrunning the ring without collecting overwrites the oldest measurements,
-// and only the lost-sample counter records it. Every other test asserts that
-// counter is zero, so one has to drive it non-zero for those to mean anything.
+// Overrunning the ring overwrites the oldest measurements, and only the
+// lost-sample counter records it. Other tests assert it is zero; this drives
+// it.
 static int
 test_ingest_timing_ring_wraps(void)
 {
@@ -521,8 +518,8 @@ test_ingest_timing_ring_wraps(void)
           event_is_after(
             before_reuse, stage.slot[i].t_h2d_start, "reused H2D slot", i));
 
-  // The ring keeps one entry per slot and H2D one per staging slot, so the
-  // surviving counts are the capacities rather than the dispatch count.
+  // Each side keeps one entry per slot, so the surviving counts are the
+  // capacities rather than the dispatch count.
   CHECK(Fail,
         check_ingest_timing(&stage,
                             before_all,
