@@ -271,8 +271,9 @@ flush_impl(struct multiarray_writer* self)
   };
 }
 
-// publish_array_shape reads the engine's bound array, so each one is bound
-// while it closes.
+// Takes each array's own aggregate state rather than binding it to the engine:
+// binding would quiesce the output and kick delivery work that closing does not
+// need.
 static struct multiarray_writer_result
 close_impl(struct multiarray_writer* self)
 {
@@ -283,14 +284,10 @@ close_impl(struct multiarray_writer* self)
     struct array_descriptor_gpu* desc = &ms->arrays[a];
     if (desc->closed || !desc->ctx.sink)
       continue;
-    ms->active = a;
-    bind_context(&ms->engine, desc);
-    if (stream_close_body(&ms->engine, &desc->ctx).error)
+    if (stream_close_body(&desc->st.agg, &desc->ctx).error)
       failed = 1;
-    unbind_context(&ms->engine, desc);
     desc->closed = 1;
   }
-  ms->active = -1;
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };

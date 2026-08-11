@@ -716,9 +716,15 @@ test_flush_idempotent_after_finished(void)
 
   // Explicit flush commits any partial shard state.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  // The extent publishes in close, so snapshot the counts after it.
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
   const int finalize_after_flush = sink.finalize_count;
   const int open_after_flush = sink.open_count;
   const int update_append_after_flush = sink.update_append_count;
+
+  // Closing again is idempotent too.
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.update_append_count == update_append_after_flush);
 
   // Second flush — idempotent: no new sink calls (including no metadata
   // re-write via update_append).

@@ -333,14 +333,14 @@ collect_ingest_timing(struct stream_engine* e)
 }
 
 static struct writer_result
-publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
+publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
 {
   if (!ctx->sink->update_append)
     return writer_ok();
 
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv)
-    if (shard_state_publish_append(&e->compress_agg.ar.shard[lv],
+    if (shard_state_publish_append(&ar->shard[lv],
                                    ctx->sink,
                                    &ctx->dims,
                                    (uint8_t)lv,
@@ -390,7 +390,7 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 }
 
 struct writer_result
-stream_close_body(struct stream_engine* e, struct stream_context* ctx)
+stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
 {
   if (ctx->layout.epoch_elements == 0)
     return writer_ok();
@@ -405,7 +405,7 @@ stream_close_body(struct stream_engine* e, struct stream_context* ctx)
   // A sink IO error is the one case the shape is withheld: which writes landed
   // is unknowable.
   if (!sink_failed) {
-    struct writer_result shape = publish_array_shape(e, ctx);
+    struct writer_result shape = publish_array_shape(ar, ctx);
     if (shape.error)
       r = shape;
   }
@@ -468,7 +468,7 @@ tile_stream_gpu_close_final(struct writer* self)
     container_of(self, struct tile_stream_gpu, writer);
   if (s->closed)
     return s->close_failed ? writer_error() : writer_ok();
-  struct writer_result r = stream_close_body(&s->engine, &s->ctx);
+  struct writer_result r = stream_close_body(&s->engine.compress_agg.ar, &s->ctx);
   s->closed = 1;
   s->close_failed = (r.error != 0);
   return r;

@@ -424,4 +424,4 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx);
 // flush body has queued its work, so several arrays' writes overlap instead of
 // draining one at a time.
 struct writer_result
-stream_close_body(struct stream_engine* e, struct stream_context* ctx);
+stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx);
