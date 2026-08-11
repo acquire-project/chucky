@@ -74,9 +74,7 @@ resolve_storage_order(uint8_t rank,
   return 0;
 }
 
-// Compute host-side tile_stream_layout fields for a single level (no GPU).
-// Returns 0 on success, 1 on overflow.
-static int
+int
 compute_level_layout(struct tile_stream_layout* layout,
                      uint8_t rank,
                      uint8_t n_append,
@@ -86,6 +84,9 @@ compute_level_layout(struct tile_stream_layout* layout,
                      size_t alignment,
                      const uint8_t* storage_order)
 {
+  CHECK(Fail, rank > 0);
+  CHECK(Fail, rank <= HALF_MAX_RANK);
+
   layout->lifted_rank = 2 * rank;
   layout->chunk_elements = 1;
 

@@ -24,15 +24,11 @@ extern "C"
   struct aggregate_layout;
   size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
 
-  // Aggregate layout fields. Host fields are always valid.
-  // d_* fields are GPU device pointers (NULL on CPU).
   struct aggregate_layout
   {
     uint8_t lifted_rank; // 2 * (rank - n_append)
     uint64_t lifted_shape[MAX_RANK];
     int64_t lifted_strides[MAX_RANK];
-    uint64_t* d_lifted_shape;  // device copy (NULL on CPU)
-    int64_t* d_lifted_strides; // device copy (NULL on CPU)
     uint64_t chunks_per_epoch; // M: actual chunk count
     uint64_t covering_count;   // C >= M: product of padded dims
     size_t max_comp_chunk_bytes;

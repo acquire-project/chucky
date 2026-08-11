@@ -20,6 +20,20 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                        size_t shard_alignment,
                        struct computed_stream_layouts* out);
 
+// One level's layout, host-side. level_shape is that level's shape in
+// elements, alignment is how far each chunk is padded, and storage_order is
+// the forward permutation: entry j is the dimension stored at position j.
+// Returns 0 on success, 1 on overflow.
+int
+compute_level_layout(struct tile_stream_layout* layout,
+                     uint8_t rank,
+                     uint8_t n_append,
+                     size_t bytes_per_element,
+                     const struct dimension* dims,
+                     const uint64_t* level_shape,
+                     size_t alignment,
+                     const uint8_t* storage_order);
+
 // Free resources owned by computed_stream_layouts.
 void
 computed_stream_layouts_free(struct computed_stream_layouts* cl);

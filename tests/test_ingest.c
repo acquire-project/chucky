@@ -52,36 +52,30 @@ test_ingest_incremental(void)
 {
   log_info("=== test_ingest_incremental ===");
 
-  const int rank = 3;
+  const uint8_t rank = 3;
   const uint64_t dim_sizes[] = { 4, 4, 6 };
   const uint64_t chunk_sizes[] = { 2, 2, 3 };
   const size_t bytes_per_element = 2;
 
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+  struct tile_stream_layout layout;
+  if (test_level_layout(&layout,
+                        rank,
+                        1,
+                        dim_sizes,
+                        chunk_sizes,
+                        NULL,
+                        bytes_per_element,
+                        TEST_CHUNK_ALIGNMENT))
+    return 1;
 
-  build_lifted_layout(rank,
-                      1,
-                      dim_sizes,
-                      chunk_sizes,
-                      NULL,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
-
+  const uint64_t epoch_elements = layout.epoch_elements;
   const size_t src_bytes = epoch_elements * bytes_per_element;
-  const size_t pool_bytes = chunks_per_epoch * chunk_stride * bytes_per_element;
+  const size_t pool_bytes =
+    layout.chunks_per_epoch * layout.chunk_stride * bytes_per_element;
   const size_t half = src_bytes / 2;
 
   struct staging_state stage = { 0 };
   struct gpu_ordering ord = { 0 };
-  struct tile_stream_layout layout = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   void* h_pool = NULL;
@@ -98,14 +92,6 @@ test_ingest_incremental(void)
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   // On the scatter's stream, so the clear cannot land after it.
   CU(Fail, cuMemsetD8Async(d_pool, 0, pool_bytes, compute));
-
-  layout.lifted_rank = lifted_rank;
-  memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
-  memcpy(layout.lifted_strides, lifted_strides, lifted_rank * sizeof(int64_t));
-  layout.chunk_elements = chunk_elements;
-  layout.chunk_stride = chunk_stride;
-  layout.chunks_per_epoch = chunks_per_epoch;
-  layout.epoch_elements = epoch_elements;
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -154,9 +140,9 @@ test_ingest_incremental(void)
     int errors = 0;
     for (uint64_t i = 0; i < epoch_elements; ++i) {
       const uint64_t off =
-        expected_scatter_offset(lifted_rank,
-                                lifted_shape,
-                                lifted_strides,
+        expected_scatter_offset(layout.lifted_rank,
+                                layout.lifted_shape,
+                                layout.lifted_strides,
                                 epoch_elements,
                                 pool_bytes / bytes_per_element,
                                 i);
@@ -199,31 +185,25 @@ Fail:
 static int
 run_epochs_from(uint32_t n_epochs, uint64_t first_element)
 {
-  const int rank = 3;
+  const uint8_t rank = 3;
   const uint64_t dim_sizes[] = { 4, 4, 6 };
   const uint64_t chunk_sizes[] = { 2, 2, 3 };
   const size_t bytes_per_element = 2;
 
-  uint8_t lifted_rank;
-  uint64_t lifted_shape[MAX_RANK];
-  int64_t lifted_strides[MAX_RANK];
-  uint64_t chunk_elements, chunk_stride, chunks_per_epoch, epoch_elements;
+  struct tile_stream_layout layout;
+  if (test_level_layout(&layout,
+                        rank,
+                        1,
+                        dim_sizes,
+                        chunk_sizes,
+                        NULL,
+                        bytes_per_element,
+                        TEST_CHUNK_ALIGNMENT))
+    return 1;
 
-  build_lifted_layout(rank,
-                      1,
-                      dim_sizes,
-                      chunk_sizes,
-                      NULL,
-                      &lifted_rank,
-                      lifted_shape,
-                      lifted_strides,
-                      &chunk_elements,
-                      &chunk_stride,
-                      &chunks_per_epoch,
-                      &epoch_elements);
-
+  const uint64_t epoch_elements = layout.epoch_elements;
   const size_t epoch_bytes =
-    (chunks_per_epoch * chunk_stride + TEST_REGION_PAD_ELEMENTS) *
+    (layout.chunks_per_epoch * layout.chunk_stride + TEST_REGION_PAD_ELEMENTS) *
     bytes_per_element;
   const uint64_t src_elements = n_epochs * epoch_elements;
   const size_t src_bytes = src_elements * bytes_per_element;
@@ -233,7 +213,6 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
 
   struct staging_state stage = { 0 };
   struct gpu_ordering ord = { 0 };
-  struct tile_stream_layout layout = { 0 };
   CUstream h2d = 0, compute = 0;
   CUdeviceptr d_pool = 0;
   void* h_pool = NULL;
@@ -250,14 +229,6 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
   CU(Fail, cuMemAlloc(&d_pool, pool_bytes));
   // On the scatter's stream, so the clear cannot land after it.
   CU(Fail, cuMemsetD8Async(d_pool, 0, pool_bytes, compute));
-
-  layout.lifted_rank = lifted_rank;
-  memcpy(layout.lifted_shape, lifted_shape, lifted_rank * sizeof(uint64_t));
-  memcpy(layout.lifted_strides, lifted_strides, lifted_rank * sizeof(int64_t));
-  layout.chunk_elements = chunk_elements;
-  layout.chunk_stride = chunk_stride;
-  layout.chunks_per_epoch = chunks_per_epoch;
-  layout.epoch_elements = epoch_elements;
 
   h_src = (uint16_t*)malloc(src_bytes);
   CHECK(Fail, h_src);
@@ -293,9 +264,9 @@ run_epochs_from(uint32_t n_epochs, uint64_t first_element)
     int errors = 0;
     for (uint64_t i = 0; i < src_elements; ++i) {
       const uint64_t off =
-        expected_scatter_offset(lifted_rank,
-                                lifted_shape,
-                                lifted_strides,
+        expected_scatter_offset(layout.lifted_rank,
+                                layout.lifted_shape,
+                                layout.lifted_strides,
                                 epoch_elements,
                                 epoch_bytes / bytes_per_element,
                                 first_element % epoch_elements + i);

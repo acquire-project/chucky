@@ -1,8 +1,10 @@
 #include "index.ops.util.h"
 #include "defs.limits.h"
+#include "stream/config.h"
 #include "util/prelude.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 void
 print_vi32(int n, const int* v)
@@ -130,50 +132,34 @@ random_vu64(int count, uint64_t max)
   return cases;
 }
 
-void
-build_lifted_layout(int rank,
-                    uint8_t n_append,
-                    const uint64_t* dim_sizes,
-                    const uint64_t* chunk_sizes,
-                    const uint8_t* storage_order,
-                    uint8_t* out_lifted_rank,
-                    uint64_t* lifted_shape,
-                    int64_t* lifted_strides,
-                    uint64_t* out_chunk_elements,
-                    uint64_t* out_chunk_stride,
-                    uint64_t* out_chunks_per_epoch,
-                    uint64_t* out_epoch_elements)
+int
+test_level_layout(struct tile_stream_layout* out,
+                  uint8_t rank,
+                  uint8_t n_append,
+                  const uint64_t* dim_sizes,
+                  const uint64_t* chunk_sizes,
+                  const uint8_t* storage_order,
+                  size_t bytes_per_element,
+                  size_t alignment)
 {
-  *out_lifted_rank = (uint8_t)(2 * rank);
-  uint64_t chunk_elements = 1;
-  uint64_t chunk_count[MAX_RANK];
+  struct dimension dims[HALF_MAX_RANK] = { 0 };
+  uint8_t identity[HALF_MAX_RANK];
 
-  for (int i = 0; i < rank; ++i) {
-    chunk_count[i] = ceildiv(dim_sizes[i], chunk_sizes[i]);
-    lifted_shape[2 * i] = chunk_count[i];
-    lifted_shape[2 * i + 1] = chunk_sizes[i];
-    chunk_elements *= chunk_sizes[i];
+  for (uint8_t d = 0; d < rank; ++d) {
+    dims[d].size = dim_sizes[d];
+    dims[d].chunk_size = chunk_sizes[d];
+    identity[d] = d;
   }
 
-  uint64_t chunk_stride = chunk_elements;
-
-  compute_lifted_strides(rank,
-                         chunk_sizes,
-                         chunk_count,
-                         storage_order,
-                         (int64_t)chunk_stride,
-                         lifted_strides);
-
-  uint64_t chunks_per_epoch = 1;
-  for (int i = n_append; i < rank; ++i)
-    chunks_per_epoch *= chunk_count[i];
-  for (int d = 0; d < n_append; ++d)
-    lifted_strides[2 * d] = 0; // an append dim's chunk position never moves
-
-  *out_chunks_per_epoch = chunks_per_epoch;
-  *out_chunk_elements = chunk_elements;
-  *out_chunk_stride = chunk_stride;
-  *out_epoch_elements = chunks_per_epoch * chunk_elements;
+  memset(out, 0, sizeof(*out));
+  return compute_level_layout(out,
+                              rank,
+                              n_append,
+                              bytes_per_element,
+                              dims,
+                              dim_sizes,
+                              alignment,
+                              storage_order ? storage_order : identity);
 }
 
 uint64_t

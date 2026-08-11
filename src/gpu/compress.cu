@@ -338,12 +338,14 @@ codec_compress(struct codec* c,
   // Fill pointer arrays
   {
     unsigned blocks = (unsigned)((n + 255) / 256);
-    fill_ptrs_kernel<<<blocks, 256, 0, cuda_stream>>>(c->d_ptrs,
-                                                      (const char*)d_input,
-                                                      input_stride,
-                                                      (char*)d_output,
-                                                      c->max_output_size,
-                                                      n);
+    CUDA_LAUNCH_OR(
+      Fail,
+      fill_ptrs_kernel<<<blocks, 256, 0, cuda_stream>>>(c->d_ptrs,
+                                                        (const char*)d_input,
+                                                        input_stride,
+                                                        (char*)d_output,
+                                                        c->max_output_size,
+                                                        n));
   }
 
   switch (c->type) {
