@@ -23,13 +23,13 @@
 // leaves its reason in the runtime's per-thread error, which the driver-API
 // calls around it never see. Yields 0 when the launch was accepted.
 //
-// The read at the front is what scopes the check to this launch. nvcomp runs
-// kernels on this same host thread, and a launch that succeeds does not clear
-// an error already stored there, so without it one of nvcomp's would come back
-// here and fail an append the GPU handled fine. A fault that poisoned the
-// context still reports: the read after the launch returns it again.
+// Taking the pending error first is what scopes the check to this launch:
+// nvcomp runs kernels on this same host thread, and a launch that succeeds
+// leaves an error already stored there for this check to find. A fault that
+// poisoned the context still reports, since the read after the launch returns
+// it again.
 #define CUDA_LAUNCH(...)                                                       \
-  (cudaGetLastError(),                                                         \
+  (warn_stale_cudaerror(__FILE__, __LINE__),                                   \
    (__VA_ARGS__),                                                              \
    handle_cudaerror(cudaGetLastError(), __FILE__, __LINE__, #__VA_ARGS__))
 
@@ -78,6 +78,21 @@ extern "C"
     return 1;
   }
 
+  // Takes the error another runtime user left unread. Reporting it here is
+  // the only account of it anyone gets: whoever produced it returned success
+  // to its own caller, and clearing is what keeps it from being read back as
+  // the next launch's failure.
+  static inline void warn_stale_cudaerror(const char* file, int line)
+  {
+    const cudaError_t stale = cudaGetLastError();
+    if (stale != cudaSuccess)
+      log_log(LOG_WARN,
+              file,
+              line,
+              "CUDA error left by an earlier call on this thread: %s\n",
+              cudaGetErrorString(stale));
+  }
+
   // Kernel launches go through the runtime API, which uses the calling
   // thread's context and refuses a stream that belongs to another one, so an
   // entry point a caller can reach from any thread makes ctx current first.
@@ -88,7 +103,14 @@ extern "C"
     CUcontext current = NULL;
     if (!ctx || (cuCtxGetCurrent(&current) == CUDA_SUCCESS && current == ctx))
       return 0;
-    return cuCtxPushCurrent(ctx) == CUDA_SUCCESS;
+    const CUresult res = cuCtxPushCurrent(ctx);
+    // Say so rather than let the caller read the 0 as "already current" and
+    // run the whole append against whatever context this thread does hold.
+    if (res != CUDA_SUCCESS) {
+      handle_curesult(LOG_ERROR, res, __FILE__, __LINE__, "cuCtxPushCurrent");
+      return 0;
+    }
+    return 1;
   }
 
   static inline void cu_ctx_pop(int pushed)

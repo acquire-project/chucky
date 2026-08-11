@@ -89,9 +89,14 @@ aggregate_cub_temp_bytes(uint64_t count, size_t* out_bytes)
     return 0;
   }
   *out_bytes = 0;
-  cub::DeviceScan::ExclusiveSum(
-    nullptr, *out_bytes, (size_t*)nullptr, (size_t*)nullptr, (int)count);
-  return 0;
+  // A query that fails leaves 0 behind, which reads as "no scratch needed"
+  // rather than as a failure, and the scan it sizes then runs without any.
+  return handle_cudaerror(
+    cub::DeviceScan::ExclusiveSum(
+      nullptr, *out_bytes, (size_t*)nullptr, (size_t*)nullptr, (int)count),
+    __FILE__,
+    __LINE__,
+    "cub::DeviceScan::ExclusiveSum query");
 }
 
 extern "C" void
@@ -205,12 +210,17 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
      cuMemHostAlloc((void**)&slot->h_permuted_sizes, C * sizeof(size_t), 0));
 
   slot->temp_bytes = 0;
-  cub::DeviceScan::ExclusiveSum(nullptr,
-                                slot->temp_bytes,
-                                slot->d_permuted_sizes,
-                                slot->d_offsets,
-                                (int)C,
-                                (cudaStream_t)0);
+  CHECK_SILENT(
+    Error,
+    handle_cudaerror(cub::DeviceScan::ExclusiveSum(nullptr,
+                                                   slot->temp_bytes,
+                                                   slot->d_permuted_sizes,
+                                                   slot->d_offsets,
+                                                   (int)C,
+                                                   (cudaStream_t)0),
+                     __FILE__,
+                     __LINE__,
+                     "cub::DeviceScan::ExclusiveSum query") == 0);
 
   if (slot->temp_bytes > 0)
     CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
@@ -327,9 +337,8 @@ aggregate_batch_by_shard_async(const void* d_compressed,
   // Pass 2: exclusive prefix sum on C elements (tight; no padding inflations).
   {
     size_t temp = slot->temp_bytes;
-    // A scan that never ran leaves d_offsets holding whatever the last batch
-    // wrote, and the passes below would pack this batch's chunks at those
-    // offsets rather than report anything.
+    // A scan that never ran leaves the offsets the last batch wrote, and the
+    // passes below would pack this batch's chunks at those.
     CHECK_SILENT(
       Error,
       handle_cudaerror(cub::DeviceScan::ExclusiveSum(slot->d_temp,

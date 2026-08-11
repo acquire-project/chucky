@@ -139,6 +139,9 @@ stream_engine_init(struct stream_engine* e,
       log_warn("staging copy pool unavailable; copies run on the producer");
   }
 
+  if (cuCtxGetCurrent(&e->cuda) != CUDA_SUCCESS)
+    e->cuda = NULL;
+
   if (gpu_delivery_init(&e->delivery))
     log_warn("delivery worker unavailable; using depth-one producer drains");
 
@@ -319,7 +322,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (!s)
     return;
 
-  const int pushed = cu_ctx_push(s->engine.delivery.cuda);
+  const int pushed = cu_ctx_push(s->engine.cuda);
 
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not

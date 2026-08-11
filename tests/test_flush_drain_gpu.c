@@ -173,6 +173,132 @@ Cleanup:
   return rc;
 }
 
+struct foreign_args
+{
+  struct writer* w;
+  struct slice input;
+  CUcontext own;    // the context this thread holds coming in
+  int error;        // non-zero if the append or flush reported one
+  int context_kept; // 1 if `own` was still current on return
+};
+
+// The writer runs on whatever thread the caller hands it. Kernel launches go
+// through the runtime API, which uses the calling thread's context, so a
+// thread holding a context of its own must come back holding it.
+static void
+foreign_context_thread_fn(void* arg)
+{
+  struct foreign_args* fa = (struct foreign_args*)arg;
+  if (cuCtxSetCurrent(fa->own) != CUDA_SUCCESS) {
+    fa->error = 1;
+    return;
+  }
+
+  struct writer_result r = writer_append(fa->w, fa->input);
+  if (r.error == 0)
+    r = writer_flush(fa->w);
+  fa->error = r.error;
+
+  CUcontext after = NULL;
+  fa->context_kept =
+    cuCtxGetCurrent(&after) == CUDA_SUCCESS && after == fa->own;
+}
+
+static int
+test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
+{
+  log_info("=== test_writes_from_a_foreign_context ===");
+
+  struct dimension dims[3] = {
+    { .size = 12, .chunk_size = 2, .chunks_per_shard = 3, .name = "z" },
+    { .size = 8, .chunk_size = 4, .chunks_per_shard = 2, .name = "y" },
+    { .size = 12, .chunk_size = 3, .chunks_per_shard = 2, .name = "x" },
+  };
+  for (int d = 0; d < 3; ++d)
+    dims[d].storage_position = (uint8_t)d;
+  const size_t total_elements = 12 * 8 * 12;
+
+  struct store* store = NULL;
+  struct shard_pool* pool = NULL;
+  struct zarr_array* arr = NULL;
+  struct tile_stream_gpu* s = NULL;
+  uint32_t* src = NULL;
+  test_thread* thr = NULL;
+  CUcontext other = 0;
+  int rc = 1;
+
+  store = store_fs_create(tmpdir, 1);
+  CHECK(Cleanup, store);
+  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
+  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
+
+  pool = store->create_pool(store, 8);
+  CHECK(Cleanup, pool);
+
+  struct zarr_array_config acfg = {
+    .data_type = dtype_u32,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
+  CHECK(Cleanup, arr);
+
+  const struct tile_stream_configuration cfg = {
+    .buffer_capacity_bytes = total_elements * sizeof(uint32_t),
+    .dtype = dtype_u32,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  // Created here, so the stream's context is the one this thread holds.
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  CHECK(Cleanup, s);
+
+  src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
+  CHECK(Cleanup, src);
+
+  CUcontext mine = NULL;
+  CU(Cleanup, cuCtxGetCurrent(&mine));
+  CU(Cleanup, cu_ctx_create(&other, 0, dev));
+  // Creating a context makes it current here too. Only the writer's thread
+  // should hold it, so take this one back to the stream's.
+  CU(Cleanup, cuCtxSetCurrent(mine));
+
+  struct foreign_args fa = {
+    .w = tile_stream_gpu_writer(s),
+    .input = { .beg = src, .end = src + total_elements },
+    .own = other,
+  };
+  CHECK(Cleanup, test_thread_start(&thr, foreign_context_thread_fn, &fa) == 0);
+  test_thread_join(thr);
+  thr = NULL;
+
+  if (fa.error) {
+    log_error("append/flush from a thread holding another context failed");
+    goto Cleanup;
+  }
+  if (!fa.context_kept) {
+    log_error("the writer left the calling thread on a different context");
+    goto Cleanup;
+  }
+
+  rc = 0;
+  log_info("  PASS");
+
+Cleanup:
+  free(src);
+  tile_stream_gpu_destroy(s);
+  test_thread_join(thr);
+  zarr_array_destroy(arr);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  if (other)
+    cuCtxDestroy(other);
+  return rc;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -195,6 +321,13 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/flush_drain", tmpdir);
     test_mkdir(sub);
     ecode |= test_flush_waits_for_sink_io(sub);
+  }
+
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/foreign_context", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_writes_from_a_foreign_context(sub, dev);
   }
 
 Cleanup:

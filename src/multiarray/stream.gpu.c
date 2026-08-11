@@ -192,7 +192,7 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       .rest = data,
     };
 
-  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
   struct array_descriptor_gpu* desc = &ms->arrays[array_index];
 
   // Switch arrays if needed
@@ -224,7 +224,7 @@ flush_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
-  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.
@@ -282,7 +282,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (!ms)
     return;
 
-  const int pushed = cu_ctx_push(ms->engine.delivery.cuda);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
 
   // Remember which arrays we will auto-flush: only their sinks are sure to be
   // alive at drain time, since a caller may free a sink after flushing itself.
