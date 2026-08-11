@@ -180,6 +180,7 @@ struct foreign_args
   CUcontext own;    // the context this thread holds coming in
   int error;        // non-zero if the append or flush reported one
   int context_kept; // 1 if `own` was still current on return
+  int consumed_all; // 1 if the append took the whole slice
 };
 
 // The writer runs on whatever thread the caller hands it. Kernel launches go
@@ -195,6 +196,9 @@ foreign_context_thread_fn(void* arg)
   }
 
   struct writer_result r = writer_append(fa->w, fa->input);
+  // An append that reports success while consuming nothing is the shape a
+  // wrong-context run would take, so the whole slice has to be gone.
+  fa->consumed_all = r.error == 0 && r.rest.beg == fa->input.end;
   if (r.error == 0)
     r = writer_flush(fa->w);
   fa->error = r.error;
@@ -281,6 +285,10 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
   }
   if (!fa.context_kept) {
     log_error("the writer left the calling thread on a different context");
+    goto Cleanup;
+  }
+  if (!fa.consumed_all) {
+    log_error("the append reported success without taking the input");
     goto Cleanup;
   }
   if (zarr_array_has_error(arr)) {

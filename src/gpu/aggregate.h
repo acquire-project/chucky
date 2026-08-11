@@ -13,7 +13,11 @@ extern "C"
 #endif
 
   // Query CUB scratch workspace size for ExclusiveSum over count elements.
-  // Writes result to *out_bytes. Returns 0 on success.
+  // Writes result to *out_bytes. The memory estimate calls this without a
+  // device, so a query that cannot be answered leaves 0 rather than failing:
+  // the estimate comes out short by the scratch term instead of reporting a
+  // valid configuration as a bad one. Returns non-zero only for a null
+  // out_bytes.
   int aggregate_cub_temp_bytes(uint64_t count, size_t* out_bytes);
 
   struct aggregate_slot
