@@ -74,7 +74,7 @@ A library consumer needs:
 
 - **`stream.gpu.h`** — GPU pipeline: create, destroy, writer, memory estimate
 - **`stream.cpu.h`** — CPU pipeline: same interface, no CUDA dependency
-- **`writer.h`** — `struct writer`, `struct slice`, `writer_append()`, `writer_flush()`
+- **`writer.h`** — `struct writer`, `struct slice`, `writer_append()`, `writer_flush()`, `writer_close()`
 - **`dimension.h`** — `struct dimension` + builder/validation helpers
 - **`dtype.h`** — `enum dtype`, `dtype_bpe()`
 - **`types.stream.h`** — `struct tile_stream_configuration`, metrics, status
@@ -99,9 +99,13 @@ Underscores within identifiers (`platform_io`, `lod_plan`). Prefix
 `CUevent` synchronization. Host buffers use `CU_MEMHOSTALLOC_WRITECOMBINED` —
 do not read from the host side; copy data out first.
 
-**Writer vtable.** `struct writer` has two methods:
-`append(self, slice) -> writer_result` and `flush(self) -> writer_result`.
-Free functions `writer_append()` / `writer_flush()` dispatch through the vtable.
+**Writer vtable.** `struct writer` has `append(self, slice)`, `flush(self)` and
+an optional `close(self)`, each returning a `writer_result`. Free functions
+`writer_append()` / `writer_flush()` / `writer_close()` dispatch through it.
+`flush` finalizes: it writes out everything appended so far and then stops
+taking input, so it is the last call on a stream rather than a mid-stream sync.
+It returns once the writes are queued; `writer_close()` waits for them, publishes
+the extent, and reports whether the data reached storage.
 
 **Two-phase init.** `compute_stream_layouts()` does all pure-CPU layout math
 (lifted shape, strides, chunk geometry), then the GPU path uploads to device

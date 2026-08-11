@@ -18,7 +18,7 @@ enum writer_error_code
 {
   writer_error_ok = 0,
   writer_error_fail = 1,
-  writer_error_finished = 2, // stream complete: total_element_limit reached
+  writer_error_finished = 2, // stream complete: flushed, or limit reached
 };
 
 struct writer_result
@@ -30,9 +30,26 @@ struct writer_result
 struct writer
 {
   struct writer_result (*append)(struct writer* self, struct slice data);
-  // explicit sync; stream remains appendable. Returns when all writes prior
-  // to the call are durable.
+  // Finalizes the stream: writes out everything appended so far, including the
+  // chunk the append cursor stopped partway through, and stops taking input.
+  // Idempotent. A later append consumes nothing and reports `finished`.
+  //
+  // Returns once those writes are queued, not once they have landed; `close`
+  // waits for them.
+  //
+  // Finalizing is what makes the partial chunk readable: it is padded out and
+  // its shard is closed. Taking more input afterwards would have to start past
+  // that padding and past the shard slots the close left empty, which puts
+  // later data at append positions the caller never asked for.
   struct writer_result (*flush)(struct writer* self);
+
+  // Optional: waits for the writes `flush` queued to land, publishes the append
+  // extent, and lets the sink write its own metadata. Returns whether all of
+  // that succeeded, so this is where a caller learns its data reached storage,
+  // and where the array becomes readable. Idempotent, and destroying the stream
+  // runs it if the caller did not — so the sink has to outlive the stream.
+  // NULL when a writer has nothing to wait for.
+  struct writer_result (*close)(struct writer* self);
 };
 
 struct shard_writer
@@ -63,7 +80,7 @@ struct shard_sink
                                uint64_t shard_index);
 
   // Optional: update append dim extents in metadata (e.g. zarr.json shape).
-  // Called periodically during streaming and at final flush.
+  // Called periodically during streaming and from the writer's close.
   // append_sizes has n_append elements (sizes for dims 0..n_append-1).
   // NULL means no-op (non-zarr sinks can ignore).
   int (*update_append)(struct shard_sink* self,
@@ -76,7 +93,7 @@ struct shard_sink
   void (*wait_fence)(struct shard_sink* self, struct io_event ev);
 
   // Optional: flush sink-level state (e.g. dirty metadata).
-  // Called from writer_flush after outstanding shard IO has settled.
+  // Called from the writer's close, after outstanding shard IO has settled.
   // NULL = no-op.
   int (*flush)(struct shard_sink* self);
 
@@ -121,6 +138,10 @@ writer_append(struct writer* w, struct slice data);
 // Dispatch to the writer's flush method.
 struct writer_result
 writer_flush(struct writer* w);
+
+// Dispatch to the writer's close method. Ok when the writer has none.
+struct writer_result
+writer_close(struct writer* w);
 
 // Append data to a writer, retrying with exponential back-off on stall.
 struct writer_result

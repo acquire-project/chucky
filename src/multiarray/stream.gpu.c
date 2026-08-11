@@ -31,7 +31,9 @@ struct array_descriptor_gpu
   // st.agg owns per-LOD layouts, shard_state, and the per-array tail buffers.
   struct engine_array_state st;
 
-  int flushed; // 1 once flush body has run for this array
+  int flushed;      // 1 once finalized; no further input is taken
+  int closed;       // 1 once this array's writes have been waited out
+  int close_failed; // outcome of that close, re-reported by later calls
 };
 
 // ---- Main struct ----
@@ -51,6 +53,8 @@ static struct multiarray_writer_result
 update_impl(struct multiarray_writer* self, int array_index, struct slice data);
 static struct multiarray_writer_result
 flush_impl(struct multiarray_writer* self);
+static struct multiarray_writer_result
+close_impl(struct multiarray_writer* self);
 
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
@@ -192,6 +196,13 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
       .rest = data,
     };
 
+  // Ahead of the context push: refusing input touches no GPU state.
+  if (ms->arrays[array_index].flushed)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_finished,
+      .rest = data,
+    };
+
   const int pushed = cu_ctx_push(ms->engine.cuda);
   if (pushed < 0)
     return (struct multiarray_writer_result){
@@ -209,11 +220,8 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
   if (out.error == multiarray_writer_ok) {
     struct array_descriptor_gpu* desc = &ms->arrays[array_index];
     struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
-    if (desc->flushed && r.rest.beg != data.beg)
-      desc->flushed = 0;
-    // `writer_finished` here means "stream is at capacity
-    // (total_element_limit)"; finalization happens on explicit `flush()` or on
-    // destroy, not here.
+    // `writer_finished` here means the array is at capacity
+    // (total_element_limit); an already-finalized array is refused above.
     out.error = r.error;
     out.rest = r.rest;
   }
@@ -248,9 +256,7 @@ flush_impl(struct multiarray_writer* self)
   // Flush each array that has data
   for (int a = 0; a < ms->n_arrays; ++a) {
     struct array_descriptor_gpu* desc = &ms->arrays[a];
-    // Idempotency: a redundant flush with no intervening updates re-finalizes
-    // already-closed sinks. The flag is reset by update_impl when new data
-    // arrives.
+    // Finalizing twice would re-finalize an already-closed sink.
     if (desc->flushed)
       continue;
     if (desc->ctx.cursor_elements == 0 && desc->st.sched.accumulated == 0) {
@@ -264,22 +270,58 @@ flush_impl(struct multiarray_writer* self)
     struct writer_result r = stream_flush_body(&ms->engine, &desc->ctx);
 
     unbind_context(&ms->engine, desc);
+    // Latched even on failure: a flush that died partway may already have
+    // closed shards, so taking more input would append past them. Those writes
+    // are new, so an earlier close no longer covers them.
+    desc->flushed = 1;
+    desc->closed = 0;
     if (r.error)
       failed = 1;
-    else
-      desc->flushed = 1;
   }
 
   ms->active = -1;
-
-  // Each array's stream_flush_body already drained its sink as a commit
-  // point; no additional drain needed here.
 
   cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }
+
+// Takes each array's own aggregate state rather than binding it to the engine:
+// binding would quiesce the output and kick delivery work that closing does not
+// need.
+static struct multiarray_writer_result
+close_impl(struct multiarray_writer* self)
+{
+  struct multiarray_tile_stream_gpu* ms =
+    container_of(self, struct multiarray_tile_stream_gpu, writer);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
+
+  int failed = 0;
+  for (int a = 0; a < ms->n_arrays; ++a) {
+    struct array_descriptor_gpu* desc = &ms->arrays[a];
+    if (desc->closed || !desc->flushed || !desc->ctx.sink) {
+      failed |= desc->close_failed;
+      continue;
+    }
+    // desc->st.agg is only refreshed by unbind_context, so a still-bound array
+    // has its live shard state in the engine.
+    struct compress_agg_array* agg = (ms->active == a)
+                                       ? &ms->engine.compress_agg.ar
+                                       : &desc->st.agg;
+    desc->close_failed = (stream_close_body(agg, &desc->ctx).error != 0);
+    failed |= desc->close_failed;
+    desc->closed = 1;
+  }
+
+  cu_ctx_pop(pushed);
+  return (struct multiarray_writer_result){
+    .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
+  };
+}
+
 
 // ---- Create / Destroy ----
 
@@ -290,17 +332,6 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
     return;
 
   const int pushed = cu_ctx_push(ms->engine.cuda);
-
-  // Remember which arrays we will auto-flush: only their sinks are sure to be
-  // alive at drain time, since a caller may free a sink after flushing itself.
-  // On alloc failure, drain all — the rarer hazard.
-  int* autoflush = NULL;
-  if (ms->arrays && ms->n_arrays > 0) {
-    autoflush = (int*)calloc((size_t)ms->n_arrays, sizeof(int));
-    if (autoflush)
-      for (int a = 0; a < ms->n_arrays; ++a)
-        autoflush[a] = !ms->arrays[a].flushed;
-  }
 
   // Auto-finalize any unflushed arrays so destroy is a safe commit point
   // for callers that didn't explicitly flush. Errors are logged but not
@@ -315,16 +346,9 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   gpu_delivery_stop_join(&ms->engine.delivery);
   gpu_streams_sync(&ms->engine.streams);
 
-  // Drain queued IO before teardown frees the buffers it points into.
-  if (ms->arrays) {
-    for (int a = 0; a < ms->n_arrays; ++a) {
-      if (autoflush && !autoflush[a])
-        continue;
-      if (ms->arrays[a].ctx.sink)
-        shard_sink_drain(ms->arrays[a].ctx.sink);
-    }
-  }
-  free(autoflush);
+  // After the join, so the writes it lets the worker issue are waited out too.
+  if (ms->arrays && close_impl(&ms->writer).error)
+    log_error("GPU multiarray close failed during destroy");
 
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a)
@@ -364,6 +388,7 @@ multiarray_tile_stream_gpu_create(
   ms->active = -1;
   ms->writer.update = update_impl;
   ms->writer.flush = flush_impl;
+  ms->writer.close = close_impl;
 
   ms->arrays = (struct array_descriptor_gpu*)calloc(
     n_arrays, sizeof(struct array_descriptor_gpu));

@@ -415,6 +415,14 @@ struct writer_result
 stream_dispatch_staged(struct stream_engine* e);
 
 // Flush the stream: partial epoch, accumulated batch, partial append
-// accumulators, finalize shards, update metadata.
+// accumulators, finalize shards.
+//
+// Queues the writes and returns; it does not wait for them to retire. Pair it
+// with stream_close_body before the buffers those writes point into are freed.
 struct writer_result
 stream_flush_body(struct stream_engine* e, struct stream_context* ctx);
+
+// Waits for queued writes to retire, then publishes the append extent and lets
+// the sink write its own metadata.
+struct writer_result
+stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx);

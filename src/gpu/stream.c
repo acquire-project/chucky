@@ -17,6 +17,8 @@ static struct writer_result
 tile_stream_gpu_append(struct writer* self, struct slice input);
 static struct writer_result
 tile_stream_gpu_flush_final(struct writer* self);
+static struct writer_result
+tile_stream_gpu_close_final(struct writer* self);
 
 // --- Shared helpers (engine + context) ---
 
@@ -331,14 +333,14 @@ collect_ingest_timing(struct stream_engine* e)
 }
 
 static struct writer_result
-publish_array_shape(struct stream_engine* e, struct stream_context* ctx)
+publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
 {
   if (!ctx->sink->update_append)
     return writer_ok();
 
   struct writer_result r = writer_ok();
   for (int lv = 0; lv < ctx->levels.nlod; ++lv)
-    if (shard_state_publish_append(&e->compress_agg.ar.shard[lv],
+    if (shard_state_publish_append(&ar->shard[lv],
                                    ctx->sink,
                                    &ctx->dims,
                                    (uint8_t)lv,
@@ -384,20 +386,31 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 
   collect_ingest_timing(e);
 
+  return r;
+}
+
+struct writer_result
+stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
+{
+  if (ctx->layout.epoch_elements == 0)
+    return writer_ok();
+
+  struct writer_result r = writer_ok();
+
   // The shape is written after this, so it never names data still queued.
   const int sink_failed = shard_sink_drain(ctx->sink);
-  if (sink_failed && !r.error)
+  if (sink_failed)
     r = writer_error();
 
   // A sink IO error is the one case the shape is withheld: which writes landed
   // is unknowable.
   if (!sink_failed) {
-    struct writer_result shape = publish_array_shape(e, ctx);
-    if (shape.error && !r.error)
+    struct writer_result shape = publish_array_shape(ar, ctx);
+    if (shape.error)
       r = shape;
   }
 
-  if (!r.error && ctx->sink->flush && ctx->sink->flush(ctx->sink))
+  if (ctx->sink->flush && ctx->sink->flush(ctx->sink))
     r = writer_error();
 
   return r;
@@ -418,6 +431,10 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
+  // Ahead of the context push: refusing input touches no GPU state.
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   const int pushed = cu_ctx_push(s->engine.cuda);
   if (pushed < 0)
     return writer_error_at(input.beg, input.end); // nothing was consumed
@@ -430,8 +447,6 @@ tile_stream_gpu_append(struct writer* self, struct slice input)
     s->engine.metrics.max_append_ms = ms;
   if (r.rest.beg != input.beg)
     record_append_ms(&s->engine.metrics, ms);
-  if (s->flushed && r.rest.beg != input.beg)
-    s->flushed = 0;
   cu_ctx_pop(pushed);
   return r;
 }
@@ -441,16 +456,38 @@ tile_stream_gpu_flush_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Idempotency: mirrors the CPU guard. Reset by tile_stream_gpu_append when
-  // new data arrives.
   if (s->flushed)
-    return writer_ok();
+    return s->flush_failed ? writer_error() : writer_ok();
+  const int pushed = cu_ctx_push(s->engine.cuda);
+  if (pushed < 0)
+    return writer_error(); // nothing ran, so the stream stays appendable
+  struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
+  // Finalized either way: a flush that failed partway may have closed some
+  // shards already, so taking more input would append past them.
+  s->flushed = 1;
+  s->flush_failed = (r.error != 0);
+  // Those writes are new, so an earlier close no longer covers them.
+  s->closed = 0;
+  cu_ctx_pop(pushed);
+  return r;
+}
+
+static struct writer_result
+tile_stream_gpu_close_final(struct writer* self)
+{
+  struct tile_stream_gpu* s =
+    container_of(self, struct tile_stream_gpu, writer);
+  // Nothing is queued until a flush runs, and close only completes what a
+  // flush queued.
+  if (s->closed || !s->flushed)
+    return s->close_failed ? writer_error() : writer_ok();
   const int pushed = cu_ctx_push(s->engine.cuda);
   if (pushed < 0)
     return writer_error();
-  struct writer_result r = stream_flush_body(&s->engine, &s->ctx);
-  if (r.error == 0)
-    s->flushed = 1;
+  struct writer_result r =
+    stream_close_body(&s->engine.compress_agg.ar, &s->ctx);
+  s->closed = 1;
+  s->close_failed = (r.error != 0);
   cu_ctx_pop(pushed);
   return r;
 }
@@ -460,4 +497,5 @@ tile_stream_gpu_init_writer(struct tile_stream_gpu* s)
 {
   s->writer.append = tile_stream_gpu_append;
   s->writer.flush = tile_stream_gpu_flush_final;
+  s->writer.close = tile_stream_gpu_close_final;
 }

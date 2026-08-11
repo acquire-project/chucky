@@ -20,6 +20,8 @@ static struct writer_result
 cpu_append(struct writer* self, struct slice input);
 static struct writer_result
 cpu_flush_final(struct writer* self);
+static struct writer_result
+cpu_close_final(struct writer* self);
 static struct cpu_stream_view
 make_view(struct tile_stream_cpu* s);
 
@@ -282,6 +284,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
 
   s->writer.append = cpu_append;
   s->writer.flush = cpu_flush_final;
+  s->writer.close = cpu_close_final;
 
   platform_toc(&s->metadata_update_clock);
 
@@ -303,14 +306,16 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   // propagated — destroy returns void.
   if (!s->flushed) {
     struct cpu_stream_view v = make_view(s);
-    struct writer_result r = cpu_stream_flush_body(&v);
-    if (r.error)
+    if (cpu_stream_flush_body(&v).error)
       log_error("CPU stream auto-flush failed during destroy");
-    // A bailed flush can leave queued IO pointing into buffers teardown frees.
-    if (s->shard_sink)
-      shard_sink_drain(s->shard_sink);
     s->flushed = 1;
+    s->closed = 0;
   }
+  // Whatever queued those writes, they point into buffers teardown frees, so
+  // they have to be waited out here. Skipped only when a close already did it,
+  // which is also the case where the caller may have released the sink.
+  if (cpu_close_final(&s->writer).error)
+    log_error("CPU stream close failed during destroy");
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     shard_state_destroy(&s->shard[lv]);
@@ -740,11 +745,11 @@ cpu_append(struct writer* self, struct slice input)
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
 
+  if (s->flushed)
+    return writer_finished_at(input.beg, input.end);
+
   struct cpu_stream_view v = make_view(s);
-  struct writer_result r = cpu_stream_append_body(&v, input);
-  if (s->flushed && r.rest.beg != input.beg)
-    s->flushed = 0;
-  return r;
+  return cpu_stream_append_body(&v, input);
 }
 
 static struct writer_result
@@ -752,14 +757,31 @@ cpu_flush_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  // Idempotency: a redundant flush with no intervening appends re-finalizes
-  // already-closed sinks (deadlock on Windows, wasted work elsewhere).
-  // The flag is reset by cpu_append when new data arrives.
   if (s->flushed)
-    return writer_ok();
+    return s->flush_failed ? writer_error() : writer_ok();
   struct cpu_stream_view v = make_view(s);
   struct writer_result r = cpu_stream_flush_body(&v);
-  if (r.error == 0)
-    s->flushed = 1;
+  // Finalized either way: a flush that failed partway may have closed some
+  // shards already, so taking more input would append past them.
+  s->flushed = 1;
+  s->flush_failed = (r.error != 0);
+  // Those writes are new, so an earlier close no longer covers them.
+  s->closed = 0;
+  return r;
+}
+
+static struct writer_result
+cpu_close_final(struct writer* self)
+{
+  struct tile_stream_cpu* s =
+    container_of(self, struct tile_stream_cpu, writer);
+  // Nothing is queued until a flush runs, and close only completes what a
+  // flush queued.
+  if (s->closed || !s->flushed)
+    return s->close_failed ? writer_error() : writer_ok();
+  struct cpu_stream_view v = make_view(s);
+  struct writer_result r = cpu_stream_close_body(&v);
+  s->closed = 1;
+  s->close_failed = (r.error != 0);
   return r;
 }

@@ -17,6 +17,12 @@ writer_flush(struct writer* w)
 }
 
 struct writer_result
+writer_close(struct writer* w)
+{
+  return w->close ? w->close(w) : writer_ok();
+}
+
+struct writer_result
 writer_append_wait(struct writer* w, struct slice data)
 {
   int stalls = 0;

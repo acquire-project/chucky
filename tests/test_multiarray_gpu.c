@@ -716,9 +716,15 @@ test_flush_idempotent_after_finished(void)
 
   // Explicit flush commits any partial shard state.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  // The extent publishes in close, so snapshot the counts after it.
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
   const int finalize_after_flush = sink.finalize_count;
   const int open_after_flush = sink.open_count;
   const int update_append_after_flush = sink.update_append_count;
+
+  // Closing again is idempotent too.
+  CHECK(Fail, w->close(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.update_append_count == update_append_after_flush);
 
   // Second flush — idempotent: no new sink calls (including no metadata
   // re-write via update_append).
@@ -798,14 +804,14 @@ Fail:
   return 1;
 }
 
-// ---- Test: flush is a resumable explicit sync ----
+// ---- Test: flush finalizes an array-stream ----
 //
-// After flush(), an array-stream is still appendable. update() succeeds with
-// new data, and the next flush() commits the new batch with distinct content.
+// After flush(), the array takes no more input and a second flush writes
+// nothing further.
 static int
-test_flush_resumable(void)
+test_flush_finalizes(void)
 {
-  log_info("=== test_flush_resumable ===");
+  log_info("=== test_flush_finalizes ===");
 
   struct test_shard_sink sink;
   test_sink_init_1(&sink);
@@ -848,24 +854,21 @@ test_flush_resumable(void)
   const int shards_after_first = test_sink_shard_count(&sink);
   CHECK(Fail, shards_after_first > 0);
 
-  // Second batch: another epoch with distinct fill 0xBB succeeds.
+  // The flush finalized the array, so a second epoch is refused and none of it
+  // is consumed.
   {
     struct multiarray_writer_result r =
       write_fill(w, 0, 4, sizeof(uint16_t), 0xBB);
-    CHECK(Fail, r.error == multiarray_writer_ok);
+    CHECK(Fail, r.error == multiarray_writer_finished);
   }
 
-  // Second flush commits the new batch.
+  // Finalizing again writes nothing further: no new shard, no new close-out.
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail, sink.finalize_count == finalize_after_first);
+  CHECK(Fail, test_sink_shard_count(&sink) == shards_after_first);
 
-  // Strict checks: a NEW shard finalized with NEW content. A silent
-  // double-flush of batch 1 would not produce both signals.
-  CHECK(Fail, sink.finalize_count > finalize_after_first);
-  const int shards_after_second = test_sink_shard_count(&sink);
-  CHECK(Fail, shards_after_second > shards_after_first);
-
-  // Scan all finalized shards: at least one byte 0xAA (batch 1) and at least
-  // one byte 0xBB (batch 2) must be present in the durable output.
+  // Scan all finalized shards: batch 1's 0xAA must be there, and batch 2's
+  // 0xBB must not, since the finalized array refused it.
   int found_aa = 0, found_bb = 0;
   for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
     const struct test_shard_writer* sw = &sink.writers[0][i];
@@ -879,7 +882,7 @@ test_flush_resumable(void)
     }
   }
   CHECK(Fail, found_aa);
-  CHECK(Fail, found_bb);
+  CHECK(Fail, !found_bb);
 
   multiarray_tile_stream_gpu_destroy(ms);
   test_sink_free(&sink);
@@ -1482,7 +1485,7 @@ main(int ac, char* av[])
   ret |= test_cross_validate_single_array();
   ret |= test_write_past_total_element_limit();
   ret |= test_flush_idempotent_after_finished();
-  ret |= test_flush_resumable();
+  ret |= test_flush_finalizes();
   ret |= test_flush_no_data();
   ret |= test_metrics_enabled();
   ret |= test_mixed_dtypes();

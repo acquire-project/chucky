@@ -1,4 +1,4 @@
-// Regression test: writer_flush() on the CPU stream must drain sink IO
+// Regression test: writer_close() on the CPU stream must drain sink IO
 // before returning. finalize_shards queues footer write_direct jobs that
 // reference stream-owned footer_buf memory; without the drain, stream
 // destroy frees that memory while the IO worker may still read it.
@@ -34,6 +34,8 @@ flush_thread_fn(void* arg)
 {
   struct flush_args* fa = (struct flush_args*)arg;
   struct writer_result r = writer_flush(fa->w);
+  if (!r.error)
+    r = writer_close(fa->w);
   fa->error = r.error;
   atomic_store(&fa->done, 1);
 }
@@ -147,7 +149,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   thr = NULL;
 
   if (flush_returned_early) {
-    log_error("flush returned before sink IO drained — fix is not in place");
+    log_error("close returned before sink IO drained — fix is not in place");
     goto Cleanup;
   }
 
