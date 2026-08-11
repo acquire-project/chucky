@@ -19,7 +19,9 @@ ingest_init(struct staging_state* stage,
             struct gpu_ordering* ord,
             CUstream compute);
 
-// Free staging buffers and events.
+// Free staging buffers and events. The caller synchronizes the streams first:
+// a copy still reading a staging buffer faults once it is freed. Safe to call
+// twice, and on a state whose setup failed.
 void
 ingest_destroy(struct staging_state* stage);
 

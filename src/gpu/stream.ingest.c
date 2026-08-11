@@ -83,6 +83,9 @@ ingest_destroy(struct staging_state* stage)
     cu_event_destroy(stage->timing[i].t_start);
     cu_event_destroy(stage->timing[i].t_end);
   }
+  // Setup tears itself down before returning an error and the caller tears
+  // down again, so this has to be safe to run twice.
+  memset(stage, 0, sizeof(*stage));
 }
 
 void

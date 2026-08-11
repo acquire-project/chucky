@@ -1,6 +1,7 @@
 #include "gpu/flush.compress_agg.h"
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/schedule.h"
+#include "gpu/stream.engine.h"
 #include "platform/platform.h"
 #include "stream/config.h"
 
@@ -112,13 +113,7 @@ test_ctx_setup(struct test_ctx* c,
     (uint32_t*)calloc(c->cl.epochs_per_batch, sizeof(uint32_t));
   CHECK(Fail, c->batch_active_masks);
 
-  memset(&c->metrics, 0, sizeof(c->metrics));
-  c->metrics.compress = mk_stream_metric("Compress", METRIC_OWNER_COMPRESS);
-  c->metrics.aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS);
-  c->metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
-  c->metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
-  c->metrics.lod_gather = mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
-  c->metrics.tail_gate = mk_stream_metric("TailGate", METRIC_OWNER_COMPRESS);
+  c->metrics = stream_engine_init_metrics(0);
 
   memset(&c->lod, 0, sizeof(c->lod));
   memset(&c->lod_shared, 0, sizeof(c->lod_shared));
@@ -228,18 +223,15 @@ test_d2h_single_epoch_none(void)
   CHECK(Fail, sink.open_count == 1);     // shard_inner_count=1
   CHECK(Fail, sink.finalize_count == 0); // tps_0=2, need 2 epochs
 
-  // Verify metrics (sink uses platform_toc, always fires)
-  CHECK(Fail, c.metrics.sink.count == 1);
-  CHECK(Fail, c.metrics.lod_gather.count == 0);
+  // Sink is host-clocked, so it fires without CUDA events.
+  CHECK(Fail, metric_arrived_timed(&c.metrics.sink, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.lod_gather, 0));
 
-  // Pass-through runs no codec, so a missing compress row is the truth here
-  // rather than a lost measurement. Everything else the drain times must
-  // arrive.
-  CHECK(Fail, c.metrics.compress.count == 0);
-  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.d2h, 1));
-  // The gate is a wait, and a wait that never had to wait measures zero.
-  CHECK(Fail, c.metrics.tail_gate.count == 1);
+  // Pass-through runs no codec, so a missing compress row is the truth here.
+  CHECK(Fail, metric_arrived(&c.metrics.compress, 0));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
 
   // Tile data correctness verified by test_compress_agg
 
@@ -448,12 +440,10 @@ test_d2h_zstd_single_epoch(void)
   CHECK(Fail, sink.finalize_count == 1);
   CHECK(Fail, sink.writers[0][0].size > 0);
 
-  // Every stage the drain times must report one measurement. A codec runs
-  // here, so compress has an interval to report as well.
-  CHECK(Fail, metric_arrived(&c.metrics.compress, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.d2h, 1));
-  CHECK(Fail, c.metrics.tail_gate.count == 1);
+  CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 1));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
 
   // Decompress and verify chunk data via the on-disk index.
   {
@@ -755,12 +745,13 @@ test_d2h_zstd_double_buffer(void)
 
   CHECK(Fail, sink.finalize_count == 2);
 
-  // Four cycles, four measurements per stage. The timing events belong to the
-  // slot, not the cycle, so a slot reused on cycle 3 has to re-record them.
-  CHECK(Fail, metric_arrived(&c.metrics.compress, 4));
-  CHECK(Fail, metric_arrived(&c.metrics.aggregate, 4));
-  CHECK(Fail, metric_arrived(&c.metrics.d2h, 4));
-  CHECK(Fail, c.metrics.tail_gate.count == 4);
+  // Counts only reach so far. These events are seeded at setup, so a cycle
+  // that skipped its record still reports a plausible interval; catching that
+  // needs the ordering check the ingest tests use.
+  CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 4));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 4));
 
   {
     struct shard_state* ss = &c.ca.ar.shard[0];
