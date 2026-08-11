@@ -12,8 +12,9 @@ extern "C"
 {
 #endif
 
-  // Query CUB scratch workspace size for ExclusiveSum over count elements.
-  // Writes result to *out_bytes. Returns 0 on success.
+  // Scratch bytes an exclusive sum over count elements needs. The memory
+  // estimate asks without a device, so an unanswerable query leaves 0 rather
+  // than failing a configuration that is fine.
   int aggregate_cub_temp_bytes(uint64_t count, size_t* out_bytes);
 
   struct aggregate_slot
@@ -29,22 +30,13 @@ extern "C"
     struct io_event io_done; // tracks IO completion from this slot's data
   };
 
-  // Upload pre-computed layout arrays to GPU. Must be called after
-  // aggregate_layout_compute. Returns 0 on success.
-  int aggregate_layout_upload(struct aggregate_layout* layout);
-
-  void aggregate_layout_destroy(struct aggregate_layout* layout);
-
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_covering_count,
                                 size_t comp_pool_bytes);
 
-  // Sizing mirrors of aggregate_layout_upload / aggregate_batch_slot_init,
-  // for the memory estimate.
-  size_t aggregate_layout_device_bytes(const struct aggregate_layout* layout);
-
+  // Sizing mirror of aggregate_batch_slot_init, for the memory estimate.
   int aggregate_batch_slot_memory(uint64_t batch_covering_count,
                                   size_t comp_pool_bytes,
                                   size_t* device_bytes,

@@ -2,6 +2,7 @@
 #include "gpu/flush.d2h_deliver.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
+#include "gpu/transpose.h"
 
 #include "defs.limits.h"
 #include "gpu/prelude.cuda.h"
@@ -118,6 +119,9 @@ stream_engine_init(struct stream_engine* e,
                    enum compression_codec codec_id,
                    int scatter_is_copy)
 {
+  if (cuCtxGetCurrent(&e->cuda) != CUDA_SUCCESS)
+    e->cuda = NULL;
+
   CHECK(Fail, gpu_streams_init(&e->streams) == 0);
   CHECK(Fail, gpu_ordering_init(&e->ord, e->streams.compute) == 0);
   gpu_streams_register(&e->streams, &e->ord);
@@ -139,7 +143,7 @@ stream_engine_init(struct stream_engine* e,
       log_warn("staging copy pool unavailable; copies run on the producer");
   }
 
-  if (gpu_delivery_init(&e->delivery))
+  if (gpu_delivery_init(&e->delivery, e->cuda))
     log_warn("delivery worker unavailable; using depth-one producer drains");
 
   e->pool_bytes = lim->pool_bytes;
@@ -234,6 +238,19 @@ engine_array_state_init(struct engine_array_state* st,
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
     st->lod.layouts[lv] = cl->layouts[lv];
 
+  // Every level scatters, so a layout the scatter cannot place is refused
+  // here rather than on the first append that reaches it.
+  for (int lv = 0; lv < cl->levels.nlod; ++lv) {
+    const struct tile_stream_layout* l = &st->lod.layouts[lv];
+    if (transpose_check_layout(l->epoch_elements,
+                               l->lifted_rank,
+                               l->lifted_shape,
+                               l->lifted_strides)) {
+      log_error("level %d has a layout the scatter cannot place", lv);
+      goto Fail;
+    }
+  }
+
   CHECK(Fail, lod_state_init(&st->lod, &ctx->levels, &ctx->config) == 0);
 
   if (ctx->levels.enable_multiscale && ctx->dims.append_downsample)
@@ -319,6 +336,8 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (!s)
     return;
 
+  const int pushed = cu_ctx_push(s->engine.cuda);
+
   // Auto-finalize any unwritten data so destroy is a safe commit point for
   // callers that didn't explicitly flush. Errors are logged but not
   // propagated — destroy returns void.
@@ -349,6 +368,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   // double-free — free once, here.
   engine_array_state_destroy(&s->ar);
   stream_engine_destroy(&s->engine);
+  cu_ctx_pop(pushed);
   free(s);
 }
 

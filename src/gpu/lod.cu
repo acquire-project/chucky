@@ -1,6 +1,7 @@
 #include "defs.limits.h"
 #include "dtype.h"
 #include "gpu/lod.h"
+#include "gpu/prelude.cuda.h"
 #include "lod/lod_plan.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
@@ -422,7 +423,7 @@ lod_morton_to_chunks_lut_k(
 // --- Dispatch helpers ---
 
 template<int NdimMax>
-static void
+static int
 lod_build_gather_lut_launch(CUdeviceptr d_src_lut,
                             CUdeviceptr d_lod_shape,
                             CUdeviceptr d_lod_strides,
@@ -433,13 +434,14 @@ lod_build_gather_lut_launch(CUdeviceptr d_src_lut,
 {
   const int grid_size = (int)((lod_count + LOD_BLOCK - 1) / LOD_BLOCK);
 
-  lod_build_gather_lut_k<NdimMax>
+  return CUDA_LAUNCH(
+    lod_build_gather_lut_k<NdimMax>
     <<<grid_size, LOD_BLOCK, 0, stream>>>((uint32_t*)d_src_lut,
                                           lod_ndim,
                                           (const uint64_t*)d_lod_shape,
                                           (const uint64_t*)d_lod_strides,
                                           lod_nlod,
-                                          lod_count);
+                                          lod_count));
 }
 
 extern "C" int
@@ -455,14 +457,13 @@ lod_build_gather_lut(CUdeviceptr d_src_lut,
 
 #define XXX(maxdim)                                                            \
   if (lod_ndim <= maxdim) {                                                    \
-    lod_build_gather_lut_launch<maxdim>(d_src_lut,                             \
-                                        d_lod_shape,                           \
-                                        d_lod_strides,                         \
-                                        lod_ndim,                              \
-                                        lod_nlod,                              \
-                                        lod_count,                             \
-                                        stream);                               \
-    return 0;                                                                  \
+    return lod_build_gather_lut_launch<maxdim>(d_src_lut,                      \
+                                               d_lod_shape,                    \
+                                               d_lod_strides,                  \
+                                               lod_ndim,                       \
+                                               lod_nlod,                       \
+                                               lod_count,                      \
+                                               stream);                        \
   }
 
   XXX(4);
@@ -474,7 +475,7 @@ lod_build_gather_lut(CUdeviceptr d_src_lut,
 }
 
 template<int NdimMax>
-static void
+static int
 lod_build_chunk_scatter_lut_launch(CUdeviceptr d_chunk_lut,
                                    CUdeviceptr d_lod_shape,
                                    CUdeviceptr d_lod_chunk_sizes,
@@ -486,14 +487,15 @@ lod_build_chunk_scatter_lut_launch(CUdeviceptr d_chunk_lut,
 {
   const int grid_size = (int)((lod_count + LOD_BLOCK - 1) / LOD_BLOCK);
 
-  lod_build_chunk_scatter_lut_k<NdimMax>
+  return CUDA_LAUNCH(
+    lod_build_chunk_scatter_lut_k<NdimMax>
     <<<grid_size, LOD_BLOCK, 0, stream>>>((uint32_t*)d_chunk_lut,
                                           lod_ndim,
                                           (const uint64_t*)d_lod_shape,
                                           (const uint64_t*)d_lod_chunk_sizes,
                                           (const int64_t*)d_lod_chunk_strides,
                                           lod_nlod,
-                                          lod_count);
+                                          lod_count));
 }
 
 extern "C" int
@@ -510,15 +512,14 @@ lod_build_chunk_scatter_lut(CUdeviceptr d_chunk_lut,
 
 #define XXX(maxdim)                                                            \
   if (lod_ndim <= maxdim) {                                                    \
-    lod_build_chunk_scatter_lut_launch<maxdim>(d_chunk_lut,                    \
-                                               d_lod_shape,                    \
-                                               d_lod_chunk_sizes,              \
-                                               d_lod_chunk_strides,            \
-                                               lod_ndim,                       \
-                                               lod_nlod,                       \
-                                               lod_count,                      \
-                                               stream);                        \
-    return 0;                                                                  \
+    return lod_build_chunk_scatter_lut_launch<maxdim>(d_chunk_lut,             \
+                                                      d_lod_shape,             \
+                                                      d_lod_chunk_sizes,       \
+                                                      d_lod_chunk_strides,     \
+                                                      lod_ndim,                \
+                                                      lod_nlod,                \
+                                                      lod_count,               \
+                                                      stream);                 \
   }
 
   XXX(4);
@@ -528,7 +529,7 @@ lod_build_chunk_scatter_lut(CUdeviceptr d_chunk_lut,
 }
 
 template<typename T>
-static void
+static int
 lod_morton_to_chunks_lut_launch(CUdeviceptr d_chunks,
                                 CUdeviceptr d_morton,
                                 CUdeviceptr d_chunk_lut,
@@ -540,13 +541,14 @@ lod_morton_to_chunks_lut_launch(CUdeviceptr d_chunks,
   const uint64_t total = fixed_dims_count * lod_count;
   const int grid_size = (int)((total + LOD_BLOCK - 1) / LOD_BLOCK);
 
-  lod_morton_to_chunks_lut_k<T><<<grid_size, LOD_BLOCK, 0, stream>>>(
-    (T*)d_chunks,
-    (const T*)d_morton,
-    (const uint32_t*)d_chunk_lut,
-    (const uint32_t*)d_fixed_dims_chunk_offsets,
-    lod_count,
-    total);
+  return CUDA_LAUNCH(lod_morton_to_chunks_lut_k<T>
+                     <<<grid_size, LOD_BLOCK, 0, stream>>>(
+                       (T*)d_chunks,
+                       (const T*)d_morton,
+                       (const uint32_t*)d_chunk_lut,
+                       (const uint32_t*)d_fixed_dims_chunk_offsets,
+                       lod_count,
+                       total));
 }
 
 extern "C" int
@@ -561,14 +563,13 @@ lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
 {
 #define DISPATCH(D, T)                                                         \
   if (dtype == D) {                                                            \
-    lod_morton_to_chunks_lut_launch<T>(d_chunks,                               \
-                                       d_morton,                               \
-                                       d_chunk_lut,                            \
-                                       d_fixed_dims_chunk_offsets,             \
-                                       lod_count,                              \
-                                       fixed_dims_count,                       \
-                                       stream);                                \
-    return 0;                                                                  \
+    return lod_morton_to_chunks_lut_launch<T>(d_chunks,                        \
+                                              d_morton,                        \
+                                              d_chunk_lut,                     \
+                                              d_fixed_dims_chunk_offsets,      \
+                                              lod_count,                       \
+                                              fixed_dims_count,                \
+                                              stream);                         \
   }
   FOR_EACH_DTYPE(DISPATCH)
 #undef DISPATCH
@@ -576,7 +577,7 @@ lod_morton_to_chunks_lut(CUdeviceptr d_chunks,
 }
 
 template<typename T>
-static void
+static int
 lod_gather_lut_launch(CUdeviceptr d_dst,
                       CUdeviceptr d_src,
                       CUdeviceptr d_src_lut,
@@ -597,13 +598,13 @@ lod_gather_lut_launch(CUdeviceptr d_dst,
     grid_size = (int)((total + TILE_ELEMENTS - 1) / TILE_ELEMENTS);
   }
 
-  lod_gather_lut_k<T>
-    <<<grid_size, LOD_BLOCK, 0, stream>>>((T*)d_dst,
-                                          (const T*)d_src,
-                                          (const uint32_t*)d_src_lut,
-                                          (const uint32_t*)d_fixed_dims_offsets,
-                                          lod_count,
-                                          total);
+  return CUDA_LAUNCH(lod_gather_lut_k<T><<<grid_size, LOD_BLOCK, 0, stream>>>(
+    (T*)d_dst,
+    (const T*)d_src,
+    (const uint32_t*)d_src_lut,
+    (const uint32_t*)d_fixed_dims_offsets,
+    lod_count,
+    total));
 }
 
 extern "C" int
@@ -618,14 +619,13 @@ lod_gather_lut(CUdeviceptr d_dst,
 {
 #define DISPATCH(D, T)                                                         \
   if (dtype == D) {                                                            \
-    lod_gather_lut_launch<T>(d_dst,                                            \
-                             d_src,                                            \
-                             d_src_lut,                                        \
-                             d_fixed_dims_offsets,                             \
-                             lod_count,                                        \
-                             fixed_dims_count,                                 \
-                             stream);                                          \
-    return 0;                                                                  \
+    return lod_gather_lut_launch<T>(d_dst,                                     \
+                                    d_src,                                     \
+                                    d_src_lut,                                 \
+                                    d_fixed_dims_offsets,                      \
+                                    lod_count,                                 \
+                                    fixed_dims_count,                          \
+                                    stream);                                   \
   }
   FOR_EACH_DTYPE(DISPATCH)
 #undef DISPATCH
@@ -691,20 +691,17 @@ lod_accum_emit(CUdeviceptr d_dst,
   const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
 
 #define LAUNCH_EMIT(T, M)                                                      \
-  lod_accum_emit_k<T, M><<<grid, LOD_BLOCK, 0, stream>>>(                      \
-    (T*)d_dst, (const T*)d_accum, n_elements, count)
+  CUDA_LAUNCH(lod_accum_emit_k<T, M><<<grid, LOD_BLOCK, 0, stream>>>(          \
+    (T*)d_dst, (const T*)d_accum, n_elements, count))
 
 #define EMIT_METHOD(T)                                                         \
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
-      LAUNCH_EMIT(T, lod_reduce_mean);                                         \
-      return 0;                                                                \
+      return LAUNCH_EMIT(T, lod_reduce_mean);                                  \
     case lod_reduce_min:                                                       \
-      LAUNCH_EMIT(T, lod_reduce_min);                                          \
-      return 0;                                                                \
+      return LAUNCH_EMIT(T, lod_reduce_min);                                   \
     case lod_reduce_max:                                                       \
-      LAUNCH_EMIT(T, lod_reduce_max);                                          \
-      return 0;                                                                \
+      return LAUNCH_EMIT(T, lod_reduce_max);                                   \
     default:                                                                   \
       return 1;                                                                \
   }
@@ -788,24 +785,21 @@ lod_accum_fold_fused(CUdeviceptr d_accum,
   const int grid = (int)((n_elements + LOD_BLOCK - 1) / LOD_BLOCK);
 
 #define LAUNCH_FUSED(T, M)                                                     \
-  lod_accum_fold_fused_k<T, M>                                                 \
-    <<<grid, LOD_BLOCK, 0, stream>>>((T*)d_accum,                              \
-                                     (const T*)d_new_data,                     \
-                                     (const uint8_t*)d_level_ids,              \
-                                     (const uint32_t*)d_counts,                \
-                                     n_elements)
+  CUDA_LAUNCH(lod_accum_fold_fused_k<T, M>                                     \
+              <<<grid, LOD_BLOCK, 0, stream>>>((T*)d_accum,                    \
+                                               (const T*)d_new_data,           \
+                                               (const uint8_t*)d_level_ids,    \
+                                               (const uint32_t*)d_counts,      \
+                                               n_elements))
 
 #define FUSED_METHOD(T)                                                        \
   switch (method) {                                                            \
     case lod_reduce_mean:                                                      \
-      LAUNCH_FUSED(T, lod_reduce_mean);                                        \
-      return 0;                                                                \
+      return LAUNCH_FUSED(T, lod_reduce_mean);                                 \
     case lod_reduce_min:                                                       \
-      LAUNCH_FUSED(T, lod_reduce_min);                                         \
-      return 0;                                                                \
+      return LAUNCH_FUSED(T, lod_reduce_min);                                  \
     case lod_reduce_max:                                                       \
-      LAUNCH_FUSED(T, lod_reduce_max);                                         \
-      return 0;                                                                \
+      return LAUNCH_FUSED(T, lod_reduce_max);                                  \
     default:                                                                   \
       return 1;                                                                \
   }
@@ -999,40 +993,35 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
     goto cleanup;
 
   // Step 1+2: Map + histogram.
-  csr_map_k<NdimMax>
-    <<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_map,
-                                     (uint64_t*)d_counts,
-                                     (const csr_level_params*)d_params,
-                                     src_total);
+  CUDA_LAUNCH_OR(cleanup,
+                 csr_map_k<NdimMax><<<grid, LOD_BLOCK, 0, stream>>>(
+                   (uint64_t*)d_map,
+                   (uint64_t*)d_counts,
+                   (const csr_level_params*)d_params,
+                   src_total));
 
   // Step 3: Prefix sum on counts → starts.
   {
     size_t cub_temp_bytes = 0;
-    cudaError_t ce = cub::DeviceScan::ExclusiveSum(nullptr,
-                                                   cub_temp_bytes,
-                                                   (uint64_t*)d_counts,
-                                                   (uint64_t*)d_starts,
-                                                   (int)dst_total,
-                                                   stream);
-    if (ce != cudaSuccess) {
-      log_error("CUB ExclusiveSum query failed: %d", (int)ce);
-      goto cleanup;
-    }
+    CUDA_CALL_OR(cleanup,
+                 cub::DeviceScan::ExclusiveSum(nullptr,
+                                               cub_temp_bytes,
+                                               (uint64_t*)d_counts,
+                                               (uint64_t*)d_starts,
+                                               (int)dst_total,
+                                               stream));
     if (cub_temp_bytes > 0) {
       r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
       if (r != CUDA_SUCCESS)
         goto cleanup;
     }
-    ce = cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
-                                       cub_temp_bytes,
-                                       (uint64_t*)d_counts,
-                                       (uint64_t*)d_starts,
-                                       (int)dst_total,
-                                       stream);
-    if (ce != cudaSuccess) {
-      log_error("CUB ExclusiveSum exec failed: %d", (int)ce);
-      goto cleanup;
-    }
+    CUDA_CALL_OR(cleanup,
+                 cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
+                                               cub_temp_bytes,
+                                               (uint64_t*)d_counts,
+                                               (uint64_t*)d_starts,
+                                               (int)dst_total,
+                                               stream));
   }
 
   // Sentinel: starts[dst_total] = src_total.  Writes a non-overlapping
@@ -1052,10 +1041,12 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
   if (r != CUDA_SUCCESS)
     goto cleanup;
 
-  csr_scatter_k<<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_indices,
-                                                (uint64_t*)d_write_pos,
-                                                (const uint64_t*)d_map,
-                                                src_total);
+  CUDA_LAUNCH_OR(
+    cleanup,
+    csr_scatter_k<<<grid, LOD_BLOCK, 0, stream>>>((uint64_t*)d_indices,
+                                                  (uint64_t*)d_write_pos,
+                                                  (const uint64_t*)d_map,
+                                                  src_total));
 
   ret = 0;
 
@@ -1343,7 +1334,8 @@ lod_reduce_csr(CUdeviceptr d_values,
 
 #define LAUNCH_CSR(Type, Acc, Method)                                          \
   case Method:                                                                 \
-    lod_reduce_csr_k<Type, Acc, Method>                                        \
+    return CUDA_LAUNCH(                                                        \
+      lod_reduce_csr_k<Type, Acc, Method>                                      \
       <<<grid_size, block_size, 0, stream>>>((Type*)d_values,                  \
                                              (const uint64_t*)d_starts,        \
                                              (const uint64_t*)d_indices,       \
@@ -1351,8 +1343,7 @@ lod_reduce_csr(CUdeviceptr d_values,
                                              dst_offset,                       \
                                              src_segment_size,                 \
                                              dst_segment_size,                 \
-                                             total);                           \
-    return 0;
+                                             total));
 
 #define CSR_METHODS(Type, Acc)                                                 \
   switch (method) {                                                            \

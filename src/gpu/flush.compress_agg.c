@@ -209,10 +209,8 @@ compress_agg_array_init(struct compress_agg_array* ar,
   ar->nlod = (uint8_t)cl->levels.nlod;
 
   // Own copy so multiarray bind/unbind can swap them per-array.
-  for (int lv = 0; lv < cl->levels.nlod; ++lv) {
+  for (int lv = 0; lv < cl->levels.nlod; ++lv)
     ar->per_lod_agg_layouts[lv] = cl->per_level[lv].agg_layout;
-    CHECK(Fail, aggregate_layout_upload(&ar->per_lod_agg_layouts[lv]) == 0);
-  }
 
   uint64_t total_shards = 0;
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
@@ -285,10 +283,8 @@ compress_agg_array_destroy(struct compress_agg_array* ar)
 {
   if (!ar)
     return;
-  for (int lv = 0; lv < ar->nlod; ++lv) {
-    aggregate_layout_destroy(&ar->per_lod_agg_layouts[lv]);
+  for (int lv = 0; lv < ar->nlod; ++lv)
     shard_state_destroy(&ar->shard[lv]);
-  }
   free(ar->h_shard_capacity);
   free(ar->h_tail_bytes);
   cu_mem_free((CUdeviceptr)ar->d_tail_bytes);
@@ -379,10 +375,8 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
   // Per-array slice (compress_agg_array_init).
   {
     uint64_t total_shards = 0;
-    for (int lv = 0; lv < cl->levels.nlod; ++lv) {
-      dev += aggregate_layout_device_bytes(&cl->per_level[lv].agg_layout);
+    for (int lv = 0; lv < cl->levels.nlod; ++lv)
       total_shards += cl->per_level[lv].agg_layout.num_shards;
-    }
     if (total_shards > 0) {
       dev += total_shards * sizeof(size_t); // d_tail_bytes
       const size_t page_size = cl->per_level[0].agg_layout.page_size;

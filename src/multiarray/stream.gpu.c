@@ -186,32 +186,40 @@ update_impl(struct multiarray_writer* self, int array_index, struct slice data)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
-
   if (array_index < 0 || array_index >= ms->n_arrays)
     return (struct multiarray_writer_result){
       .error = multiarray_writer_fail,
       .rest = data,
     };
 
-  struct array_descriptor_gpu* desc = &ms->arrays[array_index];
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){
+      .error = multiarray_writer_fail,
+      .rest = data,
+    };
 
-  // Switch arrays if needed
-  if (array_index != ms->active) {
-    int err = switch_to_array(ms, array_index);
-    if (err)
-      return (struct multiarray_writer_result){ .error = err, .rest = data };
+  // One exit from here, so the context is popped once.
+  struct multiarray_writer_result out = { .error = multiarray_writer_ok,
+                                          .rest = data };
+
+  if (array_index != ms->active)
+    out.error = switch_to_array(ms, array_index);
+
+  if (out.error == multiarray_writer_ok) {
+    struct array_descriptor_gpu* desc = &ms->arrays[array_index];
+    struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
+    if (desc->flushed && r.rest.beg != data.beg)
+      desc->flushed = 0;
+    // `writer_finished` here means "stream is at capacity
+    // (total_element_limit)"; finalization happens on explicit `flush()` or on
+    // destroy, not here.
+    out.error = r.error;
+    out.rest = r.rest;
   }
 
-  struct writer_result r = stream_append_body(&ms->engine, &desc->ctx, data);
-  if (desc->flushed && r.rest.beg != data.beg)
-    desc->flushed = 0;
-
-  // `writer_finished` here means "stream is at capacity (total_element_limit)";
-  // finalization happens on explicit `flush()` or on destroy, not here.
-  return (struct multiarray_writer_result){
-    .error = r.error,
-    .rest = r.rest,
-  };
+  cu_ctx_pop(pushed);
+  return out;
 }
 
 // ---- Writer: flush ----
@@ -221,6 +229,9 @@ flush_impl(struct multiarray_writer* self)
 {
   struct multiarray_tile_stream_gpu* ms =
     container_of(self, struct multiarray_tile_stream_gpu, writer);
+  const int pushed = cu_ctx_push(ms->engine.cuda);
+  if (pushed < 0)
+    return (struct multiarray_writer_result){ .error = multiarray_writer_fail };
 
   // One array failing must not leave the others unfinalized, so the whole loop
   // runs and the first failure is what gets reported.
@@ -264,6 +275,7 @@ flush_impl(struct multiarray_writer* self)
   // Each array's stream_flush_body already drained its sink as a commit
   // point; no additional drain needed here.
 
+  cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
@@ -276,6 +288,8 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
 {
   if (!ms)
     return;
+
+  const int pushed = cu_ctx_push(ms->engine.cuda);
 
   // Remember which arrays we will auto-flush: only their sinks are sure to be
   // alive at drain time, since a caller may free a sink after flushing itself.
@@ -322,6 +336,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   // last-bound descriptor (freed above by destroy_array_descriptor).
   stream_engine_destroy(&ms->engine);
 
+  cu_ctx_pop(pushed);
   free(ms);
 }
 
