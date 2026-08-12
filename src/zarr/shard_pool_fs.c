@@ -28,6 +28,8 @@ struct shard_pool_fs
   _Atomic int io_error;
   // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
+  // Test hook: park a writer partway through queueing a write.
+  _Atomic int pause_mid_write;
 };
 
 // --- Writer slot for a single shard file ---
@@ -42,7 +44,15 @@ struct fs_slot
   _Atomic uint64_t* queued_bytes;  // points to shard_pool_fs.queued_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
+  _Atomic int* pause_mid_write;    // points to shard_pool_fs.pause_mid_write
 };
+
+static void
+fs_slot_pause_mid_write(const struct fs_slot* w)
+{
+  while (w->pause_mid_write && atomic_load(w->pause_mid_write))
+    platform_sleep_ns(100000);
+}
 
 struct pwrite_job
 {
@@ -103,11 +113,13 @@ fs_slot_write(struct shard_writer* self,
     j->retired_bytes = w->retired_bytes;
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
+    atomic_fetch_add(w->queued_bytes, nbytes);
+    fs_slot_pause_mid_write(w);
     if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
+      atomic_fetch_sub(w->queued_bytes, nbytes);
       job_free(j);
       goto Error;
     }
-    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -160,11 +172,13 @@ fs_slot_write_direct(struct shard_writer* self,
     j->data = beg;
     j->retired_bytes = w->retired_bytes;
     j->io_error = w->io_error;
+    atomic_fetch_add(w->queued_bytes, nbytes);
+    fs_slot_pause_mid_write(w);
     if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
+      atomic_fetch_sub(w->queued_bytes, nbytes);
       free(j);
       goto Error;
     }
-    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -340,7 +354,11 @@ pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  return atomic_load(&p->queued_bytes) - atomic_load(&p->retired_bytes);
+  // Load retired first: a write is counted in queued_bytes before it is
+  // handed to the worker, so this order cannot see a retire whose queue
+  // was missed, and the difference cannot go negative.
+  uint64_t retired = atomic_load(&p->retired_bytes);
+  return atomic_load(&p->queued_bytes) - retired;
 }
 
 static size_t
@@ -401,6 +419,13 @@ shard_pool_fs_set_error(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
   atomic_store(&p->io_error, 1);
+}
+
+void
+shard_pool_fs_pause_mid_write(struct shard_pool* self, int paused)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  atomic_store(&p->pause_mid_write, paused);
 }
 
 struct gate_ctx
@@ -478,6 +503,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->queued_bytes = &p->queued_bytes;
     s->io_error = &p->io_error;
     s->fail_next_truncate = &p->fail_next_truncate;
+    s->pause_mid_write = &p->pause_mid_write;
   }
 
   return &p->base;
