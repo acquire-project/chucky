@@ -97,8 +97,11 @@ machine cannot answer is left out, and the explorer shows it as unknown rather
 than picking a default.
 
 Each run records its `frames` and the `worker_threads` the benchmark's pool ran
-on. That is not always one thread per core: the GPU backend caps its
-staging-copy helpers at three.
+on. That is rarely one thread per core, and it is a different pool on each
+backend. The GPU number counts the staging-copy pool, which stops at three
+helpers. The CPU number counts the pipeline pool, which sizes itself from the
+machine's online cores rather than the cores this process was given, so on a
+cluster it runs well above `cpu_count`.
 
 Each run also records memory two ways, so an estimate can be checked against
 what the run took:
@@ -114,9 +117,10 @@ what the run took:
 The host pair brackets the run, so their difference is what the stream added to
 a process already holding its input. Compare that difference against the
 estimate on the CPU backend. On the GPU backend compare
-`memory_device_used_bytes`, since the estimate there is device memory. Either
-way the difference runs a little over the stream itself, because the benchmark
-allocates its own source block, tens of megabytes, after the baseline is taken.
+`memory_device_used_bytes`, since the estimate there is device memory. The host
+difference runs a little over the stream itself, because the benchmark allocates
+its own source block, tens of megabytes, after the baseline is taken. The device
+figure does not carry that block.
 
 ## Schema changes
 

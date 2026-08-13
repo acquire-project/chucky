@@ -571,11 +571,14 @@ function rebuildControls() {
       .filter(Boolean).join(" | ");
 
   // A sweep written before a field existed says unknown, not a default that
-  // was never true of the run.
+  // was never true of the run. A sweep that knows none of them drops the line.
   const build = file.build || {};
   const threads = [...new Set((file.runs || [])
     .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);
-  document.getElementById("build-info").textContent = [
+  const buildInfo = document.getElementById("build-info");
+  const known = [file.driver, build.cuda_compiler_version, build.build_type,
+                 build.cuda_architectures, file.cpus, threads.length].some(Boolean);
+  buildInfo.textContent = !known ? "" : [
     `driver ${file.driver || "unknown"}`,
     `cuda ${build.cuda_compiler_version || "unknown"}`,
     `${build.build_type || "unknown"} build`,
@@ -583,6 +586,7 @@ function rebuildControls() {
     `${file.cpus || "unknown"} cores`,
     `threads ${threads.length ? threads.join(", ") : "unknown"}`,
   ].join(" | ");
+  buildInfo.style.display = known ? "" : "none";
 
   // S3 metadata from runs (region, bucket, endpoint)
   const s3Runs = (file.runs || []).filter(r => r.sink === "s3");
