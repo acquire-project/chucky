@@ -90,11 +90,14 @@ page names them.
 
 The `machine` block describes the run once: `name`, `hostname`, `gpu`,
 `driver_version`, `cpu_count` (cores this process was allowed, which on a
-cluster is below the machine's), `commit`, `date`, and a `build` block read from
-`build/CMakeCache.txt` — build type, CUDA architectures, whether the GPU backend
-was on, C++ compiler, nvcomp path, and the CUDA compiler version. Anything the
-machine cannot answer is left out, and the explorer shows it as unknown rather
-than picking a default.
+cluster is below the machine's), `commit`, `date`, and a `build` block. The
+build block comes from the build directory: build type, CUDA architectures,
+whether the GPU backend was on, C++ compiler and nvcomp path from
+`CMakeCache.txt`, and the CUDA compiler version from the
+`CMakeFiles/<cmake version>/CMakeCUDACompiler.cmake` written beside it. A build
+key the directory cannot answer is left out, `gpu` and `driver_version` say
+`unknown` when there is no `nvidia-smi`, and the explorer shows either as
+unknown rather than picking a default.
 
 Each run records its `frames` and the `worker_threads` the benchmark's pool ran
 on. That is rarely one thread per core, and it is a different pool on each
@@ -118,9 +121,11 @@ The host pair brackets the run, so their difference is what the stream added to
 a process already holding its input. Compare that difference against the
 estimate on the CPU backend. On the GPU backend compare
 `memory_device_used_bytes`, since the estimate there is device memory. The host
-difference runs a little over the stream itself, because the benchmark allocates
-its own source block, tens of megabytes, after the baseline is taken. The device
-figure does not carry that block.
+difference runs over the stream itself, because the benchmark allocates its own
+source block after the baseline is taken: 32 Mi elements, so 64 MiB for a
+one- or two-byte type and 256 MiB for an eight-byte one. That block is larger
+than a small stream's whole estimate, so subtract it before reading the two
+numbers as a ratio. The device figure does not carry it.
 
 ## Schema changes
 

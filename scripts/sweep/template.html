@@ -399,7 +399,10 @@ function memoryLine(r) {
   if (r.memory_estimate_total_bytes) {
     parts.push(`${gib(r.memory_estimate_total_bytes)} GiB estimated`);
   }
-  const grown = (r.memory_host_peak_bytes || 0) - (r.memory_host_baseline_bytes || 0);
+  // A baseline of 0 means the reading failed, so there is no growth to show.
+  const grown = r.memory_host_baseline_bytes
+    ? (r.memory_host_peak_bytes || 0) - r.memory_host_baseline_bytes
+    : 0;
   const measured = r.backend === "gpu"
     ? (r.memory_device_used_bytes || 0)
     : Math.max(grown, 0);
@@ -578,14 +581,14 @@ function rebuildControls() {
   const buildInfo = document.getElementById("build-info");
   const known = [file.driver, build.cuda_compiler_version, build.build_type,
                  build.cuda_architectures, file.cpus, threads.length].some(Boolean);
-  buildInfo.textContent = !known ? "" : [
+  buildInfo.textContent = known ? [
     `driver ${file.driver || "unknown"}`,
     `cuda ${build.cuda_compiler_version || "unknown"}`,
     `${build.build_type || "unknown"} build`,
     `sm ${build.cuda_architectures || "unknown"}`,
     `${file.cpus || "unknown"} cores`,
     `threads ${threads.length ? threads.join(", ") : "unknown"}`,
-  ].join(" | ");
+  ].join(" | ") : "";
   buildInfo.style.display = known ? "" : "none";
 
   // S3 metadata from runs (region, bucket, endpoint)

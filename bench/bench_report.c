@@ -36,8 +36,10 @@ print_append_latency(const struct stream_metrics* m)
 void
 print_memory_report(const struct bench_memory* mem)
 {
+  // A baseline of 0 is how the reading reports failure, not an empty process,
+  // so growth from it would be the whole footprint.
   const uint64_t host_growth =
-    mem->host_peak_bytes > mem->host_baseline_bytes
+    mem->host_baseline_bytes && mem->host_peak_bytes > mem->host_baseline_bytes
       ? mem->host_peak_bytes - mem->host_baseline_bytes
       : 0;
   const uint64_t measured = mem->estimate_is_device_memory
