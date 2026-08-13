@@ -48,9 +48,13 @@ print_memory_report(const struct bench_memory* mem)
 
   char a[32], b[32];
   fputc('\n', stderr);
-  format_bytes(a, sizeof(a), mem->host_baseline_bytes);
-  format_bytes(b, sizeof(b), mem->host_peak_bytes);
-  print_report("  Host memory:   %s at rest, %s peak", a, b);
+  if (mem->host_baseline_bytes || mem->host_peak_bytes) {
+    format_bytes(a, sizeof(a), mem->host_baseline_bytes);
+    format_bytes(b, sizeof(b), mem->host_peak_bytes);
+    print_report("  Host memory:   %s at rest, %s peak", a, b);
+  } else {
+    print_report("  Host memory:   unavailable");
+  }
   if (mem->device_used_bytes) {
     format_bytes(a, sizeof(a), mem->device_used_bytes);
     print_report("  Device memory: %s", a);

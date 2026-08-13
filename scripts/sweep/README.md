@@ -122,10 +122,13 @@ a process already holding its input. Compare that difference against the
 estimate on the CPU backend. On the GPU backend compare
 `memory_device_used_bytes`, since the estimate there is device memory. The host
 difference runs over the stream itself, because the benchmark allocates its own
-source block after the baseline is taken: 32 Mi elements, so 64 MiB for a
-one- or two-byte type and 256 MiB for an eight-byte one. That block is larger
-than a small stream's whole estimate, so subtract it before reading the two
-numbers as a ratio. The device figure does not carry it.
+source block after the baseline is taken. The block holds 32 Mi elements, and
+the benchmark writes two bytes into each one whatever the data type, so it adds
+up to 64 MiB — less when the run is shorter than one block, and no more than
+that for a wide type, because pages the benchmark never writes stay off the
+resident count even once the stream reads them. That is larger than a small
+stream's whole estimate, so subtract it before reading the two numbers as a
+ratio. The device figure does not carry it.
 
 ## Schema changes
 
