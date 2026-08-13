@@ -96,8 +96,8 @@ path, and the CUDA compiler version. Anything the machine cannot answer is left
 out, and the explorer shows it as unknown rather than picking a default.
 
 Each run records its `frames` and the `worker_threads` the benchmark's pool ran
-on. That is not always the thread count the runner asked for, since the GPU
-backend caps its staging-copy helpers at three.
+on. That is not always one thread per core: the GPU backend caps its
+staging-copy helpers at three.
 
 Each run also records memory two ways, so an estimate can be checked against
 what the run took:

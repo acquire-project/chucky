@@ -107,6 +107,7 @@ set(_chucky_public_deps
     Lz4::Lz4
     Zstd::Zstd
     AWS::aws-c-s3
+    $<$<PLATFORM_ID:Windows>:psapi>
     $<${_with_blosc}:Blosc::Blosc>
     $<${_with_gpu}:CUDA::cuda_driver>
     $<${_with_gpu}:CUDA::cudart_static>

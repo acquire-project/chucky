@@ -17,7 +17,8 @@ static void
 touch_block(char* block)
 {
   volatile char* pages = (volatile char*)block;
-  for (size_t i = 0; i < BLOCK_BYTES; i += platform_page_alignment())
+  const size_t page = platform_page_alignment();
+  for (size_t i = 0; i < BLOCK_BYTES; i += page)
     pages[i] = 1;
 }
 

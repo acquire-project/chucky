@@ -538,8 +538,9 @@ run_bench(const struct bench_config* cfg)
   mem_used.estimate_pinned_bytes = est_pinned_bytes;
   mem_used.host_peak_bytes = platform_peak_resident_memory();
   if (cfg->backend == BENCH_GPU) {
+    // 0 means the reading failed, not that the device ran out.
     const size_t device_free_now = bench_gpu_free_memory();
-    if (device_free_at_rest > device_free_now)
+    if (device_free_now > 0 && device_free_at_rest > device_free_now)
       mem_used.device_used_bytes = device_free_at_rest - device_free_now;
   }
 

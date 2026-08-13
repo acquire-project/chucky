@@ -334,10 +334,14 @@ def build_info(build_dir: Path) -> dict:
             if key and value:
                 info[key] = value
 
-    # Not a cache entry; CMake writes it beside the cache.
-    for detected in sorted(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake")):
+    # Not a cache entry; CMake writes it beside the cache, under a directory
+    # named for the CMake version. Upgrading CMake leaves the old directory
+    # behind, so take the one written most recently.
+    detected = sorted(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in detected:
         found = re.search(r'set\(CMAKE_CUDA_COMPILER_VERSION "([^"]+)"\)',
-                          detected.read_text(errors="replace"))
+                          path.read_text(errors="replace"))
         if found:
             info["cuda_compiler_version"] = found.group(1)
             break
