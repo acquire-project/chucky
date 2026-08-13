@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import subprocess
@@ -114,6 +115,10 @@ class RunSpec(BaseModel):
         return CHUNK_BYTES[self.chunk_label]
 
     @property
+    def frames(self) -> int:
+        return SCENARIOS[self.scenario]
+
+    @property
     def id(self) -> str:
         suffix = f"__{self.sink}" if self.sink != "discard" else ""
         if self.s3_throughput_gbps > 0:
@@ -132,6 +137,7 @@ class RunSpec(BaseModel):
             "chunk_bytes": self.chunk_bytes,
             "chunk_bytes_label": self.chunk_label,
             "sink": self.sink,
+            "frames": self.frames,
         }
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
@@ -282,15 +288,61 @@ def git_commit() -> str:
         return "unknown"
 
 
-def gpu_name() -> str:
+def gpu_and_driver() -> tuple[str, str]:
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
             capture_output=True, text=True, timeout=5,
         )
-        return out.stdout.strip().split("\n")[0]
+        name, _, driver = out.stdout.strip().split("\n")[0].partition(",")
+        return name.strip() or "unknown", driver.strip() or "unknown"
     except Exception:
-        return "unknown"
+        return "unknown", "unknown"
+
+
+def cpu_count() -> int:
+    """Cores this process may run on, which on a cluster is below the machine's."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 0
+
+
+# CMakeCache entries worth recording, and what to call them in the results file.
+BUILD_CACHE_KEYS = {
+    "CMAKE_BUILD_TYPE": "build_type",
+    "CMAKE_CUDA_ARCHITECTURES": "cuda_architectures",
+    "CMAKE_CXX_COMPILER": "cxx_compiler",
+    "CHUCKY_ENABLE_GPU": "gpu_enabled",
+    "NVCOMP_LIBRARY": "nvcomp",
+}
+
+
+def build_info(build_dir: Path) -> dict:
+    """What the binaries under build_dir were built from.
+
+    Everything comes from the build directory rather than the environment the
+    sweep runs in, so it describes the binaries that produced the numbers.
+    Missing keys are left out: a reader should see nothing rather than a
+    default that was never true.
+    """
+    info: dict = {}
+    cache = build_dir / "CMakeCache.txt"
+    if cache.is_file():
+        for line in cache.read_text(errors="replace").splitlines():
+            name, _, value = line.partition("=")
+            key = BUILD_CACHE_KEYS.get(name.split(":")[0])
+            if key and value:
+                info[key] = value
+
+    # Not a cache entry — CMake writes it beside the cache once it identifies
+    # the compiler.
+    for detected in sorted(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake")):
+        found = re.search(r'set\(CMAKE_CUDA_COMPILER_VERSION "([^"]+)"\)',
+                          detected.read_text(errors="replace"))
+        if found:
+            info["cuda_compiler_version"] = found.group(1)
+            break
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +359,6 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
     if not exe.exists():
         return None
 
-    frames = SCENARIOS[spec.scenario]
     cmd = [
         str(exe),
         "--codec", spec.codec,
@@ -315,7 +366,7 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--backend", spec.backend,
         "--dtype", spec.dtype,
         "--chunk-bytes", spec.chunk_label,
-        "--frames", str(frames),
+        "--frames", str(spec.frames),
         "--json",
     ]
 
@@ -504,12 +555,16 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
                 continue
             existing[rid] = r
     else:
+        gpu, driver = gpu_and_driver()
         data = {
             "version": CURRENT_VERSION,
             "machine": {
                 "name": machine_name,
                 "hostname": platform.node(),
-                "gpu": gpu_name(),
+                "gpu": gpu,
+                "driver_version": driver,
+                "cpu_count": cpu_count(),
+                "build": build_info(build_dir),
                 "commit": commit,
                 "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
             },

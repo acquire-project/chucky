@@ -144,6 +144,7 @@ input { accent-color: var(--series-1); }
 
 <h1>Sweep <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
 <div class="subtitle" id="machine-info"></div>
+<div class="subtitle" id="build-info"></div>
 <div class="subtitle" id="s3-info" style="display:none"></div>
 
 <div class="controls">
@@ -382,13 +383,26 @@ function tooltipText(r) {
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
-  if (r.memory) {
-    const m = r.memory;
-    if (m.device_gib) t += `device: ${m.device_gib.toFixed(2)} GiB`;
-    if (m.chunk_pool_gib) t += `  chunk_pool: ${m.chunk_pool_gib.toFixed(2)} GiB`;
-    t += "\n";
+  if (r.frames != null || r.worker_threads != null) {
+    t += `frames: ${r.frames ?? "unknown"}  threads: ${r.worker_threads ?? "unknown"}\n`;
   }
+  const memory = memoryLine(r);
+  if (memory) t += memory + "\n";
   return t.trim();
+}
+
+// Estimated against measured. The measured figure is device memory on the GPU
+// and the run's own host growth on the CPU, which is what each estimate covers.
+function memoryLine(r) {
+  const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
+  const parts = [];
+  if (r.memory_estimate_total_bytes) {
+    parts.push(`${gib(r.memory_estimate_total_bytes)} GiB estimated`);
+  }
+  const grown = (r.memory_host_peak_bytes || 0) - (r.memory_host_baseline_bytes || 0);
+  const measured = r.memory_device_used_bytes || (grown > 0 ? grown : 0);
+  if (measured) parts.push(`${gib(measured)} GiB measured`);
+  return parts.length ? "memory: " + parts.join(", ") : "";
 }
 
 function stageTooltipText(r, stageName) {
@@ -553,6 +567,20 @@ function rebuildControls() {
   document.getElementById("machine-info").textContent =
     [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
       .filter(Boolean).join(" | ");
+
+  // Sweeps written before these were recorded say unknown, rather than showing
+  // a default that was never true of the run.
+  const build = file.build || {};
+  const threads = [...new Set((file.runs || [])
+    .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);
+  document.getElementById("build-info").textContent = [
+    `driver ${file.driver || "unknown"}`,
+    `cuda ${build.cuda_compiler_version || "unknown"}`,
+    `${build.build_type || "unknown"} build`,
+    `sm ${build.cuda_architectures || "unknown"}`,
+    `${file.cpus || "unknown"} cores`,
+    `threads ${threads.length ? threads.join(", ") : "unknown"}`,
+  ].join(" | ");
 
   // S3 metadata from runs (region, bucket, endpoint)
   const s3Runs = (file.runs || []).filter(r => r.sink === "s3");

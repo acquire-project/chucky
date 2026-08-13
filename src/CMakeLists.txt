@@ -34,6 +34,9 @@ add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
 add_src_lib(platform SOURCES platform/platform.h LINKS Threads::Threads)
 add_platform_sources(platform platform/platform)
+if(WIN32)
+    target_link_libraries(platform PUBLIC psapi)
+endif()
 
 add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
     LINKS platform

@@ -34,6 +34,34 @@ print_append_latency(const struct stream_metrics* m)
 }
 
 void
+print_memory_report(const struct bench_memory* mem)
+{
+  const uint64_t host_growth =
+    mem->host_peak_bytes > mem->host_baseline_bytes
+      ? mem->host_peak_bytes - mem->host_baseline_bytes
+      : 0;
+  const uint64_t measured =
+    mem->device_used_bytes ? mem->device_used_bytes : host_growth;
+
+  char a[32], b[32];
+  fputc('\n', stderr);
+  format_bytes(a, sizeof(a), mem->host_baseline_bytes);
+  format_bytes(b, sizeof(b), mem->host_peak_bytes);
+  print_report("  Host memory:   %s at rest, %s peak", a, b);
+  if (mem->device_used_bytes) {
+    format_bytes(a, sizeof(a), mem->device_used_bytes);
+    print_report("  Device memory: %s", a);
+  }
+  format_bytes(a, sizeof(a), mem->estimate_total_bytes);
+  if (measured > 0 && mem->estimate_total_bytes > 0)
+    print_report("  Estimate:      %s (%.2fx measured)",
+                 a,
+                 (double)mem->estimate_total_bytes / (double)measured);
+  else
+    print_report("  Estimate:      %s", a);
+}
+
+void
 print_metric_row(const struct stream_metric* m)
 {
   if (m->count <= 0)
@@ -255,8 +283,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      size_t memory_estimate_total_bytes,
-                      size_t memory_estimate_pinned_bytes)
+                      const struct bench_memory* mem,
+                      int worker_threads)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -302,9 +330,20 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_s");
   jw_float(&jw, (double)flush_s);
   jw_key(&jw, "memory_estimate_total_bytes");
-  jw_uint(&jw, memory_estimate_total_bytes);
+  jw_uint(&jw, mem->estimate_total_bytes);
   jw_key(&jw, "memory_estimate_pinned_bytes");
-  jw_uint(&jw, memory_estimate_pinned_bytes);
+  jw_uint(&jw, mem->estimate_pinned_bytes);
+  // Measured, to compare against the estimate above. The host pair brackets
+  // the run, so their difference is what the run added to a process that was
+  // already holding its input.
+  jw_key(&jw, "memory_host_baseline_bytes");
+  jw_uint(&jw, mem->host_baseline_bytes);
+  jw_key(&jw, "memory_host_peak_bytes");
+  jw_uint(&jw, mem->host_peak_bytes);
+  jw_key(&jw, "memory_device_used_bytes");
+  jw_uint(&jw, mem->device_used_bytes);
+  jw_key(&jw, "worker_threads");
+  jw_uint(&jw, (uint64_t)(worker_threads > 0 ? worker_threads : 0));
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);

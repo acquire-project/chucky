@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -37,6 +38,28 @@ platform_available_memory(void)
     return 0;
   return ((size_t)vm.free_count + (size_t)vm.inactive_count) *
          platform_page_size();
+}
+
+uint64_t
+platform_resident_memory(void)
+{
+  mach_task_basic_info_data_t info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  if (task_info(mach_task_self(),
+                MACH_TASK_BASIC_INFO,
+                (task_info_t)&info,
+                &count) != KERN_SUCCESS)
+    return 0;
+  return (uint64_t)info.resident_size;
+}
+
+uint64_t
+platform_peak_resident_memory(void)
+{
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0)
+    return 0;
+  return (uint64_t)ru.ru_maxrss; // bytes on macOS
 }
 
 void*

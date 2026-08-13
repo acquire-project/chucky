@@ -67,6 +67,13 @@ bench_cursor(const struct bench_handle* h)
                                  : bench_gpu_cursor(h->gpu);
 }
 
+static int
+bench_worker_threads(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_worker_threads(h->cpu)
+                                 : bench_gpu_worker_threads(h->gpu);
+}
+
 static void
 bench_destroy(struct bench_handle* h)
 {
@@ -436,6 +443,12 @@ run_bench(const struct bench_config* cfg)
     bench_gpu_report_memory(
       &config, &est_total_chunks, &est_total_bytes, &est_pinned_bytes);
 
+  struct bench_memory mem_used = {
+    .host_baseline_bytes = platform_resident_memory(),
+  };
+  const size_t device_free_at_rest =
+    cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
+
   if (cfg->backend == BENCH_CPU) {
     struct tile_stream_cpu_memory_info mem;
     if (tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0) {
@@ -521,6 +534,15 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
+  mem_used.estimate_total_bytes = est_total_bytes;
+  mem_used.estimate_pinned_bytes = est_pinned_bytes;
+  mem_used.host_peak_bytes = platform_peak_resident_memory();
+  if (cfg->backend == BENCH_GPU) {
+    const size_t device_free_now = bench_gpu_free_memory();
+    if (device_free_at_rest > device_free_now)
+      mem_used.device_used_bytes = device_free_at_rest - device_free_now;
+  }
+
   if (bench_cursor(&h) != total_elements) {
     log_error("  cursor drift: expected %zu, got %zu (diff=%td)",
               total_elements,
@@ -551,6 +573,7 @@ run_bench(const struct bench_config* cfg)
                        init_s,
                        flush_s,
                        pending_bytes);
+    print_memory_report(&mem_used);
 
     if (cfg->json_output) {
       const struct stream_metric* sink_metric =
@@ -565,8 +588,8 @@ run_bench(const struct bench_config* cfg)
                             wall_s,
                             init_s,
                             flush_s,
-                            est_total_bytes,
-                            est_pinned_bytes);
+                            &mem_used,
+                            bench_worker_threads(&h));
     }
   }
 

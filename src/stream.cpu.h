@@ -28,6 +28,12 @@ tile_stream_cpu_writer(struct tile_stream_cpu* s);
 uint64_t
 tile_stream_cpu_cursor(const struct tile_stream_cpu* s);
 
+// Threads the pipeline pool runs on, counting the caller. This is the pool
+// max_threads sizes, so it is what a benchmark should report as the thread
+// count that ran.
+int
+tile_stream_cpu_worker_threads(const struct tile_stream_cpu* s);
+
 struct tile_stream_cpu_memory_info
 {
   size_t heap_bytes;            // total

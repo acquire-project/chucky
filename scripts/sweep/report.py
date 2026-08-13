@@ -61,10 +61,11 @@ SITE_FILES = {
 # which is the longest string in a sweep. The overview keeps it, because its
 # movers panel matches runs between sweeps by it.
 EXPLORER_OMITS = ("id",)
-EXPLORER_VERSION = 4
+EXPLORER_VERSION = 5
 
 # What the explorer's sweep list keeps from each summarized sweep.
-EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu")
+EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu",
+                       "driver", "cpus", "build")
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:

@@ -30,6 +30,9 @@ class RunResult(BaseModel, extra="allow"):
     chunk_bytes: int
     chunk_bytes_label: str
     sink: str = "discard"
+    # Absent in files written before the runner recorded them.
+    frames: int | None = None
+    worker_threads: int | None = None
     s3_endpoint: str | None = None
     s3_region: str | None = None
     s3_bucket: str | None = None

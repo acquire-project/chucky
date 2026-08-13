@@ -64,6 +64,9 @@ bench_gpu_get_metrics(const struct tile_stream_gpu* s);
 struct tile_stream_status
 bench_gpu_status(const struct tile_stream_gpu* s);
 
+int
+bench_gpu_worker_threads(const struct tile_stream_gpu* s);
+
 struct writer*
 bench_gpu_writer(struct tile_stream_gpu* s);
 

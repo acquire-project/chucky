@@ -2,7 +2,9 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,6 +35,29 @@ platform_available_memory(void)
   if (pages > 0 && page_sz > 0)
     return (size_t)pages * (size_t)page_sz;
   return 0;
+}
+
+uint64_t
+platform_resident_memory(void)
+{
+  FILE* f = fopen("/proc/self/statm", "r");
+  if (!f)
+    return 0;
+  unsigned long long total_pages = 0, resident_pages = 0;
+  int fields = fscanf(f, "%llu %llu", &total_pages, &resident_pages);
+  fclose(f);
+  if (fields != 2)
+    return 0;
+  return (uint64_t)resident_pages * (uint64_t)platform_page_size();
+}
+
+uint64_t
+platform_peak_resident_memory(void)
+{
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0)
+    return 0;
+  return (uint64_t)ru.ru_maxrss * 1024; // kilobytes on Linux
 }
 
 void*

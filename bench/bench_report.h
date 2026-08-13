@@ -18,6 +18,20 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
+// What the run asked for and what it took. The estimate comes from the
+// engine's own sizing; the rest is measured around the run.
+struct bench_memory
+{
+  uint64_t estimate_total_bytes;  // device bytes on GPU, heap bytes on CPU
+  uint64_t estimate_pinned_bytes; // pinned host bytes on GPU, 0 on CPU
+  uint64_t host_baseline_bytes;   // resident before the stream was created
+  uint64_t host_peak_bytes;       // most resident memory held during the run
+  uint64_t device_used_bytes;     // GPU: free device memory the stream took
+};
+
+void
+print_memory_report(const struct bench_memory* mem);
+
 void
 print_metric_row(const struct stream_metric* m);
 
@@ -59,8 +73,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      size_t memory_estimate_total_bytes,
-                      size_t memory_estimate_pinned_bytes);
+                      const struct bench_memory* mem,
+                      int worker_threads);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

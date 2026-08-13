@@ -86,6 +86,37 @@ page names them.
 - A change compares a machine's latest sweep against its previous one, matching
   runs by id. Changes under 2% are shown as no real change.
 
+## What a results file records
+
+The `machine` block describes the run once: `name`, `hostname`, `gpu`,
+`driver_version`, `cpu_count` (cores this process was allowed, which on a
+cluster is below the machine's), `commit`, `date`, and a `build` block read from
+`build/CMakeCache.txt` — build type, CUDA architectures, C++ compiler, nvcomp
+path, and the CUDA compiler version. Anything the machine cannot answer is left
+out, and the explorer shows it as unknown rather than picking a default.
+
+Each run records its `frames` and the `worker_threads` the benchmark's pool
+actually ran on, which is not always the thread count the runner asked for: the
+GPU backend caps its staging-copy helpers at three.
+
+Each run also records memory two ways, so an estimate can be checked against
+what the run took:
+
+| field | holds |
+|---|---|
+| `memory_estimate_total_bytes` | the engine's own estimate — device bytes on GPU, heap bytes on CPU |
+| `memory_estimate_pinned_bytes` | pinned host bytes on GPU, 0 on CPU |
+| `memory_host_baseline_bytes` | resident memory before the stream was created |
+| `memory_host_peak_bytes` | most resident memory the process held during the run |
+| `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
+
+The host pair brackets the run, so their difference is what the stream added to
+a process already holding its input. That difference is the figure to compare
+against the estimate on the CPU backend; on the GPU backend it is
+`memory_device_used_bytes`, since the estimate there is device memory. The
+difference is a little over the stream itself: the benchmark's own source block,
+tens of megabytes, is allocated after the baseline is taken.
+
 ## Schema changes
 
 `models.py` holds the results schema, its version, and the migrations.
