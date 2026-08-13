@@ -27,6 +27,7 @@
 #define BATCH_WRITES 8
 #define WORKER_SETTLE_MS 200
 #define POLL_STEP_MS 5
+#define PARK_TIMEOUT_MS 2000
 #define JOIN_TIMEOUT_MS 5000
 
 struct one_write_args
@@ -43,9 +44,10 @@ one_write_fn(void* arg)
 {
   struct one_write_args* oa = (struct one_write_args*)arg;
   const uint8_t* beg = oa->src;
-  oa->error = oa->direct
-                ? oa->w->write_direct(oa->w, 0, beg, beg + WRITE_BYTES)
-                : oa->w->write(oa->w, 0, beg, beg + WRITE_BYTES);
+  if (oa->direct)
+    oa->error = oa->w->write_direct(oa->w, 0, beg, beg + WRITE_BYTES);
+  else
+    oa->error = oa->w->write(oa->w, 0, beg, beg + WRITE_BYTES);
   atomic_store(&oa->done, 1);
 }
 
@@ -58,6 +60,19 @@ wait_for_done(_Atomic int* done, int timeout_ms)
     waited_ms += POLL_STEP_MS;
   }
   return atomic_load(done) != 0 ? 0 : -1;
+}
+
+// Wait for the writer to reach the window instead of guessing how long it takes
+// to get there. A build that counts after the handoff never reports the write,
+// so this waits out the timeout and the caller's check fails, as it should.
+static void
+wait_for_pending(struct shard_pool* pool, int timeout_ms)
+{
+  int waited_ms = 0;
+  while (shard_pool_pending_bytes(pool) == 0 && waited_ms < timeout_ms) {
+    platform_sleep_ns((int64_t)POLL_STEP_MS * 1000000LL);
+    waited_ms += POLL_STEP_MS;
+  }
 }
 
 // A writer parked in the window must leave pending_bytes reporting exactly the
@@ -92,6 +107,8 @@ test_parked_writer(const char* tmpdir, const char* label, int direct)
   oa.direct = direct;
   atomic_store(&oa.done, 0);
   CHECK(Cleanup, test_thread_start(&thr, one_write_fn, &oa) == 0);
+
+  wait_for_pending(pool, PARK_TIMEOUT_MS);
 
   // Long enough for the worker to have retired the write, if this build handed
   // it over before counting it.
@@ -186,9 +203,10 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
+  int ecode = 1;
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
+  ecode = 0;
   log_info("temp dir: %s", tmpdir);
 
   {
