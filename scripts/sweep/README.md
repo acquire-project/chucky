@@ -91,9 +91,10 @@ page names them.
 The `machine` block describes the run once: `name`, `hostname`, `gpu`,
 `driver_version`, `cpu_count` (cores this process was allowed, which on a
 cluster is below the machine's), `commit`, `date`, and a `build` block read from
-`build/CMakeCache.txt` — build type, CUDA architectures, C++ compiler, nvcomp
-path, and the CUDA compiler version. Anything the machine cannot answer is left
-out, and the explorer shows it as unknown rather than picking a default.
+`build/CMakeCache.txt` — build type, CUDA architectures, whether the GPU backend
+was on, C++ compiler, nvcomp path, and the CUDA compiler version. Anything the
+machine cannot answer is left out, and the explorer shows it as unknown rather
+than picking a default.
 
 Each run records its `frames` and the `worker_threads` the benchmark's pool ran
 on. That is not always one thread per core: the GPU backend caps its

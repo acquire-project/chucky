@@ -400,7 +400,9 @@ function memoryLine(r) {
     parts.push(`${gib(r.memory_estimate_total_bytes)} GiB estimated`);
   }
   const grown = (r.memory_host_peak_bytes || 0) - (r.memory_host_baseline_bytes || 0);
-  const measured = r.memory_device_used_bytes || (grown > 0 ? grown : 0);
+  const measured = r.backend === "gpu"
+    ? (r.memory_device_used_bytes || 0)
+    : Math.max(grown, 0);
   if (measured) parts.push(`${gib(measured)} GiB measured`);
   return parts.length ? "memory: " + parts.join(", ") : "";
 }

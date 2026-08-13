@@ -40,8 +40,9 @@ print_memory_report(const struct bench_memory* mem)
     mem->host_peak_bytes > mem->host_baseline_bytes
       ? mem->host_peak_bytes - mem->host_baseline_bytes
       : 0;
-  const uint64_t measured =
-    mem->device_used_bytes ? mem->device_used_bytes : host_growth;
+  const uint64_t measured = mem->estimate_is_device_memory
+                              ? mem->device_used_bytes
+                              : host_growth;
 
   char a[32], b[32];
   fputc('\n', stderr);

@@ -445,6 +445,7 @@ run_bench(const struct bench_config* cfg)
 
   struct bench_memory mem_used = {
     .host_baseline_bytes = platform_resident_memory(),
+    .estimate_is_device_memory = cfg->backend == BENCH_GPU,
   };
   const size_t device_free_at_rest =
     cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
