@@ -36,19 +36,9 @@ print_append_latency(const struct stream_metrics* m)
 void
 print_memory_report(const struct bench_memory* mem)
 {
-  // A baseline of 0 is how the reading reports failure, not an empty process,
-  // so growth from it would be the whole footprint.
-  const uint64_t host_growth =
-    mem->host_baseline_bytes && mem->host_peak_bytes > mem->host_baseline_bytes
-      ? mem->host_peak_bytes - mem->host_baseline_bytes
-      : 0;
-  const uint64_t measured = mem->estimate_is_device_memory
-                              ? mem->device_used_bytes
-                              : host_growth;
-
   char a[32], b[32];
   fputc('\n', stderr);
-  if (mem->host_baseline_bytes || mem->host_peak_bytes) {
+  if (mem->host_peak_bytes) {
     format_bytes(a, sizeof(a), mem->host_baseline_bytes);
     format_bytes(b, sizeof(b), mem->host_peak_bytes);
     print_report("  Host memory:   %s at rest, %s peak", a, b);
@@ -59,13 +49,13 @@ print_memory_report(const struct bench_memory* mem)
     format_bytes(a, sizeof(a), mem->device_used_bytes);
     print_report("  Device memory: %s", a);
   }
-  format_bytes(a, sizeof(a), mem->estimate_total_bytes);
-  if (measured > 0 && mem->estimate_total_bytes > 0)
+  if (mem->measured_bytes && mem->estimate_total_bytes) {
+    format_bytes(a, sizeof(a), mem->estimate_total_bytes);
     print_report("  Estimate:      %s (%.2fx measured)",
                  a,
-                 (double)mem->estimate_total_bytes / (double)measured);
-  else
-    print_report("  Estimate:      %s", a);
+                 (double)mem->estimate_total_bytes /
+                   (double)mem->measured_bytes);
+  }
 }
 
 void
@@ -340,16 +330,16 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, mem->estimate_total_bytes);
   jw_key(&jw, "memory_estimate_pinned_bytes");
   jw_uint(&jw, mem->estimate_pinned_bytes);
-  // The host pair brackets the run, so their difference is what the run added
-  // to a process that was already holding its input.
   jw_key(&jw, "memory_host_baseline_bytes");
   jw_uint(&jw, mem->host_baseline_bytes);
   jw_key(&jw, "memory_host_peak_bytes");
   jw_uint(&jw, mem->host_peak_bytes);
   jw_key(&jw, "memory_device_used_bytes");
   jw_uint(&jw, mem->device_used_bytes);
+  jw_key(&jw, "memory_measured_bytes");
+  jw_uint(&jw, mem->measured_bytes);
   jw_key(&jw, "worker_threads");
-  jw_uint(&jw, (uint64_t)(worker_threads > 0 ? worker_threads : 0));
+  jw_uint(&jw, (uint64_t)worker_threads);
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);

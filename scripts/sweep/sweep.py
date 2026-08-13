@@ -318,12 +318,13 @@ BUILD_CACHE_KEYS = {
 
 
 def build_info(build_dir: Path) -> dict:
-    """What the binaries under build_dir were built from.
+    """How build_dir was last configured.
 
     Read from the build directory rather than the environment the sweep runs
-    in, so it describes the binaries that produced the numbers. Missing keys
-    are left out: a reader should see nothing rather than a default that was
-    never true.
+    in, so it describes the binaries rather than the machine. It describes the
+    last configure, not the last build, so it goes stale if someone
+    reconfigures without rebuilding. Missing keys are left out: a reader should
+    see nothing rather than a default that was never true.
     """
     info: dict = {}
     cache = build_dir / "CMakeCache.txt"
@@ -337,14 +338,13 @@ def build_info(build_dir: Path) -> dict:
     # Not a cache entry; CMake writes it beside the cache, under a directory
     # named for the CMake version. Upgrading CMake leaves the old directory
     # behind, so take the one written most recently.
-    detected = sorted(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake"),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in detected:
+    newest = max(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake"),
+                 key=lambda p: p.stat().st_mtime, default=None)
+    if newest:
         found = re.search(r'set\(CMAKE_CUDA_COMPILER_VERSION "([^"]+)"\)',
-                          path.read_text(errors="replace"))
+                          newest.read_text(errors="replace"))
         if found:
             info["cuda_compiler_version"] = found.group(1)
-            break
     return info
 
 

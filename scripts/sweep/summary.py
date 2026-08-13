@@ -38,6 +38,10 @@ STALL_METRICS = (
     "flush_stall_ms", "io_fence_ms",
 )
 
+# The build keys a page shows. Both files this module feeds are fetched on
+# every page load, so the rest of the block stays in the results file.
+SHOWN_BUILD_KEYS = ("build_type", "cuda_architectures", "cuda_compiler_version")
+
 
 def parse_filename(path: Path) -> tuple[str | None, str | None, str | None]:
     m = FILENAME_RE.match(path.stem)
@@ -178,7 +182,8 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "gpu": machine.get("gpu", ""),
         "driver": machine.get("driver_version", ""),
         "cpus": machine.get("cpu_count", 0),
-        "build": machine.get("build", {}),
+        "build": {key: value for key, value in machine.get("build", {}).items()
+                  if key in SHOWN_BUILD_KEYS},
         "date": machine.get("date", ""),
         "day": sweep_day(machine, path),
         "filename": path.name,

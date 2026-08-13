@@ -383,30 +383,22 @@ function tooltipText(r) {
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
-  if (r.frames != null || r.worker_threads != null) {
-    t += `frames: ${r.frames ?? "unknown"}  threads: ${r.worker_threads ?? "unknown"}\n`;
-  }
+  if (r.frames != null) t += `frames: ${r.frames}\n`;
+  if (r.worker_threads != null) t += `threads: ${r.worker_threads}\n`;
   const memory = memoryLine(r);
   if (memory) t += memory + "\n";
   return t.trim();
 }
 
-// The measured figure is device memory on the GPU and the run's own host
-// growth on the CPU, which is what each estimate covers.
 function memoryLine(r) {
   const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
   const parts = [];
   if (r.memory_estimate_total_bytes) {
     parts.push(`${gib(r.memory_estimate_total_bytes)} GiB estimated`);
   }
-  // A baseline of 0 means the reading failed, so there is no growth to show.
-  const grown = r.memory_host_baseline_bytes
-    ? (r.memory_host_peak_bytes || 0) - r.memory_host_baseline_bytes
-    : 0;
-  const measured = r.backend === "gpu"
-    ? (r.memory_device_used_bytes || 0)
-    : Math.max(grown, 0);
-  if (measured) parts.push(`${gib(measured)} GiB measured`);
+  if (r.memory_measured_bytes) {
+    parts.push(`${gib(r.memory_measured_bytes)} GiB measured`);
+  }
   return parts.length ? "memory: " + parts.join(", ") : "";
 }
 
@@ -578,18 +570,18 @@ function rebuildControls() {
   const build = file.build || {};
   const threads = [...new Set((file.runs || [])
     .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);
+  const detail = [
+    [file.driver, d => `driver ${d}`],
+    [build.cuda_compiler_version, v => `cuda ${v}`],
+    [build.build_type, t => `${t} build`],
+    [build.cuda_architectures, a => `sm ${a}`],
+    [file.cpus, n => `${n} cores`],
+    [threads.join(", "), t => `threads ${t}`],
+  ];
   const buildInfo = document.getElementById("build-info");
-  const known = [file.driver, build.cuda_compiler_version, build.build_type,
-                 build.cuda_architectures, file.cpus, threads.length].some(Boolean);
-  buildInfo.textContent = known ? [
-    `driver ${file.driver || "unknown"}`,
-    `cuda ${build.cuda_compiler_version || "unknown"}`,
-    `${build.build_type || "unknown"} build`,
-    `sm ${build.cuda_architectures || "unknown"}`,
-    `${file.cpus || "unknown"} cores`,
-    `threads ${threads.length ? threads.join(", ") : "unknown"}`,
-  ].join(" | ") : "";
-  buildInfo.style.display = known ? "" : "none";
+  buildInfo.textContent = detail
+    .map(([value, render]) => render(value || "unknown")).join(" | ");
+  buildInfo.style.display = detail.some(([value]) => value) ? "" : "none";
 
   // S3 metadata from runs (region, bucket, endpoint)
   const s3Runs = (file.runs || []).filter(r => r.sink === "s3");

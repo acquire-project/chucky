@@ -33,6 +33,12 @@ class RunResult(BaseModel, extra="allow"):
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
+    memory_estimate_total_bytes: int | None = None
+    memory_estimate_pinned_bytes: int | None = None
+    memory_host_baseline_bytes: int | None = None
+    memory_host_peak_bytes: int | None = None
+    memory_device_used_bytes: int | None = None
+    memory_measured_bytes: int | None = None
     s3_endpoint: str | None = None
     s3_region: str | None = None
     s3_bucket: str | None = None

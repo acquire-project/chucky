@@ -32,11 +32,10 @@ add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h
 )
 add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
-add_src_lib(platform SOURCES platform/platform.h LINKS Threads::Threads)
+add_src_lib(platform SOURCES platform/platform.h
+    LINKS Threads::Threads $<$<PLATFORM_ID:Windows>:psapi>
+)
 add_platform_sources(platform platform/platform)
-if(WIN32)
-    target_link_libraries(platform PUBLIC psapi)
-endif()
 
 add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
     LINKS platform

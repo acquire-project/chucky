@@ -443,13 +443,6 @@ run_bench(const struct bench_config* cfg)
     bench_gpu_report_memory(
       &config, &est_total_chunks, &est_total_bytes, &est_pinned_bytes);
 
-  struct bench_memory mem_used = {
-    .host_baseline_bytes = platform_resident_memory(),
-    .estimate_is_device_memory = cfg->backend == BENCH_GPU,
-  };
-  const size_t device_free_at_rest =
-    cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
-
   if (cfg->backend == BENCH_CPU) {
     struct tile_stream_cpu_memory_info mem;
     if (tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0) {
@@ -475,6 +468,14 @@ run_bench(const struct bench_config* cfg)
         mem.epochs_per_batch);
     }
   }
+
+  struct bench_memory mem_used = {
+    .estimate_total_bytes = est_total_bytes,
+    .estimate_pinned_bytes = est_pinned_bytes,
+    .host_baseline_bytes = platform_resident_memory(),
+  };
+  const size_t device_free_at_rest =
+    cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
 
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
@@ -535,14 +536,17 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
-  mem_used.estimate_total_bytes = est_total_bytes;
-  mem_used.estimate_pinned_bytes = est_pinned_bytes;
   mem_used.host_peak_bytes = platform_peak_resident_memory();
   if (cfg->backend == BENCH_GPU) {
     // 0 means the reading failed, not that the device ran out.
     const size_t device_free_now = bench_gpu_free_memory();
     if (device_free_now > 0 && device_free_at_rest > device_free_now)
       mem_used.device_used_bytes = device_free_at_rest - device_free_now;
+    mem_used.measured_bytes = mem_used.device_used_bytes;
+  } else if (mem_used.host_baseline_bytes &&
+             mem_used.host_peak_bytes > mem_used.host_baseline_bytes) {
+    mem_used.measured_bytes =
+      mem_used.host_peak_bytes - mem_used.host_baseline_bytes;
   }
 
   if (bench_cursor(&h) != total_elements) {

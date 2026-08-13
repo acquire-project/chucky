@@ -49,12 +49,18 @@ platform_available_memory(void)
   return 0;
 }
 
+static int
+process_memory(PROCESS_MEMORY_COUNTERS* pmc)
+{
+  pmc->cb = sizeof(*pmc);
+  return GetProcessMemoryInfo(GetCurrentProcess(), pmc, sizeof(*pmc));
+}
+
 uint64_t
 platform_resident_memory(void)
 {
   PROCESS_MEMORY_COUNTERS pmc;
-  pmc.cb = sizeof(pmc);
-  if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+  if (!process_memory(&pmc))
     return 0;
   return (uint64_t)pmc.WorkingSetSize;
 }
@@ -63,8 +69,7 @@ uint64_t
 platform_peak_resident_memory(void)
 {
   PROCESS_MEMORY_COUNTERS pmc;
-  pmc.cb = sizeof(pmc);
-  if (!GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+  if (!process_memory(&pmc))
     return 0;
   return (uint64_t)pmc.PeakWorkingSetSize;
 }

@@ -48,7 +48,7 @@ platform_resident_memory(void)
   fclose(f);
   if (fields != 2)
     return 0;
-  return (uint64_t)resident_pages * (uint64_t)platform_page_size();
+  return (uint64_t)resident_pages * (uint64_t)platform_page_alignment();
 }
 
 uint64_t
