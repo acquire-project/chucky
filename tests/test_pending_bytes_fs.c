@@ -1,11 +1,11 @@
 // Regression test for #201: pending_bytes must never report more bytes than
 // were queued.
 //
-// The pool counts a write in queued_bytes and hands the job to the io worker.
-// Between those two steps the counters disagree, and the order decides which
-// way: count first and pending_bytes reads high by that write, hand off first
-// and the worker can retire a write nobody has counted yet, so the unsigned
-// difference wraps to about 2^64.
+// The pool adds a write to its pending count and hands the job to the io
+// worker, which subtracts once the write lands. Between those two steps the
+// count and the queued work disagree, and the order decides which way: count
+// first and pending_bytes reads high by that write, hand off first and the
+// worker can subtract a write nobody has added yet, leaving the count negative.
 //
 // The window is a few nanoseconds wide, so waiting for a real thread to lose
 // the race does not work. The pool has a test hook that parks a writer in the
@@ -60,8 +60,10 @@ wait_for_done(_Atomic int* done, int timeout_ms)
   return atomic_load(done) != 0 ? 0 : -1;
 }
 
-// A writer parked in the window must never leave pending_bytes above the bytes
-// it is queueing.
+// A writer parked in the window must leave pending_bytes reporting exactly the
+// write it is queueing. Equality matters: counting after the handoff drives the
+// count negative, and the clamp in pending_bytes would report that as 0, which
+// an upper-bound check would accept.
 static int
 test_parked_writer(const char* tmpdir, const char* label, int direct)
 {
@@ -107,7 +109,7 @@ test_parked_writer(const char* tmpdir, const char* label, int direct)
   CHECK(Cleanup, oa.error == 0);
 
   CHECK(Cleanup, pool->flush(pool) == 0);
-  CHECK(Cleanup, parked <= (size_t)WRITE_BYTES);
+  CHECK(Cleanup, parked == (size_t)WRITE_BYTES);
   CHECK(Cleanup, shard_pool_pending_bytes(pool) == 0);
 
   rc = 0;

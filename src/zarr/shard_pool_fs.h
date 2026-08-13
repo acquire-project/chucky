@@ -35,6 +35,6 @@ shard_pool_fs_set_error(struct shard_pool* pool);
 
 // Test helper: park writers partway through queueing a write, between counting
 // the bytes and handing the job to the worker. Lets a test read pending_bytes
-// at the one point where the two counters disagree.
+// at the one point where the count and the queued work disagree.
 void
 shard_pool_fs_pause_mid_write(struct shard_pool* pool, int paused);

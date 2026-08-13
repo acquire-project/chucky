@@ -22,9 +22,9 @@ struct shard_pool_fs
   int unbuffered;
   struct strbuf root; // owned
   // Writes land on whichever thread runs sink delivery while the producer
-  // samples pending_bytes for backpressure.
-  _Atomic uint64_t queued_bytes;
-  _Atomic uint64_t retired_bytes;
+  // samples pending_bytes for backpressure. Signed, so a slip in the
+  // bookkeeping reads as a small negative instead of wrapping.
+  _Atomic int64_t pending_bytes;
   _Atomic int io_error;
   // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
@@ -40,8 +40,7 @@ struct fs_slot
   platform_fd fd;
   struct io_queue* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
-  _Atomic uint64_t* queued_bytes;  // points to shard_pool_fs.queued_bytes
+  _Atomic int64_t* pending_bytes;  // points to shard_pool_fs.pending_bytes
   _Atomic int* io_error;           // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
   _Atomic int* pause_mid_write;    // points to shard_pool_fs.pause_mid_write
@@ -59,9 +58,9 @@ struct pwrite_job
   platform_fd fd;
   uint64_t offset;
   size_t nbytes;
-  size_t data_off;                 // byte offset from start of struct to data
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
+  size_t data_off;                // byte offset from start of struct to data
+  _Atomic int64_t* pending_bytes; // decremented by io worker after pwrite
+  _Atomic int* io_error;          // set on write failure
   uint8_t data[]; // used when data_off == sizeof(struct pwrite_job)
 };
 
@@ -74,7 +73,7 @@ pwrite_fn(void* arg)
     log_error("shard_pool_fs pwrite failed");
     atomic_store(j->io_error, 1);
   }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
+  atomic_fetch_sub(j->pending_bytes, (int64_t)j->nbytes);
 }
 
 static int
@@ -110,13 +109,13 @@ fs_slot_write(struct shard_writer* self,
     j->fd = w->fd;
     j->offset = offset;
     j->nbytes = nbytes;
-    j->retired_bytes = w->retired_bytes;
+    j->pending_bytes = w->pending_bytes;
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
-    atomic_fetch_add(w->queued_bytes, nbytes);
+    atomic_fetch_add(w->pending_bytes, (int64_t)nbytes);
     fs_slot_pause_mid_write(w);
     if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
-      atomic_fetch_sub(w->queued_bytes, nbytes);
+      atomic_fetch_sub(w->pending_bytes, (int64_t)nbytes);
       job_free(j);
       goto Error;
     }
@@ -135,9 +134,9 @@ struct pwrite_ref_job
   platform_fd fd;
   uint64_t offset;
   size_t nbytes;
-  const void* data;                // NOT owned — points into pinned memory
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
+  const void* data;               // NOT owned — points into pinned memory
+  _Atomic int64_t* pending_bytes; // decremented by io worker after pwrite
+  _Atomic int* io_error;          // set on write failure
 };
 
 static void
@@ -148,7 +147,7 @@ pwrite_ref_fn(void* arg)
     log_error("shard_pool_fs pwrite_ref failed");
     atomic_store(j->io_error, 1);
   }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
+  atomic_fetch_sub(j->pending_bytes, (int64_t)j->nbytes);
 }
 
 static int
@@ -170,12 +169,12 @@ fs_slot_write_direct(struct shard_writer* self,
     j->offset = offset;
     j->nbytes = nbytes;
     j->data = beg;
-    j->retired_bytes = w->retired_bytes;
+    j->pending_bytes = w->pending_bytes;
     j->io_error = w->io_error;
-    atomic_fetch_add(w->queued_bytes, nbytes);
+    atomic_fetch_add(w->pending_bytes, (int64_t)nbytes);
     fs_slot_pause_mid_write(w);
     if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
-      atomic_fetch_sub(w->queued_bytes, nbytes);
+      atomic_fetch_sub(w->pending_bytes, (int64_t)nbytes);
       free(j);
       goto Error;
     }
@@ -354,11 +353,8 @@ pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  // Load retired first: a write is counted in queued_bytes before it is
-  // handed to the worker, so this order cannot see a retire whose queue
-  // was missed, and the difference cannot go negative.
-  uint64_t retired = atomic_load(&p->retired_bytes);
-  return atomic_load(&p->queued_bytes) - retired;
+  int64_t pending = atomic_load(&p->pending_bytes);
+  return pending > 0 ? (size_t)pending : 0;
 }
 
 static size_t
@@ -499,8 +495,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->fd = PLATFORM_FD_INVALID;
     s->queue = p->queue;
     s->alignment = page_size;
-    s->retired_bytes = &p->retired_bytes;
-    s->queued_bytes = &p->queued_bytes;
+    s->pending_bytes = &p->pending_bytes;
     s->io_error = &p->io_error;
     s->fail_next_truncate = &p->fail_next_truncate;
     s->pause_mid_write = &p->pause_mid_write;

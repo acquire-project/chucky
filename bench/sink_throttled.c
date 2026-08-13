@@ -44,11 +44,12 @@ throttled_post(struct throttled_shard_sink* s, size_t nbytes)
   j->bytes_per_sec = s->bytes_per_sec;
   j->retired_bytes = &s->retired_bytes;
   j->total_bytes = &s->total_bytes;
+  atomic_fetch_add(&s->queued_bytes, nbytes);
   if (io_queue_post(s->queue, throttled_fn, j, free)) {
+    atomic_fetch_sub(&s->queued_bytes, nbytes);
     free(j);
     goto Error;
   }
-  atomic_fetch_add(&s->queued_bytes, nbytes);
   return 0;
 
 Error:
