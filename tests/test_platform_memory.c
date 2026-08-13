@@ -60,9 +60,18 @@ test_peak_covers_memory_already_released(void)
   char* block = (char*)malloc(BLOCK_BYTES);
   CHECK(Fail, block != NULL);
   touch_block(block);
+  uint64_t resident_during = platform_resident_memory();
+  uint64_t peak_during = platform_peak_resident_memory();
   free(block);
 
   uint64_t peak = platform_peak_resident_memory();
+  log_info("  resident %llu -> %llu, peak %llu -> %llu -> %llu, block %u",
+           (unsigned long long)resident_before,
+           (unsigned long long)resident_during,
+           (unsigned long long)peak_before,
+           (unsigned long long)peak_during,
+           (unsigned long long)peak,
+           BLOCK_BYTES);
   CHECK(Fail, peak >= peak_before);
   CHECK(Fail, peak >= resident_before + GROWTH_FLOOR);
   CHECK(Fail, peak >= platform_resident_memory());
