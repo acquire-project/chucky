@@ -391,8 +391,8 @@ function tooltipText(r) {
   return t.trim();
 }
 
-// Estimated against measured. The measured figure is device memory on the GPU
-// and the run's own host growth on the CPU, which is what each estimate covers.
+// The measured figure is device memory on the GPU and the run's own host
+// growth on the CPU, which is what each estimate covers.
 function memoryLine(r) {
   const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
   const parts = [];
@@ -568,8 +568,8 @@ function rebuildControls() {
     [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
       .filter(Boolean).join(" | ");
 
-  // Sweeps written before these were recorded say unknown, rather than showing
-  // a default that was never true of the run.
+  // A sweep written before a field existed says unknown, not a default that
+  // was never true of the run.
   const build = file.build || {};
   const threads = [...new Set((file.runs || [])
     .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);

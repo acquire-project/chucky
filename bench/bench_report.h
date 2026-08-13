@@ -18,8 +18,7 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
-// What the run asked for and what it took. The estimate comes from the
-// engine's own sizing; the rest is measured around the run.
+// What the run was expected to take, and what it took.
 struct bench_memory
 {
   uint64_t estimate_total_bytes;  // device bytes on GPU, heap bytes on CPU

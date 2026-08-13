@@ -101,8 +101,7 @@ tile_stream_gpu_cursor(const struct tile_stream_gpu* s);
 struct tile_stream_status
 tile_stream_gpu_status(const struct tile_stream_gpu* s);
 
-// Threads the staging-copy pool runs on, counting the caller. This is the pool
-// max_threads sizes, so it is what a benchmark should report as the thread
-// count that ran.
+// Threads the staging-copy pool runs on, counting the caller. The pool caps
+// its helpers, so this can be below the requested thread count.
 int
 tile_stream_gpu_worker_threads(const struct tile_stream_gpu* s);

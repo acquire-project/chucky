@@ -307,7 +307,7 @@ def cpu_count() -> int:
     return os.cpu_count() or 0
 
 
-# CMakeCache entries worth recording, and what to call them in the results file.
+# CMakeCache entries to record, and what to call them in a results file.
 BUILD_CACHE_KEYS = {
     "CMAKE_BUILD_TYPE": "build_type",
     "CMAKE_CUDA_ARCHITECTURES": "cuda_architectures",
@@ -320,10 +320,10 @@ BUILD_CACHE_KEYS = {
 def build_info(build_dir: Path) -> dict:
     """What the binaries under build_dir were built from.
 
-    Everything comes from the build directory rather than the environment the
-    sweep runs in, so it describes the binaries that produced the numbers.
-    Missing keys are left out: a reader should see nothing rather than a
-    default that was never true.
+    Read from the build directory rather than the environment the sweep runs
+    in, so it describes the binaries that produced the numbers. Missing keys
+    are left out: a reader should see nothing rather than a default that was
+    never true.
     """
     info: dict = {}
     cache = build_dir / "CMakeCache.txt"
@@ -334,8 +334,7 @@ def build_info(build_dir: Path) -> dict:
             if key and value:
                 info[key] = value
 
-    # Not a cache entry — CMake writes it beside the cache once it identifies
-    # the compiler.
+    # Not a cache entry; CMake writes it beside the cache.
     for detected in sorted(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake")):
         found = re.search(r'set\(CMAKE_CUDA_COMPILER_VERSION "([^"]+)"\)',
                           detected.read_text(errors="replace"))

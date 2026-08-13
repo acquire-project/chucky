@@ -333,9 +333,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, mem->estimate_total_bytes);
   jw_key(&jw, "memory_estimate_pinned_bytes");
   jw_uint(&jw, mem->estimate_pinned_bytes);
-  // Measured, to compare against the estimate above. The host pair brackets
-  // the run, so their difference is what the run added to a process that was
-  // already holding its input.
+  // The host pair brackets the run, so their difference is what the run added
+  // to a process that was already holding its input.
   jw_key(&jw, "memory_host_baseline_bytes");
   jw_uint(&jw, mem->host_baseline_bytes);
   jw_key(&jw, "memory_host_peak_bytes");
