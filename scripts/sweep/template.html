@@ -566,7 +566,7 @@ function rebuildControls() {
       .filter(Boolean).join(" | ");
 
   // A sweep written before a field existed says unknown, not a default that
-  // was never true of the run. A sweep that knows none of them drops the line.
+  // was never true of the run.
   const build = file.build || {};
   const threads = [...new Set((file.runs || [])
     .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);

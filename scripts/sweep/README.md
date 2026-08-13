@@ -88,47 +88,38 @@ page names them.
 
 ## What a results file records
 
-The `machine` block describes the run once: `name`, `hostname`, `gpu`,
-`driver_version`, `cpu_count` (cores this process was allowed, which on a
-cluster is below the machine's), `commit`, `date`, and a `build` block. The
-build block comes from the build directory: build type, CUDA architectures,
-whether the GPU backend was on, C++ compiler and nvcomp path from
-`CMakeCache.txt`, and the CUDA compiler version from the
-`CMakeFiles/<cmake version>/CMakeCUDACompiler.cmake` written beside it. A build
-key the directory cannot answer is left out, `gpu` and `driver_version` say
-`unknown` when there is no `nvidia-smi`, and the explorer shows either as
-unknown rather than picking a default.
+The `machine` block describes the sweep once: `name`, `hostname`, `gpu`,
+`driver_version`, `cpu_count`, `commit`, `date`, and a `build` block.
+`cpu_count` is the cores the process was allowed, which on a cluster is fewer
+than the machine has. The build block describes the build directory: build
+type, CUDA architectures, whether the GPU backend was on, C++ compiler, and
+nvcomp path from `CMakeCache.txt`, plus the CUDA compiler version from the
+`CMakeCUDACompiler.cmake` written beside it. A key the build directory cannot
+answer is left out, and `gpu` and `driver_version` say `unknown` when there is
+no `nvidia-smi`. The explorer shows either as unknown.
 
-Each run records its `frames` and the `worker_threads` the benchmark's pool ran
-on. That is rarely one thread per core, and it is a different pool on each
-backend. The GPU number counts the staging-copy pool, which stops at three
-helpers. The CPU number counts the pipeline pool, which sizes itself from the
-machine's online cores rather than the cores this process was given, so on a
-cluster it runs well above `cpu_count`.
+Each run records its `frames` and the `worker_threads` its pool ran on. The two
+backends count different pools. The GPU number is the staging-copy pool, which
+stops at three helpers. The CPU number is the pipeline pool, which sizes itself
+from the machine's online cores rather than the cores the process was given, so
+on a cluster it runs well above `cpu_count`.
 
-Each run also records memory two ways, so an estimate can be checked against
-what the run took:
+Each run records memory as an estimate and a measurement:
 
 | field | holds |
 |---|---|
-| `memory_estimate_total_bytes` | the engine's own estimate — device bytes on GPU, heap bytes on CPU |
+| `memory_estimate_total_bytes` | the engine's estimate — device bytes on GPU, heap bytes on CPU |
 | `memory_estimate_pinned_bytes` | pinned host bytes on GPU, 0 on CPU |
 | `memory_host_baseline_bytes` | resident memory before the stream was created |
 | `memory_host_peak_bytes` | most resident memory the process held during the run |
 | `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
+| `memory_measured_bytes` | the figure to hold the estimate against: device memory on GPU, the host difference on CPU |
 
-The host pair brackets the run, so their difference is what the stream added to
-a process already holding its input. Compare that difference against the
-estimate on the CPU backend. On the GPU backend compare
-`memory_device_used_bytes`, since the estimate there is device memory. The host
-difference runs over the stream itself, because the benchmark allocates its own
-source block after the baseline is taken. The block holds 32 Mi elements, and
-the benchmark writes two bytes into each one whatever the data type, so it adds
-up to 64 MiB — less when the run is shorter than one block, and no more than
-that for a wide type, because pages the benchmark never writes stay off the
-resident count even once the stream reads them. That is larger than a small
-stream's whole estimate, so subtract it before reading the two numbers as a
-ratio. The device figure does not carry it.
+Compare `memory_measured_bytes` against the estimate. On the CPU it also
+carries the benchmark's own source block, which is allocated after the baseline
+is taken and reaches 64 MiB — more than a small stream's whole estimate — so
+subtract that before reading the two as a ratio. The device figure does not
+carry the block.
 
 ## Schema changes
 

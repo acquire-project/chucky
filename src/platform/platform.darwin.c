@@ -58,8 +58,8 @@ platform_resident_memory(void)
   return (uint64_t)info.resident_size;
 }
 
-// From the same reading as platform_resident_memory, so both are in bytes and
-// count the same pages. getrusage would report the same thing in its own units.
+// Both readings come from one call, so they are in bytes and count the same
+// pages.
 uint64_t
 platform_peak_resident_memory(void)
 {

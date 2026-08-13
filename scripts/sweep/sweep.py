@@ -307,7 +307,6 @@ def cpu_count() -> int:
     return os.cpu_count() or 0
 
 
-# CMakeCache entries to record, and what to call them in a results file.
 BUILD_CACHE_KEYS = {
     "CMAKE_BUILD_TYPE": "build_type",
     "CMAKE_CUDA_ARCHITECTURES": "cuda_architectures",
@@ -335,9 +334,8 @@ def build_info(build_dir: Path) -> dict:
             if key and value:
                 info[key] = value
 
-    # Not a cache entry; CMake writes it beside the cache, under a directory
-    # named for the CMake version. Upgrading CMake leaves the old directory
-    # behind, so take the one written most recently.
+    # Not a cache entry. CMake writes one directory per version it configured
+    # with, so the newest file is the one that describes this build.
     newest = max(build_dir.glob("CMakeFiles/*/CMakeCUDACompiler.cmake"),
                  key=lambda p: p.stat().st_mtime, default=None)
     if newest:

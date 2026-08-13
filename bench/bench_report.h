@@ -26,9 +26,8 @@ struct bench_memory
   uint64_t host_baseline_bytes;   // resident before the stream was created
   uint64_t host_peak_bytes;       // most resident memory held during the run
   uint64_t device_used_bytes;     // GPU: free device memory the stream took
-  // The one of the two above that the estimate can be held against: device
-  // memory on the GPU, the host pair's difference on the CPU. 0 when that
-  // reading failed.
+  // Which of the two above the estimate can be held against: device memory on
+  // the GPU, the host difference on the CPU. 0 when that reading failed.
   uint64_t measured_bytes;
 };
 
