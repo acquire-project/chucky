@@ -22,8 +22,7 @@ struct shard_pool_fs
   int unbuffered;
   struct strbuf root; // owned
   // Writes land on whichever thread runs sink delivery while the producer
-  // samples pending_bytes for backpressure. Signed, so a slip in the
-  // bookkeeping reads as a small negative instead of wrapping.
+  // samples pending_bytes for backpressure.
   _Atomic int64_t pending_bytes;
   _Atomic int io_error;
   // Test hook: one-shot, fail the next truncate.
@@ -51,6 +50,25 @@ fs_slot_pause_mid_write(const struct fs_slot* w)
 {
   while (w->pause_mid_write && atomic_load(w->pause_mid_write))
     platform_sleep_ns(100000);
+}
+
+// Counting before the handoff is what keeps pending_bytes from dropping below
+// the work outstanding: the worker can finish a write the moment it is posted.
+static int
+fs_slot_post_write(struct fs_slot* w,
+                   size_t nbytes,
+                   void (*fn)(void*),
+                   void* job,
+                   void (*job_free)(void*))
+{
+  atomic_fetch_add(w->pending_bytes, (int64_t)nbytes);
+  fs_slot_pause_mid_write(w);
+  if (io_queue_post(w->queue, fn, job, job_free) == 0)
+    return 0;
+
+  atomic_fetch_sub(w->pending_bytes, (int64_t)nbytes);
+  job_free(job);
+  return 1;
 }
 
 struct pwrite_job
@@ -112,13 +130,7 @@ fs_slot_write(struct shard_writer* self,
     j->pending_bytes = w->pending_bytes;
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
-    atomic_fetch_add(w->pending_bytes, (int64_t)nbytes);
-    fs_slot_pause_mid_write(w);
-    if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
-      atomic_fetch_sub(w->pending_bytes, (int64_t)nbytes);
-      job_free(j);
-      goto Error;
-    }
+    CHECK(Error, fs_slot_post_write(w, nbytes, pwrite_fn, j, job_free) == 0);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -171,13 +183,7 @@ fs_slot_write_direct(struct shard_writer* self,
     j->data = beg;
     j->pending_bytes = w->pending_bytes;
     j->io_error = w->io_error;
-    atomic_fetch_add(w->pending_bytes, (int64_t)nbytes);
-    fs_slot_pause_mid_write(w);
-    if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
-      atomic_fetch_sub(w->pending_bytes, (int64_t)nbytes);
-      free(j);
-      goto Error;
-    }
+    CHECK(Error, fs_slot_post_write(w, nbytes, pwrite_ref_fn, j, free) == 0);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }

@@ -28,7 +28,11 @@ struct shard_pool
   // Returns non-zero if any I/O has failed.
   int (*has_error)(const struct shard_pool* self);
 
-  // Returns number of bytes queued but not yet written.
+  // Returns an upper bound on the bytes accepted but not yet written. A write
+  // counts from the moment it is accepted, so the figure may include one that
+  // has not reached the queue yet. Overcounting is safe for a caller deciding
+  // whether to slow down; undercounting is not, which is why this never reads
+  // below the true figure.
   size_t (*pending_bytes)(const struct shard_pool* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).

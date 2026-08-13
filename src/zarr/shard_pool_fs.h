@@ -33,10 +33,8 @@ shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);
 void
 shard_pool_fs_set_error(struct shard_pool* pool);
 
-// Test helper: park writers partway through queueing a write, between counting
-// the bytes and handing the job to the worker. Lets a test read pending_bytes
-// at the one point where the count and the queued work disagree. A parked
-// writer polls a flag that lives in the pool, so clear the pause and let the
-// writer finish before destroying the pool.
+// Test helper: park writers between counting the bytes and handing the job to
+// the worker. A parked writer polls a flag that lives in the pool, so clear the
+// pause and let the writer finish before destroying the pool.
 void
 shard_pool_fs_pause_mid_write(struct shard_pool* pool, int paused);

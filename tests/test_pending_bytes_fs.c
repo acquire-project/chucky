@@ -1,11 +1,11 @@
-// Regression test for #201: pending_bytes must never report more bytes than
-// were queued.
+// Regression test for #201: pending_bytes must never report less than the work
+// outstanding.
 //
 // The pool adds a write to its pending count and hands the job to the io
 // worker, which subtracts once the write lands. Between those two steps the
 // count and the queued work disagree, and the order decides which way: count
 // first and pending_bytes reads high by that write, hand off first and the
-// worker can subtract a write nobody has added yet, leaving the count negative.
+// worker can subtract a write nobody has added yet, driving the count negative.
 //
 // The window is a few nanoseconds wide, so waiting for a real thread to lose
 // the race does not work. The pool has a test hook that parks a writer in the
@@ -25,17 +25,19 @@
 
 #define WRITE_BYTES 4096
 #define BATCH_WRITES 8
-#define WORKER_SETTLE_MS 200
-#define POLL_STEP_MS 5
+#define POLL_STEP_MS 10
 #define PARK_TIMEOUT_MS 2000
-#define JOIN_TIMEOUT_MS 5000
+
+typedef int (*write_fn)(struct shard_writer*,
+                        uint64_t,
+                        const void*,
+                        const void*);
 
 struct one_write_args
 {
   struct shard_writer* w;
+  write_fn write;
   const uint8_t* src;
-  int direct;
-  _Atomic int done;
   int error;
 };
 
@@ -43,23 +45,7 @@ static void
 one_write_fn(void* arg)
 {
   struct one_write_args* oa = (struct one_write_args*)arg;
-  const uint8_t* beg = oa->src;
-  if (oa->direct)
-    oa->error = oa->w->write_direct(oa->w, 0, beg, beg + WRITE_BYTES);
-  else
-    oa->error = oa->w->write(oa->w, 0, beg, beg + WRITE_BYTES);
-  atomic_store(&oa->done, 1);
-}
-
-static int
-wait_for_done(_Atomic int* done, int timeout_ms)
-{
-  int waited_ms = 0;
-  while (atomic_load(done) == 0 && waited_ms < timeout_ms) {
-    platform_sleep_ns((int64_t)POLL_STEP_MS * 1000000LL);
-    waited_ms += POLL_STEP_MS;
-  }
-  return atomic_load(done) != 0 ? 0 : -1;
+  oa->error = oa->write(oa->w, 0, oa->src, oa->src + WRITE_BYTES);
 }
 
 // Wait for the writer to reach the window instead of guessing how long it takes
@@ -77,11 +63,12 @@ wait_for_pending(struct shard_pool* pool, int timeout_ms)
 
 // A writer parked in the window must leave pending_bytes reporting exactly the
 // write it is queueing. Equality matters: counting after the handoff drives the
-// count negative, and the clamp in pending_bytes would report that as 0, which
-// an upper-bound check would accept.
+// count negative, and pending_bytes clamps that to 0, which an upper-bound
+// check would accept.
 static int
-test_parked_writer(const char* tmpdir, const char* label, int direct)
+test_parked_writer(const char* tmpdir, int direct)
 {
+  const char* label = direct ? "zero-copy" : "copy";
   log_info("=== test_parked_writer (%s) ===", label);
 
   struct shard_pool* pool = NULL;
@@ -95,38 +82,37 @@ test_parked_writer(const char* tmpdir, const char* label, int direct)
 
   struct shard_writer* w = pool->open(pool, 0, "shard");
   CHECK(Cleanup, w);
-  CHECK(Cleanup, !direct || w->write_direct);
+
+  oa.w = w;
+  oa.write = direct ? w->write_direct : w->write;
+  CHECK(Cleanup, oa.write);
 
   src = (uint8_t*)calloc(1, WRITE_BYTES);
   CHECK(Cleanup, src);
+  oa.src = src;
 
   shard_pool_fs_pause_mid_write(pool, 1);
-
-  oa.w = w;
-  oa.src = src;
-  oa.direct = direct;
-  atomic_store(&oa.done, 0);
   CHECK(Cleanup, test_thread_start(&thr, one_write_fn, &oa) == 0);
 
   wait_for_pending(pool, PARK_TIMEOUT_MS);
 
-  // Long enough for the worker to have retired the write, if this build handed
-  // it over before counting it.
-  platform_sleep_ns((int64_t)WORKER_SETTLE_MS * 1000000LL);
+  // Settle any write already queued. A build that hands off before counting has
+  // one in flight here, and its worker drives the count below what is
+  // outstanding; a correct build has posted nothing and this returns at once.
+  pool->wait_fence(pool, pool->record_fence(pool));
 
   size_t parked = shard_pool_pending_bytes(pool);
   log_info("  pending while parked: %llu bytes (queueing %d)",
            (unsigned long long)parked,
            WRITE_BYTES);
+  CHECK(Cleanup, parked == (size_t)WRITE_BYTES);
 
   shard_pool_fs_pause_mid_write(pool, 0);
-  CHECK(Cleanup, wait_for_done(&oa.done, JOIN_TIMEOUT_MS) == 0);
-  test_thread_join(thr);
+  CHECK(Cleanup, test_thread_join(thr) == 0);
   thr = NULL;
   CHECK(Cleanup, oa.error == 0);
 
   CHECK(Cleanup, pool->flush(pool) == 0);
-  CHECK(Cleanup, parked == (size_t)WRITE_BYTES);
   CHECK(Cleanup, shard_pool_pending_bytes(pool) == 0);
 
   rc = 0;
@@ -136,10 +122,8 @@ Cleanup:
   if (pool)
     shard_pool_fs_pause_mid_write(pool, 0);
   test_thread_join(thr);
-  if (pool)
-    pool->flush(pool);
-  free(src);
   shard_pool_destroy(pool);
+  free(src);
   if (rc)
     log_error("  FAIL");
   return rc;
@@ -188,10 +172,8 @@ test_counts_every_write(const char* tmpdir)
 
 Cleanup:
   atomic_store(&gate, 1);
-  if (pool)
-    pool->flush(pool);
-  free(src);
   shard_pool_destroy(pool);
+  free(src);
   if (rc)
     log_error("  FAIL");
   return rc;
@@ -213,13 +195,13 @@ main(int ac, char* av[])
     char sub[4200];
     snprintf(sub, sizeof(sub), "%s/copy", tmpdir);
     test_mkdir(sub);
-    ecode |= test_parked_writer(sub, "copy", 0);
+    ecode |= test_parked_writer(sub, 0);
   }
   {
     char sub[4200];
-    snprintf(sub, sizeof(sub), "%s/direct", tmpdir);
+    snprintf(sub, sizeof(sub), "%s/zero-copy", tmpdir);
     test_mkdir(sub);
-    ecode |= test_parked_writer(sub, "zero-copy", 1);
+    ecode |= test_parked_writer(sub, 1);
   }
   {
     char sub[4200];
