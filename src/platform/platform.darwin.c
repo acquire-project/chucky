@@ -4,7 +4,6 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
-#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -40,26 +39,34 @@ platform_available_memory(void)
          platform_page_size();
 }
 
+static int
+task_memory(mach_task_basic_info_data_t* info)
+{
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  return task_info(mach_task_self(),
+                   MACH_TASK_BASIC_INFO,
+                   (task_info_t)info,
+                   &count) == KERN_SUCCESS;
+}
+
 uint64_t
 platform_resident_memory(void)
 {
   mach_task_basic_info_data_t info;
-  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-  if (task_info(mach_task_self(),
-                MACH_TASK_BASIC_INFO,
-                (task_info_t)&info,
-                &count) != KERN_SUCCESS)
+  if (!task_memory(&info))
     return 0;
   return (uint64_t)info.resident_size;
 }
 
+// From the same reading as platform_resident_memory, rather than getrusage:
+// ru_maxrss does not follow the growth this one reports.
 uint64_t
 platform_peak_resident_memory(void)
 {
-  struct rusage ru;
-  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0)
+  mach_task_basic_info_data_t info;
+  if (!task_memory(&info))
     return 0;
-  return (uint64_t)ru.ru_maxrss; // bytes on macOS
+  return (uint64_t)info.resident_size_max;
 }
 
 void*
