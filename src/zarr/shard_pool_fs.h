@@ -34,7 +34,7 @@ void
 shard_pool_fs_set_error(struct shard_pool* pool);
 
 // Test helper: park writers between counting the bytes and handing the job to
-// the worker. A parked writer polls a flag that lives in the pool, so clear the
-// pause and let the writer finish before destroying the pool.
+// the worker. A parked writer polls a flag in the pool, so clear the pause and
+// let the writer finish before destroying it.
 void
 shard_pool_fs_pause_mid_write(struct shard_pool* pool, int paused);

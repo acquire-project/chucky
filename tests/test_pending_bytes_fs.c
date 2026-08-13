@@ -1,15 +1,12 @@
 // Regression test for #201: pending_bytes must never report less than the work
 // outstanding.
 //
-// The pool adds a write to its pending count and hands the job to the io
-// worker, which subtracts once the write lands. Between those two steps the
-// count and the queued work disagree, and the order decides which way: count
-// first and pending_bytes reads high by that write, hand off first and the
+// The pool adds a write to its pending count, then hands the job to the io
+// worker, which subtracts once the write lands. Hand off before counting and the
 // worker can subtract a write nobody has added yet, driving the count negative.
 //
-// The window is a few nanoseconds wide, so waiting for a real thread to lose
-// the race does not work. The pool has a test hook that parks a writer in the
-// window instead, which makes both orders show their result every run.
+// That window is a few nanoseconds wide, so waiting for a thread to lose the
+// race does not work. The pool has a test hook that parks a writer inside it.
 
 #include "platform/platform.h"
 #include "test_platform.h"
@@ -48,9 +45,9 @@ one_write_fn(void* arg)
   oa->error = oa->write(oa->w, 0, oa->src, oa->src + WRITE_BYTES);
 }
 
-// Wait for the writer to reach the window instead of guessing how long it takes
-// to get there. A build that counts after the handoff never reports the write,
-// so this waits out the timeout and the caller's check fails, as it should.
+// Wait for the writer to reach the window rather than guess how long that takes.
+// A build that counts after the handoff never reports the write, so this waits
+// out the timeout and the caller's check fails, as it should.
 static void
 wait_for_pending(struct shard_pool* pool, int timeout_ms)
 {
@@ -61,10 +58,9 @@ wait_for_pending(struct shard_pool* pool, int timeout_ms)
   }
 }
 
-// A writer parked in the window must leave pending_bytes reporting exactly the
-// write it is queueing. Equality matters: counting after the handoff drives the
-// count negative, and pending_bytes clamps that to 0, which an upper-bound
-// check would accept.
+// A parked writer must report exactly the write it is queueing. Equality
+// matters: counting after the handoff drives the count negative, which clamps to
+// 0, and a check for "not too high" would accept that.
 static int
 test_parked_writer(const char* tmpdir, int direct)
 {
@@ -96,9 +92,9 @@ test_parked_writer(const char* tmpdir, int direct)
 
   wait_for_pending(pool, PARK_TIMEOUT_MS);
 
-  // Settle any write already queued. A build that hands off before counting has
-  // one in flight here, and its worker drives the count below what is
-  // outstanding; a correct build has posted nothing and this returns at once.
+  // Settle anything already queued. A build that hands off before counting has a
+  // write in flight whose worker drives the count too low; a correct build has
+  // posted nothing and this returns at once.
   pool->wait_fence(pool, pool->record_fence(pool));
 
   size_t parked = shard_pool_pending_bytes(pool);
@@ -129,8 +125,8 @@ Cleanup:
   return rc;
 }
 
-// With the worker held, pending_bytes must account for every queued write, and
-// must fall back to zero once they land.
+// With the worker held, the count must equal every queued write, and fall back
+// to zero once they land.
 static int
 test_counts_every_write(const char* tmpdir)
 {

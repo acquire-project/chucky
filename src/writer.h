@@ -100,8 +100,8 @@ struct shard_sink
   // Returns non-zero if any async IO has failed. NULL = no async IO.
   int (*has_error)(const struct shard_sink* self);
 
-  // Returns an upper bound on the bytes accepted but not yet written, so a 0 is
-  // not proof that nothing is outstanding. NULL = treated as 0.
+  // Returns an upper bound on bytes accepted but not yet written; a 0 is not
+  // proof that nothing is outstanding. NULL = treated as 0.
   size_t (*pending_bytes)(const struct shard_sink* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).

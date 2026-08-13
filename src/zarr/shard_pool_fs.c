@@ -52,8 +52,8 @@ fs_slot_pause_mid_write(const struct fs_slot* w)
     platform_sleep_ns(100000);
 }
 
-// Counting before the handoff is what keeps pending_bytes from dropping below
-// the work outstanding: the worker can finish a write the moment it is posted.
+// Count before the handoff: the worker can finish the write the moment it is
+// posted, and a late count reads below the work outstanding.
 static int
 fs_slot_post_write(struct fs_slot* w,
                    size_t nbytes,

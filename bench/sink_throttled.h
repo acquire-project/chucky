@@ -18,8 +18,7 @@ struct throttled_shard_sink
   struct shard_sink base;
   struct throttled_shard_writer writer; // single shared writer
   struct io_queue* queue;               // owned
-  // Delivery thread adds before queueing, worker subtracts once the job runs,
-  // producer reads.
+  // Delivery thread adds, worker subtracts, producer reads.
   _Atomic int64_t pending_bytes;
   _Atomic uint64_t total_bytes; // reporting
   uint64_t latency_ns;          // fixed per-job cost
