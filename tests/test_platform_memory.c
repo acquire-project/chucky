@@ -8,7 +8,7 @@
 
 // Anything short of the whole block would still catch a kilobyte-reported-as-
 // bytes mix-up by three orders of magnitude, so half is a loose enough floor.
-#define GROWTH_FLOOR (BLOCK_BYTES / 2)
+#define HALF_BLOCK (BLOCK_BYTES / 2)
 
 // One write per page, so every page is really resident. The writes go through
 // a volatile pointer because a plain memset here is dead code: clang drops it
@@ -36,6 +36,8 @@ Fail:
 static int
 test_resident_memory_follows_a_touched_block(void)
 {
+  // Must run before any other test here allocates a block: an allocator that
+  // keeps the freed pages leaves the next baseline already inflated.
   log_info("=== test_resident_memory_follows_a_touched_block ===");
   uint64_t before = platform_resident_memory();
   char* block = (char*)malloc(BLOCK_BYTES);
@@ -43,7 +45,7 @@ test_resident_memory_follows_a_touched_block(void)
   touch_block(block);
   uint64_t during = platform_resident_memory();
   free(block);
-  CHECK(Fail, during >= before + GROWTH_FLOOR);
+  CHECK(Fail, during >= before + HALF_BLOCK);
   return 0;
 Fail:
   return 1;
@@ -72,8 +74,11 @@ test_peak_covers_memory_already_released(void)
            (unsigned long long)peak_during,
            (unsigned long long)peak,
            BLOCK_BYTES);
+  // Whether the block is still held after the free is the allocator's choice,
+  // so the peak is measured against what was seen rather than against growth.
+  CHECK(Fail, resident_during >= HALF_BLOCK);
+  CHECK(Fail, peak >= resident_during);
   CHECK(Fail, peak >= peak_before);
-  CHECK(Fail, peak >= resident_before + GROWTH_FLOOR);
   CHECK(Fail, peak >= platform_resident_memory());
   return 0;
 Fail:

@@ -58,8 +58,8 @@ platform_resident_memory(void)
   return (uint64_t)info.resident_size;
 }
 
-// From the same reading as platform_resident_memory, rather than getrusage:
-// ru_maxrss does not follow the growth this one reports.
+// From the same reading as platform_resident_memory, so both are in bytes and
+// count the same pages. getrusage would report the same thing in its own units.
 uint64_t
 platform_peak_resident_memory(void)
 {
