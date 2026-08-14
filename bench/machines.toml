@@ -14,6 +14,17 @@
 # records the GPU. It does not record the disk or the network.
 
 [[machine]]
+name = "osx m4"
+description = "MacBook Pro"
+names = ["osx m4", "osx-m4", "laptop-s1qrti9n"]
+hosts = ["LAPTOP-S1QRTI9N*"]
+[machine.specs]
+cpu = "Apple M4 Pro"
+memory = "48 GB"
+storage = "512 GB SSD"
+os = "macOS (arm64)"
+
+[[machine]]
 name = "livescreen"
 description = "Workstation with two operating systems installed"
 names = ["LiveScreen-1", "livescreen-kubuntu"]
