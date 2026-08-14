@@ -14,7 +14,7 @@ Usage:
     uv run scripts/sweep/sweep.py --tier compress
     uv run scripts/sweep/sweep.py --all
     uv run scripts/sweep/sweep.py --tier io
-    uv run scripts/sweep/sweep.py --tier s3 --s3-bucket my-bucket
+    uv run scripts/sweep/sweep.py --tier s3 --backend cpu --s3-bucket my-bucket
 """
 
 from __future__ import annotations
@@ -396,6 +396,8 @@ def status_style(status: str) -> str:
 @click.option("--tier", "-t", multiple=True, type=click.Choice(ALL_TIER_NAMES),
               help="Tier(s) to run. Repeat for multiple.")
 @click.option("--all", "run_all", is_flag=True, help="Run all tiers.")
+@click.option("--backend", "backend_filter", type=click.Choice(sorted(VALID_BACKENDS)),
+              help="Only run benchmarks for this backend.")
 @click.option("--build-dir", type=click.Path(exists=False, path_type=Path),
               default=Path("build"),
               show_default=True, help="CMake build directory.")
@@ -415,7 +417,7 @@ def status_style(status: str) -> str:
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
-def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
+def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, dry_run,
          s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name):
     """Benchmark sweep runner for chucky."""
     commit = git_commit()
@@ -452,6 +454,8 @@ def main(tier, run_all, build_dir, output, skip, retry, rerun, dry_run,
     for t in selected_tiers:
         runs.extend(TIERS[t]())
     runs = deduplicate(runs)
+    if backend_filter:
+        runs = [r for r in runs if r.backend == backend_filter]
     if skip:
         runs = [r for r in runs if not any(pat in r.scenario for pat in skip)]
 

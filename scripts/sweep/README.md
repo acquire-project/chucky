@@ -31,8 +31,12 @@ not need to exist because `s3-blackhole` stores nothing:
 
 ```sh
 AWS_ACCESS_KEY_ID=blackhole AWS_SECRET_ACCESS_KEY=blackhole \
-  uv run scripts/sweep/sweep.py --tier s3 --s3-bucket chucky-bench
+  uv run scripts/sweep/sweep.py \
+    --tier s3 --backend cpu --s3-bucket chucky-bench
 ```
+
+Use `--backend gpu` for a GPU-only sweep, or omit `--backend` to run both
+backends.
 
 Inspect the server-side counters at
 http://127.0.0.1:9000/_s3_blackhole/stats, then stop the server with:
