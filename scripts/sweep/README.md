@@ -15,6 +15,36 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
+## Running S3 benchmarks
+
+The S3 tier measures against
+[`s3-blackhole`](https://github.com/nclack/s3-blackhole), which consumes uploads
+and discards them so the result is limited by the producer rather than object
+storage. Start the pinned benchmark server and wait for its health check:
+
+```sh
+docker compose up --build --wait s3-blackhole
+```
+
+Then run the tier with arbitrary credentials and a bucket name. The bucket does
+not need to exist because `s3-blackhole` stores nothing:
+
+```sh
+AWS_ACCESS_KEY_ID=blackhole AWS_SECRET_ACCESS_KEY=blackhole \
+  uv run scripts/sweep/sweep.py --tier s3 --s3-bucket chucky-bench
+```
+
+Inspect the server-side counters at
+http://127.0.0.1:9000/_s3_blackhole/stats, then stop the server with:
+
+```sh
+docker compose stop s3-blackhole
+```
+
+MinIO remains the backend for S3 integration tests, where stored data is read
+back and validated. The `benchmark` Compose profile keeps `s3-blackhole` out of
+the default test stack unless that service is selected explicitly.
+
 ## Generating the site
 
 ```sh
