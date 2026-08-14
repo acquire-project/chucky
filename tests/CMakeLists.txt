@@ -198,6 +198,7 @@ add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension platfor
 add_test_exe(test_chucky_log  test_chucky_log.c  chucky_log)
 add_test_exe(test_strbuf      test_strbuf.c      strbuf chucky_log)
 add_test_exe(test_platform_memory test_platform_memory.c platform chucky_log)
+add_test_exe(test_platform_threads test_platform_threads.c platform chucky_log)
 add_test_exe(test_append_latency test_append_latency.c stream_config chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)

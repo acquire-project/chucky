@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "platform/platform.h"
 
 #include <pthread.h>
@@ -241,6 +243,17 @@ platform_cpu_pause(void)
 int
 platform_default_thread_count(void)
 {
+  // The cores this process may run on, which under a batch scheduler or in a
+  // container is fewer than the machine has. Counting all of them would start
+  // a thread per core and then share the few the process was given.
+#ifdef __linux__
+  cpu_set_t allowed;
+  if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+    int n = CPU_COUNT(&allowed);
+    if (n > 0)
+      return n;
+  }
+#endif
   long n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? (int)n : 1;
 }

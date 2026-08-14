@@ -100,9 +100,8 @@ no `nvidia-smi`. The explorer shows either as unknown.
 
 Each run records its `frames` and the `worker_threads` its pool ran on. The two
 backends count different pools. The GPU number is the staging-copy pool, which
-stops at three helpers. The CPU number is the pipeline pool, which sizes itself
-from the machine's online cores rather than the cores the process was given, so
-on a cluster it runs well above `cpu_count`.
+stops at three helpers. The CPU number is the pipeline pool, which takes one
+thread per allowed core, so it matches `cpu_count`.
 
 Each run records memory as an estimate and a measurement:
 
@@ -134,6 +133,10 @@ bump it.
 
 ### Version history
 
+- **6** — The CPU pipeline pool sizes itself from the cores the process is
+  allowed rather than the cores the machine has. A sweep under a batch
+  scheduler used to start a thread per core on a fraction of them, so no
+  CPU-backend timing is comparable across this bump. GPU runs are unaffected.
 - **5** — The writer groups appends into one transfer per staging buffer, so
   the pending-bytes high-water mark and the backpressure wait are sampled far
   less often. `peak_pending_mib`, `backpressure_ms` and `backpressure_count`
