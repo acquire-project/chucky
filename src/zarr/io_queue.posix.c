@@ -11,6 +11,7 @@ struct io_job
   void* ctx;
   void (*ctx_free)(void*);
   uint64_t seq;
+  uint64_t nbytes;
 };
 
 struct io_queue
@@ -25,8 +26,9 @@ struct io_queue
   uint64_t head;     // next write position (post)
   uint64_t tail;     // next read position (worker)
 
-  uint64_t next_seq;    // incremented on post
-  uint64_t retired_seq; // updated after each job completes
+  uint64_t next_seq;      // incremented on post
+  uint64_t retired_seq;   // updated after each job completes
+  uint64_t pending_bytes; // raised as a job is taken, lowered as it completes
 
   int shutdown;
   int started;
@@ -59,6 +61,7 @@ worker_thread(void* arg)
 
     pthread_mutex_lock(&q->mutex);
     q->retired_seq = job.seq;
+    q->pending_bytes -= job.nbytes;
     pthread_cond_broadcast(&q->cond_retired);
     pthread_mutex_unlock(&q->mutex);
   }
@@ -148,6 +151,16 @@ io_queue_post(struct io_queue* q,
               void* ctx,
               void (*ctx_free)(void*))
 {
+  return io_queue_post_bytes(q, fn, ctx, ctx_free, 0);
+}
+
+int
+io_queue_post_bytes(struct io_queue* q,
+                    void (*fn)(void*),
+                    void* ctx,
+                    void (*ctx_free)(void*),
+                    uint64_t nbytes)
+{
   pthread_mutex_lock(&q->mutex);
 
   if (q->head - q->tail == q->ring_cap) {
@@ -163,12 +176,24 @@ io_queue_post(struct io_queue* q,
     .ctx = ctx,
     .ctx_free = ctx_free,
     .seq = q->next_seq,
+    .nbytes = nbytes,
   };
   q->head++;
+  q->pending_bytes += nbytes;
 
   pthread_cond_signal(&q->cond_not_empty);
   pthread_mutex_unlock(&q->mutex);
   return 0;
+}
+
+uint64_t
+io_queue_pending_bytes(const struct io_queue* q)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  pthread_mutex_lock(&mq->mutex);
+  uint64_t pending = mq->pending_bytes;
+  pthread_mutex_unlock(&mq->mutex);
+  return pending;
 }
 
 struct io_event
