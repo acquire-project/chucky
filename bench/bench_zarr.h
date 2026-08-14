@@ -54,7 +54,7 @@ int
 bench_zarr_flush(struct bench_zarr_handle* z);
 
 // Return number of bytes queued but not yet written.
-size_t
+uint64_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z);
 
 // Close and free resources. Safe to call on a zero-initialized handle.

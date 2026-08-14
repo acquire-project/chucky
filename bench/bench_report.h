@@ -44,7 +44,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   size_t flush_pending_bytes);
+                   uint64_t flush_pending_bytes);
 
 // Emit the pass-case JSON report to stdout. sink_metric may be NULL (no sink
 // block is written in that case).

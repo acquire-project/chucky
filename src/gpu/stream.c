@@ -169,7 +169,7 @@ dispatch_target_bytes(const struct stream_engine* e,
 static void
 apply_backpressure(struct stream_engine* e, struct stream_context* ctx)
 {
-  size_t pend = shard_sink_pending_bytes(ctx->sink);
+  uint64_t pend = shard_sink_pending_bytes(ctx->sink);
   if (pend > e->metrics.peak_pending_bytes)
     e->metrics.peak_pending_bytes = pend;
   if (ctx->config.backpressure_bytes == 0 ||
@@ -195,9 +195,9 @@ apply_backpressure(struct stream_engine* e, struct stream_context* ctx)
   accumulate_metric_ms(
     &e->metrics.backpressure, (float)((bp_clk.last_ns - start_ns) / 1e6), 0, 0);
   if (!drained)
-    log_warn("backpressure timeout after %.1fs (pending %zu bytes)",
+    log_warn("backpressure timeout after %.1fs (pending %llu bytes)",
              timeout_s,
-             shard_sink_pending_bytes(ctx->sink));
+             (unsigned long long)shard_sink_pending_bytes(ctx->sink));
 }
 
 // --- Shared append body ---

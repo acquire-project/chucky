@@ -86,7 +86,7 @@ writer_finished_at(const void* beg, const void* end)
   return r;
 }
 
-size_t
+uint64_t
 shard_sink_pending_bytes(const struct shard_sink* s)
 {
   return (s && s->pending_bytes) ? s->pending_bytes(s) : 0;
@@ -127,7 +127,7 @@ shard_sink_drain(struct shard_sink* s)
   return shard_sink_drain_wait(s, ev);
 }
 
-size_t
+uint64_t
 shard_pool_pending_bytes(const struct shard_pool* p)
 {
   return (p && p->pending_bytes) ? p->pending_bytes(p) : 0;

@@ -74,7 +74,7 @@ struct stream_metrics
   float max_append_ms; // longest single append
   // High-water mark of bytes awaiting write, read once per staging buffer
   // handed to the device rather than continuously.
-  size_t peak_pending_bytes;
+  uint64_t peak_pending_bytes;
 
   // How long individual appends took, as counts per time bucket. A caller
   // asking whether it can keep up needs the slow tail, not the average, and
@@ -104,10 +104,10 @@ struct tile_stream_configuration
   uint64_t
     target_batch_bytes; // target uncompressed bytes per batch (default 512 MiB)
   float metadata_update_interval_s;
-  size_t backpressure_bytes; // 0 = disabled; >0 = stall after handing a
-                             // staging buffer to the device when
-                             // sink->pending_bytes exceeds this watermark
-  int max_threads;           // 0 = OpenMP default
+  uint64_t backpressure_bytes; // 0 = disabled; >0 = stall after handing a
+                               // staging buffer to the device when the sink
+                               // reports more pending than this
+  int max_threads;             // 0 = OpenMP default
 };
 
 struct tile_stream_status

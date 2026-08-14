@@ -102,14 +102,14 @@ struct shard_sink
 
   // Returns an upper bound on bytes accepted but not yet written; a 0 is not
   // proof that nothing is outstanding. NULL = treated as 0.
-  size_t (*pending_bytes)(const struct shard_sink* self);
+  uint64_t (*pending_bytes)(const struct shard_sink* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).
   // NULL or returns 0 = no alignment constraint.
   size_t (*required_shard_alignment)(const struct shard_sink* self);
 };
 
-size_t
+uint64_t
 shard_sink_pending_bytes(const struct shard_sink* s);
 
 size_t

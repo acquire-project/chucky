@@ -321,12 +321,12 @@ pool_fs_has_error(const struct shard_pool* self)
   return atomic_load(&p->io_error);
 }
 
-static size_t
+static uint64_t
 pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  return (size_t)io_queue_pending_bytes(p->queue);
+  return io_queue_pending_bytes(p->queue);
 }
 
 static size_t

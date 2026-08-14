@@ -114,12 +114,12 @@ throttled_shard_has_error(const struct shard_sink* self)
   return 0;
 }
 
-static size_t
+static uint64_t
 throttled_shard_pending_bytes(const struct shard_sink* self)
 {
   const struct throttled_shard_sink* s =
     (const struct throttled_shard_sink*)self;
-  return (size_t)io_queue_pending_bytes(s->queue);
+  return io_queue_pending_bytes(s->queue);
 }
 
 int

@@ -50,7 +50,7 @@ test_counts_every_write(const char* tmpdir, int direct)
     uint64_t offset = (uint64_t)i * WRITE_BYTES;
     CHECK(Cleanup, post_write(w, offset, src, src + WRITE_BYTES) == 0);
     CHECK(Cleanup,
-          shard_pool_pending_bytes(pool) == (size_t)(i + 1) * WRITE_BYTES);
+          shard_pool_pending_bytes(pool) == (uint64_t)(i + 1) * WRITE_BYTES);
   }
 
   log_info("  pending with worker held: %llu bytes",
