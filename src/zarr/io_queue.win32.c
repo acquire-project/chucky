@@ -30,7 +30,7 @@ struct io_queue
 
   uint64_t next_seq;      // incremented on post
   uint64_t retired_seq;   // updated after each job completes
-  uint64_t pending_bytes; // raised as a job is taken, lowered as it completes
+  uint64_t pending_bytes; // raised on post, lowered when the job finishes
 
   int shutdown;
   int started;

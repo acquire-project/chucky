@@ -1,7 +1,6 @@
-// The pool reports the bytes its queued writes are still carrying. The count
-// itself lives in the io queue, which raises it inside the lock that hands a job
-// to the worker; tests/test_io_queue.c covers that. This checks the pool passes
-// the figure through, over both write paths.
+// The pool reports the bytes its queued writes still carry. The count lives in
+// the io queue, and tests/test_io_queue.c covers it there. This checks that the
+// pool passes the figure through, over both write paths.
 
 #include "test_platform.h"
 #include "util/prelude.h"
@@ -38,9 +37,9 @@ test_counts_every_write(const char* tmpdir, int direct)
   struct shard_writer* w = pool->open(pool, 0, "shard");
   CHECK(Cleanup, w);
 
-  int (*write)(struct shard_writer*, uint64_t, const void*, const void*) =
+  int (*post_write)(struct shard_writer*, uint64_t, const void*, const void*) =
     direct ? w->write_direct : w->write;
-  CHECK(Cleanup, write);
+  CHECK(Cleanup, post_write);
 
   src = (uint8_t*)calloc(1, WRITE_BYTES);
   CHECK(Cleanup, src);
@@ -49,7 +48,7 @@ test_counts_every_write(const char* tmpdir, int direct)
 
   for (int i = 0; i < BATCH_WRITES; ++i) {
     uint64_t offset = (uint64_t)i * WRITE_BYTES;
-    CHECK(Cleanup, write(w, offset, src, src + WRITE_BYTES) == 0);
+    CHECK(Cleanup, post_write(w, offset, src, src + WRITE_BYTES) == 0);
     CHECK(Cleanup,
           shard_pool_pending_bytes(pool) == (size_t)(i + 1) * WRITE_BYTES);
   }

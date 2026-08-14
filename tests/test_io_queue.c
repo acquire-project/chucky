@@ -169,9 +169,8 @@ Fail:
 
 // --- test: pending bytes ---
 
-// Regression test for #201. The count rises inside the same lock that hands the
-// job to the worker, so a reader can never see fewer bytes than the queue holds
-// — not even for the instant between taking a job and counting it.
+// #201: the reported figure has to account for every job the queue holds. The
+// old split counter, raised after the post, could report fewer.
 
 static void
 wait_for_gate(void* arg)

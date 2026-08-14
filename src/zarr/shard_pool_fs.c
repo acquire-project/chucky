@@ -33,8 +33,8 @@ struct fs_slot
   struct shard_writer base;
   platform_fd fd;
   struct io_queue* queue;
-  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic int* io_error;           // points to shard_pool_fs.io_error
+  size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
+  _Atomic int* io_error; // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
 };
 
@@ -45,7 +45,7 @@ struct pwrite_job
   size_t nbytes;
   size_t data_off;       // byte offset from start of struct to data
   _Atomic int* io_error; // set on write failure
-  uint8_t data[]; // used when data_off == sizeof(struct pwrite_job)
+  uint8_t data[];        // used when data_off == sizeof(struct pwrite_job)
 };
 
 static void
