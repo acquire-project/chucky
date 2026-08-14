@@ -144,9 +144,9 @@ set_tests_properties(test-test_zarr_readback PROPERTIES SKIP_RETURN_CODE 77)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer test_data test_shard_verify)
 
 # Test platform utilities
-add_test_lib(test_platform test_platform.h)
+add_test_lib(test_platform test_platform.h test_platform.common.c)
 add_platform_sources(test_platform)
-target_link_libraries(test_platform PUBLIC Threads::Threads)
+target_link_libraries(test_platform PUBLIC Threads::Threads platform)
 
 # Shared test data generation library
 add_test_lib(test_data test_data.c test_data.h)

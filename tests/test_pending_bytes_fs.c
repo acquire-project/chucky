@@ -8,7 +8,6 @@
 // That window is a few nanoseconds wide, so waiting for a thread to lose the
 // race does not work. The pool has a test hook that parks a writer inside it.
 
-#include "platform/platform.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "writer.h"
@@ -22,7 +21,6 @@
 
 #define WRITE_BYTES 4096
 #define BATCH_WRITES 8
-#define POLL_STEP_MS 10
 #define PARK_TIMEOUT_MS 2000
 
 typedef int (*write_fn)(struct shard_writer*,
@@ -45,17 +43,10 @@ one_write_fn(void* arg)
   oa->error = oa->write(oa->w, 0, oa->src, oa->src + WRITE_BYTES);
 }
 
-// Wait for the writer to reach the window rather than guess how long that takes.
-// A build that counts after the handoff never reports the write, so this waits
-// out the timeout and the caller's check fails, as it should.
-static void
-wait_for_pending(struct shard_pool* pool, int timeout_ms)
+static int
+has_pending(void* ctx)
 {
-  int waited_ms = 0;
-  while (shard_pool_pending_bytes(pool) == 0 && waited_ms < timeout_ms) {
-    platform_sleep_ns((int64_t)POLL_STEP_MS * 1000000LL);
-    waited_ms += POLL_STEP_MS;
-  }
+  return shard_pool_pending_bytes((struct shard_pool*)ctx) != 0;
 }
 
 // A parked writer must report exactly the write it is queueing. Equality
@@ -90,7 +81,10 @@ test_parked_writer(const char* tmpdir, int direct)
   shard_pool_fs_pause_mid_write(pool, 1);
   CHECK(Cleanup, test_thread_start(&thr, one_write_fn, &oa) == 0);
 
-  wait_for_pending(pool, PARK_TIMEOUT_MS);
+  // Wait for the writer to reach the window rather than guess how long that
+  // takes. A build that counts after the handoff never reports the write, so
+  // this waits out the timeout and the check below fails, as it should.
+  test_wait_until(has_pending, pool, PARK_TIMEOUT_MS);
 
   // Settle anything already queued. A build that hands off before counting has a
   // write in flight whose worker drives the count too low; a correct build has

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdatomic.h>
 #include <stddef.h>
 
 #ifdef _WIN32
@@ -34,3 +35,13 @@ test_thread_start(test_thread** out, void (*fn)(void*), void* arg);
 // Wait for the thread to finish and free resources. Returns 0 on success.
 int
 test_thread_join(test_thread* t);
+
+// Poll until ready(ctx) returns non-zero. Returns 0 once it does, -1 if
+// timeout_ms elapsed first.
+int
+test_wait_until(int (*ready)(void*), void* ctx, int timeout_ms);
+
+// Poll until *flag is non-zero. Returns 0 once it is, -1 if timeout_ms elapsed
+// first.
+int
+test_wait_flag(_Atomic int* flag, int timeout_ms);
