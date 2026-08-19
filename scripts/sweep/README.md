@@ -20,11 +20,17 @@ when the open sweep leaves it nothing to choose.
 The S3 tier measures against
 [`s3-blackhole`](https://github.com/nclack/s3-blackhole), which consumes uploads
 and discards them so the result is limited by the producer rather than object
-storage. Start the pinned benchmark server and wait for its health check:
+storage. Start the benchmark server and wait for its health check:
 
 ```sh
 docker compose up --build --wait s3-blackhole
 ```
+
+The image builds the server's default branch rather than a fixed commit, so
+Docker's layer cache decides which commit you get. Add `--no-cache` to that
+build when you want the newest one. Nothing in the running server says which
+commit it is, so take it from the `cargo install` line in the build output and
+record it with any result you keep.
 
 Then run the tier with arbitrary credentials and a bucket name. The bucket does
 not need to exist because `s3-blackhole` stores nothing:
@@ -48,6 +54,16 @@ docker compose stop s3-blackhole
 MinIO remains the backend for S3 integration tests, where stored data is read
 back and validated. The `benchmark` Compose profile keeps `s3-blackhole` out of
 the default test stack unless that service is selected explicitly.
+
+### Accept threads
+
+The image starts the server with `--shards 4`, overriding its default of one
+accept thread per core. The server runs on the same machine as the sweep, and
+every accept thread holds a core the sweep could be sending from. On a 64-core
+node the server's own default measured 18% below four threads, and 23% below
+two, on `256cube_single` with no compression. Across two nodes, where the server
+has its own cores, four threads and sixty-four measure the same, so nothing is
+given up by fixing it at four. Change it in `Dockerfile.s3-blackhole`.
 
 ## Generating the site
 

@@ -1,12 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.85-bookworm AS build
+FROM rust:1-bookworm AS build
 
-ARG S3_BLACKHOLE_REV=3b736b60ba0516a7b89035dbd3893cd4b8222f51
+# Unpinned, so rebuild with --no-cache to pick up new upstream commits.
 RUN cargo install \
         --locked \
         --git https://github.com/nclack/s3-blackhole.git \
-        --rev "${S3_BLACKHOLE_REV}" \
         s3-blackhole
 
 FROM debian:bookworm-slim
@@ -22,4 +21,7 @@ EXPOSE 9000
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["s3-blackhole"]
-CMD ["--listen", "0.0.0.0:9000"]
+# Four accept threads saturate every network measured so far, and the server
+# shares a machine with the benchmark, where a thread per core takes cores the
+# benchmark needs to send: 64 threads measured 18% slower than 4.
+CMD ["--listen", "0.0.0.0:9000", "--shards", "4"]
