@@ -81,12 +81,12 @@ page names them.
 The sweep fills frames three ways, and the choice decides how much a codec can
 squeeze out: `zeros` compresses by thousands of times, the `xor` pattern by about
 ten, `rand` barely at all. One line over all three jumps whenever a sweep adds or
-drops an easier input, so the trend chart draws a panel per input. With more than
-one panel a **Same scale** tickbox appears; it puts every panel on one value axis,
-so their heights compare directly. Untick it to read a panel whose numbers are
-much smaller. The **Input** filter picks the one the machine cards and the latest
-sweep use, and clicking a panel title sets it. The trend table and the biggest
-changes cover every input, with a column saying which one a row came from.
+drops an easier input, so the trend chart draws a panel per input. A **Same
+scale** tickbox appears once there is more than one panel, putting every panel on
+one value axis. Untick it to read a panel whose numbers are much smaller. The
+**Input** filter picks the one the machine cards and the latest sweep use, and
+clicking a panel title sets it. The trend table and the biggest changes cover
+every input, with a column naming it.
 
 ## What the numbers mean
 
@@ -98,8 +98,8 @@ changes cover every input, with a column saying which one a row came from.
 - A change on a machine card compares the two most recent sweeps that ran the
   scenario and input, using the best run of each. A row in the biggest changes
   compares a machine's most recent sweep against the last sweep that ran the
-  same configuration, matching runs by id; hover Previous or Latest to see which
-  sweep it came from. Changes under 2% are shown as no real change.
+  same configuration, matching runs by id. Changes under 2% are shown as no real
+  change.
 
 ## Schema changes
 

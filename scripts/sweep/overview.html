@@ -234,7 +234,7 @@ const SCENARIO_GROUPS = [
   {suffix: "_single", rank: 0},
 ];
 
-// Ordered easiest to hardest to compress, which is the order the panels appear in.
+// Ordered easiest to hardest to compress.
 const FILLS = [
   {key: "zeros", note: "every value is zero"},
   {key: "xor", note: "pixel coordinates xored together"},
@@ -492,8 +492,7 @@ function fmt(value) {
 
 function fmtDay(day) { return day || "unknown date"; }
 
-// Axis labels trim harder than the numbers in the tables, so 1500 reads as
-// 1.5k on an axis and 1,500 in a legend.
+// Axis labels trim harder than the numbers in the tables.
 function fmtTick(value) {
   return Math.abs(value) >= 1000 ? d3.format("~s")(value) : d3.format("~f")(value);
 }
@@ -759,7 +758,7 @@ function renderTiles() {
 }
 
 // =========================================================================
-// Trend chart — one panel per input
+// Trend chart
 //
 // The input decides how much a codec can squeeze out, so one line over all
 // inputs jumps whenever a sweep adds or drops an easier one.
@@ -825,7 +824,7 @@ function renderTrend() {
   const meta = metricMeta(state.metric);
 
   document.getElementById("trend-sub").textContent =
-    `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer, or an input to show it on the cards and tables.`;
+    `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer.`;
 
   trendPanels = ALL_FILLS
     .map(fill => ({fill, lines: trendLines(fill)}))
@@ -846,14 +845,13 @@ function renderTrend() {
   const shared = sameScaleToggle.checked;
 
   // The first panel measures the whole row until its siblings are there to
-  // share it with, so nothing is drawn until every panel is in the grid.
+  // share it with.
   const charts = trendPanels.map(panel => {
     const {card, chart} = trendPanelCard(panel);
     host.appendChild(card);
     return chart;
   });
-  // Every width is read before the first draw writes, so the panels force one
-  // layout between them rather than one each.
+  // Reading every width before the first draw costs one layout, not one each.
   const widths = charts.map(chart => chart.clientWidth || 340);
   charts.forEach((chart, i) => drawTrendChart(chart, widths[i], trendPanels[i], meta, dates,
     d3.max(shared ? allPoints : panelPoints(trendPanels[i]), p => p.value)));
@@ -1026,8 +1024,8 @@ function renderMatrix() {
 const MOVERS_SHOWN = 12;
 
 // A run id names the whole configuration, input included, so pairing by id
-// compares like with like. Pairing by sweep instead drops every configuration
-// the sweep before happened to skip.
+// compares like with like. Pairing by sweep drops every configuration the
+// sweep before skipped.
 function moversFor(machine) {
   const history = new Map();
   let newest = null;
@@ -1069,8 +1067,8 @@ function renderMovers() {
     all.push(...rows);
   }
   document.getElementById("movers-sub").textContent = newest.length
-    ? `${meta.label} in each machine's most recent sweep (${newest.join(", ")}) against the last sweep that ran the same configuration, across every scenario and input. Hover a value to see which sweep it came from.`
-    : `${meta.label} in each machine's most recent sweep, against the last sweep that ran the same configuration.`;
+    ? `${meta.label} in each machine's most recent sweep (${newest.join(", ")}) against the last sweep that ran the same configuration. Hover a value to see which sweep it came from.`
+    : `${meta.label} in each machine's most recent sweep against the last sweep that ran the same configuration.`;
 
   if (!all.length) {
     host.appendChild(el("p", "empty", "Nothing to compare under this filter. A change needs the same configuration in two of a machine's sweeps."));
