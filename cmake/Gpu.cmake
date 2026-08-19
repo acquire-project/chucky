@@ -13,11 +13,15 @@ endif()
 option(CHUCKY_ENABLE_GPU "Build GPU (CUDA) backends and tests" ${_GPU_DEFAULT})
 
 if(CHUCKY_ENABLE_GPU)
+    # Before enable_language(CUDA), which caches the compiler's own default and
+    # leaves a later set() with nothing to do. Each entry also emits PTX, so a
+    # newer card than any listed here still runs, after a wait at load.
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 89 100
+            CACHE STRING "CUDA architectures to generate code for")
+    endif()
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)
-    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES 89 100)
-    endif()
     find_package(CUDAToolkit 12.8 REQUIRED)
     find_package(Nvcomp REQUIRED)
 endif()

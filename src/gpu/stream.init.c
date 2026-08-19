@@ -446,6 +446,12 @@ tile_stream_gpu_cursor(const struct tile_stream_gpu* s)
   return s->ctx.cursor_elements;
 }
 
+int
+tile_stream_gpu_worker_threads(const struct tile_stream_gpu* s)
+{
+  return threadpool_size(s->engine.copy_pool);
+}
+
 struct tile_stream_status
 tile_stream_gpu_status(const struct tile_stream_gpu* s)
 {

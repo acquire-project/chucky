@@ -116,6 +116,13 @@ bench_gpu_status(const struct tile_stream_gpu* s)
   return st;
 }
 
+int
+bench_gpu_worker_threads(const struct tile_stream_gpu* s)
+{
+  (void)s;
+  return 0;
+}
+
 struct writer*
 bench_gpu_writer(struct tile_stream_gpu* s)
 {

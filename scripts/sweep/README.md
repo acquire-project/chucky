@@ -86,6 +86,40 @@ page names them.
 - A change compares a machine's latest sweep against its previous one, matching
   runs by id. Changes under 2% are shown as no real change.
 
+## What a results file records
+
+The `machine` block describes the sweep once: `name`, `hostname`, `gpu`,
+`driver_version`, `cpu_count`, `commit`, `date`, and a `build` block.
+`cpu_count` is the cores the process was allowed, which on a cluster is fewer
+than the machine has. The build block describes the build directory: build
+type, CUDA architectures, whether the GPU backend was on, C++ compiler, and
+nvcomp path from `CMakeCache.txt`, plus the CUDA compiler version from the
+`CMakeCUDACompiler.cmake` written beside it. A key the build directory cannot
+answer is left out, and `gpu` and `driver_version` say `unknown` when there is
+no `nvidia-smi`. The explorer shows either as unknown.
+
+Each run records its `frames` and the `worker_threads` its pool ran on. The two
+backends count different pools. The GPU number is the staging-copy pool, which
+stops at three helpers. The CPU number is the pipeline pool, which takes one
+thread per allowed core, so it matches `cpu_count`.
+
+Each run records memory as an estimate and a measurement:
+
+| field | holds |
+|---|---|
+| `memory_estimate_total_bytes` | the engine's estimate — device bytes on GPU, heap bytes on CPU |
+| `memory_estimate_pinned_bytes` | pinned host bytes on GPU, 0 on CPU |
+| `memory_host_baseline_bytes` | resident memory before the stream was created |
+| `memory_host_peak_bytes` | most resident memory the process held during the run |
+| `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
+| `memory_measured_bytes` | the figure to hold the estimate against: device memory on GPU, the host difference on CPU |
+
+Compare `memory_measured_bytes` against the estimate. On the CPU it also
+carries the benchmark's own source block, which is allocated after the baseline
+is taken and reaches 64 MiB — more than a small stream's whole estimate — so
+subtract that before reading the two as a ratio. The device figure does not
+carry the block.
+
 ## Schema changes
 
 `models.py` holds the results schema, its version, and the migrations.
@@ -99,6 +133,10 @@ bump it.
 
 ### Version history
 
+- **6** — The CPU pipeline pool sizes itself from the cores the process is
+  allowed rather than the cores the machine has. A sweep under a batch
+  scheduler used to start a thread per core on a fraction of them, so no
+  CPU-backend timing is comparable across this bump. GPU runs are unaffected.
 - **5** — The writer groups appends into one transfer per staging buffer, so
   the pending-bytes high-water mark and the backpressure wait are sampled far
   less often. `peak_pending_mib`, `backpressure_ms` and `backpressure_count`
