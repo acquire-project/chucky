@@ -144,9 +144,9 @@ set_tests_properties(test-test_zarr_readback PROPERTIES SKIP_RETURN_CODE 77)
 add_gpu_test_exe(test_cross_validate test_cross_validate.c LINKS CUDA::cuda_driver CUDA::cudart_static stream stream_cpu writer test_data test_shard_verify)
 
 # Test platform utilities
-add_test_lib(test_platform test_platform.h)
+add_test_lib(test_platform test_platform.h test_platform.common.c)
 add_platform_sources(test_platform)
-target_link_libraries(test_platform PUBLIC Threads::Threads)
+target_link_libraries(test_platform PUBLIC Threads::Threads platform)
 
 # Shared test data generation library
 add_test_lib(test_data test_data.c test_data.h)
@@ -158,6 +158,8 @@ add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_dr
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_queue    test_io_queue.c    io_queue chucky_log)
+# A worker left held would hang rather than fail; bound it.
+set_tests_properties(test-test_io_queue PROPERTIES TIMEOUT 60)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform test_platform chucky_log)
 add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api stream_cpu writer test_platform chucky_log)
 add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs store_api test_platform chucky_log)
@@ -182,6 +184,9 @@ add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log)
 add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log)
 add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log)
+add_test_exe(test_pending_bytes_fs test_pending_bytes_fs.c shard_pool_fs platform writer test_platform chucky_log)
+# A worker left held would hang rather than fail; bound it.
+set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
@@ -197,6 +202,8 @@ add_test_exe(test_dimension   test_dimension.c   stream_config dimension chucky_
 add_test_exe(test_lz4_warning test_lz4_warning.c stream_config dimension platform chucky_log)
 add_test_exe(test_chucky_log  test_chucky_log.c  chucky_log)
 add_test_exe(test_strbuf      test_strbuf.c      strbuf chucky_log)
+add_test_exe(test_platform_memory test_platform_memory.c platform chucky_log)
+add_test_exe(test_platform_threads test_platform_threads.c platform chucky_log)
 add_test_exe(test_append_latency test_append_latency.c stream_config chucky_log)
 add_gpu_test_exe(test_lod         test_lod.c         LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan index_ops morton_util)
 add_gpu_test_exe(test_lod_dtypes  test_lod_dtypes.cu LINKS CUDA::cuda_driver CUDA::cudart_static lod lod_plan)

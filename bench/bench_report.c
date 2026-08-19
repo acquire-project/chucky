@@ -34,6 +34,31 @@ print_append_latency(const struct stream_metrics* m)
 }
 
 void
+print_memory_report(const struct bench_memory* mem)
+{
+  char a[32], b[32];
+  fputc('\n', stderr);
+  if (mem->host_peak_bytes) {
+    format_bytes(a, sizeof(a), mem->host_baseline_bytes);
+    format_bytes(b, sizeof(b), mem->host_peak_bytes);
+    print_report("  Host memory:   %s at rest, %s peak", a, b);
+  } else {
+    print_report("  Host memory:   unavailable");
+  }
+  if (mem->device_used_bytes) {
+    format_bytes(a, sizeof(a), mem->device_used_bytes);
+    print_report("  Device memory: %s", a);
+  }
+  if (mem->measured_bytes && mem->estimate_total_bytes) {
+    format_bytes(a, sizeof(a), mem->estimate_total_bytes);
+    print_report("  Estimate:      %s (%.2fx measured)",
+                 a,
+                 (double)mem->estimate_total_bytes /
+                   (double)mem->measured_bytes);
+  }
+}
+
+void
 print_metric_row(const struct stream_metric* m)
 {
   if (m->count <= 0)
@@ -105,7 +130,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   size_t flush_pending_bytes)
+                   uint64_t flush_pending_bytes)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -182,7 +207,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    (unsigned long long)metrics->lod_samples_lost);
     print_append_latency(metrics);
     char pbuf[32];
-    format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
+    format_bytes(pbuf, sizeof(pbuf), metrics->peak_pending_bytes);
     print_report("  peak pending:    %s", pbuf);
   }
 
@@ -255,8 +280,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      size_t memory_estimate_total_bytes,
-                      size_t memory_estimate_pinned_bytes)
+                      const struct bench_memory* mem,
+                      int worker_threads)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -302,9 +327,19 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_s");
   jw_float(&jw, (double)flush_s);
   jw_key(&jw, "memory_estimate_total_bytes");
-  jw_uint(&jw, memory_estimate_total_bytes);
+  jw_uint(&jw, mem->estimate_total_bytes);
   jw_key(&jw, "memory_estimate_pinned_bytes");
-  jw_uint(&jw, memory_estimate_pinned_bytes);
+  jw_uint(&jw, mem->estimate_pinned_bytes);
+  jw_key(&jw, "memory_host_baseline_bytes");
+  jw_uint(&jw, mem->host_baseline_bytes);
+  jw_key(&jw, "memory_host_peak_bytes");
+  jw_uint(&jw, mem->host_peak_bytes);
+  jw_key(&jw, "memory_device_used_bytes");
+  jw_uint(&jw, mem->device_used_bytes);
+  jw_key(&jw, "memory_measured_bytes");
+  jw_uint(&jw, mem->measured_bytes);
+  jw_key(&jw, "worker_threads");
+  jw_uint(&jw, (uint64_t)worker_threads);
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);

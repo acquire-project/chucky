@@ -21,10 +21,6 @@ struct shard_pool_fs
   uint64_t nslots;
   int unbuffered;
   struct strbuf root; // owned
-  // Writes land on whichever thread runs sink delivery while the producer
-  // samples pending_bytes for backpressure.
-  _Atomic uint64_t queued_bytes;
-  _Atomic uint64_t retired_bytes;
   _Atomic int io_error;
   // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
@@ -37,10 +33,8 @@ struct fs_slot
   struct shard_writer base;
   platform_fd fd;
   struct io_queue* queue;
-  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic uint64_t* retired_bytes; // points to shard_pool_fs.retired_bytes
-  _Atomic uint64_t* queued_bytes;  // points to shard_pool_fs.queued_bytes
-  _Atomic int* io_error;           // points to shard_pool_fs.io_error
+  size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
+  _Atomic int* io_error; // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
 };
 
@@ -49,10 +43,9 @@ struct pwrite_job
   platform_fd fd;
   uint64_t offset;
   size_t nbytes;
-  size_t data_off;                 // byte offset from start of struct to data
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
-  uint8_t data[]; // used when data_off == sizeof(struct pwrite_job)
+  size_t data_off;       // byte offset from start of struct to data
+  _Atomic int* io_error; // set on write failure
+  uint8_t data[];        // used when data_off == sizeof(struct pwrite_job)
 };
 
 static void
@@ -64,7 +57,6 @@ pwrite_fn(void* arg)
     log_error("shard_pool_fs pwrite failed");
     atomic_store(j->io_error, 1);
   }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
 }
 
 static int
@@ -100,14 +92,12 @@ fs_slot_write(struct shard_writer* self,
     j->fd = w->fd;
     j->offset = offset;
     j->nbytes = nbytes;
-    j->retired_bytes = w->retired_bytes;
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
-    if (io_queue_post(w->queue, pwrite_fn, j, job_free)) {
+    if (io_queue_post_bytes(w->queue, pwrite_fn, j, job_free, nbytes)) {
       job_free(j);
       goto Error;
     }
-    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -123,9 +113,8 @@ struct pwrite_ref_job
   platform_fd fd;
   uint64_t offset;
   size_t nbytes;
-  const void* data;                // NOT owned — points into pinned memory
-  _Atomic uint64_t* retired_bytes; // written by io worker after pwrite
-  _Atomic int* io_error;           // set on write failure
+  const void* data;      // NOT owned — points into pinned memory
+  _Atomic int* io_error; // set on write failure
 };
 
 static void
@@ -136,7 +125,6 @@ pwrite_ref_fn(void* arg)
     log_error("shard_pool_fs pwrite_ref failed");
     atomic_store(j->io_error, 1);
   }
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
 }
 
 static int
@@ -158,13 +146,11 @@ fs_slot_write_direct(struct shard_writer* self,
     j->offset = offset;
     j->nbytes = nbytes;
     j->data = beg;
-    j->retired_bytes = w->retired_bytes;
     j->io_error = w->io_error;
-    if (io_queue_post(w->queue, pwrite_ref_fn, j, free)) {
+    if (io_queue_post_bytes(w->queue, pwrite_ref_fn, j, free, nbytes)) {
       free(j);
       goto Error;
     }
-    atomic_fetch_add(w->queued_bytes, nbytes);
   } else {
     CHECK(Error, platform_pwrite(w->fd, beg, nbytes, offset) == 0);
   }
@@ -335,12 +321,12 @@ pool_fs_has_error(const struct shard_pool* self)
   return atomic_load(&p->io_error);
 }
 
-static size_t
+static uint64_t
 pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  return atomic_load(&p->queued_bytes) - atomic_load(&p->retired_bytes);
+  return io_queue_pending_bytes(p->queue);
 }
 
 static size_t
@@ -474,8 +460,6 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->fd = PLATFORM_FD_INVALID;
     s->queue = p->queue;
     s->alignment = page_size;
-    s->retired_bytes = &p->retired_bytes;
-    s->queued_bytes = &p->queued_bytes;
     s->io_error = &p->io_error;
     s->fail_next_truncate = &p->fail_next_truncate;
   }

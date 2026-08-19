@@ -32,7 +32,9 @@ add_src_lib(lod_plan   SOURCES lod/lod_plan.c lod/lod_plan.h
 )
 add_src_lib(crc32c     SOURCES zarr/crc32c.c zarr/crc32c.h LINKS platform)
 
-add_src_lib(platform SOURCES platform/platform.h LINKS Threads::Threads)
+add_src_lib(platform SOURCES platform/platform.h
+    LINKS Threads::Threads $<$<PLATFORM_ID:Windows>:psapi>
+)
 add_platform_sources(platform platform/platform)
 
 add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
@@ -104,6 +106,7 @@ set(_chucky_public_deps
     Lz4::Lz4
     Zstd::Zstd
     AWS::aws-c-s3
+    $<$<PLATFORM_ID:Windows>:psapi>
     $<${_with_blosc}:Blosc::Blosc>
     $<${_with_gpu}:CUDA::cuda_driver>
     $<${_with_gpu}:CUDA::cudart_static>

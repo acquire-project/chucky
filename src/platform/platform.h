@@ -29,6 +29,15 @@ platform_aligned_free(void* ptr);
 size_t
 platform_available_memory(void);
 
+// Physical memory this process holds right now, in bytes, or 0 on failure.
+uint64_t
+platform_resident_memory(void);
+
+// Most physical memory this process has held at any point, in bytes, or 0 on
+// failure. Never goes down, so it can be read once at the end of a run.
+uint64_t
+platform_peak_resident_memory(void);
+
 // Monotonic clock for timing. Returns elapsed seconds since last call.
 struct platform_clock
 {

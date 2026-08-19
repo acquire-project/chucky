@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include <malloc.h>
+#include <psapi.h>
 
 uint64_t
 platform_process_id(void)
@@ -46,6 +47,31 @@ platform_available_memory(void)
   if (GlobalMemoryStatusEx(&memstat) && memstat.ullAvailPhys > 0)
     return (size_t)memstat.ullAvailPhys;
   return 0;
+}
+
+static int
+process_memory(PROCESS_MEMORY_COUNTERS* pmc)
+{
+  pmc->cb = sizeof(*pmc);
+  return GetProcessMemoryInfo(GetCurrentProcess(), pmc, sizeof(*pmc));
+}
+
+uint64_t
+platform_resident_memory(void)
+{
+  PROCESS_MEMORY_COUNTERS pmc;
+  if (!process_memory(&pmc))
+    return 0;
+  return (uint64_t)pmc.WorkingSetSize;
+}
+
+uint64_t
+platform_peak_resident_memory(void)
+{
+  PROCESS_MEMORY_COUNTERS pmc;
+  if (!process_memory(&pmc))
+    return 0;
+  return (uint64_t)pmc.PeakWorkingSetSize;
 }
 
 void

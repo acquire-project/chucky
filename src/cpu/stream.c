@@ -383,6 +383,12 @@ tile_stream_cpu_cursor(const struct tile_stream_cpu* s)
   return s->cursor_elements;
 }
 
+int
+tile_stream_cpu_worker_threads(const struct tile_stream_cpu* s)
+{
+  return threadpool_size(s->pool);
+}
+
 // ---- Memory estimate ----
 
 // Compute memory sizing from pre-computed layouts.

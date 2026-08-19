@@ -155,7 +155,7 @@ zarr_array_has_error_fn(const struct shard_sink* self)
   return a->pool->has_error(a->pool);
 }
 
-static size_t
+static uint64_t
 zarr_array_pending_bytes_fn(const struct shard_sink* self)
 {
   const struct zarr_array* a = container_of(self, struct zarr_array, base);
@@ -333,7 +333,7 @@ zarr_array_has_error(const struct zarr_array* a)
   return a ? a->pool->has_error(a->pool) : 0;
 }
 
-size_t
+uint64_t
 zarr_array_pending_bytes(const struct zarr_array* a)
 {
   return a ? a->pool->pending_bytes(a->pool) : 0;

@@ -28,8 +28,10 @@ struct shard_pool
   // Returns non-zero if any I/O has failed.
   int (*has_error)(const struct shard_pool* self);
 
-  // Returns number of bytes queued but not yet written.
-  size_t (*pending_bytes)(const struct shard_pool* self);
+  // Bytes accepted but not yet written. A write counts from the moment it is
+  // accepted until it lands, so the figure can read high but never low — a
+  // caller deciding whether to slow down can tolerate too high, not too low.
+  uint64_t (*pending_bytes)(const struct shard_pool* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).
   // NULL = no alignment constraint.
@@ -38,7 +40,7 @@ struct shard_pool
   void (*destroy)(struct shard_pool* self);
 };
 
-size_t
+uint64_t
 shard_pool_pending_bytes(const struct shard_pool* p);
 
 size_t

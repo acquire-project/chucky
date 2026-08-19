@@ -1,8 +1,12 @@
+#define _GNU_SOURCE
+
 #include "platform/platform.h"
 
 #include <pthread.h>
 #include <sched.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,6 +37,29 @@ platform_available_memory(void)
   if (pages > 0 && page_sz > 0)
     return (size_t)pages * (size_t)page_sz;
   return 0;
+}
+
+uint64_t
+platform_resident_memory(void)
+{
+  FILE* f = fopen("/proc/self/statm", "r");
+  if (!f)
+    return 0;
+  unsigned long long total_pages = 0, resident_pages = 0;
+  int fields = fscanf(f, "%llu %llu", &total_pages, &resident_pages);
+  fclose(f);
+  if (fields != 2)
+    return 0;
+  return (uint64_t)resident_pages * (uint64_t)platform_page_alignment();
+}
+
+uint64_t
+platform_peak_resident_memory(void)
+{
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0)
+    return 0;
+  return (uint64_t)ru.ru_maxrss * 1024; // kilobytes on Linux
 }
 
 void*
@@ -216,6 +243,17 @@ platform_cpu_pause(void)
 int
 platform_default_thread_count(void)
 {
+  // The cores this process may run on, which under a batch scheduler or in a
+  // container is fewer than the machine has. Counting all of them would start
+  // a thread per core and then share the few the process was given.
+#ifdef __linux__
+  cpu_set_t allowed;
+  if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0) {
+    int n = CPU_COUNT(&allowed);
+    if (n > 0)
+      return n;
+  }
+#endif
   long n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? (int)n : 1;
 }

@@ -67,6 +67,13 @@ bench_cursor(const struct bench_handle* h)
                                  : bench_gpu_cursor(h->gpu);
 }
 
+static int
+bench_worker_threads(const struct bench_handle* h)
+{
+  return h->backend == BENCH_CPU ? tile_stream_cpu_worker_threads(h->cpu)
+                                 : bench_gpu_worker_threads(h->gpu);
+}
+
 static void
 bench_destroy(struct bench_handle* h)
 {
@@ -462,6 +469,14 @@ run_bench(const struct bench_config* cfg)
     }
   }
 
+  struct bench_memory mem_used = {
+    .estimate_total_bytes = est_total_bytes,
+    .estimate_pinned_bytes = est_pinned_bytes,
+    .host_baseline_bytes = platform_resident_memory(),
+  };
+  const size_t device_free_at_rest =
+    cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
+
   struct platform_clock init_clock = { 0 };
   platform_toc(&init_clock);
 
@@ -510,7 +525,7 @@ run_bench(const struct bench_config* cfg)
                                   dtype_bpe(dtype),
                                   cfg->append_elements) == 0);
 
-  size_t pending_bytes = bench_zarr_pending_bytes(&zarr);
+  uint64_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
@@ -520,6 +535,19 @@ run_bench(const struct bench_config* cfg)
   }
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
+
+  mem_used.host_peak_bytes = platform_peak_resident_memory();
+  if (cfg->backend == BENCH_GPU) {
+    // 0 means the reading failed, not that the device ran out.
+    const size_t device_free_now = bench_gpu_free_memory();
+    if (device_free_now > 0 && device_free_at_rest > device_free_now)
+      mem_used.device_used_bytes = device_free_at_rest - device_free_now;
+    mem_used.measured_bytes = mem_used.device_used_bytes;
+  } else if (mem_used.host_baseline_bytes &&
+             mem_used.host_peak_bytes > mem_used.host_baseline_bytes) {
+    mem_used.measured_bytes =
+      mem_used.host_peak_bytes - mem_used.host_baseline_bytes;
+  }
 
   if (bench_cursor(&h) != total_elements) {
     log_error("  cursor drift: expected %zu, got %zu (diff=%td)",
@@ -551,6 +579,7 @@ run_bench(const struct bench_config* cfg)
                        init_s,
                        flush_s,
                        pending_bytes);
+    print_memory_report(&mem_used);
 
     if (cfg->json_output) {
       const struct stream_metric* sink_metric =
@@ -565,8 +594,8 @@ run_bench(const struct bench_config* cfg)
                             wall_s,
                             init_s,
                             flush_s,
-                            est_total_bytes,
-                            est_pinned_bytes);
+                            &mem_used,
+                            bench_worker_threads(&h));
     }
   }
 
@@ -1066,7 +1095,7 @@ run_bench_two_streams(const struct bench_config* cfg)
       print_metric_row(&m[k].backpressure);
       print_append_latency(&m[k]);
       char pbuf[32];
-      format_bytes(pbuf, sizeof(pbuf), (uint64_t)m[k].peak_pending_bytes);
+      format_bytes(pbuf, sizeof(pbuf), m[k].peak_pending_bytes);
       print_report("  peak pending:    %s", pbuf);
     }
   }

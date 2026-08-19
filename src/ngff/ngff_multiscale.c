@@ -162,7 +162,7 @@ ngff_multiscale_has_error_fn(const struct shard_sink* self)
   return ms->pool->has_error(ms->pool);
 }
 
-static size_t
+static uint64_t
 ngff_multiscale_pending_bytes_fn(const struct shard_sink* self)
 {
   const struct ngff_multiscale* ms =
@@ -411,7 +411,7 @@ ngff_multiscale_has_error(const struct ngff_multiscale* ms)
   return ms ? ms->pool->has_error(ms->pool) : 0;
 }
 
-size_t
+uint64_t
 ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms)
 {
   return ms ? ms->pool->pending_bytes(ms->pool) : 0;

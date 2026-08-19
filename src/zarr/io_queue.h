@@ -21,6 +21,20 @@ io_queue_post(struct io_queue* q,
               void* ctx,
               void (*ctx_free)(void*));
 
+// Post a job that carries nbytes of outstanding work. The queue raises its
+// pending count as it takes the job, so a reader can never see less work than
+// the queue is holding.
+int
+io_queue_post_bytes(struct io_queue* q,
+                    void (*fn)(void*),
+                    void* ctx,
+                    void (*ctx_free)(void*),
+                    uint64_t nbytes);
+
+// Bytes posted through io_queue_post_bytes whose jobs have not finished.
+uint64_t
+io_queue_pending_bytes(const struct io_queue* q);
+
 // Record an event capturing the current sequence number.
 struct io_event
 io_queue_record(struct io_queue* q);

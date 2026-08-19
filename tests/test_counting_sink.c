@@ -96,7 +96,7 @@ counting_has_error(const struct shard_sink* self)
   return cs->inner->has_error(cs->inner);
 }
 
-static size_t
+static uint64_t
 counting_pending_bytes(const struct shard_sink* self)
 {
   const struct counting_sink* cs = (const struct counting_sink*)self;

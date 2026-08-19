@@ -18,6 +18,22 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
+// What the run was expected to take, and what it took.
+struct bench_memory
+{
+  uint64_t estimate_total_bytes;  // device bytes on GPU, heap bytes on CPU
+  uint64_t estimate_pinned_bytes; // pinned host bytes on GPU, 0 on CPU
+  uint64_t host_baseline_bytes;   // resident before the stream was created
+  uint64_t host_peak_bytes;       // most resident memory held during the run
+  uint64_t device_used_bytes;     // GPU: free device memory the stream took
+  // Which of the two above the estimate can be held against: device memory on
+  // the GPU, the host difference on the CPU. 0 when that reading failed.
+  uint64_t measured_bytes;
+};
+
+void
+print_memory_report(const struct bench_memory* mem);
+
 void
 print_metric_row(const struct stream_metric* m);
 
@@ -44,7 +60,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   size_t flush_pending_bytes);
+                   uint64_t flush_pending_bytes);
 
 // Emit the pass-case JSON report to stdout. sink_metric may be NULL (no sink
 // block is written in that case).
@@ -59,8 +75,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float wall_s,
                       float init_s,
                       float flush_s,
-                      size_t memory_estimate_total_bytes,
-                      size_t memory_estimate_pinned_bytes);
+                      const struct bench_memory* mem,
+                      int worker_threads);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

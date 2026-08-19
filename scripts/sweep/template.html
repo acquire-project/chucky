@@ -144,6 +144,7 @@ input { accent-color: var(--series-1); }
 
 <h1>Sweep <span class="fail-badge" id="fail-badge" style="display:none"></span></h1>
 <div class="subtitle" id="machine-info"></div>
+<div class="subtitle" id="build-info"></div>
 <div class="subtitle" id="s3-info" style="display:none"></div>
 
 <div class="controls">
@@ -382,13 +383,23 @@ function tooltipText(r) {
   if (r.compression_fold != null) t += `compression: ${r.compression_fold.toFixed(1)}x\n`;
   if (r.wall_s != null) t += `wall clock: ${r.wall_s.toFixed(3)}s  startup: ${(r.init_s||0).toFixed(3)}s  flush: ${(r.flush_s||0).toFixed(3)}s\n`;
   if (r.total_chunks != null) t += `chunks: ${r.total_chunks} (${r.chunks_per_epoch}/epoch)\n`;
-  if (r.memory) {
-    const m = r.memory;
-    if (m.device_gib) t += `device: ${m.device_gib.toFixed(2)} GiB`;
-    if (m.chunk_pool_gib) t += `  chunk_pool: ${m.chunk_pool_gib.toFixed(2)} GiB`;
-    t += "\n";
-  }
+  if (r.frames != null) t += `frames: ${r.frames}\n`;
+  if (r.worker_threads != null) t += `threads: ${r.worker_threads}\n`;
+  const memory = memoryLine(r);
+  if (memory) t += memory + "\n";
   return t.trim();
+}
+
+function memoryLine(r) {
+  const gib = bytes => (bytes / (1024 ** 3)).toFixed(2);
+  const parts = [];
+  if (r.memory_estimate_total_bytes) {
+    parts.push(`${gib(r.memory_estimate_total_bytes)} GiB estimated`);
+  }
+  if (r.memory_measured_bytes) {
+    parts.push(`${gib(r.memory_measured_bytes)} GiB measured`);
+  }
+  return parts.length ? "memory: " + parts.join(", ") : "";
 }
 
 function stageTooltipText(r, stageName) {
@@ -553,6 +564,24 @@ function rebuildControls() {
   document.getElementById("machine-info").textContent =
     [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
       .filter(Boolean).join(" | ");
+
+  // A sweep written before a field existed says unknown, not a default that
+  // was never true of the run.
+  const build = file.build || {};
+  const threads = [...new Set((file.runs || [])
+    .map(r => r.worker_threads).filter(n => n != null))].sort((a, b) => a - b);
+  const detail = [
+    [file.driver, d => `driver ${d}`],
+    [build.cuda_compiler_version, v => `cuda ${v}`],
+    [build.build_type, t => `${t} build`],
+    [build.cuda_architectures, a => `sm ${a}`],
+    [file.cpus, n => `${n} cores`],
+    [threads.join(", "), t => `threads ${t}`],
+  ];
+  const buildInfo = document.getElementById("build-info");
+  buildInfo.textContent = detail
+    .map(([value, render]) => render(value || "unknown")).join(" | ");
+  buildInfo.style.display = detail.some(([value]) => value) ? "" : "none";
 
   // S3 metadata from runs (region, bucket, endpoint)
   const s3Runs = (file.runs || []).filter(r => r.sink === "s3");
