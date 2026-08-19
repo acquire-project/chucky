@@ -1050,34 +1050,41 @@ function renderMatrix() {
 const MOVERS_SHOWN = 12;
 
 function moversFor(machine) {
-  const index = sweep => {
-    const map = new Map();
+  const runsByInput = sweep => {
+    const inputs = new Map();
     for (const run of sweep.runs) {
       if (run.status !== "pass" || !matchesSetup(run)) continue;
       const value = metricValue(run, state.metric);
-      if (value != null) map.set(run.id, {run, value});
+      if (value == null) continue;
+      let map = inputs.get(run.fill);
+      if (!map) inputs.set(run.fill, map = new Map());
+      map.set(run.id, {run, value});
     }
-    return map;
+    return inputs;
   };
 
-  // The two most recent sweeps that ran anything matching, so a sweep that
-  // skipped this configuration does not hide the comparison.
-  const usable = machine.sweeps
-    .filter(comparable)
-    .map(sweep => ({sweep, runs: index(sweep)}))
-    .filter(entry => entry.runs.size);
-  if (usable.length < 2) return {rows: [], latest: null, previous: null};
-  const {sweep: latest, runs: after} = usable[usable.length - 1];
-  const {sweep: previous, runs: before} = usable[usable.length - 2];
+  const indexed = machine.sweeps.filter(comparable).map(sweep => ({sweep, inputs: runsByInput(sweep)}));
   const rows = [];
-  for (const [id, now] of after) {
-    const then = before.get(id);
-    if (!then) continue;
-    const pct = percentChange(then.value, now.value);
-    if (pct == null) continue;
-    rows.push({machine, id, run: now.run, previous: then.value, latest: now.value, pct, latestSweep: latest, previousSweep: previous});
+  const compared = new Set();
+  // One pair of sweeps per input: a sweep that skipped an input must not become
+  // the sweep the other inputs are compared against, or they drop out.
+  for (const fill of ALL_FILLS) {
+    const usable = indexed.filter(entry => entry.inputs.has(fill));
+    if (usable.length < 2) continue;
+    const latest = usable[usable.length - 1];
+    const previous = usable[usable.length - 2];
+    compared.add(`${previous.sweep.commit}→${latest.sweep.commit}`);
+    const before = previous.inputs.get(fill);
+    for (const [id, now] of latest.inputs.get(fill)) {
+      const then = before.get(id);
+      if (!then) continue;
+      const pct = percentChange(then.value, now.value);
+      if (pct == null) continue;
+      rows.push({machine, id, run: now.run, previous: then.value, latest: now.value, pct,
+                 latestSweep: latest.sweep, previousSweep: previous.sweep});
+    }
   }
-  return {rows, latest, previous};
+  return {rows, compared: [...compared]};
 }
 
 function renderMovers() {
@@ -1088,13 +1095,13 @@ function renderMovers() {
   const all = [];
   const pairs = [];
   for (const machine of machineOrder) {
-    const {rows, latest, previous} = moversFor(machine);
-    if (latest && previous) pairs.push(`${machine.name} ${previous.commit}→${latest.commit}`);
+    const {rows, compared} = moversFor(machine);
+    for (const pair of compared) pairs.push(`${machine.name} ${pair}`);
     all.push(...rows);
   }
   document.getElementById("movers-sub").textContent = pairs.length
-    ? `${meta.label} for configurations run in both of a machine's two most recent sweeps (${pairs.join(", ")}), across every scenario and input.`
-    : `${meta.label}, comparing each machine's two most recent sweeps.`;
+    ? `${meta.label} for configurations run in both of the two most recent sweeps that ran their input (${pairs.join(", ")}), across every scenario and input.`
+    : `${meta.label}, comparing the two most recent sweeps that ran each input.`;
 
   if (!all.length) {
     host.appendChild(el("p", "empty", "Nothing to compare: no configuration ran in two consecutive sweeps of the same machine under this filter."));
