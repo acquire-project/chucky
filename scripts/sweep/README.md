@@ -95,9 +95,11 @@ changes cover every input, with a column saying which one a row came from.
   averaged. Hover a point to see which run won and how many it beat.
 - Runs that did not pass are left out, and counted on the machine card instead.
 - A gap means the sweep ran nothing matching the filter. It does not mean zero.
-- A change compares, for one input, the two most recent sweeps of a machine that
-  ran it: the best run each time on the cards, runs matched by id in the biggest
-  changes. Changes under 2% are shown as no real change.
+- A change on a machine card compares the two most recent sweeps that ran the
+  scenario and input, using the best run of each. A row in the biggest changes
+  compares the two most recent sweeps that ran its input, matching runs by id;
+  hover Previous or Latest to see which sweep it came from. Changes under 2% are
+  shown as no real change.
 
 ## Schema changes
 

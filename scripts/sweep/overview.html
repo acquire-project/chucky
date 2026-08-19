@@ -1103,11 +1103,11 @@ function renderMovers() {
     all.push(...rows);
   }
   document.getElementById("movers-sub").textContent = pairs.length
-    ? `${meta.label} for configurations run in both of the two most recent sweeps that ran their input (${pairs.join(", ")}), across every scenario and input.`
+    ? `${meta.label} for configurations run in both of the two most recent sweeps that ran their input (${pairs.join("; ")}), across every scenario and input.`
     : `${meta.label}, comparing the two most recent sweeps that ran each input.`;
 
   if (!all.length) {
-    host.appendChild(el("p", "empty", "Nothing to compare: no configuration ran in two sweeps of the same machine under this filter."));
+    host.appendChild(el("p", "empty", "Nothing to compare: under this filter, no configuration ran in both of the two most recent sweeps of a machine that ran its input."));
     return;
   }
 
@@ -1152,7 +1152,9 @@ function renderMovers() {
     tr.appendChild(el("td", null, configLabel(row.run)));
     for (const [value, sweep] of [[row.previous, row.previousSweep], [row.latest, row.latestSweep]]) {
       const cell = el("td", "num", fmt(value));
-      cell.title = `${sweep.commit} on ${fmtDay(sweep.day)}`;
+      cell.title = row.machine.members.length > 1
+        ? `${sweep.commit} on ${fmtDay(sweep.day)}, ${sweep.member}`
+        : `${sweep.commit} on ${fmtDay(sweep.day)}`;
       tr.appendChild(cell);
     }
     const cls = changeClass(row.pct);
