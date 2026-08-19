@@ -84,7 +84,9 @@ ten, `rand` barely at all. One line over all three jumps whenever a sweep adds o
 drops an easier input, so the trend chart draws a panel per input. **Same scale**
 puts every panel on one value axis, so their heights compare directly; untick it
 to read a panel whose numbers are much smaller. The **Input** filter picks the one
-the machine cards and tables use, and clicking a panel title sets it.
+the machine cards and the latest sweep use, and clicking a panel title sets it.
+The trend table and the biggest changes cover every input, with a column saying
+which one a row came from.
 
 ## What the numbers mean
 

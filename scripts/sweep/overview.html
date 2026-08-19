@@ -36,6 +36,7 @@ h2 { font-size: 1.02em; margin: 0; }
   color: var(--text-primary); padding: 5px 8px;
   background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
+.check[hidden] { display: none; }
 
 /* Machine tiles */
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
@@ -88,7 +89,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 
 /* Small multiples: one panel per input */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--gap); }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: var(--gap); }
 .panel {
   background: var(--plane); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 10px 12px 12px;
@@ -107,7 +108,6 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 .axis line { stroke: var(--axis); }
 .grid line { stroke: var(--grid); }
 .tick-label { fill: var(--text-muted); font-size: 11px; }
-.end-label { fill: var(--text-secondary); font-size: 11px; font-weight: 600; }
 .tooltip {
   position: fixed; pointer-events: none; z-index: 20; max-width: 300px;
   background: var(--surface-1); color: var(--text-primary);
@@ -179,7 +179,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   <section class="card">
     <div class="card-head">
       <h2>Trend</h2>
-      <label class="check"><input type="checkbox" id="same-scale" checked> Same scale</label>
+      <label class="check" id="same-scale-check" hidden><input type="checkbox" id="same-scale" checked> Same scale</label>
     </div>
     <p class="card-sub" id="trend-sub"></p>
     <div class="panels" id="trend-panels"></div>
@@ -616,6 +616,7 @@ const groupToggle = document.getElementById("group-toggle");
 groupToggle.addEventListener("change", () => { state.grouped = groupToggle.checked; render(); });
 
 const sameScaleToggle = document.getElementById("same-scale");
+const sameScaleCheck = document.getElementById("same-scale-check");
 sameScaleToggle.addEventListener("change", renderTrend);
 
 metricSel.addEventListener("change", () => { state.metric = metricSel.value; render(); });
@@ -783,6 +784,15 @@ function fillsWithRuns() {
   return sortedFills(found);
 }
 
+/** Notes that hold whether or not anything is plotted go last. */
+function setTrendNote(parts) {
+  const hidden = machineOrder.filter(m => !m.plotted);
+  if (hidden.length) parts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
+  const meta = metricMeta(state.metric);
+  if (meta.note) parts.push(`Reading this metric: ${meta.note}.`);
+  document.getElementById("trend-note").textContent = parts.join(" ");
+}
+
 function renderTrend() {
   const host = document.getElementById("trend-panels");
   host.replaceChildren();
@@ -795,11 +805,13 @@ function renderTrend() {
     .map(fill => ({fill, lines: trendLines(fill)}))
     .filter(panel => panel.lines.length);
 
+  sameScaleCheck.hidden = trendPanels.length < 2;
+
   if (!trendPanels.length) {
     host.appendChild(emptyState(
       `No passing runs for ${state.scenario} with ${state.codec} on ${state.backend} into ${state.sink}.`,
       state.scenario));
-    document.getElementById("trend-note").textContent = "";
+    setTrendNote([]);
     return;
   }
 
@@ -845,21 +857,21 @@ function renderTrend() {
     drawTrendChart(chart, panel, meta, dates, shared ? sharedMax : own);
   }
 
-  const noteParts = [shared
-    ? "One scale across the panels, so their heights compare directly. Untick it to read a panel whose numbers are much smaller."
-    : "Each panel is scaled to its own runs, so their heights do not compare."];
+  const noteParts = [];
   if (!trendPanels.some(panel => panel.fill === state.fill)) {
-    noteParts.unshift(`Nothing ran on ${state.fill} here, so the machine cards are empty. Pick another input.`);
+    noteParts.push(`Nothing ran on ${state.fill} here, so the machine cards are empty. Pick another input.`);
   }
-  const hidden = machineOrder.filter(m => !m.plotted);
-  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
-  if (meta.note) noteParts.push(`Reading this metric: ${meta.note}.`);
-  document.getElementById("trend-note").textContent = noteParts.join(" ");
+  if (trendPanels.length > 1) {
+    noteParts.push(shared
+      ? "One scale across the panels, so their heights compare directly. Untick it to read a panel whose numbers are much smaller."
+      : "Each panel is scaled to its own runs, so their heights do not compare.");
+  }
+  setTrendNote(noteParts);
 }
 
 /** One panel. The date axis is shared with its siblings; the value axis may be. */
 function drawTrendChart(host, panel, meta, dates, maxValue) {
-  const width = Math.max(260, host.clientWidth || 340);
+  const width = host.clientWidth || 340;
   const height = Math.max(210, Math.min(320, Math.round(width * 0.42)));
   const margin = {top: 22, right: 12, bottom: 26, left: 44};
   const innerW = width - margin.left - margin.right;
@@ -1041,7 +1053,7 @@ function moversFor(machine) {
   const index = sweep => {
     const map = new Map();
     for (const run of sweep.runs) {
-      if (run.status !== "pass" || !matchesConfig(run)) continue;
+      if (run.status !== "pass" || !matchesSetup(run)) continue;
       const value = metricValue(run, state.metric);
       if (value != null) map.set(run.id, {run, value});
     }
@@ -1081,7 +1093,7 @@ function renderMovers() {
     all.push(...rows);
   }
   document.getElementById("movers-sub").textContent = pairs.length
-    ? `${meta.label} for configurations run in both of a machine's two most recent sweeps (${pairs.join(", ")}), across every scenario.`
+    ? `${meta.label} for configurations run in both of a machine's two most recent sweeps (${pairs.join(", ")}), across every scenario and input.`
     : `${meta.label}, comparing each machine's two most recent sweeps.`;
 
   if (!all.length) {
@@ -1111,7 +1123,7 @@ function renderMovers() {
   const table = el("table");
   const thead = el("thead");
   const headRow = el("tr");
-  for (const [label, cls] of [["Machine", ""], ["Scenario", ""], ["Configuration", ""],
+  for (const [label, cls] of [["Machine", ""], ["Scenario", ""], ["Input", ""], ["Configuration", ""],
                               ["Previous", "num"], ["Latest", "num"], ["Change", "num"]]) {
     headRow.appendChild(el("th", cls, label));
   }
@@ -1126,6 +1138,7 @@ function renderMovers() {
     machineCell.appendChild(document.createTextNode(" " + row.machine.name));
     tr.appendChild(machineCell);
     tr.appendChild(el("td", null, row.run.scenario));
+    tr.appendChild(el("td", null, row.run.fill));
     tr.appendChild(el("td", null, configLabel(row.run)));
     tr.appendChild(el("td", "num", fmt(row.previous)));
     tr.appendChild(el("td", "num", fmt(row.latest)));
