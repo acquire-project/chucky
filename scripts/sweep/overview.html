@@ -318,11 +318,11 @@ function fillRank(name) {
 }
 
 function fillNote(name) {
-  return (FILLS.find(f => f.key === name) || {}).note || "";
+  return FILLS.find(f => f.key === name)?.note || "";
 }
 
 function sortedFills(names) {
-  return [...names].sort((a, b) => fillRank(a) - fillRank(b) || String(a).localeCompare(String(b)));
+  return [...names].sort((a, b) => fillRank(a) - fillRank(b) || a.localeCompare(b));
 }
 
 function distinct(key) {
@@ -371,10 +371,6 @@ function pickDefaults() {
 /** Everything the filters ask for except the input. */
 function matchesSetup(run) {
   return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink;
-}
-
-function matchesConfig(run) {
-  return matchesSetup(run) && run.fill === state.fill;
 }
 
 function comparable(sweep) {
@@ -458,13 +454,10 @@ function emptyState(message, scenario) {
     if (i) node.appendChild(document.createTextNode(", "));
     const button = el("button", "link-button", alternative.label);
     button.type = "button";
-    button.addEventListener("click", () => {
-      if (alternative.key) state[alternative.key] = alternative.value;
-      else Object.assign(state, {codec: alternative.codec, backend: alternative.backend,
-                                 sink: alternative.sink, fill: alternative.fill});
-      syncControls();
-      render();
-    });
+    button.addEventListener("click", () => pick(alternative.key
+      ? {[alternative.key]: alternative.value}
+      : {codec: alternative.codec, backend: alternative.backend,
+         sink: alternative.sink, fill: alternative.fill}));
     node.appendChild(button);
   });
   node.appendChild(document.createTextNode("."));
@@ -498,6 +491,12 @@ function fmt(value) {
 }
 
 function fmtDay(day) { return day || "unknown date"; }
+
+// Axis labels trim harder than the numbers in the tables, so 1500 reads as
+// 1.5k on an axis and 1,500 in a legend.
+function fmtTick(value) {
+  return Math.abs(value) >= 1000 ? d3.format("~s")(value) : d3.format("~f")(value);
+}
 
 function percentChange(previous, latest) {
   if (previous == null || latest == null || previous === 0) return null;
@@ -610,6 +609,12 @@ function syncControls() {
   fillSel.value = state.fill;
   backendSel.value = state.backend;
   sinkSel.value = state.sink;
+}
+
+function pick(patch) {
+  Object.assign(state, patch);
+  syncControls();
+  render();
 }
 
 const groupToggle = document.getElementById("group-toggle");
@@ -762,7 +767,6 @@ function renderTiles() {
 
 let trendPanels = [];
 
-/** One line per plotted machine, for one input. */
 function trendLines(fill) {
   return machineOrder
     .filter(m => m.plotted)
@@ -770,27 +774,49 @@ function trendLines(fill) {
     .filter(l => l.points.length > 0);
 }
 
-/** Inputs with a usable run under everything else the filters ask for. */
-function fillsWithRuns() {
-  const found = new Set();
-  for (const sweep of sweeps) {
-    if (!comparable(sweep)) continue;
-    for (const run of sweep.runs) {
-      if (run.status !== "pass" || run.scenario !== state.scenario) continue;
-      if (!matchesSetup(run) || metricValue(run, state.metric) == null) continue;
-      found.add(run.fill);
-    }
-  }
-  return sortedFills(found);
+const panelPoints = panel => panel.lines.flatMap(line => line.points);
+
+function trendNotes() {
+  const hidden = machineOrder.filter(m => !m.plotted);
+  const meta = metricMeta(state.metric);
+  return [
+    trendPanels.length && !trendPanels.some(panel => panel.fill === state.fill) &&
+      `Nothing ran on ${state.fill} here, so the machine cards are empty. Pick another input.`,
+    trendPanels.length > 1 && (sameScaleToggle.checked
+      ? "One scale across the panels, so their heights compare directly. Untick it to read a panel whose numbers are much smaller."
+      : "Each panel is scaled to its own runs, so their heights do not compare."),
+    hidden.length && `${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`,
+    meta.note && `Reading this metric: ${meta.note}.`,
+  ].filter(Boolean).join(" ");
 }
 
-/** Notes that hold whether or not anything is plotted go last. */
-function setTrendNote(parts) {
-  const hidden = machineOrder.filter(m => !m.plotted);
-  if (hidden.length) parts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
-  const meta = metricMeta(state.metric);
-  if (meta.note) parts.push(`Reading this metric: ${meta.note}.`);
-  document.getElementById("trend-note").textContent = parts.join(" ");
+function trendPanelCard(panel) {
+  const card = el("div", "panel");
+  card.setAttribute("aria-current", panel.fill === state.fill ? "true" : "false");
+
+  const head = el("div", "panel-head");
+  const title = el("button", "panel-title", panel.fill);
+  title.type = "button";
+  title.title = `Show ${panel.fill} on the cards and tables`;
+  title.addEventListener("click", () => pick({fill: panel.fill}));
+  head.appendChild(title);
+  const note = fillNote(panel.fill);
+  if (note) head.appendChild(el("span", "panel-sub", note));
+  card.appendChild(head);
+
+  const chart = el("div", "chart-wrap");
+  card.appendChild(chart);
+
+  const legend = el("div", "legend");
+  for (const {machine, points} of panel.lines) {
+    const item = el("div", "legend-item");
+    item.appendChild(keySwatch(machine.color, "legend-key"));
+    item.appendChild(el("span", null, machine.name));
+    item.appendChild(el("span", "legend-value", fmt(points[points.length - 1].value)));
+    legend.appendChild(item);
+  }
+  card.appendChild(legend);
+  return {card, chart};
 }
 
 function renderTrend() {
@@ -801,77 +827,40 @@ function renderTrend() {
   document.getElementById("trend-sub").textContent =
     `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer, or an input to show it on the cards and tables.`;
 
-  trendPanels = fillsWithRuns()
+  trendPanels = ALL_FILLS
     .map(fill => ({fill, lines: trendLines(fill)}))
     .filter(panel => panel.lines.length);
 
   sameScaleCheck.hidden = trendPanels.length < 2;
+  document.getElementById("trend-note").textContent = trendNotes();
 
   if (!trendPanels.length) {
     host.appendChild(emptyState(
       `No passing runs for ${state.scenario} with ${state.codec} on ${state.backend} into ${state.sink}.`,
       state.scenario));
-    setTrendNote([]);
     return;
   }
 
-  const allPoints = trendPanels.flatMap(panel => panel.lines.flatMap(l => l.points));
-  const dates = [...new Set(allPoints.map(p => +p.sweep.dateObj))].sort((a, b) => a - b).map(t => new Date(t));
+  const allPoints = trendPanels.flatMap(panelPoints);
+  const dates = d3.sort(d3.union(allPoints.map(p => p.sweep.dateObj)));
   const shared = sameScaleToggle.checked;
-  const sharedMax = d3.max(allPoints, p => p.value);
 
   // The first panel measures the whole row until its siblings are there to
   // share it with, so nothing is drawn until every panel is in the grid.
-  const charts = [];
-  for (const panel of trendPanels) {
-    const card = el("div", "panel");
-    card.setAttribute("aria-current", panel.fill === state.fill ? "true" : "false");
-
-    const head = el("div", "panel-head");
-    const title = el("button", "panel-title", panel.fill);
-    title.type = "button";
-    title.title = `Show ${panel.fill} on the cards and tables`;
-    title.addEventListener("click", () => { state.fill = panel.fill; syncControls(); render(); });
-    head.appendChild(title);
-    head.appendChild(el("span", "panel-sub", fillNote(panel.fill)));
-    card.appendChild(head);
-
-    const chart = el("div", "chart-wrap");
-    card.appendChild(chart);
-
-    const legend = el("div", "legend");
-    for (const {machine, points} of panel.lines) {
-      const item = el("div", "legend-item");
-      item.appendChild(keySwatch(machine.color, "legend-key"));
-      item.appendChild(el("span", null, machine.name));
-      item.appendChild(el("span", "legend-value", fmt(points[points.length - 1].value)));
-      legend.appendChild(item);
-    }
-    card.appendChild(legend);
+  const charts = trendPanels.map(panel => {
+    const {card, chart} = trendPanelCard(panel);
     host.appendChild(card);
-    charts.push({panel, chart});
-  }
-
-  for (const {panel, chart} of charts) {
-    const own = d3.max(panel.lines.flatMap(l => l.points.map(p => p.value)));
-    drawTrendChart(chart, panel, meta, dates, shared ? sharedMax : own);
-  }
-
-  const noteParts = [];
-  if (!trendPanels.some(panel => panel.fill === state.fill)) {
-    noteParts.push(`Nothing ran on ${state.fill} here, so the machine cards are empty. Pick another input.`);
-  }
-  if (trendPanels.length > 1) {
-    noteParts.push(shared
-      ? "One scale across the panels, so their heights compare directly. Untick it to read a panel whose numbers are much smaller."
-      : "Each panel is scaled to its own runs, so their heights do not compare.");
-  }
-  setTrendNote(noteParts);
+    return chart;
+  });
+  // Every width is read before the first draw writes, so the panels force one
+  // layout between them rather than one each.
+  const widths = charts.map(chart => chart.clientWidth || 340);
+  charts.forEach((chart, i) => drawTrendChart(chart, widths[i], trendPanels[i], meta, dates,
+    d3.max(shared ? allPoints : panelPoints(trendPanels[i]), p => p.value)));
 }
 
-/** One panel. The date axis is shared with its siblings; the value axis may be. */
-function drawTrendChart(host, panel, meta, dates, maxValue) {
-  const width = host.clientWidth || 340;
+/** The date axis is shared with the other panels; the value axis may be. */
+function drawTrendChart(host, width, panel, meta, dates, maxValue) {
   const height = Math.max(210, Math.min(320, Math.round(width * 0.42)));
   const margin = {top: 22, right: 12, bottom: 26, left: 44};
   const innerW = width - margin.left - margin.right;
@@ -896,8 +885,7 @@ function drawTrendChart(host, panel, meta, dates, maxValue) {
     .attr("transform", `translate(0,${innerH})`)
     .call(d3.axisBottom(x).ticks(dateTicks).tickSizeOuter(0).tickFormat(d3.timeFormat("%b %d")));
   g.append("g").attr("class", "axis")
-    .call(d3.axisLeft(y).ticks(4).tickSize(0)
-      .tickFormat(d => Math.abs(d) >= 1000 ? d3.format("~s")(d) : d3.format("~f")(d)));
+    .call(d3.axisLeft(y).ticks(4).tickSize(0).tickFormat(fmtTick));
   g.append("text").attr("class", "tick-label")
     .attr("x", 0).attr("y", -8).text(meta.unit);
 
@@ -927,23 +915,11 @@ function drawTrendChart(host, panel, meta, dates, maxValue) {
       byDate.get(key).push({machine, point: p});
     }
   }
-  const drawn = [...byDate.keys()].sort((a, b) => a - b).map(t => new Date(t));
+  const drawn = d3.sort(byDate.keys()).map(t => new Date(t));
 
-  const nearestDate = px => {
-    const target = x.invert(px);
-    let nearest = drawn[0];
-    for (const d of drawn) if (Math.abs(d - target) < Math.abs(nearest - target)) nearest = d;
-    return nearest;
-  };
-  const nearestPoint = (px, py) => {
-    const rows = byDate.get(+nearestDate(px)) || [];
-    let best = null;
-    for (const row of rows) {
-      const distance = Math.abs(y(row.point.value) - py);
-      if (!best || distance < best.distance) best = {...row, distance};
-    }
-    return best;
-  };
+  const nearestDate = px => d3.least(drawn, d => Math.abs(d - x.invert(px)));
+  const nearestPoint = (px, py) =>
+    d3.least(byDate.get(+nearestDate(px)) || [], row => Math.abs(y(row.point.value) - py));
 
   svg.append("rect")
     .attr("x", margin.left).attr("y", margin.top)
@@ -1006,9 +982,9 @@ function renderMatrix() {
     const row = el("tr");
     row.setAttribute("aria-selected", scenario === state.scenario ? "true" : "false");
     row.tabIndex = 0;
-    const pick = () => { state.scenario = scenario; syncControls(); render(); };
-    row.addEventListener("click", pick);
-    row.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick(); } });
+    const choose = () => pick({scenario});
+    row.addEventListener("click", choose);
+    row.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } });
     row.appendChild(el("td", "scenario-cell", scenario));
 
     for (const machine of machineOrder) {
@@ -1049,45 +1025,35 @@ function renderMatrix() {
 
 const MOVERS_SHOWN = 12;
 
+// A run id names the whole configuration, input included, so pairing by id
+// compares like with like. Pairing by sweep instead drops every configuration
+// the sweep before happened to skip.
 function moversFor(machine) {
-  const runsByInput = sweep => {
-    const inputs = new Map();
+  const history = new Map();
+  let newest = null;
+  for (const sweep of machine.sweeps) {
+    if (!comparable(sweep)) continue;
     for (const run of sweep.runs) {
       if (run.status !== "pass" || !matchesSetup(run)) continue;
       const value = metricValue(run, state.metric);
       if (value == null) continue;
-      let map = inputs.get(run.fill);
-      if (!map) inputs.set(run.fill, map = new Map());
-      map.set(run.id, {run, value});
+      if (!history.has(run.id)) history.set(run.id, []);
+      history.get(run.id).push({sweep, run, value});
+      newest = sweep;
     }
-    return inputs;
-  };
-
-  const indexed = machine.sweeps.filter(comparable).map(sweep => ({sweep, inputs: runsByInput(sweep)}));
-  const rows = [];
-  const compared = new Set();
-  // One pair of sweeps per input: a sweep that skipped an input must not become
-  // the sweep the other inputs are compared against, or they drop out.
-  const fillsRun = new Set(indexed.flatMap(entry => [...entry.inputs.keys()]));
-  for (const fill of sortedFills(fillsRun)) {
-    const usable = indexed.filter(entry => entry.inputs.has(fill));
-    if (usable.length < 2) continue;
-    const latest = usable[usable.length - 1];
-    const previous = usable[usable.length - 2];
-    const before = previous.inputs.get(fill);
-    let paired = false;
-    for (const [id, now] of latest.inputs.get(fill)) {
-      const then = before.get(id);
-      if (!then) continue;
-      const pct = percentChange(then.value, now.value);
-      if (pct == null) continue;
-      rows.push({machine, run: now.run, previous: then.value, latest: now.value, pct,
-                 latestSweep: latest.sweep, previousSweep: previous.sweep});
-      paired = true;
-    }
-    if (paired) compared.add(`${previous.sweep.commit}→${latest.sweep.commit}`);
   }
-  return {rows, compared: [...compared]};
+
+  const rows = [];
+  for (const seen of history.values()) {
+    const now = seen[seen.length - 1];
+    if (seen.length < 2 || now.sweep !== newest) continue;
+    const then = seen[seen.length - 2];
+    const pct = percentChange(then.value, now.value);
+    if (pct == null) continue;
+    rows.push({machine, run: now.run, previous: then.value, latest: now.value, pct,
+               latestSweep: now.sweep, previousSweep: then.sweep});
+  }
+  return {rows, newest};
 }
 
 function renderMovers() {
@@ -1096,18 +1062,18 @@ function renderMovers() {
   const meta = metricMeta(state.metric);
 
   const all = [];
-  const pairs = [];
+  const newest = [];
   for (const machine of machineOrder) {
-    const {rows, compared} = moversFor(machine);
-    if (compared.length) pairs.push(`${machine.name} ${compared.join(" and ")}`);
+    const {rows, newest: sweep} = moversFor(machine);
+    if (rows.length) newest.push(`${machine.name} ${sweep.commit}`);
     all.push(...rows);
   }
-  document.getElementById("movers-sub").textContent = pairs.length
-    ? `${meta.label} for configurations run in both of the two most recent sweeps that ran their input (${pairs.join("; ")}), across every scenario and input.`
-    : `${meta.label}, comparing the two most recent sweeps that ran each input.`;
+  document.getElementById("movers-sub").textContent = newest.length
+    ? `${meta.label} in each machine's most recent sweep (${newest.join(", ")}) against the last sweep that ran the same configuration, across every scenario and input. Hover a value to see which sweep it came from.`
+    : `${meta.label} in each machine's most recent sweep, against the last sweep that ran the same configuration.`;
 
   if (!all.length) {
-    host.appendChild(el("p", "empty", "Nothing to compare: under this filter, no configuration ran in both of the two most recent sweeps of a machine that ran its input."));
+    host.appendChild(el("p", "empty", "Nothing to compare under this filter. A change needs the same configuration in two of a machine's sweeps."));
     return;
   }
 
@@ -1268,7 +1234,8 @@ function renderMatchCount() {
   for (const sweep of sweeps) {
     let here = 0;
     for (const run of sweep.runs) {
-      if (run.status === "pass" && matchesConfig(run) && metricValue(run, state.metric) != null) here++;
+      if (run.status === "pass" && matchesSetup(run) && run.fill === state.fill
+          && metricValue(run, state.metric) != null) here++;
     }
     runs += here;
     if (here) sweepsHit++;

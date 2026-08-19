@@ -97,9 +97,9 @@ changes cover every input, with a column saying which one a row came from.
 - A gap means the sweep ran nothing matching the filter. It does not mean zero.
 - A change on a machine card compares the two most recent sweeps that ran the
   scenario and input, using the best run of each. A row in the biggest changes
-  compares the two most recent sweeps that ran its input, matching runs by id;
-  hover Previous or Latest to see which sweep it came from. Changes under 2% are
-  shown as no real change.
+  compares a machine's most recent sweep against the last sweep that ran the
+  same configuration, matching runs by id; hover Previous or Latest to see which
+  sweep it came from. Changes under 2% are shown as no real change.
 
 ## Schema changes
 
