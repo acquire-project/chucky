@@ -76,11 +76,21 @@ A machine keeps its color as other machines are added. Eight colors are
 available; machines past that appear in the tables but not in the chart, and the
 page names them.
 
+## Inputs
+
+The sweep fills frames three ways, and the choice decides how much a codec can
+squeeze out: `zeros` compresses by thousands of times, the `xor` pattern by about
+ten, `rand` barely at all. One line over all three jumps whenever a sweep adds or
+drops an easier input, so the trend chart draws a panel per input. **Same scale**
+puts every panel on one value axis, so their heights compare directly; untick it
+to read a panel whose numbers are much smaller. The **Input** filter picks the one
+the machine cards and tables use, and clicking a panel title sets it.
+
 ## What the numbers mean
 
-- A point is the best passing run in that sweep for the scenario, codec,
-  backend, and sink you picked. Data type, chunk size, and fill are searched
-  instead of averaged. Hover a point to see which run won and how many it beat.
+- A point is the best passing run in that sweep for the scenario, input, codec,
+  backend, and sink you picked. Data type and chunk size are searched instead of
+  averaged. Hover a point to see which run won and how many it beat.
 - Runs that did not pass are left out, and counted on the machine card instead.
 - A gap means the sweep ran nothing matching the filter. It does not mean zero.
 - A change compares a machine's latest sweep against its previous one, matching

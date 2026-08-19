@@ -30,7 +30,7 @@ h2 { font-size: 1.02em; margin: 0; }
   border-radius: var(--radius); padding: 12px var(--gap); margin-bottom: var(--gap);
 }
 .filters .match-count { margin-left: auto; font-size: 0.8em; color: var(--text-secondary); }
-.filters .check {
+.check {
   display: flex; align-items: center; gap: 5px; cursor: pointer;
   font-size: 0.88em; font-weight: 400; text-transform: none; letter-spacing: 0;
   color: var(--text-primary); padding: 5px 8px;
@@ -85,6 +85,23 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--text-secondary); }
 .legend-key { width: 18px; height: 2px; border-radius: 1px; flex: none; }
 .legend-item .legend-value { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+/* Small multiples: one panel per input */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--gap); }
+.panel {
+  background: var(--plane); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px 12px;
+}
+.panel[aria-current="true"] { border-color: var(--series-1); }
+.panel-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.panel-title {
+  font: inherit; font-weight: 650; padding: 0; cursor: pointer;
+  color: var(--text-primary); background: none; border: none;
+}
+.panel-title:hover { text-decoration: underline; }
+.panel-sub { color: var(--text-muted); font-size: 0.76em; }
+.panel .legend { margin-top: 8px; gap: 4px 12px; }
 .axis text { fill: var(--text-muted); font-size: 11px; }
 .axis path { display: none; }
 .axis line { stroke: var(--axis); }
@@ -139,6 +156,10 @@ code { font-size: 0.92em; color: var(--text-secondary); }
       <select id="codec-sel"></select>
     </div>
     <div>
+      <label for="fill-sel">Input</label>
+      <select id="fill-sel"></select>
+    </div>
+    <div>
       <label for="backend-sel">Backend</label>
       <select id="backend-sel"></select>
     </div>
@@ -156,10 +177,12 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   <section class="tiles" id="tiles" aria-label="Machines"></section>
 
   <section class="card">
-    <h2>Trend</h2>
+    <div class="card-head">
+      <h2>Trend</h2>
+      <label class="check"><input type="checkbox" id="same-scale" checked> Same scale</label>
+    </div>
     <p class="card-sub" id="trend-sub"></p>
-    <div class="chart-wrap" id="trend"></div>
-    <div class="legend" id="trend-legend"></div>
+    <div class="panels" id="trend-panels"></div>
     <p class="note" id="trend-note"></p>
   </section>
 
@@ -209,6 +232,13 @@ const SCENARIO_GROUPS = [
   {suffix: "_multiscale_dim0", rank: 2},
   {suffix: "_multiscale", rank: 1},
   {suffix: "_single", rank: 0},
+];
+
+// Ordered easiest to hardest to compress, which is the order the panels appear in.
+const FILLS = [
+  {key: "zeros", note: "every value is zero"},
+  {key: "xor", note: "pixel coordinates xored together"},
+  {key: "rand", note: "random values"},
 ];
 
 // =========================================================================
@@ -282,6 +312,19 @@ function sortedScenarios(names) {
   return [...names].sort((a, b) => scenarioRank(a) - scenarioRank(b) || a.localeCompare(b));
 }
 
+function fillRank(name) {
+  const at = FILLS.findIndex(f => f.key === name);
+  return at < 0 ? FILLS.length : at;
+}
+
+function fillNote(name) {
+  return (FILLS.find(f => f.key === name) || {}).note || "";
+}
+
+function sortedFills(names) {
+  return [...names].sort((a, b) => fillRank(a) - fillRank(b) || a.localeCompare(b));
+}
+
 function distinct(key) {
   const values = new Set();
   for (const s of sweeps) for (const r of s.runs) if (r[key] != null) values.add(r[key]);
@@ -290,6 +333,7 @@ function distinct(key) {
 
 const ALL_SCENARIOS = sortedScenarios(distinct("scenario"));
 const ALL_CODECS = distinct("codec").sort();
+const ALL_FILLS = sortedFills(distinct("fill"));
 const ALL_BACKENDS = distinct("backend").sort();
 const ALL_SINKS = distinct("sink").sort();
 
@@ -297,8 +341,8 @@ const ALL_SINKS = distinct("sink").sort();
 // Selection
 // =========================================================================
 
-const state = {metric: METRICS[0].key, scenario: null, codec: null, backend: null, sink: null,
-               grouped: true};
+const state = {metric: METRICS[0].key, scenario: null, codec: null, fill: null, backend: null,
+               sink: null, grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
 
@@ -309,7 +353,7 @@ function pickDefaults() {
     const here = new Set();
     for (const r of s.runs) {
       if (r.status !== "pass" || metricValue(r, state.metric) == null) continue;
-      here.add([r.scenario, r.codec, r.backend, r.sink].join("|"));
+      here.add([r.scenario, r.codec, r.backend, r.sink, r.fill].join("|"));
     }
     for (const combo of here) counts.set(combo, (counts.get(combo) || 0) + 1);
   }
@@ -317,14 +361,20 @@ function pickDefaults() {
   for (const [combo, count] of counts) {
     if (count > bestCount) { best = combo; bestCount = count; }
   }
-  const [scenario, codec, backend, sink] = best
+  const [scenario, codec, backend, sink, fill] = best
     ? best.split("|")
-    : [ALL_SCENARIOS[0], ALL_CODECS[0], ALL_BACKENDS[0], ALL_SINKS[0]];
-  state.scenario = scenario; state.codec = codec; state.backend = backend; state.sink = sink;
+    : [ALL_SCENARIOS[0], ALL_CODECS[0], ALL_BACKENDS[0], ALL_SINKS[0], ALL_FILLS[0]];
+  state.scenario = scenario; state.codec = codec; state.backend = backend;
+  state.sink = sink; state.fill = fill;
+}
+
+/** Everything the filters ask for except the input. */
+function matchesSetup(run) {
+  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink;
 }
 
 function matchesConfig(run) {
-  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink;
+  return matchesSetup(run) && run.fill === state.fill;
 }
 
 function comparable(sweep) {
@@ -332,13 +382,14 @@ function comparable(sweep) {
   return !(sweep.retired || []).includes(leaf);
 }
 
-/** Best run of a sweep for one scenario under the current config filters. */
-function bestRun(sweep, scenario) {
+/** Best run of a sweep for one scenario and input, under the other filters. */
+function bestRun(sweep, scenario, fill) {
   const meta = metricMeta(state.metric);
   const wantHigh = meta.better === "high";
   let best = null, bestValue = null, count = 0;
   for (const run of sweep.runs) {
-    if (run.scenario !== scenario || run.status !== "pass" || !matchesConfig(run)) continue;
+    if (run.scenario !== scenario || run.fill !== fill) continue;
+    if (run.status !== "pass" || !matchesSetup(run)) continue;
     const value = metricValue(run, state.metric);
     if (value == null) continue;
     count++;
@@ -349,7 +400,7 @@ function bestRun(sweep, scenario) {
   return best ? {run: best, value: bestValue, count} : null;
 }
 
-/** Codec, backend, and sink combinations with at least one usable run. */
+/** Codec, backend, sink, and input combinations with at least one usable run. */
 function availableCombinations(scenario) {
   const found = new Set();
   for (const sweep of sweeps) {
@@ -357,7 +408,7 @@ function availableCombinations(scenario) {
     for (const run of sweep.runs) {
       if (run.status !== "pass" || metricValue(run, state.metric) == null) continue;
       if (scenario && run.scenario !== scenario) continue;
-      found.add([run.codec, run.backend, run.sink].join("|"));
+      found.add([run.codec, run.backend, run.sink, run.fill].join("|"));
     }
   }
   return found;
@@ -369,12 +420,13 @@ function availableCombinations(scenario) {
  */
 function nearestAlternatives(scenario, limit = 3) {
   const available = availableCombinations(scenario);
-  const current = [state.codec, state.backend, state.sink];
+  const current = [state.codec, state.backend, state.sink, state.fill];
   // Backend and sink first: the codec is usually the deliberate choice, so
   // suggest keeping it and moving where it ran.
   const dimensions = [
     {index: 1, key: "backend", label: "backend"},
     {index: 2, key: "sink", label: "sink"},
+    {index: 3, key: "fill", label: "input"},
     {index: 0, key: "codec", label: "codec"},
   ];
   const out = [];
@@ -388,8 +440,8 @@ function nearestAlternatives(scenario, limit = 3) {
   }
   if (!out.length) {
     for (const combo of available) {
-      const [codec, backend, sink] = combo.split("|");
-      out.push({label: `${codec} · ${backend} · ${sink}`, codec, backend, sink});
+      const [codec, backend, sink, fill] = combo.split("|");
+      out.push({label: `${codec} · ${backend} · ${sink} · ${fill}`, codec, backend, sink, fill});
       if (out.length >= limit) break;
     }
   }
@@ -408,7 +460,8 @@ function emptyState(message, scenario) {
     button.type = "button";
     button.addEventListener("click", () => {
       if (alternative.key) state[alternative.key] = alternative.value;
-      else Object.assign(state, {codec: alternative.codec, backend: alternative.backend, sink: alternative.sink});
+      else Object.assign(state, {codec: alternative.codec, backend: alternative.backend,
+                                 sink: alternative.sink, fill: alternative.fill});
       syncControls();
       render();
     });
@@ -419,11 +472,11 @@ function emptyState(message, scenario) {
 }
 
 /** One point per sweep for a machine: {sweep, value, run, count}. */
-function series(machine, scenario) {
+function series(machine, scenario, fill) {
   const points = [];
   for (const sweep of machine.sweeps) {
     if (!comparable(sweep)) continue;
-    const hit = bestRun(sweep, scenario);
+    const hit = bestRun(sweep, scenario, fill);
     if (hit) points.push({sweep, ...hit});
   }
   return points;
@@ -487,7 +540,7 @@ function keySwatch(color, className) {
 }
 
 function configLabel(run) {
-  return [run.dtype, run.chunk_bytes_label, run.fill].filter(Boolean).join(" · ");
+  return [run.dtype, run.chunk_bytes_label].filter(Boolean).join(" · ");
 }
 
 // =========================================================================
@@ -538,12 +591,14 @@ function fillSelect(select, values, labels) {
 const metricSel = document.getElementById("metric-sel");
 const scenarioSel = document.getElementById("scenario-sel");
 const codecSel = document.getElementById("codec-sel");
+const fillSel = document.getElementById("fill-sel");
 const backendSel = document.getElementById("backend-sel");
 const sinkSel = document.getElementById("sink-sel");
 
 fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label} (${m.unit})`));
 fillSelect(scenarioSel, ALL_SCENARIOS);
 fillSelect(codecSel, ALL_CODECS);
+fillSelect(fillSel, ALL_FILLS);
 fillSelect(backendSel, ALL_BACKENDS);
 fillSelect(sinkSel, ALL_SINKS);
 
@@ -552,6 +607,7 @@ function syncControls() {
   metricSel.value = state.metric;
   scenarioSel.value = state.scenario;
   codecSel.value = state.codec;
+  fillSel.value = state.fill;
   backendSel.value = state.backend;
   sinkSel.value = state.sink;
 }
@@ -559,9 +615,13 @@ function syncControls() {
 const groupToggle = document.getElementById("group-toggle");
 groupToggle.addEventListener("change", () => { state.grouped = groupToggle.checked; render(); });
 
+const sameScaleToggle = document.getElementById("same-scale");
+sameScaleToggle.addEventListener("change", renderTrend);
+
 metricSel.addEventListener("change", () => { state.metric = metricSel.value; render(); });
 scenarioSel.addEventListener("change", () => { state.scenario = scenarioSel.value; render(); });
 codecSel.addEventListener("change", () => { state.codec = codecSel.value; render(); });
+fillSel.addEventListener("change", () => { state.fill = fillSel.value; render(); });
 backendSel.addEventListener("change", () => { state.backend = backendSel.value; render(); });
 sinkSel.addEventListener("change", () => { state.sink = sinkSel.value; render(); });
 
@@ -611,7 +671,7 @@ function renderTiles() {
   const meta = metricMeta(state.metric);
 
   for (const machine of machineOrder) {
-    const points = series(machine, state.scenario);
+    const points = series(machine, state.scenario, state.fill);
     const latest = points[points.length - 1] || null;
     const previous = points[points.length - 2] || null;
     const latestSweep = machine.sweeps[machine.sweeps.length - 1];
@@ -693,91 +753,153 @@ function renderTiles() {
 }
 
 // =========================================================================
-// Trend chart
+// Trend chart — one panel per input
+//
+// The input decides how much a codec can squeeze out, so one line over all
+// inputs jumps whenever a sweep adds or drops an easier one.
 // =========================================================================
 
-let trendRows = [];
+let trendPanels = [];
+
+/** One line per plotted machine, for one input. */
+function trendLines(fill) {
+  return machineOrder
+    .filter(m => m.plotted)
+    .map(m => ({machine: m, points: series(m, state.scenario, fill)}))
+    .filter(l => l.points.length > 0);
+}
+
+/** Inputs with a usable run under everything else the filters ask for. */
+function fillsWithRuns() {
+  const found = new Set();
+  for (const sweep of sweeps) {
+    if (!comparable(sweep)) continue;
+    for (const run of sweep.runs) {
+      if (run.status !== "pass" || run.scenario !== state.scenario) continue;
+      if (!matchesSetup(run) || metricValue(run, state.metric) == null) continue;
+      found.add(run.fill);
+    }
+  }
+  return sortedFills(found);
+}
 
 function renderTrend() {
-  const host = document.getElementById("trend");
+  const host = document.getElementById("trend-panels");
   host.replaceChildren();
-  const legendHost = document.getElementById("trend-legend");
-  legendHost.replaceChildren();
   const meta = metricMeta(state.metric);
 
-  const lines = machineOrder
-    .filter(m => m.plotted)
-    .map(m => ({machine: m, points: series(m, state.scenario)}))
-    .filter(l => l.points.length > 0);
-
-  trendRows = lines;
-
   document.getElementById("trend-sub").textContent =
-    `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer.`;
+    `Best ${meta.label.toLowerCase()} per sweep — ${state.scenario}, ${state.codec} codec, ${state.backend} backend, ${state.sink} sink. Click a point to open that sweep in the explorer, or an input to show it on the cards and tables.`;
 
-  if (!lines.length) {
-    host.appendChild(emptyState(`No passing runs for ${state.scenario} with ${state.codec} on ${state.backend} into ${state.sink}.`, state.scenario));
+  trendPanels = fillsWithRuns()
+    .map(fill => ({fill, lines: trendLines(fill)}))
+    .filter(panel => panel.lines.length);
+
+  if (!trendPanels.length) {
+    host.appendChild(emptyState(
+      `No passing runs for ${state.scenario} with ${state.codec} on ${state.backend} into ${state.sink}.`,
+      state.scenario));
+    document.getElementById("trend-note").textContent = "";
     return;
   }
 
-  const width = Math.max(320, host.clientWidth || 860);
-  const height = 320;
-  const margin = {top: 12, right: 92, bottom: 28, left: 56};
+  const allPoints = trendPanels.flatMap(panel => panel.lines.flatMap(l => l.points));
+  const dates = [...new Set(allPoints.map(p => +p.sweep.dateObj))].sort((a, b) => a - b).map(t => new Date(t));
+  const shared = sameScaleToggle.checked;
+  const sharedMax = d3.max(allPoints, p => p.value);
+
+  // The first panel measures the whole row until its siblings are there to
+  // share it with, so nothing is drawn until every panel is in the grid.
+  const charts = [];
+  for (const panel of trendPanels) {
+    const card = el("div", "panel");
+    card.setAttribute("aria-current", panel.fill === state.fill ? "true" : "false");
+
+    const head = el("div", "panel-head");
+    const title = el("button", "panel-title", panel.fill);
+    title.type = "button";
+    title.title = `Show ${panel.fill} on the cards and tables`;
+    title.addEventListener("click", () => { state.fill = panel.fill; syncControls(); render(); });
+    head.appendChild(title);
+    head.appendChild(el("span", "panel-sub", fillNote(panel.fill)));
+    card.appendChild(head);
+
+    const chart = el("div", "chart-wrap");
+    card.appendChild(chart);
+
+    const legend = el("div", "legend");
+    for (const {machine, points} of panel.lines) {
+      const item = el("div", "legend-item");
+      item.appendChild(keySwatch(machine.color, "legend-key"));
+      item.appendChild(el("span", null, machine.name));
+      item.appendChild(el("span", "legend-value", fmt(points[points.length - 1].value)));
+      legend.appendChild(item);
+    }
+    card.appendChild(legend);
+    host.appendChild(card);
+    charts.push({panel, chart});
+  }
+
+  for (const {panel, chart} of charts) {
+    const own = d3.max(panel.lines.flatMap(l => l.points.map(p => p.value)));
+    drawTrendChart(chart, panel, meta, dates, shared ? sharedMax : own);
+  }
+
+  const noteParts = [shared
+    ? "One scale across the panels, so their heights compare directly. Untick it to read a panel whose numbers are much smaller."
+    : "Each panel is scaled to its own runs, so their heights do not compare."];
+  if (!trendPanels.some(panel => panel.fill === state.fill)) {
+    noteParts.unshift(`Nothing ran on ${state.fill} here, so the machine cards are empty. Pick another input.`);
+  }
+  const hidden = machineOrder.filter(m => !m.plotted);
+  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
+  if (meta.note) noteParts.push(`Reading this metric: ${meta.note}.`);
+  document.getElementById("trend-note").textContent = noteParts.join(" ");
+}
+
+/** One panel. The date axis is shared with its siblings; the value axis may be. */
+function drawTrendChart(host, panel, meta, dates, maxValue) {
+  const width = Math.max(260, host.clientWidth || 340);
+  const height = Math.max(210, Math.min(320, Math.round(width * 0.42)));
+  const margin = {top: 22, right: 12, bottom: 26, left: 44};
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
 
-  const allPoints = lines.flatMap(l => l.points);
   const svg = d3.select(host).append("svg")
     .attr("width", width).attr("height", height)
     .attr("role", "img")
-    .attr("aria-label", `${meta.label} over time, one line per machine`);
+    .attr("aria-label", `${meta.label} over time on the ${panel.fill} input, one line per machine`);
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-  const dates = [...new Set(allPoints.map(p => +p.sweep.dateObj))].sort((a, b) => a - b).map(t => new Date(t));
-  const x = d3.scaleTime()
-    .domain(d3.extent(dates))
-    .range([0, innerW]);
+  const x = d3.scaleTime().domain(d3.extent(dates)).range([0, innerW]);
   if (dates.length === 1) x.domain([d3.timeDay.offset(dates[0], -1), d3.timeDay.offset(dates[0], 1)]);
-
-  const maxValue = d3.max(allPoints, p => p.value);
   const y = d3.scaleLinear().domain([0, maxValue * 1.08 || 1]).nice().range([innerH, 0]);
 
   g.append("g").attr("class", "grid")
-    .selectAll("line").data(y.ticks(5)).join("line")
+    .selectAll("line").data(y.ticks(4)).join("line")
     .attr("x1", 0).attr("x2", innerW).attr("y1", d => y(d)).attr("y2", d => y(d));
 
+  const dateTicks = Math.max(2, Math.min(4, Math.floor(innerW / 70), dates.length));
   g.append("g").attr("class", "axis")
     .attr("transform", `translate(0,${innerH})`)
-    .call(d3.axisBottom(x).ticks(Math.min(6, dates.length)).tickSizeOuter(0).tickFormat(d3.timeFormat("%b %d")));
+    .call(d3.axisBottom(x).ticks(dateTicks).tickSizeOuter(0).tickFormat(d3.timeFormat("%b %d")));
   g.append("g").attr("class", "axis")
-    .call(d3.axisLeft(y).ticks(5).tickSize(0).tickFormat(d3.format("~s")));
+    .call(d3.axisLeft(y).ticks(4).tickSize(0)
+      .tickFormat(d => Math.abs(d) >= 1000 ? d3.format("~s")(d) : d3.format("~f")(d)));
   g.append("text").attr("class", "tick-label")
-    .attr("x", 0).attr("y", -2).text(meta.unit);
+    .attr("x", 0).attr("y", -8).text(meta.unit);
 
   const line = d3.line().x(p => x(p.sweep.dateObj)).y(p => y(p.value));
 
-  for (const {machine, points} of lines) {
+  for (const {machine, points} of panel.lines) {
     g.append("path")
       .attr("fill", "none").attr("stroke", machine.color).attr("stroke-width", 2)
       .attr("stroke-linejoin", "round").attr("stroke-linecap", "round")
       .attr("d", line(points));
     g.selectAll(null).data(points).join("circle")
-      .attr("cx", p => x(p.sweep.dateObj)).attr("cy", p => y(p.value)).attr("r", 4)
+      .attr("cx", p => x(p.sweep.dateObj)).attr("cy", p => y(p.value)).attr("r", 3.5)
       .attr("fill", machine.color)
       .attr("stroke", "var(--surface-1)").attr("stroke-width", 2);
-  }
-
-  // Direct end labels only while they stay attached to their own line.
-  const ends = lines.map(l => ({machine: l.machine, point: l.points[l.points.length - 1]}))
-    .sort((a, b) => y(a.point.value) - y(b.point.value));
-  const roomy = ends.every((e, i) => i === 0 || Math.abs(y(e.point.value) - y(ends[i - 1].point.value)) >= 13);
-  if (roomy && ends.length <= 4) {
-    for (const e of ends) {
-      g.append("text").attr("class", "end-label")
-        .attr("x", x(e.point.sweep.dateObj) + 9)
-        .attr("y", y(e.point.value) + 4)
-        .text(e.machine.name);
-    }
   }
 
   // Crosshair: aim at a sweep date, read every machine that ran that day.
@@ -786,18 +908,19 @@ function renderTrend() {
     .attr("y1", 0).attr("y2", innerH).style("display", "none");
 
   const byDate = new Map();
-  for (const {machine, points} of lines) {
+  for (const {machine, points} of panel.lines) {
     for (const p of points) {
       const key = +p.sweep.dateObj;
       if (!byDate.has(key)) byDate.set(key, []);
       byDate.get(key).push({machine, point: p});
     }
   }
+  const drawn = [...byDate.keys()].sort((a, b) => a - b).map(t => new Date(t));
 
   const nearestDate = px => {
     const target = x.invert(px);
-    let nearest = dates[0];
-    for (const d of dates) if (Math.abs(d - target) < Math.abs(nearest - target)) nearest = d;
+    let nearest = drawn[0];
+    for (const d of drawn) if (Math.abs(d - target) < Math.abs(nearest - target)) nearest = d;
     return nearest;
   };
   const nearestPoint = (px, py) => {
@@ -827,7 +950,7 @@ function renderTrend() {
       crosshair.attr("x1", x(nearest)).attr("x2", x(nearest)).style("display", null);
       const rows = byDate.get(+nearest) || [];
       showTooltip(event, node => {
-        node.appendChild(el("div", "tt-head", d3.timeFormat("%Y-%m-%d")(nearest)));
+        node.appendChild(el("div", "tt-head", `${d3.timeFormat("%Y-%m-%d")(nearest)} · ${panel.fill}`));
         for (const {machine, point} of rows) {
           const who = machine.members.length > 1
             ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
@@ -838,20 +961,6 @@ function renderTrend() {
         node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));
       });
     });
-
-  for (const {machine, points} of lines) {
-    const item = el("div", "legend-item");
-    item.appendChild(keySwatch(machine.color, "legend-key"));
-    item.appendChild(el("span", null, machine.name));
-    item.appendChild(el("span", "legend-value", `${fmt(points[points.length - 1].value)} ${meta.unit}`));
-    legendHost.appendChild(item);
-  }
-
-  const hidden = machineOrder.filter(m => !m.plotted);
-  const noteParts = [];
-  if (hidden.length) noteParts.push(`${hidden.length} machine(s) beyond the eight-color palette are in the tables only: ${hidden.map(m => m.name).join(", ")}.`);
-  if (meta.note) noteParts.push(`Reading this metric: ${meta.note}.`);
-  document.getElementById("trend-note").textContent = noteParts.join(" ");
 }
 
 // =========================================================================
@@ -863,7 +972,7 @@ function renderMatrix() {
   host.replaceChildren();
   const meta = metricMeta(state.metric);
   document.getElementById("matrix-sub").textContent =
-    `Best ${meta.label.toLowerCase()} (${meta.unit}) in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
+    `Best ${meta.label.toLowerCase()} (${meta.unit}) on ${state.fill} in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
 
   const table = el("table", "matrix");
   const thead = el("thead");
@@ -891,7 +1000,7 @@ function renderMatrix() {
     row.appendChild(el("td", "scenario-cell", scenario));
 
     for (const machine of machineOrder) {
-      const points = series(machine, scenario);
+      const points = series(machine, scenario, state.fill);
       const latest = points[points.length - 1] || null;
       const previous = points[points.length - 2] || null;
       const cell = el("td", "num");
@@ -916,7 +1025,7 @@ function renderMatrix() {
   table.appendChild(tbody);
 
   if (!anyValue) {
-    host.appendChild(emptyState(`No scenario has a passing run with ${state.codec} on ${state.backend} into ${state.sink}.`, null));
+    host.appendChild(emptyState(`No scenario has a passing run on ${state.fill} with ${state.codec} on ${state.backend} into ${state.sink}.`, null));
     return;
   }
   host.appendChild(table);
@@ -1055,21 +1164,25 @@ function renderTrendTable() {
   host.replaceChildren();
   const meta = metricMeta(state.metric);
 
-  if (!trendRows.length) {
+  if (!trendPanels.length) {
     host.appendChild(el("p", "empty", "Nothing plotted."));
     return;
   }
 
   const rows = [];
-  for (const {machine, points} of trendRows) {
-    for (const p of points) rows.push({machine, p});
+  for (const {fill, lines} of trendPanels) {
+    for (const {machine, points} of lines) {
+      for (const p of points) rows.push({fill, machine, p});
+    }
   }
-  rows.sort((a, b) => a.p.sweep.dateObj - b.p.sweep.dateObj || a.machine.name.localeCompare(b.machine.name));
+  rows.sort((a, b) => fillRank(a.fill) - fillRank(b.fill)
+                   || a.p.sweep.dateObj - b.p.sweep.dateObj
+                   || a.machine.name.localeCompare(b.machine.name));
 
   const table = el("table");
   const thead = el("thead");
   const headRow = el("tr");
-  for (const [label, cls] of [["Date", ""], ["Machine", ""], ["Commit", ""],
+  for (const [label, cls] of [["Input", ""], ["Date", ""], ["Machine", ""], ["Commit", ""],
                               [`${meta.label} (${meta.unit})`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
     headRow.appendChild(el("th", cls, label));
   }
@@ -1077,8 +1190,9 @@ function renderTrendTable() {
   table.appendChild(thead);
 
   const tbody = el("tbody");
-  for (const {machine, p} of rows) {
+  for (const {fill, machine, p} of rows) {
     const tr = el("tr");
+    tr.appendChild(el("td", null, fill));
     tr.appendChild(el("td", null, fmtDay(p.sweep.day)));
     const machineCell = el("td");
     machineCell.appendChild(keySwatch(machine.color));
@@ -1109,7 +1223,7 @@ function renderLede() {
   const strangers = [...new Set(sweeps.filter(s => !s.registered).map(s => s.member))];
   const notes = [
     "Machines are grouped by bench/machines.toml, which is where a box running two systems, or a pool of cluster nodes, is declared to be one machine. Untick Group to see the sweep names underneath.",
-    "Each plotted value is the best run of a sweep for the chosen scenario and configuration; the remaining dimensions (data type, chunk size, fill) are searched, not averaged.",
+    "Each plotted value is the best run of a sweep for the chosen scenario, input, and configuration; the remaining dimensions (data type, chunk size) are searched, not averaged.",
     "Only passing runs count. A missing point means that sweep ran nothing matching the filter.",
   ];
   if (strangers.length) {
