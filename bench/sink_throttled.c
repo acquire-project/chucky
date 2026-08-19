@@ -17,7 +17,6 @@ struct throttled_job
   uint64_t nbytes;
   uint64_t latency_ns;
   uint64_t bytes_per_sec;
-  _Atomic uint64_t* retired_bytes;
   _Atomic uint64_t* total_bytes;
 };
 
@@ -30,7 +29,6 @@ throttled_fn(void* arg)
     ns += (int64_t)((j->nbytes * 1000000000ull) / j->bytes_per_sec);
   if (ns > 0)
     platform_sleep_ns(ns);
-  atomic_fetch_add(j->retired_bytes, j->nbytes);
   atomic_fetch_add(j->total_bytes, j->nbytes);
 }
 
@@ -42,13 +40,11 @@ throttled_post(struct throttled_shard_sink* s, size_t nbytes)
   j->nbytes = nbytes;
   j->latency_ns = s->latency_ns;
   j->bytes_per_sec = s->bytes_per_sec;
-  j->retired_bytes = &s->retired_bytes;
   j->total_bytes = &s->total_bytes;
-  if (io_queue_post(s->queue, throttled_fn, j, free)) {
+  if (io_queue_post_bytes(s->queue, throttled_fn, j, free, nbytes)) {
     free(j);
     goto Error;
   }
-  atomic_fetch_add(&s->queued_bytes, nbytes);
   return 0;
 
 Error:
@@ -118,16 +114,12 @@ throttled_shard_has_error(const struct shard_sink* self)
   return 0;
 }
 
-static size_t
+static uint64_t
 throttled_shard_pending_bytes(const struct shard_sink* self)
 {
   const struct throttled_shard_sink* s =
     (const struct throttled_shard_sink*)self;
-  uint64_t retired = atomic_load(&s->retired_bytes);
-  uint64_t queued = atomic_load(&s->queued_bytes);
-  if (queued <= retired)
-    return 0;
-  return (size_t)(queued - retired);
+  return io_queue_pending_bytes(s->queue);
 }
 
 int

@@ -96,7 +96,7 @@ metering_has_error(const struct shard_sink* self)
   return ms->inner->has_error(ms->inner);
 }
 
-static size_t
+static uint64_t
 metering_pending_bytes(const struct shard_sink* self)
 {
   const struct metering_sink* ms = (const struct metering_sink*)self;

@@ -22,7 +22,6 @@
 
 #define DRAIN_OBSERVE_MS 200
 #define POST_RELEASE_TIMEOUT_MS 5000
-#define POLL_STEP_MS 10
 
 struct destroy_args
 {
@@ -36,17 +35,6 @@ destroy_thread_fn(void* arg)
   struct destroy_args* da = (struct destroy_args*)arg;
   tile_stream_gpu_destroy(da->s);
   atomic_store(&da->done, 1);
-}
-
-static int
-wait_for_done(_Atomic int* done, int timeout_ms)
-{
-  int waited_ms = 0;
-  while (atomic_load(done) == 0 && waited_ms < timeout_ms) {
-    platform_sleep_ns((int64_t)POLL_STEP_MS * 1000000LL);
-    waited_ms += POLL_STEP_MS;
-  }
-  return atomic_load(done) != 0 ? 0 : -1;
 }
 
 static int
@@ -134,7 +122,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
 
   atomic_store(&gate, 1);
 
-  if (wait_for_done(&da.done, POST_RELEASE_TIMEOUT_MS)) {
+  if (test_wait_flag(&da.done, POST_RELEASE_TIMEOUT_MS)) {
     log_error("destroy did not finish within %d ms after gate release",
               POST_RELEASE_TIMEOUT_MS);
     goto Cleanup;

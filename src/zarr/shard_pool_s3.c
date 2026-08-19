@@ -167,7 +167,7 @@ pool_s3_has_error(const struct shard_pool* self)
   return p->finalize_err;
 }
 
-static size_t
+static uint64_t
 pool_s3_pending_bytes(const struct shard_pool* self)
 {
   (void)self;

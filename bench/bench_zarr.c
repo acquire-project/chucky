@@ -179,7 +179,7 @@ bench_zarr_flush(struct bench_zarr_handle* z)
   return err;
 }
 
-size_t
+uint64_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z)
 {
   if (z->ms)

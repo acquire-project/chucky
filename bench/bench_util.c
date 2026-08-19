@@ -525,7 +525,7 @@ run_bench(const struct bench_config* cfg)
                                   dtype_bpe(dtype),
                                   cfg->append_elements) == 0);
 
-  size_t pending_bytes = bench_zarr_pending_bytes(&zarr);
+  uint64_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
@@ -1095,7 +1095,7 @@ run_bench_two_streams(const struct bench_config* cfg)
       print_metric_row(&m[k].backpressure);
       print_append_latency(&m[k]);
       char pbuf[32];
-      format_bytes(pbuf, sizeof(pbuf), (uint64_t)m[k].peak_pending_bytes);
+      format_bytes(pbuf, sizeof(pbuf), m[k].peak_pending_bytes);
       print_report("  peak pending:    %s", pbuf);
     }
   }

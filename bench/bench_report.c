@@ -130,7 +130,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   size_t flush_pending_bytes)
+                   uint64_t flush_pending_bytes)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -207,7 +207,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    (unsigned long long)metrics->lod_samples_lost);
     print_append_latency(metrics);
     char pbuf[32];
-    format_bytes(pbuf, sizeof(pbuf), (uint64_t)metrics->peak_pending_bytes);
+    format_bytes(pbuf, sizeof(pbuf), metrics->peak_pending_bytes);
     print_report("  peak pending:    %s", pbuf);
   }
 
