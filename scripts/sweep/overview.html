@@ -322,7 +322,7 @@ function fillNote(name) {
 }
 
 function sortedFills(names) {
-  return [...names].sort((a, b) => fillRank(a) - fillRank(b) || a.localeCompare(b));
+  return [...names].sort((a, b) => fillRank(a) - fillRank(b) || String(a).localeCompare(String(b)));
 }
 
 function distinct(key) {
@@ -1068,21 +1068,24 @@ function moversFor(machine) {
   const compared = new Set();
   // One pair of sweeps per input: a sweep that skipped an input must not become
   // the sweep the other inputs are compared against, or they drop out.
-  for (const fill of ALL_FILLS) {
+  const fillsRun = new Set(indexed.flatMap(entry => [...entry.inputs.keys()]));
+  for (const fill of sortedFills(fillsRun)) {
     const usable = indexed.filter(entry => entry.inputs.has(fill));
     if (usable.length < 2) continue;
     const latest = usable[usable.length - 1];
     const previous = usable[usable.length - 2];
-    compared.add(`${previous.sweep.commit}→${latest.sweep.commit}`);
     const before = previous.inputs.get(fill);
+    let paired = false;
     for (const [id, now] of latest.inputs.get(fill)) {
       const then = before.get(id);
       if (!then) continue;
       const pct = percentChange(then.value, now.value);
       if (pct == null) continue;
-      rows.push({machine, id, run: now.run, previous: then.value, latest: now.value, pct,
+      rows.push({machine, run: now.run, previous: then.value, latest: now.value, pct,
                  latestSweep: latest.sweep, previousSweep: previous.sweep});
+      paired = true;
     }
+    if (paired) compared.add(`${previous.sweep.commit}→${latest.sweep.commit}`);
   }
   return {rows, compared: [...compared]};
 }
@@ -1096,7 +1099,7 @@ function renderMovers() {
   const pairs = [];
   for (const machine of machineOrder) {
     const {rows, compared} = moversFor(machine);
-    for (const pair of compared) pairs.push(`${machine.name} ${pair}`);
+    if (compared.length) pairs.push(`${machine.name} ${compared.join(" and ")}`);
     all.push(...rows);
   }
   document.getElementById("movers-sub").textContent = pairs.length
@@ -1104,7 +1107,7 @@ function renderMovers() {
     : `${meta.label}, comparing the two most recent sweeps that ran each input.`;
 
   if (!all.length) {
-    host.appendChild(el("p", "empty", "Nothing to compare: no configuration ran in two consecutive sweeps of the same machine under this filter."));
+    host.appendChild(el("p", "empty", "Nothing to compare: no configuration ran in two sweeps of the same machine under this filter."));
     return;
   }
 
@@ -1147,8 +1150,11 @@ function renderMovers() {
     tr.appendChild(el("td", null, row.run.scenario));
     tr.appendChild(el("td", null, row.run.fill));
     tr.appendChild(el("td", null, configLabel(row.run)));
-    tr.appendChild(el("td", "num", fmt(row.previous)));
-    tr.appendChild(el("td", "num", fmt(row.latest)));
+    for (const [value, sweep] of [[row.previous, row.previousSweep], [row.latest, row.latestSweep]]) {
+      const cell = el("td", "num", fmt(value));
+      cell.title = `${sweep.commit} on ${fmtDay(sweep.day)}`;
+      tr.appendChild(cell);
+    }
     const cls = changeClass(row.pct);
     const change = el("td", "num");
     change.appendChild(el("span", `cell-delta ${cls}`,
