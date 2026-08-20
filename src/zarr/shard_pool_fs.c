@@ -323,9 +323,15 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   }
 
   w->generation = atomic_fetch_add(&p->files_opened, 1) + 1;
-  uint64_t open_now = w->generation - atomic_load(&p->files_closed);
-  if (open_now > atomic_load(&p->files_open_peak))
-    atomic_store(&p->files_open_peak, open_now);
+  const uint64_t opened = atomic_load(&p->files_opened);
+  const uint64_t closed = atomic_load(&p->files_closed);
+  // The two counts are read one after the other, so a close that lands in
+  // between can make the second larger than the first.
+  const uint64_t open_now = opened > closed ? opened - closed : 0;
+  uint64_t peak = atomic_load(&p->files_open_peak);
+  while (open_now > peak &&
+         !atomic_compare_exchange_weak(&p->files_open_peak, &peak, open_now)) {
+  }
 
   strbuf_free(&path);
   return &w->base;

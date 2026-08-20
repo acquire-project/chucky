@@ -295,6 +295,64 @@ Fail:
   return 1;
 }
 
+// --- test: timing averages count finished writes ---
+
+// The averages divide by the writes that finished, not by the writes posted.
+// Reading while work is still queued must not dilute them with writes that
+// have not run.
+
+static int
+test_timing_mean_counts_finished(void)
+{
+  struct io_queue* q = io_queue_create();
+  CHECK(Fail, q);
+
+  // One write, held behind a gate so its wait is measurable, then released.
+  atomic_int gate = 0;
+  CHECK(Fail2,
+        io_queue_post(
+          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          0);
+  CHECK(Fail3,
+        io_queue_post(q, (struct io_work){ .fn = noop_fn, .nbytes = 4096 }) ==
+          0);
+  atomic_store(&gate, 1);
+  io_event_wait(q, io_queue_record(q));
+
+  // Five more writes, still queued. The worker takes jobs in order, so it is
+  // holding the second gate and none of the five has run.
+  atomic_int held = 0;
+  CHECK(Fail4,
+        io_queue_post(
+          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&held }) ==
+          0);
+  for (int i = 0; i < 5; ++i)
+    CHECK(Fail4,
+          io_queue_post(q, (struct io_work){ .fn = noop_fn, .nbytes = 4096 }) ==
+            0);
+
+  struct io_queue_stats st;
+  io_queue_get_stats(q, &st);
+  CHECK(Fail4, st.writes == 6);
+  CHECK(Fail4, st.wait_ms_max > 0.0);
+  // One finished write, so its wait is both the average and the maximum.
+  CHECK(Fail4, st.wait_ms_mean == st.wait_ms_max);
+  CHECK(Fail4, st.run_ms_mean == st.run_ms_max);
+
+  atomic_store(&held, 1);
+  io_queue_destroy(q);
+  return 0;
+
+Fail4:
+  atomic_store(&held, 1);
+Fail3:
+  atomic_store(&gate, 1);
+Fail2:
+  io_queue_destroy(q);
+Fail:
+  return 1;
+}
+
 // --- main ---
 
 int
@@ -313,6 +371,7 @@ main(void)
     { "empty_queue_event", test_empty_queue_event },
     { "pending_bytes", test_pending_bytes },
     { "stats", test_stats },
+    { "timing_mean_counts_finished", test_timing_mean_counts_finished },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

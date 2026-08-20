@@ -185,11 +185,11 @@ recorded. What is worth knowing is the depth *available*:
 | `io_run_ms_mean` / `io_run_ms_max` | how long a write took once it started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
-The window runs from the moment the write queue is created to the moment the
-run finishes flushing, so it covers startup, streaming, and the closing footer,
-truncate and close of every shard. A peak can therefore come from the flush
-closing every open shard at once rather than from streaming. A run with no
-filesystem output records none of these.
+The window opens on the first queued write and closes when the run has
+flushed, so it covers streaming and the closing footer, truncate and close of
+every shard, but not the startup before the first write. A peak can therefore
+come from the flush closing every open shard at once rather than from
+streaming. A run with no filesystem output records none of these.
 
 Each run records memory as an estimate and a measurement:
 
