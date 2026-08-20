@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+
+FROM rust:1-bookworm AS build
+
+# Unpinned, so rebuild with --no-cache to pick up new upstream commits.
+RUN cargo install \
+        --locked \
+        --git https://github.com/nclack/s3-blackhole.git \
+        s3-blackhole
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /usr/local/cargo/bin/s3-blackhole /usr/local/bin/s3-blackhole
+
+USER 65534:65534
+EXPOSE 9000
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["s3-blackhole"]
+# Four accept threads saturate every network measured so far, and the server
+# shares a machine with the benchmark, where a thread per core takes cores the
+# benchmark needs to send: 64 threads measured 18% slower than 4.
+CMD ["--listen", "0.0.0.0:9000", "--shards", "4"]
