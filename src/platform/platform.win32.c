@@ -82,13 +82,23 @@ platform_sleep_ns(int64_t ns)
   Sleep(ms);
 }
 
+static LARGE_INTEGER qpc_freq;
+
+static void
+read_qpc_freq(void)
+{
+  QueryPerformanceFrequency(&qpc_freq);
+}
+
 int64_t
 platform_monotonic_ns(void)
 {
-  static LARGE_INTEGER freq = { 0 };
+  // Read from several threads at once, so the cached frequency needs a
+  // thread-safe first read rather than a plain zero check.
+  static platform_once freq_once = PLATFORM_ONCE_INIT;
+  platform_call_once(&freq_once, read_qpc_freq);
+  const LARGE_INTEGER freq = qpc_freq;
   LARGE_INTEGER cnt;
-  if (freq.QuadPart == 0)
-    QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&cnt);
   /* Convert to nanoseconds: cnt * 1e9 / freq, avoiding overflow. */
   return (int64_t)(cnt.QuadPart / freq.QuadPart) * 1000000000LL +

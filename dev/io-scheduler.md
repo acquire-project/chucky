@@ -123,9 +123,9 @@ high-water mark of queued work. Fence stalls are already recorded as
 
 Adding a counter does not need a results-schema bump — the version is stamped
 on the Python side and only a rename or a change of meaning requires one. But
-`scripts/sweep/summary.py` lists the keys the overview page keeps, and the
-explorer has its own list, so a new counter is dropped silently unless it is
-named in both.
+`scripts/sweep/summary.py` lists the keys the overview page keeps, so a new
+counter is dropped from that page unless it is named there. The explorer takes
+everything it is not told to drop, so it needs no change.
 
 Adds a `smallepoch_4shards_single` scenario. Today `smallepoch_single` has one
 chunk along each of its inner dimensions, so it produces exactly one shard file

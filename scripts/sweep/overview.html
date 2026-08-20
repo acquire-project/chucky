@@ -711,7 +711,7 @@ function renderTiles() {
     if (latest) {
       const value = el("div", "tile-value");
       value.appendChild(document.createTextNode(fmt(latest.value)));
-      value.appendChild(el("span", "unit", meta.unit));
+      if (meta.unit) value.appendChild(el("span", "unit", meta.unit));
       tile.appendChild(value);
     } else {
       tile.appendChild(el("div", "tile-blank", "No run matches this filter"));
