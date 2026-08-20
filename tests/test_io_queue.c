@@ -275,7 +275,8 @@ test_stats(void)
   // is over time and has to be positive: the files really were waiting.
   CHECK(Fail2, st.files_waiting_peak == 3);
   CHECK(Fail2, st.files_waiting_mean > 0.0);
-  CHECK(Fail2, st.run_ms_max >= 0.0);
+  // Every write sat behind the gate before it could start.
+  CHECK(Fail2, st.wait_ms_max > 0.0);
 
   io_queue_destroy(q);
   return 0;

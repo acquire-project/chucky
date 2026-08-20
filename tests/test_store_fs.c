@@ -288,37 +288,55 @@ test_shard_pool_io_stats(void)
   CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
   // Two slots, reused for six shard files. Each reuse is a new file, so the
-  // pool must count six opens while never holding more than two at once.
+  // count has to follow files rather than slots.
+  //
+  // Hold the worker first. Closing a slot only queues the close, so with
+  // nothing running, all six files are open at once even though the pool has
+  // two slots — the handle outlives the slot that opened it. Gating makes
+  // that exact instead of a race: unheld, how many are open when the sixth
+  // opens depends on how many closes the worker got through.
   struct shard_pool* pool = s->create_pool(s, 2);
   CHECK(Fail2, pool);
+
+  atomic_int gate = 0;
+  CHECK(Fail3, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
 
   for (int i = 0; i < 6; ++i) {
     char key[256];
     snprintf(key, sizeof(key), "stats/s%d.bin", i);
     struct shard_writer* w = pool->open(pool, (uint64_t)(i % 2), key);
-    CHECK(Fail3, w);
+    CHECK(Fail4, w);
     char data[32];
     int dlen = snprintf(data, sizeof(data), "shard_%d", i);
-    CHECK(Fail3, w->write(w, 0, data, data + dlen) == 0);
-    CHECK(Fail3, w->finalize(w) == 0);
+    CHECK(Fail4, w->write(w, 0, data, data + dlen) == 0);
+    CHECK(Fail4, w->finalize(w) == 0);
   }
-  pool->wait_fence(pool, pool->record_fence(pool));
 
   struct shard_pool_io_stats io;
   shard_pool_io_stats(pool, &io);
-  CHECK(Fail3, io.files_opened == 6);
-  CHECK(Fail3, io.files_open_peak <= 2);
+  CHECK(Fail4, io.files_opened == 6);
+  CHECK(Fail4, io.files_open_peak == 6);
+  // Six distinct files, all with work still queued behind the gate.
+  CHECK(Fail4, io.queue.files_waiting_peak == 6);
+
+  atomic_store(&gate, 1);
+  pool->wait_fence(pool, pool->record_fence(pool));
+
+  shard_pool_io_stats(pool, &io);
   CHECK(Fail3, io.queue.writes == 6);
-  CHECK(Fail3, io.queue.files_waiting_peak >= 1);
   // These went through write, which copies, not write_direct, which borrows.
   CHECK(Fail3, io.queue.bytes_copied > 0);
   CHECK(Fail3, io.queue.bytes_borrowed == 0);
+  // Peaks are high-water marks, so draining leaves them where they were.
+  CHECK(Fail3, io.files_open_peak == 6);
 
   shard_pool_destroy(pool);
   s->destroy(s);
   log_info("  PASS");
   return 0;
 
+Fail4:
+  atomic_store(&gate, 1);
 Fail3:
   shard_pool_destroy(pool);
 Fail2:
