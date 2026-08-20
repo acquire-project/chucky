@@ -273,6 +273,15 @@ test_stats(void)
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
+  // Neither does finalizing a file nobody has written to. Truncate and close
+  // carry no payload, so they offer a scheduler no second write to run.
+  CHECK(Fail3,
+        io_queue_post(q, (struct io_work){ .fn = noop_fn, .file = 4 }) == 0);
+  CHECK(Fail3,
+        io_queue_post(q, (struct io_work){ .fn = noop_fn, .file = 5 }) == 0);
+  io_queue_get_stats(q, &st);
+  CHECK(Fail3, st.files_waiting_peak == 3);
+
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
 

@@ -55,7 +55,7 @@ SCENARIOS = {
     "256cube_single": 40,
     "medfmt_single": 10,
     "smallepoch_single": 65536,
-    "smallepoch_4shards_single": 1048576,
+    "smallepoch_4shards_single": 65536,
     "orca2_multiscale": 200,
     "256cube_multiscale": 40,
     "medfmt_multiscale": 10,

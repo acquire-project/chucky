@@ -14,10 +14,11 @@
 // slow startup does not dilute the average.
 struct io_queue_stats
 {
-  // How many distinct files had work waiting at once. This is the depth
+  // How many distinct files had a write waiting at once. This is the depth
   // available to a scheduler that could run writes at the same time. It is
   // not the depth achieved: one worker runs one write at a time, so the
-  // achieved figure is always one and says nothing.
+  // achieved figure is always one and says nothing. Truncate and close carry
+  // no payload, so a file whose only queued work is finalizing does not count.
   uint64_t files_waiting_peak;
   double files_waiting_mean;
 
@@ -29,8 +30,8 @@ struct io_queue_stats
   uint64_t bytes_borrowed; // payload bytes owned by someone else
 
   // Time a write spent waiting to start, and time it spent running. The
-  // averages cover writes that have finished, which is fewer than `writes`
-  // whenever the stats are read with work still queued.
+  // averages cover writes that have finished, which can be fewer than
+  // `writes` when the stats are read with writes still queued.
   double wait_ms_mean;
   double wait_ms_max;
   double run_ms_mean;

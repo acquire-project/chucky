@@ -13,11 +13,12 @@ struct io_job
   int64_t post_ns;
 };
 
-// One open file with work waiting on it.
+// One open file with a write waiting on it. Truncate and close carry no
+// payload and cannot be run alongside anything, so they do not count.
 struct file_waiting
 {
   uint64_t file;
-  uint64_t jobs;
+  uint64_t writes;
 };
 
 struct io_queue
@@ -36,9 +37,9 @@ struct io_queue
   uint64_t retired_seq;   // updated after each job completes
   uint64_t pending_bytes; // raised on post, lowered when the job finishes
 
-  // Files with work waiting, and the time-weighted history of how many there
-  // were. Weighting needs an absolute clock: the average has to be over time,
-  // not over the number of times the count happened to change. The window
+  // Files with a write waiting, and the time-weighted history of how many
+  // there were. Weighting needs an absolute clock: the average has to be over
+  // time, not over the number of times the count happened to change. The window
   // opens on the first post, so a slow startup cannot dilute the average.
   struct file_waiting* files;
   uint64_t nfiles;
@@ -78,7 +79,7 @@ file_work_added(struct io_queue* q, uint64_t file)
 
   for (uint64_t i = 0; i < q->nfiles; ++i) {
     if (q->files[i].file == file) {
-      q->files[i].jobs++;
+      q->files[i].writes++;
       return;
     }
   }
@@ -97,7 +98,7 @@ file_work_added(struct io_queue* q, uint64_t file)
     q->files_cap = cap;
   }
 
-  q->files[q->nfiles++] = (struct file_waiting){ .file = file, .jobs = 1 };
+  q->files[q->nfiles++] = (struct file_waiting){ .file = file, .writes = 1 };
   if (q->nfiles > q->stats.files_waiting_peak)
     q->stats.files_waiting_peak = q->nfiles;
 }
@@ -111,7 +112,7 @@ file_work_finished(struct io_queue* q, uint64_t file)
   for (uint64_t i = 0; i < q->nfiles; ++i) {
     if (q->files[i].file != file)
       continue;
-    if (--q->files[i].jobs == 0) {
+    if (--q->files[i].writes == 0) {
       fold_files_waiting(q);
       q->files[i] = q->files[q->nfiles - 1];
       q->nfiles--;
@@ -161,8 +162,8 @@ worker_thread(void* arg)
     pthread_mutex_lock(&q->mutex);
     q->retired_seq = job.seq;
     q->pending_bytes -= job.work.nbytes;
-    file_work_finished(q, job.work.file);
     if (job.work.nbytes > 0) {
+      file_work_finished(q, job.work.file);
       double wait_ms = (double)(started_ns - job.post_ns) / 1e6;
       double run_ms = (double)(finished_ns - started_ns) / 1e6;
       q->writes_finished++;
@@ -283,14 +284,13 @@ io_queue_post(struct io_queue* q, struct io_work work)
   q->head++;
   q->pending_bytes += work.nbytes;
 
-  file_work_added(q, work.file);
-
   uint64_t waiting = q->head - q->tail;
   if (waiting > q->stats.jobs_waiting_peak)
     q->stats.jobs_waiting_peak = waiting;
   if (q->pending_bytes > q->stats.bytes_waiting_peak)
     q->stats.bytes_waiting_peak = q->pending_bytes;
   if (work.nbytes > 0) {
+    file_work_added(q, work.file);
     q->stats.writes++;
     q->stats.size_buckets[size_bucket(work.nbytes)]++;
     if (work.borrowed)
@@ -321,8 +321,7 @@ io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
   pthread_mutex_lock(&mq->mutex);
   fold_files_waiting(mq);
   *out = mq->stats;
-  int64_t observed_ns =
-    mq->start_ns ? mq->weighted_from_ns - mq->start_ns : 0;
+  int64_t observed_ns = mq->start_ns ? mq->weighted_from_ns - mq->start_ns : 0;
   out->files_waiting_mean =
     observed_ns > 0 ? mq->files_weighted_ns / (double)observed_ns : 0.0;
   const double finished = (double)mq->writes_finished;

@@ -140,7 +140,9 @@ print_write_report(const struct shard_pool_io_stats* io)
 
   char buf[32];
   format_bytes(buf, sizeof(buf), io->queue.bytes_waiting_peak);
-  print_report("  queued peak:     %s in %llu writes",
+  // Two separate high-water marks, not one moment: the job count leaves out
+  // the job already running, whose bytes are still counted as queued.
+  print_report("  queued peak:     %s, %llu jobs",
                buf,
                (unsigned long long)io->queue.jobs_waiting_peak);
 
@@ -409,7 +411,7 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_uint(&jw, io->queue.bytes_borrowed);
     jw_key(&jw, "io_queued_bytes_peak");
     jw_uint(&jw, io->queue.bytes_waiting_peak);
-    jw_key(&jw, "io_queued_writes_peak");
+    jw_key(&jw, "io_queued_jobs_peak");
     jw_uint(&jw, io->queue.jobs_waiting_peak);
     jw_key(&jw, "io_wait_ms_mean");
     jw_float(&jw, io->queue.wait_ms_mean);
