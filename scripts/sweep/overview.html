@@ -350,6 +350,8 @@ const state = {metric: METRICS[0].key, scenario: null, codec: null, fill: null, 
                sink: null, grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
+/** " (GiB/s)", or nothing at all for a count, which has no unit. */
+function unitSuffix(meta) { return meta.unit ? ` (${meta.unit})` : ""; }
 
 /** The opening view should not be empty: pick the config the most sweeps ran. */
 function pickDefaults() {
@@ -598,7 +600,7 @@ const fillSel = document.getElementById("fill-sel");
 const backendSel = document.getElementById("backend-sel");
 const sinkSel = document.getElementById("sink-sel");
 
-fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label} (${m.unit})`));
+fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label}${unitSuffix(m)}`));
 fillSelect(scenarioSel, ALL_SCENARIOS);
 fillSelect(codecSel, ALL_CODECS);
 fillSelect(fillSel, ALL_FILLS);
@@ -946,7 +948,7 @@ function drawTrendChart(host, width, panel, meta, dates, maxValue) {
           const who = machine.members.length > 1
             ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
             : `${machine.name} · ${point.sweep.commit}`;
-          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`);
+          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`.trimEnd());
           node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
         }
         node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));
@@ -963,7 +965,7 @@ function renderMatrix() {
   host.replaceChildren();
   const meta = metricMeta(state.metric);
   document.getElementById("matrix-sub").textContent =
-    `Best ${meta.label.toLowerCase()} (${meta.unit}) on ${state.fill} in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
+    `Best ${meta.label.toLowerCase()}${unitSuffix(meta)} on ${state.fill} in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
 
   const table = el("table", "matrix");
   const thead = el("thead");
@@ -1180,7 +1182,7 @@ function renderTrendTable() {
   const thead = el("thead");
   const headRow = el("tr");
   for (const [label, cls] of [["Input", ""], ["Date", ""], ["Machine", ""], ["Commit", ""],
-                              [`${meta.label} (${meta.unit})`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
+                              [`${meta.label}${unitSuffix(meta)}`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
     headRow.appendChild(el("th", cls, label));
   }
   thead.appendChild(headRow);

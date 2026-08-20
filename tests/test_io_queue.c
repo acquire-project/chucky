@@ -105,10 +105,10 @@ test_ctx_free(void)
 
   int free_count = 0;
   for (int i = 0; i < 10; ++i)
-    io_queue_post(
-      q,
-      (struct io_work){
-        .fn = noop_fn, .ctx = &free_count, .ctx_free = free_counter });
+    io_queue_post(q,
+                  (struct io_work){ .fn = noop_fn,
+                                    .ctx = &free_count,
+                                    .ctx_free = free_counter });
 
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
@@ -193,13 +193,17 @@ test_pending_bytes(void)
 
   // Hold the worker on the first job so the rest stay queued.
   atomic_int gate = 0;
-  CHECK(Fail2, io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) == 0);
+  CHECK(Fail2,
+        io_queue_post(
+          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          0);
 
   uint64_t posted = 0;
   for (int i = 1; i <= 8; ++i) {
     uint64_t nbytes = (uint64_t)i * 1024;
-    CHECK(Fail3, io_queue_post(q, (struct io_work){ .fn = noop_fn, .nbytes = nbytes }) == 0);
+    CHECK(Fail3,
+          io_queue_post(
+            q, (struct io_work){ .fn = noop_fn, .nbytes = nbytes }) == 0);
     posted += nbytes;
     CHECK(Fail3, io_queue_pending_bytes(q) == posted);
   }
@@ -240,7 +244,8 @@ test_stats(void)
   atomic_int gate = 0;
   CHECK(Fail2,
         io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) == 0);
+          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          0);
 
   // Three files, two writes each, posted round-robin so the count only
   // reaches three if distinct files are really being tracked.
@@ -251,7 +256,8 @@ test_stats(void)
                           (struct io_work){ .fn = noop_fn,
                                             .nbytes = 4096,
                                             .file = file,
-                                            .borrowed = (int)(file == 1) }) == 0);
+                                            .borrowed = (int)(file == 1) }) ==
+              0);
 
   struct io_queue_stats st;
   io_queue_get_stats(q, &st);

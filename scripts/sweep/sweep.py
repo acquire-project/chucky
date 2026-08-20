@@ -76,7 +76,14 @@ CHUNK_BYTES = {
     "2M": 2 << 20,
 }
 
-SINGLE_SCENARIOS = [k for k in SCENARIOS if k.endswith("_single")]
+# Scenarios that exist only to give the filesystem sink more than one shard
+# file to write at once. The compress and backend tiers write to the discard
+# sink, where a second shard file buys nothing but run time.
+IO_ONLY_SCENARIOS = {"smallepoch_4shards_single"}
+
+SINGLE_SCENARIOS = [
+    k for k in SCENARIOS if k.endswith("_single") and k not in IO_ONLY_SCENARIOS
+]
 
 # ---------------------------------------------------------------------------
 # Run spec (pydantic-validated)

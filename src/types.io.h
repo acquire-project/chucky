@@ -9,8 +9,9 @@
 // 256 MiB shard bodies, so 40 buckets leaves plenty of room above.
 #define IO_SIZE_BUCKETS 40
 
-// Counts are for the queue's whole life; peaks and the time-weighted average
-// cover the span up to the moment they are read.
+// Counts are for the queue's whole life. Peaks and the time-weighted average
+// cover the span from the first posted work to the moment they are read, so a
+// slow startup does not dilute the average.
 struct io_queue_stats
 {
   // How many distinct files had work waiting at once. This is the depth
@@ -27,10 +28,12 @@ struct io_queue_stats
   uint64_t bytes_copied;   // payload bytes the job owned
   uint64_t bytes_borrowed; // payload bytes owned by someone else
 
-  // Time a write spent waiting to start, and time it spent running.
-  double wait_ms_total;
+  // Time a write spent waiting to start, and time it spent running. The
+  // averages cover writes that have finished, which is fewer than `writes`
+  // whenever the stats are read with work still queued.
+  double wait_ms_mean;
   double wait_ms_max;
-  double run_ms_total;
+  double run_ms_mean;
   double run_ms_max;
 
   uint64_t size_buckets[IO_SIZE_BUCKETS];

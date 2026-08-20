@@ -38,13 +38,20 @@ struct io_queue
 
   // Files with work waiting, and the time-weighted history of how many there
   // were. Weighting needs an absolute clock: the average has to be over time,
-  // not over the number of times the count happened to change.
+  // not over the number of times the count happened to change. The window
+  // opens on the first post, so a slow startup cannot dilute the average.
   struct file_waiting* files;
   uint64_t nfiles;
   uint64_t files_cap;
   int64_t start_ns;
   int64_t weighted_from_ns;
   double files_weighted_ns;
+
+  // Timings land when a write finishes, so they are averaged over finished
+  // writes rather than over stats.writes, which counts every write posted.
+  uint64_t writes_finished;
+  double wait_ms_total;
+  double run_ms_total;
 
   struct io_queue_stats stats;
 
@@ -58,7 +65,8 @@ static void
 fold_files_waiting(struct io_queue* q)
 {
   int64_t now = platform_monotonic_ns();
-  q->files_weighted_ns += (double)q->nfiles * (double)(now - q->weighted_from_ns);
+  q->files_weighted_ns +=
+    (double)q->nfiles * (double)(now - q->weighted_from_ns);
   q->weighted_from_ns = now;
 }
 
@@ -157,8 +165,9 @@ worker_thread(void* arg)
     if (job.work.nbytes > 0) {
       double wait_ms = (double)(started_ns - job.post_ns) / 1e6;
       double run_ms = (double)(finished_ns - started_ns) / 1e6;
-      q->stats.wait_ms_total += wait_ms;
-      q->stats.run_ms_total += run_ms;
+      q->writes_finished++;
+      q->wait_ms_total += wait_ms;
+      q->run_ms_total += run_ms;
       if (wait_ms > q->stats.wait_ms_max)
         q->stats.wait_ms_max = wait_ms;
       if (run_ms > q->stats.run_ms_max)
@@ -184,9 +193,6 @@ io_queue_create(void)
     free(q);
     return NULL;
   }
-
-  q->start_ns = platform_monotonic_ns();
-  q->weighted_from_ns = q->start_ns;
 
   pthread_mutex_init(&q->mutex, NULL);
   pthread_cond_init(&q->cond_not_empty, NULL);
@@ -264,10 +270,15 @@ io_queue_post(struct io_queue* q, struct io_work work)
   }
 
   q->next_seq++;
+  int64_t now = platform_monotonic_ns();
+  if (q->start_ns == 0) {
+    q->start_ns = now;
+    q->weighted_from_ns = now;
+  }
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
     .work = work,
     .seq = q->next_seq,
-    .post_ns = platform_monotonic_ns(),
+    .post_ns = now,
   };
   q->head++;
   q->pending_bytes += work.nbytes;
@@ -310,9 +321,13 @@ io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
   pthread_mutex_lock(&mq->mutex);
   fold_files_waiting(mq);
   *out = mq->stats;
-  int64_t observed_ns = mq->weighted_from_ns - mq->start_ns;
+  int64_t observed_ns =
+    mq->start_ns ? mq->weighted_from_ns - mq->start_ns : 0;
   out->files_waiting_mean =
     observed_ns > 0 ? mq->files_weighted_ns / (double)observed_ns : 0.0;
+  const double finished = (double)mq->writes_finished;
+  out->wait_ms_mean = finished > 0 ? mq->wait_ms_total / finished : 0.0;
+  out->run_ms_mean = finished > 0 ? mq->run_ms_total / finished : 0.0;
   pthread_mutex_unlock(&mq->mutex);
 }
 

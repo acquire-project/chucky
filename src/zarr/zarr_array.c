@@ -340,8 +340,7 @@ zarr_array_pending_bytes(const struct zarr_array* a)
 }
 
 void
-zarr_array_io_stats(const struct zarr_array* a,
-                    struct shard_pool_io_stats* out)
+zarr_array_io_stats(const struct zarr_array* a, struct shard_pool_io_stats* out)
 {
   shard_pool_io_stats(a ? a->pool : NULL, out);
 }

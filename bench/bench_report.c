@@ -152,10 +152,10 @@ print_write_report(const struct shard_pool_io_stats* io)
                buf,
                cbuf);
   print_report("  wait per write:  %.3f ms avg, %.3f ms max",
-               io->queue.wait_ms_total / (double)io->queue.writes,
+               io->queue.wait_ms_mean,
                io->queue.wait_ms_max);
   print_report("  run per write:   %.3f ms avg, %.3f ms max",
-               io->queue.run_ms_total / (double)io->queue.writes,
+               io->queue.run_ms_mean,
                io->queue.run_ms_max);
 
   for (uint64_t i = 0; i < IO_SIZE_BUCKETS; ++i) {
@@ -412,11 +412,11 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_key(&jw, "io_queued_writes_peak");
     jw_uint(&jw, io->queue.jobs_waiting_peak);
     jw_key(&jw, "io_wait_ms_mean");
-    jw_float(&jw, io->queue.wait_ms_total / (double)io->queue.writes);
+    jw_float(&jw, io->queue.wait_ms_mean);
     jw_key(&jw, "io_wait_ms_max");
     jw_float(&jw, io->queue.wait_ms_max);
     jw_key(&jw, "io_run_ms_mean");
-    jw_float(&jw, io->queue.run_ms_total / (double)io->queue.writes);
+    jw_float(&jw, io->queue.run_ms_mean);
     jw_key(&jw, "io_run_ms_max");
     jw_float(&jw, io->queue.run_ms_max);
     jw_key(&jw, "io_write_sizes");

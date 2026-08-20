@@ -28,8 +28,8 @@ struct shard_pool_fs
   // Each open of a shard file gets its own number, so a queued write names
   // the file it was issued for rather than a descriptor that may since have
   // been closed and reissued to someone else.
-  uint64_t files_opened;
-  uint64_t files_open_peak;
+  _Atomic uint64_t files_opened;
+  _Atomic uint64_t files_open_peak;
   _Atomic uint64_t files_closed;
 };
 
@@ -322,10 +322,10 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
     }
   }
 
-  w->generation = ++p->files_opened;
-  uint64_t open_now = p->files_opened - atomic_load(&p->files_closed);
-  if (open_now > p->files_open_peak)
-    p->files_open_peak = open_now;
+  w->generation = atomic_fetch_add(&p->files_opened, 1) + 1;
+  uint64_t open_now = w->generation - atomic_load(&p->files_closed);
+  if (open_now > atomic_load(&p->files_open_peak))
+    atomic_store(&p->files_open_peak, open_now);
 
   strbuf_free(&path);
   return &w->base;
@@ -375,14 +375,13 @@ pool_fs_pending_bytes(const struct shard_pool* self)
 }
 
 static void
-pool_fs_io_stats(const struct shard_pool* self,
-                 struct shard_pool_io_stats* out)
+pool_fs_io_stats(const struct shard_pool* self, struct shard_pool_io_stats* out)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
   io_queue_get_stats(p->queue, &out->queue);
-  out->files_opened = p->files_opened;
-  out->files_open_peak = p->files_open_peak;
+  out->files_opened = atomic_load(&p->files_opened);
+  out->files_open_peak = atomic_load(&p->files_open_peak);
 }
 
 static size_t

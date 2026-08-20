@@ -136,8 +136,7 @@ shard_pool_pending_bytes(const struct shard_pool* p)
 }
 
 void
-shard_pool_io_stats(const struct shard_pool* p,
-                    struct shard_pool_io_stats* out)
+shard_pool_io_stats(const struct shard_pool* p, struct shard_pool_io_stats* out)
 {
   memset(out, 0, sizeof(*out));
   if (p && p->io_stats)
