@@ -188,6 +188,16 @@ bench_zarr_pending_bytes(struct bench_zarr_handle* z)
 }
 
 void
+bench_zarr_io_stats(struct bench_zarr_handle* z,
+                    struct shard_pool_io_stats* out)
+{
+  if (z->ms)
+    ngff_multiscale_io_stats(z->ms, out);
+  else
+    zarr_array_io_stats(z->array, out);
+}
+
+void
 bench_zarr_close(struct bench_zarr_handle* z)
 {
   ngff_multiscale_destroy(z->ms);

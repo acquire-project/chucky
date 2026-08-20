@@ -168,6 +168,27 @@ backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
+Runs that write to a filesystem also record what the write path did. The sink
+runs one write at a time, so the depth it *achieved* is always one and is not
+recorded. What is worth knowing is the depth *available*:
+
+| field | holds |
+|---|---|
+| `io_files_waiting_mean` | how many shard files had a write waiting, averaged over time |
+| `io_files_waiting_peak` | the most that ever did at once |
+| `io_files_opened` | shard files opened over the run |
+| `io_files_open_peak` | the most open at once |
+| `io_writes` | writes the queue ran |
+| `io_bytes_copied` / `io_bytes_borrowed` | payload bytes the write owned, against bytes it borrowed from a pinned buffer |
+| `io_queued_bytes_peak` / `io_queued_writes_peak` | the deepest the backlog got |
+| `io_wait_ms_mean` / `io_wait_ms_max` | how long a write waited before it started |
+| `io_run_ms_mean` / `io_run_ms_max` | how long a write took once it started |
+| `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
+
+The window ends when streaming does, before the final drain, so these describe
+the steady state rather than the tail. A run with no filesystem output records
+none of them.
+
 Each run records memory as an estimate and a measurement:
 
 | field | holds |

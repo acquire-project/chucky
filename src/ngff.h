@@ -7,6 +7,7 @@
 #include "dtype.h"
 #include "store.h"
 #include "types.codec.h"
+#include "types.io.h"
 #include "writer.h"
 
 #include <stdint.h>
@@ -84,6 +85,12 @@ ngff_multiscale_has_error(const struct ngff_multiscale* ms);
 // Returns number of bytes queued but not yet written.
 uint64_t
 ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms);
+
+// Copy out what this pyramid's write path has measured. All levels share
+// one pool, so this covers every level at once.
+void
+ngff_multiscale_io_stats(const struct ngff_multiscale* ms,
+                         struct shard_pool_io_stats* out);
 
 // Buffer a custom attribute on the multiscale's OME group (sibling of the
 // "ome" block). Validated and copied; rewritten on next metadata write or

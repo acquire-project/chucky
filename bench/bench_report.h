@@ -1,6 +1,7 @@
 #pragma once
 
 #include "stream/layouts.h"
+#include "types.io.h"
 #include "types.stream.h"
 
 #include <stddef.h>
@@ -60,7 +61,8 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   uint64_t flush_pending_bytes);
+                   uint64_t flush_pending_bytes,
+                   const struct shard_pool_io_stats* io);
 
 // Emit the pass-case JSON report to stdout. sink_metric may be NULL (no sink
 // block is written in that case).
@@ -76,7 +78,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads);
+                      int worker_threads,
+                      const struct shard_pool_io_stats* io);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

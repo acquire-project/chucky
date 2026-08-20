@@ -55,6 +55,7 @@ SCENARIOS = {
     "256cube_single": 40,
     "medfmt_single": 10,
     "smallepoch_single": 65536,
+    "smallepoch_4shards_single": 1048576,
     "orca2_multiscale": 200,
     "256cube_multiscale": 40,
     "medfmt_multiscale": 10,
@@ -196,7 +197,8 @@ def io_runs() -> list[RunSpec]:
     runs = []
     chunk_labels = ["32K", "256K", "2M"]
     scenarios = ["orca2_single", "256cube_single",
-                  "orca2_multiscale_dim0", "256cube_multiscale_dim0"]
+                  "orca2_multiscale_dim0", "256cube_multiscale_dim0",
+                  "smallepoch_single", "smallepoch_4shards_single"]
     for sc in scenarios:
         for cl in chunk_labels:
             for codec in ["none", "zstd"]:

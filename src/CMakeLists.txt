@@ -41,7 +41,8 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
     LINKS platform
 )
 
-add_src_lib(io_queue SOURCES zarr/io_queue.h LINKS Threads::Threads chucky_log)
+add_src_lib(io_queue SOURCES zarr/io_queue.h types.io.h
+    LINKS Threads::Threads platform chucky_log)
 add_platform_sources(io_queue zarr/io_queue)
 
 add_src_lib(platform_io SOURCES platform/platform_io.h)

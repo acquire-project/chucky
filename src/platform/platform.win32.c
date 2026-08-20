@@ -82,8 +82,8 @@ platform_sleep_ns(int64_t ns)
   Sleep(ms);
 }
 
-static int64_t
-monotonic_ns(void)
+int64_t
+platform_monotonic_ns(void)
 {
   static LARGE_INTEGER freq = { 0 };
   LARGE_INTEGER cnt;
@@ -98,7 +98,7 @@ monotonic_ns(void)
 float
 platform_toc(struct platform_clock* clock)
 {
-  int64_t now = monotonic_ns();
+  int64_t now = platform_monotonic_ns();
   float elapsed = (now - clock->last_ns) / 1e9f;
   clock->last_ns = now;
   return elapsed;

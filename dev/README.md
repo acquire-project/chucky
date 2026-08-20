@@ -8,5 +8,7 @@ top rather than reading as if it were still pending.
 
 - [gpu-orchestration.md](gpu-orchestration.md) — how the GPU pipeline is put
   together, the rebuild that shipped, and the next three pieces of work.
+- [io-scheduler.md](io-scheduler.md) — why the filesystem sink writes one
+  block at a time, and the five changes that fix it.
 - [devlog.md](devlog.md) — running journal and long-lived TODO list, newest
   entries first.

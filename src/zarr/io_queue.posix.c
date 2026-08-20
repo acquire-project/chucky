@@ -1,5 +1,6 @@
 #include "zarr/io_queue.h"
 #include "log/log.h"
+#include "platform/platform.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -7,11 +8,16 @@
 
 struct io_job
 {
-  void (*fn)(void*);
-  void* ctx;
-  void (*ctx_free)(void*);
+  struct io_work work;
   uint64_t seq;
-  uint64_t nbytes;
+  int64_t post_ns;
+};
+
+// One open file with work waiting on it.
+struct file_waiting
+{
+  uint64_t file;
+  uint64_t jobs;
 };
 
 struct io_queue
@@ -30,9 +36,92 @@ struct io_queue
   uint64_t retired_seq;   // updated after each job completes
   uint64_t pending_bytes; // raised on post, lowered when the job finishes
 
+  // Files with work waiting, and the time-weighted history of how many there
+  // were. Weighting needs an absolute clock: the average has to be over time,
+  // not over the number of times the count happened to change.
+  struct file_waiting* files;
+  uint64_t nfiles;
+  uint64_t files_cap;
+  int64_t start_ns;
+  int64_t weighted_from_ns;
+  double files_weighted_ns;
+
+  struct io_queue_stats stats;
+
   int shutdown;
   int started;
 };
+
+// Fold the span since the last change into the time-weighted total. Call
+// before every change to nfiles, and again when reading the average out.
+static void
+fold_files_waiting(struct io_queue* q)
+{
+  int64_t now = platform_monotonic_ns();
+  q->files_weighted_ns += (double)q->nfiles * (double)(now - q->weighted_from_ns);
+  q->weighted_from_ns = now;
+}
+
+static void
+file_work_added(struct io_queue* q, uint64_t file)
+{
+  if (file == 0)
+    return;
+
+  for (uint64_t i = 0; i < q->nfiles; ++i) {
+    if (q->files[i].file == file) {
+      q->files[i].jobs++;
+      return;
+    }
+  }
+
+  fold_files_waiting(q);
+
+  if (q->nfiles == q->files_cap) {
+    uint64_t cap = q->files_cap ? q->files_cap * 2 : 16;
+    struct file_waiting* grown =
+      (struct file_waiting*)realloc(q->files, cap * sizeof(*grown));
+    // Losing this only costs accuracy in a counter, so carry on untracked
+    // rather than failing a write.
+    if (!grown)
+      return;
+    q->files = grown;
+    q->files_cap = cap;
+  }
+
+  q->files[q->nfiles++] = (struct file_waiting){ .file = file, .jobs = 1 };
+  if (q->nfiles > q->stats.files_waiting_peak)
+    q->stats.files_waiting_peak = q->nfiles;
+}
+
+static void
+file_work_finished(struct io_queue* q, uint64_t file)
+{
+  if (file == 0)
+    return;
+
+  for (uint64_t i = 0; i < q->nfiles; ++i) {
+    if (q->files[i].file != file)
+      continue;
+    if (--q->files[i].jobs == 0) {
+      fold_files_waiting(q);
+      q->files[i] = q->files[q->nfiles - 1];
+      q->nfiles--;
+    }
+    return;
+  }
+}
+
+static uint64_t
+size_bucket(uint64_t nbytes)
+{
+  uint64_t bucket = 0;
+  while (nbytes > 1 && bucket + 1 < IO_SIZE_BUCKETS) {
+    nbytes >>= 1;
+    bucket++;
+  }
+  return bucket;
+}
 
 static void*
 worker_thread(void* arg)
@@ -55,13 +144,26 @@ worker_thread(void* arg)
     q->tail++;
     pthread_mutex_unlock(&q->mutex);
 
-    job.fn(job.ctx);
-    if (job.ctx_free)
-      job.ctx_free(job.ctx);
+    int64_t started_ns = platform_monotonic_ns();
+    job.work.fn(job.work.ctx);
+    if (job.work.ctx_free)
+      job.work.ctx_free(job.work.ctx);
+    int64_t finished_ns = platform_monotonic_ns();
 
     pthread_mutex_lock(&q->mutex);
     q->retired_seq = job.seq;
-    q->pending_bytes -= job.nbytes;
+    q->pending_bytes -= job.work.nbytes;
+    file_work_finished(q, job.work.file);
+    if (job.work.nbytes > 0) {
+      double wait_ms = (double)(started_ns - job.post_ns) / 1e6;
+      double run_ms = (double)(finished_ns - started_ns) / 1e6;
+      q->stats.wait_ms_total += wait_ms;
+      q->stats.run_ms_total += run_ms;
+      if (wait_ms > q->stats.wait_ms_max)
+        q->stats.wait_ms_max = wait_ms;
+      if (run_ms > q->stats.run_ms_max)
+        q->stats.run_ms_max = run_ms;
+    }
     pthread_cond_broadcast(&q->cond_retired);
     pthread_mutex_unlock(&q->mutex);
   }
@@ -82,6 +184,9 @@ io_queue_create(void)
     free(q);
     return NULL;
   }
+
+  q->start_ns = platform_monotonic_ns();
+  q->weighted_from_ns = q->start_ns;
 
   pthread_mutex_init(&q->mutex, NULL);
   pthread_cond_init(&q->cond_not_empty, NULL);
@@ -115,6 +220,7 @@ io_queue_destroy(struct io_queue* q)
     pthread_join(q->thread, NULL);
 
   free(q->ring);
+  free(q->files);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);
   pthread_cond_destroy(&q->cond_retired);
@@ -146,20 +252,7 @@ ring_grow(struct io_queue* q)
 }
 
 int
-io_queue_post(struct io_queue* q,
-              void (*fn)(void*),
-              void* ctx,
-              void (*ctx_free)(void*))
-{
-  return io_queue_post_bytes(q, fn, ctx, ctx_free, 0);
-}
-
-int
-io_queue_post_bytes(struct io_queue* q,
-                    void (*fn)(void*),
-                    void* ctx,
-                    void (*ctx_free)(void*),
-                    uint64_t nbytes)
+io_queue_post(struct io_queue* q, struct io_work work)
 {
   pthread_mutex_lock(&q->mutex);
 
@@ -172,14 +265,28 @@ io_queue_post_bytes(struct io_queue* q,
 
   q->next_seq++;
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
-    .fn = fn,
-    .ctx = ctx,
-    .ctx_free = ctx_free,
+    .work = work,
     .seq = q->next_seq,
-    .nbytes = nbytes,
+    .post_ns = platform_monotonic_ns(),
   };
   q->head++;
-  q->pending_bytes += nbytes;
+  q->pending_bytes += work.nbytes;
+
+  file_work_added(q, work.file);
+
+  uint64_t waiting = q->head - q->tail;
+  if (waiting > q->stats.jobs_waiting_peak)
+    q->stats.jobs_waiting_peak = waiting;
+  if (q->pending_bytes > q->stats.bytes_waiting_peak)
+    q->stats.bytes_waiting_peak = q->pending_bytes;
+  if (work.nbytes > 0) {
+    q->stats.writes++;
+    q->stats.size_buckets[size_bucket(work.nbytes)]++;
+    if (work.borrowed)
+      q->stats.bytes_borrowed += work.nbytes;
+    else
+      q->stats.bytes_copied += work.nbytes;
+  }
 
   pthread_cond_signal(&q->cond_not_empty);
   pthread_mutex_unlock(&q->mutex);
@@ -194,6 +301,19 @@ io_queue_pending_bytes(const struct io_queue* q)
   uint64_t pending = mq->pending_bytes;
   pthread_mutex_unlock(&mq->mutex);
   return pending;
+}
+
+void
+io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  pthread_mutex_lock(&mq->mutex);
+  fold_files_waiting(mq);
+  *out = mq->stats;
+  int64_t observed_ns = mq->weighted_from_ns - mq->start_ns;
+  out->files_waiting_mean =
+    observed_ns > 0 ? mq->files_weighted_ns / (double)observed_ns : 0.0;
+  pthread_mutex_unlock(&mq->mutex);
 }
 
 struct io_event
