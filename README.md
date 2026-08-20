@@ -167,7 +167,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 - `bench_stream_orca2_single` / `_multiscale` / `_multiscale_dim0`
 - `bench_stream_medfmt_single` / `_multiscale` / `_multiscale_dim0`
 - `bench_stream_smallepoch_single` — a tiny epoch, one shard file at a time
-- `bench_stream_smallepoch_4shards_single` — the same shape over four shard
+- `bench_stream_smallepoch_4shards_single` — the same chunk over four shard
   files, so writes to different files can overlap
 - `bench_stream_aqz_single`
 - `bench_stream_256cube_two_streams` — two streams sharing one GPU

@@ -105,14 +105,14 @@ a rebase onto a squashed commit at every merge.
 ### 1. Measure the write path
 
 No behavior change. Adds the counters needed to say what the sink is actually
-doing, and the flags the later steps will honor.
+doing.
 
-The headline number is **how many distinct shard files have work waiting at
+The headline number is **how many distinct shard files have a write waiting at
 once**, as a high-water mark and as a time-weighted average. Not how many have
 a write in flight: that is one by construction today, so measuring it would
 only restate the problem. What is unknown, and what decides whether any of
 this is worth building, is how much depth is *available* to take. If only two
-or three files ever have work waiting, the pool size caps throughput and no
+or three files ever have a write waiting, the pool size caps throughput and no
 scheduler can reach depth 16.
 
 Also: open file generations, summed across levels rather than guessed from the
@@ -127,16 +127,14 @@ on the Python side and only a rename or a change of meaning requires one. But
 explorer has its own list, so a new counter is dropped silently unless it is
 named in both.
 
-Flags accepted and written into the results file, inert until step 3:
-`--io-writes-in-flight`, `--io-writes-in-flight-per-file`, `--io-workers`,
-`--io-backend`.
-
-Adds a `smallepoch_shards` scenario. Today `smallepoch_single` has one chunk
-along each of its inner dimensions, so it produces exactly one shard file and
-raising its concurrent-shard target does nothing. The new scenario chunks an
-inner dimension to give four. The single-shard scenario stays, because it is
-the only one that exercises a single growing file and so the only place
-pre-sizing can be measured.
+Adds a `smallepoch_4shards_single` scenario. Today `smallepoch_single` has one
+chunk along each of its inner dimensions, so it produces exactly one shard file
+and raising its concurrent-shard target does nothing. The new scenario splits
+both inner dimensions in two to give four. Its chunk is the same size, so its
+epoch is four times as large; the pair is comparable on what the write path did
+rather than on throughput. The single-shard scenario stays, because it is the
+only one that exercises a single growing file and so the only place pre-sizing
+can be measured.
 
 ### 2. Correctness at one write in flight
 
@@ -171,7 +169,10 @@ Gate: byte-identical output and unchanged failure behavior.
 ### 3. Several writes at once
 
 Raise the worker count, schedule ready files round-robin, and add pre-sizing
-so the per-file limit can go above one. Sweep total writes in flight from 1 to
+so the per-file limit can go above one. Adds the flags that select all of
+this, written into the results file so a sweep records what it ran:
+`--io-writes-in-flight`, `--io-writes-in-flight-per-file`, `--io-workers`,
+`--io-backend`. Sweep total writes in flight from 1 to
 32; the curve is flat past 16 on the array measured above.
 
 Gate: the reef-l40 XFS matrix.

@@ -185,9 +185,9 @@ recorded. What is worth knowing is the depth *available*:
 | `io_run_ms_mean` / `io_run_ms_max` | how long a write took once it started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
-The window opens on the first queued write and closes when the run has
-flushed, so it covers streaming and the closing footer, truncate and close of
-every shard, but not the startup before the first write. Truncate and close
+The window opens on the first queued job, whatever kind, and closes when the
+run has flushed, so it covers streaming and the closing footer, truncate and
+close of every shard, but not the startup before it. Truncate and close
 carry no payload and so do not count toward the files-waiting figures, but the
 footer write does — a peak can come from the flush writing a footer to every
 open shard at once rather than from streaming. A run with no filesystem output
