@@ -41,7 +41,13 @@ throttled_post(struct throttled_shard_sink* s, size_t nbytes)
   j->latency_ns = s->latency_ns;
   j->bytes_per_sec = s->bytes_per_sec;
   j->total_bytes = &s->total_bytes;
-  if (io_queue_post_bytes(s->queue, throttled_fn, j, free, nbytes)) {
+  if (io_queue_post(s->queue,
+                    (struct io_work){
+                      .fn = throttled_fn,
+                      .ctx = j,
+                      .ctx_free = free,
+                      .nbytes = nbytes,
+                    })) {
     free(j);
     goto Error;
   }

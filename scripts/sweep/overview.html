@@ -226,6 +226,11 @@ const METRICS = [
   {key: "stalls.peak_pending_mib", label: "Peak pending bytes", unit: "MiB", better: "low"},
   {key: "stalls.backpressure_ms", label: "Backpressure wait", unit: "ms", better: "low"},
   {key: "stalls.flush_stall_ms", label: "Flush stall", unit: "ms", better: "low"},
+  {key: "io_files_waiting_mean", label: "Files with writes waiting", unit: "", better: "high",
+   note: "how many writes could run at once; the sink runs one at a time, so this is room available, not room used"},
+  {key: "io_files_waiting_peak", label: "Files with writes waiting, peak", unit: "", better: "high"},
+  {key: "io_wait_ms_mean", label: "Wait before a write starts", unit: "ms", better: "low"},
+  {key: "io_run_ms_mean", label: "Time to run a write", unit: "ms", better: "low"},
 ];
 
 const SCENARIO_GROUPS = [
@@ -305,7 +310,7 @@ function metricValue(run, key) {
 
 function scenarioRank(name) {
   for (const g of SCENARIO_GROUPS) if (name.endsWith(g.suffix)) return g.rank;
-  return 3;
+  return 0; // only the multiscale variants carry a suffix
 }
 
 function sortedScenarios(names) {
@@ -345,6 +350,10 @@ const state = {metric: METRICS[0].key, scenario: null, codec: null, fill: null, 
                sink: null, grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
+/** " (GiB/s)" after a label, or nothing at all for a count, which has no unit. */
+function unitSuffix(meta) { return meta.unit ? ` (${meta.unit})` : ""; }
+/** " GiB/s" after a value, same rule. */
+function unitTail(meta) { return meta.unit ? ` ${meta.unit}` : ""; }
 
 /** The opening view should not be empty: pick the config the most sweeps ran. */
 function pickDefaults() {
@@ -593,7 +602,7 @@ const fillSel = document.getElementById("fill-sel");
 const backendSel = document.getElementById("backend-sel");
 const sinkSel = document.getElementById("sink-sel");
 
-fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label} (${m.unit})`));
+fillSelect(metricSel, METRICS.map(m => m.key), METRICS.map(m => `${m.label}${unitSuffix(m)}`));
 fillSelect(scenarioSel, ALL_SCENARIOS);
 fillSelect(codecSel, ALL_CODECS);
 fillSelect(fillSel, ALL_FILLS);
@@ -704,7 +713,7 @@ function renderTiles() {
     if (latest) {
       const value = el("div", "tile-value");
       value.appendChild(document.createTextNode(fmt(latest.value)));
-      value.appendChild(el("span", "unit", meta.unit));
+      if (meta.unit) value.appendChild(el("span", "unit", meta.unit));
       tile.appendChild(value);
     } else {
       tile.appendChild(el("div", "tile-blank", "No run matches this filter"));
@@ -941,7 +950,7 @@ function drawTrendChart(host, width, panel, meta, dates, maxValue) {
           const who = machine.members.length > 1
             ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
             : `${machine.name} · ${point.sweep.commit}`;
-          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`);
+          tooltipRow(node, machine.color, who, `${fmt(point.value)}${unitTail(meta)}`);
           node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
         }
         node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));
@@ -958,7 +967,7 @@ function renderMatrix() {
   host.replaceChildren();
   const meta = metricMeta(state.metric);
   document.getElementById("matrix-sub").textContent =
-    `Best ${meta.label.toLowerCase()} (${meta.unit}) on ${state.fill} in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
+    `Best ${meta.label.toLowerCase()}${unitSuffix(meta)} on ${state.fill} in each machine's most recent sweep, with the change from its previous sweep. Every scenario is listed; pick one to plot it above.`;
 
   const table = el("table", "matrix");
   const thead = el("thead");
@@ -1175,7 +1184,7 @@ function renderTrendTable() {
   const thead = el("thead");
   const headRow = el("tr");
   for (const [label, cls] of [["Input", ""], ["Date", ""], ["Machine", ""], ["Commit", ""],
-                              [`${meta.label} (${meta.unit})`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
+                              [`${meta.label}${unitSuffix(meta)}`, "num"], ["Best configuration", ""], ["Runs", "num"]]) {
     headRow.appendChild(el("th", cls, label));
   }
   thead.appendChild(headRow);

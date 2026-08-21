@@ -5,6 +5,7 @@
 #include "ngff.h"
 #include "store.h"
 #include "types.codec.h"
+#include "zarr/types.io.h"
 #include "writer.h"
 #include "zarr.h"
 
@@ -56,6 +57,11 @@ bench_zarr_flush(struct bench_zarr_handle* z);
 // Return number of bytes queued but not yet written.
 uint64_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z);
+
+// Copy out what was measured. Read before close.
+void
+bench_zarr_io_stats(struct bench_zarr_handle* z,
+                    struct shard_pool_io_stats* out);
 
 // Close and free resources. Safe to call on a zero-initialized handle.
 void

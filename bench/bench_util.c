@@ -568,6 +568,10 @@ run_bench(const struct bench_config* cfg)
   {
     struct stream_metrics m = bench_get_metrics(&h);
     int has_output = output_path || cfg->s3_bucket;
+    // Read after flush, so this covers streaming plus every shard close.
+    struct shard_pool_io_stats io_stats = { 0 };
+    if (has_output)
+      bench_zarr_io_stats(&zarr, &io_stats);
     size_t sink_total_bytes;
     if (has_output)
       sink_total_bytes = meter.total_bytes;
@@ -586,7 +590,8 @@ run_bench(const struct bench_config* cfg)
                        wall_s,
                        init_s,
                        flush_s,
-                       pending_bytes);
+                       pending_bytes,
+                       &io_stats);
     print_memory_report(&mem_used);
 
     if (cfg->json_output) {
@@ -603,7 +608,8 @@ run_bench(const struct bench_config* cfg)
                             init_s,
                             flush_s,
                             &mem_used,
-                            bench_worker_threads(&h));
+                            bench_worker_threads(&h),
+                            &io_stats);
     }
   }
 

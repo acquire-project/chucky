@@ -67,6 +67,7 @@ set(BENCH_STREAM_SOURCES
     bench_stream_medfmt_multiscale.c
     bench_stream_medfmt_multiscale_dim0.c
     bench_stream_smallepoch_single.c
+    bench_stream_smallepoch_4shards.c
     bench_stream_aqz_single.c
 )
 

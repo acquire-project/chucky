@@ -1,8 +1,10 @@
 #include "bench_zarr.h"
+#include "ngff/ngff_multiscale.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/store.h"
+#include "zarr/zarr_array.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -185,6 +187,16 @@ bench_zarr_pending_bytes(struct bench_zarr_handle* z)
   if (z->ms)
     return ngff_multiscale_pending_bytes(z->ms);
   return zarr_array_pending_bytes(z->array);
+}
+
+void
+bench_zarr_io_stats(struct bench_zarr_handle* z,
+                    struct shard_pool_io_stats* out)
+{
+  if (z->ms)
+    ngff_multiscale_io_stats(z->ms, out);
+  else
+    zarr_array_io_stats(z->array, out);
 }
 
 void

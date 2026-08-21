@@ -31,6 +31,8 @@ CONFIG_KEYS = (
 RUN_METRICS = (
     "throughput_in_gibs", "throughput_out_gibs", "compression_fold",
     "input_gib", "compressed_gib", "elapsed_s", "wall_s", "init_s",
+    "io_files_waiting_mean", "io_files_waiting_peak", "io_files_open_peak",
+    "io_queued_bytes_peak", "io_wait_ms_mean", "io_run_ms_mean",
 )
 
 STALL_METRICS = (

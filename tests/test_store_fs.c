@@ -280,6 +280,65 @@ Fail:
 }
 
 static int
+test_shard_pool_io_stats(void)
+{
+  log_info("=== test_shard_pool_io_stats ===");
+  struct store* s = store_fs_create(tmpdir, 0);
+  CHECK(Fail, s);
+  CHECK(Fail2, s->mkdirs(s, "stats") == 0);
+
+  // Gate the worker: a queued close keeps the handle, so all six are open.
+  struct shard_pool* pool = s->create_pool(s, 2);
+  CHECK(Fail2, pool);
+
+  atomic_int gate = 0;
+  CHECK(Fail3, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
+
+  for (int i = 0; i < 6; ++i) {
+    char key[256];
+    snprintf(key, sizeof(key), "stats/s%d.bin", i);
+    struct shard_writer* w = pool->open(pool, (uint64_t)(i % 2), key);
+    CHECK(Fail4, w);
+    char data[32];
+    int dlen = snprintf(data, sizeof(data), "shard_%d", i);
+    CHECK(Fail4, w->write(w, 0, data, data + dlen) == 0);
+    CHECK(Fail4, w->finalize(w) == 0);
+  }
+
+  struct shard_pool_io_stats io;
+  shard_pool_io_stats(pool, &io);
+  CHECK(Fail4, io.files_opened == 6);
+  CHECK(Fail4, io.files_open_peak == 6);
+  // Six distinct files, all with work still queued behind the gate.
+  CHECK(Fail4, io.queue.files_waiting_peak == 6);
+
+  atomic_store(&gate, 1);
+  pool->wait_fence(pool, pool->record_fence(pool));
+
+  shard_pool_io_stats(pool, &io);
+  CHECK(Fail3, io.queue.writes == 6);
+  // Copying path, so nothing is borrowed.
+  CHECK(Fail3, io.queue.bytes_copied > 0);
+  CHECK(Fail3, io.queue.bytes_borrowed == 0);
+  // Peaks are high-water marks, unaffected by draining.
+  CHECK(Fail3, io.files_open_peak == 6);
+
+  shard_pool_destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  atomic_store(&gate, 1);
+Fail3:
+  shard_pool_destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  return 1;
+}
+
+static int
 test_shard_pool_error_propagation(void)
 {
   log_info("=== test_shard_pool_error_propagation ===");
@@ -567,6 +626,7 @@ main(void)
   err |= test_shard_pool_fence();
   err |= test_shard_pool_on_demand_mkdir();
   err |= test_shard_pool_unbuffered();
+  err |= test_shard_pool_io_stats();
   err |= test_shard_pool_error_propagation();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

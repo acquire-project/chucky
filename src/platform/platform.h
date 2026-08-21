@@ -47,6 +47,10 @@ struct platform_clock
 float
 platform_toc(struct platform_clock* clock);
 
+// Monotonic nanoseconds; the origin is arbitrary, only differences useful.
+int64_t
+platform_monotonic_ns(void);
+
 // One-time initialization. Thread-safe.
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN

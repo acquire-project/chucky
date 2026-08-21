@@ -4,6 +4,7 @@
 #pragma once
 
 #include "writer.h"
+#include "zarr/io_queue.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -30,18 +31,27 @@ struct shard_pool
 
   // Bytes accepted but not yet written. A write counts from the moment it is
   // accepted until it lands, so the figure can read high but never low — a
-  // caller deciding whether to slow down can tolerate too high, not too low.
+  // a caller deciding to slow down tolerates too high, never too low.
   uint64_t (*pending_bytes)(const struct shard_pool* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).
   // NULL = no alignment constraint.
   size_t (*required_shard_alignment)(const struct shard_pool* self);
 
+  // Copy out the write measurements; NULL if nothing is measured.
+  void (*io_stats)(const struct shard_pool* self,
+                   struct shard_pool_io_stats* out);
+
   void (*destroy)(struct shard_pool* self);
 };
 
 uint64_t
 shard_pool_pending_bytes(const struct shard_pool* p);
+
+// Zeroed for a null pool, or one with nothing measured.
+void
+shard_pool_io_stats(const struct shard_pool* p,
+                    struct shard_pool_io_stats* out);
 
 size_t
 shard_pool_required_shard_alignment(const struct shard_pool* p);

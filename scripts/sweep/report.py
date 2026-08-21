@@ -60,7 +60,9 @@ SITE_FILES = {
 # The explorer draws from the config fields and never reads the recorded id,
 # which is the longest string in a sweep. The overview keeps it, because its
 # movers panel matches runs between sweeps by it.
-EXPLORER_OMITS = ("id",)
+# io_write_sizes is a list of objects, so it defeats the columnar packing and
+# no page reads it.
+EXPLORER_OMITS = ("id", "io_write_sizes")
 EXPLORER_VERSION = 5
 
 # What the explorer's sweep list keeps from each summarized sweep.

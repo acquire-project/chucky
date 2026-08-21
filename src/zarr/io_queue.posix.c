@@ -1,5 +1,7 @@
 #include "zarr/io_queue.h"
 #include "log/log.h"
+#include "platform/platform.h"
+#include "zarr/io_queue_stats.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -7,11 +9,9 @@
 
 struct io_job
 {
-  void (*fn)(void*);
-  void* ctx;
-  void (*ctx_free)(void*);
+  struct io_work work;
   uint64_t seq;
-  uint64_t nbytes;
+  int64_t post_ns;
 };
 
 struct io_queue
@@ -29,6 +29,8 @@ struct io_queue
   uint64_t next_seq;      // incremented on post
   uint64_t retired_seq;   // updated after each job completes
   uint64_t pending_bytes; // raised on post, lowered when the job finishes
+
+  struct io_queue_counters counters;
 
   int shutdown;
   int started;
@@ -55,13 +57,19 @@ worker_thread(void* arg)
     q->tail++;
     pthread_mutex_unlock(&q->mutex);
 
-    job.fn(job.ctx);
-    if (job.ctx_free)
-      job.ctx_free(job.ctx);
+    // Untimed for truncate and close: no payload, so no clock reads.
+    const int timed = job.work.nbytes > 0;
+    const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
+    job.work.fn(job.work.ctx);
+    if (job.work.ctx_free)
+      job.work.ctx_free(job.work.ctx);
+    const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     pthread_mutex_lock(&q->mutex);
     q->retired_seq = job.seq;
-    q->pending_bytes -= job.nbytes;
+    q->pending_bytes -= job.work.nbytes;
+    io_queue_counters_finished(
+      &q->counters, &job.work, job.post_ns, started_ns, finished_ns);
     pthread_cond_broadcast(&q->cond_retired);
     pthread_mutex_unlock(&q->mutex);
   }
@@ -115,6 +123,7 @@ io_queue_destroy(struct io_queue* q)
     pthread_join(q->thread, NULL);
 
   free(q->ring);
+  io_queue_counters_free(&q->counters);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);
   pthread_cond_destroy(&q->cond_retired);
@@ -146,20 +155,7 @@ ring_grow(struct io_queue* q)
 }
 
 int
-io_queue_post(struct io_queue* q,
-              void (*fn)(void*),
-              void* ctx,
-              void (*ctx_free)(void*))
-{
-  return io_queue_post_bytes(q, fn, ctx, ctx_free, 0);
-}
-
-int
-io_queue_post_bytes(struct io_queue* q,
-                    void (*fn)(void*),
-                    void* ctx,
-                    void (*ctx_free)(void*),
-                    uint64_t nbytes)
+io_queue_post(struct io_queue* q, struct io_work work)
 {
   pthread_mutex_lock(&q->mutex);
 
@@ -171,15 +167,17 @@ io_queue_post_bytes(struct io_queue* q,
   }
 
   q->next_seq++;
+  const int64_t now = platform_monotonic_ns();
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
-    .fn = fn,
-    .ctx = ctx,
-    .ctx_free = ctx_free,
+    .work = work,
     .seq = q->next_seq,
-    .nbytes = nbytes,
+    .post_ns = now,
   };
   q->head++;
-  q->pending_bytes += nbytes;
+  q->pending_bytes += work.nbytes;
+
+  io_queue_counters_posted(
+    &q->counters, &work, q->head - q->tail, q->pending_bytes, now);
 
   pthread_cond_signal(&q->cond_not_empty);
   pthread_mutex_unlock(&q->mutex);
@@ -194,6 +192,15 @@ io_queue_pending_bytes(const struct io_queue* q)
   uint64_t pending = mq->pending_bytes;
   pthread_mutex_unlock(&mq->mutex);
   return pending;
+}
+
+void
+io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  pthread_mutex_lock(&mq->mutex);
+  io_queue_counters_read(&mq->counters, out, platform_monotonic_ns());
+  pthread_mutex_unlock(&mq->mutex);
 }
 
 struct io_event

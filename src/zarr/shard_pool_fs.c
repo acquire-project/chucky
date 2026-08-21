@@ -24,6 +24,11 @@ struct shard_pool_fs
   _Atomic int io_error;
   // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
+
+  // A fresh number per open; a descriptor can be reused after close.
+  _Atomic uint64_t files_opened;
+  _Atomic uint64_t files_open_now;
+  _Atomic uint64_t files_open_peak;
 };
 
 // --- Writer slot for a single shard file ---
@@ -32,10 +37,12 @@ struct fs_slot
 {
   struct shard_writer base;
   platform_fd fd;
+  uint64_t generation; // which open of a shard file
   struct io_queue* queue;
   size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
   _Atomic int* io_error; // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
+  _Atomic uint64_t* files_open_now;
 };
 
 struct pwrite_job
@@ -94,7 +101,14 @@ fs_slot_write(struct shard_writer* self,
     j->nbytes = nbytes;
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
-    if (io_queue_post_bytes(w->queue, pwrite_fn, j, job_free, nbytes)) {
+    if (io_queue_post(w->queue,
+                      (struct io_work){
+                        .fn = pwrite_fn,
+                        .ctx = j,
+                        .ctx_free = job_free,
+                        .nbytes = nbytes,
+                        .file = w->generation,
+                      })) {
       job_free(j);
       goto Error;
     }
@@ -147,7 +161,15 @@ fs_slot_write_direct(struct shard_writer* self,
     j->nbytes = nbytes;
     j->data = beg;
     j->io_error = w->io_error;
-    if (io_queue_post_bytes(w->queue, pwrite_ref_fn, j, free, nbytes)) {
+    if (io_queue_post(w->queue,
+                      (struct io_work){
+                        .fn = pwrite_ref_fn,
+                        .ctx = j,
+                        .ctx_free = free,
+                        .nbytes = nbytes,
+                        .file = w->generation,
+                        .borrowed = 1,
+                      })) {
       free(j);
       goto Error;
     }
@@ -163,6 +185,7 @@ Error:
 struct close_job
 {
   platform_fd fd;
+  _Atomic uint64_t* files_open_now;
 };
 
 static void
@@ -170,6 +193,7 @@ close_fn(void* arg)
 {
   struct close_job* j = (struct close_job*)arg;
   platform_close(j->fd);
+  atomic_fetch_sub(j->files_open_now, 1);
 }
 
 struct truncate_job
@@ -211,7 +235,13 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
     j->fd = w->fd;
     j->logical_size = logical_size;
     j->io_error = w->io_error;
-    if (io_queue_post(w->queue, truncate_fn, j, free)) {
+    if (io_queue_post(w->queue,
+                      (struct io_work){
+                        .fn = truncate_fn,
+                        .ctx = j,
+                        .ctx_free = free,
+                        .file = w->generation,
+                      })) {
       free(j);
       return 1;
     }
@@ -231,12 +261,20 @@ fs_slot_finalize(struct shard_writer* self)
     struct close_job* j = (struct close_job*)malloc(sizeof(struct close_job));
     CHECK(Error, j);
     j->fd = w->fd;
-    if (io_queue_post(w->queue, close_fn, j, free)) {
+    j->files_open_now = w->files_open_now;
+    if (io_queue_post(w->queue,
+                      (struct io_work){
+                        .fn = close_fn,
+                        .ctx = j,
+                        .ctx_free = free,
+                        .file = w->generation,
+                      })) {
       free(j);
       goto Error;
     }
   } else {
     platform_close(w->fd);
+    atomic_fetch_sub(w->files_open_now, 1);
   }
 
   w->fd = PLATFORM_FD_INVALID;
@@ -280,6 +318,13 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
       log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&path));
       goto Fail;
     }
+  }
+
+  w->generation = atomic_fetch_add(&p->files_opened, 1) + 1;
+  const uint64_t open_now = atomic_fetch_add(&p->files_open_now, 1) + 1;
+  uint64_t peak = atomic_load(&p->files_open_peak);
+  while (open_now > peak &&
+         !atomic_compare_exchange_weak(&p->files_open_peak, &peak, open_now)) {
   }
 
   strbuf_free(&path);
@@ -329,6 +374,16 @@ pool_fs_pending_bytes(const struct shard_pool* self)
   return io_queue_pending_bytes(p->queue);
 }
 
+static void
+pool_fs_io_stats(const struct shard_pool* self, struct shard_pool_io_stats* out)
+{
+  const struct shard_pool_fs* p =
+    container_of(self, struct shard_pool_fs, base);
+  io_queue_get_stats(p->queue, &out->queue);
+  out->files_opened = atomic_load(&p->files_opened);
+  out->files_open_peak = atomic_load(&p->files_open_peak);
+}
+
 static size_t
 pool_fs_required_shard_alignment(const struct shard_pool* self)
 {
@@ -371,7 +426,8 @@ int
 shard_pool_fs_inject_failing_job(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  return io_queue_post(p->queue, fail_fn, (void*)&p->io_error, NULL);
+  return io_queue_post(
+    p->queue, (struct io_work){ .fn = fail_fn, .ctx = (void*)&p->io_error });
 }
 
 int
@@ -415,7 +471,9 @@ shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
     return 1;
   g->gate = gate;
   g->queue = p->queue;
-  if (io_queue_post(p->queue, gate_fn, (void*)g, free)) {
+  if (io_queue_post(
+        p->queue,
+        (struct io_work){ .fn = gate_fn, .ctx = (void*)g, .ctx_free = free })) {
     free(g);
     return 1;
   }
@@ -439,6 +497,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->base.has_error = pool_fs_has_error;
   p->base.pending_bytes = pool_fs_pending_bytes;
   p->base.required_shard_alignment = pool_fs_required_shard_alignment;
+  p->base.io_stats = pool_fs_io_stats;
   p->base.destroy = pool_fs_destroy;
   p->nslots = nslots;
   p->unbuffered = unbuffered;
@@ -462,6 +521,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->alignment = page_size;
     s->io_error = &p->io_error;
     s->fail_next_truncate = &p->fail_next_truncate;
+    s->files_open_now = &p->files_open_now;
   }
 
   return &p->base;

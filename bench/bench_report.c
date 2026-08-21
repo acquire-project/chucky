@@ -120,6 +120,52 @@ log_bench_header(const struct tile_stream_layout* layout,
   }
 }
 
+// Writes, and the room for running several at once.
+static void
+print_write_report(const struct shard_pool_io_stats* io)
+{
+  if (!io || io->queue.writes == 0)
+    return;
+
+  fputc('\n', stderr);
+  print_report("  --- Writes ---");
+  print_report("  files waiting:   %.2f avg, %llu peak",
+               io->queue.files_waiting_mean,
+               (unsigned long long)io->queue.files_waiting_peak);
+  print_report("  files opened:    %llu (%llu open at once)",
+               (unsigned long long)io->files_opened,
+               (unsigned long long)io->files_open_peak);
+
+  char buf[32];
+  format_bytes(buf, sizeof(buf), io->queue.bytes_waiting_peak);
+  // Two high-water marks, not one moment; the running job is in the bytes.
+  print_report("  queued peak:     %s, %llu jobs",
+               buf,
+               (unsigned long long)io->queue.jobs_waiting_peak);
+
+  format_bytes(buf, sizeof(buf), io->queue.bytes_borrowed);
+  char cbuf[32];
+  format_bytes(cbuf, sizeof(cbuf), io->queue.bytes_copied);
+  print_report("  writes:          %llu (%s borrowed, %s copied)",
+               (unsigned long long)io->queue.writes,
+               buf,
+               cbuf);
+  print_report("  wait per write:  %.3f ms avg, %.3f ms max",
+               io->queue.wait_ms_mean,
+               io->queue.wait_ms_max);
+  print_report("  run per write:   %.3f ms avg, %.3f ms max",
+               io->queue.run_ms_mean,
+               io->queue.run_ms_max);
+
+  for (uint64_t i = 0; i < IO_SIZE_BUCKETS; ++i) {
+    if (io->queue.size_buckets[i] == 0)
+      continue;
+    format_bytes(buf, sizeof(buf), (uint64_t)1 << i);
+    print_report(
+      "    >= %-10s %llu", buf, (unsigned long long)io->queue.size_buckets[i]);
+  }
+}
+
 void
 print_bench_report(const struct stream_metrics* metrics,
                    const struct tile_stream_layout* layout,
@@ -130,7 +176,8 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   uint64_t flush_pending_bytes)
+                   uint64_t flush_pending_bytes,
+                   const struct shard_pool_io_stats* io)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -211,6 +258,8 @@ print_bench_report(const struct stream_metrics* metrics,
     print_report("  peak pending:    %s", pbuf);
   }
 
+  print_write_report(io);
+
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
                : 0.0;
@@ -281,7 +330,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads)
+                      int worker_threads,
+                      const struct shard_pool_io_stats* io)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -342,6 +392,48 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, mem->measured_bytes);
   jw_key(&jw, "worker_threads");
   jw_uint(&jw, (uint64_t)worker_threads);
+
+  if (io && io->queue.writes > 0) {
+    jw_key(&jw, "io_files_waiting_mean");
+    jw_float(&jw, io->queue.files_waiting_mean);
+    jw_key(&jw, "io_files_waiting_peak");
+    jw_uint(&jw, io->queue.files_waiting_peak);
+    jw_key(&jw, "io_files_opened");
+    jw_uint(&jw, io->files_opened);
+    jw_key(&jw, "io_files_open_peak");
+    jw_uint(&jw, io->files_open_peak);
+    jw_key(&jw, "io_writes");
+    jw_uint(&jw, io->queue.writes);
+    jw_key(&jw, "io_bytes_copied");
+    jw_uint(&jw, io->queue.bytes_copied);
+    jw_key(&jw, "io_bytes_borrowed");
+    jw_uint(&jw, io->queue.bytes_borrowed);
+    jw_key(&jw, "io_queued_bytes_peak");
+    jw_uint(&jw, io->queue.bytes_waiting_peak);
+    jw_key(&jw, "io_queued_jobs_peak");
+    jw_uint(&jw, io->queue.jobs_waiting_peak);
+    jw_key(&jw, "io_wait_ms_mean");
+    jw_float(&jw, io->queue.wait_ms_mean);
+    jw_key(&jw, "io_wait_ms_max");
+    jw_float(&jw, io->queue.wait_ms_max);
+    jw_key(&jw, "io_run_ms_mean");
+    jw_float(&jw, io->queue.run_ms_mean);
+    jw_key(&jw, "io_run_ms_max");
+    jw_float(&jw, io->queue.run_ms_max);
+    jw_key(&jw, "io_write_sizes");
+    jw_array_begin(&jw);
+    for (uint64_t i = 0; i < IO_SIZE_BUCKETS; ++i) {
+      if (io->queue.size_buckets[i] == 0)
+        continue;
+      jw_object_begin(&jw);
+      jw_key(&jw, "at_least");
+      jw_uint(&jw, (uint64_t)1 << i);
+      jw_key(&jw, "n");
+      jw_uint(&jw, io->queue.size_buckets[i]);
+      jw_object_end(&jw);
+    }
+    jw_array_end(&jw);
+  }
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);
