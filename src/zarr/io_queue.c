@@ -21,6 +21,7 @@ struct io_job
   struct io_request req;
   uint64_t seq;
   int64_t post_ns;
+  int64_t started_ns;
   uint8_t state;
 };
 
@@ -157,18 +158,53 @@ job_is_ready(struct io_queue* q, const struct io_job* job)
 // Zero when nothing can run right now. A barrier that is not ready is passed
 // over, so one file's barrier never holds up another file's writes.
 static uint64_t
-next_ready_seq(struct io_queue* q, int* any_waiting)
+next_ready_seq(struct io_queue* q)
 {
-  *any_waiting = 0;
   for (uint64_t s = q->tail; s < q->head; ++s) {
     const struct io_job* candidate = &q->ring[s & (q->ring_cap - 1)];
     if (candidate->state != IO_JOB_WAITING)
       continue;
-    *any_waiting = 1;
     if (job_is_ready(q, candidate))
       return s;
   }
   return 0;
+}
+
+// Room is given back against what the request asked for, not what the
+// completion reports: a partial write would otherwise leak the difference.
+static void
+retire_job(struct io_queue* q, struct io_completion c, int64_t finished_ns)
+{
+  void* owned = NULL;
+  void (*owned_free)(void*) = NULL;
+
+  platform_mutex_lock(q->mutex);
+
+  struct io_job* slot = &q->ring[c.seq & (q->ring_cap - 1)];
+  CHECK(Unlock, slot->seq == c.seq && slot->state == IO_JOB_RUNNING);
+
+  const struct io_job job = *slot;
+  owned = job.req.owned;
+  owned_free = job.req.owned_free;
+
+  slot->state = IO_JOB_RETIRED;
+  while (q->tail < q->head &&
+         q->ring[q->tail & (q->ring_cap - 1)].state == IO_JOB_RETIRED)
+    q->tail++;
+  q->pending_bytes -= job.req.nbytes;
+  file_request_retired(q, &job.req);
+  io_queue_counters_finished(
+    &q->counters, &job.req, job.post_ns, job.started_ns, finished_ns);
+  // Without this, a barrier that was passed over is never looked at again.
+  platform_cond_broadcast(q->cond_not_empty);
+  platform_cond_broadcast(q->cond_retired);
+  platform_cond_broadcast(q->cond_slot_free);
+
+Unlock:
+  platform_mutex_unlock(q->mutex);
+  // Freeing under the lock would hold every poster behind the allocator.
+  if (owned)
+    owned_free(owned);
 }
 
 static void
@@ -181,9 +217,10 @@ worker_thread(void* arg)
 
     platform_mutex_lock(q->mutex);
     uint64_t seq;
-    int any_waiting;
-    while ((seq = next_ready_seq(q, &any_waiting)) == 0) {
-      if (q->shutdown && !any_waiting)
+    // Only an empty window means everything drained; a submitted request is
+    // still running, and freeing the ring under its completion would tear.
+    while ((seq = next_ready_seq(q)) == 0) {
+      if (q->shutdown && q->tail == q->head)
         break;
       platform_cond_wait(q->cond_not_empty, q->mutex);
     }
@@ -195,43 +232,29 @@ worker_thread(void* arg)
 
     struct io_job* slot = &q->ring[seq & (q->ring_cap - 1)];
     slot->state = IO_JOB_RUNNING;
+    // Untimed for truncate and close: no payload, so no clock reads.
+    const int timed = slot->req.nbytes > 0;
+    slot->started_ns = timed ? platform_monotonic_ns() : 0;
     q->jobs_waiting--;
     job = *slot;
     platform_mutex_unlock(q->mutex);
 
-    // Untimed for truncate and close: no payload, so no clock reads.
-    const int timed = job.req.nbytes > 0;
-    const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
     struct io_completion done = {
       .seq = job.seq,
       .nbytes = job.req.nbytes,
       .status = IO_OK,
     };
+    int dispatch = IO_DONE;
     if (job.req.op == IO_OP_CALL) {
       job.req.fn(job.req.ctx);
       if (job.req.ctx_free)
         job.req.ctx_free(job.req.ctx);
     } else if (q->backend.execute) {
-      q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
+      dispatch = q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
     }
-    if (job.req.owned)
-      job.req.owned_free(job.req.owned);
-    const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
-    platform_mutex_lock(q->mutex);
-    q->ring[job.seq & (q->ring_cap - 1)].state = IO_JOB_RETIRED;
-    while (q->tail < q->head &&
-           q->ring[q->tail & (q->ring_cap - 1)].state == IO_JOB_RETIRED)
-      q->tail++;
-    q->pending_bytes -= job.req.nbytes;
-    file_request_retired(q, &job.req);
-    io_queue_counters_finished(
-      &q->counters, &job.req, job.post_ns, started_ns, finished_ns);
-    // Without this, a barrier that was passed over is never looked at again.
-    platform_cond_broadcast(q->cond_not_empty);
-    platform_cond_broadcast(q->cond_retired);
-    platform_cond_broadcast(q->cond_slot_free);
-    platform_mutex_unlock(q->mutex);
+    if (dispatch == IO_DONE)
+      retire_job(q, done, timed ? platform_monotonic_ns() : 0);
   }
 }
 
@@ -408,6 +431,12 @@ io_queue_release(struct io_queue* q, uint64_t nbytes)
 
 Unlock:
   platform_mutex_unlock(q->mutex);
+}
+
+void
+io_queue_complete(struct io_queue* q, struct io_completion c)
+{
+  retire_job(q, c, platform_monotonic_ns());
 }
 
 int

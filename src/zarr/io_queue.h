@@ -43,6 +43,11 @@ io_queue_commit(struct io_queue* q, struct io_request req);
 void
 io_queue_release(struct io_queue* q, uint64_t nbytes);
 
+// Report the outcome of a request the backend answered with IO_SUBMITTED.
+// Safe to call from any thread.
+void
+io_queue_complete(struct io_queue* q, struct io_completion c);
+
 // Bytes of unfinished posted work; an upper bound, never low.
 uint64_t
 io_queue_pending_bytes(const struct io_queue* q);
