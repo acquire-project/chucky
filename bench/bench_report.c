@@ -120,7 +120,7 @@ log_bench_header(const struct tile_stream_layout* layout,
   }
 }
 
-// Writes, and how much room there was to run several at once.
+// Writes, and the room for running several at once.
 static void
 print_write_report(const struct shard_pool_io_stats* io)
 {

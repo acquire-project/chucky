@@ -31,7 +31,7 @@ struct shard_pool
 
   // Bytes accepted but not yet written. A write counts from the moment it is
   // accepted until it lands, so the figure can read high but never low — a
-  // caller deciding whether to slow down can tolerate too high, not too low.
+  // a caller deciding to slow down tolerates too high, never too low.
   uint64_t (*pending_bytes)(const struct shard_pool* self);
 
   // Required write alignment in bytes (e.g. page size for O_DIRECT).

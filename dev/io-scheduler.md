@@ -12,7 +12,7 @@ drive. This file is the working plan for changing that.
   seen.
 - **Queue depth** — writes in flight across every shard file at once. Always
   both words: bare "depth" already means pipeline depth in `src/gpu/`.
-- **Queue depth per file** — how many of those to the same shard file. No
+- **Queue depth per file** — the part of that depth on one shard file. No
   gain above one while a file is still growing: on xfs the file's lock is taken
   for itself by an extending write, so requests are accepted by the kernel and
   then run one at a time. Only worth raising once the file is pre-sized.
