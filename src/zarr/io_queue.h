@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.io.h"
+#include "zarr/types.io.h"
 #include "writer.h"
 
 #include <stdint.h>

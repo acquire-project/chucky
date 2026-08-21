@@ -23,3 +23,9 @@ zarr_array_create_with_pool(struct store* store,
 // that exercise zarr_array without a stream.
 int
 zarr_array_flush_metadata(struct zarr_array* a);
+
+// Copy out what this array's write path has measured. Not public: these are
+// benchmark counters, and the next step of #178 changes what they mean.
+void
+zarr_array_io_stats(const struct zarr_array* a,
+                    struct shard_pool_io_stats* out);

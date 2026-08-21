@@ -5,7 +5,7 @@
 #include "ngff.h"
 #include "store.h"
 #include "types.codec.h"
-#include "types.io.h"
+#include "zarr/types.io.h"
 #include "writer.h"
 #include "zarr.h"
 

@@ -76,13 +76,14 @@ CHUNK_BYTES = {
     "2M": 2 << 20,
 }
 
-# Scenarios that exist only to give the filesystem sink more than one shard
-# file to write at once. The compress and backend tiers write to the discard
-# sink, where a second shard file buys nothing but run time.
-IO_ONLY_SCENARIOS = {"smallepoch_4shards_single"}
-
+# The compress and backend tiers write to the discard sink, so
+# smallepoch_4shards_single is left out: a second shard file buys nothing there
+# but run time. Only the io tier wants it.
 SINGLE_SCENARIOS = [
-    k for k in SCENARIOS if k.endswith("_single") and k not in IO_ONLY_SCENARIOS
+    "orca2_single",
+    "256cube_single",
+    "medfmt_single",
+    "smallepoch_single",
 ]
 
 # ---------------------------------------------------------------------------

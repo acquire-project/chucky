@@ -350,8 +350,10 @@ const state = {metric: METRICS[0].key, scenario: null, codec: null, fill: null, 
                sink: null, grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
-/** " (GiB/s)", or nothing at all for a count, which has no unit. */
+/** " (GiB/s)" after a label, or nothing at all for a count, which has no unit. */
 function unitSuffix(meta) { return meta.unit ? ` (${meta.unit})` : ""; }
+/** " GiB/s" after a value, same rule. */
+function unitTail(meta) { return meta.unit ? ` ${meta.unit}` : ""; }
 
 /** The opening view should not be empty: pick the config the most sweeps ran. */
 function pickDefaults() {
@@ -948,7 +950,7 @@ function drawTrendChart(host, width, panel, meta, dates, maxValue) {
           const who = machine.members.length > 1
             ? `${machine.name} (${point.sweep.member}) · ${point.sweep.commit}`
             : `${machine.name} · ${point.sweep.commit}`;
-          tooltipRow(node, machine.color, who, `${fmt(point.value)} ${meta.unit}`.trimEnd());
+          tooltipRow(node, machine.color, who, `${fmt(point.value)}${unitTail(meta)}`);
           node.appendChild(el("div", "tt-head", `  ${configLabel(point.run)} — best of ${point.count} run${point.count === 1 ? "" : "s"}`));
         }
         node.appendChild(el("div", "tt-head", "click to open the nearest sweep in the explorer"));

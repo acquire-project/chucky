@@ -29,8 +29,8 @@ struct shard_pool_fs
   // the file it was issued for rather than a descriptor that may since have
   // been closed and reissued to someone else.
   _Atomic uint64_t files_opened;
+  _Atomic uint64_t files_open_now;
   _Atomic uint64_t files_open_peak;
-  _Atomic uint64_t files_closed;
 };
 
 // --- Writer slot for a single shard file ---
@@ -44,7 +44,7 @@ struct fs_slot
   size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
   _Atomic int* io_error; // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
-  _Atomic uint64_t* files_closed;  // points to shard_pool_fs.files_closed
+  _Atomic uint64_t* files_open_now; // points to shard_pool_fs.files_open_now
 };
 
 struct pwrite_job
@@ -187,7 +187,7 @@ Error:
 struct close_job
 {
   platform_fd fd;
-  _Atomic uint64_t* files_closed;
+  _Atomic uint64_t* files_open_now;
 };
 
 static void
@@ -195,7 +195,7 @@ close_fn(void* arg)
 {
   struct close_job* j = (struct close_job*)arg;
   platform_close(j->fd);
-  atomic_fetch_add(j->files_closed, 1);
+  atomic_fetch_sub(j->files_open_now, 1);
 }
 
 struct truncate_job
@@ -263,7 +263,7 @@ fs_slot_finalize(struct shard_writer* self)
     struct close_job* j = (struct close_job*)malloc(sizeof(struct close_job));
     CHECK(Error, j);
     j->fd = w->fd;
-    j->files_closed = w->files_closed;
+    j->files_open_now = w->files_open_now;
     if (io_queue_post(w->queue,
                       (struct io_work){
                         .fn = close_fn,
@@ -276,7 +276,7 @@ fs_slot_finalize(struct shard_writer* self)
     }
   } else {
     platform_close(w->fd);
-    atomic_fetch_add(w->files_closed, 1);
+    atomic_fetch_sub(w->files_open_now, 1);
   }
 
   w->fd = PLATFORM_FD_INVALID;
@@ -323,11 +323,7 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   }
 
   w->generation = atomic_fetch_add(&p->files_opened, 1) + 1;
-  const uint64_t opened = atomic_load(&p->files_opened);
-  const uint64_t closed = atomic_load(&p->files_closed);
-  // The two counts are read one after the other, so a close that lands in
-  // between can make the second larger than the first.
-  const uint64_t open_now = opened > closed ? opened - closed : 0;
+  const uint64_t open_now = atomic_fetch_add(&p->files_open_now, 1) + 1;
   uint64_t peak = atomic_load(&p->files_open_peak);
   while (open_now > peak &&
          !atomic_compare_exchange_weak(&p->files_open_peak, &peak, open_now)) {
@@ -527,7 +523,7 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->alignment = page_size;
     s->io_error = &p->io_error;
     s->fail_next_truncate = &p->fail_next_truncate;
-    s->files_closed = &p->files_closed;
+    s->files_open_now = &p->files_open_now;
   }
 
   return &p->base;

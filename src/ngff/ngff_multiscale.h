@@ -21,3 +21,10 @@ struct zarr_array;
 // Used by tests to set per-level attributes that exercise the flush cascade.
 struct zarr_array*
 ngff_multiscale_level(const struct ngff_multiscale* ms, int level);
+
+// Copy out what this pyramid's write path has measured. All levels share one
+// pool, so this covers every level at once. Not public: these are benchmark
+// counters, and the next step of #178 changes what they mean.
+void
+ngff_multiscale_io_stats(const struct ngff_multiscale* ms,
+                         struct shard_pool_io_stats* out);

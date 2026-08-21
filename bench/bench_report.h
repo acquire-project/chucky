@@ -1,7 +1,7 @@
 #pragma once
 
 #include "stream/layouts.h"
-#include "types.io.h"
+#include "zarr/types.io.h"
 #include "types.stream.h"
 
 #include <stddef.h>

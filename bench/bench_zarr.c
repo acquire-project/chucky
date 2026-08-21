@@ -1,8 +1,10 @@
 #include "bench_zarr.h"
+#include "ngff/ngff_multiscale.h"
 #include "platform/platform_io.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/store.h"
+#include "zarr/zarr_array.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>

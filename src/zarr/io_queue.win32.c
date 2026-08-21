@@ -1,6 +1,7 @@
 #include "zarr/io_queue.h"
 #include "log/log.h"
 #include "platform/platform.h"
+#include "zarr/io_queue_stats.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -13,14 +14,6 @@ struct io_job
   struct io_work work;
   uint64_t seq;
   int64_t post_ns;
-};
-
-// One open file with a write waiting on it. Truncate and close carry no
-// payload and cannot be run alongside anything, so they do not count.
-struct file_waiting
-{
-  uint64_t file;
-  uint64_t writes;
 };
 
 struct io_queue
@@ -39,100 +32,11 @@ struct io_queue
   uint64_t retired_seq;   // updated after each job completes
   uint64_t pending_bytes; // raised on post, lowered when the job finishes
 
-  // Files with a write waiting, and the time-weighted history of how many
-  // there were. Weighting needs an absolute clock: the average has to be over
-  // time, not over the number of times the count happened to change. The window
-  // opens on the first post, so a slow startup cannot dilute the average.
-  struct file_waiting* files;
-  uint64_t nfiles;
-  uint64_t files_cap;
-  int64_t start_ns;
-  int64_t weighted_from_ns;
-  double files_weighted_ns;
-
-  // Timings land when a write finishes, so they are averaged over finished
-  // writes rather than over stats.writes, which counts every write posted.
-  uint64_t writes_finished;
-  double wait_ms_total;
-  double run_ms_total;
-
-  struct io_queue_stats stats;
+  struct io_queue_counters counters;
 
   int shutdown;
   int started;
 };
-
-// Fold the span since the last change into the time-weighted total. Call
-// before every change to nfiles, and again when reading the average out.
-static void
-fold_files_waiting(struct io_queue* q)
-{
-  int64_t now = platform_monotonic_ns();
-  q->files_weighted_ns +=
-    (double)q->nfiles * (double)(now - q->weighted_from_ns);
-  q->weighted_from_ns = now;
-}
-
-static void
-file_work_added(struct io_queue* q, uint64_t file)
-{
-  if (file == 0)
-    return;
-
-  for (uint64_t i = 0; i < q->nfiles; ++i) {
-    if (q->files[i].file == file) {
-      q->files[i].writes++;
-      return;
-    }
-  }
-
-  fold_files_waiting(q);
-
-  if (q->nfiles == q->files_cap) {
-    uint64_t cap = q->files_cap ? q->files_cap * 2 : 16;
-    struct file_waiting* grown =
-      (struct file_waiting*)realloc(q->files, cap * sizeof(*grown));
-    // Losing this only costs accuracy in a counter, so carry on untracked
-    // rather than failing a write.
-    if (!grown)
-      return;
-    q->files = grown;
-    q->files_cap = cap;
-  }
-
-  q->files[q->nfiles++] = (struct file_waiting){ .file = file, .writes = 1 };
-  if (q->nfiles > q->stats.files_waiting_peak)
-    q->stats.files_waiting_peak = q->nfiles;
-}
-
-static void
-file_work_finished(struct io_queue* q, uint64_t file)
-{
-  if (file == 0)
-    return;
-
-  for (uint64_t i = 0; i < q->nfiles; ++i) {
-    if (q->files[i].file != file)
-      continue;
-    if (--q->files[i].writes == 0) {
-      fold_files_waiting(q);
-      q->files[i] = q->files[q->nfiles - 1];
-      q->nfiles--;
-    }
-    return;
-  }
-}
-
-static uint64_t
-size_bucket(uint64_t nbytes)
-{
-  uint64_t bucket = 0;
-  while (nbytes > 1 && bucket + 1 < IO_SIZE_BUCKETS) {
-    nbytes >>= 1;
-    bucket++;
-  }
-  return bucket;
-}
 
 static DWORD WINAPI
 worker_thread(LPVOID arg)
@@ -155,27 +59,20 @@ worker_thread(LPVOID arg)
     q->tail++;
     ReleaseSRWLockExclusive(&q->srw);
 
-    int64_t started_ns = platform_monotonic_ns();
+    // Only work carrying a payload is timed, so a truncate or close does not
+    // pay for two clock reads nobody looks at.
+    const int timed = job.work.nbytes > 0;
+    const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
     job.work.fn(job.work.ctx);
     if (job.work.ctx_free)
       job.work.ctx_free(job.work.ctx);
-    int64_t finished_ns = platform_monotonic_ns();
+    const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     AcquireSRWLockExclusive(&q->srw);
     q->retired_seq = job.seq;
     q->pending_bytes -= job.work.nbytes;
-    if (job.work.nbytes > 0) {
-      file_work_finished(q, job.work.file);
-      double wait_ms = (double)(started_ns - job.post_ns) / 1e6;
-      double run_ms = (double)(finished_ns - started_ns) / 1e6;
-      q->writes_finished++;
-      q->wait_ms_total += wait_ms;
-      q->run_ms_total += run_ms;
-      if (wait_ms > q->stats.wait_ms_max)
-        q->stats.wait_ms_max = wait_ms;
-      if (run_ms > q->stats.run_ms_max)
-        q->stats.run_ms_max = run_ms;
-    }
+    io_queue_counters_finished(
+      &q->counters, &job.work, job.post_ns, started_ns, finished_ns);
     WakeAllConditionVariable(&q->cond_retired);
     ReleaseSRWLockExclusive(&q->srw);
   }
@@ -230,7 +127,7 @@ io_queue_destroy(struct io_queue* q)
     CloseHandle(q->thread);
 
   free(q->ring);
-  free(q->files);
+  io_queue_counters_free(&q->counters);
   free(q);
 }
 
@@ -271,11 +168,7 @@ io_queue_post(struct io_queue* q, struct io_work work)
   }
 
   q->next_seq++;
-  int64_t now = platform_monotonic_ns();
-  if (q->start_ns == 0) {
-    q->start_ns = now;
-    q->weighted_from_ns = now;
-  }
+  const int64_t now = platform_monotonic_ns();
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
     .work = work,
     .seq = q->next_seq,
@@ -284,20 +177,8 @@ io_queue_post(struct io_queue* q, struct io_work work)
   q->head++;
   q->pending_bytes += work.nbytes;
 
-  uint64_t waiting = q->head - q->tail;
-  if (waiting > q->stats.jobs_waiting_peak)
-    q->stats.jobs_waiting_peak = waiting;
-  if (q->pending_bytes > q->stats.bytes_waiting_peak)
-    q->stats.bytes_waiting_peak = q->pending_bytes;
-  if (work.nbytes > 0) {
-    file_work_added(q, work.file);
-    q->stats.writes++;
-    q->stats.size_buckets[size_bucket(work.nbytes)]++;
-    if (work.borrowed)
-      q->stats.bytes_borrowed += work.nbytes;
-    else
-      q->stats.bytes_copied += work.nbytes;
-  }
+  io_queue_counters_posted(
+    &q->counters, &work, q->head - q->tail, q->pending_bytes, now);
 
   WakeConditionVariable(&q->cond_not_empty);
   ReleaseSRWLockExclusive(&q->srw);
@@ -319,14 +200,7 @@ io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
 {
   struct io_queue* mq = (struct io_queue*)q;
   AcquireSRWLockExclusive(&mq->srw);
-  fold_files_waiting(mq);
-  *out = mq->stats;
-  int64_t observed_ns = mq->start_ns ? mq->weighted_from_ns - mq->start_ns : 0;
-  out->files_waiting_mean =
-    observed_ns > 0 ? mq->files_weighted_ns / (double)observed_ns : 0.0;
-  const double finished = (double)mq->writes_finished;
-  out->wait_ms_mean = finished > 0 ? mq->wait_ms_total / finished : 0.0;
-  out->run_ms_mean = finished > 0 ? mq->run_ms_total / finished : 0.0;
+  io_queue_counters_read(&mq->counters, out, platform_monotonic_ns());
   ReleaseSRWLockExclusive(&mq->srw);
 }
 

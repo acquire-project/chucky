@@ -6,7 +6,6 @@
 #include "dtype.h"
 #include "store.h"
 #include "types.codec.h"
-#include "types.io.h"
 #include "writer.h"
 
 #include <stdint.h>
@@ -51,11 +50,6 @@ zarr_array_has_error(const struct zarr_array* a);
 // Returns number of bytes queued but not yet written.
 uint64_t
 zarr_array_pending_bytes(const struct zarr_array* a);
-
-// Copy out what this array's write path has measured.
-void
-zarr_array_io_stats(const struct zarr_array* a,
-                    struct shard_pool_io_stats* out);
 
 // Access live dimensions (reflects append-dimension updates).
 const struct dimension*
