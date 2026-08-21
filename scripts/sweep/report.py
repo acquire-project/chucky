@@ -65,7 +65,7 @@ SITE_FILES = {
 EXPLORER_OMITS = ("id", "io_write_sizes")
 EXPLORER_VERSION = 5
 
-# What the explorer's sweep list keeps from each summarized sweep.
+# These are the fields kept in the explorer's sweep list for each summarized sweep.
 EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu",
                        "driver", "cpus", "build")
 

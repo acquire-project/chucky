@@ -632,7 +632,7 @@ lod_gather_lut(CUdeviceptr d_dst,
   return 1;
 }
 
-// Type trait: is this a floating-point type (including __half)?
+// This type trait is true for floating-point types, including __half.
 template<typename T>
 struct is_fp
 {

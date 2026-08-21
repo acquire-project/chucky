@@ -9,9 +9,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Which resource's timeline a measurement belongs to. Times may be added
-// together only within one owner. Named by role, not by thread, because the
-// drain does not always run on the same one.
+// An owner is the resource whose timeline a measurement belongs to. Times may
+// be added together only within one owner. Named by role, not by thread,
+// because the drain does not always run on the same one.
 enum metric_owner
 {
   METRIC_OWNER_NONE = 0,
@@ -76,9 +76,9 @@ struct stream_metrics
   // handed to the device rather than continuously.
   uint64_t peak_pending_bytes;
 
-  // How long individual appends took, as counts per time bucket. A caller
-  // asking whether it can keep up needs the slow tail, not the average, and
-  // there are far too many appends to keep every one.
+  // The time taken per append is counted in time buckets. A caller asking
+  // whether it can keep up needs the slow tail, not the average, and there are
+  // far too many appends to keep every one.
   uint64_t append_ms_buckets[APPEND_LATENCY_BUCKETS];
   uint64_t append_count;
 
@@ -126,7 +126,7 @@ struct tile_stream_status
   int flush_pending;
 };
 
-// Why tile_stream_{gpu,cpu}_advise_layout returned non-zero.
+// These are the reasons tile_stream_{gpu,cpu}_advise_layout returns non-zero.
 enum advise_layout_reason
 {
   ADVISE_OK = 0,

@@ -19,7 +19,7 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
-// What the run was expected to take, and what it took.
+// Both the estimated and the measured memory use are recorded here.
 struct bench_memory
 {
   uint64_t estimate_total_bytes;  // device bytes on GPU, heap bytes on CPU
@@ -39,7 +39,7 @@ print_memory_report(const struct bench_memory* mem);
 void
 print_metric_row(const struct stream_metric* m);
 
-// How long individual appends took.
+// The time taken per append is printed here.
 void
 print_append_latency(const struct stream_metrics* m);
 

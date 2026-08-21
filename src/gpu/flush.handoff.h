@@ -35,7 +35,7 @@ struct flush_handoff
 {
   int fc;                                    // flush slot index
   uint32_t n_epochs;                         // epochs in batch
-  uint32_t active_levels_mask;               // which levels active
+  uint32_t active_levels_mask;               // active levels
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
   uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;

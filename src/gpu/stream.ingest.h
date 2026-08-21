@@ -38,7 +38,7 @@ ingest_collect_scatter_timing(struct staging_state* stage,
 void
 ingest_collect_h2d_timing(struct staging_state* stage, struct stream_metric* m);
 
-// Where one dispatch's data goes in the chunk pool.
+// One dispatch's data is written to this region of the chunk pool.
 struct scatter_destination
 {
   struct gpu_pool_view first_epoch; // region for the epoch holding the first

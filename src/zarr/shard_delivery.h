@@ -70,8 +70,8 @@ shard_state_destroy(struct shard_state* ss);
 size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
-// How far along the append dim a reader can safely see. Waits for the last
-// finalize's writes to retire, which have normally landed already.
+// A reader can safely see up to this append-dim extent. The last finalize's
+// writes are waited on, and they have normally landed already.
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink);

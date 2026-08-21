@@ -85,8 +85,8 @@ test_level_layout(struct tile_stream_layout* out,
 // than an epoch's worth of elements.
 #define TEST_REGION_PAD_ELEMENTS 3
 
-// Where a scatter should put the element sitting this many elements past the
-// start of the first epoch's region.
+// A scatter should use this offset for the element sitting this many elements
+// past the start of the first epoch's region.
 uint64_t
 expected_scatter_offset(uint8_t lifted_rank,
                         const uint64_t* lifted_shape,

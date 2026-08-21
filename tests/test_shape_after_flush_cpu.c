@@ -1,4 +1,4 @@
-// What the shape says after a flush, on the CPU backend.
+// The shape after a flush is checked here, on the CPU backend.
 //
 // #175: a failed flush leaves shards on disk that a reader cannot see unless
 // the shape is written.
