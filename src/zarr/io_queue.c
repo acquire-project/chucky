@@ -3,7 +3,6 @@
 #include "platform/platform.h"
 #include "zarr/io_queue_stats.h"
 
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,10 +15,10 @@ struct io_job
 
 struct io_queue
 {
-  pthread_t thread;
-  pthread_mutex_t mutex;
-  pthread_cond_t cond_not_empty;
-  pthread_cond_t cond_retired;
+  struct platform_thread* thread;
+  struct platform_mutex* mutex;
+  struct platform_cond* cond_not_empty;
+  struct platform_cond* cond_retired;
 
   struct io_job* ring;
   uint64_t ring_cap; // power of 2
@@ -33,10 +32,9 @@ struct io_queue
   struct io_queue_counters counters;
 
   int shutdown;
-  int started;
 };
 
-static void*
+static void
 worker_thread(void* arg)
 {
   struct io_queue* q = (struct io_queue*)arg;
@@ -44,18 +42,18 @@ worker_thread(void* arg)
   for (;;) {
     struct io_job job;
 
-    pthread_mutex_lock(&q->mutex);
+    platform_mutex_lock(q->mutex);
     while (q->head == q->tail && !q->shutdown)
-      pthread_cond_wait(&q->cond_not_empty, &q->mutex);
+      platform_cond_wait(q->cond_not_empty, q->mutex);
 
     if (q->head == q->tail && q->shutdown) {
-      pthread_mutex_unlock(&q->mutex);
+      platform_mutex_unlock(q->mutex);
       break;
     }
 
     job = q->ring[q->tail & (q->ring_cap - 1)];
     q->tail++;
-    pthread_mutex_unlock(&q->mutex);
+    platform_mutex_unlock(q->mutex);
 
     // Untimed for truncate and close: no payload, so no clock reads.
     const int timed = job.req.nbytes > 0;
@@ -65,16 +63,14 @@ worker_thread(void* arg)
       job.req.ctx_free(job.req.ctx);
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
-    pthread_mutex_lock(&q->mutex);
+    platform_mutex_lock(q->mutex);
     q->retired_seq = job.seq;
     q->pending_bytes -= job.req.nbytes;
     io_queue_counters_finished(
       &q->counters, &job.req, job.post_ns, started_ns, finished_ns);
-    pthread_cond_broadcast(&q->cond_retired);
-    pthread_mutex_unlock(&q->mutex);
+    platform_cond_broadcast(q->cond_retired);
+    platform_mutex_unlock(q->mutex);
   }
-
-  return NULL;
 }
 
 struct io_queue*
@@ -86,24 +82,20 @@ io_queue_create(void)
 
   q->ring_cap = 64;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
-  if (!q->ring) {
-    free(q);
-    return NULL;
-  }
+  q->mutex = platform_mutex_new();
+  q->cond_not_empty = platform_cond_new();
+  q->cond_retired = platform_cond_new();
+  if (q->ring && q->mutex && q->cond_not_empty && q->cond_retired)
+    q->thread = platform_thread_start(worker_thread, q);
 
-  pthread_mutex_init(&q->mutex, NULL);
-  pthread_cond_init(&q->cond_not_empty, NULL);
-  pthread_cond_init(&q->cond_retired, NULL);
-
-  if (pthread_create(&q->thread, NULL, worker_thread, q) != 0) {
+  if (!q->thread) {
+    platform_cond_free(q->cond_retired);
+    platform_cond_free(q->cond_not_empty);
+    platform_mutex_free(q->mutex);
     free(q->ring);
-    pthread_mutex_destroy(&q->mutex);
-    pthread_cond_destroy(&q->cond_not_empty);
-    pthread_cond_destroy(&q->cond_retired);
     free(q);
     return NULL;
   }
-  q->started = 1;
 
   return q;
 }
@@ -114,19 +106,18 @@ io_queue_destroy(struct io_queue* q)
   if (!q)
     return;
 
-  pthread_mutex_lock(&q->mutex);
+  platform_mutex_lock(q->mutex);
   q->shutdown = 1;
-  pthread_cond_signal(&q->cond_not_empty);
-  pthread_mutex_unlock(&q->mutex);
+  platform_cond_broadcast(q->cond_not_empty);
+  platform_mutex_unlock(q->mutex);
 
-  if (q->started)
-    pthread_join(q->thread, NULL);
+  platform_thread_join(q->thread);
 
   free(q->ring);
   io_queue_counters_free(&q->counters);
-  pthread_mutex_destroy(&q->mutex);
-  pthread_cond_destroy(&q->cond_not_empty);
-  pthread_cond_destroy(&q->cond_retired);
+  platform_cond_free(q->cond_retired);
+  platform_cond_free(q->cond_not_empty);
+  platform_mutex_free(q->mutex);
   free(q);
 }
 
@@ -157,11 +148,11 @@ ring_grow(struct io_queue* q)
 int
 io_queue_post(struct io_queue* q, struct io_request req)
 {
-  pthread_mutex_lock(&q->mutex);
+  platform_mutex_lock(q->mutex);
 
   if (q->head - q->tail == q->ring_cap) {
     if (ring_grow(q)) {
-      pthread_mutex_unlock(&q->mutex);
+      platform_mutex_unlock(q->mutex);
       return 1;
     }
   }
@@ -179,8 +170,8 @@ io_queue_post(struct io_queue* q, struct io_request req)
   io_queue_counters_posted(
     &q->counters, &req, q->head - q->tail, q->pending_bytes, now);
 
-  pthread_cond_signal(&q->cond_not_empty);
-  pthread_mutex_unlock(&q->mutex);
+  platform_cond_broadcast(q->cond_not_empty);
+  platform_mutex_unlock(q->mutex);
   return 0;
 }
 
@@ -188,9 +179,9 @@ uint64_t
 io_queue_pending_bytes(const struct io_queue* q)
 {
   struct io_queue* mq = (struct io_queue*)q;
-  pthread_mutex_lock(&mq->mutex);
+  platform_mutex_lock(mq->mutex);
   uint64_t pending = mq->pending_bytes;
-  pthread_mutex_unlock(&mq->mutex);
+  platform_mutex_unlock(mq->mutex);
   return pending;
 }
 
@@ -198,17 +189,17 @@ void
 io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out)
 {
   struct io_queue* mq = (struct io_queue*)q;
-  pthread_mutex_lock(&mq->mutex);
+  platform_mutex_lock(mq->mutex);
   io_queue_counters_read(&mq->counters, out, platform_monotonic_ns());
-  pthread_mutex_unlock(&mq->mutex);
+  platform_mutex_unlock(mq->mutex);
 }
 
 struct io_event
 io_queue_record(struct io_queue* q)
 {
-  pthread_mutex_lock(&q->mutex);
+  platform_mutex_lock(q->mutex);
   struct io_event ev = { .seq = q->next_seq };
-  pthread_mutex_unlock(&q->mutex);
+  platform_mutex_unlock(q->mutex);
   return ev;
 }
 
@@ -219,18 +210,18 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
   // separate from the queue's public identity.
   struct io_queue* mq = (struct io_queue*)q;
 
-  pthread_mutex_lock(&mq->mutex);
+  platform_mutex_lock(mq->mutex);
   while (mq->retired_seq < ev.seq && !mq->shutdown)
-    pthread_cond_wait(&mq->cond_retired, &mq->mutex);
-  pthread_mutex_unlock(&mq->mutex);
+    platform_cond_wait(mq->cond_retired, mq->mutex);
+  platform_mutex_unlock(mq->mutex);
 }
 
 int
 io_queue_is_shutdown(const struct io_queue* q)
 {
   struct io_queue* mq = (struct io_queue*)q;
-  pthread_mutex_lock(&mq->mutex);
+  platform_mutex_lock(mq->mutex);
   int r = mq->shutdown;
-  pthread_mutex_unlock(&mq->mutex);
+  platform_mutex_unlock(mq->mutex);
   return r;
 }
