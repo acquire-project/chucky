@@ -26,11 +26,12 @@ io_queue_destroy(struct io_queue* q);
 int
 io_queue_post(struct io_queue* q, struct io_request req);
 
-// Claim room for one request carrying nbytes. Waits until there is room.
-// Zero on success; non-zero if the queue is shutting down, and then nothing
-// is claimed.
+// Claim room for a request. Waits until there is room. Zero on success;
+// non-zero if the queue is shutting down or the file is already closing, and
+// then nothing is claimed. Fill in op, file and nbytes; the payload can come
+// later, at commit.
 int
-io_queue_reserve(struct io_queue* q, uint64_t nbytes);
+io_queue_reserve(struct io_queue* q, struct io_request req);
 
 // Post a request whose room io_queue_reserve already claimed. The claim
 // guarantees a slot, so this cannot fail. req.nbytes must equal the nbytes

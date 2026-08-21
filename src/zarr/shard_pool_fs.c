@@ -55,9 +55,16 @@ fs_slot_write(struct shard_writer* self,
   CHECK(Error, w->alignment == 0 || nbytes % w->alignment == 0);
   CHECK(Error, w->alignment == 0 || offset % w->alignment == 0);
 
+  struct io_request req = {
+    .op = IO_OP_WRITE,
+    .file = w->token,
+    .nbytes = nbytes,
+    .offset = offset,
+  };
+
   // Claim the room before allocating, so the copy cannot outrun the ceiling
   // on queued memory.
-  CHECK_SILENT(Error, io_queue_reserve(w->queue, nbytes) == 0);
+  CHECK_SILENT(Error, io_queue_reserve(w->queue, req) == 0);
 
   void* buf;
   void (*buf_free)(void*);
@@ -71,16 +78,10 @@ fs_slot_write(struct shard_writer* self,
   CHECK(Release, buf);
   memcpy(buf, beg, nbytes);
 
-  io_queue_commit(w->queue,
-                  (struct io_request){
-                    .op = IO_OP_WRITE,
-                    .file = w->token,
-                    .payload = buf,
-                    .nbytes = nbytes,
-                    .offset = offset,
-                    .owned = buf,
-                    .owned_free = buf_free,
-                  });
+  req.payload = buf;
+  req.owned = buf;
+  req.owned_free = buf_free;
+  io_queue_commit(w->queue, req);
   return 0;
 
 Release:

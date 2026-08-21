@@ -9,12 +9,27 @@
 
 #define DEFAULT_MAX_REQUESTS 1024u
 
+enum io_job_state
+{
+  IO_JOB_WAITING = 0,
+  IO_JOB_RUNNING,
+  IO_JOB_RETIRED,
+};
+
 struct io_job
 {
   struct io_request req;
   uint64_t seq;
   int64_t post_ns;
-  uint8_t retired;
+  uint8_t state;
+};
+
+// One open file with requests in the queue.
+struct file_pending
+{
+  uint64_t generation;
+  uint64_t outstanding;
+  uint8_t closing;
 };
 
 struct io_queue
@@ -28,13 +43,17 @@ struct io_queue
   struct io_job* ring;
   uint64_t ring_cap; // power of two, fixed for the queue's life
   uint64_t head;     // next sequence number to hand out
-  uint64_t dispatch; // next sequence number the worker runs
   uint64_t tail;     // oldest sequence number that has not retired
+
+  struct file_pending* files;
+  uint64_t nfiles;
+  uint64_t files_cap;
 
   uint64_t max_requests;
   uint64_t max_bytes;
 
   uint64_t pending_bytes; // raised on commit, lowered when the job finishes
+  uint64_t jobs_waiting;  // committed and not yet taken by a worker
 
   // Room claimed by a reserve that has not yet committed or been released.
   uint64_t reserved_requests;
@@ -47,6 +66,111 @@ struct io_queue
   int shutdown;
 };
 
+static struct file_pending*
+file_find(struct io_queue* q, uint64_t generation)
+{
+  for (uint64_t i = 0; i < q->nfiles; ++i) {
+    if (q->files[i].generation == generation)
+      return &q->files[i];
+  }
+  return NULL;
+}
+
+static void
+file_request_added(struct io_queue* q, const struct io_request* req)
+{
+  if (req->file.generation == 0)
+    return;
+
+  struct file_pending* f = file_find(q, req->file.generation);
+  if (!f) {
+    if (q->nfiles == q->files_cap) {
+      uint64_t cap = q->files_cap ? q->files_cap * 2 : 16;
+      struct file_pending* grown =
+        (struct file_pending*)realloc(q->files, cap * sizeof(*grown));
+      // A write must not fail over the table, and a missing entry only makes
+      // a barrier look ready.
+      if (!grown) {
+        log_error("io_queue: could not grow the open file table");
+        return;
+      }
+      q->files = grown;
+      q->files_cap = cap;
+    }
+    f = &q->files[q->nfiles++];
+    *f = (struct file_pending){ .generation = req->file.generation };
+  }
+
+  f->outstanding++;
+  if (req->op == IO_OP_CLOSE)
+    f->closing = 1;
+}
+
+static void
+file_request_retired(struct io_queue* q, const struct io_request* req)
+{
+  if (req->file.generation == 0)
+    return;
+
+  struct file_pending* f = file_find(q, req->file.generation);
+  if (!f)
+    return;
+
+  if (--f->outstanding == 0) {
+    *f = q->files[q->nfiles - 1];
+    q->nfiles--;
+  }
+}
+
+static int
+is_barrier(const struct io_request* req)
+{
+  return req->op == IO_OP_TRUNCATE || req->op == IO_OP_CLOSE;
+}
+
+// Requests naming one file run in the order they were posted, and a barrier
+// is held back until every other request naming that file has retired.
+static int
+job_is_ready(struct io_queue* q, const struct io_job* job)
+{
+  const uint64_t generation = job->req.file.generation;
+  if (generation == 0)
+    return 1;
+
+  const struct file_pending* f = file_find(q, generation);
+  if (!f || f->outstanding == 1)
+    return 1;
+
+  const int barrier = is_barrier(&job->req);
+  for (uint64_t s = q->tail; s < job->seq; ++s) {
+    const struct io_job* earlier = &q->ring[s & (q->ring_cap - 1)];
+    if (earlier->state == IO_JOB_RETIRED)
+      continue;
+    if (earlier->req.file.generation != generation)
+      continue;
+    if (barrier || is_barrier(&earlier->req))
+      return 0;
+  }
+  return 1;
+}
+
+// Zero when nothing can run right now. A barrier that is not ready is passed
+// over, so one file's barrier never holds up another file's writes.
+static uint64_t
+next_ready_seq(struct io_queue* q, int* any_waiting)
+{
+  *any_waiting = 0;
+  for (uint64_t s = q->tail; s < q->head; ++s) {
+    const struct io_job* candidate = &q->ring[s & (q->ring_cap - 1)];
+    if (candidate->state != IO_JOB_WAITING)
+      continue;
+    *any_waiting = 1;
+    if (job_is_ready(q, candidate))
+      return s;
+  }
+  return 0;
+}
+
 static void
 worker_thread(void* arg)
 {
@@ -56,16 +180,23 @@ worker_thread(void* arg)
     struct io_job job;
 
     platform_mutex_lock(q->mutex);
-    while (q->dispatch == q->head && !q->shutdown)
+    uint64_t seq;
+    int any_waiting;
+    while ((seq = next_ready_seq(q, &any_waiting)) == 0) {
+      if (q->shutdown && !any_waiting)
+        break;
       platform_cond_wait(q->cond_not_empty, q->mutex);
+    }
 
-    if (q->dispatch == q->head && q->shutdown) {
+    if (seq == 0) {
       platform_mutex_unlock(q->mutex);
       break;
     }
 
-    job = q->ring[q->dispatch & (q->ring_cap - 1)];
-    q->dispatch++;
+    struct io_job* slot = &q->ring[seq & (q->ring_cap - 1)];
+    slot->state = IO_JOB_RUNNING;
+    q->jobs_waiting--;
+    job = *slot;
     platform_mutex_unlock(q->mutex);
 
     // Untimed for truncate and close: no payload, so no clock reads.
@@ -88,14 +219,16 @@ worker_thread(void* arg)
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     platform_mutex_lock(q->mutex);
-    q->ring[job.seq & (q->ring_cap - 1)].retired = 1;
-    while (q->tail < q->head && q->ring[q->tail & (q->ring_cap - 1)].retired) {
-      q->ring[q->tail & (q->ring_cap - 1)].retired = 0;
+    q->ring[job.seq & (q->ring_cap - 1)].state = IO_JOB_RETIRED;
+    while (q->tail < q->head &&
+           q->ring[q->tail & (q->ring_cap - 1)].state == IO_JOB_RETIRED)
       q->tail++;
-    }
     q->pending_bytes -= job.req.nbytes;
+    file_request_retired(q, &job.req);
     io_queue_counters_finished(
       &q->counters, &job.req, job.post_ns, started_ns, finished_ns);
+    // Without this, a barrier that was passed over is never looked at again.
+    platform_cond_broadcast(q->cond_not_empty);
     platform_cond_broadcast(q->cond_retired);
     platform_cond_broadcast(q->cond_slot_free);
     platform_mutex_unlock(q->mutex);
@@ -128,7 +261,6 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   // Sequence number zero means nothing was ever posted, so counting starts
   // at one and an event recorded before the first post waits on nothing.
   q->head = 1;
-  q->dispatch = 1;
   q->tail = 1;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   q->mutex = platform_mutex_new();
@@ -167,6 +299,7 @@ io_queue_destroy(struct io_queue* q)
   platform_thread_join(q->thread);
 
   free(q->ring);
+  free(q->files);
   io_queue_counters_free(&q->counters);
   platform_cond_free(q->cond_slot_free);
   platform_cond_free(q->cond_retired);
@@ -189,10 +322,31 @@ has_room(const struct io_queue* q, uint64_t nbytes)
   return q->pending_bytes + q->reserved_bytes + nbytes <= q->max_bytes;
 }
 
-int
-io_queue_reserve(struct io_queue* q, uint64_t nbytes)
+static int
+names_a_closing_file(struct io_queue* q, const struct io_request* req)
 {
+  if (req->file.generation == 0)
+    return 0;
+  if (req->op != IO_OP_WRITE && req->op != IO_OP_TRUNCATE &&
+      req->op != IO_OP_CLOSE)
+    return 0;
+
+  const struct file_pending* f = file_find(q, req->file.generation);
+  return f && f->closing;
+}
+
+int
+io_queue_reserve(struct io_queue* q, struct io_request req)
+{
+  const uint64_t nbytes = req.nbytes;
+
   platform_mutex_lock(q->mutex);
+
+  if (names_a_closing_file(q, &req)) {
+    log_error("io_queue: refused a request naming a file that is closing");
+    platform_mutex_unlock(q->mutex);
+    return 1;
+  }
 
   while (!has_room(q, nbytes) && !q->shutdown)
     platform_cond_wait(q->cond_slot_free, q->mutex);
@@ -230,9 +384,11 @@ io_queue_commit(struct io_queue* q, struct io_request req)
   };
   q->head++;
   q->pending_bytes += req.nbytes;
+  q->jobs_waiting++;
+  file_request_added(q, &req);
 
   io_queue_counters_posted(
-    &q->counters, &req, q->head - q->dispatch, q->pending_bytes, now);
+    &q->counters, &req, q->jobs_waiting, q->pending_bytes, now);
 
   platform_cond_broadcast(q->cond_not_empty);
 
@@ -257,7 +413,7 @@ Unlock:
 int
 io_queue_post(struct io_queue* q, struct io_request req)
 {
-  if (io_queue_reserve(q, req.nbytes))
+  if (io_queue_reserve(q, req))
     return 1;
   io_queue_commit(q, req);
   return 0;
