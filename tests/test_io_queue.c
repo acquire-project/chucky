@@ -411,8 +411,9 @@ answer_the_rest(struct io_queue* q,
 {
   // A barrier freed by one of these answers has to finish on its own.
   io_backend_fake_defer(f, 0);
-  const uint64_t n = io_backend_fake_deferred_count(f);
-  for (uint64_t i = 0; i < n; ++i) {
+  // Re-read the count: a request already inside execute when defer was cleared
+  // still lands in the list, and leaving it unanswered wedges destroy.
+  for (uint64_t i = 0; i < io_backend_fake_deferred_count(f); ++i) {
     const uint64_t seq = f->deferred[i];
     if (*answered & ((uint64_t)1 << seq))
       continue;
@@ -761,6 +762,10 @@ fence_during_destroy_round(void)
 
   CHECK(Fail2, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
   CHECK(Fail3, test_wait_flag(&w.entered, HANDOVER_TIMEOUT_MS) == 0);
+  // The flag is set just before the wait, so give that thread time to park.
+  // Destroy drains threads already inside; one still taking the lock is on its
+  // own, which is what the contract on io_queue_destroy says.
+  platform_sleep_ns(1000000LL);
 
   io_queue_destroy(q);
   q = NULL;

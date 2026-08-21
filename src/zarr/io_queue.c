@@ -132,13 +132,16 @@ file_request_retired(struct io_queue* q, const struct io_request* req)
   if (!f)
     return;
 
-  if (f->outstanding == 0)
-    return;
+  // An entry left at zero would never be removed, and every later barrier on
+  // the file would wait on it forever.
+  CHECK(Done, f->outstanding > 0);
 
   if (--f->outstanding == 0) {
     *f = q->files[q->nfiles - 1];
     q->nfiles--;
   }
+
+Done:;
 }
 
 static int

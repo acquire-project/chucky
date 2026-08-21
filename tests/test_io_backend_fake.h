@@ -26,7 +26,7 @@ struct io_backend_fake
   _Atomic uint64_t ndeferred;
 
   _Atomic int* gate;
-  uint8_t defer;
+  _Atomic uint8_t defer;
   uint8_t outcome_chosen;
   int outcome_status;
   uint64_t outcome_nbytes;

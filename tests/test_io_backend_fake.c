@@ -11,7 +11,9 @@ fake_execute(void* ctx,
 {
   struct io_backend_fake* f = (struct io_backend_fake*)ctx;
 
-  const uint64_t n = atomic_fetch_add(&f->nrecords, 1);
+  // The count is raised last: a test that polls it then reads the record has
+  // to see a record that is already there.
+  const uint64_t n = atomic_load(&f->nrecords);
   if (n < IO_BACKEND_FAKE_CAPACITY)
     f->records[n] = (struct io_backend_fake_record){
       .seq = seq,
@@ -19,6 +21,7 @@ fake_execute(void* ctx,
       .generation = req->file.generation,
       .op = req->op,
     };
+  atomic_fetch_add(&f->nrecords, 1);
 
   while (f->gate && atomic_load(f->gate) == 0)
     platform_sleep_ns(1000000LL);
@@ -27,12 +30,13 @@ fake_execute(void* ctx,
   out->nbytes = f->outcome_chosen ? f->outcome_nbytes : req->nbytes;
   out->status = f->outcome_chosen ? f->outcome_status : IO_OK;
 
-  if (!f->defer)
+  if (!atomic_load(&f->defer))
     return IO_DONE;
 
-  const uint64_t d = atomic_fetch_add(&f->ndeferred, 1);
+  const uint64_t d = atomic_load(&f->ndeferred);
   if (d < IO_BACKEND_FAKE_CAPACITY)
     f->deferred[d] = seq;
+  atomic_fetch_add(&f->ndeferred, 1);
   return IO_SUBMITTED;
 }
 
@@ -59,7 +63,7 @@ io_backend_fake_hold(struct io_backend_fake* f, _Atomic int* gate)
 void
 io_backend_fake_defer(struct io_backend_fake* f, int defer)
 {
-  f->defer = (uint8_t)(defer != 0);
+  atomic_store(&f->defer, (uint8_t)(defer != 0));
 }
 
 void

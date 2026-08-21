@@ -48,6 +48,8 @@ fs_slot_write(struct shard_writer* self,
 {
   struct fs_slot* w = (struct fs_slot*)self;
   size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  if (nbytes == 0)
+    return 0;
 
   // Debug-build watchdog: under O_DIRECT, length and offset must both be
   // multiples of the device alignment (source pointer alignment is handled
