@@ -22,12 +22,28 @@ touch_block(char* block)
     pages[i] = 1;
 }
 
+// Linux batches the page counters behind /proc/self/statm, so a process a few
+// tens of milliseconds old reads nothing resident however many pages it has
+// touched. Only elapsed time clears it. The two tests that compare readings
+// need the counter running before they start.
+static void
+wait_for_the_page_counter(void)
+{
+  for (int i = 0; i < 200; ++i) {
+    uint64_t bytes = 0;
+    if (platform_resident_memory(&bytes) != 0 || bytes > 0)
+      return;
+    platform_sleep_ns(1000000);
+  }
+  log_warn("resident memory still reads 0 after 200 ms");
+}
+
 static int
 test_resident_memory_is_plausible(void)
 {
   log_info("=== test_resident_memory_is_plausible ===");
-  uint64_t resident = platform_resident_memory();
-  CHECK(Fail, resident > 0); // 0 is how the reading reports failure
+  uint64_t resident = 0;
+  CHECK(Fail, platform_resident_memory(&resident) == 0);
   CHECK(Fail, resident < ((uint64_t)1 << 40));
   return 0;
 Fail:
@@ -40,12 +56,14 @@ test_resident_memory_follows_a_touched_block(void)
   // Must run before any other test here allocates a block: an allocator that
   // keeps the freed pages leaves the next baseline already inflated.
   log_info("=== test_resident_memory_follows_a_touched_block ===");
-  uint64_t before = platform_resident_memory();
+  uint64_t before = 0, during = 0;
+  int reads_failed = platform_resident_memory(&before);
   char* block = (char*)malloc(BLOCK_BYTES);
   CHECK(Fail, block != NULL);
   touch_block(block);
-  uint64_t during = platform_resident_memory();
+  reads_failed |= platform_resident_memory(&during);
   free(block);
+  CHECK(Fail, reads_failed == 0);
   CHECK(Fail, during >= before + HALF_BLOCK);
   return 0;
 Fail:
@@ -56,18 +74,21 @@ static int
 test_peak_covers_memory_already_released(void)
 {
   log_info("=== test_peak_covers_memory_already_released ===");
-  uint64_t resident_before = platform_resident_memory();
-  uint64_t peak_before = platform_peak_resident_memory();
-  CHECK(Fail, peak_before > 0);
+  uint64_t resident_before = 0, peak_before = 0;
+  int reads_failed = platform_resident_memory(&resident_before);
+  reads_failed |= platform_peak_resident_memory(&peak_before);
 
   char* block = (char*)malloc(BLOCK_BYTES);
   CHECK(Fail, block != NULL);
   touch_block(block);
-  uint64_t resident_during = platform_resident_memory();
-  uint64_t peak_during = platform_peak_resident_memory();
+  uint64_t resident_during = 0, peak_during = 0;
+  reads_failed |= platform_resident_memory(&resident_during);
+  reads_failed |= platform_peak_resident_memory(&peak_during);
   free(block);
 
-  uint64_t peak = platform_peak_resident_memory();
+  uint64_t peak = 0;
+  reads_failed |= platform_peak_resident_memory(&peak);
+  CHECK(Fail, reads_failed == 0);
   log_info("  resident %llu -> %llu, peak %llu -> %llu -> %llu, block %u",
            (unsigned long long)resident_before,
            (unsigned long long)resident_during,
@@ -90,6 +111,7 @@ int
 main(void)
 {
   int failed = 0;
+  wait_for_the_page_counter();
   failed += test_resident_memory_is_plausible();
   failed += test_resident_memory_follows_a_touched_block();
   failed += test_peak_covers_memory_already_released();

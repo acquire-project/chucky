@@ -472,8 +472,9 @@ run_bench(const struct bench_config* cfg)
   struct bench_memory mem_used = {
     .estimate_total_bytes = est_total_bytes,
     .estimate_pinned_bytes = est_pinned_bytes,
-    .host_baseline_bytes = platform_resident_memory(),
   };
+  if (platform_resident_memory(&mem_used.host_baseline_bytes) != 0)
+    log_warn("  host memory reading unavailable");
   const size_t device_free_at_rest =
     cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
 
@@ -536,7 +537,8 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
-  mem_used.host_peak_bytes = platform_peak_resident_memory();
+  if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0)
+    log_warn("  host peak memory reading unavailable");
   if (cfg->backend == BENCH_GPU) {
     // 0 means the reading failed, not that the device ran out.
     const size_t device_free_now = bench_gpu_free_memory();

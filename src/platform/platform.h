@@ -29,14 +29,19 @@ platform_aligned_free(void* ptr);
 size_t
 platform_available_memory(void);
 
-// Physical memory this process holds right now, in bytes, or 0 on failure.
-uint64_t
-platform_resident_memory(void);
+// Physical memory this process holds right now. Writes the size in bytes and
+// returns 0; returns non-zero, leaving bytes untouched, if the reading is
+// unavailable. A successful reading can still be 0: Linux batches the page
+// counters, so a process a few tens of milliseconds old reports nothing
+// resident however many pages it has touched.
+int
+platform_resident_memory(uint64_t* bytes);
 
-// Most physical memory this process has held at any point, in bytes, or 0 on
-// failure. Never goes down, so it can be read once at the end of a run.
-uint64_t
-platform_peak_resident_memory(void);
+// Most physical memory this process has held at any point. Same reporting as
+// platform_resident_memory. Never goes down, so it can be read once at the end
+// of a run.
+int
+platform_peak_resident_memory(uint64_t* bytes);
 
 // Monotonic clock for timing. Returns elapsed seconds since last call.
 struct platform_clock

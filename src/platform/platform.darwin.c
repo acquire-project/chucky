@@ -48,24 +48,26 @@ task_memory(mach_task_basic_info_data_t* info)
          KERN_SUCCESS;
 }
 
-uint64_t
-platform_resident_memory(void)
+int
+platform_resident_memory(uint64_t* bytes)
 {
   mach_task_basic_info_data_t info;
   if (!task_memory(&info))
-    return 0;
-  return (uint64_t)info.resident_size;
+    return 1;
+  *bytes = (uint64_t)info.resident_size;
+  return 0;
 }
 
 // Both readings come from one call, so they are in bytes and count the same
 // pages.
-uint64_t
-platform_peak_resident_memory(void)
+int
+platform_peak_resident_memory(uint64_t* bytes)
 {
   mach_task_basic_info_data_t info;
   if (!task_memory(&info))
-    return 0;
-  return (uint64_t)info.resident_size_max;
+    return 1;
+  *bytes = (uint64_t)info.resident_size_max;
+  return 0;
 }
 
 void*
