@@ -11,8 +11,11 @@ fake_execute(void* ctx,
 {
   struct io_backend_fake* f = (struct io_backend_fake*)ctx;
 
+  atomic_fetch_add(&f->inside_execute, 1);
+
   // The count is raised last: a test that polls it then reads the record has
-  // to see a record that is already there.
+  // to see a record that is already there. The io queue runs one worker, so
+  // only this thread picks a slot.
   const uint64_t n = atomic_load(&f->nrecords);
   if (n < IO_BACKEND_FAKE_CAPACITY)
     f->records[n] = (struct io_backend_fake_record){
@@ -30,14 +33,17 @@ fake_execute(void* ctx,
   out->nbytes = f->outcome_chosen ? f->outcome_nbytes : req->nbytes;
   out->status = f->outcome_chosen ? f->outcome_status : IO_OK;
 
-  if (!atomic_load(&f->defer))
-    return IO_DONE;
+  int dispatch = IO_DONE;
+  if (atomic_load(&f->defer)) {
+    const uint64_t d = atomic_load(&f->ndeferred);
+    if (d < IO_BACKEND_FAKE_CAPACITY)
+      f->deferred[d] = seq;
+    atomic_fetch_add(&f->ndeferred, 1);
+    dispatch = IO_SUBMITTED;
+  }
 
-  const uint64_t d = atomic_load(&f->ndeferred);
-  if (d < IO_BACKEND_FAKE_CAPACITY)
-    f->deferred[d] = seq;
-  atomic_fetch_add(&f->ndeferred, 1);
-  return IO_SUBMITTED;
+  atomic_fetch_sub(&f->inside_execute, 1);
+  return dispatch;
 }
 
 void
@@ -46,6 +52,7 @@ io_backend_fake_init(struct io_backend_fake* f)
   memset(f, 0, sizeof(*f));
   atomic_init(&f->nrecords, 0);
   atomic_init(&f->ndeferred, 0);
+  atomic_init(&f->inside_execute, 0);
 }
 
 struct io_backend
@@ -86,4 +93,10 @@ uint64_t
 io_backend_fake_deferred_count(const struct io_backend_fake* f)
 {
   return atomic_load(&f->ndeferred);
+}
+
+uint64_t
+io_backend_fake_inside_execute(const struct io_backend_fake* f)
+{
+  return atomic_load(&f->inside_execute);
 }

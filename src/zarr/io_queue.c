@@ -355,6 +355,16 @@ io_queue_destroy(struct io_queue* q)
   free(q);
 }
 
+uint64_t
+io_queue_parked_threads(const struct io_queue* q)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  platform_mutex_lock(mq->mutex);
+  uint64_t parked = mq->waiters;
+  platform_mutex_unlock(mq->mutex);
+  return parked;
+}
+
 static int
 has_room(const struct io_queue* q, uint64_t nbytes)
 {

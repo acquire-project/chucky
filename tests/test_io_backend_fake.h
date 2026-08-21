@@ -25,6 +25,8 @@ struct io_backend_fake
   uint64_t deferred[IO_BACKEND_FAKE_CAPACITY];
   _Atomic uint64_t ndeferred;
 
+  _Atomic uint64_t inside_execute;
+
   _Atomic int* gate;
   _Atomic uint8_t defer;
   uint8_t outcome_chosen;
@@ -59,3 +61,8 @@ io_backend_fake_record_count(const struct io_backend_fake* f);
 
 uint64_t
 io_backend_fake_deferred_count(const struct io_backend_fake* f);
+
+// How many requests are inside execute right now. Once this is zero, no
+// request can still be on its way into deferred[].
+uint64_t
+io_backend_fake_inside_execute(const struct io_backend_fake* f);

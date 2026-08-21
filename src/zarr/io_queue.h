@@ -26,6 +26,11 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 void
 io_queue_destroy(struct io_queue* q);
 
+// How many threads are parked inside the queue. This is what a teardown
+// racing another thread has to see before it is safe to run.
+uint64_t
+io_queue_parked_threads(const struct io_queue* q);
+
 // Zero on success; on failure nothing is posted and the payload is still
 // yours.
 int
