@@ -290,7 +290,8 @@ json_stage_metric(struct json_writer* jw,
   double out_gibs = gb_per_s(sm->output_bytes, (double)sm->ms);
   jw_key(jw, name);
   jw_object_begin(jw);
-  // Which timeline this belongs to. Times may be summed only within one owner.
+  // The measurement belongs to this timeline. Times may be summed only within
+  // one owner.
   jw_key(jw, "owner");
   jw_string(jw, metric_owner_name(sm->owner));
   jw_key(jw, "total_ms");

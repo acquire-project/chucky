@@ -54,7 +54,7 @@ def parse_filename(path: Path) -> tuple[str | None, str | None, str | None]:
 
 
 def machine_identity(path: Path, machine: dict) -> tuple[str, str]:
-    """What this one sweep calls itself, and the commit it ran at.
+    """The sweep's own name and the commit it ran at are returned.
 
     The file name wins: renaming a results file is how a sweep gets reassigned
     after the fact. `machine.name` is what sweep.py --machine recorded, and the

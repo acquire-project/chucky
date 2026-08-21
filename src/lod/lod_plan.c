@@ -87,7 +87,7 @@ lod_spans_at(const struct lod_spans* s, uint64_t i)
   };
 }
 
-// Are all LOD dims already at 1 chunk or fewer?
+// The result is true when every LOD dim is already at 1 chunk or fewer.
 // Stop generating levels when every dim fits in a single chunk.
 static int
 all_chunks_le_one(int lod_ndim,
@@ -168,7 +168,7 @@ level_dims_fill_fixed(struct level_dims* ld, int ndim)
   }
 }
 
-// Is any LOD dim at ≤1 chunk?
+// The result is true when any LOD dim is at ≤1 chunk.
 static int
 any_chunks_le_one(int lod_ndim,
                   const uint64_t* lod_shape,

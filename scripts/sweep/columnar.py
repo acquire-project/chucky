@@ -80,7 +80,7 @@ def encode_rows(rows: list[dict], table: StringTable) -> dict:
 
 
 def decode_runs(block: dict, strings: list[str]) -> list[dict]:
-    """What the pages do on load."""
+    """A block is unpacked this way in the pages on load."""
     runs: list[dict] = [{} for _ in range(block["count"])]
     for key, column in block["columns"].items():
         text = column["text"] if isinstance(column, dict) else None

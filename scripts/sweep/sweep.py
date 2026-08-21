@@ -327,7 +327,7 @@ BUILD_CACHE_KEYS = {
 
 
 def build_info(build_dir: Path) -> dict:
-    """How build_dir was last configured.
+    """The build directory's last configuration is returned.
 
     Read from the build directory rather than the environment the sweep runs
     in, so it describes the binaries rather than the machine. It describes the

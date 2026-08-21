@@ -1,7 +1,7 @@
-// What the shape says after a flush, on the GPU backend (#193). A flush pads
-// the chunk the cursor stopped in and closes its shard, so it finalizes the
-// stream: anything appended afterwards would land at append positions the
-// caller never asked for. Mirrors tests/test_shape_after_flush_cpu.c.
+// The shape after a flush is checked here, on the GPU backend (#193). A flush
+// pads the chunk the cursor stopped in and closes its shard, so it finalizes
+// the stream: anything appended afterwards would land at append positions the
+// caller never asked for. This mirrors tests/test_shape_after_flush_cpu.c.
 
 #include "stream.gpu.h"
 #include "test_shard_sink.h"

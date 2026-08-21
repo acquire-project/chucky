@@ -202,9 +202,9 @@ write_footer(struct active_shard* sh,
   return err;
 }
 
-// How far along the append dim the shards reach, not how many chunks they
-// hold: a flush that closes a half-full shard leaves its remaining slots empty
-// and the next generation still starts after them.
+// The shards' reach along the append dim is recorded, not the number of chunks
+// they hold: a flush that closes a half-full shard leaves its remaining slots
+// empty and the next generation still starts after them.
 static void
 record_finalized(struct shard_state* ss, struct shard_sink* sink)
 {

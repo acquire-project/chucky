@@ -35,8 +35,8 @@ vadd(int rank,
     for (int d = rank - 1; d > 0; --d) {
       const int e = shape[d];
       rest /= e;
-      // Q: Over the next n elements, where will there be a carry from d to d-1?
-      // A: Every input_stride*shape[d] elements starting at first_carry.
+      // Over the next n elements, a carry from d to d-1 lands every
+      // input_stride*shape[d] elements starting at first_carry.
       const int next_input_stride = input_stride * shape[d];
       // correct for carry from d to d-1
       const uint64_t correction = strides[d - 1] - shape[d] * strides[d];
