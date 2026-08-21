@@ -13,9 +13,8 @@ fake_execute(void* ctx,
 
   atomic_fetch_add(&f->inside_execute, 1);
 
-  // The count is raised last: a test that polls it then reads the record has
-  // to see a record that is already there. The io queue runs one worker, so
-  // only this thread picks a slot.
+  // Raised last, so a test that polls it then reads the record sees one that
+  // is already there. One worker, so only this thread picks a slot.
   const uint64_t n = atomic_load(&f->nrecords);
   if (n < IO_BACKEND_FAKE_CAPACITY)
     f->records[n] = (struct io_backend_fake_record){

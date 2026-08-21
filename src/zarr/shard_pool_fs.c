@@ -273,9 +273,7 @@ pool_fs_destroy(struct shard_pool* self)
       fs_slot_finalize(&p->slots[i].base);
   }
 
-  // io_queue_destroy signals shutdown and joins the worker, which drains all
-  // queued jobs first, so every outstanding write and close runs before the
-  // backend that holds their descriptors goes away.
+  // The worker has to be gone before the backend holding its descriptors is.
   io_queue_destroy(p->queue);
   io_backend_fs_destroy(p->backend);
 

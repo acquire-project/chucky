@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-// What execute() reports about the request it was handed.
+// What a backend reports about the request it was handed.
 enum io_dispatch
 {
   IO_DONE = 0,  // finished; *out is filled in

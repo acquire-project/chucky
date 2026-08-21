@@ -60,8 +60,7 @@ struct io_queue
   uint64_t reserved_requests;
   uint64_t reserved_bytes;
 
-  // Threads parked on one of the condition variables. Teardown cannot free
-  // them until every one of those threads has let go of the mutex.
+  // Teardown cannot free the lock until every parked thread has let go of it.
   uint64_t waiters;
 
   struct io_queue_counters counters;
@@ -71,8 +70,6 @@ struct io_queue
   int shutdown;
 };
 
-// Teardown frees the mutex and the condition variables, so it has to know
-// when a parked thread is still on its way out of one.
 static void
 queue_wait(struct io_queue* q, struct platform_cond* cond)
 {
@@ -151,8 +148,8 @@ is_barrier(const struct io_request* req)
   return req->op == IO_OP_TRUNCATE || req->op == IO_OP_CLOSE;
 }
 
-// Requests naming one file run in the order they were posted, and a barrier
-// is held back until every other request naming that file has retired.
+// Writes to one file are unordered; a truncate or close waits for everything
+// posted ahead of it on that file.
 static int
 job_is_ready(struct io_queue* q, const struct io_job* job)
 {
@@ -239,8 +236,7 @@ worker_thread(void* arg)
 
     platform_mutex_lock(q->mutex);
     uint64_t seq;
-    // Only an empty window means everything drained; a submitted request is
-    // still running, and freeing the ring under its completion would tear.
+    // An empty window, not an idle one: a submitted request is still running.
     while ((seq = next_ready_seq(q)) == 0) {
       if (q->shutdown && q->tail == q->head)
         break;
@@ -277,8 +273,7 @@ worker_thread(void* arg)
 struct io_queue*
 io_queue_create(struct io_backend backend, struct io_queue_limits limits)
 {
-  // Every request goes through the backend, so a queue without one runs
-  // nothing and would silently retire work that was never carried out.
+  // Without one, every request would retire without being carried out.
   if (!backend.execute) {
     log_error("io_queue: a backend must carry an execute");
     return NULL;
@@ -295,8 +290,8 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   // Masking the sequence number picks a slot, so the ring must be a power of
   // two even when the request limit is not.
   q->ring_cap = 1ull << ceil_log2(q->max_requests);
-  // Sequence number zero means nothing was ever posted, so counting starts
-  // at one and an event recorded before the first post waits on nothing.
+  // Zero means nothing was ever posted, so an event recorded before the first
+  // post waits on nothing.
   q->head = 1;
   q->tail = 1;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
@@ -336,8 +331,7 @@ io_queue_destroy(struct io_queue* q)
 
   platform_thread_join(q->thread);
 
-  // Shutdown is set, so nothing parks from here on. Freeing the mutex while a
-  // parked thread is still on its way out would pull it out from under them.
+  // Shutdown is set, so nothing parks from here on.
   platform_mutex_lock(q->mutex);
   while (q->waiters)
     platform_cond_wait(q->cond_retired, q->mutex);
@@ -511,8 +505,6 @@ io_queue_record(struct io_queue* q)
 void
 io_event_wait(const struct io_queue* q, struct io_event ev)
 {
-  // Cast away const for mutex operations — the mutable sync state is logically
-  // separate from the queue's public identity.
   struct io_queue* mq = (struct io_queue*)q;
 
   platform_mutex_lock(mq->mutex);

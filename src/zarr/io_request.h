@@ -30,8 +30,8 @@ struct io_request
 
   struct io_file_token file;
 
-  // Payload, for a write. Every other op carries no bytes, which is what the
-  // counters and the timing both key on.
+  // Every op other than a write carries no bytes, which the counters and the
+  // timing both key on.
   const void* payload;
   uint64_t nbytes;
   uint64_t offset;
