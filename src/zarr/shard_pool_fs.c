@@ -102,12 +102,12 @@ fs_slot_write(struct shard_writer* self,
     j->io_error = w->io_error;
     memcpy((char*)j + j->data_off, beg, nbytes);
     if (io_queue_post(w->queue,
-                      (struct io_work){
+                      (struct io_request){
                         .fn = pwrite_fn,
                         .ctx = j,
                         .ctx_free = job_free,
                         .nbytes = nbytes,
-                        .file = w->generation,
+                        .file = { .generation = w->generation },
                       })) {
       job_free(j);
       goto Error;
@@ -162,12 +162,12 @@ fs_slot_write_direct(struct shard_writer* self,
     j->data = beg;
     j->io_error = w->io_error;
     if (io_queue_post(w->queue,
-                      (struct io_work){
+                      (struct io_request){
                         .fn = pwrite_ref_fn,
                         .ctx = j,
                         .ctx_free = free,
                         .nbytes = nbytes,
-                        .file = w->generation,
+                        .file = { .generation = w->generation },
                         .borrowed = 1,
                       })) {
       free(j);
@@ -236,11 +236,11 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
     j->logical_size = logical_size;
     j->io_error = w->io_error;
     if (io_queue_post(w->queue,
-                      (struct io_work){
+                      (struct io_request){
                         .fn = truncate_fn,
                         .ctx = j,
                         .ctx_free = free,
-                        .file = w->generation,
+                        .file = { .generation = w->generation },
                       })) {
       free(j);
       return 1;
@@ -263,11 +263,11 @@ fs_slot_finalize(struct shard_writer* self)
     j->fd = w->fd;
     j->files_open_now = w->files_open_now;
     if (io_queue_post(w->queue,
-                      (struct io_work){
+                      (struct io_request){
                         .fn = close_fn,
                         .ctx = j,
                         .ctx_free = free,
-                        .file = w->generation,
+                        .file = { .generation = w->generation },
                       })) {
       free(j);
       goto Error;
@@ -427,7 +427,7 @@ shard_pool_fs_inject_failing_job(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
   return io_queue_post(
-    p->queue, (struct io_work){ .fn = fail_fn, .ctx = (void*)&p->io_error });
+    p->queue, (struct io_request){ .fn = fail_fn, .ctx = (void*)&p->io_error });
 }
 
 int
@@ -471,9 +471,9 @@ shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
     return 1;
   g->gate = gate;
   g->queue = p->queue;
-  if (io_queue_post(
-        p->queue,
-        (struct io_work){ .fn = gate_fn, .ctx = (void*)g, .ctx_free = free })) {
+  if (io_queue_post(p->queue,
+                    (struct io_request){
+                      .fn = gate_fn, .ctx = (void*)g, .ctx_free = free })) {
     free(g);
     return 1;
   }

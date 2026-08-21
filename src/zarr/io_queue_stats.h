@@ -32,7 +32,7 @@ io_queue_counters_free(struct io_queue_counters* c);
 // Totals as of after taking the work; now also opens the averaging window.
 void
 io_queue_counters_posted(struct io_queue_counters* c,
-                         const struct io_work* work,
+                         const struct io_request* req,
                          uint64_t jobs_waiting,
                          uint64_t bytes_waiting,
                          int64_t now);
@@ -40,7 +40,7 @@ io_queue_counters_posted(struct io_queue_counters* c,
 // The three times are read only for work carrying a payload.
 void
 io_queue_counters_finished(struct io_queue_counters* c,
-                           const struct io_work* work,
+                           const struct io_request* req,
                            int64_t post_ns,
                            int64_t started_ns,
                            int64_t finished_ns);

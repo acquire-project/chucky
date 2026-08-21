@@ -1,21 +1,12 @@
 #pragma once
 
-#include "zarr/types.io.h"
 #include "writer.h"
+#include "zarr/io_request.h"
+#include "zarr/types.io.h"
 
 #include <stdint.h>
 
 struct io_queue;
-
-struct io_work
-{
-  void (*fn)(void*);
-  void* ctx;
-  void (*ctx_free)(void*); // if non-NULL, called with ctx after fn returns
-  uint64_t nbytes;         // payload size; 0 for truncate, close, and tests
-  uint64_t file;           // which open file; 0 for none
-  int borrowed;            // payload memory owned elsewhere
-};
 
 struct io_queue*
 io_queue_create(void);
@@ -24,7 +15,7 @@ io_queue_destroy(struct io_queue* q);
 
 // Zero on success; on failure nothing is posted and ctx is still yours.
 int
-io_queue_post(struct io_queue* q, struct io_work work);
+io_queue_post(struct io_queue* q, struct io_request req);
 
 // Bytes of unfinished posted work; an upper bound, never low.
 uint64_t

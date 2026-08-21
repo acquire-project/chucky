@@ -33,7 +33,7 @@ test_ordering(void)
   struct order_ctx ctxs[100];
   for (int i = 0; i < 100; ++i) {
     ctxs[i] = (struct order_ctx){ .log = log, .index = i };
-    io_queue_post(q, (struct io_work){ .fn = order_fn, .ctx = &ctxs[i] });
+    io_queue_post(q, (struct io_request){ .fn = order_fn, .ctx = &ctxs[i] });
   }
 
   struct io_event ev = io_queue_record(q);
@@ -67,7 +67,7 @@ test_event_wait(void)
   CHECK(Fail, q);
 
   atomic_int val = 0;
-  io_queue_post(q, (struct io_work){ .fn = set_value, .ctx = (void*)&val });
+  io_queue_post(q, (struct io_request){ .fn = set_value, .ctx = (void*)&val });
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
 
@@ -106,9 +106,9 @@ test_ctx_free(void)
   int free_count = 0;
   for (int i = 0; i < 10; ++i)
     io_queue_post(q,
-                  (struct io_work){ .fn = noop_fn,
-                                    .ctx = &free_count,
-                                    .ctx_free = free_counter });
+                  (struct io_request){ .fn = noop_fn,
+                                       .ctx = &free_count,
+                                       .ctx_free = free_counter });
 
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
@@ -141,7 +141,8 @@ test_destroy_drains(void)
 
   atomic_int count = 0;
   for (int i = 0; i < 50; ++i)
-    io_queue_post(q, (struct io_work){ .fn = increment, .ctx = (void*)&count });
+    io_queue_post(q,
+                  (struct io_request){ .fn = increment, .ctx = (void*)&count });
 
   io_queue_destroy(q);
   CHECK(Fail, atomic_load(&count) == 50);
@@ -195,7 +196,7 @@ test_pending_bytes(void)
   atomic_int gate = 0;
   CHECK(Fail2,
         io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
           0);
 
   uint64_t posted = 0;
@@ -203,7 +204,7 @@ test_pending_bytes(void)
     uint64_t nbytes = (uint64_t)i * 1024;
     CHECK(Fail3,
           io_queue_post(
-            q, (struct io_work){ .fn = noop_fn, .nbytes = nbytes }) == 0);
+            q, (struct io_request){ .fn = noop_fn, .nbytes = nbytes }) == 0);
     posted += nbytes;
     CHECK(Fail3, io_queue_pending_bytes(q) == posted);
   }
@@ -213,7 +214,7 @@ test_pending_bytes(void)
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
   // A job posted without a byte count leaves the figure alone.
-  CHECK(Fail2, io_queue_post(q, (struct io_work){ .fn = noop_fn }) == 0);
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .fn = noop_fn }) == 0);
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
@@ -242,19 +243,19 @@ test_stats(void)
   atomic_int gate = 0;
   CHECK(Fail2,
         io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
           0);
 
   // Three files, two writes each, round-robin: three only if files differ.
   for (int round = 0; round < 2; ++round)
     for (uint64_t file = 1; file <= 3; ++file)
       CHECK(Fail3,
-            io_queue_post(q,
-                          (struct io_work){ .fn = noop_fn,
-                                            .nbytes = 4096,
-                                            .file = file,
-                                            .borrowed = (int)(file == 1) }) ==
-              0);
+            io_queue_post(
+              q,
+              (struct io_request){ .fn = noop_fn,
+                                   .nbytes = 4096,
+                                   .file = { .generation = file },
+                                   .borrowed = (int)(file == 1) }) == 0);
 
   struct io_queue_stats st;
   io_queue_get_stats(q, &st);
@@ -266,15 +267,19 @@ test_stats(void)
   CHECK(Fail3, st.size_buckets[12] == 6); // 4096 == 1 << 12
 
   // No file named: no change to the file count.
-  CHECK(Fail3, io_queue_post(q, (struct io_work){ .fn = noop_fn }) == 0);
+  CHECK(Fail3, io_queue_post(q, (struct io_request){ .fn = noop_fn }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
   // Not counted for truncate and close: no payload.
   CHECK(Fail3,
-        io_queue_post(q, (struct io_work){ .fn = noop_fn, .file = 4 }) == 0);
+        io_queue_post(q,
+                      (struct io_request){ .fn = noop_fn,
+                                           .file = { .generation = 4 } }) == 0);
   CHECK(Fail3,
-        io_queue_post(q, (struct io_work){ .fn = noop_fn, .file = 5 }) == 0);
+        io_queue_post(q,
+                      (struct io_request){ .fn = noop_fn,
+                                           .file = { .generation = 5 } }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
@@ -313,11 +318,11 @@ test_timing_mean_counts_finished(void)
   atomic_int gate = 0;
   CHECK(Fail2,
         io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
+          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
           0);
   CHECK(Fail3,
-        io_queue_post(q, (struct io_work){ .fn = noop_fn, .nbytes = 4096 }) ==
-          0);
+        io_queue_post(
+          q, (struct io_request){ .fn = noop_fn, .nbytes = 4096 }) == 0);
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
 
@@ -325,12 +330,12 @@ test_timing_mean_counts_finished(void)
   atomic_int held = 0;
   CHECK(Fail4,
         io_queue_post(
-          q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&held }) ==
+          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&held }) ==
           0);
   for (int i = 0; i < 5; ++i)
     CHECK(Fail4,
-          io_queue_post(q, (struct io_work){ .fn = noop_fn, .nbytes = 4096 }) ==
-            0);
+          io_queue_post(
+            q, (struct io_request){ .fn = noop_fn, .nbytes = 4096 }) == 0);
 
   struct io_queue_stats st;
   io_queue_get_stats(q, &st);

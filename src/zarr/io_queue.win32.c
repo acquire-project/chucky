@@ -11,7 +11,7 @@
 
 struct io_job
 {
-  struct io_work work;
+  struct io_request req;
   uint64_t seq;
   int64_t post_ns;
 };
@@ -60,18 +60,18 @@ worker_thread(LPVOID arg)
     ReleaseSRWLockExclusive(&q->srw);
 
     // Untimed for truncate and close: no payload, so no clock reads.
-    const int timed = job.work.nbytes > 0;
+    const int timed = job.req.nbytes > 0;
     const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
-    job.work.fn(job.work.ctx);
-    if (job.work.ctx_free)
-      job.work.ctx_free(job.work.ctx);
+    job.req.fn(job.req.ctx);
+    if (job.req.ctx_free)
+      job.req.ctx_free(job.req.ctx);
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     AcquireSRWLockExclusive(&q->srw);
     q->retired_seq = job.seq;
-    q->pending_bytes -= job.work.nbytes;
+    q->pending_bytes -= job.req.nbytes;
     io_queue_counters_finished(
-      &q->counters, &job.work, job.post_ns, started_ns, finished_ns);
+      &q->counters, &job.req, job.post_ns, started_ns, finished_ns);
     WakeAllConditionVariable(&q->cond_retired);
     ReleaseSRWLockExclusive(&q->srw);
   }
@@ -155,7 +155,7 @@ ring_grow(struct io_queue* q)
 }
 
 int
-io_queue_post(struct io_queue* q, struct io_work work)
+io_queue_post(struct io_queue* q, struct io_request req)
 {
   AcquireSRWLockExclusive(&q->srw);
 
@@ -169,15 +169,15 @@ io_queue_post(struct io_queue* q, struct io_work work)
   q->next_seq++;
   const int64_t now = platform_monotonic_ns();
   q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
-    .work = work,
+    .req = req,
     .seq = q->next_seq,
     .post_ns = now,
   };
   q->head++;
-  q->pending_bytes += work.nbytes;
+  q->pending_bytes += req.nbytes;
 
   io_queue_counters_posted(
-    &q->counters, &work, q->head - q->tail, q->pending_bytes, now);
+    &q->counters, &req, q->head - q->tail, q->pending_bytes, now);
 
   WakeConditionVariable(&q->cond_not_empty);
   ReleaseSRWLockExclusive(&q->srw);
