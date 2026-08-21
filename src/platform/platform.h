@@ -29,17 +29,12 @@ platform_aligned_free(void* ptr);
 size_t
 platform_available_memory(void);
 
-// Physical memory this process holds right now. Writes the size in bytes and
-// returns 0; returns non-zero, leaving bytes untouched, if the reading is
-// unavailable. A successful reading can still be 0: Linux batches the page
-// counters, so a process a few tens of milliseconds old reports nothing
-// resident however many pages it has touched.
+// Physical memory this process holds now. Returns non-zero if unavailable.
+// A reading of 0 is valid: Linux batches the page counters.
 int
 platform_resident_memory(uint64_t* bytes);
 
-// Most physical memory this process has held at any point. Same reporting as
-// platform_resident_memory. Never goes down, so it can be read once at the end
-// of a run.
+// Most physical memory this process has held at any point. Never goes down.
 int
 platform_peak_resident_memory(uint64_t* bytes);
 

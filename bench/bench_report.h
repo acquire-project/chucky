@@ -25,9 +25,10 @@ struct bench_memory
   uint64_t estimate_pinned_bytes; // pinned host bytes on GPU, 0 on CPU
   uint64_t host_baseline_bytes;   // resident before the stream was created
   uint64_t host_peak_bytes;       // most resident memory held during the run
-  uint64_t device_used_bytes;     // GPU: free device memory the stream took
-  // Which of the two above the estimate can be held against: device memory on
-  // the GPU, the host difference on the CPU. 0 when that reading failed.
+  // A reading of 0 is valid, so it cannot signal failure.
+  int host_reading_failed;
+  uint64_t device_used_bytes; // GPU: free device memory the stream took
+  // Device memory on GPU, the host difference on CPU. 0 if unavailable.
   uint64_t measured_bytes;
 };
 

@@ -473,8 +473,10 @@ run_bench(const struct bench_config* cfg)
     .estimate_total_bytes = est_total_bytes,
     .estimate_pinned_bytes = est_pinned_bytes,
   };
-  if (platform_resident_memory(&mem_used.host_baseline_bytes) != 0)
+  if (platform_resident_memory(&mem_used.host_baseline_bytes) != 0) {
     log_warn("  host memory reading unavailable");
+    mem_used.host_reading_failed = 1;
+  }
   const size_t device_free_at_rest =
     cfg->backend == BENCH_GPU ? bench_gpu_free_memory() : 0;
 
@@ -537,15 +539,19 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   float wall_s = platform_toc(&clock);
 
-  if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0)
+  if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0) {
     log_warn("  host peak memory reading unavailable");
+    mem_used.host_reading_failed = 1;
+  }
+  // A 0 baseline is the page counter not started yet, not an empty process.
+  const int baseline_is_usable = mem_used.host_baseline_bytes > 0;
   if (cfg->backend == BENCH_GPU) {
     // 0 means the reading failed, not that the device ran out.
     const size_t device_free_now = bench_gpu_free_memory();
     if (device_free_now > 0 && device_free_at_rest > device_free_now)
       mem_used.device_used_bytes = device_free_at_rest - device_free_now;
     mem_used.measured_bytes = mem_used.device_used_bytes;
-  } else if (mem_used.host_baseline_bytes &&
+  } else if (baseline_is_usable &&
              mem_used.host_peak_bytes > mem_used.host_baseline_bytes) {
     mem_used.measured_bytes =
       mem_used.host_peak_bytes - mem_used.host_baseline_bytes;

@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 
+// Big enough that faulting it in overflows the kernel's batched page counters.
 #define BLOCK_BYTES (64u << 20)
 
 // Anything short of the whole block would still catch a kilobyte-reported-as-
@@ -20,22 +21,6 @@ touch_block(char* block)
   const size_t page = platform_page_alignment();
   for (size_t i = 0; i < BLOCK_BYTES; i += page)
     pages[i] = 1;
-}
-
-// Linux batches the page counters behind /proc/self/statm, so a process a few
-// tens of milliseconds old reads nothing resident however many pages it has
-// touched. Only elapsed time clears it. The two tests that compare readings
-// need the counter running before they start.
-static void
-wait_for_the_page_counter(void)
-{
-  for (int i = 0; i < 200; ++i) {
-    uint64_t bytes = 0;
-    if (platform_resident_memory(&bytes) != 0 || bytes > 0)
-      return;
-    platform_sleep_ns(1000000);
-  }
-  log_warn("resident memory still reads 0 after 200 ms");
 }
 
 static int
@@ -111,7 +96,6 @@ int
 main(void)
 {
   int failed = 0;
-  wait_for_the_page_counter();
   failed += test_resident_memory_is_plausible();
   failed += test_resident_memory_follows_a_touched_block();
   failed += test_peak_covers_memory_already_released();
