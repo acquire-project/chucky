@@ -205,6 +205,7 @@ Each run records memory as an estimate and a measurement:
 | `memory_estimate_pinned_bytes` | pinned host bytes on GPU, 0 on CPU |
 | `memory_host_baseline_bytes` | resident memory before the stream was created |
 | `memory_host_peak_bytes` | most resident memory the process held during the run |
+| `memory_host_reading_failed` | true when either host reading was unavailable, since 0 is also a valid reading |
 | `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
 | `memory_measured_bytes` | the figure to hold the estimate against: device memory on GPU, the host difference on CPU |
 

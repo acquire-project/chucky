@@ -38,7 +38,7 @@ print_memory_report(const struct bench_memory* mem)
 {
   char a[32], b[32];
   fputc('\n', stderr);
-  if (mem->host_peak_bytes) {
+  if (!mem->host_reading_failed) {
     format_bytes(a, sizeof(a), mem->host_baseline_bytes);
     format_bytes(b, sizeof(b), mem->host_peak_bytes);
     print_report("  Host memory:   %s at rest, %s peak", a, b);
@@ -384,6 +384,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, mem->host_baseline_bytes);
   jw_key(&jw, "memory_host_peak_bytes");
   jw_uint(&jw, mem->host_peak_bytes);
+  jw_key(&jw, "memory_host_reading_failed");
+  jw_bool(&jw, mem->host_reading_failed);
   jw_key(&jw, "memory_device_used_bytes");
   jw_uint(&jw, mem->device_used_bytes);
   jw_key(&jw, "memory_measured_bytes");

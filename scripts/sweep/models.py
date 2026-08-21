@@ -50,6 +50,7 @@ class RunResult(BaseModel, extra="allow"):
     memory_estimate_pinned_bytes: int | None = None
     memory_host_baseline_bytes: int | None = None
     memory_host_peak_bytes: int | None = None
+    memory_host_reading_failed: bool | None = None
     memory_device_used_bytes: int | None = None
     memory_measured_bytes: int | None = None
     s3_endpoint: str | None = None

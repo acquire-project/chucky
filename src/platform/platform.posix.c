@@ -39,27 +39,29 @@ platform_available_memory(void)
   return 0;
 }
 
-uint64_t
-platform_resident_memory(void)
+int
+platform_resident_memory(uint64_t* bytes)
 {
   FILE* f = fopen("/proc/self/statm", "r");
   if (!f)
-    return 0;
+    return 1;
   unsigned long long total_pages = 0, resident_pages = 0;
   int fields = fscanf(f, "%llu %llu", &total_pages, &resident_pages);
   fclose(f);
   if (fields != 2)
-    return 0;
-  return (uint64_t)resident_pages * (uint64_t)platform_page_alignment();
+    return 1;
+  *bytes = (uint64_t)resident_pages * (uint64_t)platform_page_alignment();
+  return 0;
 }
 
-uint64_t
-platform_peak_resident_memory(void)
+int
+platform_peak_resident_memory(uint64_t* bytes)
 {
   struct rusage ru;
-  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0)
-    return 0;
-  return (uint64_t)ru.ru_maxrss * 1024; // kilobytes on Linux
+  if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss < 0)
+    return 1;
+  *bytes = (uint64_t)ru.ru_maxrss * 1024; // kilobytes on Linux
+  return 0;
 }
 
 void*
