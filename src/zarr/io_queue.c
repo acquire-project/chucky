@@ -1,14 +1,13 @@
 #include "zarr/io_queue.h"
 #include "log/log.h"
 #include "platform/platform.h"
+#include "util/prelude.h"
 #include "zarr/io_queue_stats.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-// Admission waits for the tail to pass, so head - tail never exceeds this and
-// two live sequence numbers never share a slot.
-#define RING_CAP 1024u
+#define DEFAULT_MAX_REQUESTS 1024u
 
 struct io_job
 {
@@ -27,11 +26,19 @@ struct io_queue
   struct platform_cond* cond_slot_free;
 
   struct io_job* ring;
+  uint64_t ring_cap; // power of two, fixed for the queue's life
   uint64_t head;     // next sequence number to hand out
   uint64_t dispatch; // next sequence number the worker runs
   uint64_t tail;     // oldest sequence number that has not retired
 
-  uint64_t pending_bytes; // raised on post, lowered when the job finishes
+  uint64_t max_requests;
+  uint64_t max_bytes;
+
+  uint64_t pending_bytes; // raised on commit, lowered when the job finishes
+
+  // Room claimed by a reserve that has not yet committed or been released.
+  uint64_t reserved_requests;
+  uint64_t reserved_bytes;
 
   struct io_queue_counters counters;
 
@@ -57,7 +64,7 @@ worker_thread(void* arg)
       break;
     }
 
-    job = q->ring[q->dispatch & (RING_CAP - 1)];
+    job = q->ring[q->dispatch & (q->ring_cap - 1)];
     q->dispatch++;
     platform_mutex_unlock(q->mutex);
 
@@ -81,9 +88,9 @@ worker_thread(void* arg)
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     platform_mutex_lock(q->mutex);
-    q->ring[job.seq & (RING_CAP - 1)].retired = 1;
-    while (q->tail < q->head && q->ring[q->tail & (RING_CAP - 1)].retired) {
-      q->ring[q->tail & (RING_CAP - 1)].retired = 0;
+    q->ring[job.seq & (q->ring_cap - 1)].retired = 1;
+    while (q->tail < q->head && q->ring[q->tail & (q->ring_cap - 1)].retired) {
+      q->ring[q->tail & (q->ring_cap - 1)].retired = 0;
       q->tail++;
     }
     q->pending_bytes -= job.req.nbytes;
@@ -95,20 +102,35 @@ worker_thread(void* arg)
   }
 }
 
+static uint64_t
+round_up_pow2(uint64_t v)
+{
+  uint64_t p = 1;
+  while (p < v)
+    p <<= 1;
+  return p;
+}
+
 struct io_queue*
-io_queue_create(struct io_backend backend)
+io_queue_create(struct io_backend backend, struct io_queue_limits limits)
 {
   struct io_queue* q = (struct io_queue*)calloc(1, sizeof(*q));
   if (!q)
     return NULL;
 
   q->backend = backend;
+  q->max_requests =
+    limits.max_requests ? limits.max_requests : DEFAULT_MAX_REQUESTS;
+  q->max_bytes = limits.max_bytes;
+  // Masking the sequence number picks a slot, so the ring must be a power of
+  // two even when the request limit is not.
+  q->ring_cap = round_up_pow2(q->max_requests);
   // Sequence number zero means nothing was ever posted, so counting starts
   // at one and an event recorded before the first post waits on nothing.
   q->head = 1;
   q->dispatch = 1;
   q->tail = 1;
-  q->ring = (struct io_job*)calloc(RING_CAP, sizeof(struct io_job));
+  q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   q->mutex = platform_mutex_new();
   q->cond_not_empty = platform_cond_new();
   q->cond_retired = platform_cond_new();
@@ -153,23 +175,55 @@ io_queue_destroy(struct io_queue* q)
   free(q);
 }
 
+static int
+has_room(const struct io_queue* q, uint64_t nbytes)
+{
+  if ((q->head - q->tail) + q->reserved_requests >= q->max_requests)
+    return 0;
+  if (q->max_bytes == 0)
+    return 1;
+  // A write larger than the ceiling still has to go through, so an empty
+  // queue admits it.
+  if (q->head == q->tail && q->reserved_requests == 0)
+    return 1;
+  return q->pending_bytes + q->reserved_bytes + nbytes <= q->max_bytes;
+}
+
 int
-io_queue_post(struct io_queue* q, struct io_request req)
+io_queue_reserve(struct io_queue* q, uint64_t nbytes)
 {
   platform_mutex_lock(q->mutex);
 
-  while (q->head - q->tail == RING_CAP && !q->shutdown)
+  while (!has_room(q, nbytes) && !q->shutdown)
     platform_cond_wait(q->cond_slot_free, q->mutex);
 
-  if (q->head - q->tail == RING_CAP) {
+  if (!has_room(q, nbytes)) {
     log_error("io_queue: refused a post during shutdown");
     platform_mutex_unlock(q->mutex);
     return 1;
   }
 
+  q->reserved_requests++;
+  q->reserved_bytes += nbytes;
+  platform_mutex_unlock(q->mutex);
+  return 0;
+}
+
+void
+io_queue_commit(struct io_queue* q, struct io_request req)
+{
+  platform_mutex_lock(q->mutex);
+
+  CHECK(Unlock, q->head - q->tail < q->ring_cap);
+  CHECK(Unlock, q->reserved_requests > 0);
+  CHECK(Unlock, q->reserved_bytes >= req.nbytes);
+
+  q->reserved_requests--;
+  q->reserved_bytes -= req.nbytes;
+
   const int64_t now = platform_monotonic_ns();
   const uint64_t seq = q->head;
-  q->ring[seq & (RING_CAP - 1)] = (struct io_job){
+  q->ring[seq & (q->ring_cap - 1)] = (struct io_job){
     .req = req,
     .seq = seq,
     .post_ns = now,
@@ -181,7 +235,31 @@ io_queue_post(struct io_queue* q, struct io_request req)
     &q->counters, &req, q->head - q->dispatch, q->pending_bytes, now);
 
   platform_cond_broadcast(q->cond_not_empty);
+
+Unlock:
   platform_mutex_unlock(q->mutex);
+}
+
+void
+io_queue_release(struct io_queue* q, uint64_t nbytes)
+{
+  platform_mutex_lock(q->mutex);
+  CHECK(Unlock, q->reserved_requests > 0);
+  CHECK(Unlock, q->reserved_bytes >= nbytes);
+  q->reserved_requests--;
+  q->reserved_bytes -= nbytes;
+  platform_cond_broadcast(q->cond_slot_free);
+
+Unlock:
+  platform_mutex_unlock(q->mutex);
+}
+
+int
+io_queue_post(struct io_queue* q, struct io_request req)
+{
+  if (io_queue_reserve(q, req.nbytes))
+    return 1;
+  io_queue_commit(q, req);
   return 0;
 }
 

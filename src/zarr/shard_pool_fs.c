@@ -55,6 +55,10 @@ fs_slot_write(struct shard_writer* self,
   CHECK(Error, w->alignment == 0 || nbytes % w->alignment == 0);
   CHECK(Error, w->alignment == 0 || offset % w->alignment == 0);
 
+  // Claim the room before allocating, so the copy cannot outrun the ceiling
+  // on queued memory.
+  CHECK_SILENT(Error, io_queue_reserve(w->queue, nbytes) == 0);
+
   void* buf;
   void (*buf_free)(void*);
   if (w->alignment > 0) {
@@ -64,24 +68,23 @@ fs_slot_write(struct shard_writer* self,
     buf = malloc(nbytes);
     buf_free = free;
   }
-  CHECK(Error, buf);
+  CHECK(Release, buf);
   memcpy(buf, beg, nbytes);
 
-  if (io_queue_post(w->queue,
-                    (struct io_request){
-                      .op = IO_OP_WRITE,
-                      .file = w->token,
-                      .payload = buf,
-                      .nbytes = nbytes,
-                      .offset = offset,
-                      .owned = buf,
-                      .owned_free = buf_free,
-                    })) {
-    buf_free(buf);
-    goto Error;
-  }
+  io_queue_commit(w->queue,
+                  (struct io_request){
+                    .op = IO_OP_WRITE,
+                    .file = w->token,
+                    .payload = buf,
+                    .nbytes = nbytes,
+                    .offset = offset,
+                    .owned = buf,
+                    .owned_free = buf_free,
+                  });
   return 0;
 
+Release:
+  io_queue_release(w->queue, nbytes);
 Error:
   return 1;
 }
@@ -367,7 +370,8 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->backend = io_backend_fs_create(&p->io_error);
   CHECK(Fail_alloc, p->backend);
 
-  p->queue = io_queue_create(io_backend_fs_as_backend(p->backend));
+  p->queue = io_queue_create(io_backend_fs_as_backend(p->backend),
+                             (struct io_queue_limits){ 0 });
   CHECK(Fail_backend, p->queue);
 
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));

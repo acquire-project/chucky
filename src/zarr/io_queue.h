@@ -9,15 +9,38 @@
 
 struct io_queue;
 
+// Ceilings on what may sit in the queue at once.
+struct io_queue_limits
+{
+  uint64_t max_requests; // 0 selects the default, 1024
+  uint64_t max_bytes;    // 0 means no ceiling
+};
+
 // A zeroed backend runs closures only.
 struct io_queue*
-io_queue_create(struct io_backend backend);
+io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 void
 io_queue_destroy(struct io_queue* q);
 
 // Zero on success; on failure nothing is posted and ctx is still yours.
 int
 io_queue_post(struct io_queue* q, struct io_request req);
+
+// Claim room for one request carrying nbytes. Waits until there is room.
+// Zero on success; non-zero if the queue is shutting down, and then nothing
+// is claimed.
+int
+io_queue_reserve(struct io_queue* q, uint64_t nbytes);
+
+// Post a request whose room io_queue_reserve already claimed. The claim
+// guarantees a slot, so this cannot fail. req.nbytes must equal the nbytes
+// passed to the matching reserve.
+void
+io_queue_commit(struct io_queue* q, struct io_request req);
+
+// Give back a claim that will not be committed.
+void
+io_queue_release(struct io_queue* q, uint64_t nbytes);
 
 // Bytes of unfinished posted work; an upper bound, never low.
 uint64_t
