@@ -116,8 +116,9 @@ only place pre-sizing can be measured.
 - Described write requests instead of closures.
 - An opaque token on every open file, so no late write can be applied to a
   recycled descriptor.
-- Request and byte credits reserved before a payload is allocated or copied,
-  keeping the memory limit.
+- Request and byte credits reserved before a payload is allocated or copied.
+  The byte ceiling starts unlimited: there is no memory limit today to keep, and
+  step 3 picks a number from sweep data.
 - Truncate and close as barriers, run only once that file's writes are done.
 - Completions retired through a sliding window with a watermark, so the
   meaning of `wait` is unchanged.
@@ -133,13 +134,17 @@ today's behavior and must be rewritten: jobs finishing in the order posted; an
 exact pending-byte total after every post; one blocking job holding up
 everything behind it — only possible with one worker.
 
-Cases are needed for the two uncovered hazards above: the plate's shared pool
-slot, and a fence at the same time as a destroy.
+One uncovered hazard above still needs a case: a fence at the same time as a
+destroy. The plate's shared pool slot moved to #211, whose fix changes how slots
+are allocated.
 
-No more special case for the synchronous failing-truncate hook, synchronous
-only because a queued failure would be behind the footer write with nothing
-left to drain: with a fake backend the footer write can be held and the
-truncate failed at the same time.
+The synchronous failing-truncate hook stays. A fake backend does not replace it.
+`cpu_stream_flush_body` checks for an error before it finalizes the shards and
+never drains afterwards, so a flush reports a truncate failure only when
+`finalize_shards` returns non-zero. Make the truncate asynchronous and the flush
+reports success, then publishes a fence and an append extent for a shard whose
+size is wrong. The fake backend covers the queue-level case instead: a failed
+truncate still lets the close run.
 
 *Done when:* output is byte-identical and failure behavior is unchanged.
 
