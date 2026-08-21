@@ -230,7 +230,7 @@ Fail:
 
 // --- test: write stats ---
 
-// Only the room is measurable here: one worker, so writes in flight is one.
+// Only queue depth available is measurable: one worker, so achieved is one.
 
 static int
 test_stats(void)

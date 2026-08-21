@@ -9,7 +9,7 @@
 // Counts over the whole run; peaks and the mean only from the first post.
 struct io_queue_stats
 {
-  // Room for writes in flight; not the number achieved, which is always one.
+  // Queue depth available; not the depth achieved, which is always one.
   uint64_t files_waiting_peak;
   double files_waiting_mean;
 

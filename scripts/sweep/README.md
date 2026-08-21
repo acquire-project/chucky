@@ -169,8 +169,8 @@ stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
 For a run with filesystem output, what the write path did is also recorded.
-Only one write at a time is run by the sink, so these fields are how many
-writes *could* have run at once, not how many did:
+Only one write at a time is run by the sink, so these fields are the queue
+depth *available* — how many writes could have run at once, not how many did:
 
 | field | holds |
 |---|---|

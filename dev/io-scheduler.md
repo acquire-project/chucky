@@ -10,8 +10,9 @@ drive. This file is the working plan for changing that.
 
 - **Write in flight** — handed to the operating system, completion not yet
   seen.
-- **Writes in flight, total** — outstanding across every shard file at once.
-- **Writes in flight per file** — how many of those to the same shard file. No
+- **Queue depth** — writes in flight across every shard file at once. Always
+  both words: bare "depth" already means pipeline depth in `src/gpu/`.
+- **Queue depth per file** — how many of those to the same shard file. No
   gain above one while a file is still growing: on xfs the file's lock is taken
   for itself by an extending write, so requests are accepted by the kernel and
   then run one at a time. Only worth raising once the file is pre-sized.
@@ -60,11 +61,11 @@ and closes are kept apart by the single worker. Untested.
 
 ## Cost of one write at a time
 
-About 1.4x from more writes in flight, flat past 16. Measured on xfs over an md
-RAID10 of 8 NVMe drives, 48 MiB writes, writes in flight taken from shard files
+About 1.4x from more queue depth, flat past 16. Measured on xfs over an md
+RAID10 of 8 NVMe drives, 48 MiB writes, queue depth taken from shard files
 written at once. One in flight is today's sink.
 
-| writes in flight | GB/s | vs today |
+| queue depth | GB/s | vs today |
 |---:|---:|---:|
 | 1 | 12.07 | — |
 | 8 | 15.56 | 1.29x |
@@ -94,7 +95,7 @@ commit its history does not contain.
 Done. No behavior change; counters only.
 
 Main number: **distinct shard files with a write waiting at once**, as a high-
-water mark and a time-weighted average — the writes in flight available to a
+water mark and a time-weighted average — the queue depth available to a
 scheduler, capped by pool size.
 
 Also counted: shard files opened and the most open at once, summed across
@@ -110,7 +111,7 @@ point raising its concurrent-shard target. Compare the pair on the write path,
 not on throughput. Kept: the only scenario with a single growing file, and the
 only place pre-sizing can be measured.
 
-### 2. Correctness at one write in flight
+### 2. Correctness at queue depth one
 
 - Described write requests instead of closures.
 - An opaque token on every open file, so no late write can be applied to a
@@ -142,10 +143,10 @@ truncate failed at the same time.
 
 *Done when:* output is byte-identical and failure behavior is unchanged.
 
-### 3. Several writes in flight
+### 3. More queue depth
 
 Raise the worker count, schedule ready files round-robin, and add pre-sizing so
-writes in flight per file can be raised above one. Add the selecting flags and
+queue depth per file can be raised above one. Add the selecting flags and
 record them in the results file: `--io-writes-in-flight`,
 `--io-writes-in-flight-per-file`, `--io-workers`, `--io-backend`. Sweep writes
 in flight from 1 to 32.
