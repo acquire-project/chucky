@@ -60,12 +60,27 @@ struct io_queue
   uint64_t reserved_requests;
   uint64_t reserved_bytes;
 
+  // Threads parked on one of the condition variables. Teardown cannot free
+  // them until every one of those threads has let go of the mutex.
+  uint64_t waiters;
+
   struct io_queue_counters counters;
 
   struct io_backend backend;
 
   int shutdown;
 };
+
+// Teardown frees the mutex and the condition variables, so it has to know
+// when a parked thread is still on its way out of one.
+static void
+queue_wait(struct io_queue* q, struct platform_cond* cond)
+{
+  q->waiters++;
+  platform_cond_wait(cond, q->mutex);
+  if (--q->waiters == 0)
+    platform_cond_broadcast(q->cond_retired);
+}
 
 static struct file_pending*
 file_find(struct io_queue* q, uint64_t generation)
@@ -115,6 +130,9 @@ file_request_retired(struct io_queue* q, const struct io_request* req)
 
   struct file_pending* f = file_find(q, req->file.generation);
   if (!f)
+    return;
+
+  if (f->outstanding == 0)
     return;
 
   if (--f->outstanding == 0) {
@@ -312,9 +330,17 @@ io_queue_destroy(struct io_queue* q)
   q->shutdown = 1;
   platform_cond_broadcast(q->cond_not_empty);
   platform_cond_broadcast(q->cond_slot_free);
+  platform_cond_broadcast(q->cond_retired);
   platform_mutex_unlock(q->mutex);
 
   platform_thread_join(q->thread);
+
+  // Shutdown is set, so nothing parks from here on. Freeing the mutex while a
+  // parked thread is still on its way out would pull it out from under them.
+  platform_mutex_lock(q->mutex);
+  while (q->waiters)
+    platform_cond_wait(q->cond_retired, q->mutex);
+  platform_mutex_unlock(q->mutex);
 
   free(q->ring);
   free(q->files);
@@ -360,25 +386,25 @@ io_queue_reserve(struct io_queue* q, struct io_request req)
 
   platform_mutex_lock(q->mutex);
 
-  if (names_a_closing_file(q, &req)) {
-    log_error("io_queue: refused a request naming a file that is closing");
-    platform_mutex_unlock(q->mutex);
-    return 1;
-  }
-
   while (!has_room(q, nbytes) && !q->shutdown)
-    platform_cond_wait(q->cond_slot_free, q->mutex);
+    queue_wait(q, q->cond_slot_free);
 
-  if (!has_room(q, nbytes)) {
+  int refused = 0;
+  if (q->shutdown) {
     log_error("io_queue: refused a post during shutdown");
-    platform_mutex_unlock(q->mutex);
-    return 1;
+    refused = 1;
+  } else if (names_a_closing_file(q, &req)) {
+    // Checked after the wait: the file can start closing while room is short.
+    log_error("io_queue: refused a request naming a file that is closing");
+    refused = 1;
   }
 
-  q->reserved_requests++;
-  q->reserved_bytes += nbytes;
+  if (!refused) {
+    q->reserved_requests++;
+    q->reserved_bytes += nbytes;
+  }
   platform_mutex_unlock(q->mutex);
-  return 0;
+  return refused;
 }
 
 void
@@ -480,6 +506,6 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
 
   platform_mutex_lock(mq->mutex);
   while (mq->tail - 1 < ev.seq && !mq->shutdown)
-    platform_cond_wait(mq->cond_retired, mq->mutex);
+    queue_wait(mq, mq->cond_retired);
   platform_mutex_unlock(mq->mutex);
 }
