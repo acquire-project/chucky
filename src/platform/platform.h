@@ -47,9 +47,7 @@ struct platform_clock
 float
 platform_toc(struct platform_clock* clock);
 
-// Monotonic nanoseconds from an arbitrary origin. Only differences mean
-// anything. Use this when a duration has to be weighted by the time it
-// covered, which platform_toc cannot do because reading it resets it.
+// Monotonic nanoseconds; the origin is arbitrary, only differences useful.
 int64_t
 platform_monotonic_ns(void);
 

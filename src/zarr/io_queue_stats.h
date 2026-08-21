@@ -1,8 +1,4 @@
-// The counters the io queue keeps about the writes it runs. None of it is
-// platform-specific, and there are two queue implementations, so it lives
-// here rather than in both.
-//
-// The queue owns a lock. Call all of this with that lock held.
+// Call all of this with the queue's lock held.
 #pragma once
 
 #include "zarr/io_queue.h"
@@ -14,8 +10,7 @@ struct file_waiting;
 
 struct io_queue_counters
 {
-  // Weighting needs an absolute clock: the average has to be over time, not
-  // over the number of times the count happened to change.
+  // Average is over time, not over how often the count changed.
   struct file_waiting* files;
   uint64_t nfiles;
   uint64_t files_cap;
@@ -23,22 +18,18 @@ struct io_queue_counters
   int64_t weighted_from_ns;
   double files_weighted_ns;
 
-  // Timings land when a write finishes, so their divisor is the finished
-  // count rather than the posted count.
   uint64_t writes_finished;
   double wait_ms_total;
   double run_ms_total;
 
-  // Everything a reader gets except the three averages, which are worked out
-  // on read and are zero in here.
+  // Zero in here: the three averages, worked out on read.
   struct io_queue_stats published;
 };
 
 void
 io_queue_counters_free(struct io_queue_counters* c);
 
-// jobs_waiting and bytes_waiting are the queue's totals after taking the
-// work. now is the post time, which also opens the averaging window.
+// Totals as of after taking the work; now also opens the averaging window.
 void
 io_queue_counters_posted(struct io_queue_counters* c,
                          const struct io_work* work,

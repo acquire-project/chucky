@@ -13,8 +13,8 @@ struct io_work
   void* ctx;
   void (*ctx_free)(void*); // if non-NULL, called with ctx after fn returns
   uint64_t nbytes;         // payload size; 0 for truncate, close, and tests
-  uint64_t file;           // which open file this belongs to; 0 for none
-  int borrowed;            // payload is memory the job does not own
+  uint64_t file;           // which open file; 0 for none
+  int borrowed;            // payload memory owned elsewhere
 };
 
 struct io_queue*
@@ -22,18 +22,15 @@ io_queue_create(void);
 void
 io_queue_destroy(struct io_queue* q);
 
-// Post work to the queue. Returns 0 on success, non-zero on failure.
-// On failure the work is NOT posted and the caller still owns ctx.
+// Zero on success; on failure nothing is posted and ctx is still yours.
 int
 io_queue_post(struct io_queue* q, struct io_work work);
 
-// Bytes carried by posted work that has not finished. An upper bound: a
-// write counts from the moment the queue takes it, so this can read high
-// but never low.
+// Bytes of unfinished posted work; an upper bound, never low.
 uint64_t
 io_queue_pending_bytes(const struct io_queue* q);
 
-// Copy out what the queue has measured so far.
+// Copy out what has been measured so far.
 void
 io_queue_get_stats(const struct io_queue* q, struct io_queue_stats* out);
 

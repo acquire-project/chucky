@@ -138,8 +138,7 @@ print_write_report(const struct shard_pool_io_stats* io)
 
   char buf[32];
   format_bytes(buf, sizeof(buf), io->queue.bytes_waiting_peak);
-  // Two separate high-water marks, not one moment: the job count leaves out
-  // the job already running, whose bytes are still counted as queued.
+  // Two high-water marks, not one moment; the running job is in the bytes.
   print_report("  queued peak:     %s, %llu jobs",
                buf,
                (unsigned long long)io->queue.jobs_waiting_peak);

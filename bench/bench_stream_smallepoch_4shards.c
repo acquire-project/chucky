@@ -1,9 +1,4 @@
-// Four shard files where its twin holds one. The twin pins y and x at full
-// extent, so no two of its writes can ever be outstanding; splitting each in
-// two gives four. The chunk stays 1 MiB, so this epoch is four times the
-// twin's. Compare the pair on what the write path did, not on throughput.
-// The twin stays: one growing file is the only place pre-sizing can be
-// measured.
+// Four shard files where the twin has one; compare writes, not throughput.
 #include "bench_util.h"
 #include "dimension.h"
 
@@ -14,8 +9,7 @@ main(int ac, char* av[])
   uint64_t sizes[] = { 1 << 20, 16, 16 };
   uint8_t rank = dims_create(dims, "tyx", sizes);
 
-  // 19 bits of a 1 MiB chunk at 2 bytes per element, split 13/3/3: t 8192,
-  // y 8, x 8. That leaves 2 chunks along y and 2 along x, which is the four.
+  // 13/3/3 of 19 bits: t 8192, y 8, x 8 - 2 chunks each along y and x.
   int ratios[] = { 13, 3, 3 };
 
   return bench_stream_main(ac,

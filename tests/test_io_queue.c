@@ -230,9 +230,7 @@ Fail:
 
 // --- test: write stats ---
 
-// #178: the number that decides whether running writes at the same time can
-// help is how many distinct files have work waiting. Depth achieved is one by
-// construction here, so only depth available is worth counting.
+// Only the room is measurable here: one worker, so writes in flight is one.
 
 static int
 test_stats(void)
@@ -247,8 +245,7 @@ test_stats(void)
           q, (struct io_work){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
           0);
 
-  // Three files, two writes each, posted round-robin so the count only
-  // reaches three if distinct files are really being tracked.
+  // Three files, two writes each, round-robin: three only if files differ.
   for (int round = 0; round < 2; ++round)
     for (uint64_t file = 1; file <= 3; ++file)
       CHECK(Fail3,
@@ -268,13 +265,12 @@ test_stats(void)
   CHECK(Fail3, st.bytes_waiting_peak == 6 * 4096);
   CHECK(Fail3, st.size_buckets[12] == 6); // 4096 == 1 << 12
 
-  // Work that names no file does not move the file count.
+  // No file named: no change to the file count.
   CHECK(Fail3, io_queue_post(q, (struct io_work){ .fn = noop_fn }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
-  // Neither does finalizing a file nobody has written to. Truncate and close
-  // carry no payload, so they offer a scheduler no second write to run.
+  // Not counted for truncate and close: no payload.
   CHECK(Fail3,
         io_queue_post(q, (struct io_work){ .fn = noop_fn, .file = 4 }) == 0);
   CHECK(Fail3,
@@ -286,11 +282,10 @@ test_stats(void)
   io_event_wait(q, io_queue_record(q));
 
   io_queue_get_stats(q, &st);
-  // The peak is a high-water mark, so draining leaves it alone. The average
-  // is over time and has to be positive: the files really were waiting.
+  // Peak is a high-water mark, safe from draining; the mean must be positive.
   CHECK(Fail2, st.files_waiting_peak == 3);
   CHECK(Fail2, st.files_waiting_mean > 0.0);
-  // Every write sat behind the gate before it could start.
+  // Every write was held behind the gate before it could start.
   CHECK(Fail2, st.wait_ms_max > 0.0);
 
   io_queue_destroy(q);
@@ -306,9 +301,7 @@ Fail:
 
 // --- test: timing averages count finished writes ---
 
-// The averages divide by the writes that finished, not by the writes posted.
-// Reading while work is still queued must not dilute them with writes that
-// have not run.
+// Divisor is the finished count, not the posted count.
 
 static int
 test_timing_mean_counts_finished(void)
@@ -328,8 +321,7 @@ test_timing_mean_counts_finished(void)
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
 
-  // Five more writes, still queued. The worker takes jobs in order, so it is
-  // holding the second gate and none of the five has run.
+  // Five more, still queued behind the second gate: jobs run in order.
   atomic_int held = 0;
   CHECK(Fail4,
         io_queue_post(

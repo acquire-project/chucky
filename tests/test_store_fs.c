@@ -287,14 +287,7 @@ test_shard_pool_io_stats(void)
   CHECK(Fail, s);
   CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
-  // Two slots, reused for six shard files. Each reuse is a new file, so the
-  // count has to follow files rather than slots.
-  //
-  // Hold the worker first. Closing a slot only queues the close, so with
-  // nothing running, all six files are open at once even though the pool has
-  // two slots — the handle outlives the slot that opened it. Gating makes
-  // that exact instead of a race: unheld, how many are open when the sixth
-  // opens depends on how many closes the worker got through.
+  // Gate the worker: a queued close keeps the handle, so all six are open.
   struct shard_pool* pool = s->create_pool(s, 2);
   CHECK(Fail2, pool);
 
@@ -324,10 +317,10 @@ test_shard_pool_io_stats(void)
 
   shard_pool_io_stats(pool, &io);
   CHECK(Fail3, io.queue.writes == 6);
-  // These went through write, which copies, not write_direct, which borrows.
+  // Copying path, so nothing is borrowed.
   CHECK(Fail3, io.queue.bytes_copied > 0);
   CHECK(Fail3, io.queue.bytes_borrowed == 0);
-  // Peaks are high-water marks, so draining leaves them where they were.
+  // Peaks are high-water marks, unaffected by draining.
   CHECK(Fail3, io.files_open_peak == 6);
 
   shard_pool_destroy(pool);

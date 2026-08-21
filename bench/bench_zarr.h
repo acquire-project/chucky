@@ -58,7 +58,7 @@ bench_zarr_flush(struct bench_zarr_handle* z);
 uint64_t
 bench_zarr_pending_bytes(struct bench_zarr_handle* z);
 
-// Copy out what the write path measured. Read this before close.
+// Copy out what was measured. Read before close.
 void
 bench_zarr_io_stats(struct bench_zarr_handle* z,
                     struct shard_pool_io_stats* out);

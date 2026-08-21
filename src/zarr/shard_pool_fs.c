@@ -25,9 +25,7 @@ struct shard_pool_fs
   // Test hook: one-shot, fail the next truncate.
   _Atomic int fail_next_truncate;
 
-  // Each open of a shard file gets its own number, so a queued write names
-  // the file it was issued for rather than a descriptor that may since have
-  // been closed and reissued to someone else.
+  // A fresh number per open; a descriptor can be reused after close.
   _Atomic uint64_t files_opened;
   _Atomic uint64_t files_open_now;
   _Atomic uint64_t files_open_peak;
@@ -39,12 +37,12 @@ struct fs_slot
 {
   struct shard_writer base;
   platform_fd fd;
-  uint64_t generation; // which open of a shard file this slot is holding
+  uint64_t generation; // which open of a shard file
   struct io_queue* queue;
   size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
   _Atomic int* io_error; // points to shard_pool_fs.io_error
   _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
-  _Atomic uint64_t* files_open_now; // points to shard_pool_fs.files_open_now
+  _Atomic uint64_t* files_open_now;
 };
 
 struct pwrite_job

@@ -9,8 +9,7 @@ struct file_waiting
   uint64_t writes;
 };
 
-// Call before every change to the count, and again when reading the average
-// out: the total is weighted by how long each count held.
+// Call before every change to the count, and again on read.
 static void
 fold_files_waiting(struct io_queue_counters* c, int64_t now)
 {
@@ -38,8 +37,7 @@ file_write_added(struct io_queue_counters* c, uint64_t file, int64_t now)
     uint64_t cap = c->files_cap ? c->files_cap * 2 : 16;
     struct file_waiting* grown =
       (struct file_waiting*)realloc(c->files, cap * sizeof(*grown));
-    // Losing this only costs accuracy in a counter, so carry on untracked
-    // rather than failing a write.
+    // Lost only to a counter's accuracy; a write must not fail for it.
     if (!grown)
       return;
     c->files = grown;

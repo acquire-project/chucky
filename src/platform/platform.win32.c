@@ -93,8 +93,7 @@ read_qpc_freq(void)
 int64_t
 platform_monotonic_ns(void)
 {
-  // Read from several threads at once, so the cached frequency needs a
-  // thread-safe first read rather than a plain zero check.
+  // Called from several threads, so the first read must be thread-safe.
   static platform_once freq_once = PLATFORM_ONCE_INIT;
   platform_call_once(&freq_once, read_qpc_freq);
   const LARGE_INTEGER freq = qpc_freq;

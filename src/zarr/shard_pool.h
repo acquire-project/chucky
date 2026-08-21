@@ -38,8 +38,7 @@ struct shard_pool
   // NULL = no alignment constraint.
   size_t (*required_shard_alignment)(const struct shard_pool* self);
 
-  // Copy out what this pool has measured about its writes.
-  // NULL when the pool measures nothing.
+  // Copy out the write measurements; NULL if nothing is measured.
   void (*io_stats)(const struct shard_pool* self,
                    struct shard_pool_io_stats* out);
 
@@ -49,7 +48,7 @@ struct shard_pool
 uint64_t
 shard_pool_pending_bytes(const struct shard_pool* p);
 
-// Zero-fills out for a null pool, or one that measures nothing.
+// Zeroed for a null pool, or one with nothing measured.
 void
 shard_pool_io_stats(const struct shard_pool* p,
                     struct shard_pool_io_stats* out);

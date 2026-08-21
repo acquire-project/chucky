@@ -560,8 +560,7 @@ run_bench(const struct bench_config* cfg)
   {
     struct stream_metrics m = bench_get_metrics(&h);
     int has_output = output_path || cfg->s3_bucket;
-    // The pump flushes when it runs out of data, so this window covers
-    // streaming plus the close of every shard.
+    // Read after flush, so this covers streaming plus every shard close.
     struct shard_pool_io_stats io_stats = { 0 };
     if (has_output)
       bench_zarr_io_stats(&zarr, &io_stats);

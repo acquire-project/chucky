@@ -59,7 +59,7 @@ worker_thread(LPVOID arg)
     q->tail++;
     ReleaseSRWLockExclusive(&q->srw);
 
-    // A truncate or close is not timed, so it pays for no clock reads.
+    // Untimed for truncate and close: no payload, so no clock reads.
     const int timed = job.work.nbytes > 0;
     const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
     job.work.fn(job.work.ctx);

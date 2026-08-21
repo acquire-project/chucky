@@ -57,7 +57,7 @@ worker_thread(void* arg)
     q->tail++;
     pthread_mutex_unlock(&q->mutex);
 
-    // A truncate or close is not timed, so it pays for no clock reads.
+    // Untimed for truncate and close: no payload, so no clock reads.
     const int timed = job.work.nbytes > 0;
     const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
     job.work.fn(job.work.ctx);

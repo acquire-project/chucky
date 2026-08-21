@@ -168,34 +168,34 @@ backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
-Runs that write to a filesystem also record what the write path did. The sink
-runs one write at a time, so these fields record how many writes *could* have
-run at once, not how many did:
+For a run with filesystem output, what the write path did is also recorded.
+Only one write at a time is run by the sink, so these fields are how many
+writes *could* have run at once, not how many did:
 
 | field | holds |
 |---|---|
-| `io_files_waiting_mean` | how many shard files had a write waiting, averaged over time |
-| `io_files_waiting_peak` | the most that ever did at once |
+| `io_files_waiting_mean` | shard files with a write waiting, averaged over time |
+| `io_files_waiting_peak` | the most at once |
 | `io_files_opened` | shard files opened over the run |
 | `io_files_open_peak` | the most open at once |
-| `io_writes` | writes the queue ran |
-| `io_bytes_copied` / `io_bytes_borrowed` | payload bytes the write owned, against bytes it borrowed from a pinned buffer |
-| `io_queued_bytes_peak` / `io_queued_jobs_peak` | the largest backlog, in payload bytes and in jobs. Jobs include the truncate and close that finalize a shard |
-| `io_wait_ms_mean` / `io_wait_ms_max` | how long a write waited before it started |
-| `io_run_ms_mean` / `io_run_ms_max` | how long a write took once it started |
+| `io_writes` | writes run by the queue |
+| `io_bytes_copied` / `io_bytes_borrowed` | payload bytes owned by the write, against bytes borrowed from a pinned buffer |
+| `io_queued_bytes_peak` / `io_queued_jobs_peak` | the largest backlog, in payload bytes and in jobs, counting a shard's finalizing truncate and close |
+| `io_wait_ms_mean` / `io_wait_ms_max` | the wait before a write starts |
+| `io_run_ms_mean` / `io_run_ms_max` | the time taken by a write once started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
-`summary.py` lists the keys the overview page keeps, so a new counter is
-dropped from that page unless it is named there. The explorer takes everything
-it is not told to drop, so it needs no change.
+The keys kept by the overview page are listed in `summary.py`, so a new counter
+is dropped from that page unless it is named there. Everything not explicitly
+dropped is taken by the explorer, so no change is needed there.
 
-Measurement starts at the first queued job of any kind and ends when the run
-has flushed. It covers streaming and every shard's closing footer, truncate
-and close, but not the startup before them. Truncate and close carry no
-payload, so they do not count toward the files-waiting figures, but the footer
-write does. A peak can therefore come from the flush writing a footer to every
-open shard at once, not from streaming. A run with no filesystem output
-records none of these.
+Measurement is from the first queued job of any kind until the run is flushed.
+Covered: streaming and every shard's closing footer, truncate and close, but
+not the startup before them. There is no payload on truncate and close, so
+neither is counted toward the files-waiting figures; the footer write is. A
+peak may therefore be the flush writing a footer to every open shard at once,
+rather than streaming. None of these are recorded for a run with no filesystem
+output.
 
 Each run records memory as an estimate and a measurement:
 
