@@ -6,11 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Admission waits for the tail to pass, so head - tail never exceeds this and
+// two live sequence numbers never share a slot.
+#define RING_CAP 1024u
+
 struct io_job
 {
   struct io_request req;
   uint64_t seq;
   int64_t post_ns;
+  uint8_t retired;
 };
 
 struct io_queue
@@ -19,14 +24,13 @@ struct io_queue
   struct platform_mutex* mutex;
   struct platform_cond* cond_not_empty;
   struct platform_cond* cond_retired;
+  struct platform_cond* cond_slot_free;
 
   struct io_job* ring;
-  uint64_t ring_cap; // power of 2
-  uint64_t head;     // next write position (post)
-  uint64_t tail;     // next read position (worker)
+  uint64_t head;     // next sequence number to hand out
+  uint64_t dispatch; // next sequence number the worker runs
+  uint64_t tail;     // oldest sequence number that has not retired
 
-  uint64_t next_seq;      // incremented on post
-  uint64_t retired_seq;   // updated after each job completes
   uint64_t pending_bytes; // raised on post, lowered when the job finishes
 
   struct io_queue_counters counters;
@@ -45,16 +49,16 @@ worker_thread(void* arg)
     struct io_job job;
 
     platform_mutex_lock(q->mutex);
-    while (q->head == q->tail && !q->shutdown)
+    while (q->dispatch == q->head && !q->shutdown)
       platform_cond_wait(q->cond_not_empty, q->mutex);
 
-    if (q->head == q->tail && q->shutdown) {
+    if (q->dispatch == q->head && q->shutdown) {
       platform_mutex_unlock(q->mutex);
       break;
     }
 
-    job = q->ring[q->tail & (q->ring_cap - 1)];
-    q->tail++;
+    job = q->ring[q->dispatch & (RING_CAP - 1)];
+    q->dispatch++;
     platform_mutex_unlock(q->mutex);
 
     // Untimed for truncate and close: no payload, so no clock reads.
@@ -77,11 +81,16 @@ worker_thread(void* arg)
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     platform_mutex_lock(q->mutex);
-    q->retired_seq = job.seq;
+    q->ring[job.seq & (RING_CAP - 1)].retired = 1;
+    while (q->tail < q->head && q->ring[q->tail & (RING_CAP - 1)].retired) {
+      q->ring[q->tail & (RING_CAP - 1)].retired = 0;
+      q->tail++;
+    }
     q->pending_bytes -= job.req.nbytes;
     io_queue_counters_finished(
       &q->counters, &job.req, job.post_ns, started_ns, finished_ns);
     platform_cond_broadcast(q->cond_retired);
+    platform_cond_broadcast(q->cond_slot_free);
     platform_mutex_unlock(q->mutex);
   }
 }
@@ -94,15 +103,22 @@ io_queue_create(struct io_backend backend)
     return NULL;
 
   q->backend = backend;
-  q->ring_cap = 64;
-  q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
+  // Sequence number zero means nothing was ever posted, so counting starts
+  // at one and an event recorded before the first post waits on nothing.
+  q->head = 1;
+  q->dispatch = 1;
+  q->tail = 1;
+  q->ring = (struct io_job*)calloc(RING_CAP, sizeof(struct io_job));
   q->mutex = platform_mutex_new();
   q->cond_not_empty = platform_cond_new();
   q->cond_retired = platform_cond_new();
-  if (q->ring && q->mutex && q->cond_not_empty && q->cond_retired)
+  q->cond_slot_free = platform_cond_new();
+  if (q->ring && q->mutex && q->cond_not_empty && q->cond_retired &&
+      q->cond_slot_free)
     q->thread = platform_thread_start(worker_thread, q);
 
   if (!q->thread) {
+    platform_cond_free(q->cond_slot_free);
     platform_cond_free(q->cond_retired);
     platform_cond_free(q->cond_not_empty);
     platform_mutex_free(q->mutex);
@@ -123,40 +139,18 @@ io_queue_destroy(struct io_queue* q)
   platform_mutex_lock(q->mutex);
   q->shutdown = 1;
   platform_cond_broadcast(q->cond_not_empty);
+  platform_cond_broadcast(q->cond_slot_free);
   platform_mutex_unlock(q->mutex);
 
   platform_thread_join(q->thread);
 
   free(q->ring);
   io_queue_counters_free(&q->counters);
+  platform_cond_free(q->cond_slot_free);
   platform_cond_free(q->cond_retired);
   platform_cond_free(q->cond_not_empty);
   platform_mutex_free(q->mutex);
   free(q);
-}
-
-static int
-ring_grow(struct io_queue* q)
-{
-  uint64_t new_cap = q->ring_cap * 2;
-  struct io_job* new_ring =
-    (struct io_job*)calloc(new_cap, sizeof(struct io_job));
-  if (!new_ring) {
-    log_error("io_queue: failed to grow ring buffer");
-    return 1;
-  }
-
-  // Copy existing jobs preserving order
-  uint64_t count = q->head - q->tail;
-  for (uint64_t i = 0; i < count; ++i)
-    new_ring[i] = q->ring[(q->tail + i) & (q->ring_cap - 1)];
-
-  free(q->ring);
-  q->ring = new_ring;
-  q->ring_cap = new_cap;
-  q->head = count;
-  q->tail = 0;
-  return 0;
 }
 
 int
@@ -164,25 +158,27 @@ io_queue_post(struct io_queue* q, struct io_request req)
 {
   platform_mutex_lock(q->mutex);
 
-  if (q->head - q->tail == q->ring_cap) {
-    if (ring_grow(q)) {
-      platform_mutex_unlock(q->mutex);
-      return 1;
-    }
+  while (q->head - q->tail == RING_CAP && !q->shutdown)
+    platform_cond_wait(q->cond_slot_free, q->mutex);
+
+  if (q->head - q->tail == RING_CAP) {
+    log_error("io_queue: refused a post during shutdown");
+    platform_mutex_unlock(q->mutex);
+    return 1;
   }
 
-  q->next_seq++;
   const int64_t now = platform_monotonic_ns();
-  q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
+  const uint64_t seq = q->head;
+  q->ring[seq & (RING_CAP - 1)] = (struct io_job){
     .req = req,
-    .seq = q->next_seq,
+    .seq = seq,
     .post_ns = now,
   };
   q->head++;
   q->pending_bytes += req.nbytes;
 
   io_queue_counters_posted(
-    &q->counters, &req, q->head - q->tail, q->pending_bytes, now);
+    &q->counters, &req, q->head - q->dispatch, q->pending_bytes, now);
 
   platform_cond_broadcast(q->cond_not_empty);
   platform_mutex_unlock(q->mutex);
@@ -212,7 +208,7 @@ struct io_event
 io_queue_record(struct io_queue* q)
 {
   platform_mutex_lock(q->mutex);
-  struct io_event ev = { .seq = q->next_seq };
+  struct io_event ev = { .seq = q->head - 1 };
   platform_mutex_unlock(q->mutex);
   return ev;
 }
@@ -225,7 +221,7 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
   struct io_queue* mq = (struct io_queue*)q;
 
   platform_mutex_lock(mq->mutex);
-  while (mq->retired_seq < ev.seq && !mq->shutdown)
+  while (mq->tail - 1 < ev.seq && !mq->shutdown)
     platform_cond_wait(mq->cond_retired, mq->mutex);
   platform_mutex_unlock(mq->mutex);
 }
