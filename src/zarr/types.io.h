@@ -1,4 +1,4 @@
-// Measurements from the write path.
+// The write path's measurements are carried in these types.
 #pragma once
 
 #include <stdint.h>

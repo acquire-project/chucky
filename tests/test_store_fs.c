@@ -250,7 +250,7 @@ test_shard_pool_unbuffered(void)
   memset(data, 0xAB, page);
   CHECK(Fail4, w->write(w, 0, data, data + page) == 0);
 
-  // Write via write_direct: the payload is borrowed, not copied.
+  // The payload is borrowed by write_direct, not copied.
   if (w->write_direct) {
     CHECK(Fail4, w->write_direct(w, page, data, data + page) == 0);
   }
@@ -627,7 +627,7 @@ file_size(const char* path)
   return n;
 }
 
-// A pool slot keeps its token private and clears it on finalize, so a retired
+// A pool slot's token is private and is cleared on finalize, so a retired
 // token has to come from the registry itself.
 static int
 test_stale_file_token_refused(void)
@@ -660,7 +660,7 @@ test_stale_file_token_refused(void)
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 0);
 
-  // The next open takes the slot the close gave back, under a new generation.
+  // The slot freed by the close is reused under a new generation.
   platform_fd second_fd = platform_open_write(second_path, 0);
   CHECK(Fail3, second_fd != PLATFORM_FD_INVALID);
   const struct io_file_token fresh = io_backend_fs_add_file(backend, second_fd);

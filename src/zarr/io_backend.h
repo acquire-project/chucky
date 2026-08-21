@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-// A backend's answer for the request it was handed.
+// Each request handed to a backend is answered with one of these.
 enum io_dispatch
 {
   IO_DONE = 0,  // finished; *out is filled in

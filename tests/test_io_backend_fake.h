@@ -1,5 +1,5 @@
-// A test-only backend: nothing is run, every request is recorded, and a test
-// can hold, defer, or fail what the io queue hands over.
+// This backend is for tests only: nothing is run, every request is recorded,
+// and a test can hold, defer, or fail each one.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -40,8 +40,8 @@ io_backend_fake_init(struct io_backend_fake* f);
 struct io_backend
 io_backend_fake_as_backend(struct io_backend_fake* f);
 
-// Hold every request inside execute until *gate is non-zero. The test owns the
-// gate; with a null gate nothing is held.
+// Hold every request inside execute until *gate is non-zero. The caller owns
+// the gate; with a null gate nothing is held.
 void
 io_backend_fake_hold(struct io_backend_fake* f, _Atomic int* gate);
 
@@ -50,7 +50,7 @@ io_backend_fake_hold(struct io_backend_fake* f, _Atomic int* gate);
 void
 io_backend_fake_defer(struct io_backend_fake* f, int defer);
 
-// Report this instead of "all of it, fine".
+// Report this status and count instead of IO_OK and the full request size.
 void
 io_backend_fake_set_outcome(struct io_backend_fake* f,
                             int status,
@@ -62,7 +62,7 @@ io_backend_fake_record_count(const struct io_backend_fake* f);
 uint64_t
 io_backend_fake_deferred_count(const struct io_backend_fake* f);
 
-// Requests inside execute right now. With deferring off and this at zero, the
-// deferred list is final.
+// Requests inside execute right now are counted. With deferring off and this
+// at zero, the deferred list is final.
 uint64_t
 io_backend_fake_inside_execute(const struct io_backend_fake* f);

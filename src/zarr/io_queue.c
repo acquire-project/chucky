@@ -25,7 +25,6 @@ struct io_job
   uint8_t state;
 };
 
-// One open file with requests in the queue.
 struct file_pending
 {
   uint64_t generation;
@@ -56,11 +55,11 @@ struct io_queue
   uint64_t pending_bytes; // raised on commit, lowered when the job finishes
   uint64_t jobs_waiting;  // committed and not yet taken by a worker
 
-  // Room claimed by a reserve that has not yet committed or been released.
+  // This room is held for a reserve until it is committed or released.
   uint64_t reserved_requests;
   uint64_t reserved_bytes;
 
-  // Teardown cannot free the lock until every parked thread has let go of it.
+  // The lock cannot be freed until every parked thread has let go of it.
   uint64_t waiters;
 
   struct io_queue_counters counters;
@@ -101,8 +100,8 @@ file_request_added(struct io_queue* q, const struct io_request* req)
       uint64_t cap = q->files_cap ? q->files_cap * 2 : 16;
       struct file_pending* grown =
         (struct file_pending*)realloc(q->files, cap * sizeof(*grown));
-      // A write must not fail over the table, and a missing entry only makes
-      // a barrier look ready.
+      // A write must not be refused because this table could not grow. The
+      // only cost of a missing entry is a barrier that looks ready early.
       if (!grown) {
         log_error("io_queue: could not grow the open file table");
         return;
@@ -130,7 +129,7 @@ file_request_retired(struct io_queue* q, const struct io_request* req)
     return;
 
   // An entry left at zero would never be removed, and every later barrier on
-  // the file would wait on it forever.
+  // the file would be stuck behind it forever.
   if (f->outstanding == 0) {
     log_error("io_queue: an open file entry was already at zero");
     return;
@@ -148,8 +147,8 @@ is_barrier(const struct io_request* req)
   return req->op == IO_OP_TRUNCATE || req->op == IO_OP_CLOSE;
 }
 
-// Writes to one file are unordered; a truncate or close waits for everything
-// posted ahead of it on that file.
+// Writes to one file are unordered; a truncate or close is held behind
+// everything posted ahead of it on that file.
 static int
 job_is_ready(struct io_queue* q, const struct io_job* job)
 {
@@ -174,8 +173,8 @@ job_is_ready(struct io_queue* q, const struct io_job* job)
   return 1;
 }
 
-// Zero when nothing can run right now. A barrier that is not ready is passed
-// over, so one file's barrier never holds up another file's writes.
+// A barrier that is not ready is passed over, so writes to one file are
+// never held up by a barrier on another file.
 static uint64_t
 next_ready_seq(struct io_queue* q)
 {
@@ -189,8 +188,8 @@ next_ready_seq(struct io_queue* q)
   return 0;
 }
 
-// Room is given back against what the request asked for, not what the
-// completion reports: a partial write would otherwise leak the difference.
+// Room is given back against the requested size, not the size written; a
+// partial write would otherwise leak the difference.
 static void
 retire_job(struct io_queue* q, struct io_completion c, int64_t finished_ns)
 {
@@ -236,7 +235,8 @@ worker_thread(void* arg)
 
     platform_mutex_lock(q->mutex);
     uint64_t seq;
-    // An empty window, not an idle one: a submitted request is still running.
+    // A submitted request is still running, so only an empty window means
+    // everything has drained.
     while ((seq = next_ready_seq(q)) == 0) {
       if (q->shutdown && q->tail == q->head)
         break;
@@ -250,7 +250,7 @@ worker_thread(void* arg)
 
     struct io_job* slot = &q->ring[seq & (q->ring_cap - 1)];
     slot->state = IO_JOB_RUNNING;
-    // Untimed for truncate and close: no payload, so no clock reads.
+    // A truncate or close has no payload, so no clock is read for one.
     const int timed = slot->req.nbytes > 0;
     slot->started_ns = timed ? platform_monotonic_ns() : 0;
     q->jobs_waiting--;
@@ -273,7 +273,6 @@ worker_thread(void* arg)
 struct io_queue*
 io_queue_create(struct io_backend backend, struct io_queue_limits limits)
 {
-  // Without one, every request would retire without being carried out.
   if (!backend.execute) {
     log_error("io_queue: a backend must carry an execute");
     return NULL;
@@ -291,7 +290,7 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   // two even when the request limit is not.
   q->ring_cap = 1ull << ceil_log2(q->max_requests);
   // Zero means nothing was ever posted, so an event recorded before the first
-  // post waits on nothing.
+  // post has nothing to wait for.
   q->head = 1;
   q->tail = 1;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
@@ -364,8 +363,8 @@ has_room(const struct io_queue* q, uint64_t nbytes)
     return 0;
   if (q->max_bytes == 0)
     return 1;
-  // A write larger than the ceiling still has to go through, so an empty
-  // queue admits it.
+  // A write larger than the ceiling still has to go through, so it is
+  // admitted when the queue is empty.
   if (q->head == q->tail && q->reserved_requests == 0)
     return 1;
   return q->pending_bytes + q->reserved_bytes + nbytes <= q->max_bytes;
@@ -399,7 +398,7 @@ io_queue_reserve(struct io_queue* q, struct io_request req)
     log_error("io_queue: refused a post during shutdown");
     refused = 1;
   } else if (names_a_closing_file(q, &req)) {
-    // Checked after the wait: the file can start closing while room is short.
+    // A close can be posted while the wait for room is going on.
     log_error("io_queue: refused a request naming a file that is closing");
     refused = 1;
   }

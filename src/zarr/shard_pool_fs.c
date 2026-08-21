@@ -64,8 +64,8 @@ fs_slot_write(struct shard_writer* self,
     .offset = offset,
   };
 
-  // Claim the room before allocating, so the copy cannot outrun the ceiling
-  // on queued memory.
+  // Room is claimed before the buffer is allocated, so the copy stays under
+  // the ceiling on queued memory.
   CHECK_SILENT(Error, io_queue_reserve(w->queue, req) == 0);
 
   void* buf;
@@ -264,7 +264,6 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
-  // Releases an injected block, for a teardown with no flush in front of it.
   io_backend_fs_stop(p->backend);
 
   // Finalize any open slots

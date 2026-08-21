@@ -9,7 +9,7 @@
 
 struct io_queue;
 
-// Ceilings on what may sit in the queue at once.
+// These are ceilings on what sits in the queue at once.
 struct io_queue_limits
 {
   uint64_t max_requests; // 0 selects the default, 1024
@@ -26,25 +26,25 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 void
 io_queue_destroy(struct io_queue* q);
 
-// Threads parked in a blocking queue call, the worker aside.
+// Threads parked in a blocking queue call are counted, the worker aside.
 uint64_t
 io_queue_parked_threads(const struct io_queue* q);
 
-// Zero on success; on failure nothing is posted and the payload is still
-// yours.
+// Zero is returned on success; on failure nothing is posted and the payload
+// is still yours.
 int
 io_queue_post(struct io_queue* q, struct io_request req);
 
-// Claim room for a request. Waits until there is room. Zero on success;
-// non-zero if the queue is shutting down or the file is already closing, and
-// then nothing is claimed. Fill in op, file and nbytes; the payload can come
-// later, at commit.
+// Claim room for a request, waiting until there is room. Zero is returned on
+// success, non-zero if the queue is shutting down or the file is already
+// closing, and then nothing is claimed. Fill in op, file and nbytes; the
+// payload can come later, at commit.
 int
 io_queue_reserve(struct io_queue* q, struct io_request req);
 
-// Post a request whose room io_queue_reserve already claimed. The claim
-// guarantees a slot, so this cannot fail. req.nbytes must equal the nbytes
-// passed to the matching reserve.
+// Post a request whose room was already claimed by io_queue_reserve. A slot
+// is guaranteed by the claim, so this cannot fail. req.nbytes must equal the
+// nbytes passed to the matching reserve.
 void
 io_queue_commit(struct io_queue* q, struct io_request req);
 
@@ -52,8 +52,8 @@ io_queue_commit(struct io_queue* q, struct io_request req);
 void
 io_queue_release(struct io_queue* q, uint64_t nbytes);
 
-// Report the outcome of a request the backend answered with IO_SUBMITTED.
-// Safe to call from any thread.
+// Report the outcome of a request that was answered with IO_SUBMITTED. Any
+// thread may call this.
 void
 io_queue_complete(struct io_queue* q, struct io_completion c);
 

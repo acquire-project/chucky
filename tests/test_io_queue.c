@@ -114,8 +114,8 @@ test_owned_payload_released(void)
             0);
   }
 
-  // The release happens after the request retires, outside the lock, so only
-  // the join settles the count.
+  // A payload is released after its request retires, outside the lock, so the
+  // count is only final after the join.
   io_queue_destroy(q);
   CHECK(Fail, atomic_load(&released) == 10);
   return 0;
@@ -218,7 +218,7 @@ test_pending_bytes(void)
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
-  // A request posted without a byte count leaves the figure alone.
+  // The figure is left alone by a request posted without a byte count.
   CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
@@ -340,7 +340,7 @@ test_timing_mean_counts_finished(void)
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
 
-  // Five more, still queued behind the second gate: requests run in order.
+  // Five more are posted behind the second gate and stay unfinished.
   _Atomic int held;
   atomic_store(&held, 0);
   io_backend_fake_hold(&fake, &held);
@@ -380,8 +380,8 @@ Fail:
 #define HOLD_OBSERVE_MS 100
 #define WRITE_BYTES 4096
 
-// Poll until the fake has been handed n requests. Zero once it has, -1 if the
-// wait ran out.
+// Poll until the fake has been handed n requests. Zero is returned once it
+// has, -1 if the wait ran out.
 static int
 wait_for_records(const struct io_backend_fake* f, uint64_t n, int timeout_ms)
 {
@@ -402,23 +402,23 @@ answer(struct io_queue* q, uint64_t* answered, struct io_completion c)
   io_queue_complete(q, c);
 }
 
-// Every exit from a deferring case comes through here: destroy blocks until
-// each deferred request has been answered.
+// Every exit from a deferring case has to come through here, because destroy
+// is blocked until each deferred request has been answered.
 static void
 answer_the_rest(struct io_queue* q,
                 struct io_backend_fake* f,
                 uint64_t* answered)
 {
-  // A barrier freed by one of these answers has to finish on its own.
+  // A barrier freed by one of these answers must not be deferred again.
   io_backend_fake_defer(f, 0);
 
-  // A request already inside execute when defer was cleared still lands in the
-  // list, and leaving it unanswered wedges destroy. Once nothing is inside
-  // execute the list is final, because a later request reads the cleared flag.
+  // A request already inside execute when defer was cleared is still added to
+  // the list, and leaving it unanswered hangs destroy. Once nothing is inside
+  // execute the list is final, because the cleared flag is read on the way in.
   for (int waited_ms = 0; io_backend_fake_inside_execute(f) > 0; ++waited_ms) {
     if (waited_ms >= HANDOVER_TIMEOUT_MS) {
-      // Reading the list now races the backend, and a missed entry leaves a
-      // running job that wedges destroy.
+      // Reading the list now races the backend, and with a missed entry a
+      // running job is left behind to hang destroy.
       log_error("io_queue test: the backend never came out of execute");
       break;
     }
@@ -454,7 +454,7 @@ fence_wait_fn(void* arg)
 }
 
 // Waiting on another thread turns a watermark that never moves into a failure
-// rather than a wedged test.
+// rather than a hung test.
 static int
 fence_wait_start(struct fence_wait* w,
                  test_thread** thr,
@@ -516,7 +516,7 @@ test_out_of_order_retirement(void)
            &answered,
            (struct io_completion){ .seq = seq, .nbytes = WRITE_BYTES });
 
-  // Three answered and the oldest not, so the watermark has not moved.
+  // Three are answered and the oldest is not, so the watermark has not moved.
   CHECK(Cleanup, test_wait_flag(&w.done, HOLD_OBSERVE_MS) == -1);
   CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
 
@@ -644,7 +644,7 @@ test_room_returns_after_short_answer(void)
   CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
 
-  // The same short count, this time reported by the backend as it finishes.
+  // The same short count is reported by the backend this time, as it finishes.
   io_backend_fake_defer(&fake, 0);
   io_backend_fake_set_outcome(&fake, IO_PARTIAL, 100);
   CHECK(Cleanup,
@@ -695,7 +695,6 @@ test_byte_ceiling_holds_a_post(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  // Room for one write and no more.
   struct io_queue* q =
     io_queue_create(io_backend_fake_as_backend(&fake),
                     (struct io_queue_limits){ .max_bytes = WRITE_BYTES });
@@ -744,7 +743,6 @@ Fail:
   return 1;
 }
 
-// A write bigger than the whole ceiling still has to go through.
 static int
 test_byte_ceiling_admits_an_oversize_write(void)
 {
@@ -883,10 +881,10 @@ fence_during_destroy_round(void)
 
   CHECK(Fail2, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
   CHECK(Fail3, test_wait_flag(&w.entered, HANDOVER_TIMEOUT_MS) == 0);
-  // The flag goes up just before the wait, so it does not mean the thread is
-  // inside the queue yet. Destroy drains threads already parked; one still on
-  // its way to the lock would be left holding a freed lock. Wait until the
-  // thread is either parked or already back out.
+  // The flag is set just before the wait, so it does not mean the thread is
+  // inside the queue yet. Only threads already parked are drained by destroy;
+  // one still on its way to the lock would be left holding a freed lock. Wait
+  // until the thread is either parked or already back out.
   for (int waited_ms = 0; !io_queue_parked_threads(q); ++waited_ms) {
     if (atomic_load(&w.done))
       break;
