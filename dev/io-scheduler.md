@@ -121,7 +121,7 @@ bytes; and the high-water mark of queued work. `scripts/sweep/README.md` has
 the full field list and says what window each covers. Fence stalls were
 already recorded as `io_fence_stall` on both the CPU and GPU paths.
 
-Added a `smallepoch_4shards_single` scenario. `smallepoch_single` has one
+Added a `smallepoch_4shards` scenario. `smallepoch_single` has one
 chunk along each of its inner dimensions, so it produces one shard file and
 raising its concurrent-shard target does nothing. The new scenario splits both
 inner dimensions in two to give four. Its chunk is the same size, so its epoch

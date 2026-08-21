@@ -55,7 +55,7 @@ SCENARIOS = {
     "256cube_single": 40,
     "medfmt_single": 10,
     "smallepoch_single": 65536,
-    "smallepoch_4shards_single": 65536,
+    "smallepoch_4shards": 65536,
     "orca2_multiscale": 200,
     "256cube_multiscale": 40,
     "medfmt_multiscale": 10,
@@ -77,7 +77,7 @@ CHUNK_BYTES = {
 }
 
 # The compress and backend tiers write to the discard sink, so
-# smallepoch_4shards_single is left out: a second shard file buys nothing there
+# smallepoch_4shards is left out: a second shard file buys nothing there
 # but run time. Only the io tier wants it.
 SINGLE_SCENARIOS = [
     "orca2_single",
@@ -206,7 +206,7 @@ def io_runs() -> list[RunSpec]:
     chunk_labels = ["32K", "256K", "2M"]
     scenarios = ["orca2_single", "256cube_single",
                   "orca2_multiscale_dim0", "256cube_multiscale_dim0",
-                  "smallepoch_single", "smallepoch_4shards_single"]
+                  "smallepoch_single", "smallepoch_4shards"]
     for sc in scenarios:
         for cl in chunk_labels:
             for codec in ["none", "zstd"]:

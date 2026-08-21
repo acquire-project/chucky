@@ -310,7 +310,7 @@ function metricValue(run, key) {
 
 function scenarioRank(name) {
   for (const g of SCENARIO_GROUPS) if (name.endsWith(g.suffix)) return g.rank;
-  return 3;
+  return 0; // only the multiscale variants carry a suffix
 }
 
 function sortedScenarios(names) {
