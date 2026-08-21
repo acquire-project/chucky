@@ -169,8 +169,8 @@ stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
 Runs that write to a filesystem also record what the write path did. The sink
-runs one write at a time, so the depth it *achieved* is always one and is not
-recorded. What is worth knowing is the depth *available*:
+runs one write at a time, so these fields record how many writes *could* have
+run at once, not how many did:
 
 | field | holds |
 |---|---|
@@ -180,17 +180,21 @@ recorded. What is worth knowing is the depth *available*:
 | `io_files_open_peak` | the most open at once |
 | `io_writes` | writes the queue ran |
 | `io_bytes_copied` / `io_bytes_borrowed` | payload bytes the write owned, against bytes it borrowed from a pinned buffer |
-| `io_queued_bytes_peak` / `io_queued_jobs_peak` | the deepest the backlog got, as payload bytes and as jobs; jobs counts the truncate and close that finalize a shard, not just writes |
+| `io_queued_bytes_peak` / `io_queued_jobs_peak` | the largest backlog, in payload bytes and in jobs. Jobs include the truncate and close that finalize a shard |
 | `io_wait_ms_mean` / `io_wait_ms_max` | how long a write waited before it started |
 | `io_run_ms_mean` / `io_run_ms_max` | how long a write took once it started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
-The window opens on the first queued job, whatever kind, and closes when the
-run has flushed, so it covers streaming and the closing footer, truncate and
-close of every shard, but not the startup before it. Truncate and close
-carry no payload and so do not count toward the files-waiting figures, but the
-footer write does — a peak can come from the flush writing a footer to every
-open shard at once rather than from streaming. A run with no filesystem output
+`summary.py` lists the keys the overview page keeps, so a new counter is
+dropped from that page unless it is named there. The explorer takes everything
+it is not told to drop, so it needs no change.
+
+Measurement starts at the first queued job of any kind and ends when the run
+has flushed. It covers streaming and every shard's closing footer, truncate
+and close, but not the startup before them. Truncate and close carry no
+payload, so they do not count toward the files-waiting figures, but the footer
+write does. A peak can therefore come from the flush writing a footer to every
+open shard at once, not from streaming. A run with no filesystem output
 records none of these.
 
 Each run records memory as an estimate and a measurement:

@@ -2,16 +2,15 @@
 
 #include <stdlib.h>
 
-// One open file with a write waiting on it. Truncate and close carry no
-// payload and cannot be run alongside anything, so they do not count.
+// One open file with a write waiting on it.
 struct file_waiting
 {
   uint64_t file;
   uint64_t writes;
 };
 
-// Fold the span since the last change into the time-weighted total. Call
-// before every change to nfiles, and again when reading the average out.
+// Call before every change to the count, and again when reading the average
+// out: the total is weighted by how long each count held.
 static void
 fold_files_waiting(struct io_queue_counters* c, int64_t now)
 {

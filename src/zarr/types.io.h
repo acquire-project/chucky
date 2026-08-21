@@ -1,24 +1,21 @@
-// What the write path measured. Shared by the queue that runs the writes,
-// the pool that owns the files, and the benchmarks that report both.
+// What the write path measured.
 #pragma once
 
 #include <stdint.h>
 
-// Powers of two from one byte up. Bucket i counts requests of at least
-// 2^i bytes and fewer than 2^(i+1). Writes today run from 4 KiB footers to
-// 256 MiB shard bodies, so 40 buckets leaves plenty of room above.
+// Bucket i holds requests of at least 2^i bytes and fewer than 2^(i+1).
+// Writes run from 4 KiB footers to 256 MiB shard bodies, so 40 leaves room.
 #define IO_SIZE_BUCKETS 40
 
-// Counts are for the queue's whole life. Peaks and the time-weighted average
-// cover the span from the first posted work to the moment they are read, so a
-// slow startup does not dilute the average.
+// Counts cover the queue's whole life. Peaks and the time-weighted average
+// cover the first posted work up to the read, so a slow startup does not
+// dilute them.
 struct io_queue_stats
 {
-  // How many distinct files had a write waiting at once. This is the depth
-  // available to a scheduler that could run writes at the same time. It is
-  // not the depth achieved: one worker runs one write at a time, so the
-  // achieved figure is always one and says nothing. Truncate and close carry
-  // no payload, so a file whose only queued work is finalizing does not count.
+  // The depth available to a scheduler that could run writes at the same
+  // time. Not the depth achieved: one worker runs one write at a time, so
+  // that figure is always one and says nothing. Truncate and close carry no
+  // payload, so a file that is only finalizing does not count.
   uint64_t files_waiting_peak;
   double files_waiting_mean;
 
@@ -29,9 +26,8 @@ struct io_queue_stats
   uint64_t bytes_copied;   // payload bytes the job owned
   uint64_t bytes_borrowed; // payload bytes owned by someone else
 
-  // Time a write spent waiting to start, and time it spent running. The
-  // averages cover writes that have finished, which can be fewer than
-  // `writes` when the stats are read with writes still queued.
+  // Averaged over writes that have finished, which is fewer than the writes
+  // posted whenever these are read with work still queued.
   double wait_ms_mean;
   double wait_ms_max;
   double run_ms_mean;

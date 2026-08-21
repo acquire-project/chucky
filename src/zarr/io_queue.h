@@ -7,7 +7,6 @@
 
 struct io_queue;
 
-// One piece of work for the queue to run.
 struct io_work
 {
   void (*fn)(void*);

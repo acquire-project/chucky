@@ -1,10 +1,9 @@
-// smallepoch_single over four shard files instead of one. Its twin pins y and
-// x at their full extent, which leaves one chunk along each and so exactly one
-// shard file open at a time — no two writes can ever be outstanding. Splitting
-// y and x into two chunks each gives four. The chunk stays 1 MiB, so the epoch
-// here is four chunks and four times the twin's; the two scenarios are worth
-// comparing on what the write path did, not on throughput. Keep both: the
-// one-file case is the only place pre-sizing a file can be measured.
+// Four shard files where its twin holds one. The twin pins y and x at full
+// extent, so no two of its writes can ever be outstanding; splitting each in
+// two gives four. The chunk stays 1 MiB, so this epoch is four times the
+// twin's. Compare the pair on what the write path did, not on throughput.
+// The twin stays: one growing file is the only place pre-sizing can be
+// measured.
 #include "bench_util.h"
 #include "dimension.h"
 
