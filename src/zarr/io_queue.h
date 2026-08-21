@@ -26,9 +26,7 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 void
 io_queue_destroy(struct io_queue* q);
 
-// How many threads are parked in a blocking queue call; the worker is not
-// counted. A teardown uses this to tell a thread that is already inside from
-// one still on its way to the lock.
+// Threads parked in a blocking queue call, the worker aside.
 uint64_t
 io_queue_parked_threads(const struct io_queue* q);
 

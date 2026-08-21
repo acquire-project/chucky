@@ -1,4 +1,4 @@
-// What the io queue is asked to do, described rather than wrapped in a
+// The work the io queue is asked to do, described rather than wrapped in a
 // closure, so a scheduler can reorder and gate it.
 #pragma once
 

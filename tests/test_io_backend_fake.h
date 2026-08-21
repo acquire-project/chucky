@@ -62,7 +62,7 @@ io_backend_fake_record_count(const struct io_backend_fake* f);
 uint64_t
 io_backend_fake_deferred_count(const struct io_backend_fake* f);
 
-// How many requests are inside execute right now. Once defer has been cleared
-// and this is zero, no request can still be on its way into deferred[].
+// Requests inside execute right now. With deferring off and this at zero, the
+// deferred list is final.
 uint64_t
 io_backend_fake_inside_execute(const struct io_backend_fake* f);
