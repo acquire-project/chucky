@@ -156,6 +156,29 @@ record them in the results file: `--io-writes-in-flight`,
 `--io-writes-in-flight-per-file`, `--io-workers`, `--io-backend`. Sweep writes
 in flight from 1 to 32.
 
+Two things step 2 left for this step, both harmless while one worker runs
+everything in order and neither harmless afterwards.
+
+Dispatch picks the next request by scanning the window from the tail, and the
+readiness test for each candidate scans the window again. That is quadratic in
+the size of the window, under the queue's lock. It costs nothing today: the
+filesystem backend finishes every request inside `execute`, so nothing is ever
+running while the worker scans, the oldest slot is always the next one to run,
+and the scan stops on its first step. The moment a backend answers
+`IO_SUBMITTED`, or a second worker starts, the front of the window fills with
+running requests and every dispatch walks past all of them. At the default
+ceiling of 1024 requests that is around half a million comparisons per dispatch
+while holding the lock the producer needs to post. The fix is to stop scanning:
+the file token already carries a dense index, so the queue's open-file table can
+be indexed rather than searched, and each file can carry the sequence number of
+its oldest request and of its first waiting barrier. Readiness is then one
+comparison.
+
+The same change should merge the queue's open-file table with the one in
+`io_queue_stats.c`. They have the same shape and the same key, and they are
+updated from adjacent lines under the same lock, so every post and every retire
+walks two lists instead of one.
+
 *Done when:* the reef-l40 XFS matrix is green.
 
 ### 4. io_uring on Linux
@@ -164,6 +187,18 @@ An io_uring backend behind the same interface, opt-in, with a fallback to
 threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
+
+The backend interface step 2 built is general enough to hold a ring, but three
+things are worth settling before the first one is written. A backend has no way
+to say "not now", which a full submission queue needs; the alternatives today
+are to block a worker or to fail the request. The queue never calls into the
+backend at teardown, so a backend with its own thread has nowhere to stop it.
+And the request handed to `execute` is the worker's own copy, which dies when
+the call returns, so a backend that finishes later has to copy what it needs.
+
+A short write is also unowned. `platform_pwrite` loops internally, so it never
+reports one; a ring does. Retrying the remainder belongs in the backend, not in
+the queue.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default.
