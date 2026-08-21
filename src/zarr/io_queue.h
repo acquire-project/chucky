@@ -16,7 +16,7 @@ struct io_queue_limits
   uint64_t max_bytes;    // 0 means no ceiling
 };
 
-// With no execute, nothing runs and every request retires at once.
+// The backend must carry an execute; without one there is nothing to run.
 struct io_queue*
 io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 

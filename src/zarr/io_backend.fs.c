@@ -203,7 +203,7 @@ fs_execute(void* ctx,
 
   if (req->op == IO_OP_NOOP) {
     if (atomic_exchange(&b->fail_next_noop, 0)) {
-      record_failure(b, out, "shard_pool_fs: injected test failure");
+      record_failure(b, out, "io_backend_fs: injected test failure");
       return IO_DONE;
     }
     if (atomic_exchange(&b->block_next_noop, 0)) {
@@ -222,11 +222,11 @@ fs_execute(void* ctx,
   switch (req->op) {
     case IO_OP_WRITE:
       if (platform_pwrite(fd, req->payload, (size_t)req->nbytes, req->offset))
-        record_failure(b, out, "shard_pool_fs pwrite failed");
+        record_failure(b, out, "io_backend_fs: pwrite failed");
       break;
     case IO_OP_TRUNCATE:
       if (platform_ftruncate(fd, req->logical_size))
-        record_failure(b, out, "shard_pool_fs ftruncate failed");
+        record_failure(b, out, "io_backend_fs: ftruncate failed");
       break;
     case IO_OP_CLOSE:
       platform_close(fd);

@@ -134,14 +134,15 @@ file_request_retired(struct io_queue* q, const struct io_request* req)
 
   // An entry left at zero would never be removed, and every later barrier on
   // the file would wait on it forever.
-  CHECK(Done, f->outstanding > 0);
+  if (f->outstanding == 0) {
+    log_error("io_queue: an open file entry was already at zero");
+    return;
+  }
 
   if (--f->outstanding == 0) {
     *f = q->files[q->nfiles - 1];
     q->nfiles--;
   }
-
-Done:;
 }
 
 static int
@@ -265,27 +266,24 @@ worker_thread(void* arg)
       .nbytes = job.req.nbytes,
       .status = IO_OK,
     };
-    int dispatch = IO_DONE;
-    if (q->backend.execute)
-      dispatch = q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
+    const int dispatch =
+      q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
 
     if (dispatch == IO_DONE)
       retire_job(q, done, timed ? platform_monotonic_ns() : 0);
   }
 }
 
-static uint64_t
-round_up_pow2(uint64_t v)
-{
-  uint64_t p = 1;
-  while (p < v)
-    p <<= 1;
-  return p;
-}
-
 struct io_queue*
 io_queue_create(struct io_backend backend, struct io_queue_limits limits)
 {
+  // Every request goes through the backend, so a queue without one runs
+  // nothing and would silently retire work that was never carried out.
+  if (!backend.execute) {
+    log_error("io_queue: a backend must carry an execute");
+    return NULL;
+  }
+
   struct io_queue* q = (struct io_queue*)calloc(1, sizeof(*q));
   if (!q)
     return NULL;
@@ -296,7 +294,7 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   q->max_bytes = limits.max_bytes;
   // Masking the sequence number picks a slot, so the ring must be a power of
   // two even when the request limit is not.
-  q->ring_cap = round_up_pow2(q->max_requests);
+  q->ring_cap = 1ull << ceil_log2(q->max_requests);
   // Sequence number zero means nothing was ever posted, so counting starts
   // at one and an event recorded before the first post waits on nothing.
   q->head = 1;

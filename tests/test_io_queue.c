@@ -668,6 +668,112 @@ Fail:
 
 // --- test: a zero-byte write ---
 
+// --- test: the byte ceiling holds a post back ---
+
+struct ceiling_post
+{
+  struct io_queue* q;
+  _Atomic int entered;
+  _Atomic int done;
+};
+
+static void
+ceiling_post_fn(void* arg)
+{
+  struct ceiling_post* c = (struct ceiling_post*)arg;
+  atomic_store(&c->entered, 1);
+  io_queue_post(c->q,
+                (struct io_request){ .op = IO_OP_WRITE,
+                                     .file = { .generation = 1 },
+                                     .nbytes = WRITE_BYTES });
+  atomic_store(&c->done, 1);
+}
+
+static int
+test_byte_ceiling_holds_a_post(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  // Room for one write and no more.
+  struct io_queue* q =
+    io_queue_create(io_backend_fake_as_backend(&fake),
+                    (struct io_queue_limits){ .max_bytes = WRITE_BYTES });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  test_thread* thr = NULL;
+  struct ceiling_post c = { .q = q };
+  atomic_store(&c.entered, 0);
+  atomic_store(&c.done, 0);
+
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = { .generation = 1 },
+                                           .nbytes = WRITE_BYTES }) == 0);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
+
+  CHECK(Cleanup, test_thread_start(&thr, ceiling_post_fn, &c) == 0);
+  CHECK(Cleanup, test_wait_flag(&c.entered, HANDOVER_TIMEOUT_MS) == 0);
+
+  // The ceiling is already spent, so the second post cannot get through until
+  // the first write retires.
+  CHECK(Cleanup, test_wait_flag(&c.done, HOLD_OBSERVE_MS) == -1);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
+
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, test_wait_flag(&c.done, HANDOVER_TIMEOUT_MS) == 0);
+
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_backend_fake_record_count(&fake) == 2);
+  rc = 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  test_thread_join(thr);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// A write bigger than the whole ceiling still has to go through.
+static int
+test_byte_ceiling_admits_an_oversize_write(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q =
+    io_queue_create(io_backend_fake_as_backend(&fake),
+                    (struct io_queue_limits){ .max_bytes = WRITE_BYTES });
+  CHECK(Fail, q);
+
+  CHECK(Fail2,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = { .generation = 1 },
+                                           .nbytes = WRITE_BYTES * 8 }) == 0);
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+  CHECK(Fail2, io_backend_fake_record_count(&fake) == 1);
+
+  io_queue_destroy(q);
+  return 0;
+
+Fail2:
+  io_queue_destroy(q);
+Fail:
+  return 1;
+}
+
 static int
 test_zero_byte_write(void)
 {
@@ -839,6 +945,9 @@ main(void)
     { "barrier_waits_for_write", test_barrier_waits_for_write },
     { "barrier_runs_after_failed_write", test_barrier_runs_after_failed_write },
     { "room_returns_after_short_answer", test_room_returns_after_short_answer },
+    { "byte_ceiling_holds_a_post", test_byte_ceiling_holds_a_post },
+    { "byte_ceiling_admits_an_oversize_write",
+      test_byte_ceiling_admits_an_oversize_write },
     { "zero_byte_write", test_zero_byte_write },
     { "cancelled_answer_retires", test_cancelled_answer_retires },
     { "fence_during_destroy", test_fence_during_destroy },
