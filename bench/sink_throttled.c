@@ -136,7 +136,7 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
   *s = (struct throttled_shard_sink){ 0 };
   s->latency_ns = io_latency_us * 1000ull;
   s->bytes_per_sec = io_bw_mbps * 1024ull * 1024ull;
-  s->queue = io_queue_create();
+  s->queue = io_queue_create((struct io_backend){ 0 });
   if (!s->queue)
     return 1;
 

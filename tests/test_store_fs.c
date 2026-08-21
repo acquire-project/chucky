@@ -248,7 +248,7 @@ test_shard_pool_unbuffered(void)
   memset(data, 0xAB, page);
   CHECK(Fail4, w->write(w, 0, data, data + page) == 0);
 
-  // Write via write_direct (zero-copy path) — exercises pwrite_ref_job
+  // Write via write_direct: the payload is borrowed, not copied.
   if (w->write_direct) {
     CHECK(Fail4, w->write_direct(w, page, data, data + page) == 0);
   }

@@ -31,6 +31,8 @@ struct io_queue
 
   struct io_queue_counters counters;
 
+  struct io_backend backend;
+
   int shutdown;
 };
 
@@ -58,9 +60,20 @@ worker_thread(void* arg)
     // Untimed for truncate and close: no payload, so no clock reads.
     const int timed = job.req.nbytes > 0;
     const int64_t started_ns = timed ? platform_monotonic_ns() : 0;
-    job.req.fn(job.req.ctx);
-    if (job.req.ctx_free)
-      job.req.ctx_free(job.req.ctx);
+    struct io_completion done = {
+      .seq = job.seq,
+      .nbytes = job.req.nbytes,
+      .status = IO_OK,
+    };
+    if (job.req.op == IO_OP_CALL) {
+      job.req.fn(job.req.ctx);
+      if (job.req.ctx_free)
+        job.req.ctx_free(job.req.ctx);
+    } else if (q->backend.execute) {
+      q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
+    }
+    if (job.req.owned)
+      job.req.owned_free(job.req.owned);
     const int64_t finished_ns = timed ? platform_monotonic_ns() : 0;
 
     platform_mutex_lock(q->mutex);
@@ -74,12 +87,13 @@ worker_thread(void* arg)
 }
 
 struct io_queue*
-io_queue_create(void)
+io_queue_create(struct io_backend backend)
 {
   struct io_queue* q = (struct io_queue*)calloc(1, sizeof(*q));
   if (!q)
     return NULL;
 
+  q->backend = backend;
   q->ring_cap = 64;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   q->mutex = platform_mutex_new();

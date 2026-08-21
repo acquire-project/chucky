@@ -14,8 +14,12 @@ add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
     LINKS crc32c writer platform stream_config chucky_log
 )
 
+add_src_lib(io_backend_fs SOURCES io_backend.fs.c io_backend.fs.h
+    LINKS io_queue platform platform_io chucky_log
+)
+
 add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
-    LINKS io_queue platform platform_io writer strbuf chucky_log
+    LINKS io_backend_fs io_queue platform platform_io writer strbuf chucky_log
 )
 
 add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h

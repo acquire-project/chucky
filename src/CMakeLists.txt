@@ -42,7 +42,7 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
 )
 
 add_src_lib(io_queue SOURCES zarr/io_queue.c zarr/io_queue.h zarr/types.io.h
-    zarr/io_request.h zarr/io_queue_stats.c zarr/io_queue_stats.h
+    zarr/io_request.h zarr/io_backend.h zarr/io_queue_stats.c zarr/io_queue_stats.h
     LINKS Threads::Threads platform chucky_log)
 
 add_src_lib(platform_io SOURCES platform/platform_io.h)

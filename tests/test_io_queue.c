@@ -24,7 +24,7 @@ order_fn(void* arg)
 static int
 test_ordering(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   int log[100];
@@ -63,7 +63,7 @@ set_value(void* arg)
 static int
 test_event_wait(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   atomic_int val = 0;
@@ -100,7 +100,7 @@ free_counter(void* arg)
 static int
 test_ctx_free(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   int free_count = 0;
@@ -136,7 +136,7 @@ increment(void* arg)
 static int
 test_destroy_drains(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   atomic_int count = 0;
@@ -157,7 +157,7 @@ Fail:
 static int
 test_empty_queue_event(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   // Recording an event on an empty queue should return immediately
@@ -187,7 +187,7 @@ wait_for_gate(void* arg)
 static int
 test_pending_bytes(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
@@ -236,7 +236,7 @@ Fail:
 static int
 test_stats(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   // Hold the worker so everything posted behind it stays waiting.
@@ -311,7 +311,7 @@ Fail:
 static int
 test_timing_mean_counts_finished(void)
 {
-  struct io_queue* q = io_queue_create();
+  struct io_queue* q = io_queue_create((struct io_backend){ 0 });
   CHECK(Fail, q);
 
   // One write, held behind a gate so its wait is measurable, then released.

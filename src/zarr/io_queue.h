@@ -1,6 +1,7 @@
 #pragma once
 
 #include "writer.h"
+#include "zarr/io_backend.h"
 #include "zarr/io_request.h"
 #include "zarr/types.io.h"
 
@@ -8,8 +9,9 @@
 
 struct io_queue;
 
+// A zeroed backend runs closures only.
 struct io_queue*
-io_queue_create(void);
+io_queue_create(struct io_backend backend);
 void
 io_queue_destroy(struct io_queue* q);
 
