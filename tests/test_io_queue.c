@@ -416,8 +416,12 @@ answer_the_rest(struct io_queue* q,
   // list, and leaving it unanswered wedges destroy. Once nothing is inside
   // execute the list is final, because a later request reads the cleared flag.
   for (int waited_ms = 0; io_backend_fake_inside_execute(f) > 0; ++waited_ms) {
-    if (waited_ms >= HANDOVER_TIMEOUT_MS)
+    if (waited_ms >= HANDOVER_TIMEOUT_MS) {
+      // Reading the list now races the backend, and a missed entry leaves a
+      // running job that wedges destroy.
+      log_error("io_queue test: the backend never came out of execute");
       break;
+    }
     platform_sleep_ns(1000000LL);
   }
 
