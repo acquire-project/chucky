@@ -3,6 +3,8 @@
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr.h"
+#include "zarr/io_backend.fs.h"
+#include "zarr/io_queue.h"
 #include "zarr/shard_pool.h"
 #include "zarr/shard_pool_fs.h"
 #include "zarr/store.h"
@@ -611,6 +613,95 @@ Fail:
   return 1;
 }
 
+// --- stale file token ---
+
+static long
+file_size(const char* path)
+{
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return -1;
+  fseek(f, 0, SEEK_END);
+  const long n = ftell(f);
+  fclose(f);
+  return n;
+}
+
+// A pool slot keeps its token private and clears it on finalize, so a retired
+// token has to come from the registry itself.
+static int
+test_stale_file_token_refused(void)
+{
+  log_info("=== test_stale_file_token_refused ===");
+
+  char first_path[4096];
+  char second_path[4096];
+  snprintf(first_path, sizeof(first_path), "%s/stale_first.bin", tmpdir);
+  snprintf(second_path, sizeof(second_path), "%s/stale_second.bin", tmpdir);
+
+  _Atomic int io_error;
+  atomic_store(&io_error, 0);
+
+  struct io_backend_fs* backend = io_backend_fs_create(&io_error);
+  CHECK(Fail, backend);
+
+  struct io_queue* q = io_queue_create(io_backend_fs_as_backend(backend),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail2, q);
+
+  platform_fd fd = platform_open_write(first_path, 0);
+  CHECK(Fail3, fd != PLATFORM_FD_INVALID);
+  const struct io_file_token retired = io_backend_fs_add_file(backend, fd);
+  CHECK(Fail3, retired.generation != 0);
+
+  CHECK(Fail3,
+        io_queue_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = retired }) == 0);
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Fail3, atomic_load(&io_error) == 0);
+
+  // The next open takes the slot the close gave back, under a new generation.
+  platform_fd second_fd = platform_open_write(second_path, 0);
+  CHECK(Fail3, second_fd != PLATFORM_FD_INVALID);
+  const struct io_file_token fresh = io_backend_fs_add_file(backend, second_fd);
+  CHECK(Fail3, fresh.generation != 0);
+  CHECK(Fail3, fresh.index == retired.index);
+  CHECK(Fail3, fresh.generation != retired.generation);
+
+  static const char payload[] = "must not land anywhere";
+  CHECK(Fail3,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .borrowed = 1,
+                                           .file = retired,
+                                           .payload = payload,
+                                           .nbytes = sizeof(payload) }) == 0);
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Fail3, atomic_load(&io_error) == 1);
+
+  CHECK(Fail3,
+        io_queue_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = fresh }) == 0);
+  io_event_wait(q, io_queue_record(q));
+
+  io_queue_destroy(q);
+  io_backend_fs_destroy(backend);
+
+  CHECK(Fail, file_size(first_path) == 0);
+  CHECK(Fail, file_size(second_path) == 0);
+
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  io_queue_destroy(q);
+Fail2:
+  io_backend_fs_destroy(backend);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -628,6 +719,7 @@ main(void)
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_io_stats();
   err |= test_shard_pool_error_propagation();
+  err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();
   err |= test_has_existing_data_after_write_group();
