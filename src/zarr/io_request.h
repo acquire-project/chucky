@@ -6,10 +6,7 @@
 
 enum io_op
 {
-  // Temporary, for the transition off closures. Zero so an initializer that
-  // sets only fn and ctx still means what it did.
-  IO_OP_CALL = 0,
-  IO_OP_NOOP,     // no file, no payload: a fence marker and a fault peg
+  IO_OP_NOOP = 0, // no file, no payload: a fence marker and a fault peg
   IO_OP_WRITE,    // payload to a file at an offset
   IO_OP_TRUNCATE, // barrier: set the file's size
   IO_OP_CLOSE,    // barrier: last request naming this token
@@ -44,11 +41,6 @@ struct io_request
   // Released after the request retires. NULL when the payload is borrowed.
   void* owned;
   void (*owned_free)(void*);
-
-  // IO_OP_CALL only, until the described ops replace every caller.
-  void (*fn)(void*);
-  void* ctx;
-  void (*ctx_free)(void*);
 };
 
 enum io_status

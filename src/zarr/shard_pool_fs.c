@@ -262,6 +262,9 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
+  // Releases an injected block, for a teardown with no flush in front of it.
+  io_backend_fs_stop(p->backend);
+
   // Finalize any open slots
   for (uint64_t i = 0; i < p->nslots; ++i) {
     if (p->slots[i].token.generation != 0)
@@ -279,20 +282,12 @@ pool_fs_destroy(struct shard_pool* self)
   free(p);
 }
 
-static void
-fail_fn(void* arg)
-{
-  _Atomic int* io_error = (_Atomic int*)arg;
-  log_error("shard_pool_fs: injected test failure");
-  atomic_store(io_error, 1);
-}
-
 int
 shard_pool_fs_inject_failing_job(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  return io_queue_post(
-    p->queue, (struct io_request){ .fn = fail_fn, .ctx = (void*)&p->io_error });
+  io_backend_fs_inject_failure(p->backend);
+  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
 int
@@ -310,39 +305,12 @@ shard_pool_fs_set_error(struct shard_pool* self)
   atomic_store(&p->io_error, 1);
 }
 
-struct gate_ctx
-{
-  _Atomic int* gate;
-  struct io_queue* queue;
-};
-
-static void
-gate_fn(void* arg)
-{
-  struct gate_ctx* g = (struct gate_ctx*)arg;
-  while (atomic_load(g->gate) == 0) {
-    if (io_queue_is_shutdown(g->queue))
-      return;
-    platform_sleep_ns(1000000LL); // 1ms
-  }
-}
-
 int
 shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  struct gate_ctx* g = (struct gate_ctx*)malloc(sizeof(*g));
-  if (!g)
-    return 1;
-  g->gate = gate;
-  g->queue = p->queue;
-  if (io_queue_post(p->queue,
-                    (struct io_request){
-                      .fn = gate_fn, .ctx = (void*)g, .ctx_free = free })) {
-    free(g);
-    return 1;
-  }
-  return 0;
+  io_backend_fs_inject_block(p->backend, gate);
+  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
 struct shard_pool*

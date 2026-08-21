@@ -1,47 +1,36 @@
+#include "test_io_backend_fake.h"
 #include "util/prelude.h"
 #include "zarr/io_queue.h"
 
 #include <stdatomic.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 // --- test: ordering ---
-
-struct order_ctx
-{
-  int* log;
-  int index;
-};
-
-static void
-order_fn(void* arg)
-{
-  struct order_ctx* c = (struct order_ctx*)arg;
-  c->log[c->index] = c->index;
-}
 
 static int
 test_ordering(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
-  int log[100];
-  memset(log, -1, sizeof(log));
+  for (uint64_t i = 0; i < 100; ++i)
+    CHECK(Fail2,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = { .generation = 1 },
+                                             .nbytes = i + 1 }) == 0);
 
-  struct order_ctx ctxs[100];
-  for (int i = 0; i < 100; ++i) {
-    ctxs[i] = (struct order_ctx){ .log = log, .index = i };
-    io_queue_post(q, (struct io_request){ .fn = order_fn, .ctx = &ctxs[i] });
+  io_event_wait(q, io_queue_record(q));
+
+  CHECK(Fail2, io_backend_fake_record_count(&fake) == 100);
+  for (uint64_t i = 0; i < 100; ++i) {
+    CHECK(Fail2, fake.records[i].nbytes == i + 1);
+    CHECK(Fail2, fake.records[i].seq == i + 1);
   }
-
-  struct io_event ev = io_queue_record(q);
-  io_event_wait(q, ev);
-
-  for (int i = 0; i < 100; ++i)
-    CHECK(Fail2, log[i] == i);
 
   io_queue_destroy(q);
   return 0;
@@ -54,26 +43,21 @@ Fail:
 
 // --- test: event wait ---
 
-static void
-set_value(void* arg)
-{
-  atomic_int* val = (atomic_int*)arg;
-  atomic_store(val, 1);
-}
-
 static int
 test_event_wait(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
-  atomic_int val = 0;
-  io_queue_post(q, (struct io_request){ .fn = set_value, .ctx = (void*)&val });
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
 
-  CHECK(Fail2, atomic_load(&val) == 1);
+  CHECK(Fail2, io_backend_fake_record_count(&fake) == 1);
 
   io_queue_destroy(q);
   return 0;
@@ -84,41 +68,53 @@ Fail:
   return 1;
 }
 
-// --- test: ctx_free called ---
+// --- test: owned payload released ---
+
+struct owned_block
+{
+  _Atomic int* released;
+};
 
 static void
-noop_fn(void* arg)
+release_block(void* p)
 {
-  (void)arg;
-}
-
-static void
-free_counter(void* arg)
-{
-  int* count = (int*)arg;
-  (*count)++;
+  struct owned_block* b = (struct owned_block*)p;
+  atomic_fetch_add(b->released, 1);
+  free(b);
 }
 
 static int
-test_ctx_free(void)
+test_owned_payload_released(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
-  int free_count = 0;
-  for (int i = 0; i < 10; ++i)
-    io_queue_post(q,
-                  (struct io_request){ .fn = noop_fn,
-                                       .ctx = &free_count,
-                                       .ctx_free = free_counter });
+  _Atomic int released;
+  atomic_store(&released, 0);
 
-  struct io_event ev = io_queue_record(q);
-  io_event_wait(q, ev);
+  for (int i = 0; i < 10; ++i) {
+    struct owned_block* b = (struct owned_block*)malloc(sizeof(*b));
+    CHECK(Fail2, b);
+    b->released = &released;
+    CHECK(Fail2,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = { .generation = 1 },
+                                             .payload = b,
+                                             .nbytes = sizeof(*b),
+                                             .owned = b,
+                                             .owned_free = release_block }) ==
+            0);
+  }
 
-  CHECK(Fail2, free_count == 10);
-
+  // The release happens after the request retires, outside the lock, so only
+  // the join settles the count.
   io_queue_destroy(q);
+  CHECK(Fail, atomic_load(&released) == 10);
   return 0;
 
 Fail2:
@@ -129,29 +125,26 @@ Fail:
 
 // --- test: destroy drains ---
 
-static void
-increment(void* arg)
-{
-  atomic_int* val = (atomic_int*)arg;
-  atomic_fetch_add(val, 1);
-}
-
 static int
 test_destroy_drains(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
-  atomic_int count = 0;
   for (int i = 0; i < 50; ++i)
-    io_queue_post(q,
-                  (struct io_request){ .fn = increment, .ctx = (void*)&count });
+    CHECK(Fail2,
+          io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
   io_queue_destroy(q);
-  CHECK(Fail, atomic_load(&count) == 50);
+  CHECK(Fail, io_backend_fake_record_count(&fake) == 50);
   return 0;
 
+Fail2:
+  io_queue_destroy(q);
 Fail:
   return 1;
 }
@@ -161,17 +154,24 @@ Fail:
 static int
 test_empty_queue_event(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
   // Recording an event on an empty queue should return immediately
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
 
+  CHECK(Fail2, io_backend_fake_record_count(&fake) == 0);
+
   io_queue_destroy(q);
   return 0;
 
+Fail2:
+  io_queue_destroy(q);
 Fail:
   return 1;
 }
@@ -181,36 +181,32 @@ Fail:
 // #201: the reported figure has to account for every job the queue holds. The
 // old split counter, raised after the post, could report fewer.
 
-static void
-wait_for_gate(void* arg)
-{
-  atomic_int* gate = (atomic_int*)arg;
-  while (atomic_load(gate) == 0)
-    ;
-}
-
 static int
 test_pending_bytes(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
-  // Hold the worker on the first job so the rest stay queued.
-  atomic_int gate = 0;
-  CHECK(Fail2,
-        io_queue_post(
-          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
-          0);
+  // Hold the worker on the first request so the rest stay queued.
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
   uint64_t posted = 0;
-  for (int i = 1; i <= 8; ++i) {
-    uint64_t nbytes = (uint64_t)i * 1024;
+  for (uint64_t i = 1; i <= 8; ++i) {
+    const uint64_t nbytes = i * 1024;
     CHECK(Fail3,
-          io_queue_post(
-            q, (struct io_request){ .fn = noop_fn, .nbytes = nbytes }) == 0);
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = { .generation = 1 },
+                                             .nbytes = nbytes }) == 0);
     posted += nbytes;
     CHECK(Fail3, io_queue_pending_bytes(q) == posted);
   }
@@ -219,8 +215,8 @@ test_pending_bytes(void)
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
-  // A job posted without a byte count leaves the figure alone.
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .fn = noop_fn }) == 0);
+  // A request posted without a byte count leaves the figure alone.
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
 
@@ -242,16 +238,18 @@ Fail:
 static int
 test_stats(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
   // Hold the worker so everything posted behind it stays waiting.
-  atomic_int gate = 0;
-  CHECK(Fail2,
-        io_queue_post(
-          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
-          0);
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
   // Three files, two writes each, round-robin: three only if files differ.
   for (int round = 0; round < 2; ++round)
@@ -259,10 +257,10 @@ test_stats(void)
       CHECK(Fail3,
             io_queue_post(
               q,
-              (struct io_request){ .fn = noop_fn,
+              (struct io_request){ .op = IO_OP_WRITE,
                                    .nbytes = 4096,
                                    .file = { .generation = file },
-                                   .borrowed = (int)(file == 1) }) == 0);
+                                   .borrowed = (uint8_t)(file == 1) }) == 0);
 
   struct io_queue_stats st;
   io_queue_get_stats(q, &st);
@@ -274,18 +272,19 @@ test_stats(void)
   CHECK(Fail3, st.size_buckets[12] == 6); // 4096 == 1 << 12
 
   // No file named: no change to the file count.
-  CHECK(Fail3, io_queue_post(q, (struct io_request){ .fn = noop_fn }) == 0);
+  CHECK(Fail3, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
   // Not counted for truncate and close: no payload.
   CHECK(Fail3,
         io_queue_post(q,
-                      (struct io_request){ .fn = noop_fn,
-                                           .file = { .generation = 4 } }) == 0);
+                      (struct io_request){ .op = IO_OP_TRUNCATE,
+                                           .file = { .generation = 4 },
+                                           .logical_size = 4096 }) == 0);
   CHECK(Fail3,
         io_queue_post(q,
-                      (struct io_request){ .fn = noop_fn,
+                      (struct io_request){ .op = IO_OP_CLOSE,
                                            .file = { .generation = 5 } }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
@@ -318,32 +317,37 @@ Fail:
 static int
 test_timing_mean_counts_finished(void)
 {
-  struct io_queue* q =
-    io_queue_create((struct io_backend){ 0 }, (struct io_queue_limits){ 0 });
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
   CHECK(Fail, q);
 
   // One write, held behind a gate so its wait is measurable, then released.
-  atomic_int gate = 0;
-  CHECK(Fail2,
-        io_queue_post(
-          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&gate }) ==
-          0);
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   CHECK(Fail3,
-        io_queue_post(
-          q, (struct io_request){ .fn = noop_fn, .nbytes = 4096 }) == 0);
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = { .generation = 1 },
+                                           .nbytes = 4096 }) == 0);
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
 
-  // Five more, still queued behind the second gate: jobs run in order.
-  atomic_int held = 0;
-  CHECK(Fail4,
-        io_queue_post(
-          q, (struct io_request){ .fn = wait_for_gate, .ctx = (void*)&held }) ==
-          0);
+  // Five more, still queued behind the second gate: requests run in order.
+  _Atomic int held;
+  atomic_store(&held, 0);
+  io_backend_fake_hold(&fake, &held);
+  CHECK(Fail4, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   for (int i = 0; i < 5; ++i)
     CHECK(Fail4,
-          io_queue_post(
-            q, (struct io_request){ .fn = noop_fn, .nbytes = 4096 }) == 0);
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = { .generation = 1 },
+                                             .nbytes = 4096 }) == 0);
 
   struct io_queue_stats st;
   io_queue_get_stats(q, &st);
@@ -380,7 +384,7 @@ main(void)
   } tests[] = {
     { "ordering", test_ordering },
     { "event_wait", test_event_wait },
-    { "ctx_free", test_ctx_free },
+    { "owned_payload_released", test_owned_payload_released },
     { "destroy_drains", test_destroy_drains },
     { "empty_queue_event", test_empty_queue_event },
     { "pending_bytes", test_pending_bytes },

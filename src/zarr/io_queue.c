@@ -245,13 +245,8 @@ worker_thread(void* arg)
       .status = IO_OK,
     };
     int dispatch = IO_DONE;
-    if (job.req.op == IO_OP_CALL) {
-      job.req.fn(job.req.ctx);
-      if (job.req.ctx_free)
-        job.req.ctx_free(job.req.ctx);
-    } else if (q->backend.execute) {
+    if (q->backend.execute)
       dispatch = q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
-    }
 
     if (dispatch == IO_DONE)
       retire_job(q, done, timed ? platform_monotonic_ns() : 0);
@@ -487,14 +482,4 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
   while (mq->tail - 1 < ev.seq && !mq->shutdown)
     platform_cond_wait(mq->cond_retired, mq->mutex);
   platform_mutex_unlock(mq->mutex);
-}
-
-int
-io_queue_is_shutdown(const struct io_queue* q)
-{
-  struct io_queue* mq = (struct io_queue*)q;
-  platform_mutex_lock(mq->mutex);
-  int r = mq->shutdown;
-  platform_mutex_unlock(mq->mutex);
-  return r;
 }
