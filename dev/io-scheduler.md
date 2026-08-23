@@ -33,18 +33,17 @@ truncate and close of a shard file at finalize, which are barriers, and a
 no-op used as a fence marker. Every open file carries a token, and a request
 naming a generation that has closed is refused.
 
-### What holds the ordering
+### Ordering guarantees
 
-After step 2 most of it no longer rests on the order the worker happens to run
-things in:
+After step 2 most of these no longer depend on the order the worker runs things
+in:
 
 - A write cannot reach a recycled descriptor. `pool_fs_open` still queues a
-  close, frees the slot at once and opens the next file without waiting, but
-  the new file gets a new generation, and the old one's late requests are
-  refused rather than applied.
+  close, frees the slot and opens the next file without waiting, but the new
+  file gets a new generation, and late requests naming the old one are refused.
 - Truncate and close cannot pass the writes ahead of them on their own file,
   because they are barriers. Writes carry their own offsets, so among
-  themselves they need no order at all.
+  themselves they need no order.
 - In `pool_fs_flush` a sequence number is recorded and waited on, meaning
   "everything posted so far has finished". Retirement walks a cursor over
   finished slots, so this holds however the completions arrive.
@@ -52,7 +51,7 @@ things in:
   its zero-copy write is queued, and footer, truncate, and close are fenced
   before the array's shape is allowed to name that data.
 
-One thing still rests on the worker. In `io_event_wait` the wait is abandoned as
+One case still rests on the worker. In `io_event_wait` the wait is abandoned as
 soon as shutdown is set, so a fence taken at the same time as a destroy may
 return before its writes are done — covered only by the worker join in
 `io_queue_destroy`.
@@ -145,8 +144,8 @@ into the shipping backend are #219.
 
 Both rewrite `io_backend.fs.c` and `shard_pool_fs.c`, so they have to be taken
 in order, #218 first. #218 does not delete the truncate hook; it moves the
-failure onto the worker, which is the point of the fix. So #219 has three hooks
-to carry out of shipping code, not the two its description assumes.
+failure onto the worker, which is the point of the fix. #219 therefore has one
+more hook to carry out of shipping code, not one fewer.
 
 ### 3. More queue depth
 
@@ -157,43 +156,37 @@ byte ceiling gets its number here, from step 1's `io_queued_bytes_peak`.
 
 Four pieces around it, each its own pull request, in this order.
 
-**Index the open-file table.** Left by step 2, harmless while one worker runs
-everything in order and not harmless afterwards, so it goes first. Dispatch
-picks the next request by scanning the window from the tail, and the readiness
-test for each candidate scans the window again. That is quadratic in the size of
-the window, under the queue's lock. It costs nothing today: the filesystem
-backend finishes every request inside `execute`, so nothing is ever running
-while the worker scans, the oldest slot is always the next one to run, and the
-scan stops on its first step. The moment a backend answers `IO_SUBMITTED`, or a
-second worker starts, the front of the window fills with running requests and
-every dispatch walks past all of them. At the default ceiling of 1024 requests
-that is around half a million comparisons per dispatch while holding the lock
-the producer needs to post. The fix is to stop scanning: the file token already
-carries a dense index, so the queue's open-file table can be indexed rather than
-searched, and each file can carry the sequence number of its oldest request and
-of its first waiting barrier. Readiness is then one comparison. The same change
-merges that table with the one in `io_queue_stats.c`: same shape, same key,
-updated from adjacent lines under the same lock, so every post and every retire
-walks two lists instead of one.
+**Index the open-file table** (#225). Dispatch picks the next request by
+scanning the window from the tail, and the readiness test for each candidate
+scans it again — quadratic, under the queue's lock. It is free today because the
+filesystem backend finishes every request inside `execute`, so the oldest slot
+is always next and the scan stops on its first step. With a second worker, or a
+backend that answers `IO_SUBMITTED`, the front of the window fills with running
+requests and every dispatch walks past them: around half a million comparisons
+at the default ceiling of 1024, while holding the lock the producer needs to
+post. The file token already carries a dense index, so the table can be indexed
+rather than searched, and each file can carry the sequence number of its oldest
+request and of its first waiting barrier. The same change merges that table with
+the one in `io_queue_stats.c`, which has the same shape and the same key and is
+updated under the same lock.
 
-**Give the sweep a queue depth.** Nothing in `scripts/sweep` can say how deep to
-go. A run's id is built from the scenario, codec, fill, backend, dtype, chunk
-size and sink, so a sweep from 1 to 32 writes 32 runs under one id and keeps the
-last. The S3 tier already shows the shape: an optional field on the run spec, a
-suffix on the id, a column in the results file. Add that, a tier that sweeps the
-scenarios holding more than one shard file, a schema version with its migration
-and its line in `scripts/sweep/README.md`, and a report that reads depth as an
-axis rather than as unrelated runs.
+**Record a queue depth in the sweep** (#226). A run's id is built from the
+scenario, codec, fill, backend, dtype, chunk size and sink, so 32 runs that
+differ only in writes in flight share one id and the last one written wins. The
+S3 tier shows the shape: an optional field on the run spec, a suffix on the id,
+a column in the results file. Add a tier over the scenarios holding more than
+one shard file, a schema version and its migration, a line in
+`scripts/sweep/README.md`, and a report that reads depth as an axis.
 
-**Pre-size shard files.** `ftruncate` at open, trimmed back at finalize, so a
-write lands inside the file instead of extending it. Taken after the workers,
-because queue depth per file above one buys nothing without it and it buys
+**Pre-size shard files** (#227). `ftruncate` at open, trimmed back at finalize,
+so a write lands inside the file instead of extending it. Taken after the
+workers, because depth per file above one buys nothing without it and it buys
 nothing on its own. `smallepoch_single` is the only scenario that can measure
 it, and Windows does not get it at all — see step 5.
 
-**Publish what it was worth.** A sweep at the depths above, its results file its
-own pull request, as with earlier sweeps. Step 4 is decided on this: a ring is
-worth writing only if the depth it buys is not already reached here.
+**Publish the measurement** (#228). A sweep at those depths, its results file
+its own pull request, as with earlier sweeps. Step 4 depends on it: a ring is
+worth writing only if threads do not already reach the same depth.
 
 *Done when:* the reef-l40 XFS matrix is green and the sweep is published.
 
@@ -204,16 +197,16 @@ threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
 
-**Close four gaps in the backend interface**, as its own pull request before any
-ring is written. The interface step 2 built is general enough to hold one, but a
-backend has no way to say "not now", which a full submission queue needs; the
-alternatives today are to block a worker or to fail the request. The queue never
-calls into the backend at teardown, so a backend with a thread of its own has
-nowhere to stop it. The request handed to `execute` is the worker's own copy and
-dies when the call returns, so a backend that finishes later has to copy what it
-needs. And a short write is unowned: `platform_pwrite` loops internally so it
-never reports one, a ring does, and retrying the remainder belongs in the
-backend rather than in the queue.
+**Close four gaps in the backend interface** (#229), as its own pull request
+before any ring is written. The interface step 2 built is general enough to hold
+one, but a backend has no way to say "not now", which a full submission queue
+needs; the alternatives today are to block a worker or to fail the request. The
+queue never calls into the backend at teardown, so a backend with a thread of
+its own has nowhere to stop it. The request handed to `execute` is the worker's
+own copy and dies when the call returns, so a backend that finishes later has to
+copy what it needs. And a short write is unowned: `platform_pwrite` loops
+internally so it never reports one, a ring does, and retrying the remainder
+belongs in the backend rather than in the queue.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default.
@@ -247,11 +240,10 @@ privileged, with old disk contents exposed.
 - #178, the epic.
 - #208, step 1, merged as `fee70ed`.
 - #212 and #216, step 2, merged as `54b03fa`.
-- #213, step 3. #214, step 4. #215, step 5.
+- #213, step 3, with #225, #226, #227 and #228 around it.
+- #229, then #214, step 4. #215, step 5.
 - #217, a fence waiter left holding a freed lock. Fixed inside #216.
 - #218, a flush misses the errors of the work it queued.
 - #219, the fault hooks compiled into the shipping backend.
 - #211, plate fields share pool slots. A different epic, and its fix changes how
   slots are allocated.
-
-The pieces named in steps 3 and 4 above are not filed yet.
