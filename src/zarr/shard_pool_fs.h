@@ -9,9 +9,18 @@
 // Create a filesystem shard pool with nslots writer slots.
 // root: filesystem root path (keys are relative to this).
 // unbuffered: use O_DIRECT for shard writes.
+// io: how much of the write backlog runs at once; NULL takes the defaults.
 // Returns NULL on error.
 struct shard_pool*
-shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered);
+shard_pool_fs_create(const char* root,
+                     uint64_t nslots,
+                     int unbuffered,
+                     const struct io_scheduling* io);
+
+// Fill zero fields with the write-scheduling defaults, so a caller that has
+// to record what it used has the numbers rather than the zeros.
+void
+shard_pool_fs_scheduling_defaults(struct io_scheduling* io);
 
 // Test helper: enqueue a job that unconditionally marks the pool as errored
 // when it runs. Lets tests exercise the flush/has_error propagation path

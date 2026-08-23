@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define DEFAULT_MAX_REQUESTS 1024u
+#define NO_SEQ 0u
 
 enum io_job_state
 {
@@ -22,19 +23,33 @@ struct io_job
   uint64_t seq;
   int64_t post_ns;
   int64_t started_ns;
+  // Requests naming the same file are linked oldest first by sequence
+  // number, with NO_SEQ for an end.
+  uint64_t older_on_file;
+  uint64_t newer_on_file;
   uint8_t state;
 };
 
+// One open file, found by the index its token carries. An entry lives from
+// the first request naming that file until the last one retires.
 struct file_pending
 {
   uint64_t generation;
-  uint64_t outstanding;
+  uint64_t outstanding; // unretired requests naming this file
+  uint64_t writes;      // of those, the ones carrying a payload
+  uint64_t in_flight;   // of those, the ones handed to the backend
+  uint64_t oldest_seq;  // NO_SEQ when nothing is outstanding
+  uint64_t newest_seq;
+  uint64_t turn; // where this file sits in the round-robin order
+  uint8_t barrier_running;
   uint8_t closing;
 };
 
 struct io_queue
 {
-  struct platform_thread* thread;
+  struct platform_thread** threads;
+  uint64_t nthreads;
+
   struct platform_mutex* mutex;
   struct platform_cond* cond_not_empty;
   struct platform_cond* cond_retired;
@@ -45,15 +60,26 @@ struct io_queue
   uint64_t head;     // next sequence number to hand out
   uint64_t tail;     // oldest sequence number that has not retired
 
-  struct file_pending* files;
-  uint64_t nfiles;
+  struct file_pending* files; // indexed by the token's file index
   uint64_t files_cap;
+  uint32_t* order; // the live entries, in the order they take turns
+  uint64_t norder;
+  uint64_t next_turn; // where the next dispatch starts looking
+
+  // A request naming no file is always ready, so it needs no entry. These
+  // are kept on a list of their own and looked at first.
+  uint64_t nofile_oldest;
+  uint64_t nofile_newest;
 
   uint64_t max_requests;
   uint64_t max_bytes;
+  uint64_t max_in_flight;
+  uint64_t max_in_flight_per_file;
 
   uint64_t pending_bytes; // raised on commit, lowered when the job finishes
   uint64_t jobs_waiting;  // committed and not yet taken by a worker
+  uint64_t in_flight;     // handed to the backend and not yet finished
+  uint64_t files_with_writes;
 
   // This room is held for a reserve until it is committed or released.
   uint64_t reserved_requests;
@@ -69,6 +95,12 @@ struct io_queue
   int shutdown;
 };
 
+static struct io_job*
+job_at(struct io_queue* q, uint64_t seq)
+{
+  return &q->ring[seq & (q->ring_cap - 1)];
+}
+
 static void
 queue_wait(struct io_queue* q, struct platform_cond* cond)
 {
@@ -78,114 +110,236 @@ queue_wait(struct io_queue* q, struct platform_cond* cond)
     platform_cond_broadcast(q->cond_retired);
 }
 
-static struct file_pending*
-file_find(struct io_queue* q, uint64_t generation)
-{
-  for (uint64_t i = 0; i < q->nfiles; ++i) {
-    if (q->files[i].generation == generation)
-      return &q->files[i];
-  }
-  return NULL;
-}
-
-static void
-file_request_added(struct io_queue* q, const struct io_request* req)
-{
-  if (req->file.generation == 0)
-    return;
-
-  struct file_pending* f = file_find(q, req->file.generation);
-  if (!f) {
-    if (q->nfiles == q->files_cap) {
-      uint64_t cap = q->files_cap ? q->files_cap * 2 : 16;
-      struct file_pending* grown =
-        (struct file_pending*)realloc(q->files, cap * sizeof(*grown));
-      // A write must not be refused because this table could not grow. The
-      // only cost of a missing entry is a barrier that looks ready early.
-      if (!grown) {
-        log_error("io_queue: could not grow the open file table");
-        return;
-      }
-      q->files = grown;
-      q->files_cap = cap;
-    }
-    f = &q->files[q->nfiles++];
-    *f = (struct file_pending){ .generation = req->file.generation };
-  }
-
-  f->outstanding++;
-  if (req->op == IO_OP_CLOSE)
-    f->closing = 1;
-}
-
-static void
-file_request_retired(struct io_queue* q, const struct io_request* req)
-{
-  if (req->file.generation == 0)
-    return;
-
-  struct file_pending* f = file_find(q, req->file.generation);
-  if (!f)
-    return;
-
-  // An entry left at zero would never be removed, and every later barrier on
-  // the file would be stuck behind it forever.
-  if (f->outstanding == 0) {
-    log_error("io_queue: an open file entry was already at zero");
-    return;
-  }
-
-  if (--f->outstanding == 0) {
-    *f = q->files[q->nfiles - 1];
-    q->nfiles--;
-  }
-}
-
 static int
 is_barrier(const struct io_request* req)
 {
   return req->op == IO_OP_TRUNCATE || req->op == IO_OP_CLOSE;
 }
 
-// Writes to one file are unordered; a truncate or close is held behind
-// everything posted ahead of it on that file.
-static int
-job_is_ready(struct io_queue* q, const struct io_job* job)
+// --- Lists threaded through the ring ---
+
+static void
+list_append(struct io_queue* q,
+            uint64_t* oldest,
+            uint64_t* newest,
+            uint64_t seq)
 {
-  const uint64_t generation = job->req.file.generation;
-  if (generation == 0)
-    return 1;
-
-  const struct file_pending* f = file_find(q, generation);
-  if (!f || f->outstanding == 1)
-    return 1;
-
-  const int barrier = is_barrier(&job->req);
-  for (uint64_t s = q->tail; s < job->seq; ++s) {
-    const struct io_job* earlier = &q->ring[s & (q->ring_cap - 1)];
-    if (earlier->state == IO_JOB_RETIRED)
-      continue;
-    if (earlier->req.file.generation != generation)
-      continue;
-    if (barrier || is_barrier(&earlier->req))
-      return 0;
-  }
-  return 1;
+  struct io_job* job = job_at(q, seq);
+  job->older_on_file = *newest;
+  job->newer_on_file = NO_SEQ;
+  if (*newest != NO_SEQ)
+    job_at(q, *newest)->newer_on_file = seq;
+  else
+    *oldest = seq;
+  *newest = seq;
 }
 
-// A barrier that is not ready is passed over, so writes to one file are
-// never held up by a barrier on another file.
+static void
+list_remove(struct io_queue* q,
+            uint64_t* oldest,
+            uint64_t* newest,
+            uint64_t seq)
+{
+  struct io_job* job = job_at(q, seq);
+  if (job->older_on_file != NO_SEQ)
+    job_at(q, job->older_on_file)->newer_on_file = job->newer_on_file;
+  else
+    *oldest = job->newer_on_file;
+  if (job->newer_on_file != NO_SEQ)
+    job_at(q, job->newer_on_file)->older_on_file = job->older_on_file;
+  else
+    *newest = job->older_on_file;
+  job->older_on_file = NO_SEQ;
+  job->newer_on_file = NO_SEQ;
+}
+
+// --- Round-robin order over the live files ---
+
+static void
+order_add(struct io_queue* q, uint32_t index)
+{
+  q->files[index].turn = q->norder;
+  q->order[q->norder++] = index;
+}
+
+static void
+order_remove(struct io_queue* q, uint32_t index)
+{
+  const uint64_t turn = q->files[index].turn;
+  q->order[turn] = q->order[--q->norder];
+  q->files[q->order[turn]].turn = turn;
+}
+
+// --- The open file table ---
+
+// Both tables are indexed by the token's file index, so both are grown to
+// fit it. Non-zero is returned when they could not be.
+static int
+files_make_room(struct io_queue* q, uint32_t index)
+{
+  if (index < q->files_cap)
+    return 0;
+
+  uint64_t cap = q->files_cap ? q->files_cap : 16;
+  while (cap <= index)
+    cap *= 2;
+
+  struct file_pending* files =
+    (struct file_pending*)realloc(q->files, cap * sizeof(*files));
+  if (!files)
+    return 1;
+  q->files = files;
+  memset(q->files + q->files_cap, 0, (cap - q->files_cap) * sizeof(*files));
+
+  uint32_t* order = (uint32_t*)realloc(q->order, cap * sizeof(*order));
+  if (!order)
+    return 1;
+  q->order = order;
+
+  q->files_cap = cap;
+  return 0;
+}
+
+static struct file_pending*
+file_find(struct io_queue* q, struct io_file_token file)
+{
+  if (file.generation == 0 || file.index >= q->files_cap)
+    return NULL;
+  struct file_pending* f = &q->files[file.index];
+  return f->generation == file.generation ? f : NULL;
+}
+
+// The count of files with a write outstanding is what the depth available is
+// measured from.
+static void
+writes_on_file_changed(struct io_queue* q, int64_t delta, int64_t now)
+{
+  q->files_with_writes = (uint64_t)((int64_t)q->files_with_writes + delta);
+  io_queue_counters_files_waiting(&q->counters, q->files_with_writes, now);
+}
+
+static void
+file_request_added(struct io_queue* q,
+                   uint64_t seq,
+                   const struct io_request* req,
+                   int64_t now)
+{
+  if (req->file.generation == 0) {
+    list_append(q, &q->nofile_oldest, &q->nofile_newest, seq);
+    return;
+  }
+
+  struct file_pending* f = &q->files[req->file.index];
+
+  // A backend hands an index back when the close naming it runs, which is
+  // before that close retires, so a new file can claim the entry with the old
+  // close still on its way out. That close is the only request the old
+  // generation can have left, and retiring it finds a generation that no
+  // longer matches.
+  if (f->generation != req->file.generation) {
+    if (f->outstanding == 0)
+      order_add(q, req->file.index);
+    *f = (struct file_pending){ .generation = req->file.generation,
+                                .oldest_seq = NO_SEQ,
+                                .newest_seq = NO_SEQ,
+                                .turn = f->turn };
+  }
+
+  f->outstanding++;
+  list_append(q, &f->oldest_seq, &f->newest_seq, seq);
+  if (req->op == IO_OP_CLOSE)
+    f->closing = 1;
+  if (req->nbytes > 0 && f->writes++ == 0)
+    writes_on_file_changed(q, +1, now);
+}
+
+static void
+file_request_retired(struct io_queue* q,
+                     uint64_t seq,
+                     const struct io_request* req,
+                     int64_t now)
+{
+  if (req->file.generation == 0) {
+    list_remove(q, &q->nofile_oldest, &q->nofile_newest, seq);
+    return;
+  }
+
+  struct file_pending* f = file_find(q, req->file);
+  if (!f)
+    return;
+
+  // An entry is dropped as its last request retires, so one still naming
+  // this generation and holding nothing means the counts below would wrap.
+  if (f->outstanding == 0) {
+    log_error("io_queue: an open file entry was already at zero");
+    return;
+  }
+
+  list_remove(q, &f->oldest_seq, &f->newest_seq, seq);
+  f->in_flight--;
+  if (is_barrier(req))
+    f->barrier_running = 0;
+  if (req->nbytes > 0 && --f->writes == 0)
+    writes_on_file_changed(q, -1, now);
+  if (--f->outstanding == 0) {
+    order_remove(q, req->file.index);
+    f->generation = 0;
+  }
+}
+
+// Writes to one file run together; a truncate or close is held behind
+// everything posted ahead of it on that file, and holds back everything
+// posted after it. Sound only for the oldest waiting request on the file:
+// everything ahead of that one is running, so a running barrier is the only
+// one that can be in the way.
+static int
+job_is_ready(const struct file_pending* f, const struct io_job* job)
+{
+  if (is_barrier(&job->req))
+    return f->oldest_seq == job->seq;
+  return !f->barrier_running;
+}
+
+// The request on this file to run next, or NO_SEQ. Everything ahead of the
+// oldest waiting one is running, so if that one cannot run, nor can anything
+// behind it.
+static uint64_t
+file_next_ready(struct io_queue* q, const struct file_pending* f)
+{
+  if (f->in_flight >= q->max_in_flight_per_file)
+    return NO_SEQ;
+  for (uint64_t s = f->oldest_seq; s != NO_SEQ;) {
+    const struct io_job* job = job_at(q, s);
+    if (job->state == IO_JOB_WAITING)
+      return job_is_ready(f, job) ? s : NO_SEQ;
+    s = job->newer_on_file;
+  }
+  return NO_SEQ;
+}
+
+// Files take turns, so a backlog on one of them cannot keep the others idle.
 static uint64_t
 next_ready_seq(struct io_queue* q)
 {
-  for (uint64_t s = q->tail; s < q->head; ++s) {
-    const struct io_job* candidate = &q->ring[s & (q->ring_cap - 1)];
-    if (candidate->state != IO_JOB_WAITING)
-      continue;
-    if (job_is_ready(q, candidate))
+  if (q->max_in_flight && q->in_flight >= q->max_in_flight)
+    return NO_SEQ;
+
+  for (uint64_t s = q->nofile_oldest; s != NO_SEQ;) {
+    const struct io_job* job = job_at(q, s);
+    if (job->state == IO_JOB_WAITING)
       return s;
+    s = job->newer_on_file;
   }
-  return 0;
+
+  for (uint64_t i = 0; i < q->norder; ++i) {
+    const uint64_t turn = (q->next_turn + i) % q->norder;
+    const uint64_t seq = file_next_ready(q, &q->files[q->order[turn]]);
+    if (seq != NO_SEQ) {
+      q->next_turn = turn + 1;
+      return seq;
+    }
+  }
+  return NO_SEQ;
 }
 
 // Room is given back against the requested size, not the size written; a
@@ -198,7 +352,7 @@ retire_job(struct io_queue* q, struct io_completion c, int64_t finished_ns)
 
   platform_mutex_lock(q->mutex);
 
-  struct io_job* slot = &q->ring[c.seq & (q->ring_cap - 1)];
+  struct io_job* slot = job_at(q, c.seq);
   CHECK(Unlock, slot->seq == c.seq && slot->state == IO_JOB_RUNNING);
 
   const struct io_job job = *slot;
@@ -206,11 +360,11 @@ retire_job(struct io_queue* q, struct io_completion c, int64_t finished_ns)
   owned_free = job.req.owned_free;
 
   slot->state = IO_JOB_RETIRED;
-  while (q->tail < q->head &&
-         q->ring[q->tail & (q->ring_cap - 1)].state == IO_JOB_RETIRED)
+  while (q->tail < q->head && job_at(q, q->tail)->state == IO_JOB_RETIRED)
     q->tail++;
   q->pending_bytes -= job.req.nbytes;
-  file_request_retired(q, &job.req);
+  q->in_flight--;
+  file_request_retired(q, c.seq, &job.req, finished_ns);
   io_queue_counters_finished(
     &q->counters, &job.req, job.post_ns, job.started_ns, finished_ns);
   // Without this, a barrier that was passed over is never looked at again.
@@ -237,23 +391,30 @@ worker_thread(void* arg)
     uint64_t seq;
     // A submitted request is still running, so only an empty window means
     // everything has drained.
-    while ((seq = next_ready_seq(q)) == 0) {
+    while ((seq = next_ready_seq(q)) == NO_SEQ) {
       if (q->shutdown && q->tail == q->head)
         break;
       platform_cond_wait(q->cond_not_empty, q->mutex);
     }
 
-    if (seq == 0) {
+    if (seq == NO_SEQ) {
       platform_mutex_unlock(q->mutex);
       break;
     }
 
-    struct io_job* slot = &q->ring[seq & (q->ring_cap - 1)];
+    struct io_job* slot = job_at(q, seq);
     slot->state = IO_JOB_RUNNING;
     // A truncate or close has no payload, so no clock is read for one.
     const int timed = slot->req.nbytes > 0;
     slot->started_ns = timed ? platform_monotonic_ns() : 0;
     q->jobs_waiting--;
+    q->in_flight++;
+    struct file_pending* f = file_find(q, slot->req.file);
+    if (f) {
+      f->in_flight++;
+      if (is_barrier(&slot->req))
+        f->barrier_running = 1;
+    }
     job = *slot;
     platform_mutex_unlock(q->mutex);
 
@@ -268,6 +429,20 @@ worker_thread(void* arg)
     if (dispatch == IO_DONE)
       retire_job(q, done, timed ? platform_monotonic_ns() : 0);
   }
+}
+
+static void
+queue_free(struct io_queue* q)
+{
+  free(q->threads);
+  free(q->ring);
+  free(q->files);
+  free(q->order);
+  platform_cond_free(q->cond_slot_free);
+  platform_cond_free(q->cond_retired);
+  platform_cond_free(q->cond_not_empty);
+  platform_mutex_free(q->mutex);
+  free(q);
 }
 
 struct io_queue*
@@ -286,6 +461,9 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   q->max_requests =
     limits.max_requests ? limits.max_requests : DEFAULT_MAX_REQUESTS;
   q->max_bytes = limits.max_bytes;
+  q->max_in_flight = limits.writes_in_flight;
+  q->max_in_flight_per_file =
+    limits.writes_in_flight_per_file ? limits.writes_in_flight_per_file : 1;
   // Masking the sequence number picks a slot, so the ring must be a power of
   // two even when the request limit is not.
   q->ring_cap = 1ull << ceil_log2(q->max_requests);
@@ -298,17 +476,30 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits)
   q->cond_not_empty = platform_cond_new();
   q->cond_retired = platform_cond_new();
   q->cond_slot_free = platform_cond_new();
-  if (q->ring && q->mutex && q->cond_not_empty && q->cond_retired &&
-      q->cond_slot_free)
-    q->thread = platform_thread_start(worker_thread, q);
 
-  if (!q->thread) {
-    platform_cond_free(q->cond_slot_free);
-    platform_cond_free(q->cond_retired);
-    platform_cond_free(q->cond_not_empty);
-    platform_mutex_free(q->mutex);
-    free(q->ring);
-    free(q);
+  const uint64_t workers = limits.workers ? limits.workers : 1;
+  q->threads = (struct platform_thread**)calloc(workers, sizeof(*q->threads));
+
+  if (!q->ring || !q->mutex || !q->cond_not_empty || !q->cond_retired ||
+      !q->cond_slot_free || !q->threads) {
+    queue_free(q);
+    return NULL;
+  }
+
+  while (q->nthreads < workers) {
+    struct platform_thread* t = platform_thread_start(worker_thread, q);
+    if (!t)
+      break;
+    q->threads[q->nthreads++] = t;
+  }
+
+  // A queue short of workers still runs everything, but the depth a caller
+  // asked for is one of the things being measured.
+  if (q->nthreads != workers) {
+    log_error("io_queue: could only start %llu of %llu workers",
+              (unsigned long long)q->nthreads,
+              (unsigned long long)workers);
+    io_queue_destroy(q);
     return NULL;
   }
 
@@ -328,7 +519,8 @@ io_queue_destroy(struct io_queue* q)
   platform_cond_broadcast(q->cond_retired);
   platform_mutex_unlock(q->mutex);
 
-  platform_thread_join(q->thread);
+  for (uint64_t i = 0; i < q->nthreads; ++i)
+    platform_thread_join(q->threads[i]);
 
   // Shutdown is set, so nothing parks from here on.
   platform_mutex_lock(q->mutex);
@@ -336,14 +528,7 @@ io_queue_destroy(struct io_queue* q)
     platform_cond_wait(q->cond_retired, q->mutex);
   platform_mutex_unlock(q->mutex);
 
-  free(q->ring);
-  free(q->files);
-  io_queue_counters_free(&q->counters);
-  platform_cond_free(q->cond_slot_free);
-  platform_cond_free(q->cond_retired);
-  platform_cond_free(q->cond_not_empty);
-  platform_mutex_free(q->mutex);
-  free(q);
+  queue_free(q);
 }
 
 uint64_t
@@ -379,7 +564,7 @@ names_a_closing_file(struct io_queue* q, const struct io_request* req)
       req->op != IO_OP_CLOSE)
     return 0;
 
-  const struct file_pending* f = file_find(q, req->file.generation);
+  const struct file_pending* f = file_find(q, req->file);
   return f && f->closing;
 }
 
@@ -400,6 +585,12 @@ io_queue_reserve(struct io_queue* q, struct io_request req)
   } else if (names_a_closing_file(q, &req)) {
     // A close can be posted while the wait for room is going on.
     log_error("io_queue: refused a request naming a file that is closing");
+    refused = 1;
+  } else if (req.file.generation != 0 &&
+             files_make_room(q, req.file.index)) {
+    // Taken here because a commit cannot fail, and a request left off the
+    // list is never run.
+    log_error("io_queue: could not grow the open file table");
     refused = 1;
   }
 
@@ -425,15 +616,17 @@ io_queue_commit(struct io_queue* q, struct io_request req)
 
   const int64_t now = platform_monotonic_ns();
   const uint64_t seq = q->head;
-  q->ring[seq & (q->ring_cap - 1)] = (struct io_job){
+  *job_at(q, seq) = (struct io_job){
     .req = req,
     .seq = seq,
     .post_ns = now,
+    .older_on_file = NO_SEQ,
+    .newer_on_file = NO_SEQ,
   };
   q->head++;
   q->pending_bytes += req.nbytes;
   q->jobs_waiting++;
-  file_request_added(q, &req);
+  file_request_added(q, seq, &req, now);
 
   io_queue_counters_posted(
     &q->counters, &req, q->jobs_waiting, q->pending_bytes, now);

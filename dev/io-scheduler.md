@@ -1,9 +1,9 @@
 # Filesystem write scheduling
 
-**Status.** Step 1 is done. Steps 2-5 are planned. Issue #178.
+**Status.** Steps 1 to 3 are done. Steps 4 and 5 are planned. Issue #178.
 
-Only one write at a time is run by the filesystem sink: each queued job is a
-blocking `pwrite`, so however deep the backlog, only one request reaches the
+Only one write at a time was run by the filesystem sink: each queued job was a
+blocking `pwrite`, so however deep the backlog, only one request reached the
 drive. This file is the working plan for changing that.
 
 ## Terms
@@ -23,9 +23,12 @@ drive. This file is the working plan for changing that.
   across many shard files, each reuse a new generation. No write may ever be
   applied to a generation other than its own.
 
-## Current write path
+## The write path this started from
 
-`io_queue` (`src/zarr/io_queue.h`) is a growable ring buffer of closures with
+Steps 2 and 3 have replaced most of this. It is kept because the rest of the
+plan reads against it.
+
+`io_queue` (`src/zarr/io_queue.h`) was a growable ring buffer of closures with
 one worker thread. Three kinds of job from `shard_pool_fs`: a copying write, a
 zero-copy write over borrowed pinned memory, and the truncate and close of a
 shard file at finalize.
@@ -52,7 +55,7 @@ Correctness, given jobs run in the order posted:
 
 ### Pools shared across levels and fields
 
-One pool — one queue, one worker — per `store->create_pool` call. One for all
+One pool — one queue — per `store->create_pool` call. One for all
 levels of a multiscale array, each level given a disjoint range of slots, so
 every shard and level is put through a single worker. Worse for a plate: one
 pool sized for a *single* field of view, handed to every field, so slot indices
@@ -63,9 +66,9 @@ and closes are kept apart by the single worker. Untested.
 
 About 1.4x from more queue depth, flat past 16. Measured on xfs over an md
 RAID10 of 8 NVMe drives, 48 MiB writes, queue depth taken from shard files
-written at once. One in flight is today's sink.
+written at once. One in flight is the sink this started from.
 
-| queue depth | GB/s | vs today |
+| queue depth | GB/s | vs one |
 |---:|---:|---:|
 | 1 | 12.07 | — |
 | 8 | 15.56 | 1.29x |
@@ -73,7 +76,7 @@ written at once. One in flight is today's sink.
 | 32 | 17.54 | 1.45x |
 | 64 | 17.51 | 1.45x |
 
-Today's sink is already at 69% of this array's ceiling: a 48 MiB write is split
+The one-write-at-a-time sink was already at 69% of this array's ceiling: a 48 MiB write is split
 by the array into hundreds of device requests. The gap should be larger on a
 single drive, where the problem was first seen.
 
@@ -150,34 +153,32 @@ truncate still lets the close run.
 
 ### 3. More queue depth
 
-Raise the worker count, schedule ready files round-robin, and add pre-sizing so
-queue depth per file can be raised above one. Add the selecting flags and
-record them in the results file: `--io-writes-in-flight`,
-`--io-writes-in-flight-per-file`, `--io-workers`, `--io-backend`. Sweep writes
-in flight from 1 to 32.
+Done.
 
-Two things step 2 left for this step, both harmless while one worker runs
-everything in order and neither harmless afterwards.
-
-Dispatch picks the next request by scanning the window from the tail, and the
-readiness test for each candidate scans the window again. That is quadratic in
-the size of the window, under the queue's lock. It costs nothing today: the
-filesystem backend finishes every request inside `execute`, so nothing is ever
-running while the worker scans, the oldest slot is always the next one to run,
-and the scan stops on its first step. The moment a backend answers
-`IO_SUBMITTED`, or a second worker starts, the front of the window fills with
-running requests and every dispatch walks past all of them. At the default
-ceiling of 1024 requests that is around half a million comparisons per dispatch
-while holding the lock the producer needs to post. The fix is to stop scanning:
-the file token already carries a dense index, so the queue's open-file table can
-be indexed rather than searched, and each file can carry the sequence number of
-its oldest request and of its first waiting barrier. Readiness is then one
-comparison.
-
-The same change should merge the queue's open-file table with the one in
-`io_queue_stats.c`. They have the same shape and the same key, and they are
-updated from adjacent lines under the same lock, so every post and every retire
-walks two lists instead of one.
+- Several workers per queue, with a ceiling on requests in flight across every
+  file and a second ceiling per file.
+- Files take turns, so a backlog on one shard file cannot keep the others
+  idle. The dispatch scan is gone: each file keeps its requests on a list of
+  their own, and readiness is one comparison against the head of that list
+  plus a flag for a barrier already running.
+- The open-file table is indexed by the token's file index rather than
+  searched, and the table `io_queue_stats.c` kept alongside it is merged into
+  it. A backend hands an index back when the close naming it runs, which is
+  before that close retires, so a new file naming the same index takes the
+  entry over and the old close retires against a generation that no longer
+  matches.
+- Shard files are pre-sized with `ftruncate` when more than one write per file
+  may run. The size is every chunk at its worst-case compressed size plus the
+  footer, and `finalize` already trims it back. Not on Windows, where only
+  writing moves a file's valid data length, so `platform_presize_helps`
+  answers no there and the step is skipped.
+- `--io-workers`, `--io-writes-in-flight`, `--io-writes-in-flight-per-file` and
+  `--io-backend` select all of it, and the results file records what the run
+  resolved them to. New sweep tier `iodepth` covers 1 to 32 writes in flight,
+  one and four per file.
+- Defaults: sixteen workers, sixteen writes in flight, four per file. The byte
+  credit is 2 GiB, above the deepest backlog measured — 1392 MiB, from an
+  uncompressed 256cube run with one write at a time.
 
 *Done when:* the reef-l40 XFS matrix is green.
 

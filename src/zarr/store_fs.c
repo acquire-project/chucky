@@ -12,6 +12,7 @@ struct store_fs
   struct store base;
   struct strbuf root; // owned
   int unbuffered;
+  struct io_scheduling io;
 };
 
 // Build "<root>/<key>" into a fresh strbuf. Caller frees with strbuf_free.
@@ -82,7 +83,8 @@ static struct shard_pool*
 fs_create_pool(struct store* self, uint64_t nslots)
 {
   struct store_fs* fs = container_of(self, struct store_fs, base);
-  return shard_pool_fs_create(strbuf_cstr(&fs->root), nslots, fs->unbuffered);
+  return shard_pool_fs_create(
+    strbuf_cstr(&fs->root), nslots, fs->unbuffered, &fs->io);
 }
 
 static int
@@ -133,4 +135,13 @@ Fail_fs:
   free(fs);
 Fail:
   return NULL;
+}
+
+void
+store_fs_set_io_scheduling(struct store* s, struct io_scheduling io)
+{
+  if (!s || s->create_pool != fs_create_pool)
+    return;
+  struct store_fs* fs = container_of(s, struct store_fs, base);
+  fs->io = io;
 }

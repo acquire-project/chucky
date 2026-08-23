@@ -30,7 +30,8 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
                    enum dtype data_type,
                    double fill_value,
                    struct codec_config codec,
-                   int is_multiscale)
+                   int is_multiscale,
+                   struct io_scheduling io)
 {
   *z = (struct bench_zarr_handle){ 0 };
 
@@ -40,6 +41,7 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
 
   z->store = store_fs_create(store_path, 1 /* unbuffered */);
   CHECK(Fail, z->store);
+  store_fs_set_io_scheduling(z->store, io);
   z->store->mkdirs(z->store, ".");
 
   // Write root group

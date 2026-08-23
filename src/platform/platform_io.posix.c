@@ -104,6 +104,12 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size)
 }
 
 int
+platform_presize_helps(void)
+{
+  return 1;
+}
+
+int
 platform_path_exists(const char* path)
 {
   struct stat st;

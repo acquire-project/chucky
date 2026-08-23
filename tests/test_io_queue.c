@@ -8,6 +8,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// A backend hands out a fresh generation with the index of the slot it took,
+// and the queue finds a file by that index. The two only have to agree.
+static struct io_file_token
+file_token(uint64_t generation)
+{
+  return (struct io_file_token){ .generation = generation,
+                                 .index = (uint32_t)(generation - 1) };
+}
+
 // --- test: ordering ---
 
 static int
@@ -24,7 +33,7 @@ test_ordering(void)
     CHECK(Fail2,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = 1 },
+                                             .file = file_token(1),
                                              .nbytes = i + 1 }) == 0);
 
   io_event_wait(q, io_queue_record(q));
@@ -106,7 +115,7 @@ test_owned_payload_released(void)
     CHECK(Fail2,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = 1 },
+                                             .file = file_token(1),
                                              .payload = b,
                                              .nbytes = sizeof(*b),
                                              .owned = b,
@@ -208,7 +217,7 @@ test_pending_bytes(void)
     CHECK(Fail3,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = 1 },
+                                             .file = file_token(1),
                                              .nbytes = nbytes }) == 0);
     posted += nbytes;
     CHECK(Fail3, io_queue_pending_bytes(q) == posted);
@@ -262,7 +271,7 @@ test_stats(void)
               q,
               (struct io_request){ .op = IO_OP_WRITE,
                                    .nbytes = 4096,
-                                   .file = { .generation = file },
+                                   .file = file_token(file),
                                    .borrowed = (uint8_t)(file == 1) }) == 0);
 
   struct io_queue_stats st;
@@ -283,12 +292,12 @@ test_stats(void)
   CHECK(Fail3,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_TRUNCATE,
-                                           .file = { .generation = 4 },
+                                           .file = file_token(4),
                                            .logical_size = 4096 }) == 0);
   CHECK(Fail3,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = { .generation = 5 } }) == 0);
+                                           .file = file_token(5) }) == 0);
   io_queue_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
@@ -335,7 +344,7 @@ test_timing_mean_counts_finished(void)
   CHECK(Fail3,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = 4096 }) == 0);
   atomic_store(&gate, 1);
   io_event_wait(q, io_queue_record(q));
@@ -349,7 +358,7 @@ test_timing_mean_counts_finished(void)
     CHECK(Fail4,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = 1 },
+                                             .file = file_token(1),
                                              .nbytes = 4096 }) == 0);
 
   struct io_queue_stats st;
@@ -387,6 +396,21 @@ wait_for_records(const struct io_backend_fake* f, uint64_t n, int timeout_ms)
 {
   int waited_ms = 0;
   while (io_backend_fake_record_count(f) < n) {
+    if (waited_ms >= timeout_ms)
+      return -1;
+    platform_sleep_ns(1000000LL);
+    waited_ms += 1;
+  }
+  return 0;
+}
+
+// Poll until the backend has answered n requests with IO_SUBMITTED. Zero is
+// returned once it has, -1 if the wait ran out.
+static int
+wait_for_deferred(const struct io_backend_fake* f, uint64_t n, int timeout_ms)
+{
+  int waited_ms = 0;
+  while (io_backend_fake_deferred_count(f) < n) {
     if (waited_ms >= timeout_ms)
       return -1;
     platform_sleep_ns(1000000LL);
@@ -491,7 +515,7 @@ test_out_of_order_retirement(void)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = WRITE_BYTES }) == 0);
   const struct io_event ev_first = io_queue_record(q);
 
@@ -499,7 +523,7 @@ test_out_of_order_retirement(void)
     CHECK(Cleanup,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = i + 1 },
+                                             .file = file_token(i + 1),
                                              .nbytes = WRITE_BYTES }) == 0);
   const struct io_event ev_all = io_queue_record(q);
 
@@ -557,12 +581,12 @@ barrier_after_write(int write_status)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 7 },
+                                           .file = file_token(7),
                                            .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = { .generation = 7 } }) == 0);
+                                           .file = file_token(7) }) == 0);
 
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
   platform_sleep_ns((int64_t)HOLD_OBSERVE_MS * 1000000LL);
@@ -623,12 +647,12 @@ test_room_returns_after_short_answer(void)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 2 },
+                                           .file = file_token(2),
                                            .nbytes = 2 * WRITE_BYTES }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 2, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
@@ -650,7 +674,7 @@ test_room_returns_after_short_answer(void)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 3 },
+                                           .file = file_token(3),
                                            .nbytes = 4 * WRITE_BYTES }) == 0);
   io_event_wait(q, io_queue_record(q));
   CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
@@ -684,7 +708,7 @@ ceiling_post_fn(void* arg)
   atomic_store(&c->entered, 1);
   io_queue_post(c->q,
                 (struct io_request){ .op = IO_OP_WRITE,
-                                     .file = { .generation = 1 },
+                                     .file = file_token(1),
                                      .nbytes = WRITE_BYTES });
   atomic_store(&c->done, 1);
 }
@@ -713,7 +737,7 @@ test_byte_ceiling_holds_a_post(void)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
 
@@ -757,7 +781,7 @@ test_byte_ceiling_admits_an_oversize_write(void)
   CHECK(Fail2,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = WRITE_BYTES * 8 }) == 0);
   io_event_wait(q, io_queue_record(q));
   CHECK(Fail2, io_queue_pending_bytes(q) == 0);
@@ -785,7 +809,7 @@ test_zero_byte_write(void)
   CHECK(Fail2,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = 0 }) == 0);
   io_event_wait(q, io_queue_record(q));
 
@@ -829,7 +853,7 @@ test_cancelled_answer_retires(void)
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = { .generation = 1 },
+                                           .file = file_token(1),
                                            .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
@@ -876,7 +900,7 @@ fence_during_destroy_round(void)
     CHECK(Fail2,
           io_queue_post(q,
                         (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = { .generation = 1 },
+                                             .file = file_token(1),
                                              .nbytes = WRITE_BYTES }) == 0);
 
   CHECK(Fail2, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
@@ -920,6 +944,284 @@ Fail:
   return 1;
 }
 
+// --- test: several workers run several writes at once ---
+
+// Zero when the backend has been handed exactly n requests and is handed no
+// more while the observation window runs.
+static int
+holds_at_records(const struct io_backend_fake* f, uint64_t n)
+{
+  if (wait_for_records(f, n, HANDOVER_TIMEOUT_MS))
+    return 1;
+  platform_sleep_ns((int64_t)HOLD_OBSERVE_MS * 1000000LL);
+  return io_backend_fake_record_count(f) != n;
+}
+
+#define BACKLOG 8
+
+// Deferring holds every request open, so what the backend has been handed is
+// what is running.
+static int
+in_flight_ceilings(struct io_queue_limits limits, uint64_t expect_running)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_queue* q =
+    io_queue_create(io_backend_fake_as_backend(&fake), limits);
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+
+  for (uint64_t i = 0; i < BACKLOG; ++i)
+    CHECK(Cleanup,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = file_token(1),
+                                             .nbytes = WRITE_BYTES,
+                                             .offset = i * WRITE_BYTES }) == 0);
+
+  CHECK(Cleanup, holds_at_records(&fake, expect_running) == 0);
+
+  // One answered frees exactly one slot, so one more is handed over.
+  answer(q,
+         &answered,
+         (struct io_completion){ .seq = fake.deferred[0],
+                                 .nbytes = WRITE_BYTES });
+  CHECK(Cleanup, holds_at_records(&fake, expect_running + 1) == 0);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+static int
+test_writes_in_flight_ceiling(void)
+{
+  return in_flight_ceilings((struct io_queue_limits){
+                              .workers = BACKLOG,
+                              .writes_in_flight = 3,
+                              .writes_in_flight_per_file = BACKLOG,
+                            },
+                            3);
+}
+
+static int
+test_per_file_ceiling(void)
+{
+  return in_flight_ceilings((struct io_queue_limits){
+                              .workers = BACKLOG,
+                              .writes_in_flight_per_file = 2,
+                            },
+                            2);
+}
+
+// --- test: files take turns ---
+
+#define TURN_FILES 3
+#define TURN_WRITES_PER_FILE 4
+
+// One file's whole backlog is posted before the next file's, and there is
+// room for fewer requests than one file has. Taking them in the order posted
+// would run three writes to the first file and leave the others idle.
+static int
+test_files_take_turns(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+
+  struct io_queue* q = io_queue_create(
+    io_backend_fake_as_backend(&fake),
+    (struct io_queue_limits){
+      .workers = TURN_FILES,
+      .writes_in_flight = TURN_FILES,
+      .writes_in_flight_per_file = TURN_WRITES_PER_FILE,
+    });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+
+  io_backend_fake_defer(&fake, 1);
+
+  // A request naming no file is always ready, so one per worker parks every
+  // worker and then holds every in-flight slot. Nothing can be picked up
+  // while the backlog is posted, so the order it is picked up in afterwards
+  // is the scheduler's choice rather than a race with the posting.
+  for (uint64_t i = 0; i < TURN_FILES; ++i)
+    CHECK(Cleanup,
+          io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  CHECK(Cleanup, wait_for_records(&fake, TURN_FILES, HANDOVER_TIMEOUT_MS) == 0);
+
+  for (uint64_t f = 1; f <= TURN_FILES; ++f)
+    for (uint64_t i = 0; i < TURN_WRITES_PER_FILE; ++i)
+      CHECK(Cleanup,
+            io_queue_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(f),
+                                               .nbytes = WRITE_BYTES,
+                                               .offset = i * WRITE_BYTES }) ==
+              0);
+
+  atomic_store(&gate, 1);
+  CHECK(Cleanup,
+        wait_for_deferred(&fake, TURN_FILES, HANDOVER_TIMEOUT_MS) == 0);
+  for (uint64_t seq = 1; seq <= TURN_FILES; ++seq)
+    answer(q, &answered, (struct io_completion){ .seq = seq });
+
+  CHECK(Cleanup, holds_at_records(&fake, 2 * TURN_FILES) == 0);
+
+  uint64_t seen = 0;
+  for (uint64_t i = TURN_FILES; i < 2 * TURN_FILES; ++i) {
+    const uint64_t bit = (uint64_t)1 << fake.records[i].generation;
+    CHECK(Cleanup, (seen & bit) == 0);
+    seen |= bit;
+  }
+  rc = 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// --- test: a barrier still waits when many workers are free ---
+
+#define BARRIER_WRITES 4
+
+static int
+test_barrier_waits_with_many_workers(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){
+                                         .workers = BACKLOG,
+                                         .writes_in_flight_per_file = BACKLOG,
+                                       });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+
+  for (uint64_t i = 0; i < BARRIER_WRITES; ++i)
+    CHECK(Cleanup,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = file_token(1),
+                                             .nbytes = WRITE_BYTES,
+                                             .offset = i * WRITE_BYTES }) == 0);
+  CHECK(Cleanup,
+        io_queue_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = file_token(1) }) ==
+          0);
+
+  // Idle workers and no write ahead of the close retired, so the close waits.
+  CHECK(Cleanup, holds_at_records(&fake, BARRIER_WRITES) == 0);
+  for (uint64_t i = 0; i < BARRIER_WRITES; ++i)
+    CHECK(Cleanup, fake.records[i].op == IO_OP_WRITE);
+
+  for (uint64_t seq = 1; seq <= BARRIER_WRITES; ++seq)
+    answer(q,
+           &answered,
+           (struct io_completion){ .seq = seq, .nbytes = WRITE_BYTES });
+
+  CHECK(Cleanup, wait_for_records(&fake, BARRIER_WRITES + 1, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, fake.records[BARRIER_WRITES].op == IO_OP_CLOSE);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// --- test: a new file claiming a closing file's index ---
+
+// A backend hands an index back when the close naming it runs, so a new file
+// can name that index while the old close has not retired. Both have to
+// finish, and the new file's write must not be held behind the old close.
+static int
+test_index_reused_before_close_retires(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){
+                                         .workers = 2,
+                                         .writes_in_flight_per_file = 2,
+                                       });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+  const struct io_file_token first = { .generation = 1, .index = 0 };
+  const struct io_file_token second = { .generation = 2, .index = 0 };
+
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = first,
+                                           .nbytes = WRITE_BYTES }) == 0);
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_CLOSE,
+                                           .file = first }) == 0);
+  CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
+  answer(
+    q, &answered, (struct io_completion){ .seq = 1, .nbytes = WRITE_BYTES });
+  CHECK(Cleanup, wait_for_records(&fake, 2, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, fake.records[1].op == IO_OP_CLOSE);
+
+  // The close is running and has not retired, which is the window the
+  // backend hands the index back in.
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = second,
+                                           .nbytes = WRITE_BYTES }) == 0);
+  CHECK(Cleanup, wait_for_records(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, fake.records[2].generation == 2);
+
+  answer(q, &answered, (struct io_completion){ .seq = 2 });
+  answer(
+    q, &answered, (struct io_completion){ .seq = 3, .nbytes = WRITE_BYTES });
+
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
 // --- main ---
 
 int
@@ -949,6 +1251,13 @@ main(void)
     { "zero_byte_write", test_zero_byte_write },
     { "cancelled_answer_retires", test_cancelled_answer_retires },
     { "fence_during_destroy", test_fence_during_destroy },
+    { "writes_in_flight_ceiling", test_writes_in_flight_ceiling },
+    { "per_file_ceiling", test_per_file_ceiling },
+    { "files_take_turns", test_files_take_turns },
+    { "barrier_waits_with_many_workers",
+      test_barrier_waits_with_many_workers },
+    { "index_reused_before_close_retires",
+      test_index_reused_before_close_retires },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

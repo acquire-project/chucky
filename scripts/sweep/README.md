@@ -15,6 +15,20 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
+## Running the write-depth tier
+
+The `iodepth` tier sweeps the write-queue depth of the filesystem sink, from
+1 to 32 writes at once, at one and at four per shard file. Run it when the
+write path changes.
+
+    uv run scripts/sweep/sweep.py --tier iodepth
+
+Read it in the explorer, not on the overview page: the overview picks the best
+run per scenario, input, codec, backend and sink, and every run in this tier
+matches on all five, so only the fastest depth would show. The run id carries
+the depth — `__wif16__perfile4` is sixteen writes at once, four of them to any
+one shard file.
+
 ## Running S3 benchmarks
 
 The S3 tier measures against
@@ -168,9 +182,18 @@ backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
-For a run with filesystem output, what the write path did is also recorded.
-Only one write at a time is run by the sink, so these fields are the queue
-depth *available*, not the depth reached:
+For a run with filesystem output, the write scheduling it used is recorded,
+so a sweep is comparable only against one taken with the same settings:
+
+| field | holds |
+|---|---|
+| `io_backend` | which write backend ran the requests; `threads` is the only one so far |
+| `io_workers` | threads the sink's queue ran requests on |
+| `io_writes_in_flight` | most requests handed to the backend at once, over every shard file |
+| `io_writes_in_flight_per_file` | most on any one shard file; above one the file is pre-sized so its writes do not extend it |
+
+What the write path then did is also recorded. `io_files_waiting_*` is the
+queue depth the scheduler had to work with, which is not the depth reached:
 
 | field | holds |
 |---|---|
@@ -228,6 +251,10 @@ bump it.
 
 ### Version history
 
+- **7** — The filesystem sink runs several writes at once instead of one, and
+  pre-sizes a shard file when more than one of its writes may run together. No
+  timing from a run with filesystem output is comparable across this bump; a
+  run to the discard or S3 sink is unaffected.
 - **6** — The CPU pipeline pool sizes itself from the cores the process is
   allowed rather than the cores the machine has. A sweep under a batch
   scheduler used to start a thread per core on a fraction of them, so no

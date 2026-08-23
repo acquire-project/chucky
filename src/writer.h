@@ -64,6 +64,11 @@ struct shard_writer
                       uint64_t offset,
                       const void* beg,
                       const void* end);
+  // Optional: set the shard's size to nbytes before anything is written. On
+  // some filesystems a write that extends a file takes the file's lock for
+  // itself, so this is what lets a shard's writes run together. No space is
+  // reserved, and truncate trims the shard back. NULL = no-op.
+  int (*presize)(struct shard_writer* self, uint64_t nbytes);
   // Optional: truncate the shard's persistent storage to logical_size bytes.
   // Used after O_DIRECT writes that overshoot the logical end (page-aligned)
   // so the shard file's on-disk size matches the index's expectations.

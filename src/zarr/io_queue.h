@@ -9,11 +9,18 @@
 
 struct io_queue;
 
-// These are ceilings on what sits in the queue at once.
+// These are ceilings on what sits in the queue at once, and on how much of it
+// runs together.
 struct io_queue_limits
 {
   uint64_t max_requests; // 0 selects the default, 1024
   uint64_t max_bytes;    // 0 means no ceiling
+  uint64_t workers;      // 0 selects one
+
+  // Requests handed to the backend and not yet finished. A blocking backend
+  // cannot exceed its worker count whatever this says.
+  uint64_t writes_in_flight;          // 0 means no ceiling
+  uint64_t writes_in_flight_per_file; // 0 selects one
 };
 
 // The backend must carry an execute; without one there is nothing to run.
@@ -26,7 +33,7 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 void
 io_queue_destroy(struct io_queue* q);
 
-// Threads parked in a blocking queue call are counted, the worker aside.
+// Threads parked in a blocking queue call are counted, the workers aside.
 uint64_t
 io_queue_parked_threads(const struct io_queue* q);
 
@@ -43,8 +50,9 @@ int
 io_queue_reserve(struct io_queue* q, struct io_request req);
 
 // Post a request whose room was already claimed by io_queue_reserve. A slot
-// is guaranteed by the claim, so this cannot fail. req.nbytes must equal the
-// nbytes passed to the matching reserve.
+// and a place in the open file table are guaranteed by the claim, so this
+// cannot fail. req.nbytes and req.file must be the ones passed to the
+// matching reserve.
 void
 io_queue_commit(struct io_queue* q, struct io_request req);
 

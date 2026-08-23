@@ -133,6 +133,12 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size)
 }
 
 int
+platform_presize_helps(void)
+{
+  return 0;
+}
+
+int
 platform_path_exists(const char* path)
 {
   wchar_t wpath[4096];

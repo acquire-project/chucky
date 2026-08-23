@@ -30,7 +30,8 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
                    enum dtype data_type,
                    double fill_value,
                    struct codec_config codec,
-                   int is_multiscale);
+                   int is_multiscale,
+                   struct io_scheduling io);
 
 int
 bench_zarr_open_s3(struct bench_zarr_handle* z,

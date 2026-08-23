@@ -1,7 +1,20 @@
-// The write path's measurements are carried in these types.
+// The write path's measurements and its scheduling are carried in these
+// types.
 #pragma once
 
 #include <stdint.h>
+
+// How much of a filesystem sink's write backlog runs at once. A zero field
+// takes the default.
+struct io_scheduling
+{
+  uint64_t workers;
+  uint64_t writes_in_flight;
+
+  // Above one, shard files are pre-sized: on some filesystems a write that
+  // extends a file takes the file's lock for itself.
+  uint64_t writes_in_flight_per_file;
+};
 
 // Bucket i: at least 2^i bytes, under 2^(i+1). 40 covers 4 KiB to 256 MiB.
 #define IO_SIZE_BUCKETS 40
@@ -9,7 +22,7 @@
 // Counts over the whole run; peaks and the mean only from the first post.
 struct io_queue_stats
 {
-  // Queue depth available; not the depth achieved, which is always one.
+  // Files with a write waiting: the depth available, not the depth reached.
   uint64_t files_waiting_peak;
   double files_waiting_mean;
 

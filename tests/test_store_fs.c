@@ -1,4 +1,5 @@
 #include "platform/platform.h"
+#include "platform/platform_io.h"
 #include "store.h"
 #include "test_platform.h"
 #include "util/prelude.h"
@@ -289,7 +290,15 @@ test_shard_pool_io_stats(void)
   CHECK(Fail, s);
   CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
-  // Gate the worker: a queued close keeps the handle, so all six are open.
+  // One worker running one write at a time, so the injected blocking job
+  // holds up everything behind it. A queued close keeps its handle, so all
+  // six files stay open.
+  store_fs_set_io_scheduling(s,
+                             (struct io_scheduling){
+                               .workers = 1,
+                               .writes_in_flight = 1,
+                               .writes_in_flight_per_file = 1,
+                             });
   struct shard_pool* pool = s->create_pool(s, 2);
   CHECK(Fail2, pool);
 
@@ -348,7 +357,7 @@ test_shard_pool_error_propagation(void)
   // Use a buffered pool — the error path under test is filesystem-independent,
   // driven by a test-only failing-job injector rather than by O_DIRECT
   // alignment enforcement (which varies across filesystems).
-  struct shard_pool* pool = shard_pool_fs_create(tmpdir, 1, 0);
+  struct shard_pool* pool = shard_pool_fs_create(tmpdir, 1, 0, NULL);
   CHECK(Fail, pool);
 
   // Inject a job that deliberately reports a write failure.
@@ -613,7 +622,7 @@ Fail:
   return 1;
 }
 
-// --- stale file token ---
+// --- pre-sizing ---
 
 static long
 file_size(const char* path)
@@ -626,6 +635,72 @@ file_size(const char* path)
   fclose(f);
   return n;
 }
+
+#define PRESIZE_BYTES (1 << 20)
+
+// A pre-sized file is as long as it was told to be before anything is written
+// to it, and the truncate at the end brings it back to what it holds.
+static int
+presize_leaves_file_at(uint64_t writes_per_file, long expected_after_presize)
+{
+  log_info("=== test_shard_pool_presize (%llu per file) ===",
+           (unsigned long long)writes_per_file);
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/presize%llu.bin", tmpdir,
+           (unsigned long long)writes_per_file);
+
+  struct store* s = store_fs_create(tmpdir, 0);
+  CHECK(Fail, s);
+  store_fs_set_io_scheduling(
+    s, (struct io_scheduling){ .writes_in_flight_per_file = writes_per_file });
+
+  struct shard_pool* pool = s->create_pool(s, 1);
+  CHECK(Fail2, pool);
+
+  char key[256];
+  snprintf(key, sizeof(key), "presize%llu.bin",
+           (unsigned long long)writes_per_file);
+  struct shard_writer* w = pool->open(pool, 0, key);
+  CHECK(Fail3, w);
+  CHECK(Fail3, w->presize);
+  CHECK(Fail3, w->presize(w, PRESIZE_BYTES) == 0);
+  CHECK(Fail3, pool->flush(pool) == 0);
+  CHECK(Fail3, file_size(path) == expected_after_presize);
+
+  static const char payload[] = "held";
+  CHECK(Fail3, w->write(w, 0, payload, payload + sizeof(payload)) == 0);
+  CHECK(Fail3, w->truncate(w, sizeof(payload)) == 0);
+  CHECK(Fail3, w->finalize(w) == 0);
+  CHECK(Fail3, pool->flush(pool) == 0);
+  CHECK(Fail3, file_size(path) == (long)sizeof(payload));
+
+  shard_pool_destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  shard_pool_destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_shard_pool_presize(void)
+{
+  // Nothing to gain from pre-sizing at one write at a time per file, nor on
+  // a platform where setting the size does not stop a write extending the
+  // file. Either way the file grows with its writes.
+  const long presized = platform_presize_helps() ? PRESIZE_BYTES : 0;
+  return presize_leaves_file_at(4, presized) ||
+         presize_leaves_file_at(1, 0);
+}
+
+// --- stale file token ---
 
 // A pool slot's token is private and is cleared on finalize, so a retired
 // token has to come from the registry itself.
@@ -719,6 +794,7 @@ main(void)
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_io_stats();
   err |= test_shard_pool_error_propagation();
+  err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

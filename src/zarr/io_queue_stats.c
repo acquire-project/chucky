@@ -1,70 +1,12 @@
 #include "zarr/io_queue_stats.h"
 
-#include <stdlib.h>
-
-// One open file with a write waiting on it.
-struct file_waiting
-{
-  uint64_t file;
-  uint64_t writes;
-};
-
 // Call before every change to the count, and again on read.
 static void
 fold_files_waiting(struct io_queue_counters* c, int64_t now)
 {
   c->files_weighted_ns +=
-    (double)c->nfiles * (double)(now - c->weighted_from_ns);
+    (double)c->files_waiting * (double)(now - c->weighted_from_ns);
   c->weighted_from_ns = now;
-}
-
-static void
-file_write_added(struct io_queue_counters* c, uint64_t file, int64_t now)
-{
-  if (file == 0)
-    return;
-
-  for (uint64_t i = 0; i < c->nfiles; ++i) {
-    if (c->files[i].file == file) {
-      c->files[i].writes++;
-      return;
-    }
-  }
-
-  fold_files_waiting(c, now);
-
-  if (c->nfiles == c->files_cap) {
-    uint64_t cap = c->files_cap ? c->files_cap * 2 : 16;
-    struct file_waiting* grown =
-      (struct file_waiting*)realloc(c->files, cap * sizeof(*grown));
-    // Lost only to a counter's accuracy; a write must not fail for it.
-    if (!grown)
-      return;
-    c->files = grown;
-    c->files_cap = cap;
-  }
-
-  c->files[c->nfiles++] = (struct file_waiting){ .file = file, .writes = 1 };
-  if (c->nfiles > c->published.files_waiting_peak)
-    c->published.files_waiting_peak = c->nfiles;
-}
-
-static void
-file_write_finished(struct io_queue_counters* c, uint64_t file, int64_t now)
-{
-  if (file == 0)
-    return;
-
-  for (uint64_t i = 0; i < c->nfiles; ++i) {
-    if (c->files[i].file != file)
-      continue;
-    if (--c->files[i].writes == 0) {
-      fold_files_waiting(c, now);
-      c->files[i] = c->files[c->nfiles - 1];
-      c->nfiles--;
-    }
-    return;
-  }
 }
 
 static uint64_t
@@ -79,12 +21,14 @@ size_bucket(uint64_t nbytes)
 }
 
 void
-io_queue_counters_free(struct io_queue_counters* c)
+io_queue_counters_files_waiting(struct io_queue_counters* c,
+                                uint64_t files,
+                                int64_t now)
 {
-  free(c->files);
-  c->files = NULL;
-  c->nfiles = 0;
-  c->files_cap = 0;
+  fold_files_waiting(c, now);
+  c->files_waiting = files;
+  if (files > c->published.files_waiting_peak)
+    c->published.files_waiting_peak = files;
 }
 
 void
@@ -107,7 +51,6 @@ io_queue_counters_posted(struct io_queue_counters* c,
   if (req->nbytes == 0)
     return;
 
-  file_write_added(c, req->file.generation, now);
   c->published.writes++;
   c->published.size_buckets[size_bucket(req->nbytes)]++;
   if (req->borrowed)
@@ -125,8 +68,6 @@ io_queue_counters_finished(struct io_queue_counters* c,
 {
   if (req->nbytes == 0)
     return;
-
-  file_write_finished(c, req->file.generation, finished_ns);
 
   const double wait_ms = (double)(started_ns - post_ns) / 1e6;
   const double run_ms = (double)(finished_ns - started_ns) / 1e6;

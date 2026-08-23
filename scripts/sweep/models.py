@@ -33,6 +33,10 @@ class RunResult(BaseModel, extra="allow"):
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
+    io_backend: str | None = None
+    io_workers: int | None = None
+    io_writes_in_flight: int | None = None
+    io_writes_in_flight_per_file: int | None = None
     io_files_waiting_mean: float | None = None
     io_files_waiting_peak: int | None = None
     io_files_opened: int | None = None
@@ -86,7 +90,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 6
+CURRENT_VERSION = 7
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -143,12 +147,22 @@ def _migrate_5_to_6(data: dict) -> None:
     pass
 
 
+def _migrate_6_to_7(data: dict) -> None:
+    # The filesystem sink runs several writes at once instead of one, and
+    # pre-sizes a shard file when more than one of its writes may run
+    # together. Every timing for a run with filesystem output moves, and the
+    # write-path counters change meaning with it, so this only advances the
+    # file version. Discard and S3 runs are unaffected.
+    pass
+
+
 _MIGRATIONS = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
     3: _migrate_3_to_4,
     4: _migrate_4_to_5,
     5: _migrate_5_to_6,
+    6: _migrate_6_to_7,
 }
 
 

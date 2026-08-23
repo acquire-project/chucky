@@ -6,17 +6,13 @@
 
 #include <stdint.h>
 
-struct file_waiting;
-
 struct io_queue_counters
 {
   // Average is over time, not over how often the count changed.
-  struct file_waiting* files;
-  uint64_t nfiles;
-  uint64_t files_cap;
   int64_t start_ns;
   int64_t weighted_from_ns;
   double files_weighted_ns;
+  uint64_t files_waiting;
 
   uint64_t writes_finished;
   double wait_ms_total;
@@ -26,8 +22,12 @@ struct io_queue_counters
   struct io_queue_stats published;
 };
 
+// The queue owns the table of open files and reports the count of those with
+// a write outstanding.
 void
-io_queue_counters_free(struct io_queue_counters* c);
+io_queue_counters_files_waiting(struct io_queue_counters* c,
+                                uint64_t files,
+                                int64_t now);
 
 // Totals as of after taking the work; now also opens the averaging window.
 void

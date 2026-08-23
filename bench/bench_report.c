@@ -332,6 +332,7 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
+                      const struct io_write_scheduling* scheduling,
                       const struct shard_pool_io_stats* io)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
@@ -393,6 +394,17 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_uint(&jw, mem->measured_bytes);
   jw_key(&jw, "worker_threads");
   jw_uint(&jw, (uint64_t)worker_threads);
+
+  if (scheduling && scheduling->backend) {
+    jw_key(&jw, "io_backend");
+    jw_string(&jw, scheduling->backend);
+    jw_key(&jw, "io_workers");
+    jw_uint(&jw, scheduling->io.workers);
+    jw_key(&jw, "io_writes_in_flight");
+    jw_uint(&jw, scheduling->io.writes_in_flight);
+    jw_key(&jw, "io_writes_in_flight_per_file");
+    jw_uint(&jw, scheduling->io.writes_in_flight_per_file);
+  }
 
   if (io && io->queue.writes > 0) {
     jw_key(&jw, "io_files_waiting_mean");

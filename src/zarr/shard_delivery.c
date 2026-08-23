@@ -10,6 +10,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Zero when the product would not fit, which turns pre-sizing off rather
+// than pre-sizing to the wrong number.
+static uint64_t
+shard_file_capacity_for(uint64_t chunks_per_shard_total,
+                        size_t max_comp_chunk_bytes,
+                        size_t footer_capacity)
+{
+  if (max_comp_chunk_bytes == 0 ||
+      chunks_per_shard_total > (UINT64_MAX - footer_capacity) /
+                                 max_comp_chunk_bytes)
+    return 0;
+  return chunks_per_shard_total * max_comp_chunk_bytes + footer_capacity;
+}
+
 int
 init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
 {
@@ -38,6 +52,10 @@ init_shard_state(struct shard_state* ss, const struct level_layout_info* li)
       (uint8_t*)platform_aligned_alloc(page, ss->footer_buf_pool_bytes);
     if (!ss->footer_buf_pool)
       return 1;
+    ss->shard_file_capacity =
+      shard_file_capacity_for(li->chunks_per_shard_total,
+                              li->agg_layout.max_comp_chunk_bytes,
+                              ss->footer_capacity);
   }
   for (uint64_t si = 0; si < li->shard_inner_count; ++si) {
     ss->shards[si].index =
@@ -537,6 +555,9 @@ deliver_to_shards_batch(uint8_t level,
         uint64_t flat = ss->shard_epoch * ss->shard_inner_count + si;
         sh->writer = sink->open(sink, level, flat);
         CHECK(Error, sh->writer);
+        if (sh->writer->presize)
+          CHECK(Error,
+                sh->writer->presize(sh->writer, ss->shard_file_capacity) == 0);
       }
 
       uint64_t j_run_start = si * n_active * cps_inner + a * cps_inner;
