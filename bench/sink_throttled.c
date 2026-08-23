@@ -1,8 +1,5 @@
 #include "sink_throttled.h"
 #include "platform/platform.h"
-#include "util/prelude.h"
-
-#include <stdlib.h>
 
 // --- Throttled shard_sink: synthetic IO pressure for measurement ---
 //
@@ -12,49 +9,30 @@
 // flush pipeline can be measured on machines where the real GPU can't
 // saturate disk IO.
 
-struct throttled_job
+static int
+throttled_execute(void* ctx,
+                  const struct io_request* req,
+                  uint64_t seq,
+                  struct io_completion* out)
 {
-  uint64_t nbytes;
-  uint64_t latency_ns;
-  uint64_t bytes_per_sec;
-  _Atomic uint64_t* total_bytes;
-};
+  struct throttled_shard_sink* s = (struct throttled_shard_sink*)ctx;
+  out->seq = seq;
 
-static void
-throttled_fn(void* arg)
-{
-  struct throttled_job* j = (struct throttled_job*)arg;
-  int64_t ns = (int64_t)j->latency_ns;
-  if (j->bytes_per_sec > 0)
-    ns += (int64_t)((j->nbytes * 1000000000ull) / j->bytes_per_sec);
+  int64_t ns = (int64_t)s->latency_ns;
+  if (s->bytes_per_sec > 0)
+    ns += (int64_t)((req->nbytes * 1000000000ull) / s->bytes_per_sec);
   if (ns > 0)
     platform_sleep_ns(ns);
-  atomic_fetch_add(j->total_bytes, j->nbytes);
+  atomic_fetch_add(&s->total_bytes, req->nbytes);
+  return IO_DONE;
 }
 
+// No file named, so no barrier ever holds one of these back.
 static int
 throttled_post(struct throttled_shard_sink* s, size_t nbytes)
 {
-  struct throttled_job* j = (struct throttled_job*)malloc(sizeof(*j));
-  CHECK(Error, j);
-  j->nbytes = nbytes;
-  j->latency_ns = s->latency_ns;
-  j->bytes_per_sec = s->bytes_per_sec;
-  j->total_bytes = &s->total_bytes;
-  if (io_queue_post(s->queue,
-                    (struct io_work){
-                      .fn = throttled_fn,
-                      .ctx = j,
-                      .ctx_free = free,
-                      .nbytes = nbytes,
-                    })) {
-    free(j);
-    goto Error;
-  }
-  return 0;
-
-Error:
-  return 1;
+  return io_queue_post(
+    s->queue, (struct io_request){ .op = IO_OP_WRITE, .nbytes = nbytes });
 }
 
 static int
@@ -136,7 +114,9 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
   *s = (struct throttled_shard_sink){ 0 };
   s->latency_ns = io_latency_us * 1000ull;
   s->bytes_per_sec = io_bw_mbps * 1024ull * 1024ull;
-  s->queue = io_queue_create();
+  s->queue = io_queue_create(
+    (struct io_backend){ .ctx = s, .execute = throttled_execute },
+    (struct io_queue_limits){ 0 });
   if (!s->queue)
     return 1;
 

@@ -116,8 +116,9 @@ only place pre-sizing can be measured.
 - Described write requests instead of closures.
 - An opaque token on every open file, so no late write can be applied to a
   recycled descriptor.
-- Request and byte credits reserved before a payload is allocated or copied,
-  keeping the memory limit.
+- Request and byte credits reserved before a payload is allocated or copied.
+  The byte ceiling starts unlimited: there is no memory limit today to keep, and
+  step 3 picks a number from sweep data.
 - Truncate and close as barriers, run only once that file's writes are done.
 - Completions retired through a sliding window with a watermark, so the
   meaning of `wait` is unchanged.
@@ -133,13 +134,17 @@ today's behavior and must be rewritten: jobs finishing in the order posted; an
 exact pending-byte total after every post; one blocking job holding up
 everything behind it — only possible with one worker.
 
-Cases are needed for the two uncovered hazards above: the plate's shared pool
-slot, and a fence at the same time as a destroy.
+One uncovered hazard above still needs a case: a fence at the same time as a
+destroy. The plate's shared pool slot moved to #211, whose fix changes how slots
+are allocated.
 
-No more special case for the synchronous failing-truncate hook, synchronous
-only because a queued failure would be behind the footer write with nothing
-left to drain: with a fake backend the footer write can be held and the
-truncate failed at the same time.
+The synchronous failing-truncate hook stays. A fake backend does not replace it.
+`cpu_stream_flush_body` checks for an error before it finalizes the shards and
+never drains afterwards, so a flush reports a truncate failure only when
+`finalize_shards` returns non-zero. Make the truncate asynchronous and the flush
+reports success, then publishes a fence and an append extent for a shard whose
+size is wrong. The fake backend covers the queue-level case instead: a failed
+truncate still lets the close run.
 
 *Done when:* output is byte-identical and failure behavior is unchanged.
 
@@ -151,6 +156,29 @@ record them in the results file: `--io-writes-in-flight`,
 `--io-writes-in-flight-per-file`, `--io-workers`, `--io-backend`. Sweep writes
 in flight from 1 to 32.
 
+Two things step 2 left for this step, both harmless while one worker runs
+everything in order and neither harmless afterwards.
+
+Dispatch picks the next request by scanning the window from the tail, and the
+readiness test for each candidate scans the window again. That is quadratic in
+the size of the window, under the queue's lock. It costs nothing today: the
+filesystem backend finishes every request inside `execute`, so nothing is ever
+running while the worker scans, the oldest slot is always the next one to run,
+and the scan stops on its first step. The moment a backend answers
+`IO_SUBMITTED`, or a second worker starts, the front of the window fills with
+running requests and every dispatch walks past all of them. At the default
+ceiling of 1024 requests that is around half a million comparisons per dispatch
+while holding the lock the producer needs to post. The fix is to stop scanning:
+the file token already carries a dense index, so the queue's open-file table can
+be indexed rather than searched, and each file can carry the sequence number of
+its oldest request and of its first waiting barrier. Readiness is then one
+comparison.
+
+The same change should merge the queue's open-file table with the one in
+`io_queue_stats.c`. They have the same shape and the same key, and they are
+updated from adjacent lines under the same lock, so every post and every retire
+walks two lists instead of one.
+
 *Done when:* the reef-l40 XFS matrix is green.
 
 ### 4. io_uring on Linux
@@ -159,6 +187,18 @@ An io_uring backend behind the same interface, opt-in, with a fallback to
 threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
+
+The backend interface step 2 built is general enough to hold a ring, but three
+things are worth settling before the first one is written. A backend has no way
+to say "not now", which a full submission queue needs; the alternatives today
+are to block a worker or to fail the request. The queue never calls into the
+backend at teardown, so a backend with its own thread has nowhere to stop it.
+And the request handed to `execute` is the worker's own copy, which dies when
+the call returns, so a backend that finishes later has to copy what it needs.
+
+A short write is also unowned. `platform_pwrite` loops internally, so it never
+reports one; a ring does. Retrying the remainder belongs in the backend, not in
+the queue.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default.

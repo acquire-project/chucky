@@ -89,7 +89,7 @@ io_queue_counters_free(struct io_queue_counters* c)
 
 void
 io_queue_counters_posted(struct io_queue_counters* c,
-                         const struct io_work* work,
+                         const struct io_request* req,
                          uint64_t jobs_waiting,
                          uint64_t bytes_waiting,
                          int64_t now)
@@ -104,29 +104,29 @@ io_queue_counters_posted(struct io_queue_counters* c,
   if (bytes_waiting > c->published.bytes_waiting_peak)
     c->published.bytes_waiting_peak = bytes_waiting;
 
-  if (work->nbytes == 0)
+  if (req->nbytes == 0)
     return;
 
-  file_write_added(c, work->file, now);
+  file_write_added(c, req->file.generation, now);
   c->published.writes++;
-  c->published.size_buckets[size_bucket(work->nbytes)]++;
-  if (work->borrowed)
-    c->published.bytes_borrowed += work->nbytes;
+  c->published.size_buckets[size_bucket(req->nbytes)]++;
+  if (req->borrowed)
+    c->published.bytes_borrowed += req->nbytes;
   else
-    c->published.bytes_copied += work->nbytes;
+    c->published.bytes_copied += req->nbytes;
 }
 
 void
 io_queue_counters_finished(struct io_queue_counters* c,
-                           const struct io_work* work,
+                           const struct io_request* req,
                            int64_t post_ns,
                            int64_t started_ns,
                            int64_t finished_ns)
 {
-  if (work->nbytes == 0)
+  if (req->nbytes == 0)
     return;
 
-  file_write_finished(c, work->file, finished_ns);
+  file_write_finished(c, req->file.generation, finished_ns);
 
   const double wait_ms = (double)(started_ns - post_ns) / 1e6;
   const double run_ms = (double)(finished_ns - started_ns) / 1e6;
