@@ -151,9 +151,9 @@ to carry out of shipping code, not the two its description assumes.
 ### 3. More queue depth
 
 Issue #213. Raise the worker count, schedule ready files round-robin, add the
-flags that select it — `--io-writes-in-flight`, `--io-writes-in-flight-per-file`,
-`--io-workers`, `--io-backend` — and record them in the results file. The byte
-ceiling gets its number here, from step 1's `io_queued_bytes_peak`.
+flags that select it — `--io-writes-in-flight`, `--io-workers`, `--io-backend`
+and `--io-writes-in-flight-per-file` — and record them in the results file. The
+byte ceiling gets its number here, from step 1's `io_queued_bytes_peak`.
 
 Four pieces around it, each its own pull request, in this order.
 
