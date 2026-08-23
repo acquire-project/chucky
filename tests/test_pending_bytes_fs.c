@@ -2,11 +2,11 @@
 // the io queue, and tests/test_io_queue.c covers it there. This checks that the
 // pool passes the figure through, over both write paths.
 
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr/shard_pool.h"
-#include "zarr/shard_pool_fs.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -25,12 +25,13 @@ test_counts_every_write(const char* tmpdir, int direct)
   log_info("=== test_counts_every_write (%s) ===", label);
 
   struct shard_pool* pool = NULL;
+  struct io_faults faults;
   uint8_t* src = NULL;
   int rc = 1;
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  pool = shard_pool_fs_create(tmpdir, /*nslots=*/1, /*unbuffered=*/0);
+  pool = io_faults_pool_create(&faults, tmpdir, /*nslots=*/1, /*unbuffered=*/0);
   CHECK(Cleanup, pool);
   CHECK(Cleanup, shard_pool_pending_bytes(pool) == 0);
 
@@ -44,7 +45,7 @@ test_counts_every_write(const char* tmpdir, int direct)
   src = (uint8_t*)calloc(1, WRITE_BYTES);
   CHECK(Cleanup, src);
 
-  CHECK(Cleanup, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
 
   for (int i = 0; i < BATCH_WRITES; ++i) {
     uint64_t offset = (uint64_t)i * WRITE_BYTES;
