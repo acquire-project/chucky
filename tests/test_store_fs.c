@@ -638,16 +638,36 @@ file_size(const char* path)
 
 #define PRESIZE_BYTES (1 << 20)
 
-// A pre-sized file is as long as it was told to be before anything is written
-// to it, and the truncate at the end brings it back to what it holds.
-static int
-presize_leaves_file_at(uint64_t writes_per_file, long expected_after_presize)
+// Sizes are read with the shard closed: the pool's handle is not shared, so
+// on Windows nothing else can open the file while the shard is live.
+static long
+closed_shard_size(struct shard_pool* pool,
+                  const char* key,
+                  uint64_t presize_to,
+                  const char* payload,
+                  size_t payload_bytes)
 {
-  log_info("=== test_shard_pool_presize (%llu per file) ===",
-           (unsigned long long)writes_per_file);
+  struct shard_writer* w = pool->open(pool, 0, key);
+  if (!w || !w->presize || w->presize(w, presize_to))
+    return -1;
+  if (payload_bytes > 0 &&
+      (w->write(w, 0, payload, payload + payload_bytes) ||
+       w->truncate(w, payload_bytes)))
+    return -1;
+  if (w->finalize(w) || pool->flush(pool))
+    return -1;
 
   char path[4096];
-  snprintf(path, sizeof(path), "%s/presize%llu.bin", tmpdir,
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  return file_size(path);
+}
+
+// A pre-sized file is as long as it was told to be, and the truncate at the
+// end brings it back to what it holds.
+static int
+presize_leaves_file_at(uint64_t writes_per_file, long expected_presized)
+{
+  log_info("=== test_shard_pool_presize (%llu per file) ===",
            (unsigned long long)writes_per_file);
 
   struct store* s = store_fs_create(tmpdir, 0);
@@ -658,22 +678,20 @@ presize_leaves_file_at(uint64_t writes_per_file, long expected_after_presize)
   struct shard_pool* pool = s->create_pool(s, 1);
   CHECK(Fail2, pool);
 
-  char key[256];
-  snprintf(key, sizeof(key), "presize%llu.bin",
-           (unsigned long long)writes_per_file);
-  struct shard_writer* w = pool->open(pool, 0, key);
-  CHECK(Fail3, w);
-  CHECK(Fail3, w->presize);
-  CHECK(Fail3, w->presize(w, PRESIZE_BYTES) == 0);
-  CHECK(Fail3, pool->flush(pool) == 0);
-  CHECK(Fail3, file_size(path) == expected_after_presize);
-
   static const char payload[] = "held";
-  CHECK(Fail3, w->write(w, 0, payload, payload + sizeof(payload)) == 0);
-  CHECK(Fail3, w->truncate(w, sizeof(payload)) == 0);
-  CHECK(Fail3, w->finalize(w) == 0);
-  CHECK(Fail3, pool->flush(pool) == 0);
-  CHECK(Fail3, file_size(path) == (long)sizeof(payload));
+  char key[256];
+
+  snprintf(key, sizeof(key), "presize%llu_empty.bin",
+           (unsigned long long)writes_per_file);
+  CHECK(Fail3,
+        closed_shard_size(pool, key, PRESIZE_BYTES, NULL, 0) ==
+          expected_presized);
+
+  snprintf(key, sizeof(key), "presize%llu_trimmed.bin",
+           (unsigned long long)writes_per_file);
+  CHECK(Fail3,
+        closed_shard_size(pool, key, PRESIZE_BYTES, payload, sizeof(payload)) ==
+          (long)sizeof(payload));
 
   shard_pool_destroy(pool);
   s->destroy(s);
