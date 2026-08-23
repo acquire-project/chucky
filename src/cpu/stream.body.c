@@ -321,6 +321,11 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
               finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
     }
 
+    // Finalizing only queues the truncate and close of each partial shard.
+    // Returning without waiting would report success for a shard whose size on
+    // disk is wrong.
+    CHECK(Fail, shard_sink_drain(v->sink) == 0);
+
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
     if (v->metrics)
       accumulate_metric_ms(&v->metrics->sink, emit_ms, 0, 0);

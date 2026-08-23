@@ -99,8 +99,7 @@ test_cpu_flush_error_propagates(void)
   struct writer_result ar = writer_append(w, sl);
   CHECK(Fail, ar.error == 0);
 
-  // flush only queues the writes; the sink's own flush runs in close, so that
-  // is where its error surfaces.
+  // The sink's own flush runs in close, so that is where its error surfaces.
   CHECK(Fail, writer_flush(w).error == 0);
   CHECK(Fail, sink.flush_called == 0);
   CHECK(Fail, writer_close(w).error != 0);

@@ -26,6 +26,7 @@ struct io_backend_fs
   _Atomic uint64_t files_open_peak;
 
   _Atomic int fail_next_noop;
+  _Atomic int fail_next_truncate;
   _Atomic int block_next_noop;
   _Atomic int* block_gate;
   _Atomic int stopped;
@@ -141,6 +142,12 @@ io_backend_fs_inject_failure(struct io_backend_fs* b)
 }
 
 void
+io_backend_fs_inject_failing_truncate(struct io_backend_fs* b)
+{
+  atomic_store(&b->fail_next_truncate, 1);
+}
+
+void
 io_backend_fs_inject_block(struct io_backend_fs* b, _Atomic int* gate)
 {
   b->block_gate = gate;
@@ -225,7 +232,9 @@ fs_execute(void* ctx,
         record_failure(b, out, "io_backend_fs: pwrite failed");
       break;
     case IO_OP_TRUNCATE:
-      if (platform_ftruncate(fd, req->logical_size))
+      if (atomic_exchange(&b->fail_next_truncate, 0))
+        record_failure(b, out, "io_backend_fs: injected truncate failure");
+      else if (platform_ftruncate(fd, req->logical_size))
         record_failure(b, out, "io_backend_fs: ftruncate failed");
       break;
     case IO_OP_CLOSE:

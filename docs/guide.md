@@ -104,8 +104,8 @@ an optional `close(self)`, each returning a `writer_result`. Free functions
 `writer_append()` / `writer_flush()` / `writer_close()` dispatch through it.
 `flush` finalizes: it writes out everything appended so far and then stops
 taking input, so it is the last call on a stream rather than a mid-stream sync.
-It returns once the writes are queued; `writer_close()` waits for them, publishes
-the extent, and reports whether the data reached storage.
+It returns once those writes have landed; `writer_close()` publishes the extent
+and reports whether the array is readable.
 
 **Two-phase init.** `compute_stream_layouts()` does all pure-CPU layout math
 (lifted shape, strides, chunk geometry), then the GPU path uploads to device

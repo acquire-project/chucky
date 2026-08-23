@@ -34,8 +34,8 @@ struct writer
   // chunk the append cursor stopped partway through, and stops taking input.
   // Idempotent. A later append consumes nothing and reports `finished`.
   //
-  // Returns once those writes are queued, not once they have landed; `close`
-  // waits for them.
+  // Returns once those writes have landed, so the failure of any of them is
+  // reported here.
   //
   // Finalizing is what makes the partial chunk readable: it is padded out and
   // its shard is closed. Taking more input afterwards would have to start past
@@ -43,12 +43,11 @@ struct writer
   // later data at append positions the caller never asked for.
   struct writer_result (*flush)(struct writer* self);
 
-  // Optional: waits for the writes `flush` queued to land, publishes the append
-  // extent, and lets the sink write its own metadata. Returns whether all of
-  // that succeeded, so this is where a caller learns its data reached storage,
-  // and where the array becomes readable. Idempotent, and destroying the stream
-  // runs it if the caller did not — so the sink has to outlive the stream.
-  // NULL when a writer has nothing to wait for.
+  // Optional: publishes the append extent and lets the sink write its own
+  // metadata. Returns whether that succeeded, so this is where the array
+  // becomes readable. Idempotent, and destroying the stream runs it if the
+  // caller did not — so the sink has to outlive the stream. NULL when a writer
+  // has nothing to publish.
   struct writer_result (*close)(struct writer* self);
 };
 

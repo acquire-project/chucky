@@ -31,9 +31,9 @@ struct multiarray_writer
                                             int array_index,
                                             struct slice data);
   // Finalizes every array: writes out what each one holds and stops taking
-  // input. Returns once the writes are queued; `close` waits for them.
+  // input. Returns once those writes have landed.
   struct multiarray_writer_result (*flush)(struct multiarray_writer* self);
-  // Waits for those writes to land and publishes each array's append extent.
-  // Idempotent; destroy runs it if the caller did not.
+  // Publishes each array's append extent. Idempotent; destroy runs it if the
+  // caller did not.
   struct multiarray_writer_result (*close)(struct multiarray_writer* self);
 };

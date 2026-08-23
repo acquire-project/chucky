@@ -1,6 +1,10 @@
-// Regression test (#147): a flush that errors with footer IO still queued must
-// drain the sink before returning, or destroy frees buffers the IO worker still
-// reads (use-after-free; ASAN catches it).
+// Regression test (#218): a flush has to report the failures of the work it
+// queued. Finalizing a partial shard posts a truncate and a close; a flush that
+// returned without waiting for them reported success for a shard whose size on
+// disk is wrong.
+//
+// Also covers #147: the flush frees nothing the IO worker still reads, so
+// destroy after a failed flush is not a use-after-free (ASAN catches it).
 
 #include "platform/platform.h"
 #include "store.h"
@@ -18,13 +22,13 @@
 #include <stdlib.h>
 
 static int
-test_destroy_drains_after_flush_error(const char* tmpdir)
+test_flush_reports_queued_truncate_failure(const char* tmpdir)
 {
-  log_info("=== test_destroy_drains_after_flush_error (cpu) ===");
+  log_info("=== test_flush_reports_queued_truncate_failure (cpu) ===");
 
   // One epoch into a 2-per-shard append dim leaves a partial shard, so flush
-  // queues a footer write then truncates — and the injected hook fails
-  // truncate.
+  // queues a footer write then a truncate — and the injected hook fails the
+  // truncate on the IO worker.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,
@@ -89,19 +93,20 @@ test_destroy_drains_after_flush_error(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // Fail the next truncate so flush errors with a footer write still queued.
+  // The truncate fails only once the worker runs it, which is after the flush
+  // has queued it — so only a flush that waits can see it.
   CHECK(Cleanup, shard_pool_fs_inject_failing_truncate(pool) == 0);
 
   {
     struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
     if (!r.error) {
-      log_error("flush unexpectedly succeeded — fault hook not in effect");
+      log_error("flush missed the failure of the truncate it queued");
       goto Cleanup;
     }
   }
 
-  // Destroy frees the footer buffers; the errored flush must have drained the
-  // queued IO, or this reads freed heap under ASAN.
+  // Destroy frees the footer buffers, which the queued IO reads — under ASAN
+  // this catches a flush that left any of it outstanding.
   tile_stream_cpu_destroy(s);
   s = NULL;
 
@@ -132,7 +137,7 @@ main(int ac, char* av[])
     char sub[4200];
     snprintf(sub, sizeof(sub), "%s/flush_error_drain_cpu", tmpdir);
     test_mkdir(sub);
-    ecode |= test_destroy_drains_after_flush_error(sub);
+    ecode |= test_flush_reports_queued_truncate_failure(sub);
   }
 
   test_tmpdir_remove(tmpdir);

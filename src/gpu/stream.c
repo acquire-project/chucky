@@ -382,6 +382,12 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       ctx->append_failed = 1;
     else
       r = finalize_all_levels(e, ctx);
+
+    // Finalizing only queues the truncate and close of each partial shard.
+    // Returning without waiting would report success for a shard whose size on
+    // disk is wrong.
+    if (shard_sink_drain(ctx->sink))
+      r = writer_error();
   }
 
   collect_ingest_timing(e);
