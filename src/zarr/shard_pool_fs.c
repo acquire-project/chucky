@@ -253,8 +253,6 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
-  io_backend_fs_stop(p->backend);
-
   // Finalize any open slots
   for (uint64_t i = 0; i < p->nslots; ++i) {
     if (p->slots[i].token.generation != 0)
@@ -270,21 +268,6 @@ pool_fs_destroy(struct shard_pool* self)
   free(p);
 }
 
-int
-shard_pool_fs_inject_failing_job(struct shard_pool* self)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  io_backend_fs_inject_failure(p->backend);
-  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
-}
-
-void
-shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  io_backend_fs_inject_failing_truncate(p->backend);
-}
-
 void
 shard_pool_fs_set_error(struct shard_pool* self)
 {
@@ -292,16 +275,11 @@ shard_pool_fs_set_error(struct shard_pool* self)
   atomic_store(&p->io_error, 1);
 }
 
-int
-shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  io_backend_fs_inject_block(p->backend, gate);
-  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
-}
-
 struct shard_pool*
-shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
+shard_pool_fs_create_wrapped(const char* root,
+                             uint64_t nslots,
+                             int unbuffered,
+                             struct shard_pool_fs_wrapper wrapper)
 {
   CHECK(Fail, root);
   CHECK(Fail, nslots > 0);
@@ -326,8 +304,11 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
   p->backend = io_backend_fs_create(&p->io_error);
   CHECK(Fail_alloc, p->backend);
 
-  p->queue = io_queue_create(io_backend_fs_as_backend(p->backend),
-                             (struct io_queue_limits){ 0 });
+  struct io_backend backend = io_backend_fs_as_backend(p->backend);
+  if (wrapper.wrap)
+    backend = wrapper.wrap(wrapper.ctx, backend);
+
+  p->queue = io_queue_create(backend, (struct io_queue_limits){ 0 });
   CHECK(Fail_backend, p->queue);
 
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));
@@ -344,6 +325,9 @@ shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
     s->alignment = page_size;
   }
 
+  if (wrapper.queue)
+    *wrapper.queue = p->queue;
+
   return &p->base;
 
 Fail_queue:
@@ -355,4 +339,11 @@ Fail_alloc:
   free(p);
 Fail:
   return NULL;
+}
+
+struct shard_pool*
+shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
+{
+  return shard_pool_fs_create_wrapped(
+    root, nslots, unbuffered, (struct shard_pool_fs_wrapper){ 0 });
 }

@@ -24,12 +24,6 @@ struct io_backend_fs
   _Atomic uint64_t files_opened;
   _Atomic uint64_t files_open_now;
   _Atomic uint64_t files_open_peak;
-
-  _Atomic int fail_next_noop;
-  _Atomic int fail_next_truncate;
-  _Atomic int block_next_noop;
-  _Atomic int* block_gate;
-  _Atomic int stopped;
 };
 
 static int
@@ -135,31 +129,6 @@ io_backend_fs_files_open_peak(const struct io_backend_fs* b)
   return atomic_load(&b->files_open_peak);
 }
 
-void
-io_backend_fs_inject_failure(struct io_backend_fs* b)
-{
-  atomic_store(&b->fail_next_noop, 1);
-}
-
-void
-io_backend_fs_inject_failing_truncate(struct io_backend_fs* b)
-{
-  atomic_store(&b->fail_next_truncate, 1);
-}
-
-void
-io_backend_fs_inject_block(struct io_backend_fs* b, _Atomic int* gate)
-{
-  b->block_gate = gate;
-  atomic_store(&b->block_next_noop, 1);
-}
-
-void
-io_backend_fs_stop(struct io_backend_fs* b)
-{
-  atomic_store(&b->stopped, 1);
-}
-
 static int
 resolve(struct io_backend_fs* b, struct io_file_token file, platform_fd* fd)
 {
@@ -208,17 +177,8 @@ fs_execute(void* ctx,
   struct io_backend_fs* b = (struct io_backend_fs*)ctx;
   out->seq = seq;
 
-  if (req->op == IO_OP_NOOP) {
-    if (atomic_exchange(&b->fail_next_noop, 0)) {
-      record_failure(b, out, "io_backend_fs: injected test failure");
-      return IO_DONE;
-    }
-    if (atomic_exchange(&b->block_next_noop, 0)) {
-      while (atomic_load(b->block_gate) == 0 && !atomic_load(&b->stopped))
-        platform_sleep_ns(1000000LL);
-    }
+  if (req->op == IO_OP_NOOP)
     return IO_DONE;
-  }
 
   platform_fd fd = PLATFORM_FD_INVALID;
   if (!resolve(b, req->file, &fd)) {
@@ -232,9 +192,7 @@ fs_execute(void* ctx,
         record_failure(b, out, "io_backend_fs: pwrite failed");
       break;
     case IO_OP_TRUNCATE:
-      if (atomic_exchange(&b->fail_next_truncate, 0))
-        record_failure(b, out, "io_backend_fs: injected truncate failure");
-      else if (platform_ftruncate(fd, req->logical_size))
+      if (platform_ftruncate(fd, req->logical_size))
         record_failure(b, out, "io_backend_fs: ftruncate failed");
       break;
     case IO_OP_CLOSE:

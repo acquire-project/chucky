@@ -28,19 +28,3 @@ io_backend_fs_files_opened(const struct io_backend_fs* b);
 
 uint64_t
 io_backend_fs_files_open_peak(const struct io_backend_fs* b);
-
-// These test hooks are one-shot, each applying to the next op of its kind:
-// IO_OP_NOOP for failure and block, IO_OP_TRUNCATE for the failing truncate.
-// All three fail on the worker, where every real failure happens, so only a
-// caller that waits can see them.
-void
-io_backend_fs_inject_failure(struct io_backend_fs* b);
-void
-io_backend_fs_inject_block(struct io_backend_fs* b, _Atomic int* gate);
-void
-io_backend_fs_inject_failing_truncate(struct io_backend_fs* b);
-
-// Release a blocked request, for a queue torn down with no flush in front of
-// it.
-void
-io_backend_fs_stop(struct io_backend_fs* b);

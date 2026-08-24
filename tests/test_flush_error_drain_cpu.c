@@ -6,11 +6,11 @@
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.cpu.h"
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr/shard_pool.h"
-#include "zarr/shard_pool_fs.h"
 #include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
@@ -45,13 +45,14 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   const size_t epoch_elements = 8 * 8;
 
   struct store* store = NULL;
+  struct io_faults faults;
   struct shard_pool* pool = NULL;
   struct zarr_array* arr = NULL;
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;
   int rc = 1;
 
-  store = store_fs_create(tmpdir, /*unbuffered=*/1);
+  store = io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1);
   CHECK(Cleanup, store);
   CHECK(Cleanup, store->mkdirs(store, ".") == 0);
   CHECK(Cleanup, store->mkdirs(store, "0") == 0);
@@ -90,7 +91,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   }
 
   // The truncate fails on the worker, so only a flush that waits can see it.
-  shard_pool_fs_inject_failing_truncate(pool);
+  io_faults_fail_next_truncate(&faults);
 
   {
     struct writer_result r = writer_flush(tile_stream_cpu_writer(s));

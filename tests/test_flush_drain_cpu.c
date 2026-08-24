@@ -6,11 +6,11 @@
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.cpu.h"
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr/shard_pool.h"
-#include "zarr/shard_pool_fs.h"
 #include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
@@ -67,6 +67,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   const size_t epoch_elements = 8 * 8;
 
   struct store* store = NULL;
+  struct io_faults faults;
   struct shard_pool* pool = NULL;
   struct zarr_array* arr = NULL;
   struct tile_stream_cpu* s = NULL;
@@ -76,7 +77,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = store_fs_create(tmpdir, /*unbuffered=*/1);
+  store = io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1);
   CHECK(Cleanup, store);
   CHECK(Cleanup, store->mkdirs(store, ".") == 0);
   CHECK(Cleanup, store->mkdirs(store, "0") == 0);
@@ -116,7 +117,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
 
   // Gate sits in the io_queue ahead of the footer jobs the flush will queue
   // behind it.
-  CHECK(Cleanup, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
 
   struct flush_args fa = { .w = tile_stream_cpu_writer(s) };
   atomic_store(&fa.done, 0);
@@ -155,9 +156,10 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   log_info("  PASS");
 
 Cleanup:
+  atomic_store(&gate, 1);
   free(src);
-  tile_stream_cpu_destroy(s);
   test_thread_join(thr);
+  tile_stream_cpu_destroy(s);
   zarr_array_destroy(arr);
   shard_pool_destroy(pool);
   store_destroy(store);
