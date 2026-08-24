@@ -313,6 +313,60 @@ the same depth. Since depth follows the count of shard files holding work,
 writing more shard files at once is the lever that would move it, not a
 larger cap.
 
+### The shared file server
+
+`/bio`, which is `/mnt/main0`, is an NFS version 3 mount, one mebibyte per
+request, sixteen TCP connections (`nconnect=16`). Every login and compute node
+has it. A file written on a compute node was checksummed from a second machine,
+so the bytes do reach the server.
+
+One write costs about ten times what it costs on a local drive: 51 ms for
+48 MiB, against 5 ms on the eight-drive array. Throughput comes from depth
+alone. `dev/io-depth/io_depth`, 48 MiB writes over 64 files, one write per
+file, two repeats averaged:
+
+| depth reached | 1.0 | 7.8 | 14.2 | 23.7 | 37.2 |
+|---|---:|---:|---:|---:|---:|
+| from a `cpu-turin-gp-l` node, GB/s | 0.90 | 4.89 | 5.87 | 5.50 | 7.51 |
+| from an L40 node, GB/s | 0.92 | 5.17 | 7.87 | 7.34 | 6.77 |
+
+The server is shared with the rest of the cluster. Two repeats of one point
+differ by up to 40% — 6.85 and 4.89 GB/s at depth 14 on the same node minutes
+apart — so a single reading is an estimate.
+
+**The faster target depends on the node.** An L40 node's mirror gives 1.6 to
+2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`
+node's array gives 17.4 GB/s, more than twice the file server.
+`orca2_single` uncompressed, 2000 frames, two repeats, each pair measured in
+one allocation:
+
+| node | target | best GB/s | at |
+|---|---|---:|---|
+| L40 | local mirror | 2.19 | 4 in flight |
+| L40 | file server | 5.12 | 32 in flight, 4 per file |
+| turin | local array | 7.10 | 16 in flight |
+| turin | file server | 4.77 | 16 in flight |
+
+Compare the pairs with each other and not with the 4000-frame table above:
+2000 frames is short enough to read low, as that section says.
+
+The sink reaches about 5 GB/s on the file server from either node, so nothing
+is gained from the 96-core node's stronger pipeline. The remaining limit is
+the latency already seen on the array: at the fastest settings writes wait
+0.4 ms, so the queue drains as fast as it fills, and a write takes 97 ms
+against 62 on the array.
+
+**Writes to one file are serialized.** On a single file, depth adds latency in
+proportion and no throughput — 1.05 GB/s at one write in flight against 1.35
+at thirty-two, while the median write goes from 47 ms to 1204. Pre-sizing
+cannot help there, because there is no extending-write lock to avoid. Per-file
+depth still helps `orca2_single`, but only by raising the total across its
+sixteen shard files.
+
+Two other settings matter less than depth. A request of at least 8 MiB is
+worth having, 3.14 GB/s at 1 MiB against 7.20 at 8 MiB, and the curve is flat
+above that. Buffered and unbuffered are within the run-to-run spread.
+
 ### 4. io_uring on Linux
 
 An io_uring backend behind the same interface, opt-in, with a fallback to
@@ -333,7 +387,8 @@ reports one; a ring does. Retrying the remainder belongs in the backend, not in
 the queue.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
-default.
+default. The file server's own numbers are above, so that matrix has a
+baseline to be read against.
 
 ### 5. Overlapped writes on Windows
 
