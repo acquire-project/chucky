@@ -155,8 +155,8 @@ test_flush_waits_for_sink_io(const char* tmpdir)
 Cleanup:
   atomic_store(&gate, 1);
   free(src);
-  tile_stream_gpu_destroy(s);
   test_thread_join(thr);
+  tile_stream_gpu_destroy(s);
   zarr_array_destroy(arr);
   shard_pool_destroy(pool);
   store_destroy(store);
@@ -290,8 +290,8 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
 
 Cleanup:
   free(src);
-  tile_stream_gpu_destroy(s);
   test_thread_join(thr);
+  tile_stream_gpu_destroy(s);
   zarr_array_destroy(arr);
   shard_pool_destroy(pool);
   store_destroy(store);

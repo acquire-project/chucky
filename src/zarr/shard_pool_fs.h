@@ -16,19 +16,18 @@ struct io_queue;
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered);
 
-// How a test puts a backend of its own in front of the filesystem one, to make
+// A test's own backend can be called in place of the filesystem one, to make
 // requests fail or block. Every field may be left null.
 struct shard_pool_fs_wrapper
 {
   void* ctx;
-  // Given the backend the pool built, return the one the queue should call.
+  // The pool's backend is the argument, and the queue calls the result.
   struct io_backend (*wrap)(void* ctx, struct io_backend inner);
-  // Set to the queue the pool built, so a test can post requests of its own.
-  struct io_queue** queue;
+  struct io_queue** queue; // receives the queue the pool built
 };
 
-// Create a filesystem shard pool with a wrapper between its queue and its
-// filesystem backend. shard_pool_fs_create passes an empty wrapper.
+// Create a filesystem shard pool with the wrapper between its queue and its
+// filesystem backend.
 struct shard_pool*
 shard_pool_fs_create_wrapped(const char* root,
                              uint64_t nslots,

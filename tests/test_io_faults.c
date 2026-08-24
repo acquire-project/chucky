@@ -110,7 +110,12 @@ static struct shard_pool*
 faults_store_create_pool(struct store* self, uint64_t nslots)
 {
   struct faults_store* s = container_of(self, struct faults_store, base);
+  // A second pool would leave the first pool's queue calling the wrong
+  // backend.
+  CHECK(Fail, !s->faults->pool);
   return pool_create(s->faults, strbuf_cstr(&s->root), nslots, s->unbuffered);
+Fail:
+  return NULL;
 }
 
 static void

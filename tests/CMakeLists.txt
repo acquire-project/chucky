@@ -172,6 +172,8 @@ add_test_exe(test_io_queue    test_io_queue.c    io_queue test_io_backend_fake t
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_io_queue PROPERTIES TIMEOUT 60)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform test_platform chucky_log test_io_faults)
+# A worker left held would hang rather than fail; bound it.
+set_tests_properties(test-test_store_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api stream_cpu writer test_platform chucky_log)
 add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs store_api test_platform chucky_log)
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
@@ -194,6 +196,15 @@ add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driv
 add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults)
 add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults)
 add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults)
+# A worker left held would hang rather than fail; bound them.
+set_tests_properties(test-test_flush_drain_cpu PROPERTIES TIMEOUT 60)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(
+        test-test_destroy_drain test-test_flush_drain_gpu
+        test-test_destroy_midstream
+        PROPERTIES TIMEOUT 120
+    )
+endif()
 add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log)
 add_test_exe(test_pending_bytes_fs test_pending_bytes_fs.c shard_pool_fs platform writer test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
