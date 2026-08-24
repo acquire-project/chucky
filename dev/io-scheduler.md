@@ -182,7 +182,7 @@ Done.
 
 *Done:* the reef-l40 XFS matrix is green, 72 of 72, in
 `bench/results/reef-l40-130fda8-20260823.json`. The node writes its shards to
-a local `/tmp` that is xfs over an md array of NVMe drives.
+a local `/tmp` that is xfs over an md array.
 
 Output throughput, GiB/s, against writes in flight:
 
@@ -193,26 +193,45 @@ Output throughput, GiB/s, against writes in flight:
 | smallepoch_single | none | 0.59 | 0.58 | 0.56 | 0.59 | 0.54 | 0.57 |
 | orca2_single | zstd | 0.36 | 0.37 | 0.37 | 0.37 | 0.37 | 0.36 |
 
-Three things this says, none of them the 1.4x above.
+Read these against the same node, not against the table further up. That
+table is an md RAID10 of 8 NVMe drives. An L40 node's `/tmp` is an md **RAID1
+of two encrypted device-mapper volumes** — a mirror, so a write goes to both
+members and striping buys nothing. `dev/io-depth/io_depth` on the L40 node,
+48 MiB writes over 8 files, one per file:
 
-Writing to several shard files at once is worth about 1.2x, and it is flat
-from four writes in flight. `smallepoch_single` holds one shard file and does
-not move, which is what it is kept for.
+| writes in flight | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---:|---:|---:|---:|---:|---:|
+| GB/s | 2.24 | 1.49 | 2.27 | 2.59 | 2.43 | 2.11 |
 
-A compressed run does not move either. Compression is the ceiling there, so
-the write path is not what is being waited on.
+So the node tops out near 2.6 GB/s and peaks at eight, not sixteen.
 
-Queue depth per file is worth nothing measurable: four writes per file reaches
-1.21x against 1.19x for one, and on the single-file scenario 1.05x against
-1.00x. Both are inside the run-to-run spread. That does not settle whether
-pre-sizing works, because none of these scenarios comes near the array: the
-best of them writes 2.6 GiB/s where the microbenchmark above reaches 12 GB/s
-at one write at a time. Until a scenario can push the array, a per-file effect
-has nothing to show up against. The defaults keep pre-sizing on, since the
-argument for it is about a drive the sink can saturate.
+**The sink reaches that ceiling.** `orca2_single` uncompressed writes 2.79 GB/s
+at eight in flight, against the 2.59 GB/s the microbenchmark gets on the same
+node, and the queue behind it holds a 1.1 GiB backlog with writes waiting
+209 ms before they start. Nothing upstream is holding the write path back
+there; the drive is the limit, and the 1.2x is the whole of what this node has
+to give. The microbenchmark's own gain over the same range is 1.16x.
 
-The 16 column reads low in every row, and 32 recovers, so treat it as spread
-rather than a dip. These are single runs.
+A compressed run does not move. Compression is the ceiling there, so the write
+path is not what is being waited on.
+
+Queue depth per file does not show up in the sweep — 1.21x against 1.19x on
+`orca2_single`, inside the spread. That is the expected answer rather than a
+disappointing one: about twenty shard files have a write waiting at once, so
+the depth is already there and taking it per file adds nothing. The scenario
+where per-file depth is the only lever is `smallepoch_single`, and its runs
+last 0.05 s and queue 16 MiB, which is too little to resolve anything.
+
+The microbenchmark can resolve it. One file, four workers:
+
+| | GB/s |
+|---|---:|
+| one write per file | 1.98 |
+| four per file, no pre-sizing | 2.10 |
+| four per file, pre-sized | 2.18 |
+
+Pre-sizing is worth about 10% on a file being written by itself, which is why
+it stays on by default even though no bench scenario is shaped to show it.
 
 ### 4. io_uring on Linux
 

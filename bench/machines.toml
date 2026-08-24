@@ -35,7 +35,7 @@ description = "One of the CoreWeave L40 nodes"
 names = ["reef-l40"]
 hosts = ["cw-us-e4a2-l40-*"]
 [machine.specs]
-storage = "shared /mnt/main0; a sweep writes its shards to the node's local /tmp, xfs on an md NVMe array"
+storage = "shared /mnt/main0; a sweep writes its shards to the node's local /tmp, xfs on an md RAID1 of two encrypted volumes, about 2.6 GB/s"
 
 [[machine]]
 name = "reef-h100"
