@@ -16,6 +16,13 @@ drive. This file is the working plan for changing that.
   gain above one while a file is still growing: on xfs the file's lock is taken
   for itself by an extending write, so requests are accepted by the kernel and
   then run one at a time. Only worth raising once the file is pre-sized.
+- **Depth allowed** — the cap `--io-writes-in-flight` sets on queue depth, and
+  `--io-writes-in-flight-per-file` on queue depth per file. The two are a
+  minimum, not a product: four per file across sixteen files still runs only
+  as many at once as the first cap allows.
+- **Depth reached** — the depth a run actually got to, recorded as
+  `io_writes_in_flight_mean`. Never assume it equals the depth allowed.
+- **Ceiling** — a drive's maximum rate, never a setting.
 - **Pre-sizing** — setting a file's size up front, so later writes are inside
   the file rather than extensions of it. Trimmed back to its real size at
   finalize.
@@ -155,8 +162,8 @@ truncate still lets the close run.
 
 Done.
 
-- Several workers per queue, with a ceiling on requests in flight across every
-  file and a second ceiling per file.
+- Several workers per queue, with a cap on queue depth and a second on queue
+  depth per file.
 - Files take turns, so a backlog on one shard file cannot keep the others
   idle. The dispatch scan is gone: each file keeps its requests on a list of
   their own, and readiness is one comparison against the head of that list
@@ -174,9 +181,9 @@ Done.
   answers no there and the step is skipped.
 - `--io-workers`, `--io-writes-in-flight`, `--io-writes-in-flight-per-file` and
   `--io-backend` select all of it, and the results file records what the run
-  resolved them to. New sweep tier `iodepth` covers 1 to 32 writes in flight,
-  one and four per file.
-- Defaults: eight workers, eight writes in flight, four per file. The byte
+  resolved them to. New sweep tier `iodepth` covers depth allowed from 1 to 32,
+  at one and four per file.
+- Defaults: eight workers, depth allowed eight, four per file. The byte
   credit is 2 GiB, above the deepest backlog measured — 1392 MiB, from an
   uncompressed 256cube run with one write at a time.
 
@@ -184,7 +191,7 @@ Done.
 `bench/results/reef-l40-130fda8-20260823.json`. The node writes its shards to
 a local `/tmp` that is xfs over an md array.
 
-Output throughput, GiB/s, against writes in flight:
+Output throughput, GiB/s, against depth allowed:
 
 | scenario | codec | 1 | 2 | 4 | 8 | 16 | 32 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -200,9 +207,12 @@ members and there is no striping to gain from. Neither is encrypted; the
 difference is drive count and array shape. `dev/io-depth/io_depth` on the L40
 node, 48 MiB writes over 8 files, one per file:
 
-| writes in flight | 1 | 2 | 4 | 8 | 16 | 32 |
+| depth allowed | 1 | 2 | 4 | 8 | 16 | 32 |
 |---|---:|---:|---:|---:|---:|---:|
 | GB/s | 2.24 | 1.49 | 2.27 | 2.59 | 2.43 | 2.11 |
+
+Those last three rows all reached depth 7.8, not 16 and 32: eight files at one
+write per file cannot go deeper. Read the corrected curve below instead.
 
 So the node tops out near 2.6 GB/s and peaks at eight, not sixteen.
 
@@ -250,11 +260,11 @@ It also moves the limit. At one write in flight the queue holds a 1 GiB
 backlog and writes wait 59 ms; by thirty-two the wait is 0.4 ms, so the queue
 drains as fast as it fills and the drive is no longer what is waited on.
 
-### The ceiling is not the depth reached
+### Depth allowed is not depth reached
 
-`io_writes_in_flight_mean` records the depth a run actually reached, because a
-configured ceiling is no evidence it was approached. Two things only show up
-once it is read.
+`io_writes_in_flight_mean` records the depth a run actually reached, because
+the cap it was given is no evidence it got near it. Two things only show up
+once that is read.
 
 The array rewards depth past eight, and the earlier claim here that it did not
 was an artifact: a depth sweep over 8 files at one write per file cannot
@@ -267,17 +277,18 @@ this file says:
 | depth reached | 1.00 | 2.00 | 4.00 | 7.99 | 15.93 | 31.39 | 58.16 |
 | GB/s | 11.77 | 13.44 | 14.23 | 16.38 | 17.52 | 17.56 | 17.50 |
 
-**The sink cannot use that depth.** On `orca2_single` it reaches 6.1 at a
-ceiling of eight and only 12.2 at a ceiling of thirty-two, because with one
-write per file the depth *is* the count of shard files holding queued work,
-and that count is 11 to 17. Raising the ceiling past about ten buys unused
-allowance.
+**The sink cannot use that depth.** `orca2_single` writes about sixteen shard
+files at a time, and with one write per file the depth *is* the count of those
+holding queued work. Allowed thirty-two, it reaches 11.8 while 11.7 files hold
+work — the same number. Four per file adds only 0.4 on top, because with a
+dozen files busy each is handed about one write anyway. Allowing more than
+about ten is allowance nothing claims.
 
 So the defaults are eight, and the reason is not the drive. Three repeats of
 `orca2_single` on the eight-drive array, spread under 1%:
 
-| per file | ceiling | depth reached | GB/s |
-|---|---:|---:|---:|
+| depth per file | depth allowed | depth reached | GB/s |
+|---:|---:|---:|---:|
 | 1 | 8 | 6.46 | 11.29 |
 | 1 | 16 | 9.83 | 10.76 |
 | 4 | 8 | 6.57 | **11.41** |
@@ -285,13 +296,13 @@ So the defaults are eight, and the reason is not the drive. Three repeats of
 
 More depth is *slower* here. The workers are threads, and on the CPU backend
 they take cores from the pipeline that feeds them. Eight wins on the mirror
-too, where the drive saturates long before the ceiling binds. Neither case
-covers a machine with a fast drive and a GPU, which this cluster does not
-have.
+too, where the drive saturates before either cap binds. Neither case covers a
+machine with a fast drive and a GPU, which this cluster does not have.
 
 The gap left is the pipeline: 11.4 GB/s against the 16.4 the array gives at
-the same depth. Raising the number of shard files written at once is the lever
-that would move it, not a higher ceiling.
+the same depth. Since depth follows the count of shard files holding work,
+writing more shard files at once is the lever that would move it, not a
+larger cap.
 
 ### 4. io_uring on Linux
 
