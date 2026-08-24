@@ -246,9 +246,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     return writer_ok();
 
   // Finalizing a shard claims it is complete, so finalize is skipped once
-  // anything above it failed. A flush that bails that way skips the drain below
-  // too, and leaves the IO it already queued to the drain in close, which
-  // destroy runs when the caller does not.
+  // anything above it failed.
   int failed = 0;
 
   // Flush partial epoch into the batch.
@@ -322,11 +320,6 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
               finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
     }
 
-    // Finalizing only queues the truncate and close of each partial shard.
-    // Returning without waiting would report success for a shard whose size on
-    // disk is wrong.
-    CHECK(Fail, shard_sink_drain(v->sink) == 0);
-
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
     if (v->metrics)
       accumulate_metric_ms(&v->metrics->sink, emit_ms, 0, 0);
@@ -338,6 +331,13 @@ Fail:
   failed = 1;
 
 Done:
+  // Finalizing only queues the truncate and close of each partial shard, and a
+  // flush that bailed partway still has writes of its own outstanding.
+  // Returning without waiting for either would report a shard whose size on
+  // disk is wrong, or free buffers the IO worker is still reading.
+  if (shard_sink_drain(v->sink))
+    failed = 1;
+
   return failed ? writer_error() : writer_ok();
 }
 

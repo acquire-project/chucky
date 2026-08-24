@@ -278,12 +278,11 @@ shard_pool_fs_inject_failing_job(struct shard_pool* self)
   return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
-int
+void
 shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
   io_backend_fs_inject_failing_truncate(p->backend);
-  return 0;
 }
 
 void

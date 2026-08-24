@@ -24,9 +24,8 @@ shard_pool_fs_inject_failing_job(struct shard_pool* pool);
 int
 shard_pool_fs_inject_blocking_job(struct shard_pool* pool, _Atomic int* gate);
 
-// Test helper: one-shot, fail the next truncate on the IO worker. Returns 0
-// on success.
-int
+// Test helper: one-shot, fail the next truncate on the IO worker.
+void
 shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);
 
 // Test helper: mark the pool errored so later deliveries fail and stay queued.

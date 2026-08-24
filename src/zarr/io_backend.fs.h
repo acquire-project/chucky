@@ -29,15 +29,14 @@ io_backend_fs_files_opened(const struct io_backend_fs* b);
 uint64_t
 io_backend_fs_files_open_peak(const struct io_backend_fs* b);
 
-// These test hooks are one-shot. Failure and block apply to the next
-// IO_OP_NOOP, the one op with no file and no payload.
+// These test hooks are one-shot, each applying to the next op of its kind:
+// IO_OP_NOOP (the one op with no file and no payload) for failure and block,
+// IO_OP_TRUNCATE for the failing truncate. All three fail on the worker, where
+// every real failure happens, so only a caller that waits can see them.
 void
 io_backend_fs_inject_failure(struct io_backend_fs* b);
 void
 io_backend_fs_inject_block(struct io_backend_fs* b, _Atomic int* gate);
-
-// One-shot, applies to the next IO_OP_TRUNCATE: it fails where every other
-// failure does, on the worker, so only a caller that waits can see it.
 void
 io_backend_fs_inject_failing_truncate(struct io_backend_fs* b);
 

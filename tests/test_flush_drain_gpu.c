@@ -236,7 +236,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
 
   // The truncate fails only once the worker runs it, which is after the flush
   // has queued it — so only a flush that waits can see it.
-  CHECK(Cleanup, shard_pool_fs_inject_failing_truncate(pool) == 0);
+  shard_pool_fs_inject_failing_truncate(pool);
 
   {
     struct writer_result r = writer_flush(tile_stream_gpu_writer(s));

@@ -382,13 +382,14 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       ctx->append_failed = 1;
     else
       r = finalize_all_levels(e, ctx);
-
-    // Finalizing only queues the truncate and close of each partial shard.
-    // Returning without waiting would report success for a shard whose size on
-    // disk is wrong.
-    if (shard_sink_drain(ctx->sink))
-      r = writer_error();
   }
+
+  // Finalizing only queues the truncate and close of each partial shard, and a
+  // flush that bailed partway still has writes of its own outstanding.
+  // Returning without waiting for either would report a shard whose size on
+  // disk is wrong, or free buffers the IO worker is still reading.
+  if (shard_sink_drain(ctx->sink))
+    r = writer_error();
 
   collect_ingest_timing(e);
 
@@ -483,9 +484,9 @@ tile_stream_gpu_close_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Only a close after a flush has work to do. Before a flush the extent is
-  // not final, and the writes appends queued are waited out by the close that
-  // destroy runs after its auto-flush.
+  // Only a close after a flush has work to do: before one the extent is not
+  // final, and destroy's auto-flush is followed by a close that waits out
+  // whatever the appends queued.
   if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   const int pushed = cu_ctx_push(s->engine.cuda);
