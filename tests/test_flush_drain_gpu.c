@@ -1,6 +1,6 @@
-// Regression test: writer_flush() on the GPU stream must drain sink IO
-// before returning, so flush is a commit point: when it returns, all
-// queued pwrite_ref jobs are durable.
+// Regression test: a flush on the GPU stream drains sink IO before returning,
+// so when it returns every queued write is durable and any that failed is
+// reported (#218).
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -156,6 +156,102 @@ Cleanup:
   atomic_store(&gate, 1);
   free(src);
   test_thread_join(thr);
+  tile_stream_gpu_destroy(s);
+  zarr_array_destroy(arr);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return rc;
+}
+
+static int
+test_flush_reports_queued_truncate_failure(const char* tmpdir)
+{
+  log_info("=== test_flush_reports_queued_truncate_failure ===");
+
+  // One epoch into a 2-per-shard append dim leaves a partial shard, so the
+  // flush has a truncate to queue.
+  struct dimension dims[3] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+  const size_t epoch_elements = 8 * 8;
+
+  struct store* store = NULL;
+  struct io_faults faults;
+  struct shard_pool* pool = NULL;
+  struct zarr_array* arr = NULL;
+  struct tile_stream_gpu* s = NULL;
+  uint16_t* src = NULL;
+  int rc = 1;
+
+  store = io_faults_store_create(&faults, tmpdir, 1);
+  CHECK(Cleanup, store);
+  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
+  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
+
+  pool = store->create_pool(store, 8);
+  CHECK(Cleanup, pool);
+
+  struct zarr_array_config acfg = {
+    .data_type = dtype_u16,
+    .fill_value = 0,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
+  CHECK(Cleanup, arr);
+
+  const struct tile_stream_configuration cfg = {
+    .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
+    .epochs_per_batch = 1,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .metadata_update_interval_s = 3600.0f,
+  };
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  CHECK(Cleanup, s);
+
+  src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));
+  CHECK(Cleanup, src);
+
+  {
+    struct slice input = { .beg = src, .end = src + epoch_elements };
+    struct writer_result r = writer_append(tile_stream_gpu_writer(s), input);
+    CHECK(Cleanup, r.error == 0);
+  }
+
+  // The truncate fails on the worker, so only a flush that waits can see it.
+  io_faults_fail_next_truncate(&faults);
+
+  {
+    struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
+    if (!r.error) {
+      log_error("flush missed the failure of the truncate it queued");
+      goto Cleanup;
+    }
+  }
+
+  rc = 0;
+  log_info("  PASS");
+
+Cleanup:
+  free(src);
   tile_stream_gpu_destroy(s);
   zarr_array_destroy(arr);
   shard_pool_destroy(pool);
@@ -322,6 +418,13 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/flush_drain", tmpdir);
     test_mkdir(sub);
     ecode |= test_flush_waits_for_sink_io(sub);
+  }
+
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/flush_truncate_error", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_flush_reports_queued_truncate_failure(sub);
   }
 
   {

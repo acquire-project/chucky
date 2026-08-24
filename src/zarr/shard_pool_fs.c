@@ -24,8 +24,6 @@ struct shard_pool_fs
   int unbuffered;
   struct strbuf root; // owned
   _Atomic int io_error;
-  // Test hook: one-shot, fail the next truncate.
-  _Atomic int fail_next_truncate;
 };
 
 // --- Writer slot for a single shard file ---
@@ -35,9 +33,7 @@ struct fs_slot
   struct shard_writer base;
   struct io_file_token token; // zero generation means no file is open here
   struct io_queue* queue;
-  size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
-  _Atomic int* io_error; // points to shard_pool_fs.io_error
-  _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
+  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
 };
 
 static int
@@ -121,13 +117,6 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   struct fs_slot* w = (struct fs_slot*)self;
   if (w->token.generation == 0)
     return 0;
-
-  // Test hook: fail synchronously and mark the pool errored, so a footer write
-  // already queued by the caller outlives the flush that bails on the error.
-  if (w->fail_next_truncate && atomic_exchange(w->fail_next_truncate, 0)) {
-    atomic_store(w->io_error, 1);
-    return 1;
-  }
 
   return io_queue_post(w->queue,
                        (struct io_request){
@@ -279,14 +268,6 @@ pool_fs_destroy(struct shard_pool* self)
   free(p);
 }
 
-int
-shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  atomic_store(&p->fail_next_truncate, 1);
-  return 0;
-}
-
 void
 shard_pool_fs_set_error(struct shard_pool* self)
 {
@@ -342,8 +323,6 @@ shard_pool_fs_create_wrapped(const char* root,
     s->base.finalize = fs_slot_finalize;
     s->queue = p->queue;
     s->alignment = page_size;
-    s->io_error = &p->io_error;
-    s->fail_next_truncate = &p->fail_next_truncate;
   }
 
   if (wrapper.queue)

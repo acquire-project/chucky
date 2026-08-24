@@ -119,8 +119,8 @@ run_shape_case(const struct shape_case* c)
   }
 
   struct writer_result fr = writer_flush(w);
-  // flush queues the writes; the extent is published once they have landed.
-  // Closing runs even after a failed flush, which is what #175 is about.
+  // The extent is published at close, not at flush. Closing runs even after a
+  // failed flush, which is what #175 is about.
   struct writer_result cr = writer_close(w);
   if (!fr.error)
     fr = cr;

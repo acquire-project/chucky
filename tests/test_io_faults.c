@@ -18,6 +18,15 @@ faults_execute(void* ctx,
 {
   struct io_faults* f = (struct io_faults*)ctx;
 
+  if (req->op == IO_OP_TRUNCATE && atomic_exchange(&f->fail_next_truncate, 0)) {
+    log_error("io_faults: injected truncate failure");
+    shard_pool_fs_set_error(f->pool);
+    out->seq = seq;
+    out->nbytes = 0;
+    out->status = IO_FAILED;
+    return IO_DONE;
+  }
+
   if (req->op != IO_OP_NOOP)
     return f->inner.execute(f->inner.ctx, req, seq, out);
 
@@ -177,4 +186,10 @@ io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate)
   f->block_gate = gate;
   atomic_store(&f->block_next_noop, 1);
   return post_noop(f);
+}
+
+void
+io_faults_fail_next_truncate(struct io_faults* f)
+{
+  atomic_store(&f->fail_next_truncate, 1);
 }

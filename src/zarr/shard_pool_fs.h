@@ -34,11 +34,6 @@ shard_pool_fs_create_wrapped(const char* root,
                              int unbuffered,
                              struct shard_pool_fs_wrapper wrapper);
 
-// Test helper: one-shot, fail the next truncate so a flush errors with IO
-// still queued. Exercises the destroy-time drain that guards those buffers.
-int
-shard_pool_fs_inject_failing_truncate(struct shard_pool* pool);
-
 // Test helper: mark the pool errored so later deliveries fail and stay queued.
 void
 shard_pool_fs_set_error(struct shard_pool* pool);

@@ -1,5 +1,6 @@
 // This backend is for tests only: every request goes to the filesystem backend
-// behind it, except IO_OP_NOOP, which can be made to fail or to block.
+// behind it, except IO_OP_NOOP, which can be made to fail or to block, and
+// IO_OP_TRUNCATE, which can be made to fail.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -17,9 +18,11 @@ struct io_faults
   struct io_queue* queue;
   struct shard_pool* pool;
 
-  // Both flags are one-shot and apply to the next IO_OP_NOOP.
+  // The flags are one-shot. Two apply to the next IO_OP_NOOP, the third to the
+  // next IO_OP_TRUNCATE.
   _Atomic int fail_next_noop;
   _Atomic int block_next_noop;
+  _Atomic int fail_next_truncate;
   _Atomic int* block_gate;
 };
 
@@ -45,3 +48,8 @@ io_faults_inject_failing_job(struct io_faults* f);
 // enqueue.
 int
 io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate);
+
+// Fail the next truncate. Nothing is queued here: the failure lands when the
+// worker reaches a truncate the caller's own code posted.
+void
+io_faults_fail_next_truncate(struct io_faults* f);
