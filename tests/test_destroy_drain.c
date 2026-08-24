@@ -5,12 +5,12 @@
 #include "platform/platform.h"
 #include "store.h"
 #include "stream.gpu.h"
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr.h"
 #include "zarr/shard_pool.h"
-#include "zarr/shard_pool_fs.h"
 #include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
@@ -62,6 +62,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   const size_t total_elements = 12 * 8 * 12;
 
   struct store* store = NULL;
+  struct io_faults faults;
   struct shard_pool* pool = NULL;
   struct zarr_array* arr = NULL;
   struct tile_stream_gpu* s = NULL;
@@ -71,7 +72,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = store_fs_create(tmpdir, 1);
+  store = io_faults_store_create(&faults, tmpdir, 1);
   CHECK(Cleanup, store);
   CHECK(Cleanup, store->mkdirs(store, ".") == 0);
   CHECK(Cleanup, store->mkdirs(store, "0") == 0);
@@ -110,7 +111,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
 
   // Gate sits at seq=1 in the io_queue ahead of any pwrite jobs the
   // destroy auto-flush will queue behind it.
-  CHECK(Cleanup, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
 
   struct destroy_args da = { .s = s };
   atomic_store(&da.done, 0);
@@ -145,6 +146,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   log_info("  PASS");
 
 Cleanup:
+  atomic_store(&gate, 1);
   free(src);
   tile_stream_gpu_destroy(s);
   test_thread_join(thr);

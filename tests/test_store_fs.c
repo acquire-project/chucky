@@ -1,12 +1,12 @@
 #include "platform/platform.h"
 #include "store.h"
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/io_backend.fs.h"
 #include "zarr/io_queue.h"
 #include "zarr/shard_pool.h"
-#include "zarr/shard_pool_fs.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
 
@@ -285,7 +285,8 @@ static int
 test_shard_pool_io_stats(void)
 {
   log_info("=== test_shard_pool_io_stats ===");
-  struct store* s = store_fs_create(tmpdir, 0);
+  struct io_faults faults;
+  struct store* s = io_faults_store_create(&faults, tmpdir, 0);
   CHECK(Fail, s);
   CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
@@ -294,7 +295,7 @@ test_shard_pool_io_stats(void)
   CHECK(Fail2, pool);
 
   atomic_int gate = 0;
-  CHECK(Fail3, shard_pool_fs_inject_blocking_job(pool, &gate) == 0);
+  CHECK(Fail3, io_faults_inject_blocking_job(&faults, &gate) == 0);
 
   for (int i = 0; i < 6; ++i) {
     char key[256];
@@ -348,11 +349,12 @@ test_shard_pool_error_propagation(void)
   // Use a buffered pool — the error path under test is filesystem-independent,
   // driven by a test-only failing-job injector rather than by O_DIRECT
   // alignment enforcement (which varies across filesystems).
-  struct shard_pool* pool = shard_pool_fs_create(tmpdir, 1, 0);
+  struct io_faults faults;
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0);
   CHECK(Fail, pool);
 
   // Inject a job that deliberately reports a write failure.
-  CHECK(Fail2, shard_pool_fs_inject_failing_job(pool) == 0);
+  CHECK(Fail2, io_faults_inject_failing_job(&faults) == 0);
 
   // Flush waits for all async IO and returns the error flag.
   int flush_err = pool->flush(pool);
