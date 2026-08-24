@@ -239,22 +239,28 @@ WRITES_IN_FLIGHT = [1, 2, 4, 8, 16, 32]
 
 
 def iodepth_runs() -> list[RunSpec]:
-    """Write-queue depth sweep, over shard files and within one."""
+    """Write-queue depth sweep, over shard files and within one.
+
+    Both backends, because the write path is the same behind either and the
+    fast drives on this cluster are on nodes with no GPU. Pick one with
+    --backend to match the node you have.
+    """
     runs = []
     scenarios = ["smallepoch_single", "smallepoch_4shards", "orca2_single"]
     for sc in scenarios:
-        for codec in ["none", "zstd"]:
-            for wif in WRITES_IN_FLIGHT:
-                # One per file isolates the gain from writing to several shard
-                # files at once; four adds the gain from pre-sizing a file so
-                # its own writes can run together.
-                for per_file in [1, 4]:
-                    runs.append(RunSpec(
-                        scenario=sc, codec=codec, fill="xor", backend="gpu",
-                        dtype="u16", chunk_label="256K", sink="fs",
-                        io_writes_in_flight=wif,
-                        io_writes_in_flight_per_file=per_file,
-                    ))
+        for backend in ["gpu", "cpu"]:
+            for codec in ["none", "zstd"]:
+                for wif in WRITES_IN_FLIGHT:
+                    # One per file isolates the gain from writing to several
+                    # shard files at once; four adds the gain from pre-sizing
+                    # a file so its own writes can run together.
+                    for per_file in [1, 4]:
+                        runs.append(RunSpec(
+                            scenario=sc, codec=codec, fill="xor",
+                            backend=backend, dtype="u16", chunk_label="256K",
+                            sink="fs", io_writes_in_flight=wif,
+                            io_writes_in_flight_per_file=per_file,
+                        ))
     return runs
 
 

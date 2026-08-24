@@ -176,7 +176,7 @@ Done.
   `--io-backend` select all of it, and the results file records what the run
   resolved them to. New sweep tier `iodepth` covers 1 to 32 writes in flight,
   one and four per file.
-- Defaults: sixteen workers, sixteen writes in flight, four per file. The byte
+- Defaults: eight workers, eight writes in flight, four per file. The byte
   credit is 2 GiB, above the deepest backlog measured — 1392 MiB, from an
   uncompressed 256cube run with one write at a time.
 
@@ -194,10 +194,11 @@ Output throughput, GiB/s, against writes in flight:
 | orca2_single | zstd | 0.36 | 0.37 | 0.37 | 0.37 | 0.37 | 0.36 |
 
 Read these against the same node, not against the table further up. That
-table is an md RAID10 of 8 NVMe drives. An L40 node's `/tmp` is an md **RAID1
-of two encrypted device-mapper volumes** — a mirror, so a write goes to both
-members and striping buys nothing. `dev/io-depth/io_depth` on the L40 node,
-48 MiB writes over 8 files, one per file:
+table is an md RAID10 of 8 drives, on a `cpu-turin-gp-l` node. An L40 node's
+`/tmp` is an md **RAID1 mirror of two drives**, so a write goes to both
+members and there is no striping to gain from. Neither is encrypted; the
+difference is drive count and array shape. `dev/io-depth/io_depth` on the L40
+node, 48 MiB writes over 8 files, one per file:
 
 | writes in flight | 1 | 2 | 4 | 8 | 16 | 32 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -232,6 +233,30 @@ The microbenchmark can resolve it. One file, four workers:
 
 Pre-sizing is worth about 10% on a file being written by itself, which is why
 it stays on by default even though no bench scenario is shaped to show it.
+
+### On the eight-drive array
+
+The tier carries a CPU-backend arm so it can run where the fast drive is. On
+`cpu-turin-gp-l-243-241`, an md RAID10 of eight drives, `--backend cpu`,
+`bench/results/turin-raid10-ab4b2f0-20260824.json`:
+
+| scenario | codec | 1 | 2 | 4 | 8 | 16 | 32 | best/1 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| orca2_single, GB/s written | none | 6.12 | 6.89 | 7.84 | 8.22 | 8.08 | 7.90 | 1.34x |
+
+**1.34x, against 1.21x on the mirror.** A faster drive is worth measuring on:
+the gain is larger and it peaks in the same place.
+
+It also moves the limit. At one write in flight the queue holds a 1 GiB
+backlog and writes wait 59 ms; by sixteen the wait is 6 ms and by thirty-two
+it is 0.4 ms, so the queue is draining as fast as it fills. The drive is no
+longer what is waited on — the rest of the pipeline is, at about 8 GB/s
+against the array's 16.4. That is where the next write-path work has to look.
+
+Both sweeps peak at **eight** writes in flight and fall back past it, which is
+why the defaults are eight rather than the sixteen the microbenchmark table
+suggests. The microbenchmark keeps improving to thirty-two because it has no
+pipeline in front of it.
 
 ### 4. io_uring on Linux
 

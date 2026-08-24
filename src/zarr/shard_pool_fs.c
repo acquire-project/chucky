@@ -330,12 +330,12 @@ shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
   return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
-// Measured on xfs over an md RAID10 of eight NVMe drives: more writes at once
-// is worth about 1.4x, and flat past sixteen. Four per file is enough to hide
-// one write's latency behind the next without a shard file monopolizing the
-// drive.
-#define DEFAULT_WORKERS 16u
-#define DEFAULT_WRITES_IN_FLIGHT 16u
+// Eight is where the sweep peaks on both an md RAID10 of eight drives (1.34x)
+// and a two-drive mirror (1.21x); past it the rest of the pipeline, not the
+// drive, is what is waited on, and throughput falls back. Four per file hides
+// one write's latency behind the next on a shard file written by itself.
+#define DEFAULT_WORKERS 8u
+#define DEFAULT_WRITES_IN_FLIGHT 8u
 #define DEFAULT_WRITES_IN_FLIGHT_PER_FILE 4u
 
 // Room for the payloads the queue holds. The deepest backlog measured is
