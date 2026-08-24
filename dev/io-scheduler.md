@@ -284,20 +284,29 @@ work — the same number. Four per file adds only 0.4 on top, because with a
 dozen files busy each is handed about one write anyway. Allowing more than
 about ten is allowance nothing claims.
 
-So the defaults are eight, and the reason is not the drive. Three repeats of
-`orca2_single` on the eight-drive array, spread under 1%:
+So the defaults are eight, and the reason is not the drive. `orca2_single` on
+the eight-drive array at 4000 frames, three repeats, spread under 1%:
 
-| depth per file | depth allowed | depth reached | GB/s |
-|---:|---:|---:|---:|
-| 1 | 8 | 6.46 | 11.29 |
-| 1 | 16 | 9.83 | 10.76 |
-| 4 | 8 | 6.57 | **11.41** |
-| 4 | 16 | 10.55 | 10.77 |
+| depth allowed | depth reached | GB/s |
+|---:|---:|---:|
+| 4 | 3.90 | 11.71 |
+| 8 | 6.84 | **12.47** |
+| 16 | 10.55 | 11.65 |
+| 32 | 10.10 | 11.54 |
 
-More depth is *slower* here. The workers are threads, and on the CPU backend
-they take cores from the pipeline that feeds them. Eight wins on the mirror
-too, where the drive saturates before either cap binds. Neither case covers a
-machine with a fast drive and a GPU, which this cluster does not have.
+**Use a run of several seconds for this.** At the scenario's own 200 frames
+the run lasts half a second, nearly all of it startup and the closing flush,
+and two passes of the tier then disagree about whether eight or sixteen is
+faster. That is why the tier overrides the frame count.
+
+More depth is slower, and why is not settled. It is not the worker threads
+taking cores from the pipeline: holding the pipeline to 32 threads on a
+96-core node, leaving 64 idle, eight still beats sixteen by 9%. What does move
+with depth is how long a single write takes — `io_run_ms_mean` goes from 10.0
+ms at eight to 18.4 at sixteen while the sink's rate does not improve — and
+the producer waits on io fences, so it feels a write's latency rather than the
+aggregate rate. That is a guess until the CPU path records a fence stall the
+way the GPU path does.
 
 The gap left is the pipeline: 11.4 GB/s against the 16.4 the array gives at
 the same depth. Since depth follows the count of shard files holding work,

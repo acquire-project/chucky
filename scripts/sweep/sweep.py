@@ -104,6 +104,9 @@ class RunSpec(BaseModel):
     # which is what every tier but iodepth wants.
     io_writes_in_flight: int = 0
     io_writes_in_flight_per_file: int = 0
+    # 0 takes the scenario's own count. A tier that compares runs against each
+    # other raises it, so that startup and the closing flush stop dominating.
+    frames_override: int = 0
 
     @model_validator(mode="after")
     def _validate_enums(self) -> RunSpec:
@@ -129,7 +132,7 @@ class RunSpec(BaseModel):
 
     @property
     def frames(self) -> int:
-        return SCENARIOS[self.scenario]
+        return self.frames_override or SCENARIOS[self.scenario]
 
     @property
     def id(self) -> str:
@@ -237,6 +240,16 @@ def io_runs() -> list[RunSpec]:
 # about 1.4x and flat past 16; 32 is here to show the flat part.
 WRITES_IN_FLIGHT = [1, 2, 4, 8, 16, 32]
 
+# At their own frame counts these scenarios run for well under a second, which
+# is startup and the closing flush rather than steady state, and two runs of
+# the same tier then disagree about which depth is faster. These counts put a
+# run at several seconds.
+IODEPTH_FRAMES = {
+    "orca2_single": 4000,
+    "smallepoch_single": 4 << 20,
+    "smallepoch_4shards": 4 << 20,
+}
+
 
 def iodepth_runs() -> list[RunSpec]:
     """Write-queue depth sweep, over shard files and within one.
@@ -260,6 +273,7 @@ def iodepth_runs() -> list[RunSpec]:
                             backend=backend, dtype="u16", chunk_label="256K",
                             sink="fs", io_writes_in_flight=wif,
                             io_writes_in_flight_per_file=per_file,
+                            frames_override=IODEPTH_FRAMES[sc],
                         ))
     return runs
 
