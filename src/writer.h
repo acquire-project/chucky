@@ -32,10 +32,9 @@ struct writer
   struct writer_result (*append)(struct writer* self, struct slice data);
   // Finalizes the stream: writes out everything appended so far, including the
   // chunk the append cursor stopped partway through, and stops taking input.
-  // Idempotent. A later append consumes nothing and reports `finished`.
-  //
-  // Returns once those writes have landed, so the failure of any of them is
-  // reported here.
+  // Idempotent. A later append consumes nothing and reports `finished`. It
+  // returns once those writes have landed, so a write that failed is reported
+  // here.
   //
   // Finalizing is what makes the partial chunk readable: it is padded out and
   // its shard is closed. Taking more input afterwards would have to start past

@@ -331,10 +331,8 @@ Fail:
   failed = 1;
 
 Done:
-  // Finalizing only queues the truncate and close of each partial shard, and a
-  // flush that bailed partway still has writes of its own outstanding.
-  // Returning without waiting for either would report a shard whose size on
-  // disk is wrong, or free buffers the IO worker is still reading.
+  // Writes queued anywhere above can still fail, and destroy frees the buffers
+  // they read.
   if (shard_sink_drain(v->sink))
     failed = 1;
 

@@ -1,6 +1,6 @@
-// Regression test: writer_flush() on the GPU stream must drain sink IO
-// before returning, so flush is a commit point: when it returns, all
-// queued pwrite_ref jobs are durable, and any that failed are reported (#218).
+// Regression test: a flush on the GPU stream drains sink IO before returning,
+// so when it returns every queued write is durable and any that failed is
+// reported (#218).
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
@@ -166,9 +166,8 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
 {
   log_info("=== test_flush_reports_queued_truncate_failure ===");
 
-  // One epoch into a 2-per-shard append dim leaves a partial shard, so flush
-  // queues a footer write then a truncate — and the injected hook fails the
-  // truncate on the IO worker.
+  // One epoch into a 2-per-shard append dim leaves a partial shard, so the
+  // flush has a truncate to queue.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,
@@ -234,8 +233,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // The truncate fails only once the worker runs it, which is after the flush
-  // has queued it — so only a flush that waits can see it.
+  // The truncate fails on the worker, so only a flush that waits can see it.
   shard_pool_fs_inject_failing_truncate(pool);
 
   {

@@ -598,8 +598,8 @@ The caller interacts with the pipeline through a `struct writer` vtable:
 - **`flush(self)`** — finalize the stream. Writes out everything appended,
   including the chunk the cursor stopped partway through, and then stops taking
   input: a later `append` consumes nothing and reports `finished`. Idempotent.
-  Returns once those writes have landed, so the failure of any of them is
-  reported here.
+  Returns once those writes have landed, so a write that failed is reported
+  here.
 
 - **`close(self)`** — publishes the append extent and lets the sink write its
   own metadata. This is where the array becomes readable. Idempotent, and

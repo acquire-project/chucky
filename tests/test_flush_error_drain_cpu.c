@@ -1,12 +1,7 @@
 // Regression test (#218): a flush has to report the failures of the work it
-// queued. Finalizing a partial shard posts a truncate and a close; a flush that
-// returned without waiting for them reported success for a shard whose size on
-// disk is wrong.
-//
-// The failed flush is torn down here as well, so ASAN sees destroy free the
-// buffers the IO queue was reading from. That is the shape of #147 but not a
-// reproduction of it: the truncate fails on the IO worker, so the flush only
-// learns of it by draining, and destroy has nothing left to race.
+// queued. Finalizing a partial shard posts a truncate and a close, and a flush
+// that returned without waiting reported success for a shard whose size on disk
+// is wrong.
 
 #include "platform/platform.h"
 #include "store.h"
@@ -28,9 +23,8 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
 {
   log_info("=== test_flush_reports_queued_truncate_failure (cpu) ===");
 
-  // One epoch into a 2-per-shard append dim leaves a partial shard, so flush
-  // queues a footer write then a truncate — and the injected hook fails the
-  // truncate on the IO worker.
+  // One epoch into a 2-per-shard append dim leaves a partial shard, so the
+  // flush has a truncate to queue.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,
@@ -95,8 +89,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // The truncate fails only once the worker runs it, which is after the flush
-  // has queued it — so only a flush that waits can see it.
+  // The truncate fails on the worker, so only a flush that waits can see it.
   shard_pool_fs_inject_failing_truncate(pool);
 
   {
@@ -106,11 +99,6 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
       goto Cleanup;
     }
   }
-
-  // Destroy frees the footer buffers the queued IO read, so this is the
-  // teardown ASAN watches.
-  tile_stream_cpu_destroy(s);
-  s = NULL;
 
   rc = 0;
   log_info("  PASS");
