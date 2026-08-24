@@ -781,8 +781,9 @@ cpu_close_final(struct writer* self)
 {
   struct tile_stream_cpu* s =
     container_of(self, struct tile_stream_cpu, writer);
-  // Nothing is queued until a flush runs, and close only completes what a
-  // flush queued.
+  // Only a close after a flush has work to do. Before a flush the extent is
+  // not final, and the writes appends queued are waited out by the close that
+  // destroy runs after its auto-flush.
   if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   struct cpu_stream_view v = make_view(s);

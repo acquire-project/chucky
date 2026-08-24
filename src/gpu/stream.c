@@ -483,8 +483,9 @@ tile_stream_gpu_close_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Nothing is queued until a flush runs, and close only completes what a
-  // flush queued.
+  // Only a close after a flush has work to do. Before a flush the extent is
+  // not final, and the writes appends queued are waited out by the close that
+  // destroy runs after its auto-flush.
   if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   const int pushed = cu_ctx_push(s->engine.cuda);

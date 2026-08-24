@@ -245,9 +245,10 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
   if (v->layout->epoch_elements == 0)
     return writer_ok();
 
-  // Every exit runs the drain: queued IO points into buffers destroy frees.
-  // Finalizing shards and writing the array shape both claim the output is
-  // complete, so they are skipped once anything above them failed.
+  // Finalizing a shard claims it is complete, so finalize is skipped once
+  // anything above it failed. A flush that bails that way skips the drain below
+  // too, and leaves the IO it already queued to the drain in close, which
+  // destroy runs when the caller does not.
   int failed = 0;
 
   // Flush partial epoch into the batch.

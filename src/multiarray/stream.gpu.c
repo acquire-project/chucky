@@ -32,7 +32,7 @@ struct array_descriptor_gpu
   struct engine_array_state st;
 
   int flushed;      // 1 once finalized; no further input is taken
-  int closed;       // 1 once this array's writes have been waited out
+  int closed;       // 1 once close drained and, on success, published
   int close_failed; // outcome of that close, re-reported by later calls
 };
 

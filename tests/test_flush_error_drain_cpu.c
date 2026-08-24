@@ -3,8 +3,10 @@
 // returned without waiting for them reported success for a shard whose size on
 // disk is wrong.
 //
-// Also covers #147: the flush frees nothing the IO worker still reads, so
-// destroy after a failed flush is not a use-after-free (ASAN catches it).
+// The failed flush is torn down here as well, so ASAN sees destroy free the
+// buffers the IO queue was reading from. That is the shape of #147 but not a
+// reproduction of it: the truncate fails on the IO worker, so the flush only
+// learns of it by draining, and destroy has nothing left to race.
 
 #include "platform/platform.h"
 #include "store.h"
@@ -105,8 +107,8 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
     }
   }
 
-  // Destroy frees the footer buffers, which the queued IO reads — under ASAN
-  // this catches a flush that left any of it outstanding.
+  // Destroy frees the footer buffers the queued IO read, so this is the
+  // teardown ASAN watches.
   tile_stream_cpu_destroy(s);
   s = NULL;
 
