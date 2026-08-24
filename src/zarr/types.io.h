@@ -22,9 +22,13 @@ struct io_scheduling
 // Counts over the whole run; peaks and the mean only from the first post.
 struct io_queue_stats
 {
-  // Files with a write waiting: the depth available, not the depth reached.
+  // Files with a write waiting: the depth available.
   uint64_t files_waiting_peak;
   double files_waiting_mean;
+
+  // Requests the backend is running at once: the depth reached.
+  uint64_t writes_in_flight_peak;
+  double writes_in_flight_mean;
 
   uint64_t jobs_waiting_peak;
   uint64_t bytes_waiting_peak;

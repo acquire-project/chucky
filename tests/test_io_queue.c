@@ -1002,6 +1002,57 @@ Fail:
   return 1;
 }
 
+// A configured ceiling is not evidence the run reached it, so the depth
+// actually reached is measured rather than assumed.
+static int
+test_in_flight_is_measured(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){
+                                         .workers = BACKLOG,
+                                         .writes_in_flight = 3,
+                                         .writes_in_flight_per_file = BACKLOG,
+                                       });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+  struct io_queue_stats stats;
+
+  io_queue_get_stats(q, &stats);
+  CHECK(Cleanup, stats.writes_in_flight_peak == 0);
+
+  for (uint64_t i = 0; i < BACKLOG; ++i)
+    CHECK(Cleanup,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = file_token(1),
+                                             .nbytes = WRITE_BYTES,
+                                             .offset = i * WRITE_BYTES }) == 0);
+
+  CHECK(Cleanup, holds_at_records(&fake, 3) == 0);
+
+  // Eight were posted and eight workers were free, so a peak of three is the
+  // ceiling holding rather than the backlog running out.
+  io_queue_get_stats(q, &stats);
+  CHECK(Cleanup, stats.writes_in_flight_peak == 3);
+  CHECK(Cleanup, stats.writes_in_flight_mean > 0.0);
+  CHECK(Cleanup, stats.writes_in_flight_mean <= 3.0);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
 static int
 test_writes_in_flight_ceiling(void)
 {
@@ -1251,6 +1302,7 @@ main(void)
     { "zero_byte_write", test_zero_byte_write },
     { "cancelled_answer_retires", test_cancelled_answer_retires },
     { "fence_during_destroy", test_fence_during_destroy },
+    { "in_flight_is_measured", test_in_flight_is_measured },
     { "writes_in_flight_ceiling", test_writes_in_flight_ceiling },
     { "per_file_ceiling", test_per_file_ceiling },
     { "files_take_turns", test_files_take_turns },

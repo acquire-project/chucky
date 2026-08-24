@@ -1,11 +1,12 @@
 #include "zarr/io_queue_stats.h"
 
-// Call before every change to the count, and again on read.
+// Call before every change to either count, and again on read.
 static void
-fold_files_waiting(struct io_queue_counters* c, int64_t now)
+fold(struct io_queue_counters* c, int64_t now)
 {
-  c->files_weighted_ns +=
-    (double)c->files_waiting * (double)(now - c->weighted_from_ns);
+  const double elapsed = (double)(now - c->weighted_from_ns);
+  c->files_weighted_ns += (double)c->files_waiting * elapsed;
+  c->in_flight_weighted_ns += (double)c->in_flight * elapsed;
   c->weighted_from_ns = now;
 }
 
@@ -25,10 +26,21 @@ io_queue_counters_files_waiting(struct io_queue_counters* c,
                                 uint64_t files,
                                 int64_t now)
 {
-  fold_files_waiting(c, now);
+  fold(c, now);
   c->files_waiting = files;
   if (files > c->published.files_waiting_peak)
     c->published.files_waiting_peak = files;
+}
+
+void
+io_queue_counters_in_flight(struct io_queue_counters* c,
+                            uint64_t in_flight,
+                            int64_t now)
+{
+  fold(c, now);
+  c->in_flight = in_flight;
+  if (in_flight > c->published.writes_in_flight_peak)
+    c->published.writes_in_flight_peak = in_flight;
 }
 
 void
@@ -85,13 +97,15 @@ io_queue_counters_read(struct io_queue_counters* c,
                        struct io_queue_stats* out,
                        int64_t now)
 {
-  fold_files_waiting(c, now);
+  fold(c, now);
   *out = c->published;
 
   const int64_t observed_ns =
     c->start_ns ? c->weighted_from_ns - c->start_ns : 0;
   out->files_waiting_mean =
     observed_ns > 0 ? c->files_weighted_ns / (double)observed_ns : 0.0;
+  out->writes_in_flight_mean =
+    observed_ns > 0 ? c->in_flight_weighted_ns / (double)observed_ns : 0.0;
 
   const double finished = (double)c->writes_finished;
   out->wait_ms_mean = finished > 0 ? c->wait_ms_total / finished : 0.0;

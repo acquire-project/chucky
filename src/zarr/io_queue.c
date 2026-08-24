@@ -364,6 +364,7 @@ retire_job(struct io_queue* q, struct io_completion c, int64_t finished_ns)
     q->tail++;
   q->pending_bytes -= job.req.nbytes;
   q->in_flight--;
+  io_queue_counters_in_flight(&q->counters, q->in_flight, finished_ns);
   file_request_retired(q, c.seq, &job.req, finished_ns);
   io_queue_counters_finished(
     &q->counters, &job.req, job.post_ns, job.started_ns, finished_ns);
@@ -404,11 +405,12 @@ worker_thread(void* arg)
 
     struct io_job* slot = job_at(q, seq);
     slot->state = IO_JOB_RUNNING;
-    // A truncate or close has no payload, so no clock is read for one.
-    const int timed = slot->req.nbytes > 0;
-    slot->started_ns = timed ? platform_monotonic_ns() : 0;
+    const int64_t now = platform_monotonic_ns();
+    // Only work with a payload is timed, so a truncate or close has no start.
+    slot->started_ns = slot->req.nbytes > 0 ? now : 0;
     q->jobs_waiting--;
     q->in_flight++;
+    io_queue_counters_in_flight(&q->counters, q->in_flight, now);
     struct file_pending* f = file_find(q, slot->req.file);
     if (f) {
       f->in_flight++;
@@ -427,7 +429,7 @@ worker_thread(void* arg)
       q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
 
     if (dispatch == IO_DONE)
-      retire_job(q, done, timed ? platform_monotonic_ns() : 0);
+      retire_job(q, done, platform_monotonic_ns());
   }
 }
 

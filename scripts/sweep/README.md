@@ -192,13 +192,16 @@ so a sweep is comparable only against one taken with the same settings:
 | `io_writes_in_flight` | most requests handed to the backend at once, over every shard file |
 | `io_writes_in_flight_per_file` | most on any one shard file; above one the file is pre-sized so its writes do not extend it |
 
-What the write path then did is also recorded. `io_files_waiting_*` is the
-queue depth the scheduler had to work with, which is not the depth reached:
+What the write path then did is also recorded. Read `io_writes_in_flight_*`,
+the depth reached, against `io_files_waiting_*`, the depth the scheduler had
+to work with. A configured ceiling is not evidence the run got near it:
 
 | field | holds |
 |---|---|
 | `io_files_waiting_mean` | shard files with a write waiting, averaged over time |
 | `io_files_waiting_peak` | the most at once |
+| `io_writes_in_flight_mean` | requests the backend was running at once, averaged over time: the depth reached, against the two rows above, which are the depth available |
+| `io_writes_in_flight_peak` | the most at once |
 | `io_files_opened` | shard files opened over the run |
 | `io_files_open_peak` | the most open at once |
 | `io_writes` | writes run by the queue |

@@ -411,6 +411,10 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_float(&jw, io->queue.files_waiting_mean);
     jw_key(&jw, "io_files_waiting_peak");
     jw_uint(&jw, io->queue.files_waiting_peak);
+    jw_key(&jw, "io_writes_in_flight_mean");
+    jw_float(&jw, io->queue.writes_in_flight_mean);
+    jw_key(&jw, "io_writes_in_flight_peak");
+    jw_uint(&jw, io->queue.writes_in_flight_peak);
     jw_key(&jw, "io_files_opened");
     jw_uint(&jw, io->files_opened);
     jw_key(&jw, "io_files_open_peak");

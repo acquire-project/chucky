@@ -12,7 +12,9 @@ struct io_queue_counters
   int64_t start_ns;
   int64_t weighted_from_ns;
   double files_weighted_ns;
+  double in_flight_weighted_ns;
   uint64_t files_waiting;
+  uint64_t in_flight;
 
   uint64_t writes_finished;
   double wait_ms_total;
@@ -28,6 +30,12 @@ void
 io_queue_counters_files_waiting(struct io_queue_counters* c,
                                 uint64_t files,
                                 int64_t now);
+
+// Requests handed to the backend and not yet finished.
+void
+io_queue_counters_in_flight(struct io_queue_counters* c,
+                            uint64_t in_flight,
+                            int64_t now);
 
 // Totals as of after taking the work; now also opens the averaging window.
 void
