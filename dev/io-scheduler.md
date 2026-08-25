@@ -312,23 +312,52 @@ larger cap.
 ### The shared file server
 
 `/bio`, which is `/mnt/main0`, is an NFS version 3 mount, one mebibyte per
-request, sixteen TCP connections (`nconnect=16`). Every login and compute node
-has it. A file written on a compute node was checksummed from a second machine,
-so the bytes do reach the server.
+request, sixteen TCP connections (`nconnect=16`), over an NVMe store. Every
+login and compute node has it. A file written on a compute node was
+checksummed from a second machine, so the bytes do reach the server.
 
-One write costs about ten times what it costs on a local drive: 51 ms for
-48 MiB, against 5 ms on the eight-drive array. Throughput comes from depth
-alone. `dev/io-depth/io_depth`, 48 MiB writes over 64 files, one write per
-file, two repeats averaged:
+**A node caps near 8.8 GB/s, and the server does not.** One point run by one,
+two and four nodes at once totals 7.4, 12.3 and 25.0 GB/s. The limit belongs
+to a node, not to the file server: 8.8 GB/s is about 70 Gb/s, which is roughly
+what one of a node's 100 Gb/s ports carries in practice.
 
-| depth reached | 1.0 | 7.8 | 14.2 | 23.7 | 37.2 |
-|---|---:|---:|---:|---:|---:|
-| from a `cpu-turin-gp-l` node, GB/s | 0.90 | 4.89 | 5.87 | 5.50 | 7.51 |
-| from an L40 node, GB/s | 0.92 | 5.17 | 7.87 | 7.34 | 6.77 |
+From one node, 8 MiB writes over 256 files, unbuffered:
+
+| writes in flight | 32 | 64 | 128 | 256 |
+|---|---:|---:|---:|---:|
+| GB/s | 8.26 | 7.88 | 8.76 | 7.90 |
+| median write, ms | 17 | 24 | 79 | 147 |
+
+Thirty-two is the knee, and past it only the latency grows. Buffered writes
+are no faster and cost ten times the system time — 24 s against 1.4 s for
+32 GiB — so the shipping path's O_DIRECT is right here too. Request size
+matters up to about 8 MiB: at sixteen writes in flight, 1 MiB gives 3.14 GB/s
+and 8 MiB gives 7.20, flat above that.
+
+One write costs about ten times what it costs on a local drive, 51 ms for
+48 MiB against 5 ms on the eight-drive array, so throughput comes from depth
+alone. The default of eight writes in flight is chosen for a local array and
+is too low for this mount.
 
 The server is shared with the rest of the cluster. Two repeats of one point
-differ by up to 40% — 6.85 and 4.89 GB/s at depth 14 on the same node minutes
-apart — so a single reading is an estimate.
+differ by up to 40%, so a single reading is an estimate.
+
+**The sink reaches about half of what a node can.** `orca2_single`
+uncompressed writes 3.9 to 4.8 GB/s to the mount, and eight of those streams
+at once on one node total 8.78 — the node's own ceiling. The shortfall is in
+one stream rather than in the mount or the server.
+
+| streams at once | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|
+| total GB/s | 3.86 | 5.41 | 6.78 | **8.78** |
+| depth reached, each | 12.6 | 10.3 | 9.5 | 8.3 |
+
+The queue is starved rather than backed up: it waits 0.4 ms and reaches depth
+12.6, while the mount wants about thirty-two writes at a time. Raising the cap
+does not move it, because throughput here is depth times write size over
+latency and the producer stops posting once it waits on an io fence. That is
+the same pipeline limit the eight-drive array shows, and the mount's higher
+latency makes it wider.
 
 **The faster target depends on the node.** An L40 node's mirror gives 1.6 to
 2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`
@@ -346,22 +375,12 @@ one allocation:
 Compare the pairs with each other and not with the 4000-frame table above:
 2000 frames is short enough to read low, as that section says.
 
-The sink reaches about 5 GB/s on the file server from either node, so nothing
-is gained from the 96-core node's stronger pipeline. The remaining limit is
-the latency already seen on the array: at the fastest settings writes wait
-0.4 ms, so the queue drains as fast as it fills, and a write takes 97 ms
-against 62 on the array.
-
 **Writes to one file are serialized.** On a single file, depth adds latency in
 proportion and no throughput — 1.05 GB/s at one write in flight against 1.35
 at thirty-two, while the median write goes from 47 ms to 1204. Pre-sizing
 cannot help there, because there is no extending-write lock to avoid. Per-file
 depth still helps `orca2_single`, but only by raising the total across its
 sixteen shard files.
-
-Two other settings matter less than depth. A request of at least 8 MiB is
-worth having, 3.14 GB/s at 1 MiB against 7.20 at 8 MiB, and the curve is flat
-above that. Buffered and unbuffered are within the run-to-run spread.
 
 ### 4. io_uring on Linux
 
