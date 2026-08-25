@@ -11,8 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Wait for everything queued up to ev, charging the wall time to metric when
-// one is given.
+// Wait for every write queued up to the event, timed into the metric when one
+// is given.
 static void
 wait_fence_timed(struct shard_sink* sink,
                  struct io_event ev,
