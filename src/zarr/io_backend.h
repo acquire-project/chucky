@@ -21,8 +21,9 @@ struct io_backend
   // The request outlives the call, so a backend answering IO_SUBMITTED can
   // keep reading it until it calls io_queue_complete; after that the queue
   // may reuse the slot. A backend with no room for the request answers
-  // IO_BUSY, which keeps its place and its order, and one that answers
-  // IO_BUSY forever leaves the queue nothing to drain.
+  // IO_BUSY, which keeps the request where it was in line. A backend that
+  // never takes a request keeps the queue from draining, so io_queue_destroy
+  // never returns.
   //
   // A write that comes back short is finished here rather than by the queue,
   // by retrying what io_write_remaining hands back. Reporting fewer bytes
