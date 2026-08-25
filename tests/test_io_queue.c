@@ -1408,8 +1408,8 @@ test_backend_is_stopped_at_teardown(void)
 
   io_queue_destroy(q);
 
-  // Stopped once, and with every request already handed over, so a backend
-  // running a thread of its own has nothing left to do when it is stopped.
+  // The backend is stopped once, with every request already handed over, so
+  // one running a thread of its own has nothing left to do by then.
   CHECK(Fail, fake.stops == 1);
   CHECK(Fail, fake.records_when_stopped == STOP_REQUESTS);
   return 0;
@@ -1424,8 +1424,8 @@ Fail:
 
 // A backend that finishes later reads the request after execute has returned,
 // so what it was handed has to still be there and still say the same thing.
-// The second request goes to the same worker, and a request that lived only
-// as long as the call would leave both pointing at the same worn-out place.
+// Both requests go to the same worker, so a request living only as long as the
+// call would leave the two pointers aimed at the same spot on its stack.
 static int
 test_request_outlives_execute(void)
 {
@@ -1453,7 +1453,7 @@ test_request_outlives_execute(void)
                                            .offset = 7 * WRITE_BYTES }) == 0);
   CHECK(Cleanup, wait_for_deferred(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
 
-  // Another file, so this one is not held behind the first.
+  // This names another file, so it is not held behind the first.
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
@@ -1509,11 +1509,10 @@ static int
 test_short_write_is_finished_by_the_backend(void)
 {
   char payload[WRITE_BYTES];
-  char landed[2 * WRITE_BYTES];
+  char landed[2 * WRITE_BYTES] = { 0 };
 
   for (uint64_t i = 0; i < WRITE_BYTES; ++i)
     payload[i] = (char)(i * 7 + 1);
-  memset(landed, 0, sizeof(landed));
 
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);

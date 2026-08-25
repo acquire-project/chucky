@@ -26,8 +26,8 @@ struct io_backend
   //
   // A write that comes back short is finished here rather than by the queue,
   // by retrying what io_write_remaining hands back. Reporting fewer bytes
-  // than were asked for says the backend gave up, and raising the error flag
-  // it was given is its own to do.
+  // than were asked for says the backend gave up; the queue does not read
+  // that as an error, so the backend raises the error flag it was given.
   int (*execute)(void* ctx,
                  const struct io_request* req,
                  uint64_t seq,
@@ -35,6 +35,6 @@ struct io_backend
 
   // Called once by io_queue_destroy, after the last request has finished and
   // every worker has stopped. A backend running a thread of its own stops it
-  // here. Optional, and a backend wrapping another must pass it along.
+  // here. This is optional, and a backend wrapping another passes it along.
   void (*stop)(void* ctx);
 };

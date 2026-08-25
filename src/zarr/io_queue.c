@@ -389,7 +389,7 @@ Unlock:
 static void
 requeue_job(struct io_queue* q, uint64_t seq)
 {
-  int wait_for_a_retirement = 0;
+  int waited_for_a_retirement = 0;
 
   platform_mutex_lock(q->mutex);
 
@@ -412,13 +412,14 @@ requeue_job(struct io_queue* q, uint64_t seq)
 
   // Whatever the backend has no room for is work it already holds, so the
   // next request to finish is what frees it.
-  wait_for_a_retirement = q->in_flight > 0;
-  if (wait_for_a_retirement)
+  if (q->in_flight > 0) {
+    waited_for_a_retirement = 1;
     platform_cond_wait(q->cond_not_empty, q->mutex);
+  }
 
 Unlock:
   platform_mutex_unlock(q->mutex);
-  if (!wait_for_a_retirement)
+  if (!waited_for_a_retirement)
     platform_sleep_ns(BUSY_RETRY_NS);
 }
 
@@ -462,7 +463,7 @@ worker_thread(void* arg)
     const struct io_request* req = &slot->req;
     struct io_completion done = {
       .seq = seq,
-      .nbytes = slot->req.nbytes,
+      .nbytes = req->nbytes,
       .status = IO_OK,
     };
     platform_mutex_unlock(q->mutex);

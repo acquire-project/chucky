@@ -44,10 +44,10 @@ struct io_request
   void (*owned_free)(void*);
 };
 
-// The part of a write still to be done. A short write is finished by the
-// backend that reported it, retrying this until nothing is left. The queue's
-// own copy is left alone, so the room it gives back still matches what was
-// asked for, and this copy owns nothing.
+// The part of a write still to be done is returned here. A short write is
+// finished by the backend that saw it, which retries this until nothing is
+// left. The queue's own copy is untouched, so the room it gives back still
+// matches what was asked for, and this copy owns nothing.
 static inline struct io_request
 io_write_remaining(const struct io_request* req, uint64_t written)
 {
