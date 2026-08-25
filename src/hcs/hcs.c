@@ -166,8 +166,8 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     CHECK(Fail, rn_len < 64); // bounded by hcs_plate.row_names buffer
   }
 
-  // The whole plate shares one pool so that it shares one io queue, so the
-  // pool has to be wide enough to give every field of view its own slots.
+  // One pool keeps the whole plate on one io queue, so the pool has to be wide
+  // enough for every field of view to have its own slots.
   uint64_t slots_per_fov = ngff_multiscale_slot_count(&cfg->fov);
   CHECK(Fail, slots_per_fov > 0);
 
