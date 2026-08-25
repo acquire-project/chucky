@@ -45,12 +45,22 @@ faults_execute(void* ctx,
   return IO_DONE;
 }
 
+static void
+faults_stop(void* ctx)
+{
+  struct io_faults* f = (struct io_faults*)ctx;
+  if (f->inner.stop)
+    f->inner.stop(f->inner.ctx);
+}
+
 static struct io_backend
 faults_wrap(void* ctx, struct io_backend inner)
 {
   struct io_faults* f = (struct io_faults*)ctx;
   f->inner = inner;
-  return (struct io_backend){ .ctx = f, .execute = faults_execute };
+  return (struct io_backend){ .ctx = f,
+                              .execute = faults_execute,
+                              .stop = faults_stop };
 }
 
 static struct shard_pool*

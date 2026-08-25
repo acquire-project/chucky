@@ -394,14 +394,15 @@ too, so evidence is needed first.
 
 **Close four gaps in the backend interface** (#229), as its own pull request
 before any ring is written. The interface step 2 built is general enough to hold
-one, but a backend has no way to say "not now", which a full submission queue
-needs; the alternatives today are to block a worker or to fail the request. The
-queue never calls into the backend at teardown, so a backend with a thread of
-its own has nowhere to stop it. The request handed to `execute` is the worker's
-own copy and dies when the call returns, so a backend that finishes later has to
-copy what it needs. And a short write is unowned: `platform_pwrite` loops
-internally so it never reports one, a ring does, and retrying the remainder
-belongs in the backend rather than in the queue.
+one, and these four were what it was short of. A backend with no room now
+answers "not now" instead of blocking a worker or failing the request, and the
+queue offers that request again with its place in line kept. A backend can carry
+a stop, called once at teardown, so one running a thread of its own has
+somewhere to release it. The request handed to `execute` is the queue's own copy
+and outlives the call, so a backend that finishes later reads it where it lies
+rather than copying what it needs. And a short write is the backend's to finish:
+`platform_pwrite` loops internally so it never reports one, a ring does, and the
+part still to be done is handed back for retrying.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default. The file server's own numbers are above, so that matrix has a
