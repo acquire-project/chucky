@@ -12,7 +12,6 @@
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
-#include "zarr.h"
 #include "zarr/shard_pool_fs.h"
 
 #include <stdatomic.h>
@@ -107,7 +106,7 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
   tile_stream_gpu_destroy(s);
   s = NULL;
 
-  CHECK(Cleanup, zarr_array_has_error(z.array) == 0);
+  CHECK(Cleanup, test_zarr_sink_has_error(&z) == 0);
 
   rc = 0;
   log_info("  PASS");
@@ -243,7 +242,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
   const size_t epoch_elements = 4 * 8 * 12;
   const size_t append_elements = 2 * epoch_elements; // one full batch at K=2
 
-  struct io_faults faults = { 0 };
+  struct io_faults faults;
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
@@ -308,7 +307,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
     goto Cleanup;
   }
 
-  CHECK(Cleanup, zarr_array_has_error(z.array) == 0);
+  CHECK(Cleanup, test_zarr_sink_has_error(&z) == 0);
 
   rc = 0;
   log_info("  PASS");

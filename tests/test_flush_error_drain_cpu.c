@@ -42,7 +42,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct io_faults faults = { 0 };
+  struct io_faults faults;
   struct test_zarr_sink z = { 0 };
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;

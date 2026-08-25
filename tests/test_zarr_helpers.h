@@ -32,9 +32,7 @@ test_zarr_sink_open(struct test_zarr_sink* z,
                     struct codec_config codec,
                     int unbuffered);
 
-// The store passed in is owned by the sink from here on, even when the open
-// fails. The pool is created and owned here as well; the open above leaves the
-// pool null, because there the array owns it.
+// The store passed in is owned from here on, even when the open fails.
 int
 test_zarr_sink_open_with_pool(struct test_zarr_sink* z,
                               struct store* store,
@@ -46,6 +44,9 @@ test_zarr_sink_open_with_pool(struct test_zarr_sink* z,
 
 struct shard_sink*
 test_zarr_sink_as_shard_sink(struct test_zarr_sink* z);
+
+int
+test_zarr_sink_has_error(const struct test_zarr_sink* z);
 
 void
 test_zarr_sink_flush(struct test_zarr_sink* z);

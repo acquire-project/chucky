@@ -10,7 +10,6 @@
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
-#include "zarr.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -65,7 +64,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct io_faults faults = { 0 };
+  struct io_faults faults;
   struct test_zarr_sink z = { 0 };
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;
@@ -136,7 +135,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     goto Cleanup;
   }
 
-  if (zarr_array_has_error(z.array)) {
+  if (test_zarr_sink_has_error(&z)) {
     log_error("zarr_array reported IO error after drain");
     goto Cleanup;
   }

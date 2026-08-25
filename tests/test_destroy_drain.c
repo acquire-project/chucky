@@ -9,7 +9,6 @@
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
-#include "zarr.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -59,7 +58,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   };
   const size_t total_elements = 12 * 8 * 12;
 
-  struct io_faults faults = { 0 };
+  struct io_faults faults;
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
@@ -125,7 +124,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
     goto Cleanup;
   }
 
-  if (zarr_array_has_error(z.array)) {
+  if (test_zarr_sink_has_error(&z)) {
     log_error("zarr_array reported IO error after drain");
     goto Cleanup;
   }
