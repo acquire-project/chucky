@@ -306,6 +306,102 @@ Fail:
   return 1;
 }
 
+// --- Test: two fields open at the same time keep their own shard files ---
+
+static int
+test_hcs_two_fields_open_together(void)
+{
+  log_info("=== test_hcs_two_fields_open_together ===");
+
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Fail, store);
+  store->mkdirs(store, ".");
+
+  struct dimension dims[] = {
+    { .size = 16,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 16,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct hcs_plate_config cfg = {
+    .name = "together",
+    .rows = 1,
+    .cols = 1,
+    .field_count = 2,
+    .fov = {
+      .data_type = dtype_u8,
+      .rank = 2,
+      .dimensions = dims,
+      .nlod = 1,
+    },
+  };
+
+  struct hcs_plate* plate = hcs_plate_create(store, &cfg);
+  CHECK(Fail2, plate);
+
+  struct shard_sink* first = hcs_plate_fov_sink(plate, 0, 0, 0);
+  struct shard_sink* second = hcs_plate_fov_sink(plate, 0, 0, 1);
+  CHECK(Fail3, first && second);
+
+  struct shard_writer* first_shard = first->open(first, 0, 0);
+  CHECK(Fail3, first_shard);
+  struct shard_writer* second_shard = second->open(second, 0, 0);
+  CHECK(Fail3, second_shard);
+  CHECK(Fail3, first_shard != second_shard);
+
+  uint8_t first_data[256], second_data[256];
+  memset(first_data, 0x11, sizeof(first_data));
+  memset(second_data, 0x22, sizeof(second_data));
+
+  CHECK(Fail3,
+        first_shard->write(
+          first_shard, 0, first_data, first_data + sizeof(first_data)) == 0);
+  CHECK(Fail3,
+        second_shard->write(
+          second_shard, 0, second_data, second_data + sizeof(second_data)) ==
+          0);
+  CHECK(Fail3, first_shard->finalize(first_shard) == 0);
+  CHECK(Fail3, second_shard->finalize(second_shard) == 0);
+
+  // Destroying the plate drains the writes, so the files are complete below.
+  hcs_plate_destroy(plate);
+  plate = NULL;
+
+  char path[4096], buf[8192];
+  size_t len;
+
+  snprintf(path, sizeof(path), "%s/together/A/1/0/0/c/0/0", tmpdir);
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, len == sizeof(first_data));
+  CHECK(Fail3, memcmp(buf, first_data, sizeof(first_data)) == 0);
+
+  snprintf(path, sizeof(path), "%s/together/A/1/1/0/c/0/0", tmpdir);
+  CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+  CHECK(Fail3, len == sizeof(second_data));
+  CHECK(Fail3, memcmp(buf, second_data, sizeof(second_data)) == 0);
+
+  store_destroy(store);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  hcs_plate_destroy(plate);
+Fail2:
+  store_destroy(store);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -319,6 +415,7 @@ main(void)
   err |= test_plate_metadata_with_mask();
   err |= test_hcs_plate_create();
   err |= test_hcs_well_mask();
+  err |= test_hcs_two_fields_open_together();
 
   test_tmpdir_remove(tmpdir);
 

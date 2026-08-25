@@ -1,7 +1,6 @@
 #include "hcs.h"
 #include "defs.limits.h"
 #include "hcs/hcs_metadata.h"
-#include "lod/lod_plan.h"
 #include "ngff/ngff_multiscale.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -167,25 +166,15 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     CHECK(Fail, rn_len < 64); // bounded by hcs_plate.row_names buffer
   }
 
-  // Compute pool size: max shard_inner_count across all LOD levels
-  struct lod_plan plan = { 0 };
-  int max_lev = cfg->fov.nlod > 0 ? cfg->fov.nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->fov.dimensions, cfg->fov.rank, max_lev, 0) == 0);
+  // The whole plate shares one pool so that it shares one io queue, so the
+  // pool has to be wide enough to give every field of view its own slots.
+  uint64_t slots_per_fov = ngff_multiscale_slot_count(&cfg->fov);
+  CHECK(Fail, slots_per_fov > 0);
 
-  uint8_t na = dims_n_append(cfg->fov.dimensions, cfg->fov.rank);
-  uint64_t total_slots = 0;
-  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
-    uint64_t sic = 1;
-    for (int d = na; d < cfg->fov.rank; ++d)
-      sic *= plan.levels.level[lv].dim[d].shard_count;
-    total_slots += sic;
-  }
-  lod_plan_free(&plan);
-  CHECK(Fail, total_slots > 0);
-
-  struct shard_pool* pool = store->create_pool(store, total_slots);
+  uint64_t fov_count =
+    (uint64_t)cfg->rows * (uint64_t)cfg->cols * (uint64_t)cfg->field_count;
+  struct shard_pool* pool =
+    store->create_pool(store, fov_count * slots_per_fov);
   CHECK(Fail, pool);
 
   struct hcs_plate* p = (struct hcs_plate*)calloc(1, sizeof(*p));
@@ -263,10 +252,14 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
         int fp_rc =
           strbuf_appendf(&fov_prefix, "%s/%c/%d/%d", cfg->name, rc, c + 1, f);
         int idx = fov_index(p, r, c, f);
-        p->fovs[idx] = fp_rc == 0
-                         ? ngff_multiscale_create_with_pool(
-                             store, pool, strbuf_cstr(&fov_prefix), &cfg->fov)
-                         : NULL;
+        p->fovs[idx] =
+          fp_rc == 0
+            ? ngff_multiscale_create_with_pool(store,
+                                               pool,
+                                               (uint64_t)idx * slots_per_fov,
+                                               strbuf_cstr(&fov_prefix),
+                                               &cfg->fov)
+            : NULL;
         strbuf_free(&fov_prefix);
         CHECK(Fail_fovs, p->fovs[idx]);
       }
