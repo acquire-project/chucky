@@ -383,32 +383,34 @@ Unlock:
     owned_free(owned);
 }
 
-// A backend with no room for a request answers IO_BUSY and the request is
-// handed over again. It keeps its sequence number and its place on the file,
-// so nothing is reordered.
-static void
-requeue_job(struct io_queue* q, uint64_t seq)
+// A refused request goes back where it was, keeping its sequence number and
+// its place on its file, so nothing is reordered. Zero is returned when it
+// cannot go back: a newer open of the same file index has taken that entry
+// over, and the list the request was reachable from went with it.
+static int
+requeue_job(struct io_queue* q, uint64_t seq, int64_t now)
 {
+  int requeued = 0;
   int waited_for_a_retirement = 0;
 
   platform_mutex_lock(q->mutex);
 
   struct io_job* slot = job_at(q, seq);
   CHECK(Unlock, slot->seq == seq && slot->state == IO_JOB_RUNNING);
+  struct file_pending* f = file_find(q, slot->req.file);
+  CHECK_SILENT(Unlock, f || slot->req.file.generation == 0);
 
   slot->state = IO_JOB_WAITING;
-  slot->started_ns = 0;
   q->jobs_waiting++;
   q->in_flight--;
-  io_queue_counters_in_flight(
-    &q->counters, q->in_flight, platform_monotonic_ns());
+  io_queue_counters_in_flight(&q->counters, q->in_flight, now);
 
-  struct file_pending* f = file_find(q, slot->req.file);
   if (f) {
     f->in_flight--;
     if (is_barrier(&slot->req))
       f->barrier_running = 0;
   }
+  requeued = 1;
 
   // Whatever the backend has no room for is work it already holds, so the
   // next request to finish is what frees it.
@@ -419,8 +421,9 @@ requeue_job(struct io_queue* q, uint64_t seq)
 
 Unlock:
   platform_mutex_unlock(q->mutex);
-  if (!waited_for_a_retirement)
+  if (requeued && !waited_for_a_retirement)
     platform_sleep_ns(BUSY_RETRY_NS);
+  return requeued;
 }
 
 static void
@@ -470,10 +473,19 @@ worker_thread(void* arg)
 
     const int dispatch = q->backend.execute(q->backend.ctx, req, seq, &done);
 
-    if (dispatch == IO_DONE)
+    if (dispatch == IO_DONE) {
       retire_job(q, done, platform_monotonic_ns());
-    else if (dispatch == IO_BUSY)
-      requeue_job(q, seq);
+    } else if (dispatch == IO_BUSY) {
+      const int64_t now = platform_monotonic_ns();
+      // A request that is on no list can never be picked up again, so it is
+      // finished here rather than left waiting to be.
+      if (!requeue_job(q, seq, now)) {
+        log_error("io_queue: a refused request named a file that was reopened");
+        done.nbytes = 0;
+        done.status = IO_CANCELLED;
+        retire_job(q, done, now);
+      }
+    }
   }
 }
 

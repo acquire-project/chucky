@@ -27,7 +27,7 @@ copy_the_write(struct io_backend_fake* f, const struct io_request* req)
     uint64_t taken = rest.nbytes;
     if (f->bytes_per_attempt && taken > f->bytes_per_attempt)
       taken = f->bytes_per_attempt;
-    if (rest.offset + taken <= f->dest_nbytes)
+    if (rest.offset <= f->dest_nbytes && taken <= f->dest_nbytes - rest.offset)
       memcpy((char*)f->dest + rest.offset, rest.payload, (size_t)taken);
     atomic_fetch_add(&f->write_attempts, 1);
     rest = io_write_remaining(&rest, taken);
@@ -56,12 +56,13 @@ fake_execute(void* ctx,
     };
   atomic_fetch_add(&f->nrecords, 1);
 
+  // Held ahead of the refusal, so a request can be both held and refused.
+  while (f->gate && atomic_load(f->gate) == 0)
+    platform_sleep_ns(1000000LL);
+
   int dispatch = IO_BUSY;
   if (!take_a_refusal(f)) {
-    while (f->gate && atomic_load(f->gate) == 0)
-      platform_sleep_ns(1000000LL);
-
-    if (f->dest && req->op == IO_OP_WRITE)
+    if (f->dest && req->payload && req->op == IO_OP_WRITE)
       copy_the_write(f, req);
 
     out->seq = seq;
@@ -73,7 +74,7 @@ fake_execute(void* ctx,
       const uint64_t d = atomic_fetch_add(&f->nclaimed_deferred, 1);
       if (d < IO_BACKEND_FAKE_CAPACITY) {
         f->deferred[d] = seq;
-        f->deferred_requests[d] = req;
+        atomic_store(&f->deferred_requests[d], req);
       }
       atomic_fetch_add(&f->ndeferred, 1);
       dispatch = IO_SUBMITTED;
@@ -160,9 +161,11 @@ io_backend_fake_short_write(struct io_backend_fake* f, uint64_t nbytes)
 const struct io_request*
 io_backend_fake_deferred_request(const struct io_backend_fake* f, uint64_t i)
 {
-  if (i >= atomic_load(&f->ndeferred) || i >= IO_BACKEND_FAKE_CAPACITY)
+  // The published count says how many places are taken, not which, so the
+  // place itself is what says whether a call has filled it in.
+  if (i >= IO_BACKEND_FAKE_CAPACITY)
     return NULL;
-  return f->deferred_requests[i];
+  return atomic_load(&f->deferred_requests[i]);
 }
 
 uint64_t

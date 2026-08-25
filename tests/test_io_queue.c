@@ -1556,6 +1556,64 @@ Fail:
   return 1;
 }
 
+// --- test: a refused request whose file index was reused ---
+
+// A close hands its file index back when it runs, so a new open can hold that
+// index while the close has not retired. A close refused in that window is on
+// no list any more, and putting it back would strand it with the queue unable
+// to drain.
+static int
+test_refused_request_after_the_index_is_reused(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  _Atomic int gate;
+  atomic_store(&gate, 0);
+  io_backend_fake_hold(&fake, &gate);
+  io_backend_fake_refuse(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  test_thread* thr = NULL;
+  struct fence_wait w;
+  const struct io_file_token first = { .generation = 1, .index = 0 };
+  const struct io_file_token second = { .generation = 2, .index = 0 };
+
+  CHECK(Cleanup,
+        io_queue_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = first }) == 0);
+  CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
+
+  // The close is held in the backend, which is the window a new open claiming
+  // the same index takes the file entry over in.
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = second,
+                                           .nbytes = WRITE_BYTES }) == 0);
+
+  // One worker, so the close is refused first and the write is taken after.
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
+  CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, io_backend_fake_refused_count(&fake) == 1);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  rc = 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  test_thread_join(thr);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
 // --- main ---
 
 int
@@ -1601,6 +1659,8 @@ main(void)
     { "request_outlives_execute", test_request_outlives_execute },
     { "short_write_is_finished_by_the_backend",
       test_short_write_is_finished_by_the_backend },
+    { "refused_request_after_the_index_is_reused",
+      test_refused_request_after_the_index_is_reused },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

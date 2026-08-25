@@ -26,8 +26,9 @@ struct io_backend_fake
   _Atomic uint64_t nrecords;
 
   uint64_t deferred[IO_BACKEND_FAKE_CAPACITY];
-  // The request each deferred call was handed, at its place in that list.
-  const struct io_request* deferred_requests[IO_BACKEND_FAKE_CAPACITY];
+  // The request each deferred call was handed is kept at its place in that
+  // list.
+  _Atomic(const struct io_request*) deferred_requests[IO_BACKEND_FAKE_CAPACITY];
   _Atomic uint64_t nclaimed_deferred;
   _Atomic uint64_t ndeferred;
 
@@ -79,8 +80,8 @@ io_backend_fake_set_outcome(struct io_backend_fake* f,
 void
 io_backend_fake_refuse(struct io_backend_fake* f, uint64_t requests);
 
-// Copy every write into dest at the request's offset, so what landed can be
-// checked. A write reaching past the end is dropped.
+// Copy every write carrying a payload into dest at the request's offset, so
+// what landed can be checked. A write reaching past the end is dropped.
 void
 io_backend_fake_write_into(struct io_backend_fake* f,
                            void* dest,
@@ -91,8 +92,9 @@ io_backend_fake_write_into(struct io_backend_fake* f,
 void
 io_backend_fake_short_write(struct io_backend_fake* f, uint64_t nbytes);
 
-// The request a deferred call was handed. It stays valid until the queue is
-// told that request finished. NULL past the end of the list.
+// The request a deferred call was handed is returned here, and it stays good
+// until the queue is told that request finished. A null result means no call
+// has filled that place in yet.
 const struct io_request*
 io_backend_fake_deferred_request(const struct io_backend_fake* f, uint64_t i);
 
