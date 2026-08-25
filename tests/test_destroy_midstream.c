@@ -9,12 +9,11 @@
 #include "stream.gpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr.h"
-#include "zarr/shard_pool.h"
 #include "zarr/shard_pool_fs.h"
-#include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -68,30 +67,20 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
   const size_t epoch_elements = 4 * 64 * 64;
   const size_t append_elements = 3 * epoch_elements; // 1.5 batches at K=2
 
-  struct store* store = NULL;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint16_t* src = NULL;
   int rc = 1;
 
-  store = store_fs_create(tmpdir, 1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          store_fs_create(tmpdir, 1),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_ZSTD }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
@@ -101,7 +90,7 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
     .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
@@ -118,7 +107,7 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
   tile_stream_gpu_destroy(s);
   s = NULL;
 
-  CHECK(Cleanup, zarr_array_has_error(arr) == 0);
+  CHECK(Cleanup, zarr_array_has_error(z.array) == 0);
 
   rc = 0;
   log_info("  PASS");
@@ -126,9 +115,7 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
 Cleanup:
   free(src);
   tile_stream_gpu_destroy(s);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 
@@ -160,31 +147,21 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
   const size_t epoch_elements = 4 * 64 * 64;
   const size_t append_elements = 4 * epoch_elements; // two full batches at K=2
 
-  struct store* store = NULL;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint16_t* src = NULL;
   test_thread* thr = NULL;
   int rc = 1;
 
-  store = store_fs_create(tmpdir, 1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_ZSTD },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          store_fs_create(tmpdir, 1),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_ZSTD }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
@@ -194,7 +171,7 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
     .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
@@ -206,7 +183,7 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
   gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_AFTER_DRAIN);
 
   // Error the sink first so every delivery fails fast.
-  shard_pool_fs_set_error(pool);
+  shard_pool_fs_set_error(z.pool);
 
   {
     struct slice input = { .beg = src, .end = src + append_elements };
@@ -234,9 +211,7 @@ Cleanup:
   free(src);
   tile_stream_gpu_destroy(s);
   test_thread_join(thr);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 
@@ -268,10 +243,8 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
   const size_t epoch_elements = 4 * 8 * 12;
   const size_t append_elements = 2 * epoch_elements; // one full batch at K=2
 
-  struct store* store = NULL;
   struct io_faults faults;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
   test_thread* thr = NULL;
@@ -279,23 +252,15 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = io_faults_store_create(&faults, tmpdir, 0);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u32,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, 0),
+          "0",
+          dims,
+          3,
+          dtype_u32,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = epoch_elements * sizeof(uint32_t),
@@ -305,7 +270,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
     .codec = { .id = CODEC_NONE },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(append_elements, sizeof(uint32_t));
@@ -343,7 +308,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
     goto Cleanup;
   }
 
-  CHECK(Cleanup, zarr_array_has_error(arr) == 0);
+  CHECK(Cleanup, zarr_array_has_error(z.array) == 0);
 
   rc = 0;
   log_info("  PASS");
@@ -353,9 +318,7 @@ Cleanup:
   free(src);
   tile_stream_gpu_destroy(s);
   test_thread_join(thr);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 

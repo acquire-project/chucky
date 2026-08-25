@@ -2,7 +2,9 @@
 #include "defs.limits.h"
 #include "util/prelude.h"
 #include "zarr.h"
+#include "zarr/shard_pool.h"
 #include "zarr/store.h"
+#include "zarr/zarr_array.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
@@ -84,6 +86,46 @@ Fail:
   return 1;
 }
 
+int
+test_zarr_sink_open_with_pool(struct test_zarr_sink* z,
+                              struct store* store,
+                              const char* array_name,
+                              const struct dimension* dims,
+                              uint8_t rank,
+                              enum dtype data_type,
+                              struct codec_config codec)
+{
+  *z = (struct test_zarr_sink){ 0 };
+  CHECK(Fail, store);
+  z->store = store;
+
+  CHECK(Fail_store, array_name && array_name[0]);
+  CHECK(Fail_store, store->mkdirs(store, ".") == 0);
+  CHECK(Fail_store, store->mkdirs(store, array_name) == 0);
+
+  z->pool = store->create_pool(store, 8);
+  CHECK(Fail_store, z->pool);
+
+  struct zarr_array_config acfg = {
+    .data_type = data_type,
+    .fill_value = 0,
+    .rank = rank,
+    .dimensions = dims,
+    .codec = codec,
+  };
+  z->array = zarr_array_create_with_pool(store, z->pool, 0, array_name, &acfg);
+  CHECK(Fail_pool, z->array);
+  return 0;
+
+Fail_pool:
+  shard_pool_destroy(z->pool);
+Fail_store:
+  store_destroy(z->store);
+Fail:
+  *z = (struct test_zarr_sink){ 0 };
+  return 1;
+}
+
 struct shard_sink*
 test_zarr_sink_as_shard_sink(struct test_zarr_sink* z)
 {
@@ -100,6 +142,7 @@ void
 test_zarr_sink_close(struct test_zarr_sink* z)
 {
   zarr_array_destroy(z->array);
+  shard_pool_destroy(z->pool);
   store_destroy(z->store);
   *z = (struct test_zarr_sink){ 0 };
 }

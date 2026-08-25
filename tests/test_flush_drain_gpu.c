@@ -8,11 +8,10 @@
 #include "stream.gpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
 #include "zarr.h"
-#include "zarr/shard_pool.h"
-#include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -64,10 +63,8 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   };
   const size_t total_elements = 12 * 8 * 12;
 
-  struct store* store = NULL;
   struct io_faults faults;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
   test_thread* thr = NULL;
@@ -75,23 +72,15 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = io_faults_store_create(&faults, tmpdir, 1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u32,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, 1),
+          "0",
+          dims,
+          3,
+          dtype_u32,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = total_elements * sizeof(uint32_t),
@@ -100,7 +89,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
@@ -144,7 +133,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     goto Cleanup;
   }
 
-  if (zarr_array_has_error(arr)) {
+  if (zarr_array_has_error(z.array)) {
     log_error("zarr_array reported IO error after drain");
     goto Cleanup;
   }
@@ -157,9 +146,7 @@ Cleanup:
   free(src);
   test_thread_join(thr);
   tile_stream_gpu_destroy(s);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 
@@ -189,31 +176,21 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct store* store = NULL;
   struct io_faults faults;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint16_t* src = NULL;
   int rc = 1;
 
-  store = io_faults_store_create(&faults, tmpdir, 1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, 1),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
@@ -224,7 +201,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
     .codec = { .id = CODEC_NONE },
     .metadata_update_interval_s = 3600.0f,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));
@@ -253,9 +230,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
 Cleanup:
   free(src);
   tile_stream_gpu_destroy(s);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 
@@ -307,32 +282,22 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
     dims[d].storage_position = (uint8_t)d;
   const size_t total_elements = 12 * 8 * 12;
 
-  struct store* store = NULL;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
   test_thread* thr = NULL;
   CUcontext other = 0;
   int rc = 1;
 
-  store = store_fs_create(tmpdir, 1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u32,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          store_fs_create(tmpdir, 1),
+          "0",
+          dims,
+          3,
+          dtype_u32,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = total_elements * sizeof(uint32_t),
@@ -342,7 +307,7 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
     .codec = { .id = CODEC_NONE },
   };
   // Created here, so the stream's context is the one this thread holds.
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
@@ -376,7 +341,7 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
     log_error("the append reported success without taking the input");
     goto Cleanup;
   }
-  if (zarr_array_has_error(arr)) {
+  if (zarr_array_has_error(z.array)) {
     log_error("zarr_array reported an IO error");
     goto Cleanup;
   }
@@ -388,9 +353,7 @@ Cleanup:
   free(src);
   test_thread_join(thr);
   tile_stream_gpu_destroy(s);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   if (other)
     cuCtxDestroy(other);
   return rc;
