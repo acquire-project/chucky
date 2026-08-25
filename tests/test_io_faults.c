@@ -18,8 +18,12 @@ faults_execute(void* ctx,
 {
   struct io_faults* f = (struct io_faults*)ctx;
 
-  if (req->op == IO_OP_TRUNCATE && atomic_exchange(&f->fail_next_truncate, 0)) {
-    log_error("io_faults: injected truncate failure");
+  uint8_t fault = IO_FAULT_NONE;
+  if (req->op == atomic_load(&f->fault_op))
+    fault = atomic_exchange(&f->fault, IO_FAULT_NONE);
+
+  if (fault == IO_FAULT_FAIL) {
+    log_error("io_faults: injected failure of io op %u", (unsigned)req->op);
     shard_pool_fs_set_error(f->pool);
     out->seq = seq;
     out->nbytes = 0;
@@ -27,22 +31,12 @@ faults_execute(void* ctx,
     return IO_DONE;
   }
 
-  if (req->op != IO_OP_NOOP)
-    return f->inner.execute(f->inner.ctx, req, seq, out);
-
-  out->seq = seq;
-  if (atomic_exchange(&f->fail_next_noop, 0)) {
-    log_error("io_faults: injected test failure");
-    shard_pool_fs_set_error(f->pool);
-    out->nbytes = 0;
-    out->status = IO_FAILED;
-    return IO_DONE;
-  }
-  if (atomic_exchange(&f->block_next_noop, 0)) {
+  if (fault == IO_FAULT_BLOCK) {
     while (atomic_load(f->block_gate) == 0)
       platform_sleep_ns(1000000LL);
   }
-  return IO_DONE;
+
+  return f->inner.execute(f->inner.ctx, req, seq, out);
 }
 
 static struct io_backend
@@ -177,6 +171,15 @@ Fail:
 
 // --- Injection ---
 
+// The op is stored first so a request already running cannot claim the fault
+// against whichever op was armed before it.
+static void
+arm(struct io_faults* f, uint8_t op, uint8_t fault)
+{
+  atomic_store(&f->fault_op, op);
+  atomic_store(&f->fault, fault);
+}
+
 static int
 post_noop(struct io_faults* f)
 {
@@ -186,7 +189,7 @@ post_noop(struct io_faults* f)
 int
 io_faults_inject_failing_job(struct io_faults* f)
 {
-  atomic_store(&f->fail_next_noop, 1);
+  arm(f, IO_OP_NOOP, IO_FAULT_FAIL);
   return post_noop(f);
 }
 
@@ -194,12 +197,12 @@ int
 io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate)
 {
   f->block_gate = gate;
-  atomic_store(&f->block_next_noop, 1);
+  arm(f, IO_OP_NOOP, IO_FAULT_BLOCK);
   return post_noop(f);
 }
 
 void
 io_faults_fail_next_truncate(struct io_faults* f)
 {
-  atomic_store(&f->fail_next_truncate, 1);
+  arm(f, IO_OP_TRUNCATE, IO_FAULT_FAIL);
 }
