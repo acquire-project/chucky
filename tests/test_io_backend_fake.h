@@ -1,5 +1,5 @@
 // This backend is for tests only: nothing is run, every request is recorded,
-// and a test can hold, defer, refuse or fail each one.
+// and a test can hold, defer, refuse, or fail each one.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -26,8 +26,6 @@ struct io_backend_fake
   _Atomic uint64_t nrecords;
 
   uint64_t deferred[IO_BACKEND_FAKE_CAPACITY];
-  // The request each deferred call was handed is kept at its place in that
-  // list.
   _Atomic(const struct io_request*) deferred_requests[IO_BACKEND_FAKE_CAPACITY];
   _Atomic uint64_t nclaimed_deferred;
   _Atomic uint64_t ndeferred;
@@ -48,7 +46,7 @@ struct io_backend_fake
   uint64_t bytes_per_attempt;
   _Atomic uint64_t write_attempts;
 
-  // Only io_queue_destroy calls stop, once, so neither of these is shared.
+  // These are written only at teardown, so neither is shared.
   uint64_t stops;
   uint64_t records_when_stopped;
 };
@@ -75,26 +73,25 @@ io_backend_fake_set_outcome(struct io_backend_fake* f,
                             int status,
                             uint64_t nbytes);
 
-// Answer IO_BUSY for the next n requests handed over, and take them after
-// that. A request handed over again is recorded again.
+// The next n requests handed over are refused, and every one after that is
+// taken. Each refusal is recorded.
 void
 io_backend_fake_refuse(struct io_backend_fake* f, uint64_t requests);
 
-// Copy every write carrying a payload into dest at the request's offset, so
-// what landed can be checked. A write reaching past the end is dropped.
+// Every write carrying a payload is copied into the buffer at its own offset.
+// A write reaching past the end is dropped.
 void
 io_backend_fake_write_into(struct io_backend_fake* f,
                            void* dest,
                            uint64_t nbytes);
 
-// Take at most this many bytes per attempt and retry what is left, the way a
-// backend seeing a short write has to. Zero takes a write in one attempt.
+// At most this many bytes are written per attempt, and the rest is retried.
+// Zero means a write is done in one attempt.
 void
 io_backend_fake_short_write(struct io_backend_fake* f, uint64_t nbytes);
 
-// The request a deferred call was handed is returned here, and it stays good
-// until the queue is told that request finished. A null result means no call
-// has filled that place in yet.
+// The request a deferred call was handed is returned here, good until that
+// request is reported finished. Null means that place is not filled in yet.
 const struct io_request*
 io_backend_fake_deferred_request(const struct io_backend_fake* f, uint64_t i);
 
@@ -104,7 +101,6 @@ io_backend_fake_record_count(const struct io_backend_fake* f);
 uint64_t
 io_backend_fake_refused_count(const struct io_backend_fake* f);
 
-// Attempts at a write, counting the retries a short one needed.
 uint64_t
 io_backend_fake_write_attempts(const struct io_backend_fake* f);
 

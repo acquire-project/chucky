@@ -3,8 +3,6 @@
 
 #include <string.h>
 
-// A refusal is taken only while one is left, so several workers cannot take
-// the same one.
 static int
 take_a_refusal(struct io_backend_fake* f)
 {
@@ -18,7 +16,6 @@ take_a_refusal(struct io_backend_fake* f)
   return 1;
 }
 
-// A short write is the backend's to finish, so what is left is retried here.
 static void
 copy_the_write(struct io_backend_fake* f, const struct io_request* req)
 {
@@ -56,7 +53,7 @@ fake_execute(void* ctx,
     };
   atomic_fetch_add(&f->nrecords, 1);
 
-  // Held ahead of the refusal, so a request can be both held and refused.
+  // The hold is first, so a request can be both held and refused.
   while (f->gate && atomic_load(f->gate) == 0)
     platform_sleep_ns(1000000LL);
 
@@ -161,8 +158,6 @@ io_backend_fake_short_write(struct io_backend_fake* f, uint64_t nbytes)
 const struct io_request*
 io_backend_fake_deferred_request(const struct io_backend_fake* f, uint64_t i)
 {
-  // The published count says how many places are taken, not which, so the
-  // place itself is what says whether a call has filled it in.
   if (i >= IO_BACKEND_FAKE_CAPACITY)
     return NULL;
   return atomic_load(&f->deferred_requests[i]);

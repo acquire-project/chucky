@@ -29,8 +29,7 @@ io_queue_create(struct io_backend backend, struct io_queue_limits limits);
 
 // Every other call must have returned, or be parked inside the queue already,
 // before this runs. A thread still on its way in cannot be counted, and the
-// lock it is about to take is one of the things freed here. The backend is
-// stopped after the last worker finishes.
+// lock it is about to take is one of the things freed here.
 void
 io_queue_destroy(struct io_queue* q);
 

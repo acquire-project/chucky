@@ -420,8 +420,8 @@ wait_for_deferred(const struct io_backend_fake* f, uint64_t n, int timeout_ms)
   return 0;
 }
 
-// Poll until nothing is inside execute. Zero is returned once nothing is,
-// -1 if the wait ran out.
+// Poll until nothing is inside execute. Zero is returned once the wait is
+// over, -1 if it ran out.
 static int
 wait_out_of_execute(const struct io_backend_fake* f, int timeout_ms)
 {
@@ -455,8 +455,7 @@ answer_the_rest(struct io_queue* q,
   // A request already inside execute when defer was cleared is still added to
   // the list, and leaving it unanswered hangs destroy. Once nothing is inside
   // execute the list is final, because the cleared flag is read on the way in.
-  // Reading the list any sooner races the backend, and with a missed entry a
-  // running job is left behind to hang destroy.
+  // Reading it any sooner races the backend.
   if (wait_out_of_execute(f, HANDOVER_TIMEOUT_MS))
     log_error("io_queue test: the backend never came out of execute");
 
@@ -1284,12 +1283,12 @@ Fail:
   return 1;
 }
 
-// --- test: a backend that says "not now" ---
+// --- test: a refused request ---
 
 #define REFUSALS 3
 
-// A refused request keeps its place and is handed over again, so both writes
-// run in the order they were posted and neither is dropped.
+// A refused request is offered again in the same place, so both writes run in
+// the order they were posted.
 static int
 test_refused_request_is_handed_over_again(void)
 {
@@ -1324,7 +1323,7 @@ test_refused_request_is_handed_over_again(void)
   CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
 
   // One worker, so a refusal that left the request counted as running would
-  // show up here as a second one running.
+  // show up as a peak of two.
   io_queue_get_stats(q, &stats);
   CHECK(Cleanup, stats.writes_in_flight_peak == 1);
   rc = 0;
@@ -1337,10 +1336,10 @@ Fail:
   return 1;
 }
 
-// --- test: a refused barrier does not stall its file ---
+// --- test: a refused barrier ---
 
-// A refused barrier is offered again, and the write posted behind it is not
-// left waiting once the barrier has run.
+// A refused barrier is offered again, and the write behind it is not left
+// waiting.
 static int
 test_refused_barrier_keeps_the_file_moving(void)
 {
@@ -1382,7 +1381,7 @@ Fail:
   return 1;
 }
 
-// --- test: the backend is stopped at teardown ---
+// --- test: backend stop at teardown ---
 
 #define STOP_REQUESTS 3
 
@@ -1408,8 +1407,6 @@ test_backend_is_stopped_at_teardown(void)
 
   io_queue_destroy(q);
 
-  // The backend is stopped once, with every request already handed over, so
-  // one running a thread of its own has nothing left to do by then.
   CHECK(Fail, fake.stops == 1);
   CHECK(Fail, fake.records_when_stopped == STOP_REQUESTS);
   return 0;
@@ -1420,12 +1417,11 @@ Fail:
   return 1;
 }
 
-// --- test: the request outlives the call ---
+// --- test: request lifetime ---
 
-// A backend that finishes later reads the request after execute has returned,
-// so what it was handed has to still be there and still say the same thing.
-// Both requests go to the same worker, so a request living only as long as the
-// call would leave the two pointers aimed at the same spot on its stack.
+// Both requests go to the same worker, so a request living only as long as
+// the call would leave both pointers aimed at one spot on that worker's
+// stack.
 static int
 test_request_outlives_execute(void)
 {
@@ -1453,7 +1449,7 @@ test_request_outlives_execute(void)
                                            .offset = 7 * WRITE_BYTES }) == 0);
   CHECK(Cleanup, wait_for_deferred(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
 
-  // This names another file, so it is not held behind the first.
+  // The file is a different one, so this write is not held behind the first.
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,
@@ -1499,12 +1495,12 @@ Fail:
   return 1;
 }
 
-// --- test: a short write is finished by the backend ---
+// --- test: a short write ---
 
 #define SHORT_WRITE_BYTES 1000
 
-// The backend's write takes only part of what it was given, and the rest is
-// retried behind the interface. The queue is handed the request once.
+// Only part of the payload is written per attempt, and the rest is retried
+// inside the backend, so the queue is handed the request once.
 static int
 test_short_write_is_finished_by_the_backend(void)
 {
@@ -1556,12 +1552,11 @@ Fail:
   return 1;
 }
 
-// --- test: a refused request whose file index was reused ---
+// --- test: a refusal after the file index is reused ---
 
-// A close hands its file index back when it runs, so a new open can hold that
-// index while the close has not retired. A close refused in that window is on
-// no list any more, and putting it back would strand it with the queue unable
-// to drain.
+// A file index is handed back when the close naming it runs, before that
+// close retires, so a new open can hold the index already. A close refused in
+// that window is on no list, and putting it back would strand it.
 static int
 test_refused_request_after_the_index_is_reused(void)
 {
@@ -1588,8 +1583,7 @@ test_refused_request_after_the_index_is_reused(void)
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = first }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
 
-  // The close is held in the backend, which is the window a new open claiming
-  // the same index takes the file entry over in.
+  // The close is waiting in the backend, the window a new open needs.
   CHECK(Cleanup,
         io_queue_post(q,
                       (struct io_request){ .op = IO_OP_WRITE,

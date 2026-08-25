@@ -9,8 +9,8 @@
 
 #define DEFAULT_MAX_REQUESTS 1024u
 #define NO_SEQ 0u
-// A busy backend with nothing in flight has no finish coming to wake a
-// wait, so the request is offered again on a timer instead.
+// With nothing in flight there is nothing to wake a wait, so a refused
+// request is offered again on a timer.
 #define BUSY_RETRY_NS 100000LL
 
 enum io_job_state
@@ -383,10 +383,9 @@ Unlock:
     owned_free(owned);
 }
 
-// A refused request goes back where it was, keeping its sequence number and
-// its place on its file, so nothing is reordered. Zero is returned when it
-// cannot go back: a newer open of the same file index has taken that entry
-// over, and the list the request was reachable from went with it.
+// A refused request is put back where it was, with its sequence number and
+// its place on its file, so nothing is reordered. Zero is returned when a
+// newer open of the same file index has taken that entry over.
 static int
 requeue_job(struct io_queue* q, uint64_t seq, int64_t now)
 {
@@ -412,8 +411,7 @@ requeue_job(struct io_queue* q, uint64_t seq, int64_t now)
   }
   requeued = 1;
 
-  // Whatever the backend has no room for is work it already holds, so the
-  // next request to finish is what frees it.
+  // The backend is full until something already handed over finishes.
   if (q->in_flight > 0) {
     waited_for_a_retirement = 1;
     platform_cond_wait(q->cond_not_empty, q->mutex);
@@ -461,8 +459,7 @@ worker_thread(void* arg)
       if (is_barrier(&slot->req))
         f->barrier_running = 1;
     }
-    // The slot outlives the call, so a backend that finishes later can keep
-    // reading the request until it reports the outcome.
+    // The request has to outlive the call, so the slot is passed, not a copy.
     const struct io_request* req = &slot->req;
     struct io_completion done = {
       .seq = seq,
@@ -477,8 +474,8 @@ worker_thread(void* arg)
       retire_job(q, done, platform_monotonic_ns());
     } else if (dispatch == IO_BUSY) {
       const int64_t now = platform_monotonic_ns();
-      // A request that is on no list can never be picked up again, so it is
-      // finished here rather than left waiting to be.
+      // A request on no list can never be picked up again, so it is finished
+      // here instead.
       if (!requeue_job(q, seq, now)) {
         log_error("io_queue: a refused request named a file that was reopened");
         done.nbytes = 0;

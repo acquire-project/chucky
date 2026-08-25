@@ -44,11 +44,8 @@ struct io_request
   void (*owned_free)(void*);
 };
 
-// The part of a write still to be done is returned here. A short write is
-// finished by the backend that saw it, which retries this until nothing is
-// left. The queue's own copy is untouched, so the room it gives back still
-// matches what was asked for, and nothing is owned by this copy, so retrying
-// it cannot free a payload twice.
+// The part of a write still to be done is returned here. Nothing is owned by
+// the copy, so a retry cannot free a payload twice.
 static inline struct io_request
 io_write_remaining(const struct io_request* req, uint64_t written)
 {
