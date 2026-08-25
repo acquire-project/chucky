@@ -44,8 +44,9 @@ struct io_request
   void (*owned_free)(void*);
 };
 
-// The part of a write still to be done is returned here. Nothing is owned by
-// the copy, so a retry cannot free a payload twice.
+// The part of a write still to be done is returned here, for the backend to
+// finish rather than the queue. Nothing is owned by the copy, so a retry
+// cannot free a payload twice.
 static inline struct io_request
 io_write_remaining(const struct io_request* req, uint64_t written)
 {
@@ -71,6 +72,6 @@ enum io_status
 struct io_completion
 {
   uint64_t seq;
-  uint64_t nbytes; // written; never more than the request asked for
-  int status;
+  uint64_t nbytes; // written; never more than asked for, and not read here
+  int status;      // not read here, so a backend raises the error flag itself
 };

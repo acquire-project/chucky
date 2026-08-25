@@ -455,7 +455,7 @@ answer_the_rest(struct io_queue* q,
   // A request already inside execute when defer was cleared is still added to
   // the list, and leaving it unanswered hangs destroy. Once nothing is inside
   // execute the list is final, because the cleared flag is read on the way in.
-  // Reading it any sooner races the backend.
+  // Anything sooner is a race with the backend.
   if (wait_out_of_execute(f, HANDOVER_TIMEOUT_MS))
     log_error("io_queue test: the backend never came out of execute");
 
@@ -1419,9 +1419,8 @@ Fail:
 
 // --- test: request lifetime ---
 
-// Both requests go to the same worker, so a request living only as long as
-// the call would leave both pointers aimed at one spot on that worker's
-// stack.
+// One worker takes both requests, so a request kept only for the length of
+// the call would leave both pointers aimed at one spot on its stack.
 static int
 test_request_outlives_execute(void)
 {
@@ -1556,7 +1555,8 @@ Fail:
 
 // A file index is handed back when the close naming it runs, before that
 // close retires, so a new open can hold the index already. A close refused in
-// that window is on no list, and putting it back would strand it.
+// that window is on no list, and putting it back would strand it, leaving the
+// queue unable to drain.
 static int
 test_refused_request_after_the_index_is_reused(void)
 {

@@ -383,9 +383,8 @@ Unlock:
     owned_free(owned);
 }
 
-// A refused request is put back where it was, with its sequence number and
-// its place on its file, so nothing is reordered. Zero is returned when a
-// newer open of the same file index has taken that entry over.
+// A refused request is put back where it was, so nothing is reordered. Zero
+// is returned when a newer open has taken its file entry over.
 static int
 requeue_job(struct io_queue* q, uint64_t seq, int64_t now)
 {

@@ -1,5 +1,5 @@
 // This backend is for tests only: nothing is run, every request is recorded,
-// and a test can hold, defer, refuse, or fail each one.
+// and each one can be held, deferred, refused or failed on request.
 #pragma once
 
 #include "zarr/io_backend.h"

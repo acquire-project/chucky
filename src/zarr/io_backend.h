@@ -18,15 +18,12 @@ struct io_backend
 {
   void* ctx;
 
-  // A request taken but not finished is good until its outcome is reported.
-  // The completion is good only for the length of the call. Every request has
-  // to be taken eventually. A write that moved fewer bytes than asked is the
-  // backend's to finish, not the queue's. Neither the count nor the status is
-  // read, so a backend that gives up has to raise the error flag itself.
+  // A request is carried out here. Every request has to be taken eventually,
+  // and one taken but not finished stays good until its outcome is reported.
   int (*execute)(void* ctx,
                  const struct io_request* req,
                  uint64_t seq,
-                 struct io_completion* out);
+                 struct io_completion* out); // good only for this call
 
   // A backend's own thread is stopped here, after every request has finished.
   // This may be null.
