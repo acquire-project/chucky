@@ -3,7 +3,6 @@
 
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
-#include "store.h"
 #include "stream.gpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
@@ -60,7 +59,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
   };
   const size_t total_elements = 12 * 8 * 12;
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
@@ -86,7 +85,7 @@ test_destroy_waits_for_sink_io(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));

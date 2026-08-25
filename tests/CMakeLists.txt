@@ -86,6 +86,7 @@ target_link_libraries(
         zarr_metadata
         store_fs
         store_api
+        writer
         lod_plan
         dimension
         chucky_log

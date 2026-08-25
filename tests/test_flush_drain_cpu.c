@@ -4,7 +4,6 @@
 // destroy frees that memory while the IO worker may still read it.
 
 #include "platform/platform.h"
-#include "store.h"
 #include "stream.cpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
@@ -66,7 +65,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;
@@ -93,7 +92,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
   };
-  s = tile_stream_cpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_cpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));

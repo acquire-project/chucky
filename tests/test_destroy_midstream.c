@@ -90,7 +90,7 @@ test_destroy_with_delivery_in_flight(const char* tmpdir, int rep)
     .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
@@ -171,7 +171,7 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
     .codec = { .id = CODEC_ZSTD },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)malloc(append_elements * sizeof(uint16_t));
@@ -243,7 +243,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
   const size_t epoch_elements = 4 * 8 * 12;
   const size_t append_elements = 2 * epoch_elements; // one full batch at K=2
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
@@ -270,7 +270,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
     .codec = { .id = CODEC_NONE },
     .epochs_per_batch = 2,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(append_elements, sizeof(uint32_t));

@@ -99,12 +99,12 @@ test_zarr_sink_open_with_pool(struct test_zarr_sink* z,
   CHECK(Fail, store);
   z->store = store;
 
-  CHECK(Fail_store, array_name && array_name[0]);
-  CHECK(Fail_store, store->mkdirs(store, ".") == 0);
-  CHECK(Fail_store, store->mkdirs(store, array_name) == 0);
+  CHECK(Fail, array_name && array_name[0]);
+  CHECK(Fail, store->mkdirs(store, ".") == 0);
+  CHECK(Fail, store->mkdirs(store, array_name) == 0);
 
   z->pool = store->create_pool(store, 8);
-  CHECK(Fail_store, z->pool);
+  CHECK(Fail, z->pool);
 
   struct zarr_array_config acfg = {
     .data_type = data_type,
@@ -114,15 +114,11 @@ test_zarr_sink_open_with_pool(struct test_zarr_sink* z,
     .codec = codec,
   };
   z->array = zarr_array_create_with_pool(store, z->pool, 0, array_name, &acfg);
-  CHECK(Fail_pool, z->array);
+  CHECK(Fail, z->array);
   return 0;
 
-Fail_pool:
-  shard_pool_destroy(z->pool);
-Fail_store:
-  store_destroy(z->store);
 Fail:
-  *z = (struct test_zarr_sink){ 0 };
+  test_zarr_sink_close(z);
   return 1;
 }
 

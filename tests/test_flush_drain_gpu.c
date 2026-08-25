@@ -63,7 +63,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   };
   const size_t total_elements = 12 * 8 * 12;
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint32_t* src = NULL;
@@ -89,7 +89,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
@@ -176,7 +176,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_gpu* s = NULL;
   uint16_t* src = NULL;
@@ -201,7 +201,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
     .codec = { .id = CODEC_NONE },
     .metadata_update_interval_s = 3600.0f,
   };
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));
@@ -307,7 +307,7 @@ test_writes_from_a_foreign_context(const char* tmpdir, CUdevice dev)
     .codec = { .id = CODEC_NONE },
   };
   // Created here, so the stream's context is the one this thread holds.
-  s = tile_stream_gpu_create(&cfg, zarr_array_as_shard_sink(z.array));
+  s = tile_stream_gpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint32_t*)calloc(total_elements, sizeof(uint32_t));
