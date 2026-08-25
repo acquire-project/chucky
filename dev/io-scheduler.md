@@ -301,10 +301,11 @@ taking cores from the pipeline: holding the pipeline to 32 threads on a
 with depth is how long a single write takes — `io_run_ms_mean` goes from 10.0
 ms at eight to 18.4 at sixteen while the sink's rate does not improve — and
 the producer waits on io, so it feels a write's latency rather than the
-aggregate rate. Which wait is not settled. The one fence the CPU path times
-reads 0.01 ms over seven calls, so it is not that one, and the producer's
-other waits on io are timed inside the `sink` stage rather than reported on
-their own.
+aggregate rate. Which wait is not settled here. Each of the producer's waits
+on io is reported on its own now, but this point was measured before those
+metrics existed, and the one fence timed then read 0.01 ms over seven calls.
+On the file server below, the wait on an aggregate slot's previous writes is
+where the producer sits.
 
 The gap left is the pipeline: 11.4 GB/s against the 16.4 the array gives at
 the same depth. Since depth follows the count of shard files holding work,
@@ -361,6 +362,25 @@ then flattens, because the depth reached stays near twelve however high the
 cap goes. What is missing is writes the producer never posts, and that is the
 same pipeline limit the eight-drive array shows, widened by the mount's higher
 latency.
+
+**The producer sits on the fence between the two aggregate slots.** Each of
+its waits on io is reported on its own (#232). Six repeats of the point above,
+against two of the same run to the node's own eight-drive array:
+
+| wait | calls | on the mount, ms | on the array, ms |
+|---|---:|---:|---:|
+| an aggregate slot's previous writes | 63 | 3195 to 4577 | 5 to 15 |
+| shards closed since the extent was published | 4 | 345 to 567 | 281 to 298 |
+| a shard's previous footer write | 80 | 0.1 to 0.5 | 0.2 to 0.5 |
+| every queued write, at flush | 1 | 14 to 42 | 34 to 37 |
+
+A mount run lasts 7.3 to 9.1 s and an array run 5.8, so the slot fence is 43 to
+50% of one on the mount and under a third of a percent on the array. There are
+two slots, so a batch cannot be filled until the writes of the batch two before
+it have landed: the producer runs two batches ahead of io and no further, and
+that is the depth the queue never reaches. Publishing the extent costs a
+further 5% on either target, and no stage total held it. The footer buffer and
+the flush are nothing on either.
 
 **The faster target depends on the node.** An L40 node's mirror gives 1.6 to
 2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`
