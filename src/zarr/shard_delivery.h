@@ -3,6 +3,7 @@
 #include "stream/dim_info.h"
 #include "stream/layouts.h"
 #include "stream/types.aggregate.h"
+#include "types.stream.h"
 #include "writer.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -76,10 +77,12 @@ size_t
 shard_state_heap_bytes(const struct level_layout_info* li);
 
 // A reader can safely see up to this append-dim extent. The last finalize's
-// writes are waited on, and they have normally landed already.
+// writes are waited on, and they have normally landed already. Pass metrics to
+// time that wait, or NULL to skip timing.
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
-                                   struct shard_sink* sink);
+                                   struct shard_sink* sink,
+                                   struct stream_metrics* metrics);
 
 // Publish one level's append extent through the sink. Pass cursor_elements to
 // hold the extent down to what the caller appended, or NULL where the cursor
@@ -93,7 +96,8 @@ shard_state_publish_append(struct shard_state* ss,
                            struct shard_sink* sink,
                            const struct dim_info* dims,
                            uint8_t level,
-                           const uint64_t* cursor_elements);
+                           const uint64_t* cursor_elements,
+                           struct stream_metrics* metrics);
 
 // Best-effort finalize of every shard with an open writer. Returns 0 on
 // success. Calls sink->wait_fence/record_fence on each shard's footer to
@@ -101,12 +105,14 @@ shard_state_publish_append(struct shard_state* ss,
 int
 finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
-                size_t shard_alignment);
+                size_t shard_alignment,
+                struct stream_metrics* metrics);
 
 // Deliver compressed chunks from one batch's aggregate slot to shards.
 //   layout: aggregate layout for shard_capacity / num_shards / page_size.
 //   h_tail_bytes: [num_shards] sub-page leading-tail bytes carried in;
 //                 updated in place. NULL only when page_size == 0.
+//   metrics: times the footer-buffer wait, or NULL to skip timing.
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
@@ -116,4 +122,5 @@ deliver_to_shards_batch(uint8_t level,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,
-                        size_t* out_bytes);
+                        size_t* out_bytes,
+                        struct stream_metrics* metrics);

@@ -210,6 +210,7 @@ add_test_exe(test_pending_bytes_fs test_pending_bytes_fs.c shard_pool_fs platfor
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
+add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)

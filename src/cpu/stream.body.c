@@ -205,8 +205,12 @@ cpu_stream_append_body(struct cpu_stream_view* v, struct slice input)
         if (elapsed >= v->config->metadata_update_interval_s) {
           *v->metadata_update_clock = peek;
           for (int lv = 0; lv < v->levels->nlod; ++lv)
-            if (shard_state_publish_append(
-                  &v->shard[lv], v->sink, &v->cl->dims, (uint8_t)lv, NULL))
+            if (shard_state_publish_append(&v->shard[lv],
+                                           v->sink,
+                                           &v->cl->dims,
+                                           (uint8_t)lv,
+                                           NULL,
+                                           v->metrics))
               goto Error;
         }
       }
@@ -308,8 +312,15 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     // Both slots may hold in-flight IO from this batch; wait on both before
     // finalize. Single fence per slot covers all LODs (one shared IO queue).
     if (v->sink->wait_fence) {
+      struct platform_clock fence_clk = { 0 };
+      platform_toc(&fence_clk);
       v->sink->wait_fence(v->sink, v->io_done[0]);
       v->sink->wait_fence(v->sink, v->io_done[1]);
+      if (v->metrics)
+        accumulate_metric_ms(&v->metrics->flush_fence_stall,
+                             (float)(platform_toc(&fence_clk) * 1000.0),
+                             0,
+                             0);
     }
 
     CHECK(Fail, !(v->sink->has_error && v->sink->has_error(v->sink)));
@@ -317,7 +328,8 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     for (int lv = 0; lv < v->levels->nlod; ++lv) {
       if (v->shard[lv].epoch_in_shard > 0)
         CHECK(Fail,
-              finalize_shards(&v->shard[lv], v->sink, v->shard_alignment) == 0);
+              finalize_shards(
+                &v->shard[lv], v->sink, v->shard_alignment, v->metrics) == 0);
     }
 
     float emit_ms = (float)(platform_toc(&emit_clk) * 1000.0);
@@ -354,7 +366,8 @@ cpu_stream_close_body(struct cpu_stream_view* v)
                                      v->sink,
                                      &v->cl->dims,
                                      (uint8_t)lv,
-                                     v->cursor_elements))
+                                     v->cursor_elements,
+                                     v->metrics))
         failed = 1;
 
   if (v->sink->flush && v->sink->flush(v->sink))

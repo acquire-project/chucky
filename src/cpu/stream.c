@@ -250,6 +250,12 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
   s->metrics.io_fence_stall =
     mk_stream_metric("io_fence", METRIC_OWNER_PRODUCER);
+  s->metrics.footer_buffer_stall =
+    mk_stream_metric("footer_buffer", METRIC_OWNER_PRODUCER);
+  s->metrics.append_extent_stall =
+    mk_stream_metric("append_extent", METRIC_OWNER_PRODUCER);
+  s->metrics.flush_fence_stall =
+    mk_stream_metric("flush_fence", METRIC_OWNER_PRODUCER);
   // These three are named so the report can list them, and only the GPU path
   // ever populates them.
   s->metrics.flush_stall =

@@ -307,7 +307,7 @@ finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
         finalize_shards(
-          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment, NULL))
       r = writer_error();
   }
   return r;
@@ -344,7 +344,8 @@ publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
                                    ctx->sink,
                                    &ctx->dims,
                                    (uint8_t)lv,
-                                   &ctx->cursor_elements))
+                                   &ctx->cursor_elements,
+                                   NULL))
       r = writer_error();
   return r;
 }

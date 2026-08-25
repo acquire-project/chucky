@@ -38,6 +38,7 @@ RUN_METRICS = (
 STALL_METRICS = (
     "max_append_ms", "peak_pending_mib", "backpressure_ms",
     "flush_stall_ms", "io_fence_ms",
+    "footer_buffer_ms", "append_extent_ms", "flush_fence_ms",
 )
 
 # The build keys a page shows. Both files this module feeds are fetched on

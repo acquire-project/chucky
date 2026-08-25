@@ -33,7 +33,8 @@ deliver_aggregate(int lv,
                               active_count,
                               p->sink,
                               p->shard_alignment_bytes,
-                              &sink_bytes))
+                              &sink_bytes,
+                              p->metrics))
     return 1;
 
   if (p->metrics) {

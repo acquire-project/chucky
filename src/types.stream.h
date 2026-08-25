@@ -64,9 +64,13 @@ struct stream_metrics
   struct stream_metric flush_stall;    // producer: waiting for a drain
   struct stream_metric drain_dispatch; // worker: its work between the waits
   struct stream_metric io_fence_stall; // queued writes still holding a slot
-  struct stream_metric backpressure;   // sink queue over its watermark
-  struct stream_metric edge_stall[3];  // one declared ordering edge each; the
-                                       // name says which
+  struct stream_metric footer_buffer_stall; // a shard's previous footer write
+  struct stream_metric append_extent_stall; // shards closed since the extent
+                                            // was last published
+  struct stream_metric flush_fence_stall;   // every queued write, at flush
+  struct stream_metric backpressure;        // sink queue over its watermark
+  struct stream_metric edge_stall[3]; // one declared ordering edge each; the
+                                      // name says which
   // Compatibility name: compression-to-aggregation delay while waiting for
   // the preceding batch's page-aligned tail state to become host-ready.
   struct stream_metric tail_gate;
