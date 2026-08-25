@@ -1,5 +1,5 @@
-// This backend is for tests only: every request goes to the filesystem backend
-// behind it, except that one armed operation is made to fail or to block first.
+// This backend is for tests only. Every request goes to the filesystem backend
+// behind it. One armed request can be held at a gate first, or made to fail.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -25,10 +25,9 @@ struct io_faults
   struct io_queue* queue;
   struct shard_pool* pool;
 
-  // One fault is armed at a time, and the first request whose op matches
-  // clears it.
-  _Atomic uint8_t fault_op; // enum io_op
-  _Atomic uint8_t fault;    // enum io_fault
+  // One fault is armed at a time. The op is in the high byte and the fault in
+  // the low, so that a request reads both as one value.
+  _Atomic uint16_t armed;
   _Atomic int* block_gate;
 
   struct io_scheduling io; // zero fields take the pool's own defaults

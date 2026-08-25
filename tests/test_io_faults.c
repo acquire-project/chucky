@@ -18,9 +18,11 @@ faults_execute(void* ctx,
 {
   struct io_faults* f = (struct io_faults*)ctx;
 
+  uint16_t armed = atomic_load(&f->armed);
   uint8_t fault = IO_FAULT_NONE;
-  if (req->op == atomic_load(&f->fault_op))
-    fault = atomic_exchange(&f->fault, IO_FAULT_NONE);
+  if ((armed >> 8) == req->op &&
+      atomic_compare_exchange_strong(&f->armed, &armed, (uint16_t)0))
+    fault = (uint8_t)(armed & 0xff);
 
   if (fault == IO_FAULT_FAIL) {
     log_error("io_faults: injected failure of io op %u", (unsigned)req->op);
@@ -171,13 +173,10 @@ Fail:
 
 // --- Injection ---
 
-// The op is stored first so a request already running cannot claim the fault
-// against whichever op was armed before it.
 static void
-arm(struct io_faults* f, uint8_t op, uint8_t fault)
+arm_fault(struct io_faults* f, uint8_t op, uint8_t fault)
 {
-  atomic_store(&f->fault_op, op);
-  atomic_store(&f->fault, fault);
+  atomic_store(&f->armed, (uint16_t)(((uint16_t)op << 8) | fault));
 }
 
 static int
@@ -189,7 +188,7 @@ post_noop(struct io_faults* f)
 int
 io_faults_inject_failing_job(struct io_faults* f)
 {
-  arm(f, IO_OP_NOOP, IO_FAULT_FAIL);
+  arm_fault(f, IO_OP_NOOP, IO_FAULT_FAIL);
   return post_noop(f);
 }
 
@@ -197,12 +196,12 @@ int
 io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate)
 {
   f->block_gate = gate;
-  arm(f, IO_OP_NOOP, IO_FAULT_BLOCK);
+  arm_fault(f, IO_OP_NOOP, IO_FAULT_BLOCK);
   return post_noop(f);
 }
 
 void
 io_faults_fail_next_truncate(struct io_faults* f)
 {
-  arm(f, IO_OP_TRUNCATE, IO_FAULT_FAIL);
+  arm_fault(f, IO_OP_TRUNCATE, IO_FAULT_FAIL);
 }
