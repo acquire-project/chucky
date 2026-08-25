@@ -64,7 +64,7 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size);
 // extending it. Not so on NTFS, where only writing moves a file's valid data
 // length.
 int
-platform_presize_helps(void);
+platform_should_presize_shard(void);
 
 // Returns 1 if path exists, 0 if it does not (ENOENT / path-component-is-file
 // on Windows / not-a-dir), -1 on unexpected IO error.

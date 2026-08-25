@@ -715,7 +715,7 @@ test_shard_pool_presize(void)
   // Nothing to gain from pre-sizing at one write at a time per file, nor on
   // a platform where setting the size does not stop a write extending the
   // file. Either way the file grows with its writes.
-  const long presized = platform_presize_helps() ? PRESIZE_BYTES : 0;
+  const long presized = platform_should_presize_shard() ? PRESIZE_BYTES : 0;
   return presize_leaves_file_at(4, presized) ||
          presize_leaves_file_at(1, 0);
 }

@@ -383,7 +383,7 @@ shard_pool_fs_create_wrapped(const char* root,
     s->queue = p->queue;
     s->alignment = page_size;
     s->presize =
-      limits.writes_in_flight_per_file > 1 && platform_presize_helps();
+      limits.writes_in_flight_per_file > 1 && platform_should_presize_shard();
   }
 
   if (wrapper.queue)

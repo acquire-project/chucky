@@ -104,7 +104,7 @@ platform_ftruncate(platform_fd fd, uint64_t logical_size)
 }
 
 int
-platform_presize_helps(void)
+platform_should_presize_shard(void)
 {
   return 1;
 }
