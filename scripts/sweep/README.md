@@ -211,6 +211,19 @@ to work with. A configured ceiling is not evidence the run got near it:
 | `io_run_ms_mean` / `io_run_ms_max` | the time taken by a write once started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
+Under `stalls`, each of the producer's waits on io is reported on its own by
+the CPU path, as a total and a count. `footer_buffer` and `flush_writes` break
+down the `sink` stage total; `io_fence` and `append_extent` fall outside every
+stage. `io_fence` is measured by the GPU path too; the other three are left at
+count zero there, meaning not measured rather than no wait:
+
+| field | holds |
+|---|---|
+| `io_fence_ms` / `io_fence_count` | the wait on an aggregate slot's previous writes, before the slot is filled again |
+| `footer_buffer_ms` / `footer_buffer_count` | the wait on a shard's previous footer write, before its footer buffer is filled again |
+| `append_extent_ms` / `append_extent_count` | the wait on shards closed since the append extent was last published |
+| `flush_writes_ms` / `flush_writes_count` | the wait on every queued write, at flush |
+
 The keys kept by the overview page are listed in `summary.py`, so a new counter
 is dropped from that page unless it is named there. Everything not explicitly
 dropped is taken by the explorer, so no change is needed there.

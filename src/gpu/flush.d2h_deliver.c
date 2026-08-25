@@ -282,7 +282,8 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                                   handoff->per_lod_n_active[lv],
                                   sink,
                                   stage->shard_alignment,
-                                  &level_bytes))
+                                  &level_bytes,
+                                  NULL))
         goto Error;
       sink_bytes += level_bytes;
     }
@@ -343,7 +344,7 @@ d2h_deliver_update_metadata(const struct flush_handoff* handoff,
   *metadata_update_clock = peek;
   for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
     struct shard_state* ss = handoff->shards_by_lod[lv];
-    if (ss && shard_state_publish_append(ss, sink, dims_info, lv, NULL))
+    if (ss && shard_state_publish_append(ss, sink, dims_info, lv, NULL, NULL))
       return 1;
   }
   return 0;

@@ -41,6 +41,12 @@ stream_engine_init_metrics(int enable_multiscale)
     .flush_stall = mk_stream_metric("FlushStall", METRIC_OWNER_PRODUCER),
     .drain_dispatch = mk_stream_metric("DrainDisp", METRIC_OWNER_DRAIN),
     .io_fence_stall = mk_stream_metric("IOFence", METRIC_OWNER_PRODUCER),
+    // These three are named so the report can list them, and only the CPU
+    // path populates them.
+    .footer_buffer_stall = mk_stream_metric("FooterBuf", METRIC_OWNER_PRODUCER),
+    .append_extent_stall = mk_stream_metric("AppendExt", METRIC_OWNER_PRODUCER),
+    .flush_writes_stall =
+      mk_stream_metric("FlushWrites", METRIC_OWNER_PRODUCER),
     .backpressure = mk_stream_metric("Backpres", METRIC_OWNER_PRODUCER),
     .tail_gate = mk_stream_metric("TailGate", METRIC_OWNER_COMPRESS),
   };
@@ -307,7 +313,7 @@ finalize_all_levels(struct stream_engine* e, struct stream_context* ctx)
   for (int lv = 0; lv < ctx->levels.nlod; ++lv) {
     if (e->compress_agg.ar.shard[lv].epoch_in_shard > 0 &&
         finalize_shards(
-          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment))
+          &e->compress_agg.ar.shard[lv], ctx->sink, ctx->shard_alignment, NULL))
       r = writer_error();
   }
   return r;
@@ -344,7 +350,8 @@ publish_array_shape(struct compress_agg_array* ar, struct stream_context* ctx)
                                    ctx->sink,
                                    &ctx->dims,
                                    (uint8_t)lv,
-                                   &ctx->cursor_elements))
+                                   &ctx->cursor_elements,
+                                   NULL))
       r = writer_error();
   return r;
 }
