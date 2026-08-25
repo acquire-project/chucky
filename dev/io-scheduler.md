@@ -173,7 +173,7 @@ Done.
 - Shard files are pre-sized with `ftruncate` when more than one write per file
   may run. The size is every chunk at its worst-case compressed size plus the
   footer, and `finalize` already trims it back. Not on Windows, where only
-  writing moves a file's valid data length, so `platform_presize_helps`
+  writing moves a file's valid data length, so `platform_should_presize_shard`
   answers no there and the step is skipped.
 - `--io-workers`, `--io-writes-in-flight`, `--io-writes-in-flight-per-file` and
   `--io-backend` select all of it, and the results file records what the run
@@ -300,9 +300,11 @@ taking cores from the pipeline: holding the pipeline to 32 threads on a
 96-core node, leaving 64 idle, eight still beats sixteen by 9%. What does move
 with depth is how long a single write takes — `io_run_ms_mean` goes from 10.0
 ms at eight to 18.4 at sixteen while the sink's rate does not improve — and
-the producer waits on io fences, so it feels a write's latency rather than the
-aggregate rate. That is a guess until the CPU path records a fence stall the
-way the GPU path does.
+the producer waits on io, so it feels a write's latency rather than the
+aggregate rate. Which wait is not settled. The one fence the CPU path times
+reads 0.01 ms over seven calls, so it is not that one, and the producer's
+other waits on io are timed inside the `sink` stage rather than reported on
+their own.
 
 The gap left is the pipeline: 11.4 GB/s against the 16.4 the array gives at
 the same depth. Since depth follows the count of shard files holding work,
@@ -353,11 +355,12 @@ one stream rather than in the mount or the server.
 | depth reached, each | 12.6 | 10.3 | 9.5 | 8.3 |
 
 The queue is starved rather than backed up: it waits 0.4 ms and reaches depth
-12.6, while the mount wants about thirty-two writes at a time. Raising the cap
-does not move it, because throughput here is depth times write size over
-latency and the producer stops posting once it waits on an io fence. That is
-the same pipeline limit the eight-drive array shows, and the mount's higher
-latency makes it wider.
+12.6, while the mount is fastest at about thirty-two writes at a time. A
+higher cap helps up to sixteen — 2.7 GB/s at four against 4.8 at sixteen — and
+then flattens, because the depth reached stays near twelve however high the
+cap goes. What is missing is writes the producer never posts, and that is the
+same pipeline limit the eight-drive array shows, widened by the mount's higher
+latency.
 
 **The faster target depends on the node.** An L40 node's mirror gives 1.6 to
 2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`
