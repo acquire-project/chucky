@@ -24,8 +24,6 @@ struct shard_pool_fs
   int unbuffered;
   struct strbuf root; // owned
   _Atomic int io_error;
-  // Test hook: one-shot, fail the next truncate.
-  _Atomic int fail_next_truncate;
 };
 
 // --- Writer slot for a single shard file ---
@@ -35,10 +33,8 @@ struct fs_slot
   struct shard_writer base;
   struct io_file_token token; // zero generation means no file is open here
   struct io_queue* queue;
-  size_t alignment;      // 0 = normal malloc, >0 = page-aligned allocation
-  int presize;           // set the file's size up front
-  _Atomic int* io_error; // points to shard_pool_fs.io_error
-  _Atomic int* fail_next_truncate; // points to shard_pool_fs.fail_next_truncate
+  size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
+  int presize;      // set the file's size up front
 };
 
 static int
@@ -139,13 +135,6 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   struct fs_slot* w = (struct fs_slot*)self;
   if (w->token.generation == 0)
     return 0;
-
-  // Test hook: fail synchronously and mark the pool errored, so a footer write
-  // already queued by the caller outlives the flush that bails on the error.
-  if (w->fail_next_truncate && atomic_exchange(w->fail_next_truncate, 0)) {
-    atomic_store(w->io_error, 1);
-    return 1;
-  }
 
   return io_queue_post(w->queue,
                        (struct io_request){
@@ -282,8 +271,6 @@ pool_fs_destroy(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
 
-  io_backend_fs_stop(p->backend);
-
   // Finalize any open slots
   for (uint64_t i = 0; i < p->nslots; ++i) {
     if (p->slots[i].token.generation != 0)
@@ -299,35 +286,11 @@ pool_fs_destroy(struct shard_pool* self)
   free(p);
 }
 
-int
-shard_pool_fs_inject_failing_job(struct shard_pool* self)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  io_backend_fs_inject_failure(p->backend);
-  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
-}
-
-int
-shard_pool_fs_inject_failing_truncate(struct shard_pool* self)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  atomic_store(&p->fail_next_truncate, 1);
-  return 0;
-}
-
 void
 shard_pool_fs_set_error(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
   atomic_store(&p->io_error, 1);
-}
-
-int
-shard_pool_fs_inject_blocking_job(struct shard_pool* self, _Atomic int* gate)
-{
-  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  io_backend_fs_inject_block(p->backend, gate);
-  return io_queue_post(p->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
 // Eight is where the sweep peaks on both an md RAID10 of eight drives (1.34x)
@@ -368,10 +331,11 @@ limits_from(const struct io_scheduling* io)
 }
 
 struct shard_pool*
-shard_pool_fs_create(const char* root,
-                     uint64_t nslots,
-                     int unbuffered,
-                     const struct io_scheduling* io)
+shard_pool_fs_create_wrapped(const char* root,
+                             uint64_t nslots,
+                             int unbuffered,
+                             const struct io_scheduling* io,
+                             struct shard_pool_fs_wrapper wrapper)
 {
   CHECK(Fail, root);
   CHECK(Fail, nslots > 0);
@@ -398,7 +362,11 @@ shard_pool_fs_create(const char* root,
   p->backend = io_backend_fs_create(&p->io_error);
   CHECK(Fail_alloc, p->backend);
 
-  p->queue = io_queue_create(io_backend_fs_as_backend(p->backend), limits);
+  struct io_backend backend = io_backend_fs_as_backend(p->backend);
+  if (wrapper.wrap)
+    backend = wrapper.wrap(wrapper.ctx, backend);
+
+  p->queue = io_queue_create(backend, limits);
   CHECK(Fail_backend, p->queue);
 
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));
@@ -416,9 +384,10 @@ shard_pool_fs_create(const char* root,
     s->alignment = page_size;
     s->presize =
       limits.writes_in_flight_per_file > 1 && platform_presize_helps();
-    s->io_error = &p->io_error;
-    s->fail_next_truncate = &p->fail_next_truncate;
   }
+
+  if (wrapper.queue)
+    *wrapper.queue = p->queue;
 
   return &p->base;
 
@@ -431,4 +400,14 @@ Fail_alloc:
   free(p);
 Fail:
   return NULL;
+}
+
+struct shard_pool*
+shard_pool_fs_create(const char* root,
+                     uint64_t nslots,
+                     int unbuffered,
+                     const struct io_scheduling* io)
+{
+  return shard_pool_fs_create_wrapped(
+    root, nslots, unbuffered, io, (struct shard_pool_fs_wrapper){ 0 });
 }

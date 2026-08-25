@@ -40,25 +40,28 @@ one worker thread. Three kinds of job from `shard_pool_fs`: a copying write, a
 zero-copy write over borrowed pinned memory, and the truncate and close of a
 shard file at finalize.
 
-### Ordering guarantees from one worker
+### Ordering guarantees
 
-Correctness, given jobs run in the order posted:
+After step 2 most of these no longer depend on the order the worker runs things
+in:
 
-- In `pool_fs_open`, `fs_slot_finalize` is called: a close is *queued*, the
-  slot marked free at once, the next file opened, no wait on that close. With
-  one in-order worker the close cannot be run ahead of the writes before it,
-  and the new descriptor cannot be the old one, still open — neither true once
-  completions are unordered.
-- The shard footer is written at `data_cursor`, after the data writes;
-  truncate and close are last, after every write to that file.
+- A write cannot reach a recycled descriptor. `pool_fs_open` still queues a
+  close, frees the slot and opens the next file without waiting, but the new
+  file gets a new generation, and late requests naming the old one are refused.
+- Truncate and close cannot pass the writes ahead of them on their own file,
+  because they are barriers. Writes carry their own offsets, so among
+  themselves they need no order.
 - In `pool_fs_flush` a sequence number is recorded and waited on, meaning
-  "everything posted so far has finished".
+  "everything posted so far has finished". Retirement walks a cursor over
+  finished slots, so this holds however the completions arrive.
 - In `shard_delivery.c`, a shard's footer buffer is fenced against reuse while
   its zero-copy write is queued, and footer, truncate, and close are fenced
   before the array's shape is allowed to name that data.
-- In `io_event_wait` the wait is abandoned as soon as shutdown is set, so a
-  fence taken at the same time as a destroy is allowed to return before its
-  writes are done — covered only by the worker join in `io_queue_destroy`.
+
+One case still rests on the worker. In `io_event_wait` the wait is abandoned as
+soon as shutdown is set, so a fence taken at the same time as a destroy may
+return before its writes are done — covered only by the worker join in
+`io_queue_destroy`.
 
 ### Pools shared across levels and fields
 
@@ -66,8 +69,9 @@ One pool — one queue — per `store->create_pool` call. One for all
 levels of a multiscale array, each level given a disjoint range of slots, so
 every shard and level is put through a single worker. Worse for a plate: one
 pool sized for a *single* field of view, handed to every field, so slot indices
-are shared — safe only because fields are written one at a time and their opens
-and closes are kept apart by the single worker. Untested.
+are shared and two fields open at once write into each other's files. That is
+#211, and its fix changes how slots are allocated. Untested either way: no test
+in the tree writes array data through a plate field sink.
 
 ## Cost of one write at a time
 
@@ -91,14 +95,16 @@ Every data write is already 2-48 MiB — nothing to combine, nothing to split.
 The only small writes are shard footers at 4-8 KiB, one per file, about 2.6 ms
 across a whole run.
 
-Full measurements in issue #178, including between-node variation: no single
-number is safe to quote.
+Full measurements are in #178, including between-node variation: no single
+number is safe to quote. The program that produced them is not in the
+repository and is not being added, so everything measured from here on is
+measured through the sweep, on the real write path.
 
 ## Plan
 
-Five changes, each a pull request off `main`, opened after the previous
-merge. Not stacked: with squash merges, every child would be rebased onto a
-commit its history does not contain.
+Five steps, each of them one or more pull requests off `main`, opened after the
+previous merge. Not stacked: with squash merges, every child
+would be rebased onto a commit its history does not contain.
 
 ### 1. Write-path measurements
 
@@ -123,40 +129,30 @@ only place pre-sizing can be measured.
 
 ### 2. Correctness at queue depth one
 
-- Described write requests instead of closures.
-- An opaque token on every open file, so no late write can be applied to a
-  recycled descriptor.
-- Request and byte credits reserved before a payload is allocated or copied.
-  The byte ceiling starts unlimited: there is no memory limit today to keep, and
-  step 3 picks a number from sweep data.
-- Truncate and close as barriers, run only once that file's writes are done.
-- Completions retired through a sliding window with a watermark, so the
-  meaning of `wait` is unchanged.
-- Defined behavior for partial, zero-byte, failed, and cancelled completions.
-- Still one worker.
+Done, merged as `54b03fa` (#216). Output is byte-identical and failure
+behavior is unchanged.
 
-Keep `bench/sink_throttled.c` working: a second `io_queue` where one write at a
-time is the point, bandwidth modeled by sleeping inside jobs.
+Requests are described rather than wrapped in closures, descriptors and their
+syscalls sit behind a backend interface, and every open file carries a token,
+so no late write reaches a recycled descriptor. Room is claimed before a
+payload is copied. A truncate or close is held behind the writes posted ahead
+of it on its own file. Retirement walks a tail cursor over finished slots, so
+the watermark follows from the structure rather than from the dispatch order,
+and a backend may report an outcome after `execute` has returned. Still one
+worker.
 
-Rewrite the injection tests against a fake backend able to complete out of
-order, and add cases for the orderings impossible today. Several are pinned to
-today's behavior and must be rewritten: jobs finishing in the order posted; an
-exact pending-byte total after every post; one blocking job holding up
-everything behind it — only possible with one worker.
+The byte ceiling ships unlimited. The mechanism is tested; step 3 picks the
+number from sweep data.
 
-One uncovered hazard above still needs a case: a fence at the same time as a
-destroy. The plate's shared pool slot moved to #211, whose fix changes how slots
-are allocated.
+The synchronous failing-truncate hook stayed. A fake backend does not replace
+it, because `cpu_stream_flush_body` checks for an error before it finalizes the
+shards and never looks again. That gap is #218. The fault hooks still compiled
+into the shipping backend are #219.
 
-The synchronous failing-truncate hook stays. A fake backend does not replace it.
-`cpu_stream_flush_body` checks for an error before it finalizes the shards and
-never drains afterwards, so a flush reports a truncate failure only when
-`finalize_shards` returns non-zero. Make the truncate asynchronous and the flush
-reports success, then publishes a fence and an append extent for a shard whose
-size is wrong. The fake backend covers the queue-level case instead: a failed
-truncate still lets the close run.
-
-*Done when:* output is byte-identical and failure behavior is unchanged.
+Both rewrite `io_backend.fs.c` and `shard_pool_fs.c`, so they have to be taken
+in order, #218 first. #218 does not delete the truncate hook; it moves the
+failure onto the worker, which is the point of the fix. #219 therefore has one
+more hook to carry out of shipping code, not one fewer.
 
 ### 3. More queue depth
 
@@ -374,17 +370,16 @@ threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
 
-The backend interface step 2 built is general enough to hold a ring, but three
-things are worth settling before the first one is written. A backend has no way
-to say "not now", which a full submission queue needs; the alternatives today
-are to block a worker or to fail the request. The queue never calls into the
-backend at teardown, so a backend with its own thread has nowhere to stop it.
-And the request handed to `execute` is the worker's own copy, which dies when
-the call returns, so a backend that finishes later has to copy what it needs.
-
-A short write is also unowned. `platform_pwrite` loops internally, so it never
-reports one; a ring does. Retrying the remainder belongs in the backend, not in
-the queue.
+**Close four gaps in the backend interface** (#229), as its own pull request
+before any ring is written. The interface step 2 built is general enough to hold
+one, but a backend has no way to say "not now", which a full submission queue
+needs; the alternatives today are to block a worker or to fail the request. The
+queue never calls into the backend at teardown, so a backend with a thread of
+its own has nowhere to stop it. The request handed to `execute` is the worker's
+own copy and dies when the call returns, so a backend that finishes later has to
+copy what it needs. And a short write is unowned: `platform_pwrite` loops
+internally so it never reports one, a ring does, and retrying the remainder
+belongs in the backend rather than in the queue.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default. The file server's own numbers are above, so that matrix has a
@@ -406,3 +401,23 @@ privileged, with old disk contents exposed.
   sizes, no space reserved so peak disk usage is unchanged, `fallocate`
   unsupported on the NFS mount. The cost: on a full disk, failure is at the
   write, not the open.
+- macOS keeps the thread backend. Neither step 4 nor step 5 touches it, and
+  nothing else is planned for it.
+- The S3 pool is out of scope. It writes on the calling thread through the AWS
+  client and never reaches `io_queue`, and the last L40 sweep put it at about
+  what a local write costs.
+- The queue-depth microbenchmark is not being added to the repository; its
+  numbers stay in #178.
+
+## Issues
+
+- #178, the epic.
+- #208, step 1, merged as `fee70ed`.
+- #212 and #216, step 2, merged as `54b03fa`.
+- #213, step 3, with #225, #226, #227 and #228 around it.
+- #229, then #214, step 4. #215, step 5.
+- #217, a fence waiter left holding a freed lock. Fixed inside #216.
+- #218, a flush misses the errors of the work it queued.
+- #219, the fault hooks compiled into the shipping backend.
+- #211, plate fields share pool slots. A different epic, and its fix changes how
+  slots are allocated.

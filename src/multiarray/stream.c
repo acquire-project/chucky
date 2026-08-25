@@ -48,7 +48,7 @@ struct array_descriptor
   size_t shard_alignment; // from sink; 0 = no alignment
   int pool_fully_covered; // 1 if scatter overwrites every pool position
   int flushed;            // 1 once finalized; no further input is taken
-  int closed;             // 1 once this array's writes have been waited out
+  int closed;             // 1 once close drained and, on success, published
   int close_failed;       // outcome of that close, re-reported by later calls
 };
 

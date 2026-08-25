@@ -384,6 +384,11 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
       r = finalize_all_levels(e, ctx);
   }
 
+  // Writes queued anywhere above can still fail, and destroy frees the buffers
+  // they read.
+  if (shard_sink_drain(ctx->sink))
+    r = writer_error();
+
   collect_ingest_timing(e);
 
   return r;
@@ -477,8 +482,8 @@ tile_stream_gpu_close_final(struct writer* self)
 {
   struct tile_stream_gpu* s =
     container_of(self, struct tile_stream_gpu, writer);
-  // Nothing is queued until a flush runs, and close only completes what a
-  // flush queued.
+  // Before a flush the extent is not final, so there is nothing to publish.
+  // Destroy flushes before it closes, so appends never lose their queued IO.
   if (s->closed || !s->flushed)
     return s->close_failed ? writer_error() : writer_ok();
   const int pushed = cu_ctx_push(s->engine.cuda);

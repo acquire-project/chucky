@@ -28,15 +28,3 @@ io_backend_fs_files_opened(const struct io_backend_fs* b);
 
 uint64_t
 io_backend_fs_files_open_peak(const struct io_backend_fs* b);
-
-// These test hooks are one-shot. Each applies to the next IO_OP_NOOP, the
-// one op with no file and no payload.
-void
-io_backend_fs_inject_failure(struct io_backend_fs* b);
-void
-io_backend_fs_inject_block(struct io_backend_fs* b, _Atomic int* gate);
-
-// Release a blocked request, for a queue torn down with no flush in front of
-// it.
-void
-io_backend_fs_stop(struct io_backend_fs* b);
