@@ -358,27 +358,28 @@ test_hcs_two_fields_open_together(void)
     { 0, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 },
     { 1, 0, 0 }, { 1, 0, 1 }, { 1, 1, 0 },
   };
-  const int nopens = (int)(sizeof(opens) / sizeof(opens[0]));
+  struct shard_writer* writers[countof(opens)] = { 0 };
+  uint8_t payload[256];
 
-  struct shard_writer* writers[sizeof(opens) / sizeof(opens[0])] = { 0 };
-  uint8_t data[sizeof(opens) / sizeof(opens[0])][256];
-
-  for (int i = 0; i < nopens; ++i) {
+  for (uint64_t i = 0; i < countof(opens); ++i) {
     struct shard_sink* sink = hcs_plate_fov_sink(plate, 0, 0, opens[i].field);
     CHECK(Fail3, sink);
     writers[i] =
       sink->open(sink, (uint8_t)opens[i].level, (uint64_t)opens[i].shard);
     CHECK(Fail3, writers[i]);
-    for (int j = 0; j < i; ++j)
+    for (uint64_t j = 0; j < i; ++j)
       CHECK(Fail3, writers[i] != writers[j]);
-    memset(data[i], (uint8_t)(0x10 + i), sizeof(data[i]));
   }
 
-  for (int i = 0; i < nopens; ++i)
+  // Every writer is open before any write, so a shared slot shows up as one
+  // field's bytes landing in another's file.
+  for (uint64_t i = 0; i < countof(opens); ++i) {
+    memset(payload, (uint8_t)(0x10 + i), sizeof(payload));
     CHECK(Fail3,
           writers[i]->write(
-            writers[i], 0, data[i], data[i] + sizeof(data[i])) == 0);
-  for (int i = 0; i < nopens; ++i)
+            writers[i], 0, payload, payload + sizeof(payload)) == 0);
+  }
+  for (uint64_t i = 0; i < countof(opens); ++i)
     CHECK(Fail3, writers[i]->finalize(writers[i]) == 0);
 
   // Destroying the plate drains the writes, so the files are complete below.
@@ -388,7 +389,7 @@ test_hcs_two_fields_open_together(void)
   char path[4096], buf[8192];
   size_t len;
 
-  for (int i = 0; i < nopens; ++i) {
+  for (uint64_t i = 0; i < countof(opens); ++i) {
     snprintf(path,
              sizeof(path),
              "%s/together/A/1/%d/%d/c/0/%d",
@@ -396,9 +397,10 @@ test_hcs_two_fields_open_together(void)
              opens[i].field,
              opens[i].level,
              opens[i].shard);
+    memset(payload, (uint8_t)(0x10 + i), sizeof(payload));
     CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
-    CHECK(Fail3, len == sizeof(data[i]));
-    CHECK(Fail3, memcmp(buf, data[i], sizeof(data[i])) == 0);
+    CHECK(Fail3, len == sizeof(payload));
+    CHECK(Fail3, memcmp(buf, payload, sizeof(payload)) == 0);
   }
 
   store_destroy(store);

@@ -195,6 +195,14 @@ ngff_multiscale_flush_fn(struct shard_sink* self)
 
 // --- Shared create logic ---
 
+static int
+plan_from_config(struct lod_plan* plan,
+                 const struct ngff_multiscale_config* cfg)
+{
+  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
+  return lod_plan_init_from_dims(plan, cfg->dimensions, cfg->rank, max_lev, 0);
+}
+
 static void
 level_dimensions(struct dimension* out,
                  const struct ngff_multiscale_config* cfg,
@@ -211,20 +219,14 @@ level_dimensions(struct dimension* out,
   }
 }
 
-// Slot ranges are spaced by this count, so it has to walk the levels the same
-// way the create loop below does.
+// Both the count that spaces slot ranges and the create loop below reach a
+// level's slots through here, so the two cannot disagree.
 static uint64_t
-plan_slot_count(const struct ngff_multiscale_config* cfg,
-                const struct lod_plan* plan)
+dims_slot_count(const struct dimension* dims, uint8_t rank)
 {
-  uint64_t total = 0;
-  for (int lv = 0; lv < plan->levels.nlod; ++lv) {
-    struct dimension lv_dims[MAX_ZARR_RANK];
-    uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-    level_dimensions(lv_dims, cfg, plan, lv);
-    total += dims_compute_shard_geometry(lv_dims, cfg->rank, sc, cps);
-  }
-  return total;
+  uint64_t shard_counts[MAX_ZARR_RANK], chunks_per_shard[MAX_ZARR_RANK];
+  return dims_compute_shard_geometry(
+    dims, rank, shard_counts, chunks_per_shard);
 }
 
 // Shared init: caller provides a pre-computed LOD plan.
@@ -299,8 +301,7 @@ ngff_multiscale_init(struct store* store,
     strbuf_free(&level_prefix);
     CHECK(Fail_levels, ms->levels[lv]);
 
-    uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-    slot_base += dims_compute_shard_geometry(lv_dims, cfg->rank, sc, cps);
+    slot_base += dims_slot_count(lv_dims, cfg->rank);
   }
 
   CHECK(Fail_levels, write_ngff_group_metadata(ms) == 0);
@@ -333,12 +334,14 @@ ngff_multiscale_slot_count(const struct ngff_multiscale_config* cfg)
   CHECK(Fail, cfg->dimensions);
 
   struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
+  CHECK(Fail, plan_from_config(&plan, cfg) == 0);
 
-  uint64_t total = plan_slot_count(cfg, &plan);
+  uint64_t total = 0;
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    struct dimension lv_dims[MAX_ZARR_RANK];
+    level_dimensions(lv_dims, cfg, &plan, lv);
+    total += dims_slot_count(lv_dims, cfg->rank);
+  }
   lod_plan_free(&plan);
   return total;
 
@@ -360,10 +363,7 @@ ngff_multiscale_create_with_pool(struct store* store,
   CHECK(Fail, cfg->dimensions);
 
   struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
+  CHECK(Fail, plan_from_config(&plan, cfg) == 0);
 
   return ngff_multiscale_init(store, pool, slot_base, prefix, cfg, &plan);
 
@@ -379,34 +379,21 @@ ngff_multiscale_create(struct store* store,
                        const struct ngff_multiscale_config* cfg)
 {
   CHECK(Fail, store);
-  CHECK(Fail, cfg);
-  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
-  CHECK(Fail, cfg->dimensions);
 
-  struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
-
-  uint64_t total_slots = plan_slot_count(cfg, &plan);
-  CHECK(Fail_plan, total_slots > 0);
+  uint64_t total_slots = ngff_multiscale_slot_count(cfg);
+  CHECK(Fail, total_slots > 0);
 
   struct shard_pool* pool = store->create_pool(store, total_slots);
-  CHECK(Fail_plan, pool);
+  CHECK(Fail, pool);
 
-  // plan ownership transfers to ngff_multiscale_init
   struct ngff_multiscale* ms =
-    ngff_multiscale_init(store, pool, 0, prefix, cfg, &plan);
+    ngff_multiscale_create_with_pool(store, pool, 0, prefix, cfg);
   if (!ms) {
     shard_pool_destroy(pool);
     return NULL;
   }
   ms->owns_pool = 1;
   return ms;
-
-Fail_plan:
-  lod_plan_free(&plan);
 
 Fail:
   return NULL;

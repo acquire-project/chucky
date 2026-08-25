@@ -26,7 +26,7 @@ struct hcs_plate
 
   // fovs[row * cols * field_count + col * field_count + fov]
   struct ngff_multiscale** fovs;
-  int nfovs; // total allocated FOV slots
+  uint64_t nfovs; // total allocated FOV slots
 
   // Plate-level custom attrs.
   struct attr_set plate_attrs;
@@ -46,10 +46,10 @@ row_char(const struct hcs_plate_config* cfg, int r)
   return cfg->row_names ? cfg->row_names[r] : (char)('A' + r);
 }
 
-static int
+static uint64_t
 fov_index(const struct hcs_plate* p, int row, int col, int fov)
 {
-  return (row * p->cols + col) * p->field_count + fov;
+  return ((uint64_t)row * p->cols + col) * p->field_count + fov;
 }
 
 static int
@@ -166,13 +166,11 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
     CHECK(Fail, rn_len < 64); // bounded by hcs_plate.row_names buffer
   }
 
-  // One pool keeps the whole plate on one io queue, so the pool has to be wide
-  // enough for every field of view to have its own slots.
+  // One pool per plate keeps the whole plate on one io queue.
   uint64_t slots_per_fov = ngff_multiscale_slot_count(&cfg->fov);
   CHECK(Fail, slots_per_fov > 0);
 
-  uint64_t fov_count =
-    (uint64_t)cfg->rows * (uint64_t)cfg->cols * (uint64_t)cfg->field_count;
+  uint64_t fov_count = (uint64_t)cfg->rows * cfg->cols * cfg->field_count;
   struct shard_pool* pool =
     store->create_pool(store, fov_count * slots_per_fov);
   CHECK(Fail, pool);
@@ -205,7 +203,7 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   for (int i = 0; i < cfg->rows * cfg->cols; ++i)
     attr_set_init(&p->well_attrs[i]);
 
-  p->nfovs = cfg->rows * cfg->cols * cfg->field_count;
+  p->nfovs = fov_count;
   p->fovs = (struct ngff_multiscale**)calloc((size_t)p->nfovs, sizeof(void*));
   CHECK(Fail_well_attrs, p->fovs);
 
@@ -249,17 +247,15 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
       // FOV multiscale sinks
       for (int f = 0; f < cfg->field_count; ++f) {
         struct strbuf fov_prefix = { 0 };
-        int fp_rc =
-          strbuf_appendf(&fov_prefix, "%s/%c/%d/%d", cfg->name, rc, c + 1, f);
-        int idx = fov_index(p, r, c, f);
-        p->fovs[idx] =
-          fp_rc == 0
-            ? ngff_multiscale_create_with_pool(store,
-                                               pool,
-                                               (uint64_t)idx * slots_per_fov,
-                                               strbuf_cstr(&fov_prefix),
-                                               &cfg->fov)
-            : NULL;
+        uint64_t idx = fov_index(p, r, c, f);
+        if (strbuf_appendf(
+              &fov_prefix, "%s/%c/%d/%d", cfg->name, rc, c + 1, f) == 0)
+          p->fovs[idx] =
+            ngff_multiscale_create_with_pool(store,
+                                             pool,
+                                             idx * slots_per_fov,
+                                             strbuf_cstr(&fov_prefix),
+                                             &cfg->fov);
         strbuf_free(&fov_prefix);
         CHECK(Fail_fovs, p->fovs[idx]);
       }
@@ -269,7 +265,7 @@ hcs_plate_create(struct store* store, const struct hcs_plate_config* cfg)
   return p;
 
 Fail_fovs:
-  for (int i = 0; i < p->nfovs; ++i) {
+  for (uint64_t i = 0; i < p->nfovs; ++i) {
     if (p->fovs[i])
       ngff_multiscale_destroy(p->fovs[i]);
   }
@@ -304,7 +300,7 @@ hcs_plate_destroy(struct hcs_plate* p)
         write_well_group(p, r, c);
 
   // FOV multiscales flush their own metadata in their destroy.
-  for (int i = 0; i < p->nfovs; ++i) {
+  for (uint64_t i = 0; i < p->nfovs; ++i) {
     if (p->fovs[i])
       ngff_multiscale_destroy(p->fovs[i]);
   }
@@ -329,7 +325,7 @@ hcs_plate_fov_sink(struct hcs_plate* p, int row, int col, int fov)
   CHECK_SILENT(Bad, fov >= 0 && fov < p->field_count);
   CHECK_SILENT(Bad, well_active(p, row, col));
 
-  int idx = fov_index(p, row, col, fov);
+  uint64_t idx = fov_index(p, row, col, fov);
   return ngff_multiscale_as_shard_sink(p->fovs[idx]);
 Bad:
   return NULL;
