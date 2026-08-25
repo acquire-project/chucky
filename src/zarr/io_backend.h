@@ -9,6 +9,7 @@ enum io_dispatch
 {
   IO_DONE = 0,  // finished; *out is filled in
   IO_SUBMITTED, // finished later, through io_queue_complete
+  IO_BUSY,      // not taken; the queue hands it over again
 };
 
 // Descriptors and syscalls live behind this; the queue owns admission,
@@ -16,8 +17,24 @@ enum io_dispatch
 struct io_backend
 {
   void* ctx;
+
+  // The request outlives the call, so a backend answering IO_SUBMITTED can
+  // keep reading it until it calls io_queue_complete; after that the queue
+  // may reuse the slot. A backend with no room for the request answers
+  // IO_BUSY, which keeps its place and its order, and one that answers
+  // IO_BUSY forever leaves the queue nothing to drain.
+  //
+  // A write that comes back short is finished here rather than by the queue,
+  // by retrying what io_write_remaining hands back. Reporting fewer bytes
+  // than were asked for says the backend gave up, and raising the error flag
+  // it was given is its own to do.
   int (*execute)(void* ctx,
                  const struct io_request* req,
                  uint64_t seq,
                  struct io_completion* out);
+
+  // Called once by io_queue_destroy, after the last request has finished and
+  // every worker has stopped. A backend running a thread of its own stops it
+  // here. Optional, and a backend wrapping another must pass it along.
+  void (*stop)(void* ctx);
 };

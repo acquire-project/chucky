@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 // A backend hands out a fresh generation with the index of the slot it took,
 // and the queue finds a file by that index. The two only have to agree.
@@ -419,6 +420,21 @@ wait_for_deferred(const struct io_backend_fake* f, uint64_t n, int timeout_ms)
   return 0;
 }
 
+// Poll until nothing is inside execute. Zero is returned once nothing is,
+// -1 if the wait ran out.
+static int
+wait_out_of_execute(const struct io_backend_fake* f, int timeout_ms)
+{
+  int waited_ms = 0;
+  while (io_backend_fake_inside_execute(f) > 0) {
+    if (waited_ms >= timeout_ms)
+      return -1;
+    platform_sleep_ns(1000000LL);
+    waited_ms += 1;
+  }
+  return 0;
+}
+
 static void
 answer(struct io_queue* q, uint64_t* answered, struct io_completion c)
 {
@@ -439,15 +455,10 @@ answer_the_rest(struct io_queue* q,
   // A request already inside execute when defer was cleared is still added to
   // the list, and leaving it unanswered hangs destroy. Once nothing is inside
   // execute the list is final, because the cleared flag is read on the way in.
-  for (int waited_ms = 0; io_backend_fake_inside_execute(f) > 0; ++waited_ms) {
-    if (waited_ms >= HANDOVER_TIMEOUT_MS) {
-      // Reading the list now races the backend, and with a missed entry a
-      // running job is left behind to hang destroy.
-      log_error("io_queue test: the backend never came out of execute");
-      break;
-    }
-    platform_sleep_ns(1000000LL);
-  }
+  // Reading the list any sooner races the backend, and with a missed entry a
+  // running job is left behind to hang destroy.
+  if (wait_out_of_execute(f, HANDOVER_TIMEOUT_MS))
+    log_error("io_queue test: the backend never came out of execute");
 
   uint64_t n = io_backend_fake_deferred_count(f);
   if (n > IO_BACKEND_FAKE_CAPACITY)
@@ -1273,6 +1284,279 @@ Fail:
   return 1;
 }
 
+// --- test: a backend that says "not now" ---
+
+#define REFUSALS 3
+
+// A refused request keeps its place and is handed over again, so both writes
+// run in the order they were posted and neither is dropped.
+static int
+test_refused_request_is_handed_over_again(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_refuse(&fake, REFUSALS);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  struct io_queue_stats stats;
+
+  for (uint64_t i = 0; i < 2; ++i)
+    CHECK(Cleanup,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = file_token(1),
+                                             .nbytes = WRITE_BYTES,
+                                             .offset = i * WRITE_BYTES }) == 0);
+
+  CHECK(Cleanup,
+        wait_for_records(&fake, REFUSALS + 2, HANDOVER_TIMEOUT_MS) == 0);
+  io_event_wait(q, io_queue_record(q));
+
+  CHECK(Cleanup, io_backend_fake_refused_count(&fake) == REFUSALS);
+  CHECK(Cleanup, io_backend_fake_record_count(&fake) == REFUSALS + 2);
+  for (uint64_t i = 0; i <= REFUSALS; ++i)
+    CHECK(Cleanup, fake.records[i].seq == 1);
+  CHECK(Cleanup, fake.records[REFUSALS + 1].seq == 2);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+
+  // One worker, so a refusal that left the request counted as running would
+  // show up here as a second one running.
+  io_queue_get_stats(q, &stats);
+  CHECK(Cleanup, stats.writes_in_flight_peak == 1);
+  rc = 0;
+
+Cleanup:
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// --- test: a refused barrier does not stall its file ---
+
+// A refused barrier is offered again, and the write posted behind it is not
+// left waiting once the barrier has run.
+static int
+test_refused_barrier_keeps_the_file_moving(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_refuse(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  int rc = 1;
+
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_TRUNCATE,
+                                           .file = file_token(1),
+                                           .logical_size = WRITE_BYTES }) == 0);
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .file = file_token(1),
+                                           .nbytes = WRITE_BYTES }) == 0);
+
+  CHECK(Cleanup, wait_for_records(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
+  io_event_wait(q, io_queue_record(q));
+
+  CHECK(Cleanup, fake.records[0].op == IO_OP_TRUNCATE);
+  CHECK(Cleanup, fake.records[1].op == IO_OP_TRUNCATE);
+  CHECK(Cleanup, fake.records[2].op == IO_OP_WRITE);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  rc = 0;
+
+Cleanup:
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// --- test: the backend is stopped at teardown ---
+
+#define STOP_REQUESTS 3
+
+static int
+test_backend_is_stopped_at_teardown(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  for (uint64_t i = 0; i < STOP_REQUESTS; ++i)
+    CHECK(Fail2,
+          io_queue_post(q,
+                        (struct io_request){ .op = IO_OP_WRITE,
+                                             .file = file_token(1),
+                                             .nbytes = WRITE_BYTES,
+                                             .offset = i * WRITE_BYTES }) == 0);
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Fail2, fake.stops == 0);
+
+  io_queue_destroy(q);
+
+  // Stopped once, and with every request already handed over, so a backend
+  // running a thread of its own has nothing left to do when it is stopped.
+  CHECK(Fail, fake.stops == 1);
+  CHECK(Fail, fake.records_when_stopped == STOP_REQUESTS);
+  return 0;
+
+Fail2:
+  io_queue_destroy(q);
+Fail:
+  return 1;
+}
+
+// --- test: the request outlives the call ---
+
+// A backend that finishes later reads the request after execute has returned,
+// so what it was handed has to still be there and still say the same thing.
+// The second request goes to the same worker, and a request that lived only
+// as long as the call would leave both pointing at the same worn-out place.
+static int
+test_request_outlives_execute(void)
+{
+  char first_payload[WRITE_BYTES];
+  char second_payload[WRITE_BYTES];
+
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .borrowed = 1,
+                                           .file = file_token(5),
+                                           .payload = first_payload,
+                                           .nbytes = WRITE_BYTES,
+                                           .offset = 7 * WRITE_BYTES }) == 0);
+  CHECK(Cleanup, wait_for_deferred(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
+
+  // Another file, so this one is not held behind the first.
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .borrowed = 1,
+                                           .file = file_token(6),
+                                           .payload = second_payload,
+                                           .nbytes = WRITE_BYTES / 2,
+                                           .offset = 0 }) == 0);
+  CHECK(Cleanup, wait_for_deferred(&fake, 2, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, wait_out_of_execute(&fake, HANDOVER_TIMEOUT_MS) == 0);
+
+  const struct io_request* first = io_backend_fake_deferred_request(&fake, 0);
+  const struct io_request* second = io_backend_fake_deferred_request(&fake, 1);
+  CHECK(Cleanup, first);
+  CHECK(Cleanup, second);
+  CHECK(Cleanup, first != second);
+  CHECK(Cleanup, first->op == IO_OP_WRITE);
+  CHECK(Cleanup, first->payload == first_payload);
+  CHECK(Cleanup, first->nbytes == WRITE_BYTES);
+  CHECK(Cleanup, first->offset == 7 * WRITE_BYTES);
+  CHECK(Cleanup, first->file.generation == 5);
+  CHECK(Cleanup, second->payload == second_payload);
+  CHECK(Cleanup, second->nbytes == WRITE_BYTES / 2);
+
+  answer(
+    q,
+    &answered,
+    (struct io_completion){ .seq = fake.deferred[0], .nbytes = first->nbytes });
+  answer(q,
+         &answered,
+         (struct io_completion){ .seq = fake.deferred[1],
+                                 .nbytes = second->nbytes });
+  io_event_wait(q, io_queue_record(q));
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+// --- test: a short write is finished by the backend ---
+
+#define SHORT_WRITE_BYTES 1000
+
+// The backend's write takes only part of what it was given, and the rest is
+// retried behind the interface. The queue is handed the request once.
+static int
+test_short_write_is_finished_by_the_backend(void)
+{
+  char payload[WRITE_BYTES];
+  char landed[2 * WRITE_BYTES];
+
+  for (uint64_t i = 0; i < WRITE_BYTES; ++i)
+    payload[i] = (char)(i * 7 + 1);
+  memset(landed, 0, sizeof(landed));
+
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_write_into(&fake, landed, sizeof(landed));
+  io_backend_fake_short_write(&fake, SHORT_WRITE_BYTES);
+
+  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
+                                       (struct io_queue_limits){ 0 });
+  CHECK(Fail, q);
+
+  int rc = 1;
+
+  CHECK(Cleanup,
+        io_queue_post(q,
+                      (struct io_request){ .op = IO_OP_WRITE,
+                                           .borrowed = 1,
+                                           .file = file_token(1),
+                                           .payload = payload,
+                                           .nbytes = WRITE_BYTES,
+                                           .offset = WRITE_BYTES }) == 0);
+  io_event_wait(q, io_queue_record(q));
+
+  CHECK(Cleanup, io_backend_fake_record_count(&fake) == 1);
+  CHECK(Cleanup,
+        io_backend_fake_write_attempts(&fake) ==
+          ceildiv(WRITE_BYTES, SHORT_WRITE_BYTES));
+  CHECK(Cleanup, memcmp(landed + WRITE_BYTES, payload, WRITE_BYTES) == 0);
+
+  uint64_t landed_before_the_offset = 0;
+  for (uint64_t i = 0; i < WRITE_BYTES; ++i)
+    landed_before_the_offset += (uint64_t)(landed[i] != 0);
+  CHECK(Cleanup, landed_before_the_offset == 0);
+  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  rc = 0;
+
+Cleanup:
+  io_queue_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
 // --- main ---
 
 int
@@ -1310,6 +1594,14 @@ main(void)
       test_barrier_waits_with_many_workers },
     { "index_reused_before_close_retires",
       test_index_reused_before_close_retires },
+    { "refused_request_is_handed_over_again",
+      test_refused_request_is_handed_over_again },
+    { "refused_barrier_keeps_the_file_moving",
+      test_refused_barrier_keeps_the_file_moving },
+    { "backend_is_stopped_at_teardown", test_backend_is_stopped_at_teardown },
+    { "request_outlives_execute", test_request_outlives_execute },
+    { "short_write_is_finished_by_the_backend",
+      test_short_write_is_finished_by_the_backend },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

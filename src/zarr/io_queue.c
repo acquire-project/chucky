@@ -9,6 +9,9 @@
 
 #define DEFAULT_MAX_REQUESTS 1024u
 #define NO_SEQ 0u
+// A busy backend with nothing in flight has no finish coming to wake a
+// wait, so the request is offered again on a timer instead.
+#define BUSY_RETRY_NS 100000LL
 
 enum io_job_state
 {
@@ -380,14 +383,51 @@ Unlock:
     owned_free(owned);
 }
 
+// A backend with no room for a request answers IO_BUSY and the request is
+// handed over again. It keeps its sequence number and its place on the file,
+// so nothing is reordered.
+static void
+requeue_job(struct io_queue* q, uint64_t seq)
+{
+  int wait_for_a_retirement = 0;
+
+  platform_mutex_lock(q->mutex);
+
+  struct io_job* slot = job_at(q, seq);
+  CHECK(Unlock, slot->seq == seq && slot->state == IO_JOB_RUNNING);
+
+  slot->state = IO_JOB_WAITING;
+  slot->started_ns = 0;
+  q->jobs_waiting++;
+  q->in_flight--;
+  io_queue_counters_in_flight(
+    &q->counters, q->in_flight, platform_monotonic_ns());
+
+  struct file_pending* f = file_find(q, slot->req.file);
+  if (f) {
+    f->in_flight--;
+    if (is_barrier(&slot->req))
+      f->barrier_running = 0;
+  }
+
+  // Whatever the backend has no room for is work it already holds, so the
+  // next request to finish is what frees it.
+  wait_for_a_retirement = q->in_flight > 0;
+  if (wait_for_a_retirement)
+    platform_cond_wait(q->cond_not_empty, q->mutex);
+
+Unlock:
+  platform_mutex_unlock(q->mutex);
+  if (!wait_for_a_retirement)
+    platform_sleep_ns(BUSY_RETRY_NS);
+}
+
 static void
 worker_thread(void* arg)
 {
   struct io_queue* q = (struct io_queue*)arg;
 
   for (;;) {
-    struct io_job job;
-
     platform_mutex_lock(q->mutex);
     uint64_t seq;
     // A submitted request is still running, so only an empty window means
@@ -417,19 +457,22 @@ worker_thread(void* arg)
       if (is_barrier(&slot->req))
         f->barrier_running = 1;
     }
-    job = *slot;
-    platform_mutex_unlock(q->mutex);
-
+    // The slot outlives the call, so a backend that finishes later can keep
+    // reading the request until it reports the outcome.
+    const struct io_request* req = &slot->req;
     struct io_completion done = {
-      .seq = job.seq,
-      .nbytes = job.req.nbytes,
+      .seq = seq,
+      .nbytes = slot->req.nbytes,
       .status = IO_OK,
     };
-    const int dispatch =
-      q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
+    platform_mutex_unlock(q->mutex);
+
+    const int dispatch = q->backend.execute(q->backend.ctx, req, seq, &done);
 
     if (dispatch == IO_DONE)
       retire_job(q, done, platform_monotonic_ns());
+    else if (dispatch == IO_BUSY)
+      requeue_job(q, seq);
   }
 }
 
@@ -523,6 +566,9 @@ io_queue_destroy(struct io_queue* q)
 
   for (uint64_t i = 0; i < q->nthreads; ++i)
     platform_thread_join(q->threads[i]);
+
+  if (q->backend.stop)
+    q->backend.stop(q->backend.ctx);
 
   // Shutdown is set, so nothing parks from here on.
   platform_mutex_lock(q->mutex);

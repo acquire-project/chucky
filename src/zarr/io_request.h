@@ -2,6 +2,7 @@
 // so it can be reordered and gated.
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 enum io_op
@@ -42,6 +43,24 @@ struct io_request
   void* owned;
   void (*owned_free)(void*);
 };
+
+// The part of a write still to be done. A short write is finished by the
+// backend that reported it, retrying this until nothing is left. The queue's
+// own copy is left alone, so the room it gives back still matches what was
+// asked for, and this copy owns nothing.
+static inline struct io_request
+io_write_remaining(const struct io_request* req, uint64_t written)
+{
+  const uint64_t done = written < req->nbytes ? written : req->nbytes;
+  struct io_request rest = *req;
+  rest.borrowed = 1;
+  rest.payload = (const char*)req->payload + done;
+  rest.nbytes = req->nbytes - done;
+  rest.offset = req->offset + done;
+  rest.owned = NULL;
+  rest.owned_free = NULL;
+  return rest;
+}
 
 enum io_status
 {
