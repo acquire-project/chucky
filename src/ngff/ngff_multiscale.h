@@ -6,9 +6,7 @@
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
 
-// Count the pool slots one multiscale needs across its levels. Several
-// multiscales sharing a pool space their slot ranges by this much, because two
-// multiscales on one slot overwrite each other's shard files. Returns 0 when
+// Count the pool slots one multiscale needs across its levels. Returns 0 when
 // the config cannot be used.
 uint64_t
 ngff_multiscale_slot_count(const struct ngff_multiscale_config* cfg);

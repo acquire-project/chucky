@@ -317,8 +317,8 @@ test_hcs_two_fields_open_together(void)
   CHECK(Fail, store);
   store->mkdirs(store, ".");
 
-  // A field spans several slots here, two shards at level 0 and one at level 1,
-  // so a wrong stride between fields lands on another field's slot.
+  // A field spans several slots here, so a wrong stride between fields
+  // collides.
   struct dimension dims[] = {
     { .size = 32,
       .chunk_size = 16,
@@ -371,8 +371,7 @@ test_hcs_two_fields_open_together(void)
       CHECK(Fail3, writers[i] != writers[j]);
   }
 
-  // Every writer is open before any write, so a shared slot shows up as one
-  // field's bytes landing in another's file.
+  // Every writer is open before any write, so a shared slot misroutes bytes.
   for (uint64_t i = 0; i < countof(opens); ++i) {
     memset(payload, (uint8_t)(0x10 + i), sizeof(payload));
     CHECK(Fail3,
@@ -382,7 +381,7 @@ test_hcs_two_fields_open_together(void)
   for (uint64_t i = 0; i < countof(opens); ++i)
     CHECK(Fail3, writers[i]->finalize(writers[i]) == 0);
 
-  // Destroying the plate drains the writes, so the files are complete below.
+  // Destroying the plate drains the writes, so the files are complete.
   hcs_plate_destroy(plate);
   plate = NULL;
 

@@ -219,8 +219,7 @@ level_dimensions(struct dimension* out,
   }
 }
 
-// Both the count that spaces slot ranges and the create loop below reach a
-// level's slots through here, so the two cannot disagree.
+// Spacing a slot range and advancing it must use one count.
 static uint64_t
 dims_slot_count(const struct dimension* dims, uint8_t rank)
 {
