@@ -62,6 +62,7 @@ pool_create(struct io_faults* f,
   f->pool = shard_pool_fs_create_wrapped(root,
                                          nslots,
                                          unbuffered,
+                                         &f->io,
                                          (struct shard_pool_fs_wrapper){
                                            .ctx = f,
                                            .wrap = faults_wrap,
@@ -74,10 +75,19 @@ struct shard_pool*
 io_faults_pool_create(struct io_faults* f,
                       const char* root,
                       uint64_t nslots,
-                      int unbuffered)
+                      int unbuffered,
+                      const struct io_scheduling* io)
 {
   memset(f, 0, sizeof(*f));
+  if (io)
+    f->io = *io;
   return pool_create(f, root, nslots, unbuffered);
+}
+
+void
+io_faults_set_io_scheduling(struct io_faults* f, struct io_scheduling io)
+{
+  f->io = io;
 }
 
 // --- Store ---

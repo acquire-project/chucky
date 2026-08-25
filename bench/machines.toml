@@ -35,7 +35,17 @@ description = "One of the CoreWeave L40 nodes"
 names = ["reef-l40"]
 hosts = ["cw-us-e4a2-l40-*"]
 [machine.specs]
-storage = "shared /mnt/main0"
+storage = "shared /mnt/main0; a sweep writes its shards to the node's local /tmp, xfs on an md RAID1 mirror of two drives, about 2.6 GB/s"
+
+# The fast local storage on this cluster, and the only place a write-path
+# sweep can push past a few GB/s. No GPU, so the sweep runs --backend cpu.
+[[machine]]
+name = "turin-raid10"
+description = "A CoreWeave cpu-turin node with an unencrypted eight-drive array"
+names = ["turin-raid10"]
+hosts = ["cpu-turin-gp-l-*"]
+[machine.specs]
+storage = "node-local /tmp, xfs on an md RAID10 of eight drives, about 16 GB/s"
 
 [[machine]]
 name = "reef-h100"

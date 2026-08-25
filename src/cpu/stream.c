@@ -248,13 +248,14 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
   s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
   s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
-  // GPU-only stall metrics: named but never populated on CPU path.
+  s->metrics.io_fence_stall =
+    mk_stream_metric("io_fence", METRIC_OWNER_PRODUCER);
+  // These three are named so the report can list them, and only the GPU path
+  // ever populates them.
   s->metrics.flush_stall =
     mk_stream_metric("flush_stall", METRIC_OWNER_PRODUCER);
   s->metrics.drain_dispatch =
     mk_stream_metric("drain_dispatch", METRIC_OWNER_DRAIN);
-  s->metrics.io_fence_stall =
-    mk_stream_metric("io_fence", METRIC_OWNER_PRODUCER);
   s->metrics.backpressure =
     mk_stream_metric("backpressure", METRIC_OWNER_PRODUCER);
   if (s->levels.enable_multiscale) {

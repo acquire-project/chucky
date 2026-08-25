@@ -1,4 +1,5 @@
 #include "platform/platform.h"
+#include "platform/platform_io.h"
 #include "store.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
@@ -290,7 +291,15 @@ test_shard_pool_io_stats(void)
   CHECK(Fail, s);
   CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
-  // Gate the worker: a queued close keeps the handle, so all six are open.
+  // One worker running one write at a time, so the injected blocking job
+  // holds up everything behind it. A queued close keeps its handle, so all
+  // six files stay open.
+  io_faults_set_io_scheduling(&faults,
+                              (struct io_scheduling){
+                                .workers = 1,
+                                .writes_in_flight = 1,
+                                .writes_in_flight_per_file = 1,
+                              });
   struct shard_pool* pool = s->create_pool(s, 2);
   CHECK(Fail2, pool);
 
@@ -350,7 +359,7 @@ test_shard_pool_error_propagation(void)
   // driven by a test-only failing-job injector rather than by O_DIRECT
   // alignment enforcement (which varies across filesystems).
   struct io_faults faults;
-  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0);
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0, NULL);
   CHECK(Fail, pool);
 
   // Inject a job that deliberately reports a write failure.
@@ -615,7 +624,7 @@ Fail:
   return 1;
 }
 
-// --- stale file token ---
+// --- pre-sizing ---
 
 static long
 file_size(const char* path)
@@ -628,6 +637,90 @@ file_size(const char* path)
   fclose(f);
   return n;
 }
+
+#define PRESIZE_BYTES (1 << 20)
+
+// Sizes are read with the shard closed: the pool's handle is not shared, so
+// on Windows nothing else can open the file while the shard is live.
+static long
+closed_shard_size(struct shard_pool* pool,
+                  const char* key,
+                  uint64_t presize_to,
+                  const char* payload,
+                  size_t payload_bytes)
+{
+  struct shard_writer* w = pool->open(pool, 0, key);
+  if (!w || !w->presize || w->presize(w, presize_to))
+    return -1;
+  if (payload_bytes > 0 &&
+      (w->write(w, 0, payload, payload + payload_bytes) ||
+       w->truncate(w, payload_bytes)))
+    return -1;
+  if (w->finalize(w) || pool->flush(pool))
+    return -1;
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  return file_size(path);
+}
+
+// A pre-sized file is as long as it was told to be, and the truncate at the
+// end brings it back to what it holds.
+static int
+presize_leaves_file_at(uint64_t writes_per_file, long expected_presized)
+{
+  log_info("=== test_shard_pool_presize (%llu per file) ===",
+           (unsigned long long)writes_per_file);
+
+  struct store* s = store_fs_create(tmpdir, 0);
+  CHECK(Fail, s);
+  store_fs_set_io_scheduling(
+    s, (struct io_scheduling){ .writes_in_flight_per_file = writes_per_file });
+
+  struct shard_pool* pool = s->create_pool(s, 1);
+  CHECK(Fail2, pool);
+
+  static const char payload[] = "held";
+  char key[256];
+
+  snprintf(key, sizeof(key), "presize%llu_empty.bin",
+           (unsigned long long)writes_per_file);
+  CHECK(Fail3,
+        closed_shard_size(pool, key, PRESIZE_BYTES, NULL, 0) ==
+          expected_presized);
+
+  snprintf(key, sizeof(key), "presize%llu_trimmed.bin",
+           (unsigned long long)writes_per_file);
+  CHECK(Fail3,
+        closed_shard_size(pool, key, PRESIZE_BYTES, payload, sizeof(payload)) ==
+          (long)sizeof(payload));
+
+  shard_pool_destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  shard_pool_destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_shard_pool_presize(void)
+{
+  // Nothing to gain from pre-sizing at one write at a time per file, nor on
+  // a platform where setting the size does not stop a write extending the
+  // file. Either way the file grows with its writes.
+  const long presized = platform_should_presize_shard() ? PRESIZE_BYTES : 0;
+  return presize_leaves_file_at(4, presized) ||
+         presize_leaves_file_at(1, 0);
+}
+
+// --- stale file token ---
 
 // A pool slot's token is private and is cleared on finalize, so a retired
 // token has to come from the registry itself.
@@ -721,6 +814,7 @@ main(void)
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_io_stats();
   err |= test_shard_pool_error_propagation();
+  err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

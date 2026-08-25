@@ -100,6 +100,13 @@ class RunSpec(BaseModel):
     chunk_label: str
     sink: str = "discard"
     s3_throughput_gbps: float = 0
+    # Write scheduling for the filesystem sink. 0 leaves the binary's default,
+    # which is what every tier but iodepth wants.
+    io_writes_in_flight: int = 0
+    io_writes_in_flight_per_file: int = 0
+    # 0 takes the scenario's own count. A tier that compares runs against each
+    # other raises it, so that startup and the closing flush stop dominating.
+    frames_override: int = 0
 
     @model_validator(mode="after")
     def _validate_enums(self) -> RunSpec:
@@ -125,13 +132,17 @@ class RunSpec(BaseModel):
 
     @property
     def frames(self) -> int:
-        return SCENARIOS[self.scenario]
+        return self.frames_override or SCENARIOS[self.scenario]
 
     @property
     def id(self) -> str:
         suffix = f"__{self.sink}" if self.sink != "discard" else ""
         if self.s3_throughput_gbps > 0:
             suffix += f"__{int(self.s3_throughput_gbps)}gbps"
+        if self.io_writes_in_flight > 0:
+            suffix += f"__wif{self.io_writes_in_flight}"
+        if self.io_writes_in_flight_per_file > 0:
+            suffix += f"__perfile{self.io_writes_in_flight_per_file}"
         return f"{self.scenario}__{self.codec}__{self.fill}__{self.backend}__{self.dtype}__{self.chunk_label}{suffix}"
 
     def base_result(self) -> dict:
@@ -150,6 +161,13 @@ class RunSpec(BaseModel):
         }
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
+        # The binary reports what it resolved these to, and that reading wins.
+        # These are only here so a run that never got that far still says what
+        # it was asked for.
+        if self.io_writes_in_flight > 0:
+            d["io_writes_in_flight"] = self.io_writes_in_flight
+        if self.io_writes_in_flight_per_file > 0:
+            d["io_writes_in_flight_per_file"] = self.io_writes_in_flight_per_file
         return d
 
 
@@ -218,6 +236,48 @@ def io_runs() -> list[RunSpec]:
     return runs
 
 
+# How deep the write queue is allowed to get. Measured on xfs, more is worth
+# about 1.4x and flat past 16; 32 is here to show the flat part.
+WRITES_IN_FLIGHT = [1, 2, 4, 8, 16, 32]
+
+# At their own frame counts these scenarios run for well under a second, which
+# is startup and the closing flush rather than steady state, and two runs of
+# the same tier then disagree about which depth is faster. These counts put a
+# run at several seconds.
+IODEPTH_FRAMES = {
+    "orca2_single": 4000,
+    "smallepoch_single": 4 << 20,
+    "smallepoch_4shards": 4 << 20,
+}
+
+
+def iodepth_runs() -> list[RunSpec]:
+    """Write-queue depth sweep, over shard files and within one.
+
+    Both backends, because the write path is the same behind either and the
+    fast drives on this cluster are on nodes with no GPU. Pick one with
+    --backend to match the node you have.
+    """
+    runs = []
+    scenarios = ["smallepoch_single", "smallepoch_4shards", "orca2_single"]
+    for sc in scenarios:
+        for backend in ["gpu", "cpu"]:
+            for codec in ["none", "zstd"]:
+                for wif in WRITES_IN_FLIGHT:
+                    # One per file isolates the gain from writing to several
+                    # shard files at once; four adds the gain from pre-sizing
+                    # a file so its own writes can run together.
+                    for per_file in [1, 4]:
+                        runs.append(RunSpec(
+                            scenario=sc, codec=codec, fill="xor",
+                            backend=backend, dtype="u16", chunk_label="256K",
+                            sink="fs", io_writes_in_flight=wif,
+                            io_writes_in_flight_per_file=per_file,
+                            frames_override=IODEPTH_FRAMES[sc],
+                        ))
+    return runs
+
+
 def fill_runs() -> list[RunSpec]:
     """Fill-pattern sweep: xor vs zeros vs rand across codecs and chunk sizes."""
     runs = []
@@ -267,6 +327,7 @@ TIERS = {
     "lod": lod_runs,
     "fill": fill_runs,
     "io": io_runs,
+    "iodepth": iodepth_runs,
     "s3": s3_runs,
 }
 
@@ -380,6 +441,15 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--frames", str(spec.frames),
         "--json",
     ]
+
+    # The worker count is what caps how many writes a blocking backend can have
+    # running, so it tracks the ceiling rather than being swept on its own.
+    if spec.io_writes_in_flight > 0:
+        cmd.extend(["--io-writes-in-flight", str(spec.io_writes_in_flight),
+                    "--io-workers", str(spec.io_writes_in_flight)])
+    if spec.io_writes_in_flight_per_file > 0:
+        cmd.extend(["--io-writes-in-flight-per-file",
+                    str(spec.io_writes_in_flight_per_file)])
 
     tmpdir = None
     if spec.sink == "fs":
@@ -539,11 +609,16 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
         table.add_column("Dtype")
         table.add_column("Chunk")
         table.add_column("Sink", justify="center")
+        table.add_column("In flight all/file", justify="center")
         for i, r in enumerate(runs, 1):
+            in_flight = ""
+            if r.io_writes_in_flight > 0:
+                in_flight = f"{r.io_writes_in_flight}/{r.io_writes_in_flight_per_file}"
             table.add_row(
                 str(i), r.scenario, r.codec, r.fill,
                 r.backend, r.dtype, r.chunk_label,
                 r.sink if r.sink != "discard" else "",
+                in_flight,
             )
         console.print(table)
         console.print(f"\nTotal: [bold]{len(runs)}[/bold] runs across tiers: {', '.join(selected_tiers)}")

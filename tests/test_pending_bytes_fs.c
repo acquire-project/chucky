@@ -31,7 +31,13 @@ test_counts_every_write(const char* tmpdir, int direct)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  pool = io_faults_pool_create(&faults, tmpdir, /*nslots=*/1, /*unbuffered=*/0);
+  // One worker and one write at a time, so the injected blocking job holds
+  // up every write behind it and the count can be read between posts.
+  const struct io_scheduling io = { .workers = 1,
+                                    .writes_in_flight = 1,
+                                    .writes_in_flight_per_file = 1 };
+  pool =
+    io_faults_pool_create(&faults, tmpdir, /*nslots=*/1, /*unbuffered=*/0, &io);
   CHECK(Cleanup, pool);
   CHECK(Cleanup, shard_pool_pending_bytes(pool) == 0);
 

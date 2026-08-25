@@ -114,6 +114,8 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
   *s = (struct throttled_shard_sink){ 0 };
   s->latency_ns = io_latency_us * 1000ull;
   s->bytes_per_sec = io_bw_mbps * 1024ull * 1024ull;
+  // Defaults, which is one worker running one write at a time: a modeled
+  // drive with a bandwidth is only a bandwidth if one write holds it.
   s->queue = io_queue_create(
     (struct io_backend){ .ctx = s, .execute = throttled_execute },
     (struct io_queue_limits){ 0 });

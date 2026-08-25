@@ -4,6 +4,7 @@
 #pragma once
 
 #include "zarr/io_backend.h"
+#include "zarr/types.io.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -24,14 +25,23 @@ struct io_faults
   _Atomic int block_next_noop;
   _Atomic int fail_next_truncate;
   _Atomic int* block_gate;
+
+  struct io_scheduling io; // zero fields take the pool's own defaults
 };
 
 // Create a filesystem shard pool whose io can be made to fail or block.
+// io: how much of the write backlog runs at once; NULL takes the defaults.
 struct shard_pool*
 io_faults_pool_create(struct io_faults* f,
                       const char* root,
                       uint64_t nslots,
-                      int unbuffered);
+                      int unbuffered,
+                      const struct io_scheduling* io);
+
+// Set the write scheduling a later pool is built with. A store builds its pool
+// after it is created, so this is how that pool's scheduling is chosen.
+void
+io_faults_set_io_scheduling(struct io_faults* f, struct io_scheduling io);
 
 // Create a filesystem store whose pool can be made to fail or block. Only one
 // pool can be built from it, even after that pool is destroyed.

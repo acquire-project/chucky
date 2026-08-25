@@ -57,6 +57,11 @@ struct shard_state
   uint8_t* footer_buf_pool;
   size_t footer_buf_pool_bytes;
   size_t footer_capacity; // bytes per shard
+
+  // Most a shard file can reach: every chunk at its worst-case compressed
+  // size, plus the footer. Zero when the size is unknown, which turns
+  // pre-sizing off.
+  uint64_t shard_file_capacity;
 };
 
 int

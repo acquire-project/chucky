@@ -20,9 +20,13 @@ struct io_backend_fake_record
 struct io_backend_fake
 {
   struct io_backend_fake_record records[IO_BACKEND_FAKE_CAPACITY];
+  // Claimed on the way in, published on the way out, so the two counts differ
+  // only while a worker is between them.
+  _Atomic uint64_t nclaimed;
   _Atomic uint64_t nrecords;
 
   uint64_t deferred[IO_BACKEND_FAKE_CAPACITY];
+  _Atomic uint64_t nclaimed_deferred;
   _Atomic uint64_t ndeferred;
 
   _Atomic uint64_t inside_execute;

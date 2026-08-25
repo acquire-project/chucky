@@ -33,6 +33,15 @@ struct bench_memory
   uint64_t measured_bytes;
 };
 
+// The write scheduling a run used, for the results file. Recorded even when
+// nothing was written, so a run with no output is still told apart from one
+// taken with different settings.
+struct io_write_scheduling
+{
+  struct io_scheduling io;
+  const char* backend; // NULL when the run wrote nothing
+};
+
 void
 print_memory_report(const struct bench_memory* mem);
 
@@ -80,6 +89,7 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
+                      const struct io_write_scheduling* scheduling,
                       const struct shard_pool_io_stats* io);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
