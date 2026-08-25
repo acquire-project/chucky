@@ -67,7 +67,7 @@ struct stream_metrics
   struct stream_metric footer_buffer_stall; // a shard's previous footer write
   struct stream_metric append_extent_stall; // shards closed since the extent
                                             // was last published
-  struct stream_metric flush_fence_stall;   // every queued write, at flush
+  struct stream_metric flush_writes_stall;  // every queued write, at flush
   struct stream_metric backpressure;        // sink queue over its watermark
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which

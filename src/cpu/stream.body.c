@@ -317,7 +317,7 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
       v->sink->wait_fence(v->sink, v->io_done[0]);
       v->sink->wait_fence(v->sink, v->io_done[1]);
       if (v->metrics)
-        accumulate_metric_ms(&v->metrics->flush_fence_stall,
+        accumulate_metric_ms(&v->metrics->flush_writes_stall,
                              (float)(platform_toc(&fence_clk) * 1000.0),
                              0,
                              0);

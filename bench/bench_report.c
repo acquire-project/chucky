@@ -236,7 +236,7 @@ print_bench_report(const struct stream_metrics* metrics,
     metrics->io_fence_stall.count > 0 ||
     metrics->footer_buffer_stall.count > 0 ||
     metrics->append_extent_stall.count > 0 ||
-    metrics->flush_fence_stall.count > 0 || metrics->backpressure.count > 0 ||
+    metrics->flush_writes_stall.count > 0 || metrics->backpressure.count > 0 ||
     metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
     metrics->tail_gate.count > 0 || metrics->scatter_samples_lost > 0 ||
     metrics->lod_samples_lost > 0 || have_edge_stalls;
@@ -248,7 +248,7 @@ print_bench_report(const struct stream_metrics* metrics,
     print_metric_row(&metrics->io_fence_stall);
     print_metric_row(&metrics->footer_buffer_stall);
     print_metric_row(&metrics->append_extent_stall);
-    print_metric_row(&metrics->flush_fence_stall);
+    print_metric_row(&metrics->flush_writes_stall);
     print_metric_row(&metrics->backpressure);
     print_metric_row(&metrics->tail_gate);
     for (size_t i = 0; i < n_edge_stalls; ++i)
@@ -496,10 +496,10 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->append_extent_stall.ms);
   jw_key(&jw, "append_extent_count");
   jw_uint(&jw, (uint64_t)m->append_extent_stall.count);
-  jw_key(&jw, "flush_fence_ms");
-  jw_float(&jw, (double)m->flush_fence_stall.ms);
-  jw_key(&jw, "flush_fence_count");
-  jw_uint(&jw, (uint64_t)m->flush_fence_stall.count);
+  jw_key(&jw, "flush_writes_ms");
+  jw_float(&jw, (double)m->flush_writes_stall.ms);
+  jw_key(&jw, "flush_writes_count");
+  jw_uint(&jw, (uint64_t)m->flush_writes_stall.count);
   jw_key(&jw, "backpressure_ms");
   jw_float(&jw, (double)m->backpressure.ms);
   jw_key(&jw, "backpressure_count");
@@ -526,8 +526,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_string(&jw, metric_owner_name(m->footer_buffer_stall.owner));
   jw_key(&jw, "append_extent");
   jw_string(&jw, metric_owner_name(m->append_extent_stall.owner));
-  jw_key(&jw, "flush_fence");
-  jw_string(&jw, metric_owner_name(m->flush_fence_stall.owner));
+  jw_key(&jw, "flush_writes");
+  jw_string(&jw, metric_owner_name(m->flush_writes_stall.owner));
   jw_key(&jw, "backpressure");
   jw_string(&jw, metric_owner_name(m->backpressure.owner));
   jw_key(&jw, "tail_gate");

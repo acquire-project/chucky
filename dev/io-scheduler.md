@@ -301,11 +301,10 @@ taking cores from the pipeline: holding the pipeline to 32 threads on a
 with depth is how long a single write takes — `io_run_ms_mean` goes from 10.0
 ms at eight to 18.4 at sixteen while the sink's rate does not improve — and
 the producer waits on io, so it feels a write's latency rather than the
-aggregate rate. Which wait is not settled here. Each of the producer's waits
-on io is reported on its own now, but this point was measured before those
-metrics existed, and the one fence timed then read 0.01 ms over seven calls.
-On the file server below, the wait on an aggregate slot's previous writes is
-where the producer sits.
+aggregate rate. Which wait is not settled here. Each of those waits is
+reported on its own now, but this point predates the metrics, and the one fence
+timed then read 0.01 ms over seven calls. On the file server below, the wait on
+an aggregate slot's previous writes is where the producer sits.
 
 The gap left is the pipeline: 11.4 GB/s against the 16.4 the array gives at
 the same depth. Since depth follows the count of shard files holding work,
@@ -377,10 +376,10 @@ against two of the same run to the node's own eight-drive array:
 A mount run lasts 7.3 to 9.1 s and an array run 5.8, so the slot fence is 43 to
 50% of one on the mount and under a third of a percent on the array. There are
 two slots, so a batch cannot be filled until the writes of the batch two before
-it have landed: the producer runs two batches ahead of io and no further, and
-that is the depth the queue never reaches. Publishing the extent costs a
-further 5% on either target, and no stage total held it. The footer buffer and
-the flush are nothing on either.
+it have landed. The producer therefore runs two batches ahead of io and no
+further, which is the ceiling on the depth the queue can reach. Publishing the
+extent costs a further 5% on either target, and no stage total held it. The
+footer buffer and the flush are nothing on either.
 
 **The faster target depends on the node.** An L40 node's mirror gives 1.6 to
 2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`

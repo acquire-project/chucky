@@ -78,7 +78,7 @@ shard_state_heap_bytes(const struct level_layout_info* li);
 
 // A reader can safely see up to this append-dim extent. The last finalize's
 // writes are waited on, and they have normally landed already. Pass metrics to
-// time that wait, or NULL to skip timing.
+// time that wait, or NULL.
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct shard_sink* sink,
@@ -112,7 +112,7 @@ finalize_shards(struct shard_state* ss,
 //   layout: aggregate layout for shard_capacity / num_shards / page_size.
 //   h_tail_bytes: [num_shards] sub-page leading-tail bytes carried in;
 //                 updated in place. NULL only when page_size == 0.
-//   metrics: times the footer-buffer wait, or NULL to skip timing.
+//   metrics: times the footer-buffer wait, or NULL.
 int
 deliver_to_shards_batch(uint8_t level,
                         struct shard_state* ss,
