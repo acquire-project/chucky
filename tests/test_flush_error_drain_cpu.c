@@ -51,7 +51,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   CHECK(Cleanup,
         test_zarr_sink_open_with_pool(
           &z,
-          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1),
+          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1, NULL),
           "0",
           dims,
           3,

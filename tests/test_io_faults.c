@@ -63,12 +63,13 @@ static struct shard_pool*
 pool_create(struct io_faults* f,
             const char* root,
             uint64_t nslots,
-            int unbuffered)
+            int unbuffered,
+            const struct io_scheduling* io)
 {
   f->pool = shard_pool_fs_create_wrapped(root,
                                          nslots,
                                          unbuffered,
-                                         &f->io,
+                                         io,
                                          (struct shard_pool_fs_wrapper){
                                            .ctx = f,
                                            .wrap = faults_wrap,
@@ -85,15 +86,7 @@ io_faults_pool_create(struct io_faults* f,
                       const struct io_scheduling* io)
 {
   memset(f, 0, sizeof(*f));
-  if (io)
-    f->io = *io;
-  return pool_create(f, root, nslots, unbuffered);
-}
-
-void
-io_faults_set_io_scheduling(struct io_faults* f, struct io_scheduling io)
-{
-  f->io = io;
+  return pool_create(f, root, nslots, unbuffered, io);
 }
 
 // --- Store ---
@@ -105,6 +98,7 @@ struct faults_store
   struct io_faults* faults;
   struct strbuf root; // owned
   int unbuffered;
+  struct io_scheduling io; // held until the pool is built
 };
 
 static int
@@ -138,7 +132,8 @@ faults_store_create_pool(struct store* self, uint64_t nslots)
   // A second pool would leave the first pool's queue calling the wrong
   // backend.
   CHECK(Fail, !s->faults->pool);
-  return pool_create(s->faults, strbuf_cstr(&s->root), nslots, s->unbuffered);
+  return pool_create(
+    s->faults, strbuf_cstr(&s->root), nslots, s->unbuffered, &s->io);
 Fail:
   return NULL;
 }
@@ -153,7 +148,10 @@ faults_store_destroy(struct store* self)
 }
 
 struct store*
-io_faults_store_create(struct io_faults* f, const char* root, int unbuffered)
+io_faults_store_create(struct io_faults* f,
+                       const char* root,
+                       int unbuffered,
+                       const struct io_scheduling* io)
 {
   memset(f, 0, sizeof(*f));
 
@@ -167,6 +165,8 @@ io_faults_store_create(struct io_faults* f, const char* root, int unbuffered)
   s->base.destroy = faults_store_destroy;
   s->faults = f;
   s->unbuffered = unbuffered;
+  if (io)
+    s->io = *io;
   CHECK(Fail_alloc, strbuf_set(&s->root, root) == 0);
 
   s->inner = store_fs_create(root, unbuffered);
