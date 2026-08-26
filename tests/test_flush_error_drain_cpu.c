@@ -1,7 +1,6 @@
 // A flush is required to wait for the work it queued and to report its
 // failures.
 
-#include "platform/platform.h"
 #include "stream.cpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
@@ -9,7 +8,6 @@
 #include "util/prelude.h"
 #include "writer.h"
 
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
