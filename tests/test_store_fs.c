@@ -286,25 +286,23 @@ static int
 test_shard_pool_io_stats(void)
 {
   log_info("=== test_shard_pool_io_stats ===");
-  struct io_faults faults;
-  struct store* s = io_faults_store_create(&faults, tmpdir, 0);
-  CHECK(Fail, s);
-  CHECK(Fail2, s->mkdirs(s, "stats") == 0);
 
   // One worker running one write at a time, so the injected blocking job
   // holds up everything behind it. A queued close keeps its handle, so all
   // six files stay open.
-  io_faults_set_io_scheduling(&faults,
-                              (struct io_scheduling){
-                                .workers = 1,
-                                .writes_in_flight = 1,
-                                .writes_in_flight_per_file = 1,
-                              });
+  const struct io_scheduling scheduling = { .workers = 1,
+                                            .writes_in_flight = 1,
+                                            .writes_in_flight_per_file = 1 };
+  struct io_faults faults;
+  struct store* s = io_faults_store_create(&faults, tmpdir, 0, &scheduling);
+  CHECK(Fail, s);
+  CHECK(Fail2, s->mkdirs(s, "stats") == 0);
+
   struct shard_pool* pool = s->create_pool(s, 2);
   CHECK(Fail2, pool);
 
   atomic_int gate = 0;
-  CHECK(Fail3, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Fail4, io_faults_inject_blocking_job(&faults, &gate) == 0);
 
   for (int i = 0; i < 6; ++i) {
     char key[256];
@@ -347,6 +345,72 @@ Fail3:
 Fail2:
   s->destroy(s);
 Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+// --- store scheduling ---
+
+#define HELD_WRITE_BYTES 4096
+#define HELD_WRITES 8
+
+// The pool is built after the store, so the scheduling must be kept until then.
+// With one request in flight, nothing behind the gated job can be started.
+static int
+test_store_scheduling_reaches_pool(void)
+{
+  log_info("=== test_store_scheduling_reaches_pool ===");
+
+  const struct io_scheduling scheduling = { .workers = 1,
+                                            .writes_in_flight = 1,
+                                            .writes_in_flight_per_file = 1 };
+  struct io_faults faults;
+  struct store* s = io_faults_store_create(&faults, tmpdir, 0, &scheduling);
+  CHECK(Fail, s);
+  CHECK(Fail2, s->mkdirs(s, "scheduling") == 0);
+
+  struct shard_pool* pool = s->create_pool(s, 1);
+  CHECK(Fail2, pool);
+
+  struct shard_writer* w = pool->open(pool, 0, "scheduling/held.bin");
+  CHECK(Fail3, w);
+
+  atomic_int gate = 0;
+  CHECK(Fail4, io_faults_inject_blocking_job(&faults, &gate) == 0);
+
+  static const char payload[HELD_WRITE_BYTES] = { 0 };
+  for (uint64_t i = 0; i < HELD_WRITES; ++i)
+    CHECK(Fail4,
+          w->write(
+            w, i * HELD_WRITE_BYTES, payload, payload + HELD_WRITE_BYTES) == 0);
+
+  CHECK(Fail4,
+        shard_pool_pending_bytes(pool) ==
+          (uint64_t)HELD_WRITES * HELD_WRITE_BYTES);
+
+  atomic_store(&gate, 1);
+  CHECK(Fail3, pool->flush(pool) == 0);
+  CHECK(Fail3, shard_pool_pending_bytes(pool) == 0);
+
+  // On the defaults the gated job would be overlapped with the writes behind
+  // it. A depth of one means the pool was given the scheduling.
+  struct shard_pool_io_stats io;
+  shard_pool_io_stats(pool, &io);
+  CHECK(Fail3, io.queue.writes_in_flight_peak == 1);
+
+  shard_pool_destroy(pool);
+  s->destroy(s);
+  log_info("  PASS");
+  return 0;
+
+Fail4:
+  atomic_store(&gate, 1);
+Fail3:
+  shard_pool_destroy(pool);
+Fail2:
+  s->destroy(s);
+Fail:
+  log_error("  FAIL");
   return 1;
 }
 
@@ -813,6 +877,7 @@ main(void)
   err |= test_shard_pool_on_demand_mkdir();
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_io_stats();
+  err |= test_store_scheduling_reaches_pool();
   err |= test_shard_pool_error_propagation();
   err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();

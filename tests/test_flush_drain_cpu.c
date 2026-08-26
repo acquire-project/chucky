@@ -76,7 +76,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   CHECK(Cleanup,
         test_zarr_sink_open_with_pool(
           &z,
-          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1),
+          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1, NULL),
           "0",
           dims,
           3,

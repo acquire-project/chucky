@@ -254,7 +254,7 @@ test_destroy_blocks_on_gated_sink(const char* tmpdir)
   CHECK(Cleanup,
         test_zarr_sink_open_with_pool(
           &z,
-          io_faults_store_create(&faults, tmpdir, 0),
+          io_faults_store_create(&faults, tmpdir, 0, NULL),
           "0",
           dims,
           3,
