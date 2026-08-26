@@ -51,13 +51,8 @@ ENV CC=clang
 ENV CXX=clang++
 ENV CMAKE_PREFIX_PATH="/opt/aws"
 
-# The io_uring write backend is built when liburing is present; this layer
-# is kept apart so adding it does not rebuild the ones above.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        liburing-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
+# No liburing here on purpose. A container is not allowed a ring, so the
+# io_uring backend would be built and never run, and counted as uncovered.
 WORKDIR /src
 COPY . .
 
