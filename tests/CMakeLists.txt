@@ -214,7 +214,7 @@ add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu 
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
-add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
+add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   test_zarr_helpers store_s3 platform_cmd)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)
 
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)

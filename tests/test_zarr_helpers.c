@@ -61,10 +61,30 @@ test_zarr_sink_open(struct test_zarr_sink* z,
                     struct codec_config codec,
                     int unbuffered)
 {
+  return test_zarr_sink_open_in_store(z,
+                                      store_fs_create(store_path, unbuffered),
+                                      array_name,
+                                      dims,
+                                      rank,
+                                      data_type,
+                                      fill_value,
+                                      codec);
+}
+
+int
+test_zarr_sink_open_in_store(struct test_zarr_sink* z,
+                             struct store* store,
+                             const char* array_name,
+                             const struct dimension* dims,
+                             uint8_t rank,
+                             enum dtype data_type,
+                             double fill_value,
+                             struct codec_config codec)
+{
   *z = (struct test_zarr_sink){ 0 };
 
-  z->store = store_fs_create(store_path, unbuffered);
-  CHECK(Fail, z->store);
+  CHECK(Fail, store);
+  z->store = store;
   z->store->mkdirs(z->store, ".");
 
   CHECK(Fail, write_root_and_intermediates(z->store, array_name) == 0);
@@ -167,10 +187,33 @@ test_zarr_multiscale_open(struct test_zarr_multiscale* z,
                           const struct ngff_axis* axes,
                           int unbuffered)
 {
+  return test_zarr_multiscale_open_in_store(
+    z,
+    store_fs_create(store_path, unbuffered),
+    array_name,
+    dims,
+    rank,
+    data_type,
+    nlod,
+    codec,
+    axes);
+}
+
+int
+test_zarr_multiscale_open_in_store(struct test_zarr_multiscale* z,
+                                   struct store* store,
+                                   const char* array_name,
+                                   const struct dimension* dims,
+                                   uint8_t rank,
+                                   enum dtype data_type,
+                                   int nlod,
+                                   struct codec_config codec,
+                                   const struct ngff_axis* axes)
+{
   *z = (struct test_zarr_multiscale){ 0 };
 
-  z->store = store_fs_create(store_path, unbuffered);
-  CHECK(Fail, z->store);
+  CHECK(Fail, store);
+  z->store = store;
   z->store->mkdirs(z->store, ".");
 
   CHECK(Fail, write_root_and_intermediates(z->store, array_name) == 0);
