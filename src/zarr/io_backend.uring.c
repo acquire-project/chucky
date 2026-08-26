@@ -14,21 +14,18 @@
 #define DEFAULT_DEPTH 8u
 
 // A ring with nothing left in it still has to wake the thread reading it, so
-// teardown posts one request carrying this instead of a slot number. No slot
-// reaches it: a slot number is small and sits in the low half.
+// teardown posts a request carrying this in place of a slot number, which is
+// too small to reach it.
 #define STOP_TAG UINT64_MAX
 
-// The ring counts a write's bytes in 32 bits, and a run of them has to stay
-// aligned for an unbuffered file, so a longer write is split on a page
-// boundary and finished the way a short one is.
+// A write's byte count is 32 bits wide in the ring, and a longer write has to
+// be split where an unbuffered file allows it.
 #define MAX_WRITE_BYTES (1u << 30)
 
-// A ring that cannot be read is a broken kernel rather than a busy one, so it
-// is tried again on a slow timer instead of spun on.
+// A ring that cannot be read is a broken kernel rather than a busy one.
 #define READ_RETRY_NS 100000000LL
 
-// A submission that does not go through is transient, so it is tried again a
-// few times before the entry is left for the next one to carry.
+// A submission the kernel turns down is transient.
 #define SUBMIT_TRIES 3
 #define SUBMIT_RETRY_NS 1000000LL
 
@@ -43,8 +40,8 @@ struct ring_slot
   uint8_t in_flight; // the ring may still report it
 };
 
-// Which write a completion belongs to. The claim count tells a completion for
-// the write in the slot now from one for a write that is long gone.
+// A completion is named by its slot and by the count of times that slot has
+// been taken, so one for a write that is long gone can be told apart.
 static uint64_t
 slot_tag(uint32_t index, uint32_t claims)
 {
@@ -56,8 +53,8 @@ struct io_backend_uring
   struct io_uring ring;
   struct io_backend_fs* files;
   struct io_backend blocking; // everything that is not a write goes here
-  // The queue is built from the backend, so the workers exist before this is
-  // set and read it from their own threads.
+  // The queue is built from the backend, so this is set after its workers are
+  // already running.
   struct io_queue* _Atomic queue;
   _Atomic int* io_error;
 
@@ -69,8 +66,7 @@ struct io_backend_uring
   struct platform_thread* reader;
 };
 
-// -1 until a ring has been asked for, then 0 or 1.
-static _Atomic int ring_probed = -1;
+static _Atomic int ring_probed = -1; // -1 until a ring has been asked for
 static _Atomic int ring_probe_reported = 0;
 
 int
@@ -92,17 +88,32 @@ io_backend_uring_supported(void)
   return rc == 0;
 }
 
-// Give the ring the write the slot holds. Non-zero when the ring had no room
-// to take it, and the slot is then still the caller's. A prepared entry is the
-// kernel's from that moment and cannot be taken back, so from there the write
-// is in flight whatever the submitting call reports: a caller told the write
-// failed would free a payload the kernel is still reading.
+// Non-zero when the slot still holds the write the tag names. A completion for
+// one it no longer holds is dropped, so it cannot retire a later write.
+static int
+slot_holds_the_write(struct io_backend_uring* b, uint64_t tag)
+{
+  const uint32_t index = (uint32_t)tag;
+  if (index >= b->nslots)
+    return 0;
+
+  struct ring_slot* s = &b->slots[index];
+  platform_mutex_lock(b->mutex);
+  const int holds = s->in_flight && s->claims == (uint32_t)(tag >> 32);
+  platform_mutex_unlock(b->mutex);
+  return holds;
+}
+
+// Give the ring the write the slot holds. Non-zero when there was no room and
+// the slot is still the caller's; otherwise the write is in flight, because a
+// prepared entry cannot be taken back.
 static int
 submit(struct io_backend_uring* b, uint32_t index)
 {
   struct ring_slot* s = &b->slots[index];
 
   platform_mutex_lock(b->mutex);
+  const uint32_t claims = s->claims;
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
   if (!sqe) {
     io_uring_submit(&b->ring);
@@ -113,7 +124,7 @@ submit(struct io_backend_uring* b, uint32_t index)
       s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes : MAX_WRITE_BYTES;
     io_uring_prep_write(
       sqe, s->fd, s->rest.payload, (unsigned)nbytes, s->rest.offset);
-    io_uring_sqe_set_data64(sqe, slot_tag(index, s->claims));
+    io_uring_sqe_set_data64(sqe, slot_tag(index, claims));
     s->in_flight = 1;
   }
   platform_mutex_unlock(b->mutex);
@@ -121,22 +132,26 @@ submit(struct io_backend_uring* b, uint32_t index)
   if (!sqe)
     return 1;
 
-  // A submission the kernel turns down wants the completions read first, and
-  // the lock is what the thread reading them needs, so it is let go between
-  // tries.
+  // Holding the lock would stop the completions being read, which is what
+  // lets a turned-down submission through.
   int rc = 0;
   for (int attempt = 0; attempt < SUBMIT_TRIES; ++attempt) {
+    if (attempt)
+      platform_sleep_ns(SUBMIT_RETRY_NS);
     platform_mutex_lock(b->mutex);
     rc = io_uring_submit(&b->ring);
     platform_mutex_unlock(b->mutex);
     if (rc >= 0)
       return 0;
-    platform_sleep_ns(SUBMIT_RETRY_NS);
   }
 
-  // The entry is still in the ring and the next submission carries it. With
-  // none to come the write never runs and the queue waits for it, which takes
-  // a kernel that has stopped accepting submissions at all.
+  // Another thread's submission may have carried the entry, and a write that
+  // has already run is not one to call failed.
+  if (!slot_holds_the_write(b, slot_tag(index, claims)))
+    return 0;
+
+  // The entry is still in the ring for the next submission to carry, so the
+  // write is not this backend's to call failed either.
   log_error("io_backend_uring: cannot hand the ring a write: %s",
             strerror(-rc));
   atomic_store(b->io_error, 1);
@@ -153,7 +168,6 @@ release(struct io_backend_uring* b, uint32_t index)
   platform_mutex_unlock(b->mutex);
 }
 
-// The queue does not read a status, so the pool's flag is raised here.
 static void
 report(struct io_backend_uring* b, uint32_t index, uint64_t nbytes, int status)
 {
@@ -166,8 +180,8 @@ report(struct io_backend_uring* b, uint32_t index, uint64_t nbytes, int status)
     (struct io_completion){ .seq = seq, .nbytes = nbytes, .status = status });
 }
 
-// The thread reading the ring is the only one that empties it, so the rest of
-// a write is offered once rather than waited on here.
+// The thread that would make room in the ring is the one running this, so the
+// rest of a write is offered once rather than waited on.
 static void
 hand_over(struct io_backend_uring* b, uint32_t index)
 {
@@ -175,23 +189,6 @@ hand_over(struct io_backend_uring* b, uint32_t index)
     return;
   log_error("io_backend_uring: the ring had no room for the rest of a write");
   report(b, index, 0, IO_FAILED);
-}
-
-// Non-zero when the completion belongs to the write the slot holds now. One
-// that belongs to no write is dropped rather than laid on whoever holds the
-// slot, so a completion the ring reports twice cannot retire a later write.
-static int
-completion_is_expected(struct io_backend_uring* b, uint64_t tag)
-{
-  const uint32_t index = (uint32_t)tag;
-  if (index >= b->nslots)
-    return 0;
-
-  struct ring_slot* s = &b->slots[index];
-  platform_mutex_lock(b->mutex);
-  const int expected = s->in_flight && s->claims == (uint32_t)(tag >> 32);
-  platform_mutex_unlock(b->mutex);
-  return expected;
 }
 
 static void
@@ -250,7 +247,7 @@ read_completions(void* arg)
 
     if (tag == STOP_TAG)
       return;
-    if (completion_is_expected(b, tag))
+    if (slot_holds_the_write(b, tag))
       finish(b, (uint32_t)tag, res);
   }
 }
@@ -304,8 +301,8 @@ uring_execute(void* ctx,
     return IO_BUSY;
   }
 
-  // The slot is taken before the write is submitted, so no other thread can
-  // be handed it while this one is preparing its entry.
+  // The slot is taken before the write is submitted, so it cannot be handed
+  // out twice.
   struct ring_slot* s = &b->slots[index];
   b->free_head = s->next_free;
   *s = (struct ring_slot){

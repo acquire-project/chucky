@@ -318,7 +318,7 @@ shard_pool_fs_scheduling_defaults(struct io_scheduling* io)
     io->writes_in_flight = DEFAULT_WRITES_IN_FLIGHT;
   if (!io->writes_in_flight_per_file)
     io->writes_in_flight_per_file = DEFAULT_WRITES_IN_FLIGHT_PER_FILE;
-  // Settled here, not in the pool, so what a caller records is what it got.
+  // Settled here rather than in the pool, so a caller records what it got.
   if (io->backend != IO_BACKEND_URING)
     return;
   if (!io_backend_uring_supported())

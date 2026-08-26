@@ -1,5 +1,5 @@
-// Stands in for the ring where there is none: not Linux, or liburing was not
-// found when the build was configured.
+// No ring is to be had here: not Linux, or liburing was not found when the
+// build was configured.
 #include "zarr/io_backend.uring.h"
 
 #include <stddef.h>

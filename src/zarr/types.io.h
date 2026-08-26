@@ -4,15 +4,14 @@
 
 #include <stdint.h>
 
-// Which backend carries out the write requests.
+// The write requests are carried out by one of these.
 enum io_backend_choice
 {
   IO_BACKEND_THREADS = 0, // blocking writes on the queue's own workers
   IO_BACKEND_URING,       // io_uring, on Linux only
 };
 
-// A ring is not to be had on every machine, so a run reports the backend it
-// ended up on rather than the one it asked for.
+// The name a results file records is returned here.
 static inline const char*
 io_backend_choice_name(enum io_backend_choice choice)
 {

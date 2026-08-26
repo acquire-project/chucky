@@ -61,8 +61,7 @@ RUN wget -qO /tmp/nvcomp.tar.xz \
 
 ENV CMAKE_PREFIX_PATH="/opt/nvcomp:/opt/aws"
 
-# The io_uring write backend is built when liburing is present; this layer
-# is kept apart so adding it does not rebuild the ones above.
+# liburing is installed in a layer of its own, so the ones above stay cached.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         liburing-dev \
         pkg-config \

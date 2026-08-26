@@ -1,6 +1,5 @@
-// The ring is put through the same write path the worker threads take, and
-// the files it leaves are compared with theirs. Where no ring can be had the
-// whole file is skipped, so a container that refuses one still reports green.
+// The ring is put through the write path the worker threads take, and its
+// files are compared with theirs. Where no ring can be had, nothing here runs.
 
 #include "platform/platform.h"
 #include "platform/platform_io.h"
@@ -33,7 +32,8 @@
 #define ROUNDS 2u
 #define SOURCE_BYTES (SHARD_BYTES * POOL_SLOTS * ROUNDS)
 
-// Big enough that a run of writes overlaps, small enough to stay quick.
+// These are big enough that a run of writes overlaps and small enough to stay
+// quick.
 #define WORKERS 3u
 #define WRITES_IN_FLIGHT 6u
 #define WRITES_PER_FILE_IN_FLIGHT 3u
@@ -60,16 +60,15 @@ shard_key(char* out, uint64_t round, uint64_t slot)
            (unsigned long long)slot);
 }
 
-// Offsets are visited out of order so the queue has more than one write ready
-// on a file and the ring reports them in whatever order it finishes them.
+// Offsets are visited out of order so a file has more than one write ready.
 static uint64_t
 write_turn(uint64_t i)
 {
   return (i * 5u) % WRITES_PER_FILE;
 }
 
-// Write POOL_SLOTS shard files per round, twice over, so a slot and the file
-// index behind it are both reused while an earlier close is still retiring.
+// The shard files are written twice over, so a writer slot and the file index
+// behind it are both reused while an earlier close is still retiring.
 static int
 write_the_shards(const char* root,
                  enum io_backend_choice backend,
@@ -120,8 +119,8 @@ Fail:
   return rc;
 }
 
-// Read up to cap bytes of the file into buf. The count is returned, or -1
-// when the file could not be opened.
+// Read the file. The count of bytes read is returned, or -1 when it could not
+// be opened.
 static int64_t
 read_whole_file(const char* path, uint8_t* buf, uint64_t cap)
 {
@@ -211,8 +210,8 @@ struct ring_under_test
   _Atomic int io_error;
 };
 
-// depth is the ring's, and in_flight the queue's ceiling; a ceiling above the
-// depth is what makes the ring answer that it has no room.
+// A queue ceiling above the ring's depth is what makes the ring say it has no
+// room.
 static int
 ring_open(struct ring_under_test* r, uint64_t depth, uint64_t in_flight)
 {
@@ -351,9 +350,8 @@ Cleanup:
   return rc;
 }
 
-// The queue reads no status either way, so a write the kernel turns down has
-// to raise the flag as well. A negative file offset is turned down whatever
-// the file is.
+// A write the kernel turns down has to raise the pool's flag too. A negative
+// offset is turned down whatever the file is.
 static int
 test_a_write_the_kernel_turns_down_raises_the_error_flag(const char* tmpdir)
 {
@@ -392,11 +390,9 @@ Cleanup:
 }
 
 #ifndef _WIN32
-// A write the kernel only partly carries out is the backend's to finish, not
-// the queue's. A file-size limit is what stops the kernel halfway; the part
-// left over is over the limit too, so the retry is turned down and the flag
-// goes up. A backend that called the short write done would leave the flag
-// clear and half the bytes lost.
+// A write the kernel only partly carries out is the backend's to finish. A
+// file-size limit stops it halfway and turns the rest down, so a backend that
+// carries on raises the flag where one that gave up would not.
 static int
 test_a_short_write_is_not_reported_as_done(const char* tmpdir)
 {
@@ -455,8 +451,7 @@ Cleanup:
 }
 #endif
 
-// Nothing is ever posted, so the thread reading the ring has no completion to
-// wake it and teardown is the only thing that can.
+// Nothing is posted, so only teardown can wake the thread reading the ring.
 static int
 test_an_idle_ring_is_torn_down(const char* tmpdir)
 {
@@ -488,8 +483,7 @@ main(void)
 
   int rc = 0;
   rc |= test_the_ring_writes_what_the_threads_write(tmpdir, 0);
-  // An unbuffered write has to be a whole number of pages long, and the sizes
-  // above are fixed.
+  // An unbuffered write has to be a whole number of pages long.
   if (WRITE_BYTES % platform_page_alignment() == 0)
     rc |= test_the_ring_writes_what_the_threads_write(tmpdir, 1);
   rc |= test_a_full_ring_takes_every_write_in_the_end(tmpdir);
