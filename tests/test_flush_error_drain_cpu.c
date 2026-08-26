@@ -1,4 +1,4 @@
-// A flush is required to report the failures of the io it waited on.
+// A flush is required to report the failures of the work it waited on.
 
 #include "platform/platform.h"
 #include "stream.cpu.h"
