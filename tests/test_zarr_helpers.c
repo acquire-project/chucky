@@ -158,10 +158,10 @@ test_zarr_sink_has_error(const struct test_zarr_sink* z)
   return zarr_array_has_error(z->array);
 }
 
-void
+int
 test_zarr_sink_flush(struct test_zarr_sink* z)
 {
-  zarr_array_flush(z->array);
+  return zarr_array_flush(z->array);
 }
 
 void
@@ -240,12 +240,6 @@ struct shard_sink*
 test_zarr_multiscale_as_shard_sink(struct test_zarr_multiscale* z)
 {
   return ngff_multiscale_as_shard_sink(z->ms);
-}
-
-void
-test_zarr_multiscale_flush(struct test_zarr_multiscale* z)
-{
-  ngff_multiscale_flush(z->ms);
 }
 
 void

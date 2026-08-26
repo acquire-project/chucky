@@ -181,7 +181,7 @@ test_pipeline(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify: correct number of shards, all chunks decompress.
   {
@@ -307,7 +307,7 @@ test_streaming_append(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify all shards
   {
@@ -436,7 +436,7 @@ test_batch_readback_impl(const char* tmpdir, int epochs_per_batch)
     struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // There should be exactly one shard (all epochs + all inner chunks).
   {

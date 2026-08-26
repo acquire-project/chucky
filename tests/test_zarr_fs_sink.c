@@ -222,7 +222,7 @@ test_pipeline(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify shard files exist and contents are correct
   {
@@ -791,7 +791,7 @@ test_unbounded_metadata_update(const char* tmpdir)
   // The extent publishes in close, not flush.
   CHECK(Fail4, writer_close(tile_stream_gpu_writer(s)).error == 0);
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // After closing, zarr.json shape[0] should reflect data written.
   // 4 epochs of chunk_size=2 → shape[0] = 8.
@@ -1069,7 +1069,7 @@ test_midstream_metadata_update(const char* tmpdir)
     struct writer_result r = writer_flush(tile_stream_gpu_writer(s));
     CHECK(Fail4, r.error == 0);
   }
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify final shape after flush: 6 epochs * chunk_size 2 = 12
   {
@@ -1169,7 +1169,7 @@ test_unbuffered_pipeline(const char* tmpdir)
     CHECK(Fail3, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail3, test_zarr_sink_flush(&z) == 0);
 
   // Verify shard file exists
   char path[4096];
@@ -1378,7 +1378,7 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify shard files: same loop as test_pipeline
   {
@@ -1833,7 +1833,7 @@ test_pipeline_storage_order(const char* tmpdir)
     CHECK(Fail4, r.error == 0);
   }
 
-  test_zarr_sink_flush(&z);
+  CHECK(Fail4, test_zarr_sink_flush(&z) == 0);
 
   // Verify shard files and chunk contents
   {
