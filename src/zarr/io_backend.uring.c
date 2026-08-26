@@ -27,6 +27,10 @@
 // is tried again on a slow timer instead of spun on.
 #define READ_RETRY_NS 100000000LL
 
+// A submission that does not go through is transient, so it is tried again a
+// few times before the entry is left for the next one to carry.
+#define SUBMIT_TRIES 3
+
 struct ring_slot
 {
   struct io_request rest; // the part of the write still to be done
@@ -87,8 +91,10 @@ io_backend_uring_supported(void)
   return rc == 0;
 }
 
-// 0 when the write was handed to the ring, 1 when the ring had no room for
-// it, and -1 when the ring refused it.
+// Non-zero when the ring had no room to take the write. A prepared entry is
+// the kernel's from that moment and cannot be taken back, so once one is
+// prepared the write is in flight whatever the submitting call reports: a
+// caller told the write failed would free a payload the kernel still reads.
 static int
 submit_locked(struct io_backend_uring* b, uint32_t index)
 {
@@ -109,14 +115,16 @@ submit_locked(struct io_backend_uring* b, uint32_t index)
   io_uring_sqe_set_data64(sqe, slot_tag(index, s->claims));
   s->in_flight = 1;
 
-  if (io_uring_submit(&b->ring) >= 0)
-    return 0;
-
-  // The entry stays in the ring whether or not the call went through, so a
-  // completion carrying this slot can still arrive. It is dropped, because
-  // the slot is no longer waiting for one.
-  s->in_flight = 0;
-  return -1;
+  for (int attempt = 0; attempt < SUBMIT_TRIES; ++attempt) {
+    const int rc = io_uring_submit(&b->ring);
+    if (rc >= 0)
+      return 0;
+    if (attempt + 1 == SUBMIT_TRIES)
+      log_error("io_backend_uring: cannot hand the ring a write: %s",
+                strerror(-rc));
+  }
+  // The entry is still in the ring, and the next submission carries it.
+  return 0;
 }
 
 static void
@@ -148,30 +156,30 @@ static void
 hand_over(struct io_backend_uring* b, uint32_t index)
 {
   platform_mutex_lock(b->mutex);
-  const int answer = submit_locked(b, index);
+  const int no_room = submit_locked(b, index);
   platform_mutex_unlock(b->mutex);
 
-  if (answer == 0)
+  if (!no_room)
     return;
   log_error("io_backend_uring: the ring would not take the rest of a write");
   report(b, index, 0, IO_FAILED);
 }
 
-// The write a completion belongs to, or NULL when it belongs to none: an entry
-// left in the ring by a submission that did not go through still completes,
-// and by then its slot may be free or holding another write.
-static struct ring_slot*
-slot_of(struct io_backend_uring* b, uint64_t tag)
+// Non-zero when the completion belongs to the write the slot holds now. One
+// that belongs to no write is dropped rather than laid on whoever holds the
+// slot, so a completion the ring reports twice cannot retire a later write.
+static int
+completion_is_expected(struct io_backend_uring* b, uint64_t tag)
 {
   const uint32_t index = (uint32_t)tag;
   if (index >= b->nslots)
-    return NULL;
+    return 0;
 
   struct ring_slot* s = &b->slots[index];
   platform_mutex_lock(b->mutex);
-  const int ours = s->in_flight && s->claims == (uint32_t)(tag >> 32);
+  const int expected = s->in_flight && s->claims == (uint32_t)(tag >> 32);
   platform_mutex_unlock(b->mutex);
-  return ours ? s : NULL;
+  return expected;
 }
 
 static void
@@ -230,7 +238,7 @@ read_completions(void* arg)
 
     if (tag == STOP_TAG)
       return;
-    if (slot_of(b, tag))
+    if (completion_is_expected(b, tag))
       finish(b, (uint32_t)tag, res);
   }
 }
@@ -295,18 +303,12 @@ uring_execute(void* ctx,
   };
 
   const uint32_t next_free = s->next_free;
-  const int answer = submit_locked(b, index);
-  if (answer == 0)
+  const int no_room = submit_locked(b, index);
+  if (!no_room)
     b->free_head = next_free;
   platform_mutex_unlock(b->mutex);
 
-  if (answer == 0)
-    return IO_SUBMITTED;
-  if (answer > 0)
-    return IO_BUSY;
-
-  record_failure(b, out, "io_backend_uring: the ring turned a write down");
-  return IO_DONE;
+  return no_room ? IO_BUSY : IO_SUBMITTED;
 }
 
 static void
