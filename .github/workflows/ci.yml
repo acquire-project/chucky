@@ -151,6 +151,7 @@ jobs:
       - name: Run tests and generate coverage
         run: |
           docker run --name coverage-run \
+            --security-opt seccomp=unconfined \
             -e AWS_ACCESS_KEY_ID=minioadmin \
             -e AWS_SECRET_ACCESS_KEY=minioadmin \
             -e AWS_ENDPOINT_URL=http://localhost:9000 \
