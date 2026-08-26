@@ -2282,9 +2282,6 @@ main(int ac, char* av[])
   (void)av;
 
   int ecode = 0;
-
-  // The cases before the CUDA setup are already folded into ecode, so a failed
-  // setup is tracked apart from them.
   int cuda_ready = 0;
 
   // Create temp directory
