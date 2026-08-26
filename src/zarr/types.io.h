@@ -11,13 +11,6 @@ enum io_backend_choice
   IO_BACKEND_URING,       // io_uring, on Linux only
 };
 
-// The name a results file records is returned here.
-static inline const char*
-io_backend_choice_name(enum io_backend_choice choice)
-{
-  return choice == IO_BACKEND_URING ? "uring" : "threads";
-}
-
 // How much of a filesystem sink's write backlog runs at once. A zero field
 // takes the default.
 struct io_scheduling

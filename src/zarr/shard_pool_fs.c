@@ -327,17 +327,6 @@ shard_pool_fs_scheduling_defaults(struct io_scheduling* io)
     io->writes_in_flight = IO_BACKEND_URING_MAX_DEPTH;
 }
 
-static struct io_queue_limits
-limits_from(const struct io_scheduling* resolved)
-{
-  return (struct io_queue_limits){
-    .max_bytes = DEFAULT_MAX_QUEUED_BYTES,
-    .workers = resolved->workers,
-    .writes_in_flight = resolved->writes_in_flight,
-    .writes_in_flight_per_file = resolved->writes_in_flight_per_file,
-  };
-}
-
 struct shard_pool*
 shard_pool_fs_create_wrapped(const char* root,
                              uint64_t nslots,
@@ -350,7 +339,12 @@ shard_pool_fs_create_wrapped(const char* root,
 
   struct io_scheduling resolved = io ? *io : (struct io_scheduling){ 0 };
   shard_pool_fs_scheduling_defaults(&resolved);
-  const struct io_queue_limits limits = limits_from(&resolved);
+  const struct io_queue_limits limits = {
+    .max_bytes = DEFAULT_MAX_QUEUED_BYTES,
+    .workers = resolved.workers,
+    .writes_in_flight = resolved.writes_in_flight,
+    .writes_in_flight_per_file = resolved.writes_in_flight_per_file,
+  };
 
   struct shard_pool_fs* p =
     (struct shard_pool_fs*)calloc(1, sizeof(struct shard_pool_fs));
@@ -382,11 +376,10 @@ shard_pool_fs_create_wrapped(const char* root,
       log_error("shard_pool_fs: no ring for this pool; writing on the workers");
   }
   if (wrapper.wrap) {
-    const struct io_backend inner = backend;
-    backend = wrapper.wrap(wrapper.ctx, inner);
+    backend = wrapper.wrap(wrapper.ctx, backend);
     // The queue only stops the outermost backend, and a ring left running
     // reads a queue that has already been freed.
-    CHECK(Fail_backend, !inner.stop || backend.stop);
+    CHECK(Fail_backend, !p->ring || backend.stop);
   }
 
   p->queue = io_queue_create(backend, limits);

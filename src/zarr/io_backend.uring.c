@@ -66,26 +66,28 @@ struct io_backend_uring
   struct platform_thread* reader;
 };
 
-static _Atomic int ring_probed = -1; // -1 until a ring has been asked for
-static _Atomic int ring_probe_reported = 0;
+static platform_once ring_probe = PLATFORM_ONCE_INIT;
+static int ring_can_be_had;
 
-int
-io_backend_uring_supported(void)
+static void
+probe_for_a_ring(void)
 {
-  const int known = atomic_load(&ring_probed);
-  if (known >= 0)
-    return known;
-
   struct io_uring ring;
   const int rc = io_uring_queue_init(PROBE_ENTRIES, &ring, 0);
   if (rc == 0)
     io_uring_queue_exit(&ring);
-  else if (atomic_exchange(&ring_probe_reported, 1) == 0)
+  else
     log_error("io_backend_uring: no ring here (%s); writing on the workers",
               strerror(-rc));
 
-  atomic_store(&ring_probed, rc == 0);
-  return rc == 0;
+  ring_can_be_had = rc == 0;
+}
+
+int
+io_backend_uring_supported(void)
+{
+  platform_call_once(&ring_probe, probe_for_a_ring);
+  return ring_can_be_had;
 }
 
 // Non-zero when the slot still holds the write the tag names. A completion for
@@ -119,6 +121,7 @@ submit(struct io_backend_uring* b, uint32_t index)
     io_uring_submit(&b->ring);
     sqe = io_uring_get_sqe(&b->ring);
   }
+  int rc = 0;
   if (sqe) {
     const uint64_t nbytes =
       s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes : MAX_WRITE_BYTES;
@@ -126,18 +129,19 @@ submit(struct io_backend_uring* b, uint32_t index)
       sqe, s->fd, s->rest.payload, (unsigned)nbytes, s->rest.offset);
     io_uring_sqe_set_data64(sqe, slot_tag(index, claims));
     s->in_flight = 1;
+    rc = io_uring_submit(&b->ring);
   }
   platform_mutex_unlock(b->mutex);
 
   if (!sqe)
     return 1;
+  if (rc >= 0)
+    return 0;
 
-  // Holding the lock would stop the completions being read, which is what
-  // lets a turned-down submission through.
-  int rc = 0;
-  for (int attempt = 0; attempt < SUBMIT_TRIES; ++attempt) {
-    if (attempt)
-      platform_sleep_ns(SUBMIT_RETRY_NS);
+  // Holding the lock over the wait would stop the completions being read,
+  // which is what lets a turned-down submission through.
+  for (int attempt = 1; attempt < SUBMIT_TRIES; ++attempt) {
+    platform_sleep_ns(SUBMIT_RETRY_NS);
     platform_mutex_lock(b->mutex);
     rc = io_uring_submit(&b->ring);
     platform_mutex_unlock(b->mutex);
@@ -200,14 +204,9 @@ finish(struct io_backend_uring* b, uint32_t index, int32_t res)
     hand_over(b, index);
     return;
   }
-  if (res < 0) {
-    log_error("io_backend_uring: write failed: %s", strerror(-res));
-    report(b, index, 0, IO_FAILED);
-    return;
-  }
-  if (res == 0) {
-    log_error("io_backend_uring: a write of %llu bytes moved none",
-              (unsigned long long)s->rest.nbytes);
+  if (res <= 0) {
+    log_error("io_backend_uring: write failed: %s",
+              res ? strerror(-res) : "no bytes moved");
     report(b, index, 0, IO_FAILED);
     return;
   }
@@ -252,17 +251,6 @@ read_completions(void* arg)
   }
 }
 
-static void
-record_failure(struct io_backend_uring* b,
-               struct io_completion* out,
-               const char* message)
-{
-  log_error("%s", message);
-  atomic_store(b->io_error, 1);
-  out->nbytes = 0;
-  out->status = IO_FAILED;
-}
-
 static int
 uring_execute(void* ctx,
               const struct io_request* req,
@@ -271,27 +259,13 @@ uring_execute(void* ctx,
 {
   struct io_backend_uring* b = (struct io_backend_uring*)ctx;
 
-  if (req->op != IO_OP_WRITE)
-    return b->blocking.execute(b->blocking.ctx, req, seq, out);
-
-  out->seq = seq;
-  if (!atomic_load(&b->queue)) {
-    record_failure(b, out, "io_backend_uring: no queue to report writes to");
-    return IO_DONE;
-  }
-
+  // A ring reports a write of no bytes the way it reports a failure, and a
+  // stale token has to be refused the same way either backend refuses it, so
+  // anything the ring cannot carry goes to the filesystem backend behind it.
   platform_fd fd = PLATFORM_FD_INVALID;
-  if (!io_backend_fs_resolve(b->files, req->file, &fd)) {
-    record_failure(b, out, "io_backend_uring: stale file token");
-    return IO_DONE;
-  }
-
-  // A ring reports a write of no bytes as one that moved none, which is how
-  // it reports a failure too.
-  if (req->nbytes == 0) {
-    out->nbytes = 0;
-    return IO_DONE;
-  }
+  if (req->op != IO_OP_WRITE || req->nbytes == 0 || !atomic_load(&b->queue) ||
+      !io_backend_fs_resolve(b->files, req->file, &fd))
+    return b->blocking.execute(b->blocking.ctx, req, seq, out);
 
   platform_mutex_lock(b->mutex);
 

@@ -172,6 +172,29 @@ parse_backend(const char* s, enum bench_backend* out)
   return 0;
 }
 
+// A ring is Linux only, and a run that asks for one where it cannot be had
+// falls back to the threads.
+int
+parse_io_backend(const char* s, enum io_backend_choice* out)
+{
+  static const char* const names[] = { "threads", "uring" };
+  static const enum io_backend_choice vals[] = { IO_BACKEND_THREADS,
+                                                 IO_BACKEND_URING };
+  int i = match_option(s, names, 2);
+  if (i < 2) {
+    *out = vals[i];
+    return 1;
+  }
+  fprintf(stderr, "Unknown io backend: %s (expected threads, uring)\n", s);
+  return 0;
+}
+
+const char*
+io_backend_name(enum io_backend_choice choice)
+{
+  return choice == IO_BACKEND_URING ? "uring" : "threads";
+}
+
 int
 parse_dtype(const char* s, enum dtype* out)
 {

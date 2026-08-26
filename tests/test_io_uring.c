@@ -24,8 +24,7 @@
 
 #define SKIP_EXIT_CODE 77
 
-#define PAGE_BYTES 4096u
-#define WRITE_BYTES (2u * PAGE_BYTES)
+#define WRITE_BYTES 8192u
 #define WRITES_PER_FILE 6u
 #define SHARD_BYTES (WRITES_PER_FILE * WRITE_BYTES)
 #define POOL_SLOTS 3u
@@ -38,10 +37,12 @@
 #define WRITES_IN_FLIGHT 6u
 #define WRITES_PER_FILE_IN_FLIGHT 3u
 
+// A path is built by appending a key to a root, and a root by appending to the
+// temporary directory, so each holds less than the one it is built from.
 #define KEY_CHARS 64
-#define ROOT_CHARS 384
 #define PATH_CHARS 512
-#define TMPDIR_CHARS 256
+#define ROOT_CHARS (PATH_CHARS - KEY_CHARS - 1)
+#define TMPDIR_CHARS (ROOT_CHARS - KEY_CHARS - 1)
 
 static void
 fill_source(uint8_t* src, uint64_t nbytes)
@@ -133,35 +134,31 @@ read_whole_file(const char* path, uint8_t* buf, uint64_t cap)
 }
 
 static int
-files_match(const char* left_root, const char* right_root)
+files_hold_the_source(const char* root, const uint8_t* src)
 {
   int rc = 1;
-  uint8_t* left = (uint8_t*)malloc(SHARD_BYTES + 1);
-  uint8_t* right = (uint8_t*)malloc(SHARD_BYTES + 1);
-  CHECK(Cleanup, left && right);
+  uint8_t* landed = (uint8_t*)malloc(SHARD_BYTES + 1);
+  CHECK(Cleanup, landed);
 
+  const uint8_t* next = src;
   for (uint64_t round = 0; round < ROUNDS; ++round) {
     for (uint64_t slot = 0; slot < POOL_SLOTS; ++slot) {
       char key[KEY_CHARS];
       char path[PATH_CHARS];
       shard_key(key, round, slot);
+      snprintf(path, sizeof(path), "%s/%s", root, key);
 
-      snprintf(path, sizeof(path), "%s/%s", left_root, key);
       CHECK(Cleanup,
-            read_whole_file(path, left, SHARD_BYTES + 1) ==
+            read_whole_file(path, landed, SHARD_BYTES + 1) ==
               (int64_t)SHARD_BYTES);
-      snprintf(path, sizeof(path), "%s/%s", right_root, key);
-      CHECK(Cleanup,
-            read_whole_file(path, right, SHARD_BYTES + 1) ==
-              (int64_t)SHARD_BYTES);
-      CHECK(Cleanup, memcmp(left, right, SHARD_BYTES) == 0);
+      CHECK(Cleanup, memcmp(landed, next, SHARD_BYTES) == 0);
+      next += SHARD_BYTES;
     }
   }
   rc = 0;
 
 Cleanup:
-  free(right);
-  free(left);
+  free(landed);
   return rc;
 }
 
@@ -189,7 +186,8 @@ test_the_ring_writes_what_the_threads_write(const char* tmpdir, int unbuffered)
           0);
   CHECK(Cleanup,
         write_the_shards(ring_root, IO_BACKEND_URING, unbuffered, src) == 0);
-  CHECK(Cleanup, files_match(threads_root, ring_root) == 0);
+  CHECK(Cleanup, files_hold_the_source(threads_root, src) == 0);
+  CHECK(Cleanup, files_hold_the_source(ring_root, src) == 0);
   rc = 0;
 
 Cleanup:

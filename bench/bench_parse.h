@@ -4,6 +4,7 @@
 #include "test_data.h"
 #include "types.codec.h"
 #include "types.lod.h"
+#include "zarr/types.io.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -35,3 +36,10 @@ parse_backend(const char* s, enum bench_backend* out);
 
 int
 parse_dtype(const char* s, enum dtype* out);
+
+int
+parse_io_backend(const char* s, enum io_backend_choice* out);
+
+// The name a results file records is returned here.
+const char*
+io_backend_name(enum io_backend_choice choice);

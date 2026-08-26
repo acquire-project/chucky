@@ -601,7 +601,7 @@ run_bench(const struct bench_config* cfg)
         meter.metric.count > 0 ? &meter.metric : NULL;
       const struct io_write_scheduling scheduling = {
         .io = cfg->io,
-        .backend = output_path ? io_backend_choice_name(cfg->io.backend) : NULL,
+        .backend = output_path ? io_backend_name(cfg->io.backend) : NULL,
       };
       print_bench_json_pass(&m,
                             sink_metric,
@@ -666,23 +666,6 @@ struct bench_cli_args
   int max_threads;
   struct io_scheduling io;
 };
-
-// A ring is Linux only, and a run that asks for one where it cannot be had
-// falls back to the threads; what ran is what the results file records.
-static int
-parse_io_backend(const char* text, enum io_backend_choice* out)
-{
-  if (strcmp(text, "threads") == 0) {
-    *out = IO_BACKEND_THREADS;
-    return 1;
-  }
-  if (strcmp(text, "uring") == 0) {
-    *out = IO_BACKEND_URING;
-    return 1;
-  }
-  fprintf(stderr, "--io-backend: unknown backend \"%s\"\n", text);
-  return 0;
-}
 
 static int
 read_size(const char* flag, const char* text, uint64_t* out)

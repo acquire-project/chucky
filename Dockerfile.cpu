@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
         ninja-build \
+        liburing-dev \
+        pkg-config \
         libblosc-dev \
         libsnappy-dev \
         zlib1g-dev \
@@ -45,12 +47,6 @@ RUN git clone --depth 1 --branch v0.12.6 https://github.com/awslabs/aws-c-common
  && git clone --depth 1 --branch v0.11.5  https://github.com/awslabs/aws-c-s3.git           /tmp/b && cmake -S /tmp/b -B /tmp/b/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/aws -DCMAKE_PREFIX_PATH=/opt/aws -DBUILD_TESTING=OFF && cmake --build /tmp/b/build --target install && rm -rf /tmp/b
 
 ENV CMAKE_PREFIX_PATH="/opt/aws"
-
-# liburing is installed in a layer of its own, so the ones above stay cached.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        liburing-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .

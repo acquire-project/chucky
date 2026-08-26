@@ -15,6 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         ninja-build \
+        liburing-dev \
+        pkg-config \
         libblosc-dev \
         libsnappy-dev \
         zlib1g-dev \
@@ -60,12 +62,6 @@ RUN wget -qO /tmp/nvcomp.tar.xz \
     && rm /tmp/nvcomp.tar.xz
 
 ENV CMAKE_PREFIX_PATH="/opt/nvcomp:/opt/aws"
-
-# liburing is installed in a layer of its own, so the ones above stay cached.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        liburing-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
