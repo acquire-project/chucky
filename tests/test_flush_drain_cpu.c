@@ -4,14 +4,12 @@
 // destroy frees that memory while the IO worker may still read it.
 
 #include "platform/platform.h"
-#include "store.h"
 #include "stream.cpu.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "writer.h"
-#include "zarr/shard_pool.h"
-#include "zarr/zarr_array.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -66,10 +64,8 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct store* store = NULL;
   struct io_faults faults;
-  struct shard_pool* pool = NULL;
-  struct zarr_array* arr = NULL;
+  struct test_zarr_sink z = { 0 };
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;
   test_thread* thr = NULL;
@@ -77,23 +73,15 @@ test_flush_waits_for_sink_io(const char* tmpdir)
   _Atomic int gate;
   atomic_store(&gate, 0);
 
-  store = io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1);
-  CHECK(Cleanup, store);
-  CHECK(Cleanup, store->mkdirs(store, ".") == 0);
-  CHECK(Cleanup, store->mkdirs(store, "0") == 0);
-
-  pool = store->create_pool(store, 8);
-  CHECK(Cleanup, pool);
-
-  struct zarr_array_config acfg = {
-    .data_type = dtype_u16,
-    .fill_value = 0,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-  };
-  arr = zarr_array_create_with_pool(store, pool, 0, "0", &acfg);
-  CHECK(Cleanup, arr);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
   const struct tile_stream_configuration cfg = {
     .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
@@ -103,7 +91,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     .dimensions = dims,
     .codec = { .id = CODEC_NONE },
   };
-  s = tile_stream_cpu_create(&cfg, zarr_array_as_shard_sink(arr));
+  s = tile_stream_cpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
   CHECK(Cleanup, s);
 
   src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));
@@ -147,7 +135,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     goto Cleanup;
   }
 
-  if (zarr_array_has_error(arr)) {
+  if (test_zarr_sink_has_error(&z)) {
     log_error("zarr_array reported IO error after drain");
     goto Cleanup;
   }
@@ -160,9 +148,7 @@ Cleanup:
   free(src);
   test_thread_join(thr);
   tile_stream_cpu_destroy(s);
-  zarr_array_destroy(arr);
-  shard_pool_destroy(pool);
-  store_destroy(store);
+  test_zarr_sink_close(&z);
   return rc;
 }
 
@@ -172,9 +158,10 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
+  int ecode = 1;
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
+  ecode = 0;
   log_info("temp dir: %s", tmpdir);
 
   {

@@ -3,10 +3,10 @@
 #include "ngff.h"
 #include "platform/platform_cmd.h"
 #include "store.h"
+#include "test_zarr_helpers.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/store.h"
-#include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,108 +147,11 @@ Fail:
   return 1;
 }
 
-// --- S3 store helpers ---
+// --- S3 store ---
 
-struct s3_test_sink
+static struct store*
+s3_store_create(const char* prefix)
 {
-  struct store* store;
-  struct zarr_array* array;
-};
-
-static int
-s3_test_sink_open(struct s3_test_sink* z,
-                  const char* prefix,
-                  const char* array_name,
-                  const struct dimension* dims,
-                  uint8_t rank,
-                  enum dtype data_type,
-                  double fill_value,
-                  struct codec_config codec)
-{
-  *z = (struct s3_test_sink){ 0 };
-
-  struct store_s3_config scfg = {
-    .bucket = S3_BUCKET,
-    .prefix = prefix,
-    .region = "us-east-1",
-    .throughput_gbps = 100,
-    .endpoint = s3_endpoint(),
-  };
-  store_s3_config_set_defaults(&scfg);
-
-  z->store = store_s3_create(&scfg);
-  CHECK(Fail, z->store);
-  z->store->mkdirs(z->store, ".");
-
-  // Write root group
-  {
-    struct zarr_group* g = zarr_group_create(z->store, "");
-    CHECK(Fail_store, g);
-    zarr_group_destroy(g);
-  }
-
-  // Write intermediate groups
-  if (array_name && array_name[0]) {
-    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
-  }
-
-  struct zarr_array_config acfg = {
-    .data_type = data_type,
-    .fill_value = fill_value,
-    .rank = rank,
-    .dimensions = dims,
-    .codec = codec,
-  };
-  z->array = zarr_array_create(z->store, array_name ? array_name : "", &acfg);
-  CHECK(Fail_store, z->array);
-  return 0;
-
-Fail_store:
-  store_destroy(z->store);
-  z->store = NULL;
-Fail:
-  return 1;
-}
-
-static struct shard_sink*
-s3_test_sink_as_shard_sink(struct s3_test_sink* z)
-{
-  return zarr_array_as_shard_sink(z->array);
-}
-
-static void
-s3_test_sink_flush(struct s3_test_sink* z)
-{
-  zarr_array_flush(z->array);
-}
-
-static void
-s3_test_sink_close(struct s3_test_sink* z)
-{
-  zarr_array_destroy(z->array);
-  store_destroy(z->store);
-  *z = (struct s3_test_sink){ 0 };
-}
-
-// --- S3 multiscale helpers ---
-
-struct s3_test_multiscale
-{
-  struct store* store;
-  struct ngff_multiscale* ms;
-};
-
-static int
-s3_test_multiscale_open(struct s3_test_multiscale* z,
-                        const char* prefix,
-                        const char* array_name,
-                        const struct dimension* dims,
-                        uint8_t rank,
-                        enum dtype data_type,
-                        int nlod)
-{
-  *z = (struct s3_test_multiscale){ 0 };
-
   struct store_s3_config scfg = {
     .bucket = S3_BUCKET,
     .prefix = prefix,
@@ -256,47 +159,7 @@ s3_test_multiscale_open(struct s3_test_multiscale* z,
     .endpoint = s3_endpoint(),
   };
   store_s3_config_set_defaults(&scfg);
-
-  z->store = store_s3_create(&scfg);
-  CHECK(Fail, z->store);
-  z->store->mkdirs(z->store, ".");
-
-  // Write root group
-  {
-    struct zarr_group* g = zarr_group_create(z->store, "");
-    CHECK(Fail_store, g);
-    zarr_group_destroy(g);
-  }
-
-  // Write intermediate groups for array_name
-  if (array_name && array_name[0]) {
-    CHECK(Fail_store, z->store->mkdirs(z->store, array_name) == 0);
-  }
-
-  struct ngff_multiscale_config mscfg = {
-    .data_type = data_type,
-    .rank = rank,
-    .dimensions = dims,
-    .nlod = nlod,
-  };
-  z->ms =
-    ngff_multiscale_create(z->store, array_name ? array_name : "", &mscfg);
-  CHECK(Fail_store, z->ms);
-  return 0;
-
-Fail_store:
-  store_destroy(z->store);
-  z->store = NULL;
-Fail:
-  return 1;
-}
-
-static void
-s3_test_multiscale_close(struct s3_test_multiscale* z)
-{
-  ngff_multiscale_destroy(z->ms);
-  store_destroy(z->store);
-  *z = (struct s3_test_multiscale){ 0 };
+  return store_s3_create(&scfg);
 }
 
 // --- Tests ---
@@ -338,16 +201,17 @@ test_metadata(void)
 
   set_s3_creds();
 
-  struct s3_test_sink sink;
+  struct test_zarr_sink sink;
   CHECK(Fail,
-        s3_test_sink_open(&sink,
-                          "test-meta",
-                          "0",
-                          dims,
-                          3,
-                          dtype_u32,
-                          0,
-                          (struct codec_config){ .id = CODEC_ZSTD }) == 0);
+        test_zarr_sink_open_in_store(
+          &sink,
+          s3_store_create("test-meta"),
+          "0",
+          dims,
+          3,
+          dtype_u32,
+          0,
+          (struct codec_config){ .id = CODEC_ZSTD }) == 0);
 
   // Verify root zarr.json (group metadata with "attributes")
   {
@@ -378,14 +242,14 @@ test_metadata(void)
 
   log_info("  array zarr.json OK (%zu bytes)", len);
   free(data);
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_data:
   free(data);
 Fail_sink:
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -406,18 +270,19 @@ test_shard_write(void)
 
   set_s3_creds();
 
-  struct s3_test_sink sink;
+  struct test_zarr_sink sink;
   CHECK(Fail,
-        s3_test_sink_open(&sink,
-                          "test-shard",
-                          "0",
-                          dims,
-                          1,
-                          dtype_u16,
-                          0,
-                          (struct codec_config){ .id = CODEC_NONE }) == 0);
+        test_zarr_sink_open_in_store(
+          &sink,
+          s3_store_create("test-shard"),
+          "0",
+          dims,
+          1,
+          dtype_u16,
+          0,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
-  struct shard_sink* ss = s3_test_sink_as_shard_sink(&sink);
+  struct shard_sink* ss = test_zarr_sink_as_shard_sink(&sink);
 
   // shard_index=0 -> key "test-shard/0/c/0"
   struct shard_writer* w = ss->open(ss, 0, 0);
@@ -439,14 +304,14 @@ test_shard_write(void)
 
   log_info("  shard 0 OK (%zu bytes)", len);
   free(data);
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_data:
   free(data);
 Fail_sink:
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -479,18 +344,19 @@ test_concurrent_finalize(void)
 
   set_s3_creds();
 
-  struct s3_test_sink sink;
+  struct test_zarr_sink sink;
   CHECK(Fail,
-        s3_test_sink_open(&sink,
-                          "test-concurrent",
-                          "0",
-                          dims,
-                          3,
-                          dtype_u16,
-                          0,
-                          (struct codec_config){ .id = CODEC_NONE }) == 0);
+        test_zarr_sink_open_in_store(
+          &sink,
+          s3_store_create("test-concurrent"),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          0,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
 
-  struct shard_sink* ss = s3_test_sink_as_shard_sink(&sink);
+  struct shard_sink* ss = test_zarr_sink_as_shard_sink(&sink);
 
   // Write epoch 0: open all 4 inner shards, write, finalize (async)
   uint16_t data[2] = { 0xAAAA, 0xBBBB };
@@ -518,7 +384,7 @@ test_concurrent_finalize(void)
   ss->wait_fence(ss, fence);
 
   // Flush to drain epoch 1's pending uploads
-  s3_test_sink_flush(&sink);
+  test_zarr_sink_flush(&sink);
 
   // Verify epoch 0 shards arrived
   for (int i = 0; i < 4; ++i) {
@@ -537,12 +403,12 @@ test_concurrent_finalize(void)
   }
 
   log_info("  concurrent finalize + fence OK");
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
   log_info("  PASS");
   return 0;
 
 Fail_sink:
-  s3_test_sink_close(&sink);
+  test_zarr_sink_close(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -575,10 +441,18 @@ test_multiscale_metadata(void)
 
   set_s3_creds();
 
-  struct s3_test_multiscale ms;
+  struct test_zarr_multiscale ms;
   CHECK(Fail,
-        s3_test_multiscale_open(
-          &ms, "test-multiscale", "", dims, 3, dtype_u16, 0) == 0);
+        test_zarr_multiscale_open_in_store(
+          &ms,
+          s3_store_create("test-multiscale"),
+          "",
+          dims,
+          3,
+          dtype_u16,
+          0,
+          (struct codec_config){ .id = CODEC_NONE },
+          NULL) == 0);
 
   // Check root zarr.json has multiscales attribute
   {
@@ -602,12 +476,12 @@ test_multiscale_metadata(void)
   CHECK(Fail2,
         check_array_json(
           "test-multiscale/1/zarr.json", "\"shape\":[64,32,32]", NULL) == 0);
-  s3_test_multiscale_close(&ms);
+  test_zarr_multiscale_close(&ms);
   log_info("  PASS");
   return 0;
 
 Fail2:
-  s3_test_multiscale_close(&ms);
+  test_zarr_multiscale_close(&ms);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -642,10 +516,18 @@ test_multiscale_metadata_named(void)
 
   set_s3_creds();
 
-  struct s3_test_multiscale ms;
+  struct test_zarr_multiscale ms;
   CHECK(Fail,
-        s3_test_multiscale_open(
-          &ms, "test-ms-named", "ms", dims, 3, dtype_u16, 0) == 0);
+        test_zarr_multiscale_open_in_store(
+          &ms,
+          s3_store_create("test-ms-named"),
+          "ms",
+          dims,
+          3,
+          dtype_u16,
+          0,
+          (struct codec_config){ .id = CODEC_NONE },
+          NULL) == 0);
 
   // Root zarr.json should be a plain group (attributes:{})
   {
@@ -669,12 +551,12 @@ test_multiscale_metadata_named(void)
   // L0 array zarr.json
   CHECK(Fail_sink, s3_exists("test-ms-named/ms/0/zarr.json"));
 
-  s3_test_multiscale_close(&ms);
+  test_zarr_multiscale_close(&ms);
   log_info("  PASS");
   return 0;
 
 Fail_sink:
-  s3_test_multiscale_close(&ms);
+  test_zarr_multiscale_close(&ms);
 Fail:
   log_error("  FAIL");
   return 1;

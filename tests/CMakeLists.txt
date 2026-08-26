@@ -86,6 +86,7 @@ target_link_libraries(
         zarr_metadata
         store_fs
         store_api
+        writer
         lod_plan
         dimension
         chucky_log
@@ -192,10 +193,10 @@ add_gpu_test_exe(test_zarr_fs_sink   test_zarr_fs_sink.c   LINKS CUDA::cuda_driv
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(test-test_zarr_fs_sink PROPERTIES TIMEOUT 120)
 endif()
-add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults)
-add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults)
-add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults)
-add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults)
+add_gpu_test_exe(test_destroy_drain  test_destroy_drain.c  LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults test_zarr_helpers)
+add_gpu_test_exe(test_flush_drain_gpu test_flush_drain_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults test_zarr_helpers)
+add_gpu_test_exe(test_destroy_midstream test_destroy_midstream.c LINKS CUDA::cuda_driver CUDA::cudart_static stream zarr_array store_fs store_api shard_pool_fs platform test_platform Zstd::Zstd chucky_log test_io_faults test_zarr_helpers)
+add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults test_zarr_helpers)
 # A worker left held would hang rather than fail; bound them.
 set_tests_properties(test-test_flush_drain_cpu PROPERTIES TIMEOUT 60)
 if(CHUCKY_ENABLE_GPU)
@@ -205,7 +206,7 @@ if(CHUCKY_ENABLE_GPU)
         PROPERTIES TIMEOUT 120
     )
 endif()
-add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults)
+add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults test_zarr_helpers)
 add_test_exe(test_pending_bytes_fs test_pending_bytes_fs.c shard_pool_fs platform writer test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
@@ -213,7 +214,7 @@ add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu 
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
-add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   zarr_array ngff_multiscale zarr_group zarr_metadata store_s3 store_api lod_plan dimension platform_cmd chucky_log)
+add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   test_zarr_helpers store_s3 platform_cmd)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)
 
 add_gpu_test_exe(test_ingest       test_ingest.c       LINKS CUDA::cuda_driver CUDA::cudart_static stream index_ops_util)
