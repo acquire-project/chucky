@@ -327,7 +327,7 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
+  int ecode = 1;
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
   log_info("temp dir: %s", tmpdir);
@@ -337,6 +337,7 @@ main(int ac, char* av[])
   CU(Cleanup, cuInit(0));
   CU(Cleanup, cuDeviceGet(&dev, 0));
   CU(Cleanup, cu_ctx_create(&ctx, 0, dev));
+  ecode = 0;
 
   for (int rep = 0; rep < 5; ++rep) {
     char sub[4200];

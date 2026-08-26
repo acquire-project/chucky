@@ -105,9 +105,10 @@ main(int ac, char* av[])
   (void)ac;
   (void)av;
 
-  int ecode = 0;
+  int ecode = 1;
   char tmpdir[4096];
   CHECK(Fail, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
+  ecode = 0;
   log_info("temp dir: %s", tmpdir);
 
   {
