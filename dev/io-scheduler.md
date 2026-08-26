@@ -426,15 +426,16 @@ rather than copying what it needs. And a short write is the backend's to finish:
 `platform_pwrite` loops internally so it never reports one, a ring does, and the
 part still to be done is handed back for retrying.
 
-**The ring against the threads.** On the eight-drive array, ten paired runs of
-`orca2_single` at 256 KiB chunks put the ring 1.2% ahead, 8.78 GiB/s against
-8.67, which is the size of the spread between repeats. On the file server
-eight paired runs put it 5% ahead with a 16% spread, so nothing at all. A
-write loop with nothing else in it goes the other way: at the same depth
-reached, eight blocking threads write 13.9 GB/s where one ring writes 12.3,
-and at depth 32 it is 14.6 against 13.2. Neither run waits on the write path
-— the queue holds 5.6 of the 8 writes it is allowed, and one write takes 20
-ms whichever backend runs it.
+**The ring against the threads.** Paired runs of `orca2_single` at 256 KiB
+chunks put the ring 1.2% ahead on one node of the eight-drive array and 0.5%
+behind on another, both inside the spread between repeats; on the file server
+eight pairs put it 2.5% ahead with a spread six times that. The sign follows
+the node, not the backend. A write loop with nothing else in it goes one way
+only: at the same depth reached, eight blocking threads write 13.9 GB/s where
+one ring writes 12.3, and at depth 32 it is 14.6 against 13.2. A write takes
+the same time either way — 20 ms on the node where the array kept up, 44 on
+the node where it did not — and the queue holds 5.6 of the 8 writes it is
+allowed, so the write path is not what the run waits on.
 
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default. The file server's own numbers are above, so that matrix has a
