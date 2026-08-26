@@ -30,6 +30,7 @@
 // A submission that does not go through is transient, so it is tried again a
 // few times before the entry is left for the next one to carry.
 #define SUBMIT_TRIES 3
+#define SUBMIT_RETRY_NS 1000000LL
 
 struct ring_slot
 {
@@ -91,35 +92,46 @@ io_backend_uring_supported(void)
   return rc == 0;
 }
 
-// Non-zero when the ring had no room to take the write. A prepared entry is
-// the kernel's from that moment and cannot be taken back, so once one is
-// prepared the write is in flight whatever the submitting call reports: a
-// caller told the write failed would free a payload the kernel still reads.
+// Give the ring the write the slot holds. Non-zero when the ring had no room
+// to take it, and the slot is then still the caller's. A prepared entry is the
+// kernel's from that moment and cannot be taken back, so from there the write
+// is in flight whatever the submitting call reports: a caller told the write
+// failed would free a payload the kernel is still reading.
 static int
-submit_locked(struct io_backend_uring* b, uint32_t index)
+submit(struct io_backend_uring* b, uint32_t index)
 {
   struct ring_slot* s = &b->slots[index];
 
+  platform_mutex_lock(b->mutex);
   struct io_uring_sqe* sqe = io_uring_get_sqe(&b->ring);
   if (!sqe) {
     io_uring_submit(&b->ring);
     sqe = io_uring_get_sqe(&b->ring);
-    if (!sqe)
-      return 1;
   }
+  if (sqe) {
+    const uint64_t nbytes =
+      s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes : MAX_WRITE_BYTES;
+    io_uring_prep_write(
+      sqe, s->fd, s->rest.payload, (unsigned)nbytes, s->rest.offset);
+    io_uring_sqe_set_data64(sqe, slot_tag(index, s->claims));
+    s->in_flight = 1;
+  }
+  platform_mutex_unlock(b->mutex);
 
-  const uint64_t nbytes =
-    s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes : MAX_WRITE_BYTES;
-  io_uring_prep_write(
-    sqe, s->fd, s->rest.payload, (unsigned)nbytes, s->rest.offset);
-  io_uring_sqe_set_data64(sqe, slot_tag(index, s->claims));
-  s->in_flight = 1;
+  if (!sqe)
+    return 1;
 
+  // A submission the kernel turns down wants the completions read first, and
+  // the lock is what the thread reading them needs, so it is let go between
+  // tries.
   int rc = 0;
   for (int attempt = 0; attempt < SUBMIT_TRIES; ++attempt) {
+    platform_mutex_lock(b->mutex);
     rc = io_uring_submit(&b->ring);
+    platform_mutex_unlock(b->mutex);
     if (rc >= 0)
       return 0;
+    platform_sleep_ns(SUBMIT_RETRY_NS);
   }
 
   // The entry is still in the ring and the next submission carries it. With
@@ -127,6 +139,7 @@ submit_locked(struct io_backend_uring* b, uint32_t index)
   // a kernel that has stopped accepting submissions at all.
   log_error("io_backend_uring: cannot hand the ring a write: %s",
             strerror(-rc));
+  atomic_store(b->io_error, 1);
   return 0;
 }
 
@@ -158,13 +171,9 @@ report(struct io_backend_uring* b, uint32_t index, uint64_t nbytes, int status)
 static void
 hand_over(struct io_backend_uring* b, uint32_t index)
 {
-  platform_mutex_lock(b->mutex);
-  const int no_room = submit_locked(b, index);
-  platform_mutex_unlock(b->mutex);
-
-  if (!no_room)
+  if (!submit(b, index))
     return;
-  log_error("io_backend_uring: the ring would not take the rest of a write");
+  log_error("io_backend_uring: the ring had no room for the rest of a write");
   report(b, index, 0, IO_FAILED);
 }
 
@@ -295,23 +304,25 @@ uring_execute(void* ctx,
     return IO_BUSY;
   }
 
+  // The slot is taken before the write is submitted, so no other thread can
+  // be handed it while this one is preparing its entry.
   struct ring_slot* s = &b->slots[index];
+  b->free_head = s->next_free;
   *s = (struct ring_slot){
     .rest = io_write_remaining(req, 0),
     .seq = seq,
     .asked = req->nbytes,
     .fd = fd,
-    .next_free = s->next_free,
+    .next_free = FREE_LIST_END,
     .claims = s->claims + 1,
   };
-
-  const uint32_t next_free = s->next_free;
-  const int no_room = submit_locked(b, index);
-  if (!no_room)
-    b->free_head = next_free;
   platform_mutex_unlock(b->mutex);
 
-  return no_room ? IO_BUSY : IO_SUBMITTED;
+  if (!submit(b, index))
+    return IO_SUBMITTED;
+
+  release(b, index);
+  return IO_BUSY;
 }
 
 static void
