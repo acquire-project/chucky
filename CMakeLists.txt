@@ -20,6 +20,7 @@ include(Gpu)
 include(Lz4)
 include(Zstd)
 include(Blosc)
+include(IoUring)
 
 find_package(Threads REQUIRED)
 find_package(aws-c-s3 REQUIRED CONFIG)
