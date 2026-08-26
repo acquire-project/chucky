@@ -172,6 +172,12 @@ add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata str
 add_test_exe(test_io_queue    test_io_queue.c    io_queue test_io_backend_fake test_platform chucky_log)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_io_queue PROPERTIES TIMEOUT 60)
+# The io_uring write backend; skips itself where no ring can be had.
+add_test_exe(test_io_uring test_io_uring.c shard_pool_fs io_backend_fs io_backend_uring io_queue platform platform_io writer test_platform chucky_log)
+set_tests_properties(
+    test-test_io_uring
+    PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60
+)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_store_fs PROPERTIES TIMEOUT 60)
