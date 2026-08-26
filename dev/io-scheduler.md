@@ -1,6 +1,9 @@
 # Filesystem write scheduling
 
-**Status.** Steps 1 to 3 are done. Steps 4 and 5 are planned. Issue #178.
+**Status.** Steps 1 to 3 are done, and so is the groundwork for step 4. The
+evidence step 4 waited on is in, and it is against writing an io_uring backend:
+the limit is upstream of the write path. Step 5 is blocked on hardware.
+Issue #178.
 
 Only one write at a time was run by the filesystem sink: each queued job was a
 blocking `pwrite`, so however deep the backlog, only one request reached the
@@ -12,10 +15,12 @@ drive. This file is the working plan for changing that.
   seen.
 - **Queue depth** — writes in flight across every shard file at once. Always
   both words: bare "depth" already means pipeline depth in `src/gpu/`.
-- **Queue depth per file** — the part of that depth on one shard file. No
-  gain above one while a file is still growing: on xfs the file's lock is taken
-  for itself by an extending write, so requests are accepted by the kernel and
-  then run one at a time. Only worth raising once the file is pre-sized.
+- **Queue depth per file** — the part of that depth on one shard file. There
+  is little gain above one while a file is still growing: on xfs the file's
+  lock is taken for itself by an extending write, so requests are accepted by
+  the kernel and then run one at a time. It is worth raising once the file is
+  pre-sized, and worth nothing on the shared file server, where one file is
+  serialized whatever the depth.
 - **Depth allowed** — the cap `--io-writes-in-flight` sets on queue depth, and
   `--io-writes-in-flight-per-file` on queue depth per file. The two are a
   minimum, not a product: four per file across sixteen files still runs only
@@ -26,9 +31,18 @@ drive. This file is the working plan for changing that.
 - **Pre-sizing** — setting a file's size up front, so later writes are inside
   the file rather than extensions of it. Trimmed back to its real size at
   finalize.
+- **Fence** — a wait until everything posted to the queue up to a marked point
+  has finished. A buffer is not refilled, and a shape is not published, until
+  the fence over its writes has been passed.
 - **File generation** — one open of one shard file. A pool slot is reused
   across many shard files, each reuse a new generation. No write may ever be
   applied to a generation other than its own.
+- **Producer** — the caller's thread, the one that appends. A batch is
+  gathered, compressed and posted to the queue on it.
+- **Aggregate slot** — one of the two workspaces a batch is built in on the
+  CPU path, `agg_slots` in `src/cpu/stream.internal.h`. A slot cannot be filled
+  again until its previous writes have landed, so no more than two batches of
+  writes are outstanding at once.
 
 ## The write path this started from
 
@@ -141,18 +155,18 @@ the watermark follows from the structure rather than from the dispatch order,
 and a backend may report an outcome after `execute` has returned. Still one
 worker.
 
-The byte ceiling ships unlimited. The mechanism is tested; step 3 picks the
-number from sweep data.
+The byte ceiling shipped unlimited. The mechanism was tested, and step 3 set
+the number from sweep data.
 
-The synchronous failing-truncate hook stayed. A fake backend does not replace
-it, because `cpu_stream_flush_body` checks for an error before it finalizes the
-shards and never looks again. That gap is #218. The fault hooks still compiled
-into the shipping backend are #219.
-
-Both rewrite `io_backend.fs.c` and `shard_pool_fs.c`, so they have to be taken
-in order, #218 first. #218 does not delete the truncate hook; it moves the
-failure onto the worker, which is the point of the fix. #219 therefore has one
-more hook to carry out of shipping code, not one fewer.
+Two gaps were left open, and both are now closed. A flush missed the errors of
+the truncates and closes it had queued itself, because `cpu_stream_flush_body`
+checked for an error before finalizing the shards and never looked again (#218,
+merged as `4494074`). The fault hooks were compiled into the shipping backend
+(#219, merged as `e236081`). The order predicted here was wrong: #219 was
+first, so the truncate hook #218 moved onto the worker had a test-side wrapper
+waiting for it. #231 then folded the three one-shot fault flags into one armed
+fault (`06ffc93`). No fault hook is left in `io_backend.fs.c` or
+`shard_pool_fs.c`.
 
 ### 3. More queue depth
 
@@ -187,7 +201,7 @@ Done.
 `bench/results/reef-l40-130fda8-20260823.json`. The node writes its shards to
 a local `/tmp` that is xfs over an md array.
 
-Output throughput, GiB/s, against depth allowed:
+Output throughput, GiB/s, against depth allowed, at one write per file:
 
 | scenario | codec | 1 | 2 | 4 | 8 | 16 | 32 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -213,11 +227,12 @@ write per file cannot go deeper. Read the corrected curve below instead.
 So the node tops out near 2.6 GB/s and peaks at eight, not sixteen.
 
 **The sink reaches that ceiling.** `orca2_single` uncompressed writes 2.79 GB/s
-at eight in flight, against the 2.59 GB/s the microbenchmark gets on the same
-node, and the queue behind it holds a 1.1 GiB backlog with writes waiting
-209 ms before they start. Nothing upstream is holding the write path back
-there; the drive is the limit, and the 1.2x is the whole of what this node has
-to give. The microbenchmark's own gain over the same range is 1.16x.
+at eight in flight and four per file, against the 2.59 GB/s the microbenchmark
+gets on the same node, and the queue behind it holds a 1.1 GiB backlog with a
+write waiting 139 ms before it starts, down from 210 ms at one in flight.
+Nothing upstream is holding the write path back there; the drive is the limit,
+and the 1.2x is the whole of what this node has to give. The microbenchmark's
+own gain over the same range is 1.16x.
 
 A compressed run does not move. Compression is the ceiling there, so the write
 path is not what is being waited on.
@@ -252,9 +267,17 @@ The tier carries a CPU-backend arm so it can run where the fast drive is. On
 
 **1.34x, against 1.21x on the mirror.** A faster drive is worth measuring on.
 
-It also moves the limit. At one write in flight the queue holds a 1 GiB
-backlog and writes wait 59 ms; by thirty-two the wait is 0.4 ms, so the queue
-drains as fast as it fills and the drive is no longer what is waited on.
+A second pass of the same tier on the same node twenty minutes later is
+committed too, as `bench/results/turin-raid10-16745be-20260824.json`. Its peak
+is at sixteen writes in flight rather than eight, 8.25 GB/s, and its gain over
+one is 1.32x. Both passes are at the scenario's own 200 frames, which the
+paragraph below calls too short to resolve depth. About 1.3x is the figure, and
+the peak is settled by neither pass.
+
+It also moves the limit. At one write in flight the queue holds a 1 GiB backlog
+and a write waits 59 ms; by thirty-two the wait is 7.9 ms, and 0.4 ms with four
+per file, so the queue drains about as fast as it fills and the drive is no
+longer what is waited on.
 
 ### Depth allowed is not depth reached
 
@@ -278,7 +301,9 @@ files at a time, and with one write per file the depth *is* the count of those
 holding queued work. Allowed thirty-two, it reaches 11.8 while 11.7 files hold
 work — the same number. Four per file adds only 0.4 on top, because with a
 dozen files busy each is handed about one write anyway. Allowing more than
-about ten is allowance nothing claims.
+about ten is allowance nothing claims. Those readings are
+`turin-raid10-16745be-20260824.json`; the other committed pass predates
+`io_writes_in_flight_mean` and has none.
 
 So the defaults are eight, and the reason is not the drive. `orca2_single` on
 the eight-drive array at 4000 frames, three repeats, spread under 1%:
@@ -381,6 +406,9 @@ further, which is the ceiling on the depth the queue can reach. Publishing the
 extent costs a further 5% on either target, and no stage total held it. The
 footer buffer and the flush are nothing on either.
 
+Every committed sweep is older than these four counters, so these readings are
+in #236 rather than under `bench/results/`.
+
 **The faster target depends on the node.** An L40 node's mirror gives 1.6 to
 2.8 GB/s, so the file server is three times faster there. A `cpu-turin-gp-l`
 node's array gives 17.4 GB/s, more than twice the file server.
@@ -409,23 +437,53 @@ sixteen shard files.
 An io_uring backend behind the same interface, opt-in, with a fallback to
 threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
-too, so evidence is needed first.
+too, so evidence comes first: a ring is worth writing only if the same depth is
+not already reached by threads.
 
-**Close four gaps in the backend interface** (#229), as its own pull request
-before any ring is written. The interface step 2 built is general enough to hold
-one, and these four were what it was short of. A backend with no room now
-answers "not now" instead of blocking a worker or failing the request, and the
-queue offers that request again with its place in line kept. A backend can carry
-a stop, called once at teardown, so one running a thread of its own has
-somewhere to release it. The request handed to `execute` is the queue's own copy
-and outlives the call, so a backend that finishes later reads it where it lies
-rather than copying what it needs. And a short write is the backend's to finish:
-`platform_pwrite` loops internally so it never reports one, a ring does, and the
-part still to be done is handed back for retrying.
+**The groundwork is done.** Four gaps in the backend interface were closed as
+their own pull request (#229, merged as `a6a812f`), so a ring would now be one
+change rather than a change to the interface and another under it. A backend
+with no room answers "not now" instead of blocking a worker or failing the
+request, and the queue offers that request again with its place in line kept. A
+backend can carry a stop, called once at teardown, so one running a thread of
+its own has somewhere to release it. The request handed to `execute` is the
+queue's own copy and outlives the call, so a backend that finishes later reads
+it where it lies rather than copying what it needs. And a short write is the
+backend's to finish: `platform_pwrite` loops internally so it never reports one,
+a ring does, and the part still to be done is handed back for retrying.
 
-*Done when:* the XFS matrix is green, then an NFS matrix before it is made the
-default. The file server's own numbers are above, so that matrix has a
-baseline to be read against.
+**The evidence is now in, and it is against the ring.** These four readings are
+all measured above.
+
+- A node caps near 8.8 GB/s writing to the shared file server. That cap is the
+  same at 32, 64, 128 and 256 writes at once — 8.26, 7.88, 8.76 and 7.90 GB/s —
+  and the same buffered as unbuffered.
+- Eight `orca2_single` streams at once on one node total 8.78 GB/s, which is
+  that cap. The thread backend is already at it.
+- The same point run from one, two and four nodes totals 7.4, 12.3 and
+  25.0 GB/s, so the ceiling belongs to a node and not to the file server.
+- One stream reaches 3.9 to 4.8 GB/s, and the rest of its time was accounted
+  for in #236. The wait on an aggregate slot's previous writes is 43 to 50% of
+  a run against the file server, and under a third of a percent of one against
+  a local array. There are two slots, so the producer runs two batches ahead of
+  io and no further.
+
+The limit is therefore upstream of the backend. A ring's advantage is a lower
+cost per write submitted, and nothing here is waiting on submission: the queue
+is starved rather than backed up, the depth reached is near twelve however high
+the cap is set, and the writes that would fill the rest are ones the producer
+never posts. A ring built now could not be told apart from the threads.
+
+*What would change this:* a target on which a node is not the limit, or a
+producer that can run further ahead. The second is the nearer of the two. The
+depth the queue can reach would be raised by more aggregate slots, or by a
+fence per shard file rather than per slot, and only past that depth is there
+room for a ring to show anything. That question is #232, and it is now ahead
+of #214.
+
+*Done when, if it is taken up:* the XFS matrix is green, then an NFS matrix
+before it is made the default. The file server's own numbers are above, so that
+matrix has a baseline to be read against.
 
 ### 5. Overlapped writes on Windows
 
@@ -448,18 +506,34 @@ privileged, with old disk contents exposed.
 - The S3 pool is out of scope. It writes on the calling thread through the AWS
   client and never reaches `io_queue`, and the last L40 sweep put it at about
   what a local write costs.
-- The queue-depth microbenchmark is not being added to the repository; its
-  numbers stay in #178.
+- The queue-depth microbenchmark is not being added to the repository. The
+  name `dev/io-depth/io_depth` above is a path in a working tree, not in the
+  repository; its numbers stay in #178 and #232.
+- One default for writes in flight whatever the target is not settled. Eight
+  suits a local array and is too low for the file server, which is fastest
+  nearer thirty-two. A target-dependent default is open in #232.
 
 ## Issues
 
-- #178, the epic.
+- #178, the epic. Its own checklist is behind this file.
 - #208, step 1, merged as `fee70ed`.
 - #212 and #216, step 2, merged as `54b03fa`.
-- #213, step 3, with #225, #226, #227 and #228 around it.
-- #229, then #214, step 4. #215, step 5.
+- #213, step 3, with #225, #226, #227 and #228 around it, merged as `a4b61b4`.
+- #229, the groundwork for step 4, merged as `a6a812f`. #214 is the ring
+  itself, still open, and the evidence above is against it. #215, step 5,
+  blocked on hardware.
 - #217, a fence waiter left holding a freed lock. Fixed inside #216.
-- #218, a flush misses the errors of the work it queued.
-- #219, the fault hooks compiled into the shipping backend.
+- #218, a flush missed the errors of the work it queued. Fixed in `4494074`.
+- #219, the fault hooks compiled into the shipping backend. Fixed in `e236081`,
+  and #231 folded what remained into one armed fault in `06ffc93`.
+- #232, one stream reaching half of what a node can write to the file server.
+  The producer's waits are measured now, in `a550ed0`; letting it post further
+  ahead is not done, and step 4 is waiting on it.
+- #230, nine tests hand-building the same setup, and #237, five of them
+  reporting success when their setup failed. Both fixed in `cc157ce`. A sixth
+  binary with the #237 bug is open as #241.
+- #239, io fault scheduling wiped when it is set before the store is created.
+  #240, the test flush helpers discarding the error they are given. Both open,
+  and both are places a write-path test can pass for the wrong reason.
 - #211, plate fields share pool slots. A different epic, and its fix changes how
-  slots are allocated.
+  slots are allocated. PR #234 is open and green.
