@@ -354,8 +354,8 @@ Fail:
 #define HELD_WRITE_BYTES 4096
 #define HELD_WRITES 8
 
-// The pool is built after the store, so the scheduling has to survive until
-// then. At one request in flight nothing behind the gated job can run.
+// The pool is built after the store, so the scheduling must be kept until
+// then. With one request in flight, nothing behind the gated job is started.
 static int
 test_store_scheduling_reaches_pool(void)
 {
@@ -393,7 +393,7 @@ test_store_scheduling_reaches_pool(void)
   CHECK(Fail3, shard_pool_pending_bytes(pool) == 0);
 
   // On the defaults the gated job would be overlapped with the writes behind
-  // it, so a depth of one means the scheduling arrived.
+  // it. A depth of one is proof that the scheduling was applied.
   struct shard_pool_io_stats io;
   shard_pool_io_stats(pool, &io);
   CHECK(Fail3, io.queue.writes_in_flight_peak == 1);
