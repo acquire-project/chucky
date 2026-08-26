@@ -2282,6 +2282,7 @@ main(int ac, char* av[])
   (void)av;
 
   int ecode = 0;
+  int cuda_ready = 0;
 
   // Create temp directory
   char tmpdir[512];
@@ -2387,6 +2388,7 @@ main(int ac, char* av[])
     CU(Cleanup, cuInit(0));
     CU(Cleanup, cuDeviceGet(&dev, 0));
     CU(Cleanup, cu_ctx_create(&ctx, 0, dev));
+    cuda_ready = 1;
 
     {
       char sub[576];
@@ -2435,7 +2437,8 @@ main(int ac, char* av[])
 
 Cleanup:
   test_tmpdir_remove(tmpdir);
+  return ecode | !cuda_ready;
 
 Fail:
-  return ecode;
+  return 1;
 }
