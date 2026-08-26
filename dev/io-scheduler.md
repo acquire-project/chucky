@@ -411,8 +411,8 @@ threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
 
-Written, opt-in as `--io-backend uring`. The threads stay the default: the
-numbers below do not ask for anything else.
+Written as `--io-backend uring`. The threads stay the default: the numbers
+below do not ask for anything else.
 
 **Close four gaps in the backend interface** (#229), as its own pull request
 before any ring is written. The interface step 2 built is general enough to hold
