@@ -411,6 +411,9 @@ threads when a ring is not allowed by the kernel or the container. At chucky's
 write sizes the ceiling is reached by one ring alone, and by blocking writes
 too, so evidence is needed first.
 
+Written and merged as `--io-backend uring`. The threads stay the default: the
+numbers below do not ask for anything else.
+
 **Close four gaps in the backend interface** (#229), as its own pull request
 before any ring is written. The interface step 2 built is general enough to hold
 one, and these four were what it was short of. A backend with no room now
@@ -423,9 +426,20 @@ rather than copying what it needs. And a short write is the backend's to finish:
 `platform_pwrite` loops internally so it never reports one, a ring does, and the
 part still to be done is handed back for retrying.
 
+**The ring against the threads.** On the eight-drive array, ten paired runs of
+`orca2_single` at 256 KiB chunks put the ring 1.2% ahead, 8.78 GiB/s against
+8.67, which is the size of the spread between repeats. On the file server
+eight paired runs put it 5% ahead with a 16% spread, so nothing at all. A
+write loop with nothing else in it goes the other way: at the same depth
+reached, eight blocking threads write 13.9 GB/s where one ring writes 12.3,
+and at depth 32 it is 14.6 against 13.2. Neither run waits on the write path
+— the queue holds 5.6 of the 8 writes it is allowed, and one write takes 20
+ms whichever backend runs it.
+
 *Done when:* the XFS matrix is green, then an NFS matrix before it is made the
 default. The file server's own numbers are above, so that matrix has a
-baseline to be read against.
+baseline to be read against. One configuration on each has been run, not a
+matrix, and it found nothing to make the ring the default for.
 
 ### 5. Overlapped writes on Windows
 
