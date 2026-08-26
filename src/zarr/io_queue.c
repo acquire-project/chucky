@@ -9,6 +9,9 @@
 
 #define DEFAULT_MAX_REQUESTS 1024u
 #define NO_SEQ 0u
+// With nothing in flight there is nothing to wake a wait, so a refused
+// request is offered again on a timer.
+#define BUSY_RETRY_NS 100000LL
 
 enum io_job_state
 {
@@ -380,14 +383,52 @@ Unlock:
     owned_free(owned);
 }
 
+// A refused request is put back where it was, so nothing is reordered. Zero
+// is returned when a newer open has taken its file entry over.
+static int
+requeue_job(struct io_queue* q, uint64_t seq, int64_t now)
+{
+  int requeued = 0;
+  int waited_for_a_retirement = 0;
+
+  platform_mutex_lock(q->mutex);
+
+  struct io_job* slot = job_at(q, seq);
+  CHECK(Unlock, slot->seq == seq && slot->state == IO_JOB_RUNNING);
+  struct file_pending* f = file_find(q, slot->req.file);
+  CHECK_SILENT(Unlock, f || slot->req.file.generation == 0);
+
+  slot->state = IO_JOB_WAITING;
+  q->jobs_waiting++;
+  q->in_flight--;
+  io_queue_counters_in_flight(&q->counters, q->in_flight, now);
+
+  if (f) {
+    f->in_flight--;
+    if (is_barrier(&slot->req))
+      f->barrier_running = 0;
+  }
+  requeued = 1;
+
+  // The backend is full until something already handed over finishes.
+  if (q->in_flight > 0) {
+    waited_for_a_retirement = 1;
+    platform_cond_wait(q->cond_not_empty, q->mutex);
+  }
+
+Unlock:
+  platform_mutex_unlock(q->mutex);
+  if (requeued && !waited_for_a_retirement)
+    platform_sleep_ns(BUSY_RETRY_NS);
+  return requeued;
+}
+
 static void
 worker_thread(void* arg)
 {
   struct io_queue* q = (struct io_queue*)arg;
 
   for (;;) {
-    struct io_job job;
-
     platform_mutex_lock(q->mutex);
     uint64_t seq;
     // A submitted request is still running, so only an empty window means
@@ -417,19 +458,30 @@ worker_thread(void* arg)
       if (is_barrier(&slot->req))
         f->barrier_running = 1;
     }
-    job = *slot;
-    platform_mutex_unlock(q->mutex);
-
+    // The request has to outlive the call, so the slot is passed, not a copy.
+    const struct io_request* req = &slot->req;
     struct io_completion done = {
-      .seq = job.seq,
-      .nbytes = job.req.nbytes,
+      .seq = seq,
+      .nbytes = req->nbytes,
       .status = IO_OK,
     };
-    const int dispatch =
-      q->backend.execute(q->backend.ctx, &job.req, job.seq, &done);
+    platform_mutex_unlock(q->mutex);
 
-    if (dispatch == IO_DONE)
+    const int dispatch = q->backend.execute(q->backend.ctx, req, seq, &done);
+
+    if (dispatch == IO_DONE) {
       retire_job(q, done, platform_monotonic_ns());
+    } else if (dispatch == IO_BUSY) {
+      const int64_t now = platform_monotonic_ns();
+      // A request on no list can never be picked up again, so it is finished
+      // here instead.
+      if (!requeue_job(q, seq, now)) {
+        log_error("io_queue: a refused request named a file that was reopened");
+        done.nbytes = 0;
+        done.status = IO_CANCELLED;
+        retire_job(q, done, now);
+      }
+    }
   }
 }
 
@@ -523,6 +575,9 @@ io_queue_destroy(struct io_queue* q)
 
   for (uint64_t i = 0; i < q->nthreads; ++i)
     platform_thread_join(q->threads[i]);
+
+  if (q->backend.stop)
+    q->backend.stop(q->backend.ctx);
 
   // Shutdown is set, so nothing parks from here on.
   platform_mutex_lock(q->mutex);

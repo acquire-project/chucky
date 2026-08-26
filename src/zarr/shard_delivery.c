@@ -4,11 +4,31 @@
 
 #include "log/log.h"
 #include "platform/platform.h"
+#include "util/metric.h"
 #include "util/prelude.h"
 #include "zarr/crc32c.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+// Wait for every write queued up to the event, timed into the metric when one
+// is given.
+static void
+wait_fence_timed(struct shard_sink* sink,
+                 struct io_event ev,
+                 struct stream_metric* metric)
+{
+  if (!sink || !sink->wait_fence)
+    return;
+  if (!metric) {
+    sink->wait_fence(sink, ev);
+    return;
+  }
+  struct platform_clock clk = { 0 };
+  platform_toc(&clk);
+  sink->wait_fence(sink, ev);
+  accumulate_metric_ms(metric, (float)(platform_toc(&clk) * 1000.0), 0, 0);
+}
 
 // Zero when the product would not fit, which turns pre-sizing off rather
 // than pre-sizing to the wrong number.
@@ -165,14 +185,15 @@ write_footer(struct active_shard* sh,
              size_t tail_bytes,
              size_t shard_alignment,
              size_t* out_aligned_bytes,
-             size_t* out_logical_bytes)
+             size_t* out_logical_bytes,
+             struct stream_metrics* metrics)
 {
   const size_t index_data_bytes =
     ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
 
   if (sh->footer_buf && sh->writer->write_direct) {
-    if (sink && sink->wait_fence)
-      sink->wait_fence(sink, sh->footer_io_done);
+    wait_fence_timed(
+      sink, sh->footer_io_done, metrics ? &metrics->footer_buffer_stall : NULL);
     if (build_shard_footer(sh->footer_buf,
                            ss->footer_capacity,
                            tail_src,
@@ -236,14 +257,16 @@ record_finalized(struct shard_state* ss, struct shard_sink* sink)
 
 uint64_t
 shard_state_readable_append_chunks(struct shard_state* ss,
-                                   struct shard_sink* sink)
+                                   struct shard_sink* sink,
+                                   struct stream_metrics* metrics)
 {
   // Once per closed-out generation, not once per caller: the metadata update
   // runs every batch, and re-waiting a retired fence costs real throughput on
   // small epochs.
   if (ss->fence_pending) {
-    if (sink->wait_fence)
-      sink->wait_fence(sink, ss->finalized_fence);
+    wait_fence_timed(sink,
+                     ss->finalized_fence,
+                     metrics ? &metrics->append_extent_stall : NULL);
     ss->fence_pending = 0;
   }
   return ss->finalized_append_chunks;
@@ -254,9 +277,10 @@ shard_state_publish_append(struct shard_state* ss,
                            struct shard_sink* sink,
                            const struct dim_info* dims,
                            uint8_t level,
-                           const uint64_t* cursor_elements)
+                           const uint64_t* cursor_elements,
+                           struct stream_metrics* metrics)
 {
-  uint64_t readable = shard_state_readable_append_chunks(ss, sink);
+  uint64_t readable = shard_state_readable_append_chunks(ss, sink, metrics);
   uint64_t append_sizes[HALF_MAX_RANK];
   if (cursor_elements)
     dim_info_readable_append_sizes(
@@ -270,7 +294,8 @@ shard_state_publish_append(struct shard_state* ss,
 int
 finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
-                size_t shard_alignment)
+                size_t shard_alignment,
+                struct stream_metrics* metrics)
 {
   int err = 0;
   size_t index_data_bytes = ss->chunks_per_shard_total * 2 * sizeof(uint64_t);
@@ -289,7 +314,8 @@ finalize_shards(struct shard_state* ss,
                      sh->tail_bytes,
                      shard_alignment,
                      &aligned_bytes,
-                     &logical_bytes)) {
+                     &logical_bytes,
+                     metrics)) {
       log_error("finalize_shards: footer write failed for shard %llu",
                 (unsigned long long)si);
       err = 1;
@@ -379,7 +405,8 @@ deliver_run_finalizing(struct active_shard* sh,
                        size_t total_run,
                        size_t* h_tail_bytes_si,
                        size_t sa,
-                       size_t* total_bytes)
+                       size_t* total_bytes,
+                       struct stream_metrics* metrics)
 {
   size_t page_floor = sa > 0 ? (total_run / sa) * sa : 0;
   if (page_floor > 0) {
@@ -404,7 +431,8 @@ deliver_run_finalizing(struct active_shard* sh,
                    total_run - page_floor,
                    sa,
                    &aligned_bytes,
-                   &logical_bytes))
+                   &logical_bytes,
+                   metrics))
     return 1;
   *total_bytes += aligned_bytes;
 
@@ -517,7 +545,8 @@ deliver_to_shards_batch(uint8_t level,
                         uint32_t n_active,
                         struct shard_sink* sink,
                         size_t shard_alignment,
-                        size_t* out_bytes)
+                        size_t* out_bytes,
+                        struct stream_metrics* metrics)
 {
   const uint64_t cps_inner = ss->chunks_per_shard_inner;
   const size_t sa = shard_alignment;
@@ -594,7 +623,8 @@ deliver_to_shards_batch(uint8_t level,
                                        total_run,
                                        &h_tail_bytes[si],
                                        sa,
-                                       &total_bytes) == 0);
+                                       &total_bytes,
+                                       metrics) == 0);
         } else {
           CHECK(Error,
                 deliver_run_nonfinalizing(sh,
@@ -628,7 +658,7 @@ deliver_to_shards_batch(uint8_t level,
       if (use_carryover)
         CHECK(Error, close_finalized_shards(ss, sink) == 0);
       else
-        CHECK(Error, finalize_shards(ss, sink, sa) == 0);
+        CHECK(Error, finalize_shards(ss, sink, sa, metrics) == 0);
     }
   }
 
