@@ -1,7 +1,4 @@
-// Regression test (#218): a flush has to report the failures of the work it
-// queued. Finalizing a partial shard posts a truncate and a close, and a flush
-// that returned without waiting reported success for a shard whose size on disk
-// is wrong.
+// A flush is required to report the failures of the io it waited on.
 
 #include "platform/platform.h"
 #include "stream.cpu.h"
@@ -16,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// Regression (#218): finalizing a partial shard posts a truncate and a close,
+// and a flush that returned without waiting reported success for a shard whose
+// size on disk is wrong.
 static int
 test_flush_reports_queued_truncate_failure(const char* tmpdir)
 {
@@ -99,6 +99,56 @@ Cleanup:
   return rc;
 }
 
+// Regression (#240): the helper discarded what the array flush returned, so a
+// failed flush left the verdict to whatever had reached the store.
+static int
+test_sink_flush_reports_io_failure(const char* tmpdir)
+{
+  log_info("=== test_sink_flush_reports_io_failure (cpu) ===");
+
+  struct dimension dims[3] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 1,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+
+  struct io_faults faults;
+  struct test_zarr_sink z = { 0 };
+  int rc = 1;
+
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
+
+  CHECK(Cleanup, io_faults_inject_failing_job(&faults) == 0);
+  CHECK(Cleanup, test_zarr_sink_flush(&z) != 0);
+
+  rc = 0;
+  log_info("  PASS");
+
+Cleanup:
+  test_zarr_sink_close(&z);
+  return rc;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -116,6 +166,13 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/flush_error_drain_cpu", tmpdir);
     test_mkdir(sub);
     ecode |= test_flush_reports_queued_truncate_failure(sub);
+  }
+
+  {
+    char sub[4200];
+    snprintf(sub, sizeof(sub), "%s/sink_flush_io_failure", tmpdir);
+    test_mkdir(sub);
+    ecode |= test_sink_flush_reports_io_failure(sub);
   }
 
   test_tmpdir_remove(tmpdir);

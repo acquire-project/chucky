@@ -58,7 +58,7 @@ write_zarr(const char* store_path, struct codec_config codec)
   r = writer_flush(tile_stream_cpu_writer(s));
   CHECK(Fail_stream, r.error == 0);
 
-  test_zarr_sink_flush(&zs);
+  CHECK(Fail_stream, test_zarr_sink_flush(&zs) == 0);
   tile_stream_cpu_destroy(s);
   test_zarr_sink_close(&zs);
   free(src);

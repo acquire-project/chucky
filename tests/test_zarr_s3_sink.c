@@ -384,7 +384,7 @@ test_concurrent_finalize(void)
   ss->wait_fence(ss, fence);
 
   // Flush to drain epoch 1's pending uploads
-  test_zarr_sink_flush(&sink);
+  CHECK(Fail_sink, test_zarr_sink_flush(&sink) == 0);
 
   // Verify epoch 0 shards arrived
   for (int i = 0; i < 4; ++i) {
