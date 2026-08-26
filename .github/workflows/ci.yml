@@ -43,14 +43,15 @@ jobs:
           ctest --test-dir build --output-on-failure"
 
       # A container is not allowed a ring under the default seccomp profile, so
-      # the run above skips this test and nothing exercises the backend. A skip
-      # here is a failure: it would mean the backend is going untested again.
+      # the run above skips this test. A skip here is a failure instead.
       - name: Run the io_uring write backend test
         run: |
-          out=$(docker run --rm --security-opt seccomp=unconfined chucky-cpu \
-            ctest --test-dir build --output-on-failure -R io_uring)
-          echo "$out"
-          if echo "$out" | grep -q Skipped; then
+          docker run --rm --security-opt seccomp=unconfined chucky-cpu \
+            ctest --test-dir build --output-on-failure --no-tests=error \
+            -R io_uring 2>&1 | tee ring-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          if grep -q Skipped ring-test.log; then
             echo "No ring in the container, so the backend was not exercised."
             exit 1
           fi
