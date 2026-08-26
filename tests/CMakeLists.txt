@@ -207,12 +207,11 @@ if(CHUCKY_ENABLE_GPU)
     )
 endif()
 add_test_exe(test_flush_error_drain_cpu test_flush_error_drain_cpu.c stream_cpu zarr_array store_fs store_api shard_pool_fs platform writer test_platform chucky_log test_io_faults test_zarr_helpers)
+# A fence that never retires would hang rather than fail; bound it.
+set_tests_properties(test-test_flush_error_drain_cpu PROPERTIES TIMEOUT 60)
 add_test_exe(test_pending_bytes_fs test_pending_bytes_fs.c shard_pool_fs platform writer test_platform chucky_log test_io_faults)
-# A worker left held would hang rather than fail; bound them.
-set_tests_properties(
-    test-test_flush_error_drain_cpu test-test_pending_bytes_fs
-    PROPERTIES TIMEOUT 60
-)
+# A worker left held would hang rather than fail; bound it.
+set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)

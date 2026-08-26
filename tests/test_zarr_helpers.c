@@ -242,12 +242,6 @@ test_zarr_multiscale_as_shard_sink(struct test_zarr_multiscale* z)
   return ngff_multiscale_as_shard_sink(z->ms);
 }
 
-int
-test_zarr_multiscale_flush(struct test_zarr_multiscale* z)
-{
-  return ngff_multiscale_flush(z->ms);
-}
-
 void
 test_zarr_multiscale_close(struct test_zarr_multiscale* z)
 {

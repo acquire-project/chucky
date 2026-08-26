@@ -98,13 +98,16 @@ Cleanup:
   return rc;
 }
 
-// Regression (#240): the helper discarded what the array flush returned, so a
-// failed flush left the verdict to whatever had reached the store.
+// Regression (#240): at a call site that flushes and then reads the store
+// back, the reported error is the only signal, because the shard the site
+// checks is already whole on disk.
 static int
 test_sink_flush_reports_io_failure(const char* tmpdir)
 {
   log_info("=== test_sink_flush_reports_io_failure (cpu) ===");
 
+  // One epoch fills the whole shard, so the file a call site checks is
+  // complete before the fault is armed.
   struct dimension dims[3] = {
     { .size = 0,
       .chunk_size = 1,
@@ -122,9 +125,12 @@ test_sink_flush_reports_io_failure(const char* tmpdir)
       .name = "x",
       .storage_position = 2 },
   };
+  const size_t epoch_elements = 8 * 8;
 
   struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
+  struct tile_stream_cpu* s = NULL;
+  uint16_t* src = NULL;
   int rc = 1;
 
   CHECK(Cleanup,
@@ -137,16 +143,48 @@ test_sink_flush_reports_io_failure(const char* tmpdir)
           dtype_u16,
           (struct codec_config){ .id = CODEC_NONE }) == 0);
 
-  // The clean flush is checked first, so the failure below can only be the
-  // fault's.
+  const struct tile_stream_configuration cfg = {
+    .buffer_capacity_bytes = epoch_elements * sizeof(uint16_t),
+    .epochs_per_batch = 1,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+  };
+  s = tile_stream_cpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Cleanup, s);
+
+  src = (uint16_t*)calloc(epoch_elements, sizeof(uint16_t));
+  CHECK(Cleanup, src);
+
+  {
+    struct slice input = { .beg = src, .end = src + epoch_elements };
+    struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
+    CHECK(Cleanup, r.error == 0);
+  }
+  {
+    struct writer_result r = writer_flush(tile_stream_cpu_writer(s));
+    CHECK(Cleanup, r.error == 0);
+  }
+
+  // A clean flush is checked first, so the failure below can only come from
+  // the fault.
   CHECK(Cleanup, test_zarr_sink_flush(&z) == 0);
   CHECK(Cleanup, io_faults_inject_failing_job(&faults) == 0);
   CHECK(Cleanup, test_zarr_sink_flush(&z) != 0);
+
+  {
+    char path[4300];
+    snprintf(path, sizeof(path), "%s/0/c/0/0/0", tmpdir);
+    CHECK(Cleanup, test_file_exists(path));
+  }
 
   rc = 0;
   log_info("  PASS");
 
 Cleanup:
+  free(src);
+  tile_stream_cpu_destroy(s);
   test_zarr_sink_close(&z);
   return rc;
 }

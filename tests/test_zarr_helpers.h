@@ -100,8 +100,5 @@ test_zarr_multiscale_open_in_store(struct test_zarr_multiscale* z,
 struct shard_sink*
 test_zarr_multiscale_as_shard_sink(struct test_zarr_multiscale* z);
 
-int
-test_zarr_multiscale_flush(struct test_zarr_multiscale* z);
-
 void
 test_zarr_multiscale_close(struct test_zarr_multiscale* z);
