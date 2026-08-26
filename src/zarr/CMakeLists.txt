@@ -18,8 +18,19 @@ add_src_lib(io_backend_fs SOURCES io_backend.fs.c io_backend.fs.h
     LINKS io_queue platform platform_io chucky_log
 )
 
+if(HAVE_IO_URING)
+    add_src_lib(io_backend_uring SOURCES io_backend.uring.c io_backend.uring.h
+        LINKS io_backend_fs io_queue platform chucky_log IoUring::IoUring
+    )
+else()
+    add_src_lib(io_backend_uring SOURCES io_backend.uring.none.c io_backend.uring.h
+        LINKS io_queue
+    )
+endif()
+
 add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
-    LINKS io_backend_fs io_queue platform platform_io writer strbuf chucky_log
+    LINKS io_backend_fs io_backend_uring io_queue platform platform_io writer
+        strbuf chucky_log
 )
 
 add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h

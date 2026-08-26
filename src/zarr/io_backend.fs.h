@@ -23,6 +23,13 @@ io_backend_fs_as_backend(struct io_backend_fs* b);
 struct io_file_token
 io_backend_fs_add_file(struct io_backend_fs* b, platform_fd fd);
 
+// Look up the descriptor a token names. Zero is returned when the token is
+// stale, so the caller has to refuse the request rather than write to it.
+int
+io_backend_fs_resolve(struct io_backend_fs* b,
+                      struct io_file_token file,
+                      platform_fd* fd);
+
 uint64_t
 io_backend_fs_files_opened(const struct io_backend_fs* b);
 

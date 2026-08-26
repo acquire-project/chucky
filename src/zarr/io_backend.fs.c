@@ -129,8 +129,10 @@ io_backend_fs_files_open_peak(const struct io_backend_fs* b)
   return atomic_load(&b->files_open_peak);
 }
 
-static int
-resolve(struct io_backend_fs* b, struct io_file_token file, platform_fd* fd)
+int
+io_backend_fs_resolve(struct io_backend_fs* b,
+                      struct io_file_token file,
+                      platform_fd* fd)
 {
   int found = 0;
   platform_mutex_lock(b->mutex);
@@ -181,7 +183,7 @@ fs_execute(void* ctx,
     return IO_DONE;
 
   platform_fd fd = PLATFORM_FD_INVALID;
-  if (!resolve(b, req->file, &fd)) {
+  if (!io_backend_fs_resolve(b, req->file, &fd)) {
     record_failure(b, out, "io_backend_fs: stale file token");
     return IO_DONE;
   }
