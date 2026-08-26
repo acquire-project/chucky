@@ -154,8 +154,7 @@ submit(struct io_backend_uring* b, uint32_t index)
   if (!slot_holds_the_write(b, slot_tag(index, claims)))
     return 0;
 
-  // The entry is still in the ring for the next submission to carry, so the
-  // write is not this backend's to call failed either.
+  // The entry is still in the ring for the next submission to carry.
   log_error("io_backend_uring: cannot hand the ring a write: %s",
             strerror(-rc));
   atomic_store(b->io_error, 1);
