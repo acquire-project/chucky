@@ -115,15 +115,18 @@ submit_locked(struct io_backend_uring* b, uint32_t index)
   io_uring_sqe_set_data64(sqe, slot_tag(index, s->claims));
   s->in_flight = 1;
 
+  int rc = 0;
   for (int attempt = 0; attempt < SUBMIT_TRIES; ++attempt) {
-    const int rc = io_uring_submit(&b->ring);
+    rc = io_uring_submit(&b->ring);
     if (rc >= 0)
       return 0;
-    if (attempt + 1 == SUBMIT_TRIES)
-      log_error("io_backend_uring: cannot hand the ring a write: %s",
-                strerror(-rc));
   }
-  // The entry is still in the ring, and the next submission carries it.
+
+  // The entry is still in the ring and the next submission carries it. With
+  // none to come the write never runs and the queue waits for it, which takes
+  // a kernel that has stopped accepting submissions at all.
+  log_error("io_backend_uring: cannot hand the ring a write: %s",
+            strerror(-rc));
   return 0;
 }
 
