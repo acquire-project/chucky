@@ -32,7 +32,7 @@ struct io_faults
 };
 
 // Create a filesystem shard pool whose io can be made to fail or block.
-// io: the limits on writes run at once; NULL for the defaults.
+// io: the limit on the write backlog run at once; NULL for the defaults.
 struct shard_pool*
 io_faults_pool_create(struct io_faults* f,
                       const char* root,
@@ -42,7 +42,7 @@ io_faults_pool_create(struct io_faults* f,
 
 // Create a filesystem store whose pool can be made to fail or block. Only one
 // pool can be built from it, even after that pool is destroyed.
-// io: the limits on writes run at once; NULL for the defaults.
+// io: the limit on the write backlog run at once; NULL for the defaults.
 struct store*
 io_faults_store_create(struct io_faults* f,
                        const char* root,
