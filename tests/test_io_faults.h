@@ -1,6 +1,5 @@
-// This backend is for tests only: every request goes to the filesystem backend
-// behind it, except IO_OP_NOOP, which can be made to fail or to block, and
-// IO_OP_TRUNCATE, which can be made to fail.
+// This backend is for tests only. Every request goes to the filesystem backend
+// behind it. One armed request can be held at a gate first, or made to fail.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -13,17 +12,22 @@ struct io_queue;
 struct shard_pool;
 struct store;
 
+enum io_fault
+{
+  IO_FAULT_NONE = 0,
+  IO_FAULT_FAIL,  // report the request failed and mark the pool errored
+  IO_FAULT_BLOCK, // hold the request until the gate opens
+};
+
 struct io_faults
 {
   struct io_backend inner;
   struct io_queue* queue;
   struct shard_pool* pool;
 
-  // The flags are one-shot. Two apply to the next IO_OP_NOOP, the third to the
-  // next IO_OP_TRUNCATE.
-  _Atomic int fail_next_noop;
-  _Atomic int block_next_noop;
-  _Atomic int fail_next_truncate;
+  // One fault is armed at a time. The op is in the high byte and the fault in
+  // the low, so that a request reads both as one value.
+  _Atomic uint16_t armed;
   _Atomic int* block_gate;
 
   struct io_scheduling io; // zero fields take the pool's own defaults
