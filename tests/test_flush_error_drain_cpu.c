@@ -1,4 +1,5 @@
-// A flush is required to report the failures of the work it waited on.
+// A flush is required to wait for the work it queued and to report its
+// failures.
 
 #include "platform/platform.h"
 #include "stream.cpu.h"
@@ -42,7 +43,7 @@ test_flush_reports_queued_truncate_failure(const char* tmpdir)
   };
   const size_t epoch_elements = 8 * 8;
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   struct tile_stream_cpu* s = NULL;
   uint16_t* src = NULL;
@@ -124,20 +125,23 @@ test_sink_flush_reports_io_failure(const char* tmpdir)
       .storage_position = 2 },
   };
 
-  struct io_faults faults;
+  struct io_faults faults = { 0 };
   struct test_zarr_sink z = { 0 };
   int rc = 1;
 
   CHECK(Cleanup,
         test_zarr_sink_open_with_pool(
           &z,
-          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/1),
+          io_faults_store_create(&faults, tmpdir, /*unbuffered=*/0),
           "0",
           dims,
           3,
           dtype_u16,
           (struct codec_config){ .id = CODEC_NONE }) == 0);
 
+  // The clean flush is checked first, so the failure below can only be the
+  // fault's.
+  CHECK(Cleanup, test_zarr_sink_flush(&z) == 0);
   CHECK(Cleanup, io_faults_inject_failing_job(&faults) == 0);
   CHECK(Cleanup, test_zarr_sink_flush(&z) != 0);
 
