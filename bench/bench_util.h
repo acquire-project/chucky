@@ -56,7 +56,6 @@ struct bench_config
   uint64_t backpressure_bytes; // 0 = disabled; >0 = stall when pending > N
   int max_threads;            // 0 = OpenMP default (omp_get_max_threads)
   struct io_scheduling io;    // filesystem sink write scheduling
-  const char* io_backend;     // which write backend; NULL = the default
 };
 
 int

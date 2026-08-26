@@ -187,7 +187,7 @@ so a sweep is comparable only against one taken with the same settings:
 
 | field | holds |
 |---|---|
-| `io_backend` | which write backend ran the requests; `threads` is the only one so far |
+| `io_backend` | which write backend ran the requests: `threads`, or `uring` on Linux |
 | `io_workers` | threads the sink's queue ran requests on |
 | `io_writes_in_flight` | most requests handed to the backend at once, over every shard file |
 | `io_writes_in_flight_per_file` | most on any one shard file; above one the file is pre-sized so its writes do not extend it |

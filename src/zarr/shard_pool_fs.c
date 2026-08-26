@@ -4,6 +4,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/io_backend.fs.h"
+#include "zarr/io_backend.uring.h"
 #include "zarr/io_queue.h"
 
 #include <stdatomic.h>
@@ -18,6 +19,7 @@ struct shard_pool_fs
 {
   struct shard_pool base;
   struct io_backend_fs* backend;
+  struct io_backend_uring* ring; // null unless the writes go to a ring
   struct io_queue* queue;
   struct fs_slot* slots;
   uint64_t nslots;
@@ -279,6 +281,7 @@ pool_fs_destroy(struct shard_pool* self)
 
   // The worker has to be gone before the backend holding its descriptors is.
   io_queue_destroy(p->queue);
+  io_backend_uring_destroy(p->ring);
   io_backend_fs_destroy(p->backend);
 
   free(p->slots);
@@ -315,18 +318,19 @@ shard_pool_fs_scheduling_defaults(struct io_scheduling* io)
     io->writes_in_flight = DEFAULT_WRITES_IN_FLIGHT;
   if (!io->writes_in_flight_per_file)
     io->writes_in_flight_per_file = DEFAULT_WRITES_IN_FLIGHT_PER_FILE;
+  // Settled here, not in the pool, so what a caller records is what it got.
+  if (io->backend == IO_BACKEND_URING && !io_backend_uring_supported())
+    io->backend = IO_BACKEND_THREADS;
 }
 
 static struct io_queue_limits
-limits_from(const struct io_scheduling* io)
+limits_from(const struct io_scheduling* resolved)
 {
-  struct io_scheduling resolved = io ? *io : (struct io_scheduling){ 0 };
-  shard_pool_fs_scheduling_defaults(&resolved);
   return (struct io_queue_limits){
     .max_bytes = DEFAULT_MAX_QUEUED_BYTES,
-    .workers = resolved.workers,
-    .writes_in_flight = resolved.writes_in_flight,
-    .writes_in_flight_per_file = resolved.writes_in_flight_per_file,
+    .workers = resolved->workers,
+    .writes_in_flight = resolved->writes_in_flight,
+    .writes_in_flight_per_file = resolved->writes_in_flight_per_file,
   };
 }
 
@@ -340,7 +344,9 @@ shard_pool_fs_create_wrapped(const char* root,
   CHECK(Fail, root);
   CHECK(Fail, nslots > 0);
 
-  const struct io_queue_limits limits = limits_from(io);
+  struct io_scheduling resolved = io ? *io : (struct io_scheduling){ 0 };
+  shard_pool_fs_scheduling_defaults(&resolved);
+  const struct io_queue_limits limits = limits_from(&resolved);
 
   struct shard_pool_fs* p =
     (struct shard_pool_fs*)calloc(1, sizeof(struct shard_pool_fs));
@@ -363,11 +369,20 @@ shard_pool_fs_create_wrapped(const char* root,
   CHECK(Fail_alloc, p->backend);
 
   struct io_backend backend = io_backend_fs_as_backend(p->backend);
+  if (resolved.backend == IO_BACKEND_URING) {
+    p->ring = io_backend_uring_create(
+      p->backend, &p->io_error, limits.writes_in_flight);
+    if (p->ring)
+      backend = io_backend_uring_as_backend(p->ring);
+    else
+      log_error("shard_pool_fs: no ring for this pool; writing on the workers");
+  }
   if (wrapper.wrap)
     backend = wrapper.wrap(wrapper.ctx, backend);
 
   p->queue = io_queue_create(backend, limits);
   CHECK(Fail_backend, p->queue);
+  CHECK(Fail_queue, !p->ring || io_backend_uring_start(p->ring, p->queue) == 0);
 
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));
   CHECK(Fail_queue, p->slots);
@@ -394,6 +409,7 @@ shard_pool_fs_create_wrapped(const char* root,
 Fail_queue:
   io_queue_destroy(p->queue);
 Fail_backend:
+  io_backend_uring_destroy(p->ring);
   io_backend_fs_destroy(p->backend);
 Fail_alloc:
   strbuf_free(&p->root);

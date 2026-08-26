@@ -601,7 +601,8 @@ run_bench(const struct bench_config* cfg)
         meter.metric.count > 0 ? &meter.metric : NULL;
       const struct io_write_scheduling scheduling = {
         .io = cfg->io,
-        .backend = output_path ? cfg->io_backend : NULL,
+        .backend =
+          output_path ? io_backend_choice_name(cfg->io.backend) : NULL,
       };
       print_bench_json_pass(&m,
                             sink_metric,
@@ -665,17 +666,19 @@ struct bench_cli_args
   uint64_t backpressure_bytes;
   int max_threads;
   struct io_scheduling io;
-  const char* io_backend;
 };
 
-// Only the thread backend exists; step 4 of the write-path work adds the
-// io_uring one. The name is read and recorded so a sweep taken now can be
-// told apart from one taken then.
+// A ring is Linux only, and a run that asks for one where it cannot be had
+// falls back to the threads; what ran is what the results file records.
 static int
-parse_io_backend(const char* text, const char** out)
+parse_io_backend(const char* text, enum io_backend_choice* out)
 {
   if (strcmp(text, "threads") == 0) {
-    *out = "threads";
+    *out = IO_BACKEND_THREADS;
+    return 1;
+  }
+  if (strcmp(text, "uring") == 0) {
+    *out = IO_BACKEND_URING;
     return 1;
   }
   fprintf(stderr, "--io-backend: unknown backend \"%s\"\n", text);
@@ -698,6 +701,7 @@ read_size(const char* flag, const char* text, uint64_t* out)
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
 //   --max-threads --io-workers --io-writes-in-flight
 //   --io-writes-in-flight-per-file --io-backend.
+// --io-backend takes threads or uring; a ring is Linux only.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
 static int
@@ -724,7 +728,6 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->backpressure_bytes = 0;
   out->max_threads = 0;
   out->io = (struct io_scheduling){ 0 };
-  out->io_backend = "threads";
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -791,7 +794,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
                i + 1 < ac) {
       out->io.writes_in_flight_per_file = strtoull(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--io-backend") == 0 && i + 1 < ac) {
-      if (!parse_io_backend(av[++i], &out->io_backend))
+      if (!parse_io_backend(av[++i], &out->io.backend))
         return 1;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
@@ -807,7 +810,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--backpressure N (bytes, e.g. 256M)] "
               "[--max-threads N (0 = OpenMP default)] "
               "[--io-workers N] [--io-writes-in-flight N] "
-              "[--io-writes-in-flight-per-file N] [--io-backend threads]\n",
+              "[--io-writes-in-flight-per-file N] "
+              "[--io-backend threads|uring]\n",
               av[0]);
       return 1;
     }
@@ -863,7 +867,6 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
     .io = a.io,
-    .io_backend = a.io_backend,
   };
   // Resolved here rather than inside the pool, so that what the run used is
   // what the results file records.
@@ -1237,7 +1240,6 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
     .io = a.io,
-    .io_backend = a.io_backend,
   };
   shard_pool_fs_scheduling_defaults(&cfg.io);
   int ecode = run_bench_two_streams(&cfg);

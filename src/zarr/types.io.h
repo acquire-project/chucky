@@ -4,6 +4,21 @@
 
 #include <stdint.h>
 
+// Which backend carries out the write requests.
+enum io_backend_choice
+{
+  IO_BACKEND_THREADS = 0, // blocking writes on the queue's own workers
+  IO_BACKEND_URING,       // io_uring, on Linux only
+};
+
+// A ring is not to be had on every machine, so a run reports the backend it
+// ended up on rather than the one it asked for.
+static inline const char*
+io_backend_choice_name(enum io_backend_choice choice)
+{
+  return choice == IO_BACKEND_URING ? "uring" : "threads";
+}
+
 // How much of a filesystem sink's write backlog runs at once. A zero field
 // takes the default.
 struct io_scheduling
@@ -14,6 +29,8 @@ struct io_scheduling
   // Above one, shard files are pre-sized: on some filesystems a write that
   // extends a file takes the file's lock for itself.
   uint64_t writes_in_flight_per_file;
+
+  enum io_backend_choice backend;
 };
 
 // Bucket i: at least 2^i bytes, under 2^(i+1). 40 covers 4 KiB to 256 MiB.
