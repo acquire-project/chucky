@@ -13,14 +13,19 @@ struct io_backend_fs;
 struct io_backend_uring;
 struct io_queue;
 
+// A ring bigger than this is turned down by the kernel, so a deeper one is
+// not to be had whatever is asked for.
+#define IO_BACKEND_URING_MAX_DEPTH 32768u
+
 // Non-zero when a ring can be had on this machine. A refusal is reported once
 // and then remembered.
 int
 io_backend_uring_supported(void);
 
-// Create a ring that holds depth writes at once, or NULL when it cannot be
-// had. The file table is the filesystem backend's, and so is every request
-// that is not a write. io_error is the pool's flag, raised on any failure.
+// Create a ring that holds depth writes at once, or the ceiling above where
+// depth is over it, or NULL when no ring can be had. The file table is the
+// filesystem backend's, and so is every request that is not a write. io_error
+// is the pool's flag, raised on any failure.
 struct io_backend_uring*
 io_backend_uring_create(struct io_backend_fs* files,
                         _Atomic int* io_error,

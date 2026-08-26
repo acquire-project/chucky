@@ -319,8 +319,12 @@ shard_pool_fs_scheduling_defaults(struct io_scheduling* io)
   if (!io->writes_in_flight_per_file)
     io->writes_in_flight_per_file = DEFAULT_WRITES_IN_FLIGHT_PER_FILE;
   // Settled here, not in the pool, so what a caller records is what it got.
-  if (io->backend == IO_BACKEND_URING && !io_backend_uring_supported())
+  if (io->backend != IO_BACKEND_URING)
+    return;
+  if (!io_backend_uring_supported())
     io->backend = IO_BACKEND_THREADS;
+  else if (io->writes_in_flight > IO_BACKEND_URING_MAX_DEPTH)
+    io->writes_in_flight = IO_BACKEND_URING_MAX_DEPTH;
 }
 
 static struct io_queue_limits
@@ -377,8 +381,13 @@ shard_pool_fs_create_wrapped(const char* root,
     else
       log_error("shard_pool_fs: no ring for this pool; writing on the workers");
   }
-  if (wrapper.wrap)
-    backend = wrapper.wrap(wrapper.ctx, backend);
+  if (wrapper.wrap) {
+    const struct io_backend inner = backend;
+    backend = wrapper.wrap(wrapper.ctx, inner);
+    // The queue only stops the outermost backend, and a ring left running
+    // reads a queue that has already been freed.
+    CHECK(Fail_backend, !inner.stop || backend.stop);
+  }
 
   p->queue = io_queue_create(backend, limits);
   CHECK(Fail_backend, p->queue);

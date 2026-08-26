@@ -26,7 +26,8 @@ void
 shard_pool_fs_scheduling_defaults(struct io_scheduling* io);
 
 // A test's own backend can be called in place of the filesystem one, to make
-// requests fail or block. Every field may be left null.
+// requests fail or block. Every field may be left null. A wrapper around a
+// backend that carries a stop has to carry one too, and pass it on.
 struct shard_pool_fs_wrapper
 {
   void* ctx;
