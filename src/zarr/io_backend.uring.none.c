@@ -2,6 +2,8 @@
 // found when the build was configured.
 #include "zarr/io_backend.uring.h"
 
+#include <stddef.h>
+
 int
 io_backend_uring_supported(void)
 {
@@ -16,7 +18,7 @@ io_backend_uring_create(struct io_backend_fs* files,
   (void)files;
   (void)io_error;
   (void)depth;
-  return 0;
+  return NULL;
 }
 
 int

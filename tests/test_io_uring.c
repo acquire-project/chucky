@@ -175,8 +175,8 @@ test_the_ring_writes_what_the_threads_write(const char* tmpdir, int unbuffered)
   int rc = 1;
   char threads_root[ROOT_CHARS];
   char ring_root[ROOT_CHARS];
-  snprintf(threads_root, sizeof(threads_root), "%s/threads%d", tmpdir,
-           unbuffered);
+  snprintf(
+    threads_root, sizeof(threads_root), "%s/threads%d", tmpdir, unbuffered);
   snprintf(ring_root, sizeof(ring_root), "%s/ring%d", tmpdir, unbuffered);
   CHECK(Fail, test_mkdir(threads_root) == 0);
   CHECK(Fail, test_mkdir(ring_root) == 0);
@@ -295,9 +295,9 @@ test_a_full_ring_takes_every_write_in_the_end(const char* tmpdir)
                                              .offset = offset }) == 0);
   }
   CHECK(Cleanup,
-        io_queue_post(r.queue,
-                      (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = token }) == 0);
+        io_queue_post(
+          r.queue, (struct io_request){ .op = IO_OP_CLOSE, .file = token }) ==
+          0);
   io_event_wait(r.queue, io_queue_record(r.queue));
 
   CHECK(Cleanup, atomic_load(&r.io_error) == 0);
@@ -330,14 +330,14 @@ test_a_stale_token_raises_the_error_flag(const char* tmpdir)
 
   CHECK(Cleanup, ring_open(&r, /*depth=*/2, /*in_flight=*/2) == 0);
 
-  CHECK(Cleanup,
-        io_queue_post(r.queue,
-                      (struct io_request){
-                        .op = IO_OP_WRITE,
-                        .borrowed = 1,
-                        .file = { .generation = 99, .index = 0 },
-                        .payload = payload,
-                        .nbytes = WRITE_BYTES }) == 0);
+  CHECK(
+    Cleanup,
+    io_queue_post(r.queue,
+                  (struct io_request){ .op = IO_OP_WRITE,
+                                       .borrowed = 1,
+                                       .file = { .generation = 99, .index = 0 },
+                                       .payload = payload,
+                                       .nbytes = WRITE_BYTES }) == 0);
   io_event_wait(r.queue, io_queue_record(r.queue));
 
   CHECK(Cleanup, atomic_load(&r.io_error) == 1);
@@ -377,8 +377,7 @@ test_a_write_the_kernel_turns_down_raises_the_error_flag(const char* tmpdir)
                                            .file = token,
                                            .payload = payload,
                                            .nbytes = WRITE_BYTES,
-                                           .offset = (uint64_t)1
-                                                     << 63 }) == 0);
+                                           .offset = (uint64_t)1 << 63 }) == 0);
   io_event_wait(r.queue, io_queue_record(r.queue));
 
   CHECK(Cleanup, atomic_load(&r.io_error) == 1);
@@ -434,9 +433,9 @@ test_a_short_write_is_not_reported_as_done(const char* tmpdir)
                                            .payload = payload,
                                            .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup,
-        io_queue_post(r.queue,
-                      (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = token }) == 0);
+        io_queue_post(
+          r.queue, (struct io_request){ .op = IO_OP_CLOSE, .file = token }) ==
+          0);
   io_event_wait(r.queue, io_queue_record(r.queue));
 
   CHECK(Cleanup, atomic_load(&r.io_error) == 1);

@@ -601,8 +601,7 @@ run_bench(const struct bench_config* cfg)
         meter.metric.count > 0 ? &meter.metric : NULL;
       const struct io_write_scheduling scheduling = {
         .io = cfg->io,
-        .backend =
-          output_path ? io_backend_choice_name(cfg->io.backend) : NULL,
+        .backend = output_path ? io_backend_choice_name(cfg->io.backend) : NULL,
       };
       print_bench_json_pass(&m,
                             sink_metric,

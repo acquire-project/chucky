@@ -13,6 +13,11 @@
 #define PROBE_ENTRIES 8u
 #define DEFAULT_DEPTH 8u
 
+// A ring larger than this is turned down by the kernel, and a pool that asked
+// for a ring and got none writes on the workers while the results file still
+// names the ring. A depth over the ceiling is taken down to it instead.
+#define MAX_DEPTH 32768u
+
 // A ring with nothing left in it still has to wake the thread reading it, so
 // teardown posts one request carrying this instead of a slot number.
 #define STOP_TAG UINT64_MAX
@@ -22,8 +27,11 @@
 // boundary and finished the way a short one is.
 #define MAX_WRITE_BYTES (1u << 30)
 
-// Room is short only for as long as a write already handed over takes.
+// Room is short only for as long as a write already handed over takes. A ring
+// that will not take one back cannot be waited on forever: the queue holds the
+// request open until it is reported.
 #define RESUBMIT_RETRY_NS 100000LL
+#define RESUBMIT_TRIES 1000
 
 struct ring_slot
 {
@@ -32,6 +40,7 @@ struct ring_slot
   uint64_t asked; // the size the queue was told
   platform_fd fd;
   uint32_t next_free;
+  uint8_t in_flight; // the ring has it
 };
 
 struct io_backend_uring
@@ -39,7 +48,9 @@ struct io_backend_uring
   struct io_uring ring;
   struct io_backend_fs* files;
   struct io_backend blocking; // everything that is not a write goes here
-  struct io_queue* queue;
+  // The queue is built from the backend, so the workers exist before this is
+  // set and read it from their own threads.
+  struct io_queue* _Atomic queue;
   _Atomic int* io_error;
 
   struct platform_mutex* mutex; // guards submission and the free list
@@ -88,19 +99,23 @@ submit_locked(struct io_backend_uring* b, uint32_t index)
       return 1;
   }
 
-  const uint64_t nbytes = s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes
-                                                           : MAX_WRITE_BYTES;
+  const uint64_t nbytes =
+    s->rest.nbytes < MAX_WRITE_BYTES ? s->rest.nbytes : MAX_WRITE_BYTES;
   io_uring_prep_write(
     sqe, s->fd, s->rest.payload, (unsigned)nbytes, s->rest.offset);
   io_uring_sqe_set_data64(sqe, index);
 
-  return io_uring_submit(&b->ring) < 0 ? -1 : 0;
+  if (io_uring_submit(&b->ring) < 0)
+    return -1;
+  s->in_flight = 1;
+  return 0;
 }
 
 static void
 release(struct io_backend_uring* b, uint32_t index)
 {
   platform_mutex_lock(b->mutex);
+  b->slots[index].in_flight = 0;
   b->slots[index].next_free = b->free_head;
   b->free_head = index;
   platform_mutex_unlock(b->mutex);
@@ -108,10 +123,7 @@ release(struct io_backend_uring* b, uint32_t index)
 
 // The queue does not read a status, so the pool's flag is raised here.
 static void
-report(struct io_backend_uring* b,
-       uint32_t index,
-       uint64_t nbytes,
-       int status)
+report(struct io_backend_uring* b, uint32_t index, uint64_t nbytes, int status)
 {
   const uint64_t seq = b->slots[index].seq;
   if (status != IO_OK)
@@ -122,22 +134,53 @@ report(struct io_backend_uring* b,
     (struct io_completion){ .seq = seq, .nbytes = nbytes, .status = status });
 }
 
+// A ring that turned a write down has the entry for it still, so a completion
+// carrying this slot's number can still arrive. The slot is given up rather
+// than put back, so nothing else can be handed that number in the meantime.
+static void
+abandon(struct io_backend_uring* b, uint32_t index)
+{
+  platform_mutex_lock(b->mutex);
+  b->slots[index].in_flight = 0;
+  platform_mutex_unlock(b->mutex);
+
+  atomic_store(b->io_error, 1);
+  io_queue_complete(b->queue,
+                    (struct io_completion){ .seq = b->slots[index].seq,
+                                            .nbytes = 0,
+                                            .status = IO_FAILED });
+}
+
 static void
 hand_over(struct io_backend_uring* b, uint32_t index)
 {
-  for (;;) {
+  for (uint64_t attempt = 0; attempt < RESUBMIT_TRIES; ++attempt) {
     platform_mutex_lock(b->mutex);
     const int answer = submit_locked(b, index);
     platform_mutex_unlock(b->mutex);
 
     if (answer == 0)
       return;
-    if (answer < 0) {
-      log_error("io_backend_uring: the ring refused the rest of a write");
-      report(b, index, 0, IO_FAILED);
-      return;
-    }
+    if (answer < 0)
+      break;
     platform_sleep_ns(RESUBMIT_RETRY_NS);
+  }
+
+  log_error("io_backend_uring: the ring would not take the rest of a write");
+  abandon(b, index);
+}
+
+// A ring that cannot be read again leaves the writes in it unfinished, and the
+// queue waits for every request it posted, so they are failed here.
+static void
+fail_the_writes_in_flight(struct io_backend_uring* b)
+{
+  for (uint32_t i = 0; i < b->nslots; ++i) {
+    platform_mutex_lock(b->mutex);
+    const int held = b->slots[i].in_flight;
+    platform_mutex_unlock(b->mutex);
+    if (held)
+      report(b, i, 0, IO_FAILED);
   }
 }
 
@@ -181,9 +224,9 @@ read_completions(void* arg)
     if (rc == -EINTR)
       continue;
     if (rc < 0) {
-      log_error("io_backend_uring: could not read the ring: %s",
-                strerror(-rc));
+      log_error("io_backend_uring: could not read the ring: %s", strerror(-rc));
       atomic_store(b->io_error, 1);
+      fail_the_writes_in_flight(b);
       return;
     }
 
@@ -220,14 +263,21 @@ uring_execute(void* ctx,
     return b->blocking.execute(b->blocking.ctx, req, seq, out);
 
   out->seq = seq;
-  if (req->nbytes == 0) {
-    out->nbytes = 0;
+  if (!atomic_load(&b->queue)) {
+    record_failure(b, out, "io_backend_uring: no queue to report writes to");
     return IO_DONE;
   }
 
   platform_fd fd = PLATFORM_FD_INVALID;
-  if (!b->queue || !io_backend_fs_resolve(b->files, req->file, &fd)) {
+  if (!io_backend_fs_resolve(b->files, req->file, &fd)) {
     record_failure(b, out, "io_backend_uring: stale file token");
+    return IO_DONE;
+  }
+
+  // A ring reports a write of no bytes as one that moved none, which is how
+  // it reports a failure too.
+  if (req->nbytes == 0) {
+    out->nbytes = 0;
     return IO_DONE;
   }
 
@@ -249,8 +299,11 @@ uring_execute(void* ctx,
     .next_free = next_free,
   };
 
+  // A ring that took the write owns the slot, and one that turned it down may
+  // still hold an entry carrying the slot's number, so only a ring with no
+  // room leaves the slot free.
   const int answer = submit_locked(b, index);
-  if (answer == 0)
+  if (answer <= 0)
     b->free_head = next_free;
   platform_mutex_unlock(b->mutex);
 
@@ -294,6 +347,8 @@ io_backend_uring_create(struct io_backend_fs* files,
     return NULL;
   if (depth == 0)
     depth = DEFAULT_DEPTH;
+  if (depth > MAX_DEPTH)
+    depth = MAX_DEPTH;
 
   struct io_backend_uring* b =
     (struct io_backend_uring*)calloc(1, sizeof(struct io_backend_uring));
