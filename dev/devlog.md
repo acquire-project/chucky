@@ -14,8 +14,8 @@
 - [x] cpu impl
 - [ ] whitepaper
 - [ ] coverage
-- [ ] ci/cd
-- [ ] metadata
+- [x] ci/cd
+- [x] metadata
 - [x] fix "temporal" vs "spatial" naming.
 - [x] fix uses of the work chunk, then fix uses of the word tile.
 - [x] boundary conditions for dim0 downsampling - it's a ceil like it should be
@@ -39,10 +39,10 @@
 - [x] evaluate gather vs scatter for non-lod stream
 - [x] bench 2 streams, 1 gpu
 Cleanup
-- [ ] make sure everything has extern c guards
-- [ ] comments at the top of each test
-- [ ] look into j8 failures
-- [ ] medfmt and smallepoch scenarios need some analysis/optimization
+- [x] make sure everything has extern c guards
+- [x] comments at the top of each test
+- [x] look into j8 failures
+- [x] medfmt and smallepoch scenarios need some analysis/optimization
 - [ ] move bench sweep data to it's own repo
 
 ## 2026-04-01
