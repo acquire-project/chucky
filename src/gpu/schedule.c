@@ -386,6 +386,10 @@ delivery_main(void* arg)
     j->state = DELIVERY_JOB_DONE;
     if (r.error)
       delivery_fail_pending_locked(d);
+    // A successful join waits on the same condition as a failed one. Tail
+    // generation publication used to provide this wakeup implicitly; keep
+    // completion notification explicit now that tails are host-only.
+    platform_cond_broadcast(d->cv);
 
     delivery_park(d, DELIVERY_HOLD_AFTER_DRAIN);
   }

@@ -59,12 +59,12 @@ close_impl(struct multiarray_writer* self);
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
-static void
+static int
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   // Whole-struct handoff; shared engine resources (sized to maxima) are
   // untouched. Tails remain in the per-array host shard state.
-  (void)stream_engine_bind_array(e, &desc->st, &desc->ctx);
+  return stream_engine_bind_array(e, &desc->st, &desc->ctx);
 }
 
 static void
@@ -158,7 +158,7 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
   }
 
   ms->active = array_index;
-  bind_context(e, &ms->arrays[array_index]);
+  CHECK(Fail, bind_context(e, &ms->arrays[array_index]) == 0);
 
   // Zero both pools for the incoming array. This is the correctness-critical
   // zero: it ensures no stale data from the departing array leaks into the

@@ -447,6 +447,9 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                                         ? gpu_pool_view_d(pool_buf)
                                         : stage->d_compressed[fc];
   if (plan->layout.total_batch_chunks > 0) {
+    const size_t aggregate_source_stride =
+      stage->codec.type == CODEC_NONE ? stage->codec.chunk_bytes
+                                      : stage->codec.max_output_size;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -456,7 +459,7 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
             plan->layout.total_batch_chunks,
             plan->layout.total_batch_covering,
             stage->ar.nlod,
-            stage->codec.max_output_size,
+            aggregate_source_stride,
             slot,
             compress_stream) == 0);
   }
@@ -486,7 +489,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->t_compress_start = stage->t_compress_start[fc];
   out->t_compress_end = stage->t_compress_end[fc];
   out->t_aggregate_start = stage->t_aggregate_start[fc];
-  out->max_output_size = stage->codec.max_output_size;
+  out->max_output_size = stage->ar.per_lod_agg_layouts[0].max_comp_chunk_bytes;
   out->passthrough = (stage->codec.type == CODEC_NONE);
   out->agg_pool = &stage->agg_pool;
   out->agg_host = &stage->agg_host;
@@ -504,7 +507,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
     .layout = plan->layout,
     .nlod = nlod,
     .per_lod_layouts = stage->ar.per_lod_agg_layouts,
-    .fixed_chunk_bytes = stage->codec.max_output_size,
+    .fixed_chunk_bytes = stage->codec.chunk_bytes,
     .aggregate_pool = &stage->agg_pool,
     .host_pool = &stage->agg_host,
     .index_pool = &stage->agg_index,
