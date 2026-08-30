@@ -221,29 +221,8 @@ schedule_d2h_kick(struct d2h_deliver_stage* stage,
   // io_done is host-owned slot bookkeeping; its fence must retire before
   // any device acquire, so peek rather than acquire here.
   wait_io_fences(gpu_pool_at(handoff->agg_host, fc, 0).p, sink, stage->metrics);
-
-  struct gpu_pool_view v;
-  CHECK(Error,
-        gpu_pool_acquire_consume(handoff->agg_pool, fc, d2h_stream, &v) == 0);
-
-  int dispatch_err = d2h_deliver_kick(stage, handoff, v.p, d2h_stream);
-
-  // Passthrough never polls the chunk index (its drain waits on the
-  // slot-drained edge recorded after the kick's bulk copy).
-  if (!dispatch_err && !handoff->passthrough &&
-      gpu_pool_release_produce(handoff->agg_index, fc, d2h_stream))
-    dispatch_err = 1;
-
-  // Always release the passthrough slot (SLOT_DRAINED) even on dispatch
-  // error: the drain's host poll blocks on it and would hang otherwise.
-  if (handoff->passthrough)
-    CHECK(Error,
-          gpu_pool_release_consume(handoff->agg_pool, fc, d2h_stream) == 0);
-
-  return dispatch_err;
-
-Error:
-  return 1;
+  return d2h_materialize_begin(
+    &stage->materializer, &handoff->device_batch, d2h_stream);
 }
 
 struct writer_result
@@ -258,7 +237,7 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
                    struct platform_clock* metadata_update_clock)
 {
   const int fc = handoff->fc;
-  struct aggregate_slot* slot = NULL;
+  struct host_batch* host = NULL;
   int err = 1;
 
   if (sink->has_error && sink->has_error(sink))
@@ -269,32 +248,16 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
     platform_toc(&kick_clk);
     const float polls_before = edge_stall_total_ms(metrics);
 
-    if (handoff->passthrough) {
-      struct gpu_pool_view hv;
-      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, &hv))
-        goto Done;
-      slot = hv.p;
-    } else {
-      struct gpu_pool_view iv;
-      if (gpu_pool_host_acquire_consume(handoff->agg_index, fc, &iv))
-        goto Done;
-      slot = iv.p;
-
-      int dispatch_err = d2h_deliver_drain_copy(stage, handoff, slot);
-
-      // Always release the slot (SLOT_DRAINED), even if the D2H dispatch
-      // above failed: the host poll below and the next kick's acquire block
-      // on it and would hang otherwise. Release-on-error is harmless
-      // because the stream is already in an error state and the next op
-      // will short-circuit.
-      if (gpu_pool_release_consume(handoff->agg_pool, fc, stage->drain_stream))
-        goto Done;
-
-      if (dispatch_err)
-        goto Done;
-      if (gpu_pool_host_acquire_consume(handoff->agg_host, fc, NULL))
-        goto Done;
-    }
+    struct shard_state* shard_ptrs[LOD_MAX_LEVELS] = { 0 };
+    for (uint8_t lv = 0; lv < handoff->nlod; ++lv)
+      shard_ptrs[lv] = handoff->shards_by_lod[lv];
+    struct d2h_host_placement placement = {
+      .per_lod_layouts = handoff->per_lod_agg_layouts,
+      .shards_by_lod = shard_ptrs,
+      .slot_lifetime = gpu_pool_at(handoff->agg_host, fc, 0).p,
+    };
+    if (d2h_materialize_finish(&stage->materializer, fc, &placement, &host))
+      goto Done;
 
     float block_ms = platform_toc(&kick_clk) * 1000.0f;
     float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
@@ -304,7 +267,8 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
 
   err = d2h_deliver_drain_sink(stage,
                                handoff,
-                               slot,
+                               host,
+                               stage->materializer.ticket[fc].payload_start,
                                handoff->shards,
                                levels,
                                layout,

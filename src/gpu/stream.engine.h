@@ -2,6 +2,7 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
+#include "gpu/d2h.materializer.h"
 #include "gpu/ordering.h"
 #include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
@@ -248,10 +249,7 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  struct gpu_ordering* ord;     // borrowed
-  CUevent t_d2h_start[2];       // timing; kick-time, before the worker handoff
-  CUevent t_d2h_drain_start[2]; // timing; immediately before the payload copy
-  CUstream drain_stream;        // borrowed (gpu_streams.drain)
+  struct d2h_materializer materializer;
 
   size_t shard_alignment;         // from sink; 0 = no alignment
   struct stream_metrics* metrics; // borrowed, for stall-time accumulation

@@ -38,8 +38,8 @@ shard_file_capacity_for(uint64_t chunks_per_shard_total,
                         size_t footer_capacity)
 {
   if (max_comp_chunk_bytes == 0 ||
-      chunks_per_shard_total > (UINT64_MAX - footer_capacity) /
-                                 max_comp_chunk_bytes)
+      chunks_per_shard_total >
+        (UINT64_MAX - footer_capacity) / max_comp_chunk_bytes)
     return 0;
   return chunks_per_shard_total * max_comp_chunk_bytes + footer_capacity;
 }
@@ -166,7 +166,8 @@ shard_tail_set(struct active_shard* sh,
                size_t n)
 {
   sh->tail_bytes = n;
-  *h_tail_bytes_si = n;
+  if (h_tail_bytes_si)
+    *h_tail_bytes_si = n;
   if (n > 0)
     memcpy(sh->tail_buf, src, n);
 }
@@ -669,5 +670,351 @@ deliver_to_shards_batch(uint8_t level,
 
 Error:
   free(bytes_consumed);
+  return 1;
+}
+
+static int
+host_batch_reserve(struct host_batch* host, size_t count)
+{
+  if (count <= host->run_capacity)
+    return 0;
+  CHECK_MUL_OVERFLOW(Error, count, sizeof(*host->runs), SIZE_MAX);
+  struct host_batch_run* p =
+    (struct host_batch_run*)realloc(host->runs, count * sizeof(*host->runs));
+  CHECK(Error, p);
+  host->runs = p;
+  host->run_capacity = count;
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+d2h_plan_legacy_spans(const struct batch_aggregate_layout* layout,
+                      uint8_t nlod,
+                      const uint32_t* per_lod_n_active,
+                      const size_t* offsets,
+                      const size_t* chunk_sizes,
+                      int fixed_extent,
+                      struct d2h_transfer_span* spans,
+                      size_t span_capacity,
+                      size_t* out_count)
+{
+  CHECK(Error, layout && per_lod_n_active && spans && out_count);
+  CHECK(Error, nlod == layout->nlod);
+  *out_count = 0;
+
+  if (fixed_extent) {
+    CHECK(Error, span_capacity >= 1);
+    spans[0] = (struct d2h_transfer_span){
+      .device_offset = 0,
+      .host_offset = 0,
+      .bytes = layout->total_data_bytes,
+    };
+    *out_count = 1;
+    return 0;
+  }
+
+  CHECK(Error, offsets && chunk_sizes);
+  if (layout->page_size > 0) {
+    for (uint8_t lv = 0; lv < nlod; ++lv) {
+      if (per_lod_n_active[lv] == 0)
+        continue;
+      CHECK(Error, *out_count < span_capacity);
+      const struct lod_segment* seg = &layout->lods[lv];
+      const uint64_t total = (uint64_t)seg->n_active * seg->covering_count;
+      CHECK(Error, total > 0);
+      const size_t last = seg->batch_covering_offset + (size_t)lv + total - 1;
+      CHECK(Error, offsets[last] <= SIZE_MAX - chunk_sizes[last]);
+      const size_t end = offsets[last] + chunk_sizes[last];
+      CHECK(Error, end >= seg->data_segment_offset);
+      const size_t actual = end - seg->data_segment_offset;
+      CHECK(Error, actual <= seg->data_segment_bytes);
+      spans[(*out_count)++] = (struct d2h_transfer_span){
+        .device_offset = seg->data_segment_offset,
+        .host_offset = seg->data_segment_offset,
+        .bytes = actual,
+      };
+    }
+  } else if (layout->total_batch_covering > 0) {
+    CHECK(Error, span_capacity >= 1);
+    const size_t n = (size_t)layout->total_batch_covering + nlod;
+    CHECK(Error, offsets[n - 1] <= SIZE_MAX - chunk_sizes[n - 1]);
+    const size_t total = offsets[n - 1] + chunk_sizes[n - 1];
+    spans[0] = (struct d2h_transfer_span){
+      .device_offset = 0,
+      .host_offset = 0,
+      .bytes = total,
+    };
+    *out_count = 1;
+  }
+  return 0;
+
+Error:
+  if (out_count)
+    *out_count = 0;
+  return 1;
+}
+
+static int
+run_payload_bytes(const size_t* chunk_sizes, uint64_t count, size_t* out_bytes)
+{
+  size_t bytes = 0;
+  for (uint64_t i = 0; i < count; ++i) {
+    CHECK(Error, chunk_sizes[i] <= SIZE_MAX - bytes);
+    bytes += chunk_sizes[i];
+  }
+  *out_bytes = bytes;
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+host_batch_build_legacy(struct host_batch* host,
+                        void* aggregate_data,
+                        const size_t* offsets,
+                        const size_t* chunk_sizes,
+                        const struct batch_aggregate_layout* batch_layout,
+                        const struct aggregate_layout* per_lod_layouts,
+                        struct shard_state* const* shards_by_lod,
+                        const uint32_t* per_lod_n_active,
+                        uint8_t nlod,
+                        void* slot_lifetime)
+{
+  size_t* consumed = NULL;
+  CHECK(Error, host && aggregate_data && offsets && chunk_sizes);
+  CHECK(Error, batch_layout && per_lod_layouts && shards_by_lod);
+  CHECK(Error, per_lod_n_active && nlod == batch_layout->nlod);
+
+  size_t count = 0;
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct shard_state* ss = shards_by_lod[lv];
+    CHECK(Error, ss);
+    CHECK(Error, ss->chunks_per_shard_append > 0);
+    CHECK(Error, ss->epoch_in_shard < ss->chunks_per_shard_append);
+    uint32_t left = per_lod_n_active[lv];
+    uint64_t epoch = ss->epoch_in_shard;
+    while (left > 0) {
+      uint64_t remain = ss->chunks_per_shard_append - epoch;
+      uint32_t run = left < remain ? left : (uint32_t)remain;
+      CHECK(Error, run > 0);
+      CHECK(Error, ss->shard_inner_count <= SIZE_MAX - count);
+      count += (size_t)ss->shard_inner_count;
+      left -= run;
+      epoch = run == remain ? 0 : epoch + run;
+    }
+  }
+  CHECK(Error, host_batch_reserve(host, count) == 0);
+
+  host->run_count = 0;
+  host->slot_lifetime = slot_lifetime;
+  host->transfer.logical_payload_bytes = 0;
+
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    struct shard_state* ss = shards_by_lod[lv];
+    const struct aggregate_layout* al = &per_lod_layouts[lv];
+    const struct lod_segment* seg = &batch_layout->lods[lv];
+    const uint32_t n_active = per_lod_n_active[lv];
+    const uint64_t cps = ss->chunks_per_shard_inner;
+    const size_t meta_base = seg->batch_covering_offset + (size_t)lv;
+    uint32_t a = 0;
+    uint64_t epoch = ss->epoch_in_shard;
+    uint64_t generation = ss->shard_epoch;
+    if (ss->shard_inner_count > 0) {
+      consumed = (size_t*)calloc((size_t)ss->shard_inner_count, sizeof(size_t));
+      CHECK(Error, consumed);
+    }
+
+    while (a < n_active) {
+      const uint64_t remaining = ss->chunks_per_shard_append - epoch;
+      const uint32_t left = n_active - a;
+      const uint32_t run_len = left < remaining ? left : (uint32_t)remaining;
+      const int finalizes = run_len == remaining;
+
+      for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {
+        const uint64_t j = si * (uint64_t)n_active * cps + (uint64_t)a * cps;
+        const uint64_t nchunks = (uint64_t)run_len * cps;
+        size_t payload = 0;
+        CHECK(Error,
+              run_payload_bytes(
+                chunk_sizes + meta_base + j, nchunks, &payload) == 0);
+        const size_t tail = (a == 0) ? ss->shards[si].tail_bytes : 0;
+        const size_t source = offsets[meta_base + j];
+        CHECK(Error, source >= tail);
+
+        struct host_batch_run* out = &host->runs[host->run_count++];
+        *out = (struct host_batch_run){
+          .level = lv,
+          .inner_shard = si,
+          .flat_shard = generation * ss->shard_inner_count + si,
+          .active_begin = a,
+          .active_count = run_len,
+          .epoch_in_shard = epoch,
+          .chunks_per_shard_inner = cps,
+          .finalizes = finalizes,
+          .ends_generation_run = si + 1 == ss->shard_inner_count,
+          .data = (uint8_t*)aggregate_data + source - tail,
+          .page_size = al->page_size,
+          .tail_bytes = tail,
+          .payload_bytes = payload,
+          .source_offset = source,
+          .offsets = offsets + meta_base + j,
+          .chunk_sizes = chunk_sizes + meta_base + j,
+        };
+
+        // The legacy carry layout packs successive generation runs in the
+        // same shard reservation.  This check catches a stale or malformed
+        // offset table without imposing that layout on the host-tail design.
+        if (al->page_size > 0 && al->shard_capacity > 0) {
+          const size_t expected = seg->data_segment_offset +
+                                  (size_t)si * al->shard_capacity +
+                                  consumed[si] + tail;
+          CHECK(Error, source == expected);
+          consumed[si] += tail + payload;
+        }
+
+        CHECK(Error,
+              payload <= SIZE_MAX - host->transfer.logical_payload_bytes);
+        host->transfer.logical_payload_bytes += payload;
+      }
+
+      a += run_len;
+      if (finalizes) {
+        epoch = 0;
+        generation++;
+      } else {
+        epoch += run_len;
+      }
+    }
+    free(consumed);
+    consumed = NULL;
+  }
+
+  CHECK(Error, host->run_count == count);
+  return 0;
+
+Error:
+  free(consumed);
+  host->run_count = 0;
+  return 1;
+}
+
+void
+host_batch_destroy(struct host_batch* host)
+{
+  if (!host)
+    return;
+  free(host->runs);
+  *host = (struct host_batch){ 0 };
+}
+
+static void
+record_host_run_index(struct active_shard* sh, const struct host_batch_run* run)
+{
+  const uint64_t cps = run->chunks_per_shard_inner;
+  for (uint32_t r = 0; r < run->active_count; ++r) {
+    for (uint64_t c = 0; c < cps; ++c) {
+      const uint64_t j = (uint64_t)r * cps + c;
+      const size_t chunk_size = run->chunk_sizes[j];
+      if (chunk_size == 0)
+        continue;
+      const uint64_t slot = (run->epoch_in_shard + r) * cps + c;
+      sh->index[2 * slot] = sh->data_cursor + run->tail_bytes +
+                            (run->offsets[j] - run->source_offset);
+      sh->index[2 * slot + 1] = chunk_size;
+    }
+  }
+}
+
+int
+deliver_host_batch(struct host_batch* host,
+                   struct shard_state* const* shards_by_lod,
+                   struct shard_sink* sink,
+                   size_t shard_alignment,
+                   size_t* out_bytes,
+                   struct stream_metrics* metrics)
+{
+  CHECK(Error, host && shards_by_lod && sink);
+  size_t total_bytes = 0;
+
+  for (size_t i = 0; i < host->run_count; ++i) {
+    const struct host_batch_run* run = &host->runs[i];
+    struct shard_state* ss = shards_by_lod[run->level];
+    CHECK(Error, run->inner_shard < ss->shard_inner_count);
+    CHECK(Error, ss->epoch_in_shard == run->epoch_in_shard);
+    CHECK(Error,
+          ss->shard_epoch * ss->shard_inner_count + run->inner_shard ==
+            run->flat_shard);
+
+    struct active_shard* sh = &ss->shards[run->inner_shard];
+    if (!sh->writer) {
+      sh->writer = sink->open(sink, run->level, run->flat_shard);
+      CHECK(Error, sh->writer);
+      if (sh->writer->presize)
+        CHECK(Error,
+              sh->writer->presize(sh->writer, ss->shard_file_capacity) == 0);
+    }
+
+    record_host_run_index(sh, run);
+    CHECK(Error, run->payload_bytes <= SIZE_MAX - run->tail_bytes);
+    const size_t total_run = run->tail_bytes + run->payload_bytes;
+    if (run->page_size == 0) {
+      if (run->payload_bytes > 0) {
+        int wr = sh->writer->write_direct
+                   ? sh->writer->write_direct(sh->writer,
+                                              sh->data_cursor,
+                                              run->data,
+                                              run->data + run->payload_bytes)
+                   : sh->writer->write(sh->writer,
+                                       sh->data_cursor,
+                                       run->data,
+                                       run->data + run->payload_bytes);
+        CHECK(Error, wr == 0);
+        total_bytes += run->payload_bytes;
+        sh->data_cursor += run->payload_bytes;
+      }
+    } else if (run->finalizes) {
+      CHECK(Error,
+            deliver_run_finalizing(sh,
+                                   ss,
+                                   sink,
+                                   run->data,
+                                   total_run,
+                                   NULL,
+                                   shard_alignment,
+                                   &total_bytes,
+                                   metrics) == 0);
+    } else {
+      CHECK(Error, shard_alignment == run->page_size);
+      CHECK(Error,
+            deliver_run_nonfinalizing(sh,
+                                      run->data,
+                                      total_run,
+                                      NULL,
+                                      shard_alignment,
+                                      shard_alignment,
+                                      &total_bytes) == 0);
+    }
+
+    if (run->ends_generation_run) {
+      ss->epoch_in_shard += run->active_count;
+      if (run->finalizes) {
+        if (run->page_size > 0)
+          CHECK(Error, close_finalized_shards(ss, sink) == 0);
+        else
+          CHECK(Error,
+                finalize_shards(ss, sink, shard_alignment, metrics) == 0);
+      }
+    }
+  }
+
+  if (out_bytes)
+    *out_bytes = total_bytes;
+  return 0;
+
+Error:
   return 1;
 }

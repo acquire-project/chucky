@@ -677,4 +677,20 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
   for (uint8_t lv = 0; lv < nlod; ++lv)
     out->shards_by_lod[lv] = &stage->ar.shard[lv];
+
+  out->device_batch = (struct device_aggregate_batch){
+    .slot_index = fc,
+    .extent_kind = stage->codec.type == CODEC_NONE
+                     ? DEVICE_AGGREGATE_FIXED_EXTENT
+                     : DEVICE_AGGREGATE_INDEXED_EXTENT,
+    .layout = plan->layout,
+    .nlod = nlod,
+    .aggregate_pool = &stage->agg_pool,
+    .host_pool = &stage->agg_host,
+    .index_pool = &stage->agg_index,
+    .completion = out->t_aggregate_end,
+  };
+  memcpy(out->device_batch.per_lod_n_active,
+         plan->per_lod_n_active,
+         (size_t)nlod * sizeof(uint32_t));
 }

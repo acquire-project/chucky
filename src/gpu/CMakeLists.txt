@@ -3,7 +3,8 @@ add_src_lib(compress  SOURCES compress.cu compress.h   LINKS nvcomp::nvcomp CUDA
 add_src_lib(aggregate SOURCES aggregate.cu aggregate.h LINKS CUDA::cudart_static CUDA::cuda_driver stream_config chucky_log)
 add_src_lib(lod       SOURCES lod.cu lod.h
                               reduce_csr_gpu.c reduce_csr_gpu.h
-                      LINKS CUDA::cudart_static CUDA::cuda_driver chucky_log)
+                      LINKS CUDA::cudart_static CUDA::cuda_driver chucky_log
+)
 
 add_src_lib(stream
     SOURCES
@@ -14,6 +15,7 @@ add_src_lib(stream
         ordering.c ordering.h
         pool.c pool.h
         schedule.c schedule.h
+        d2h.materializer.c d2h.materializer.h
         flush.compress_agg.c flush.compress_agg.h
         flush.d2h_deliver.c flush.d2h_deliver.h
         flush.handoff.h

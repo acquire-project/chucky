@@ -109,6 +109,9 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
   CHECK(Fail,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
                          platform_page_alignment(),
+                         config->codec.id == CODEC_NONE
+                           ? DEVICE_AGGREGATE_FIXED_EXTENT
+                           : DEVICE_AGGREGATE_INDEXED_EXTENT,
                          &c->s->engine.ord,
                          c->s->engine.streams.drain,
                          c->s->engine.streams.compute) == 0);

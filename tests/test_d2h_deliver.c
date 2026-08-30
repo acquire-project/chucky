@@ -98,6 +98,9 @@ test_ctx_setup(struct test_ctx* c,
   CHECK(Fail,
         d2h_deliver_init(&c->d2h,
                          platform_page_alignment(),
+                         config->codec.id == CODEC_NONE
+                           ? DEVICE_AGGREGATE_FIXED_EXTENT
+                           : DEVICE_AGGREGATE_INDEXED_EXTENT,
                          &c->ord,
                          c->drain_stream,
                          c->compute) == 0);

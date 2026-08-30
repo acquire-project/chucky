@@ -165,9 +165,14 @@ stream_engine_init(struct stream_engine* e,
 
   // shard_alignment is per-array; set by stream_engine_bind_array.
   CHECK(Fail,
-        d2h_deliver_init(
-          &e->d2h_deliver, 0, &e->ord, e->streams.drain, e->streams.compute) ==
-          0);
+        d2h_deliver_init(&e->d2h_deliver,
+                         0,
+                         codec_id == CODEC_NONE
+                           ? DEVICE_AGGREGATE_FIXED_EXTENT
+                           : DEVICE_AGGREGATE_INDEXED_EXTENT,
+                         &e->ord,
+                         e->streams.drain,
+                         e->streams.compute) == 0);
 
   // Shared LOD buffers (sized to the max across arrays).
   if (lim->any_multiscale) {

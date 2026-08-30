@@ -1,7 +1,6 @@
 #pragma once
 
-#include "gpu/aggregate.h"
-#include "gpu/pool.h"
+#include "gpu/d2h.materializer.h"
 #include "lod/lod_plan.h"
 #include "stream/types.aggregate.h"
 
@@ -39,6 +38,8 @@ struct flush_handoff
   const uint32_t* batch_active_masks;        // borrowed [K] per-epoch masks
   uint32_t per_lod_n_active[LOD_MAX_LEVELS]; // owned, for delivery sizing
   uint8_t nlod;
+
+  struct device_aggregate_batch device_batch;
 
   CUevent t_aggregate_end;   // D2H waits on this
   CUevent t_compress_start;  // for metrics

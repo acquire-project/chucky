@@ -235,16 +235,16 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            CUstream compress_stream,
                            struct flush_handoff* out);
 
-// Slot-reuse fence wait plus the slot acquire around the D2H kick payload.
-// Releases the chunk-index facet (compressed) or the slot itself
-// (passthrough, whose drain has no chunk index to poll).
+// Slot-reuse fence wait plus the materializer begin lifecycle.  The selected
+// materializer owns device/index pool leases and every codec-specific copy
+// decision behind this call.
 int
 schedule_d2h_kick(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
                   struct shard_sink* sink,
                   CUstream d2h_stream);
 
-// Host-acquire the drained slot per codec shape, deliver it to the sink, and
+// Finish materialization, deliver its normalized host batch to the sink, and
 // synchronously upload page-aligned tail state.
 struct writer_result
 schedule_d2h_drain(struct d2h_deliver_stage* stage,

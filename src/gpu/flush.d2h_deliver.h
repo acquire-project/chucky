@@ -8,6 +8,7 @@
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
+                 enum device_aggregate_extent_kind extent_kind,
                  struct gpu_ordering* ord,
                  CUstream drain_stream,
                  CUstream compute);
@@ -15,30 +16,14 @@ d2h_deliver_init(struct d2h_deliver_stage* stage,
 void
 d2h_deliver_destroy(struct d2h_deliver_stage* stage);
 
-// Payload phases over an already-acquired slot; the acquires and releases
-// around them are placed by the schedule (schedule_d2h_kick /
-// schedule_d2h_drain).
-
-// Chunk-index copies. Pass-through codecs also run the bulk D2H here so it
-// overlaps the next batch's compute; compressed codecs land the chunk index
-// only and size the bulk copies at drain time.
-int
-d2h_deliver_kick(struct d2h_deliver_stage* stage,
-                 const struct flush_handoff* handoff,
-                 struct aggregate_slot* slot,
-                 CUstream d2h_stream);
-
-// Compressed-only: per-LOD bulk copies sized from the landed chunk index.
-int
-d2h_deliver_drain_copy(struct d2h_deliver_stage* stage,
-                       const struct flush_handoff* handoff,
-                       struct aggregate_slot* slot);
-
-// Sink delivery + tail-state upload for the host-complete slot.
+// Sink delivery + tail-state upload for the host-complete batch.  CUDA copy
+// planning and readiness live behind d2h_materializer; delivery deliberately
+// stays outside that boundary.
 struct writer_result
 d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
-                       struct aggregate_slot* slot,
+                       struct host_batch* host,
+                       CUevent payload_start,
                        struct compress_agg_array* shards,
                        const struct level_geometry* levels,
                        const struct tile_stream_layout* layout,

@@ -5,6 +5,7 @@
 #include "stream/types.aggregate.h"
 #include "types.stream.h"
 #include "writer.h"
+#include "zarr/host_batch.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -124,3 +125,35 @@ deliver_to_shards_batch(uint8_t level,
                         size_t shard_alignment,
                         size_t* out_bytes,
                         struct stream_metrics* metrics);
+
+// Build run views over the existing aggregate layout without changing any
+// shard state.  This is the behavior-preserving bridge used by the first GPU
+// materializer refactor: page-aligned layouts already contain their carried
+// tail at the head of each shard region, while contiguous layouts have no
+// prefix.  The caller owns host->runs and may reuse the allocation.
+int
+host_batch_build_legacy(struct host_batch* host,
+                        void* aggregate_data,
+                        const size_t* offsets,
+                        const size_t* chunk_sizes,
+                        const struct batch_aggregate_layout* batch_layout,
+                        const struct aggregate_layout* per_lod_layouts,
+                        struct shard_state* const* shards_by_lod,
+                        const uint32_t* per_lod_n_active,
+                        uint8_t nlod,
+                        void* slot_lifetime);
+
+void
+host_batch_destroy(struct host_batch* host);
+
+// Deliver run views in their recorded order.  This is GPU-only call-site
+// behavior but intentionally CUDA-free so planning and delivery can be unit
+// tested on a CPU.  The CPU pipeline continues to use
+// deliver_to_shards_batch unchanged.
+int
+deliver_host_batch(struct host_batch* host,
+                   struct shard_state* const* shards_by_lod,
+                   struct shard_sink* sink,
+                   size_t shard_alignment,
+                   size_t* out_bytes,
+                   struct stream_metrics* metrics);
