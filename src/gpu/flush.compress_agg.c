@@ -169,14 +169,6 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
     stage->t_compress_end[fc] = NULL;
     stage->t_aggregate_start[fc] = NULL;
   }
-  if (stage->lut_steady_count + stage->lut_recompute_count > 0) {
-    const uint64_t tot = stage->lut_steady_count + stage->lut_recompute_count;
-    log_debug("compress_agg unified lut_steady=%llu lut_recompute=%llu "
-              "(steady=%.1f%%)",
-              (unsigned long long)stage->lut_steady_count,
-              (unsigned long long)stage->lut_recompute_count,
-              100.0 * (double)stage->lut_steady_count / (double)tot);
-  }
   for (int fc = 0; fc < 2; ++fc)
     aggregate_slot_destroy(&stage->agg[fc]);
   cu_mem_free(stage->d_batch_gather);
@@ -516,12 +508,9 @@ build_and_upload_luts(struct compress_agg_stage* stage,
                (size_t)n_lv * sizeof(uint32_t)) != 0)
       lut_steady = 0;
   }
-  if (lut_steady) {
-    stage->lut_steady_count++;
+  if (lut_steady)
     return 0;
-  }
 
-  stage->lut_recompute_count++;
   if (layout->total_batch_chunks > 0) {
     aggregate_batch_luts_unified(layout,
                                  stage->ar.per_lod_agg_layouts,
