@@ -771,7 +771,6 @@ test_compress_agg_lut_cache_position_shift(void)
   // Kick 2: only epoch 1 active (mask [0, 1]).
   // Same n_active=1 as kick 1, but pool_epochs=[1] — a steady-state cache
   // keyed on counts alone would mis-hit and gather from epoch 0 instead.
-  uint64_t lut_recompute_before = c.stage.lut_recompute_count;
   c.batch_active_masks[0] = 0x0;
   c.batch_active_masks[1] = 0x1;
   struct flush_handoff handoff2;
@@ -790,10 +789,6 @@ test_compress_agg_lut_cache_position_shift(void)
             0);
     CU(Fail, cuStreamSynchronize(c.compute));
   }
-
-  // The cache must have missed (recompute count incremented) because the
-  // pool_epoch values changed even though n_active didn't.
-  CHECK(Fail, c.stage.lut_recompute_count > lut_recompute_before);
 
   // The aggregated data must reflect epoch 1, not epoch 0.
   uint64_t C = handoff2.per_lod_agg_layouts[0].covering_count;

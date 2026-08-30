@@ -238,8 +238,6 @@ struct compress_agg_stage
   uint32_t* cached_pool_epochs; // [LOD_MAX_LEVELS * pool_epochs_stride]
   uint32_t pool_epochs_stride;  // max K used by scratch + cache
   int lut_cache_valid;
-  uint64_t lut_steady_count;
-  uint64_t lut_recompute_count;
 
   // Per-shard tables shared across arrays (sized to maxima).
   struct shard_tables shards;
