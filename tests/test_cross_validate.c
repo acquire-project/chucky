@@ -724,12 +724,10 @@ Fail:
   return 1;
 }
 
-// ---- Page-aligned tail carry (lazy pipeline) ----
-// A sink alignment requirement activates the carry-over delivery path,
-// whose tail kernels consume an upload the host makes only after the
-// previous batch delivers — later than the kernels are enqueued.
-// CODEC_NONE keeps the race window open (aggregate runs as soon as it is
-// enqueued); the CPU pipeline is the byte-exact oracle.
+// ---- Page-aligned host-tail carry ----
+// A sink alignment requirement activates host-side run assembly. Aggregation
+// may run ahead, but payload materialization consumes the committed tail only
+// after the preceding delivery. The CPU pipeline is the byte-exact oracle.
 #define TC_Z 32  // 32 epochs (chunk_size 1), one shard generation
 #define TC_Y 144 // 2 chunks of 72
 #define TC_X 80  // 2 chunks of 40

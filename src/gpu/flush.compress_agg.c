@@ -87,15 +87,18 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
 
   stage->max_total_batch_chunks = lim->max_total_batch_chunks;
   stage->max_total_batch_covering = lim->max_total_batch_covering;
-  stage->max_total_data_bytes = lim->max_total_data_bytes;
+  stage->max_device_data_bytes = lim->max_device_data_bytes;
+  stage->max_host_data_bytes = lim->max_host_data_bytes;
 
   if (stage->max_total_batch_chunks > 0) {
     const uint64_t C_max =
       stage->max_total_batch_covering + (uint64_t)lim->max_nlod;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(
-              &stage->agg[fc], C_max, stage->max_total_data_bytes) == 0);
+            aggregate_batch_slot_init(&stage->agg[fc],
+                                      C_max,
+                                      stage->max_device_data_bytes,
+                                      stage->max_host_data_bytes) == 0);
     }
 
     CU(Fail,
@@ -109,30 +112,6 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
     stage->h_lut_perm_scratch =
       (uint32_t*)malloc(stage->max_total_batch_chunks * sizeof(uint32_t));
     CHECK(Fail, stage->h_lut_gather_scratch && stage->h_lut_perm_scratch);
-  }
-
-  // Sized to the max total_shards; the active array's slice is re-uploaded
-  // by every kick.
-  if (lim->max_total_shards > 0) {
-    const uint64_t ts = lim->max_total_shards;
-    stage->shards.h_base_offsets = (size_t*)malloc(ts * sizeof(size_t));
-    stage->shards.h_tps_group = (uint64_t*)malloc(ts * sizeof(uint64_t));
-    stage->shards.h_offsets_base = (uint64_t*)malloc(ts * sizeof(uint64_t));
-    CHECK(Fail,
-          stage->shards.h_base_offsets && stage->shards.h_tps_group &&
-            stage->shards.h_offsets_base);
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&stage->shards.d_base_offsets,
-                  ts * sizeof(size_t)));
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&stage->shards.d_shard_capacity,
-                  ts * sizeof(size_t)));
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&stage->shards.d_tps_group,
-                  ts * sizeof(uint64_t)));
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&stage->shards.d_offsets_base,
-                  ts * sizeof(uint64_t)));
   }
 
   // Seed timing events so the first metric reads see a valid interval.
@@ -179,14 +158,6 @@ compress_agg_destroy_shared(struct compress_agg_stage* stage)
   free(stage->h_lut_perm_scratch);
   stage->h_lut_gather_scratch = NULL;
   stage->h_lut_perm_scratch = NULL;
-  free(stage->shards.h_base_offsets);
-  free(stage->shards.h_tps_group);
-  free(stage->shards.h_offsets_base);
-  cu_mem_free((CUdeviceptr)stage->shards.d_base_offsets);
-  cu_mem_free((CUdeviceptr)stage->shards.d_shard_capacity);
-  cu_mem_free((CUdeviceptr)stage->shards.d_tps_group);
-  cu_mem_free((CUdeviceptr)stage->shards.d_offsets_base);
-  memset(&stage->shards, 0, sizeof(stage->shards));
 }
 
 int
@@ -201,63 +172,9 @@ compress_agg_array_init(struct compress_agg_array* ar,
   ar->nlod = (uint8_t)cl->levels.nlod;
 
   // Own copy so multiarray bind/unbind can swap them per-array.
-  for (int lv = 0; lv < cl->levels.nlod; ++lv)
-    ar->per_lod_agg_layouts[lv] = cl->per_level[lv].agg_layout;
-
-  uint64_t total_shards = 0;
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
-    ar->shards_begin[lv] = (uint32_t)total_shards;
-    ar->n_shards[lv] = (uint32_t)cl->per_level[lv].agg_layout.num_shards;
-    total_shards += cl->per_level[lv].agg_layout.num_shards;
-  }
-  ar->total_shards = total_shards;
-  ar->page_size = cl->per_level[0].agg_layout.page_size;
-
-  if (total_shards > 0) {
-    ar->h_shard_capacity = (size_t*)malloc(total_shards * sizeof(size_t));
-    ar->h_tail_bytes = (size_t*)calloc(total_shards, sizeof(size_t));
-    CHECK(Fail, ar->h_shard_capacity && ar->h_tail_bytes);
-    for (uint64_t i = 0; i < total_shards; ++i) {
-      for (int lv = 0; lv < cl->levels.nlod; ++lv) {
-        if (i >= ar->shards_begin[lv] &&
-            i < ar->shards_begin[lv] + ar->n_shards[lv]) {
-          ar->h_shard_capacity[i] = cl->per_level[lv].agg_layout.shard_capacity;
-          break;
-        }
-      }
-    }
-
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&ar->d_tail_bytes,
-                  total_shards * sizeof(size_t)));
-    CU(Fail,
-       cuMemsetD8(
-         (CUdeviceptr)ar->d_tail_bytes, 0, total_shards * sizeof(size_t)));
-
-    // Delivery's tail upload is a synchronous HtoD from pageable memory.
-    // SYNC_MEMOPS makes return from that host call the authoritative
-    // tail-ready transition observed by the delivery coordinator.
-    {
-      unsigned int sync_memops = 1;
-      CU(Fail,
-         cuPointerSetAttribute(&sync_memops,
-                               CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-                               (CUdeviceptr)ar->d_tail_bytes));
-    }
-
-    // One layout across LODs: the sink page size is uniform.
-    if (ar->page_size > 0) {
-      ar->tail_carry_bytes = total_shards * ar->page_size;
-      CU(Fail, cuMemAlloc(&ar->d_tail_carry, ar->tail_carry_bytes));
-      CU(Fail, cuMemsetD8(ar->d_tail_carry, 0, ar->tail_carry_bytes));
-      // Same pageable-HtoD constraint as d_tail_bytes above.
-      {
-        unsigned int sync_memops = 1;
-        CU(Fail,
-           cuPointerSetAttribute(
-             &sync_memops, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, ar->d_tail_carry));
-      }
-    }
+    ar->per_lod_agg_layouts[lv] = cl->per_level[lv].agg_layout;
+    ar->total_shards += cl->per_level[lv].agg_layout.num_shards;
   }
 
   for (int lv = 0; lv < cl->levels.nlod; ++lv)
@@ -277,10 +194,6 @@ compress_agg_array_destroy(struct compress_agg_array* ar)
     return;
   for (int lv = 0; lv < ar->nlod; ++lv)
     shard_state_destroy(&ar->shard[lv]);
-  free(ar->h_shard_capacity);
-  free(ar->h_tail_bytes);
-  cu_mem_free((CUdeviceptr)ar->d_tail_bytes);
-  cu_mem_free(ar->d_tail_carry);
   memset(ar, 0, sizeof(*ar));
 }
 
@@ -298,13 +211,6 @@ compress_agg_init(struct compress_agg_stage* stage,
         compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
           0);
   CHECK(Fail, compress_agg_array_init(&stage->ar, cl) == 0);
-  // d_shard_capacity is constant per array — upload once; the other shard
-  // tables depend on per-batch active counts and are uploaded by the kick.
-  if (stage->ar.total_shards > 0)
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)stage->shards.d_shard_capacity,
-                    stage->ar.h_shard_capacity,
-                    stage->ar.total_shards * sizeof(size_t)));
   return 0;
 
 Fail:
@@ -352,29 +258,15 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
     size_t slot_dev = 0;
     size_t slot_host = 0;
     CHECK(Error,
-          aggregate_batch_slot_memory(
-            C_max, lim->max_total_data_bytes, &slot_dev, &slot_host) == 0);
+          aggregate_batch_slot_memory(C_max,
+                                      lim->max_device_data_bytes,
+                                      lim->max_host_data_bytes,
+                                      &slot_dev,
+                                      &slot_host) == 0);
     dev += 2 * slot_dev; // agg[2]
     host += 2 * slot_host;
     dev += 2 * lim->max_total_batch_chunks *
            sizeof(uint32_t); // d_batch_gather + d_batch_perm
-  }
-
-  // Shared per-shard device tables: d_base_offsets, d_shard_capacity,
-  // d_tps_group, d_offsets_base.
-  dev += lim->max_total_shards * (2 * sizeof(size_t) + 2 * sizeof(uint64_t));
-
-  // Per-array slice (compress_agg_array_init).
-  {
-    uint64_t total_shards = 0;
-    for (int lv = 0; lv < cl->levels.nlod; ++lv)
-      total_shards += cl->per_level[lv].agg_layout.num_shards;
-    if (total_shards > 0) {
-      dev += total_shards * sizeof(size_t); // d_tail_bytes
-      const size_t page_size = cl->per_level[0].agg_layout.page_size;
-      if (page_size > 0)
-        dev += total_shards * page_size; // d_tail_carry
-    }
   }
 
   *aggregate_device_bytes = dev;
@@ -386,62 +278,6 @@ Error:
 }
 
 // --- Kick phases (acquire/release placement lives in schedule.c) ---
-
-// Build per-shard tables for this batch's `layout`. Populates host shadows
-// and uploads to device on `stream`. tables.h_shard_capacity is constant and
-// uploaded at init; not re-uploaded here. The rest is rebuilt every kick:
-// it depends on per_lod_n_active, which can shift mid-stream.
-static int
-build_and_upload_shard_tables(struct compress_agg_stage* stage,
-                              const struct batch_aggregate_layout* layout,
-                              CUstream stream)
-{
-  struct shard_tables* t = &stage->shards;
-  const struct compress_agg_array* ar = &stage->ar;
-  if (ar->total_shards == 0)
-    return 0;
-
-  for (uint8_t lv = 0; lv < layout->nlod; ++lv) {
-    const struct lod_segment* seg = &layout->lods[lv];
-    const struct aggregate_layout* al = &stage->ar.per_lod_agg_layouts[lv];
-    const uint32_t begin = ar->shards_begin[lv];
-    const uint32_t n = ar->n_shards[lv];
-    const uint64_t cps_inner = al->cps_inner;
-    const uint64_t tps_group_lv = (uint64_t)seg->n_active * cps_inner;
-    // Each LOD's offsets range starts at seg->batch_covering_offset + lv
-    // (the +lv is the per-LOD shift built into aggregate_batch_luts_unified).
-    const uint64_t lod_offsets_base = seg->batch_covering_offset + (uint64_t)lv;
-
-    for (uint32_t si = 0; si < n; ++si) {
-      const uint32_t s = begin + si;
-      t->h_offsets_base[s] = lod_offsets_base + (uint64_t)si * tps_group_lv;
-      t->h_tps_group[s] = tps_group_lv;
-      t->h_base_offsets[s] =
-        seg->data_segment_offset + (size_t)si * al->shard_capacity;
-    }
-  }
-
-  CU(Error,
-     cuMemcpyHtoDAsync((CUdeviceptr)t->d_base_offsets,
-                       t->h_base_offsets,
-                       ar->total_shards * sizeof(size_t),
-                       stream));
-  CU(Error,
-     cuMemcpyHtoDAsync((CUdeviceptr)t->d_tps_group,
-                       t->h_tps_group,
-                       ar->total_shards * sizeof(uint64_t),
-                       stream));
-  CU(Error,
-     cuMemcpyHtoDAsync((CUdeviceptr)t->d_offsets_base,
-                       t->h_offsets_base,
-                       ar->total_shards * sizeof(uint64_t),
-                       stream));
-
-  return 0;
-
-Error:
-  return 1;
-}
 
 static void
 scan_active_masks(struct compress_agg_stage* stage,
@@ -466,16 +302,13 @@ build_batch_layout(struct compress_agg_stage* stage,
                    const uint32_t* per_lod_n_active,
                    struct batch_aggregate_layout* layout)
 {
-  // Page size is uniform across LODs (sink-driven); read from LOD 0.
-  const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
   CHECK(Error,
-        batch_aggregate_layout_init(layout,
-                                    stage->ar.per_lod_agg_layouts,
-                                    per_lod_n_active,
-                                    stage->ar.nlod,
-                                    page_size) == 0);
+        batch_aggregate_layout_init_compact(layout,
+                                            stage->ar.per_lod_agg_layouts,
+                                            per_lod_n_active,
+                                            stage->ar.nlod) == 0);
 
-  CHECK(Error, layout->total_data_bytes <= stage->max_total_data_bytes);
+  CHECK(Error, layout->total_data_bytes <= stage->max_device_data_bytes);
   CHECK(Error, layout->total_batch_chunks <= stage->max_total_batch_chunks);
   CHECK(Error, layout->total_batch_covering <= stage->max_total_batch_covering);
   return 0;
@@ -565,9 +398,6 @@ compress_agg_prepare(struct compress_agg_stage* stage,
                               plan->per_lod_n_active,
                               per_lod_pool_epochs,
                               compress_stream) == 0);
-  CHECK(Error,
-        build_and_upload_shard_tables(stage, &plan->layout, compress_stream) ==
-          0);
   return 0;
 
 Error:
@@ -611,15 +441,12 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                        struct gpu_pool_view pool_buf,
                        CUstream compress_stream)
 {
-  // The schedule calls this only after the preceding tail is host-ready, so
-  // the interval excludes time spent waiting for sink delivery.
   CU(Error, cuEventRecord(stage->t_aggregate_start[fc], compress_stream));
   // CODEC_NONE aggregates straight from the pool buffer, skipping compress.
   const CUdeviceptr d_aggregate_src = (stage->codec.type == CODEC_NONE)
                                         ? gpu_pool_view_d(pool_buf)
                                         : stage->d_compressed[fc];
   if (plan->layout.total_batch_chunks > 0) {
-    const size_t page_size = stage->ar.per_lod_agg_layouts[0].page_size;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -631,14 +458,6 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
             stage->ar.nlod,
             stage->codec.max_output_size,
             slot,
-            stage->shards.d_base_offsets,
-            stage->shards.d_shard_capacity,
-            stage->shards.d_tps_group,
-            stage->shards.d_offsets_base,
-            stage->ar.d_tail_bytes,
-            stage->ar.d_tail_carry,
-            page_size,
-            stage->ar.total_shards,
             compress_stream) == 0);
   }
   return 0;
@@ -672,7 +491,6 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
   out->agg_pool = &stage->agg_pool;
   out->agg_host = &stage->agg_host;
   out->agg_index = &stage->agg_index;
-  out->shards = &stage->ar;
   out->layout = plan->layout;
   out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
   for (uint8_t lv = 0; lv < nlod; ++lv)
@@ -685,6 +503,8 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
                      : DEVICE_AGGREGATE_INDEXED_EXTENT,
     .layout = plan->layout,
     .nlod = nlod,
+    .per_lod_layouts = stage->ar.per_lod_agg_layouts,
+    .fixed_chunk_bytes = stage->codec.max_output_size,
     .aggregate_pool = &stage->agg_pool,
     .host_pool = &stage->agg_host,
     .index_pool = &stage->agg_index,

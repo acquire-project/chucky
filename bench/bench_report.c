@@ -414,6 +414,24 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->d2h);
   print_metric_row(&metrics->sink);
 
+  if (metrics->d2h_logical_payload_bytes ||
+      metrics->d2h_payload_bytes_transferred ||
+      metrics->d2h_metadata_bytes_transferred ||
+      metrics->d2h_payload_copy_count) {
+    char logical[32], payload[32], metadata[32];
+    format_bytes(logical, sizeof(logical), metrics->d2h_logical_payload_bytes);
+    format_bytes(
+      payload, sizeof(payload), metrics->d2h_payload_bytes_transferred);
+    format_bytes(
+      metadata, sizeof(metadata), metrics->d2h_metadata_bytes_transferred);
+    print_report("  D2H transfer: logical %s, payload %s, metadata %s, "
+                 "%llu copies",
+                 logical,
+                 payload,
+                 metadata,
+                 (unsigned long long)metrics->d2h_payload_copy_count);
+  }
+
   print_diagnostics_report(metrics, wall_s);
 
   print_write_report(io);
@@ -665,6 +683,21 @@ print_bench_json_pass(const struct stream_metrics* m,
       jw_object_end(&jw);
     }
     jw_array_end(&jw);
+  }
+
+  if (m->d2h_logical_payload_bytes || m->d2h_payload_bytes_transferred ||
+      m->d2h_metadata_bytes_transferred || m->d2h_payload_copy_count) {
+    jw_key(&jw, "d2h_transfer");
+    jw_object_begin(&jw);
+    jw_key(&jw, "logical_payload_bytes");
+    jw_uint(&jw, m->d2h_logical_payload_bytes);
+    jw_key(&jw, "payload_bytes_transferred");
+    jw_uint(&jw, m->d2h_payload_bytes_transferred);
+    jw_key(&jw, "metadata_bytes_transferred");
+    jw_uint(&jw, m->d2h_metadata_bytes_transferred);
+    jw_key(&jw, "payload_copy_count");
+    jw_uint(&jw, m->d2h_payload_copy_count);
+    jw_object_end(&jw);
   }
 
   jw_key(&jw, "stages");

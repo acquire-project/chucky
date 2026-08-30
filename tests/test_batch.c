@@ -636,9 +636,9 @@ Fail0:
   return 1;
 }
 
-// Hold generation 1 after submission but before drain. Generation 2 may
-// compress and reach PREPARED, but cannot aggregate until generation 1 has
-// delivered and synchronously uploaded its tail state.
+// Hold generation 1 after submission but before drain. Generation 2 must be
+// fully aggregated and materialization-begun while payload placement remains
+// ordered behind generation 1 delivery.
 static int
 run_host_coordinator_hold(enum compression_codec codec)
 {
@@ -654,7 +654,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   int held = 0;
   int ok = 0;
   CHECK(Fail, s);
-  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
   CHECK(Fail, s->engine.sched.epochs_per_batch == 1);
   CHECK(Fail, s->engine.compress_agg.ar.total_shards > 1);
 
@@ -676,27 +676,16 @@ run_host_coordinator_hold(enum compression_codec codec)
           DELIVERY_JOB_SUBMITTED);
   CHECK(Fail,
         gpu_delivery_job_state(&s->engine.delivery, 1, &generation1) ==
-          DELIVERY_JOB_PREPARED);
+          DELIVERY_JOB_SUBMITTED);
   CHECK(Fail, generation0 == 1);
   CHECK(Fail, generation1 == 2);
-  {
-    uint64_t submitted = 0;
-    uint64_t tail_ready = 0;
-    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
-    CHECK(Fail, submitted == 1);
-    CHECK(Fail, tail_ready == 0);
-  }
+  CHECK(Fail, gpu_delivery_submitted_generation(&s->engine.delivery) == 2);
 
   gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
   held = 0;
   CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
-  {
-    uint64_t submitted = 0;
-    uint64_t tail_ready = 0;
-    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
-    CHECK(Fail, submitted == 2);
-    CHECK(Fail, tail_ready == 2);
-  }
+  CHECK(Fail, gpu_delivery_submitted_generation(&s->engine.delivery) == 2);
+  CHECK(Fail, s->engine.metrics.tail_gate.count == 0);
   CHECK(
     Fail,
     coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
@@ -723,9 +712,8 @@ test_host_coordinator_hold(void)
   return error;
 }
 
-// Force the worker-unavailable selection after construction, before any job
-// is queued. Page-aligned tail carry must remain correct on the direct,
-// drain-before-kick fallback.
+// Force the worker-unavailable path after construction, before any job is
+// queued. Host-only tail carry must remain correct with inline slot drains.
 static int
 test_worker_unavailable_fallback(void)
 {
@@ -744,9 +732,8 @@ test_worker_unavailable_fallback(void)
   CHECK(Fail, s);
 
   gpu_delivery_stop_join(&s->engine.delivery);
-  schedule_select(
-    &s->engine.sched, &s->engine.compress_agg.ar, &s->engine.delivery);
-  CHECK(Fail, s->engine.sched.mode == SCHEDULE_DRAIN_BEFORE_KICK);
+  schedule_select(&s->engine.sched, &s->engine.delivery);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
 
   const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
   src = make_src(4 * epoch_elements);

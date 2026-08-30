@@ -8,8 +8,8 @@
 //
 // Timing-only events are excluded (they must not masquerade as ordering):
 //   staging t_h2d_start and the rotated scatter pairs; compress
-//   t_compress_start/end; aggregate t_aggregate_start; d2h t_d2h_drain_start;
-//   d2h t_d2h_start; lod timing t_start/t_scatter_end/t_reduce_end/
+//   t_compress_start/end; aggregate t_aggregate_start; materializer
+//   payload_start; lod timing t_start/t_scatter_end/t_reduce_end/
 //   t_append_end/t_end.
 
 #include <cuda.h>
@@ -77,6 +77,7 @@ struct gpu_edge_desc
   uint8_t seeded;   // recorded-signaled at init
   int8_t alias_of;  // shares the owner edge's event; -1 = none
   uint8_t external; // event owned elsewhere; attached via gpu_ordering_bind
+  enum gpu_stream_id consumer_alt; // 0 = none
 };
 
 const struct gpu_edge_desc*

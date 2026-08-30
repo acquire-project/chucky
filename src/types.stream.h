@@ -75,9 +75,15 @@ struct stream_metrics
   struct stream_metric backpressure;        // sink queue over its watermark
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which
-  // Compatibility name: compression-to-aggregation delay while waiting for
-  // the preceding batch's page-aligned tail state to become host-ready.
+  // Compatibility-only legacy field. GPU host-tail materialization leaves it
+  // at zero; archived runs may still contain samples.
   struct stream_metric tail_gate;
+
+  // Optional GPU D2H materialization totals.  They remain zero for CPU runs.
+  uint64_t d2h_logical_payload_bytes;
+  uint64_t d2h_payload_bytes_transferred;
+  uint64_t d2h_metadata_bytes_transferred;
+  uint64_t d2h_payload_copy_count;
 
   float max_append_ms; // longest single append
   // High-water mark of bytes awaiting write, read once per staging buffer

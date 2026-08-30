@@ -1185,9 +1185,9 @@ Fail:
 
 // ---- Test: tail-carry across two arrays with non-zero shard alignment ----
 //
-// Exercises the multistream path with page_size > 0 (the tail-carry kernels
-// would null-deref before this test was written). Runs 2 batches per shard
-// per array with interleaved writes, then verifies the per-shard on-disk
+// Exercises the multistream path with page_size > 0 and host-only tails.
+// Runs 2 batches per shard per array with interleaved writes, then verifies
+// the per-shard on-disk
 // invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
 // padding). Uses CODEC_ZSTD on both arrays so compression+tail-carry is
 // covered alongside the multistream switch (GPU multiarray requires all
@@ -1200,7 +1200,7 @@ test_tail_carry_two_arrays(void)
   struct test_shard_sink sink0, sink1;
   test_sink_init_1(&sink0);
   test_sink_init_1(&sink1);
-  // Non-zero alignment activates the carry-over path on the GPU.
+  // Non-zero alignment activates page-aligned host-run assembly.
   sink0.shard_alignment = 4096;
   sink1.shard_alignment = 4096;
 
@@ -1322,13 +1322,10 @@ Fail:
 // epochs_per_batch=4 forces batch 1 to span shard 0 (3 epochs) + partial
 // shard 1 (1 epoch). Batch 2 finishes shard 1 (2 more epochs).
 //
-// In the broken implementation the GPU's stash_tail_k computes the tail
-// over both generations packed in a single shard column, while the host
-// correctly splits them per generation. The host's h_tail_bytes and the
-// GPU's d_tail_bytes diverge, and the next batch reads the wrong leading-
-// tail bytes from d_aggregated. Verified two ways: the byte-level file size
-// invariant AND decompression by following the on-disk index back to the
-// original fill bytes.
+// The materializer must split the compact device aggregate into two physical
+// generation runs, prepend only the committed host tail for each run, and
+// deliver them oldest-first. Verified two ways: the byte-level file-size
+// invariant and the on-disk index back to the original fill bytes.
 static int
 test_tail_carry_cross_generation(void)
 {
@@ -1337,9 +1334,8 @@ test_tail_carry_cross_generation(void)
   // Chunk size is chosen to span just over one page (2049 * 2 == 4098 bytes
   // per chunk) so that:
   //  - gen 0's three chunks (12294 bytes) do NOT land on a page boundary;
-  //  - the post-finalize run in batch 0 lands at a mid-shard src (bounce);
-  //  - the second batch's non-finalizing run on shard 1 starts a fresh batch
-  //    at the page-aligned shard_base and takes write_direct.
+  //  - batch 0 crosses a generation boundary and needs two aligned regions;
+  //  - batch 1 prepends shard 1's committed two-byte host tail.
   const size_t kChunkX = 2049;
   const size_t kChunkBytes = kChunkX * sizeof(uint16_t); // 4098
 
@@ -1431,13 +1427,9 @@ test_tail_carry_cross_generation(void)
     found++;
   }
   CHECK(Fail, found == 2);
-  // batch 0: shard 0 finalize (3 chunks, bundle = copy); shard 1 starts
-  // gen 0 with 1 chunk (post-finalize run, bounce = copy).
-  // batch 1: shard 1 finalizes (2 more chunks, bundle = copy).
-  // No write_direct calls in this geometry — every run either bundles a
-  // finalize or bounces a fresh-gen run. The byte-level on-disk check
-  // above validates correctness through the bounce path. Steady-state
-  // write_direct coverage lives in test_tail_carry_two_arrays.
+  // Every physical run has its own aligned region, so complete pages can use
+  // write_direct even when a batch crosses a generation. The byte-level
+  // on-disk check above validates both aligned writes and footer assembly.
   log_info("  PASS (%d shards verified, write_direct=%d, write=%d)",
            found,
            sink.write_direct_count,

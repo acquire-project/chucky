@@ -182,6 +182,13 @@ backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
+GPU runs may also contain a `d2h_transfer` block. Its
+`logical_payload_bytes` is the compact shard payload, while
+`payload_bytes_transferred` is what crossed PCIe. `metadata_bytes_transferred`
+counts copied offset/size arrays and `payload_copy_count` counts non-empty
+physical-shard-run copies. The whole block is absent in archived results, where
+these quantities are unknown rather than zero.
+
 For a run with filesystem output, the write scheduling it used is recorded,
 so a sweep is comparable only against one taken with the same settings:
 
@@ -247,7 +254,7 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 | `append_extent_io` | host waiting for writes to shards closed since the last published extent |
 | `final_io` | host waiting for all queued writes at flush |
 | `sink_backpressure` | producer waiting for the sink queue to fall below its limit |
-| `prior_tail_state` | compression-to-aggregation gap waiting for the preceding tail state |
+| `prior_tail_state` | archived compression-to-aggregation gap from the former GPU tail gate; new runs omit it |
 | `staging_reuse` | producer waiting to refill a staging buffer still used by H2D |
 | `chunk_metadata_d2h` | drain host waiting for chunk offsets and compressed sizes to arrive by D2H; not chunk-index kernel time |
 | `payload_d2h` | drain host waiting for the aggregated payload to arrive by D2H |
@@ -256,6 +263,11 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 results remain usable without rewriting them. Historical files cannot recover
 `wait_calls`, `min_ms`, or `max_ms`, and the explorer shows those cells as
 unknown.
+
+The legacy root `tail_gate_ms` and `tail_gate_count` fields remain present as
+zero for compatibility. They do not produce a canonical `prior_tail_state`
+entry when there are no samples.
+
 Values retired because their meaning changed are not backfilled under a current
 diagnostic ID.
 The overview keys are listed in `summary.py`; the explorer receives all
@@ -303,6 +315,11 @@ bump it.
 
 ### Version history
 
+- **8** — GPU aggregation is compact and host materialization owns page-aligned
+  tails. D2H stage bandwidth now uses actual payload transfer bytes, and the
+  optional `d2h_transfer` block records logical/payload/metadata bytes and copy
+  count. Archived files keep this block absent because those values cannot be
+  reconstructed.
 - **7** — The filesystem sink runs several writes at once instead of one, and
   pre-sizes a shard file when more than one of its writes may run together. No
   timing from a run with filesystem output is comparable across this bump; a

@@ -16,7 +16,6 @@ struct stream_context;
 struct platform_thread;
 struct platform_mutex;
 struct platform_cond;
-struct compress_agg_array;
 struct compress_agg_stage;
 struct compress_agg_input;
 struct d2h_deliver_stage;
@@ -59,12 +58,6 @@ enum schedule_mode
 {
   // Depth 2: kick now; drain a slot only when about to refill it.
   SCHEDULE_PIPELINED_DIRECT = 0,
-  // Depth 2, and the delivery worker enqueues aggregation, which cannot run
-  // until the preceding batch has finished uploading the tail it reads.
-  SCHEDULE_PIPELINED_HOST_COORDINATED,
-  // Depth 1: drain every kicked slot before kicking. A page-aligned array
-  // with no delivery worker, so tail uploads are ordered on the producer.
-  SCHEDULE_DRAIN_BEFORE_KICK,
   // Depth 1: drain immediately after kicking; no pool swap. Multiarray:
   // double-buffered pipeline state does not compose across array switches.
   SCHEDULE_DRAIN_AFTER_KICK,
@@ -79,9 +72,8 @@ struct schedule_slot
   int kicked;
   uint64_t generation;
 
-  // Retained between PREPARED and SUBMITTED for host-coordinated,
-  // page-aligned batches. The views remain owned by their pools; this slot
-  // merely carries the acquired generation until aggregation is enqueued.
+  // Retained through submission and oldest-first materialization. The views
+  // remain owned by their pools; this slot carries their generation.
   struct compress_agg_plan plan;
   struct gpu_pool_view pool_buf;
   struct gpu_pool_view aggregate_slot;
@@ -104,13 +96,9 @@ struct gpu_scheduler
   struct schedule_slot slot[2];
 };
 
-// A page-aligned batch waits here between compression and aggregation,
-// because its aggregation reads tail bytes the preceding batch only finishes
-// uploading during its own delivery.
 enum delivery_job_state
 {
   DELIVERY_JOB_EMPTY = 0,
-  DELIVERY_JOB_PREPARED,
   DELIVERY_JOB_SUBMITTED,
   DELIVERY_JOB_DONE,
 };
@@ -143,7 +131,6 @@ struct gpu_delivery
   enum delivery_hold_point hold_at;
   int sticky_error;
   uint64_t submitted_generation;
-  uint64_t tail_ready_generation;
   struct delivery_job job[2]; // by fc
 };
 
@@ -153,23 +140,11 @@ int
 gpu_delivery_init(struct gpu_delivery* d, CUcontext cuda);
 
 int
-gpu_delivery_enqueue_prepared(struct gpu_delivery* d,
-                              struct stream_engine* e,
-                              struct stream_context* ctx,
-                              int fc,
-                              uint64_t generation);
-
-int
 gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
                                struct stream_engine* e,
                                struct stream_context* ctx,
                                int fc,
                                uint64_t generation);
-
-// Shared-buffer barrier: wait until aggregation for `generation` has been
-// enqueued, or return failure if the coordinator has failed.
-int
-gpu_delivery_wait_submitted(struct gpu_delivery* d, uint64_t generation);
 
 int
 gpu_delivery_pending(struct gpu_delivery* d, int fc);
@@ -188,18 +163,13 @@ gpu_delivery_set_hold(struct gpu_delivery* d, enum delivery_hold_point at);
 enum delivery_job_state
 gpu_delivery_job_state(struct gpu_delivery* d, int fc, uint64_t* generation);
 
-void
-gpu_delivery_generations(struct gpu_delivery* d,
-                         uint64_t* submitted,
-                         uint64_t* tail_ready);
+uint64_t
+gpu_delivery_submitted_generation(struct gpu_delivery* d);
 
-// Depth selection from the array and worker availability. delivery == NULL is
-// the multi-array immediate-drain path. Only a page-aligned array needs a
-// worker; without one it must drain before each kick to order its tail
-// uploads on the producer.
+// delivery == NULL selects the multi-array immediate-drain path. Every
+// single-array configuration otherwise uses the same depth-two schedule.
 void
 schedule_select(struct gpu_scheduler* sched,
-                const struct compress_agg_array* ar,
                 const struct gpu_delivery* delivery);
 
 // The LOD producer edge exists only when the engine allocated shared LOD
@@ -207,8 +177,7 @@ schedule_select(struct gpu_scheduler* sched,
 int
 schedule_lod_active(const struct gpu_ordering* ord, int enable_multiscale);
 
-// Prepare compression and retain the aggregation inputs in `slot` without
-// enqueueing aggregation.
+// Prepare compression and retain the aggregation inputs in `slot`.
 int
 schedule_compress_agg_prepare(struct compress_agg_stage* stage,
                               const struct compress_agg_input* in,
@@ -224,8 +193,7 @@ schedule_compress_agg_submit(struct compress_agg_stage* stage,
                              struct schedule_slot* slot,
                              CUstream compress_stream);
 
-// Direct compatibility path used by contiguous pipelines and stage tests.
-// Callers are responsible for ensuring any page-aligned tail state is ready.
+// Direct compatibility path used by stage tests.
 int
 schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            const struct compress_agg_input* in,
@@ -241,11 +209,9 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
 int
 schedule_d2h_kick(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
-                  struct shard_sink* sink,
                   CUstream d2h_stream);
 
-// Finish materialization, deliver its normalized host batch to the sink, and
-// synchronously upload page-aligned tail state.
+// Finish materialization and deliver its normalized host batch to the sink.
 struct writer_result
 schedule_d2h_drain(struct d2h_deliver_stage* stage,
                    const struct flush_handoff* handoff,

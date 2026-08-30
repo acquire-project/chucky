@@ -19,7 +19,7 @@
 struct d2h_materializer_ops
 {
   int (*begin)(struct d2h_materializer*, struct d2h_ticket*, CUstream);
-  int (*finish)(struct d2h_materializer*, struct d2h_ticket*);
+  int (*prepare_payload)(struct d2h_materializer*, struct d2h_ticket*);
 };
 
 static int
@@ -39,36 +39,40 @@ Error:
   return 1;
 }
 
-static size_t
-metadata_count(const struct device_aggregate_batch* batch)
-{
-  return (size_t)batch->layout.total_batch_covering + batch->nlod;
-}
-
 static int
 enqueue_metadata(struct d2h_ticket* ticket, CUstream stream)
 {
-  const size_t n = metadata_count(&ticket->batch);
+  CHECK(Error,
+        ticket->batch.layout.total_batch_covering <=
+          SIZE_MAX - ticket->batch.nlod);
+  const size_t n =
+    (size_t)ticket->batch.layout.total_batch_covering + ticket->batch.nlod;
   if (n == 0)
     return 0;
+  CHECK_MUL_OVERFLOW(Error, n, sizeof(size_t), SIZE_MAX);
+  const size_t metadata_bytes = n * sizeof(size_t);
+  CHECK(Error, metadata_bytes <= SIZE_MAX / 2);
 
   int err = 0;
   D2H_TRY(err,
           "cuMemcpyDtoHAsync",
           cuMemcpyDtoHAsync(ticket->slot->h_offsets,
                             (CUdeviceptr)ticket->slot->d_offsets,
-                            n * sizeof(size_t),
+                            metadata_bytes,
                             stream));
   if (!err)
     D2H_TRY(err,
             "cuMemcpyDtoHAsync",
             cuMemcpyDtoHAsync(ticket->slot->h_permuted_sizes,
                               (CUdeviceptr)ticket->slot->d_permuted_sizes,
-                              n * sizeof(size_t),
+                              metadata_bytes,
                               stream));
   if (!err)
-    ticket->host.transfer.metadata_bytes_transferred = 2 * n * sizeof(size_t);
+    ticket->host.transfer.metadata_bytes_transferred = 2 * metadata_bytes;
   return err;
+
+Error:
+  return 1;
 }
 
 static int
@@ -105,8 +109,11 @@ enqueue_payload_spans(struct d2h_materializer* materializer,
   // One completion record covers every non-empty span.  It is also emitted on
   // failure so host/drain and slot-reuse paths cannot strand a generation.
   if (gpu_pool_release_consume(
-        ticket->batch.aggregate_pool, ticket->batch.slot_index, stream))
+        ticket->batch.aggregate_pool, ticket->batch.slot_index, stream)) {
     err = 1;
+  } else {
+    ticket->aggregate_released = 1;
+  }
   (void)materializer;
   return err;
 }
@@ -116,39 +123,31 @@ fixed_begin(struct d2h_materializer* materializer,
             struct d2h_ticket* ticket,
             CUstream stream)
 {
-  const int fc = ticket->batch.slot_index;
-  int err =
-    cuEventRecord(materializer->begin_event[fc], stream) != CUDA_SUCCESS;
-  ticket->payload_start = materializer->begin_event[fc];
-  if (enqueue_metadata(ticket, stream))
-    err = 1;
-  if (ticket_reserve_spans(ticket, 1))
-    err = 1;
-  if (!err && d2h_plan_legacy_spans(&ticket->batch.layout,
-                                    ticket->batch.nlod,
-                                    ticket->batch.per_lod_n_active,
-                                    NULL,
-                                    NULL,
-                                    1,
-                                    ticket->spans,
-                                    ticket->span_capacity,
-                                    &ticket->span_count))
-    err = 1;
-  if (err)
-    ticket->span_count = 0;
-  if (enqueue_payload_spans(
-        materializer, ticket, stream, materializer->begin_event[fc], 0))
-    err = 1;
-  return err;
+  (void)materializer;
+  (void)stream;
+  return aggregate_fixed_host_index(&ticket->batch.layout,
+                                    ticket->batch.per_lod_layouts,
+                                    ticket->batch.fixed_chunk_bytes,
+                                    ticket->slot->h_offsets,
+                                    ticket->slot->h_permuted_sizes);
 }
 
 static int
-fixed_finish(struct d2h_materializer* materializer, struct d2h_ticket* ticket)
+fixed_prepare_payload(struct d2h_materializer* materializer,
+                      struct d2h_ticket* ticket)
 {
-  (void)materializer;
-  struct gpu_pool_view host;
-  return gpu_pool_host_acquire_consume(
-    ticket->batch.host_pool, ticket->batch.slot_index, &host);
+  struct gpu_pool_view lease;
+  CHECK(Error,
+        gpu_pool_acquire_consume(ticket->batch.aggregate_pool,
+                                 ticket->batch.slot_index,
+                                 materializer->payload_stream,
+                                 &lease) == 0);
+  ticket->slot = lease.p;
+  ticket->aggregate_acquired = 1;
+  return 0;
+
+Error:
+  return 1;
 }
 
 static int
@@ -157,68 +156,53 @@ indexed_begin(struct d2h_materializer* materializer,
               CUstream stream)
 {
   (void)materializer;
+  struct gpu_pool_view lease;
+  CHECK(Error,
+        gpu_pool_acquire_consume(ticket->batch.aggregate_pool,
+                                 ticket->batch.slot_index,
+                                 stream,
+                                 &lease) == 0);
+  ticket->slot = lease.p;
+  ticket->aggregate_acquired = 1;
   int err = enqueue_metadata(ticket, stream);
   if (gpu_pool_release_produce(
         ticket->batch.index_pool, ticket->batch.slot_index, stream))
     err = 1;
-  if (err && gpu_pool_release_consume(
-               ticket->batch.aggregate_pool, ticket->batch.slot_index, stream))
-    err = 1;
+  if (err) {
+    if (gpu_pool_release_consume(
+          ticket->batch.aggregate_pool, ticket->batch.slot_index, stream)) {
+      err = 1;
+    } else {
+      ticket->aggregate_released = 1;
+    }
+  }
   return err;
-}
-
-static int
-indexed_plan_spans(struct d2h_ticket* ticket)
-{
-  CHECK(Error, ticket_reserve_spans(ticket, ticket->batch.nlod) == 0);
-  return d2h_plan_legacy_spans(&ticket->batch.layout,
-                               ticket->batch.nlod,
-                               ticket->batch.per_lod_n_active,
-                               ticket->slot->h_offsets,
-                               ticket->slot->h_permuted_sizes,
-                               0,
-                               ticket->spans,
-                               ticket->span_capacity,
-                               &ticket->span_count);
 
 Error:
-  ticket->span_count = 0;
   return 1;
 }
 
 static int
-indexed_finish(struct d2h_materializer* materializer, struct d2h_ticket* ticket)
+indexed_prepare_payload(struct d2h_materializer* materializer,
+                        struct d2h_ticket* ticket)
 {
+  (void)materializer;
   const int fc = ticket->batch.slot_index;
   struct gpu_pool_view index;
   if (gpu_pool_host_acquire_consume(ticket->batch.index_pool, fc, &index))
     return 1;
   ticket->slot = index.p;
-  if (indexed_plan_spans(ticket))
-    goto ReleaseError;
-  ticket->state = D2H_TICKET_PAYLOAD_PENDING;
-  if (enqueue_payload_spans(materializer,
-                            ticket,
-                            materializer->payload_stream,
-                            materializer->payload_event[fc],
-                            1))
-    return 1;
-  return gpu_pool_host_acquire_consume(ticket->batch.host_pool, fc, NULL);
-
-ReleaseError:
-  (void)gpu_pool_release_consume(
-    ticket->batch.aggregate_pool, fc, materializer->payload_stream);
-  return 1;
+  return 0;
 }
 
 static const struct d2h_materializer_ops FIXED_OPS = {
   .begin = fixed_begin,
-  .finish = fixed_finish,
+  .prepare_payload = fixed_prepare_payload,
 };
 
 static const struct d2h_materializer_ops INDEXED_OPS = {
   .begin = indexed_begin,
-  .finish = indexed_finish,
+  .prepare_payload = indexed_prepare_payload,
 };
 
 int
@@ -235,8 +219,6 @@ d2h_materializer_init(struct d2h_materializer* materializer,
   materializer->ord = ord;
   materializer->payload_stream = payload_stream;
   for (int fc = 0; fc < 2; ++fc) {
-    CU(Fail, cuEventCreate(&materializer->begin_event[fc], CU_EVENT_DEFAULT));
-    CU(Fail, cuEventRecord(materializer->begin_event[fc], seed_stream));
     CU(Fail, cuEventCreate(&materializer->payload_event[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventRecord(materializer->payload_event[fc], seed_stream));
   }
@@ -253,7 +235,6 @@ d2h_materializer_destroy(struct d2h_materializer* materializer)
   if (!materializer)
     return;
   for (int fc = 0; fc < 2; ++fc) {
-    cu_event_destroy(materializer->begin_event[fc]);
     cu_event_destroy(materializer->payload_event[fc]);
     free(materializer->ticket[fc].spans);
     host_batch_destroy(&materializer->ticket[fc].host);
@@ -275,22 +256,19 @@ d2h_materialize_begin(struct d2h_materializer* materializer,
           ticket->state == D2H_TICKET_HOST_READY ||
           ticket->state == D2H_TICKET_ERROR);
 
-  struct gpu_pool_view lease;
-  CHECK(Error,
-        gpu_pool_acquire_consume(
-          batch->aggregate_pool, batch->slot_index, metadata_stream, &lease) ==
-          0);
-
   ticket->batch = *batch;
-  ticket->slot = lease.p;
+  ticket->slot = gpu_pool_at(batch->aggregate_pool, batch->slot_index, 0).p;
   ticket->span_count = 0;
   ticket->host.run_count = 0;
-  ticket->host.slot_lifetime = lease.p;
+  ticket->host.slot_lifetime = ticket->slot;
   ticket->host.transfer = (struct d2h_transfer_statistics){ 0 };
+  ticket->aggregate_acquired = 0;
+  ticket->aggregate_released = 0;
   ticket->state = batch->extent_kind == DEVICE_AGGREGATE_FIXED_EXTENT
                     ? D2H_TICKET_PAYLOAD_PENDING
                     : D2H_TICKET_METADATA_PENDING;
   if (materializer->ops->begin(materializer, ticket, metadata_stream)) {
+    (void)d2h_materialize_cancel(materializer, batch->slot_index);
     ticket->state = D2H_TICKET_ERROR;
     return 1;
   }
@@ -312,21 +290,99 @@ d2h_materialize_finish(struct d2h_materializer* materializer,
   CHECK(Error,
         ticket->state == D2H_TICKET_METADATA_PENDING ||
           ticket->state == D2H_TICKET_PAYLOAD_PENDING);
-  CHECK(Error, materializer->ops->finish(materializer, ticket) == 0);
+  CHECK(Error, materializer->ops->prepare_payload(materializer, ticket) == 0);
 
+  size_t capacity_bound = 0;
+  size_t run_capacity = 0;
   CHECK(Error,
-        host_batch_build_legacy(&ticket->host,
-                                ticket->slot->h_aggregated,
-                                ticket->slot->h_offsets,
-                                ticket->slot->h_permuted_sizes,
-                                &ticket->batch.layout,
-                                placement->per_lod_layouts,
-                                placement->shards_by_lod,
-                                ticket->batch.per_lod_n_active,
-                                ticket->batch.nlod,
-                                placement->slot_lifetime) == 0);
+        host_batch_compact_capacity(placement->per_lod_layouts,
+                                    ticket->batch.per_lod_n_active,
+                                    ticket->batch.nlod,
+                                    placement->per_lod_layouts[0].page_size,
+                                    &capacity_bound,
+                                    &run_capacity) == 0);
+  CHECK(Error, capacity_bound <= ticket->slot->host_capacity);
+  CHECK(Error, ticket_reserve_spans(ticket, run_capacity) == 0);
+  CHECK(Error,
+        host_batch_build_compact(&ticket->host,
+                                 ticket->slot->h_aggregated,
+                                 ticket->slot->host_capacity,
+                                 ticket->slot->h_offsets,
+                                 ticket->slot->h_permuted_sizes,
+                                 &ticket->batch.layout,
+                                 placement->per_lod_layouts,
+                                 placement->shards_by_lod,
+                                 ticket->batch.per_lod_n_active,
+                                 ticket->batch.nlod,
+                                 ticket->spans,
+                                 ticket->span_capacity,
+                                 &ticket->span_count,
+                                 placement->slot_lifetime) == 0);
+  ticket->state = D2H_TICKET_PAYLOAD_PENDING;
+  const int payload_error =
+    enqueue_payload_spans(materializer,
+                          ticket,
+                          materializer->payload_stream,
+                          materializer->payload_event[slot_index],
+                          1);
+  CHECK(Error, payload_error == 0);
+  CHECK(Error,
+        gpu_pool_host_acquire_consume(
+          ticket->batch.host_pool, slot_index, NULL) == 0);
   *out = &ticket->host;
   ticket->state = D2H_TICKET_HOST_READY;
+  return 0;
+
+Error:
+  if (materializer && slot_index >= 0 && slot_index < 2) {
+    (void)d2h_materialize_cancel(materializer, slot_index);
+    materializer->ticket[slot_index].state = D2H_TICKET_ERROR;
+  }
+  return 1;
+}
+
+int
+d2h_materialize_cancel(struct d2h_materializer* materializer, int slot_index)
+{
+  CHECK(Error, materializer && (slot_index == 0 || slot_index == 1));
+  struct d2h_ticket* ticket = &materializer->ticket[slot_index];
+  if (ticket->state == D2H_TICKET_EMPTY ||
+      ticket->state == D2H_TICKET_HOST_READY) {
+    ticket->state = D2H_TICKET_ERROR;
+    return 0;
+  }
+
+  if (ticket->aggregate_released) {
+    CHECK(Error,
+          gpu_pool_host_acquire_consume(
+            ticket->batch.host_pool, slot_index, NULL) == 0);
+    ticket->state = D2H_TICKET_ERROR;
+    return 0;
+  }
+
+  if (ticket->batch.extent_kind == DEVICE_AGGREGATE_INDEXED_EXTENT &&
+      ticket->aggregate_acquired) {
+    // Retire metadata first: it reads arrays sharing this aggregate slot.
+    (void)gpu_pool_host_acquire_consume(
+      ticket->batch.index_pool, slot_index, NULL);
+  } else if (!ticket->aggregate_acquired) {
+    struct gpu_pool_view lease;
+    CHECK(Error,
+          gpu_pool_acquire_consume(ticket->batch.aggregate_pool,
+                                   slot_index,
+                                   materializer->payload_stream,
+                                   &lease) == 0);
+    ticket->aggregate_acquired = 1;
+  }
+
+  CHECK(Error,
+        gpu_pool_release_consume(ticket->batch.aggregate_pool,
+                                 slot_index,
+                                 materializer->payload_stream) == 0);
+  ticket->aggregate_released = 1;
+  (void)gpu_pool_host_acquire_consume(
+    ticket->batch.host_pool, slot_index, NULL);
+  ticket->state = D2H_TICKET_ERROR;
   return 0;
 
 Error:

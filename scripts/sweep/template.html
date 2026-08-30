@@ -411,6 +411,13 @@ function tooltipText(r) {
   if (r.worker_threads != null) t += `threads: ${r.worker_threads}\n`;
   const memory = memoryLine(r);
   if (memory) t += memory + "\n";
+  if (r.d2h_transfer) {
+    const d = r.d2h_transfer;
+    t += `D2H: ${Number(d.payload_bytes_transferred).toLocaleString()} payload / ` +
+         `${Number(d.logical_payload_bytes).toLocaleString()} logical bytes, ` +
+         `${Number(d.metadata_bytes_transferred).toLocaleString()} metadata bytes, ` +
+         `${Number(d.payload_copy_count).toLocaleString()} copies\n`;
+  }
   return t.trim();
 }
 
@@ -1140,6 +1147,22 @@ function diagnosticNumber(value, suffix = "") {
 }
 
 function renderDiagnostics(run) {
+  const root = d3.select("#diagnostic-table");
+  if (run.d2h_transfer && typeof run.d2h_transfer === "object") {
+    const d = run.d2h_transfer;
+    root.append("h2").text(
+      `D2H transfer: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    const table = root.append("table");
+    const head = table.append("thead").append("tr");
+    ["Logical payload bytes", "Payload bytes transferred", "Metadata bytes", "Payload copies"]
+      .forEach(label => head.append("th").text(label));
+    const row = table.append("tbody").append("tr");
+    [d.logical_payload_bytes, d.payload_bytes_transferred,
+     d.metadata_bytes_transferred, d.payload_copy_count]
+      .forEach(value => row.append("td").text(
+        Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
+  }
+
   if (!run.diagnostics || typeof run.diagnostics !== "object") return;
   const present = Object.keys(run.diagnostics);
   const ordered = DIAGNOSTIC_ORDER.filter(id => present.includes(id))
@@ -1148,7 +1171,6 @@ function renderDiagnostics(run) {
     .map(id => [id, run.diagnostics[id]]);
   if (!entries.length) return;
 
-  const root = d3.select("#diagnostic-table");
   root.append("h2").text(
     `Diagnostics: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
   const table = root.append("table");

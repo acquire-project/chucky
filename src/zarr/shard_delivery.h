@@ -50,8 +50,9 @@ struct shard_state
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet
 
-  // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
-  // bulk HtoD upload covers all shards. NULL when page == 0.
+  // Persistent host-only tail pool.  Materialization copies the committed
+  // prefix into each page-aligned pinned run before payload D2H. NULL when
+  // page == 0.
   uint8_t* tail_buf_pool;
   size_t tail_buf_pool_bytes;
 
@@ -142,6 +143,39 @@ host_batch_build_legacy(struct host_batch* host,
                         const uint32_t* per_lod_n_active,
                         uint8_t nlod,
                         void* slot_lifetime);
+
+// Worst-case pinned-host capacity for compact GPU materialization.  The
+// bound includes every real payload byte plus independently aligned space
+// for every physical-shard generation run and its possible carried tail.
+// out_run_count is the maximum number of run views/spans for the supplied
+// active-count maxima.
+int
+host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
+                            const uint32_t* per_lod_n_active,
+                            uint8_t nlod,
+                            size_t page_size,
+                            size_t* out_bytes,
+                            size_t* out_run_count);
+
+// Resolve compact absolute device offsets into physical-shard-run copies.
+// Every run receives its own page-aligned host region when page_size > 0.
+// Existing committed tails are copied into those regions before spans are
+// returned; payload copies begin immediately after the tail prefix.
+int
+host_batch_build_compact(struct host_batch* host,
+                         void* aggregate_data,
+                         size_t aggregate_capacity,
+                         const size_t* offsets,
+                         const size_t* chunk_sizes,
+                         const struct batch_aggregate_layout* batch_layout,
+                         const struct aggregate_layout* per_lod_layouts,
+                         struct shard_state* const* shards_by_lod,
+                         const uint32_t* per_lod_n_active,
+                         uint8_t nlod,
+                         struct d2h_transfer_span* spans,
+                         size_t span_capacity,
+                         size_t* out_span_count,
+                         void* slot_lifetime);
 
 void
 host_batch_destroy(struct host_batch* host);

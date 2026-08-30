@@ -158,9 +158,8 @@ handoff_slot(const struct flush_handoff* handoff)
 }
 
 // D2H aggregate offsets and data for level 0. Caller frees *out_agg_data.
-// Copies the full d_aggregated pool because the new tail-carryover layout
-// places each shard's chunks at fixed `s * shard_capacity` offsets — not
-// contiguously packed at the start as the old pad-to-page layout did.
+// The GPU aggregate is compact: offsets are absolute in one tightly packed
+// batch buffer and contain neither shard padding nor a leading host tail.
 //
 // Unified handoff: the slot holds all LODs' offsets/sizes/data in a single
 // buffer. For single-LOD tests (lv=0), seg->batch_covering_offset == 0 and
@@ -187,7 +186,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                   (CUdeviceptr)(agg->d_permuted_sizes + base),
                   n_covering * sizeof(size_t)));
 
-  size_t pool_bytes = agg_pool_bytes_layout(&handoff->per_lod_agg_layouts[0]);
+  size_t pool_bytes = handoff->layout.total_data_bytes;
   void* h_agg = malloc(pool_bytes);
   CHECK(Fail, h_agg);
   CU(Fail,
@@ -224,10 +223,9 @@ verify_tiles_none(const struct flush_handoff* handoff,
       cpu_perm(t, al->lifted_rank, al->lifted_shape, al->lifted_strides);
     size_t off = lv_offsets[pi];
     size_t sz = lv_offsets[pi + 1] - off;
-    // Last chunk per shard may include alignment padding; check >= instead.
-    if (sz < chunk_bytes) {
+    if (sz != chunk_bytes) {
       if (errors < 5)
-        log_error("  chunk %lu: size=%zu expected>=%zu",
+        log_error("  chunk %lu: size=%zu expected=%zu",
                   (unsigned long)t,
                   sz,
                   chunk_bytes);
@@ -294,16 +292,11 @@ test_compress_agg_single_epoch(void)
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
 
   {
-    // h_offsets[C] is the un-biased prefix-sum sentinel: sum of all real
-    // permuted_sizes — chunk_bytes per real chunk for CODEC_NONE.
-    // Each shard's data starts at s * shard_capacity in h_agg.
-    const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
-    uint64_t num_shards = C / al->cps_inner;
+    // h_offsets[C] is the compact prefix-sum sentinel: the sum of all real
+    // permuted sizes, with zero-sized covering entries contributing nothing.
     uint64_t N = (uint64_t)c.stage.ar.per_lod_agg_layouts[0].active_count_max *
                  c.cl.levels.level[0].chunk_count;
     CHECK(Fail, lv_offsets[C] == N * chunk_bytes);
-    for (uint64_t s = 0; s < num_shards; ++s)
-      CHECK(Fail, lv_offsets[s * al->cps_inner] == s * al->shard_capacity);
   }
   CHECK(Fail, verify_tiles_none(&handoff, &c, h_agg, fill_epoch0) == 0);
 
@@ -357,15 +350,9 @@ test_compress_agg_batch(void)
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, batch_covering) == 0);
 
   {
-    // h_offsets[batch_covering] is the un-biased prefix-sum sentinel: real
-    // chunk bytes summed across all chunks. Each shard's data starts at
-    // s * shard_capacity in h_agg.
-    uint64_t num_shards = C / al->cps_inner;
-    uint64_t tps_group = batch_covering / num_shards;
+    // The sentinel is the sum of real chunk bytes across every active epoch.
     uint64_t N = (uint64_t)batch_count * c.cl.levels.level[0].chunk_count;
     CHECK(Fail, lv_offsets[batch_covering] == N * chunk_bytes);
-    for (uint64_t s = 0; s < num_shards; ++s)
-      CHECK(Fail, lv_offsets[s * tps_group] == s * al->shard_capacity);
   }
 
   // Verify data per epoch
@@ -384,10 +371,9 @@ test_compress_agg_batch(void)
         ravel(2, shard_shape, shard_strides, perm_pos) + a * cps_inner;
       size_t off = lv_offsets[out_idx];
       size_t sz = lv_offsets[out_idx + 1] - off;
-      // Last chunk per shard may include alignment padding.
-      if (sz < chunk_bytes) {
+      if (sz != chunk_bytes) {
         if (errors < 5)
-          log_error("  epoch %u chunk %lu: size=%zu expected>=%zu",
+          log_error("  epoch %u chunk %lu: size=%zu expected=%zu",
                     a,
                     (unsigned long)j,
                     sz,
@@ -460,12 +446,8 @@ test_compress_agg_partial_batch(void)
     // filled by permute_sizes_batch_k; the rest of d_permuted_sizes stays 0
     // (from cuMemset). Sentinel h_offsets[C] therefore equals N*chunk_bytes
     // where N is the active-epoch chunk count, not K * chunks_lv.
-    const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
-    uint64_t num_shards = C / al->cps_inner;
     uint64_t N = (uint64_t)1 * c.cl.levels.level[0].chunk_count; // n_epochs=1
     CHECK(Fail, lv_offsets[C] == N * chunk_bytes);
-    for (uint64_t s = 0; s < num_shards; ++s)
-      CHECK(Fail, lv_offsets[s * al->cps_inner] == s * al->shard_capacity);
   }
   CHECK(Fail, verify_tiles_none(&handoff, &c, h_agg, fill_epoch0) == 0);
 
@@ -523,8 +505,7 @@ test_compress_agg_zstd_single_epoch(void)
     size_t off = lv_offsets[pi];
     size_t comp_sz = lv_sizes[pi];
     CHECK(Fail, comp_sz > 0);
-    // Last chunk per shard may include alignment padding.
-    CHECK(Fail, comp_sz <= handoff.max_output_size + al->page_size);
+    CHECK(Fail, comp_sz <= handoff.max_output_size);
 
     size_t result =
       ZSTD_decompress(decomp_buf, chunk_bytes, (char*)h_agg + off, comp_sz);
@@ -593,6 +574,8 @@ test_compress_agg_zstd_batch(void)
   const struct lod_segment* seg = &handoff.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
+  const size_t* lv_sizes =
+    handoff_slot(&handoff)->h_permuted_sizes + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
   uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
   uint64_t batch_covering = (uint64_t)batch_count * C;
@@ -619,11 +602,12 @@ test_compress_agg_zstd_batch(void)
       size_t off = lv_offsets[out_idx];
       size_t slot_sz = lv_offsets[out_idx + 1] - off;
       CHECK(Fail, slot_sz > 0);
+      CHECK(Fail, slot_sz == lv_sizes[out_idx]);
 
-      // Slot may include shard-boundary padding; find the actual frame size.
       size_t comp_sz =
         ZSTD_findFrameCompressedSize((char*)h_agg + off, slot_sz);
       CHECK(Fail, !ZSTD_isError(comp_sz));
+      CHECK(Fail, comp_sz == slot_sz);
       CHECK(Fail, comp_sz <= handoff.max_output_size);
 
       size_t result =

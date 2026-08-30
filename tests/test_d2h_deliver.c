@@ -156,7 +156,7 @@ test_ctx_kick_and_drain(struct test_ctx* c,
         schedule_compress_agg_kick(
           &c->ca, &in, &c->cl.levels, &c->pool, 0, c->compute, handoff) == 0);
 
-  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
+  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, c->d2h_stream) == 0);
 
   struct writer_result r = schedule_d2h_drain(&c->d2h,
                                               handoff,
@@ -234,7 +234,14 @@ test_d2h_single_epoch_none(void)
   CHECK(Fail, metric_arrived(&c.metrics.compress, 0));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail,
+        c.metrics.d2h_logical_payload_bytes == total_chunks * chunk_bytes);
+  CHECK(Fail,
+        c.metrics.d2h_payload_bytes_transferred ==
+          c.metrics.d2h_logical_payload_bytes);
+  CHECK(Fail, c.metrics.d2h_metadata_bytes_transferred == 0);
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
 
   // Tile data correctness verified by test_compress_agg
 
@@ -446,7 +453,15 @@ test_d2h_zstd_single_epoch(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail,
+        c.metrics.d2h_payload_bytes_transferred ==
+          c.metrics.d2h_logical_payload_bytes);
+  CHECK(Fail,
+        c.metrics.d2h_metadata_bytes_transferred ==
+          2 * (handoff.layout.total_batch_covering + handoff.nlod) *
+            sizeof(size_t));
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
 
   // Decompress and verify chunk data via the on-disk index.
   {
@@ -753,7 +768,11 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 4));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail,
+        c.metrics.d2h_payload_bytes_transferred ==
+          c.metrics.d2h_logical_payload_bytes);
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 4);
 
   {
     struct shard_state* ss = &c.ca.ar.shard[0];

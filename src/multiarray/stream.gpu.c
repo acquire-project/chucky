@@ -63,8 +63,7 @@ static void
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   // Whole-struct handoff; shared engine resources (sized to maxima) are
-  // untouched. The bind upload failing leaves the engine no worse than the
-  // current array's first kick failing, which the writer paths report.
+  // untouched. Tails remain in the per-array host shard state.
   (void)stream_engine_bind_array(e, &desc->st, &desc->ctx);
 }
 
@@ -308,9 +307,8 @@ close_impl(struct multiarray_writer* self)
     }
     // desc->st.agg is only refreshed by unbind_context, so a still-bound array
     // has its live shard state in the engine.
-    struct compress_agg_array* agg = (ms->active == a)
-                                       ? &ms->engine.compress_agg.ar
-                                       : &desc->st.agg;
+    struct compress_agg_array* agg =
+      (ms->active == a) ? &ms->engine.compress_agg.ar : &desc->st.agg;
     desc->close_failed = (stream_close_body(agg, &desc->ctx).error != 0);
     failed |= desc->close_failed;
     desc->closed = 1;
@@ -321,7 +319,6 @@ close_impl(struct multiarray_writer* self)
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }
-
 
 // ---- Create / Destroy ----
 

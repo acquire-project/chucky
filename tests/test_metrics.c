@@ -92,8 +92,15 @@ check_shared_stages(const struct stream_metrics* m)
   ok &= metric_any_arrived_timed(&m->aggregate);
   ok &= metric_any_arrived_timed(&m->d2h);
   ok &= metric_any_arrived_timed(&m->sink);
-  if (m->tail_gate.count <= 0) {
-    log_error("  %s: no measurement arrived", m->tail_gate.name);
+  if (m->tail_gate.count != 0 || m->tail_gate.ms != 0) {
+    log_error("  %s: legacy metric is not zero", m->tail_gate.name);
+    ok = 0;
+  }
+  if (m->d2h_logical_payload_bytes == 0 ||
+      m->d2h_payload_bytes_transferred != m->d2h_logical_payload_bytes ||
+      m->d2h_metadata_bytes_transferred == 0 ||
+      m->d2h_payload_copy_count == 0) {
+    log_error("  D2H transfer statistics are missing or inconsistent");
     ok = 0;
   }
   for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);

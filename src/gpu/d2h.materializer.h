@@ -28,6 +28,8 @@ struct device_aggregate_batch
   struct batch_aggregate_layout layout;
   uint8_t nlod;
   uint32_t per_lod_n_active[LOD_MAX_LEVELS];
+  const struct aggregate_layout* per_lod_layouts;
+  size_t fixed_chunk_bytes;
 
   struct gpu_pool* aggregate_pool;
   struct gpu_pool* host_pool;
@@ -63,6 +65,8 @@ struct d2h_ticket
   size_t span_capacity;
   struct host_batch host;
   CUevent payload_start;
+  int aggregate_acquired;
+  int aggregate_released;
   enum d2h_ticket_state state;
 };
 
@@ -74,7 +78,6 @@ struct d2h_materializer
   enum device_aggregate_extent_kind extent_kind;
   struct gpu_ordering* ord;
   CUstream payload_stream;
-  CUevent begin_event[2];
   CUevent payload_event[2];
   struct d2h_ticket ticket[2];
 };
@@ -102,3 +105,9 @@ d2h_materialize_finish(struct d2h_materializer* materializer,
                        int slot_index,
                        const struct d2h_host_placement* placement,
                        struct host_batch** out);
+
+// Release an outstanding aggregate/index lease without delivering it.  Used
+// after a sticky D2H or sink failure so later materializations cannot retain
+// slots indefinitely.
+int
+d2h_materialize_cancel(struct d2h_materializer* materializer, int slot_index);

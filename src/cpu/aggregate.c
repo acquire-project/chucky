@@ -275,9 +275,9 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     }
   }
 
-  // Leading-tail copy: stage prior batch's ragged tail at the front of each
-  // shard's region within the LOD segment (CPU equivalent of GPU's
-  // copy_leading_tail_k).
+  // Leading-tail copy: stage the prior batch's ragged tail at the front of
+  // each shard's legacy CPU aggregate region. GPU tail assembly now happens
+  // later in ordered host materialization.
   if (use_carryover) {
     for (uint8_t lv = 0; lv < nlod; ++lv) {
       const struct lod_segment* seg = &in->layout->lods[lv];

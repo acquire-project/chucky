@@ -18,9 +18,9 @@ extern "C"
                         uint64_t cps_inner,
                         size_t page_size);
 
-  // Compute the aggregated-buffer size for the GPU streaming path that uses
-  // tail carry-over (shard-capacity-sized regions per shard). Returns 0 on
-  // overflow or when num_shards is 0.
+  // Compute the legacy page-aligned aggregate size used by the CPU pipeline
+  // (shard-capacity-sized regions per shard). Returns 0 on overflow or when
+  // num_shards is 0.
   struct aggregate_layout;
   size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
 
@@ -101,8 +101,10 @@ extern "C"
 
     uint64_t batch_chunk_offset;    // start in unified gather/perm
     uint64_t batch_covering_offset; // start in unified offsets/chunk_sizes/...
-    size_t data_segment_offset;     // page-aligned byte offset in shared data
-    size_t data_segment_bytes;      // capacity reserved for this segment
+    // Static capacity range. In compact indexed output, actual bytes from
+    // adjacent LODs pack across these worst-case boundaries.
+    size_t data_segment_offset;
+    size_t data_segment_bytes;
   };
 
   // Unified per-batch aggregate layout: collects per-LOD segment info plus
@@ -116,7 +118,7 @@ extern "C"
 
     uint64_t total_batch_chunks;   // sum of n_active * chunks_per_epoch
     uint64_t total_batch_covering; // sum of n_active * covering_count
-    size_t total_data_bytes;       // sum of segment caps, each page-aligned
+    size_t total_data_bytes;       // total aggregate capacity across all LODs
   };
 
   // Populate a batch layout from the per-LOD aggregate_layouts and active
@@ -128,6 +130,25 @@ extern "C"
                                   const uint32_t* per_lod_n_active,
                                   uint8_t nlod,
                                   size_t page_size);
+
+  // GPU compact layout.  Unlike batch_aggregate_layout_init(), this never
+  // reserves shard regions, leading-tail space, or page padding: every LOD
+  // contributes only its real chunks at the codec's maximum extent.  The
+  // CPU pipeline intentionally continues to use the legacy initializer.
+  int batch_aggregate_layout_init_compact(
+    struct batch_aggregate_layout* out,
+    const struct aggregate_layout* per_lod,
+    const uint32_t* per_lod_n_active,
+    uint8_t nlod);
+
+  // Build the host shadow of the unified offset/size arrays for a fixed-size
+  // aggregate.  Covering entries without a real chunk remain zero-sized and
+  // offsets stay absolute in the compact device aggregate.
+  int aggregate_fixed_host_index(const struct batch_aggregate_layout* layout,
+                                 const struct aggregate_layout* per_lod,
+                                 size_t fixed_chunk_bytes,
+                                 size_t* offsets,
+                                 size_t* chunk_sizes);
 
   // Build unified gather + perm for a batch across all LODs.
   // per_lod and pool_epochs are ragged: pool_epochs[lv][a] for a in

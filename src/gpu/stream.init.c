@@ -77,25 +77,25 @@ engine_limits_accumulate(struct engine_limits* lim,
       per_lod_max[lv] = cl->per_level[lv].batch_active_count;
     }
     CHECK(Fail,
-          batch_aggregate_layout_init(&ml,
-                                      per_lod_layouts,
-                                      per_lod_max,
-                                      (uint8_t)cl->levels.nlod,
-                                      cl->per_level[0].agg_layout.page_size) ==
-            0);
+          batch_aggregate_layout_init_compact(
+            &ml, per_lod_layouts, per_lod_max, (uint8_t)cl->levels.nlod) == 0);
     lim->max_total_batch_chunks =
       max_u64(lim->max_total_batch_chunks, ml.total_batch_chunks);
     lim->max_total_batch_covering =
       max_u64(lim->max_total_batch_covering, ml.total_batch_covering);
-    lim->max_total_data_bytes =
-      max_sz(lim->max_total_data_bytes, ml.total_data_bytes);
-  }
-
-  {
-    uint64_t total_shards = 0;
-    for (int lv = 0; lv < cl->levels.nlod; ++lv)
-      total_shards += cl->per_level[lv].agg_layout.num_shards;
-    lim->max_total_shards = max_u64(lim->max_total_shards, total_shards);
+    lim->max_device_data_bytes =
+      max_sz(lim->max_device_data_bytes, ml.total_data_bytes);
+    size_t host_bytes = 0;
+    size_t max_runs = 0;
+    CHECK(Fail,
+          host_batch_compact_capacity(per_lod_layouts,
+                                      per_lod_max,
+                                      (uint8_t)cl->levels.nlod,
+                                      cl->per_level[0].agg_layout.page_size,
+                                      &host_bytes,
+                                      &max_runs) == 0);
+    (void)max_runs;
+    lim->max_host_data_bytes = max_sz(lim->max_host_data_bytes, host_bytes);
   }
 
   return 0;
@@ -144,7 +144,7 @@ stream_engine_init(struct stream_engine* e,
   }
 
   if (gpu_delivery_init(&e->delivery, e->cuda))
-    log_warn("delivery worker unavailable; using depth-one producer drains");
+    log_warn("delivery worker unavailable; using inline ordered drains");
 
   e->pool_bytes = lim->pool_bytes;
   gpu_pool_init(
@@ -190,7 +190,6 @@ stream_engine_init(struct stream_engine* e,
   CU(Fail, cuStreamSynchronize(e->streams.compute));
 
   e->metrics = stream_engine_init_metrics(scatter_is_copy);
-  e->d2h_deliver.metrics = &e->metrics;
   stream_engine_attach_edge_stalls(e);
   e->metadata_update_clock = (struct platform_clock){ 0 };
   platform_toc(&e->metadata_update_clock);
@@ -269,7 +268,7 @@ engine_array_state_init(struct engine_array_state* st,
   }
 
   CHECK(Fail, compress_agg_array_init(&st->agg, cl) == 0);
-  schedule_select(&st->sched, &st->agg, delivery);
+  schedule_select(&st->sched, delivery);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
   // append body detect the at-capacity case without recomputing each call.
@@ -315,22 +314,9 @@ stream_engine_bind_array(struct stream_engine* e,
   e->compress_agg.ar = st->agg;
   e->d2h_deliver.shard_alignment = ctx->shard_alignment;
 
-  // Per-array shard_capacity table is constant; upload on bind so the
-  // device-side d_shard_capacity reflects the active array's shard sizes.
-  // (h_base_offsets / h_tps_group / h_offsets_base are per-batch scratch,
-  // refreshed by the kick.)
-  if (st->agg.total_shards > 0 && st->agg.h_shard_capacity)
-    CU(Fail,
-       cuMemcpyHtoD((CUdeviceptr)e->compress_agg.shards.d_shard_capacity,
-                    st->agg.h_shard_capacity,
-                    st->agg.total_shards * sizeof(size_t)));
-
   // Invalidate the LUT cache: per-array layouts differ.
   e->compress_agg.lut_cache_valid = 0;
   return 0;
-
-Fail:
-  return 1;
 }
 
 // --- Create / Destroy ---
@@ -354,7 +340,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   }
 
   // A failed flush can leave delivery jobs queued. Run valid jobs out and
-  // cancel PREPARED jobs made unsafe by an earlier coordinator error before
+  // cancel later materializations made unsafe by the sticky error before
   // synchronizing or freeing their stage storage.
   gpu_delivery_stop_join(&s->engine.delivery);
 

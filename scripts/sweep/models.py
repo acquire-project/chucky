@@ -20,6 +20,13 @@ VALID_STATUSES = {"pass", "error", "timeout", "missing", "unknown"}
 # ---------------------------------------------------------------------------
 
 
+class D2HTransfer(BaseModel, extra="allow"):
+    logical_payload_bytes: int
+    payload_bytes_transferred: int
+    metadata_bytes_transferred: int
+    payload_copy_count: int
+
+
 class RunResult(BaseModel, extra="allow"):
     id: str
     scenario: str
@@ -59,6 +66,8 @@ class RunResult(BaseModel, extra="allow"):
     memory_host_reading_failed: bool | None = None
     memory_device_used_bytes: int | None = None
     memory_measured_bytes: int | None = None
+    # Absent in archived results; missing means unknown, not zero.
+    d2h_transfer: D2HTransfer | None = None
     s3_endpoint: str | None = None
     s3_region: str | None = None
     s3_bucket: str | None = None
@@ -92,7 +101,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 7
+CURRENT_VERSION = 8
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -158,6 +167,14 @@ def _migrate_6_to_7(data: dict) -> None:
     pass
 
 
+def _migrate_7_to_8(data: dict) -> None:
+    # GPU aggregation became compact and page-aligned tail assembly moved to
+    # ordered host materialization. D2H stage bytes now mean actual payload
+    # bytes transferred. The new d2h_transfer block is deliberately not
+    # backfilled: archived transfer totals are unknown, not zero.
+    pass
+
+
 _MIGRATIONS = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
@@ -165,6 +182,7 @@ _MIGRATIONS = {
     4: _migrate_4_to_5,
     5: _migrate_5_to_6,
     6: _migrate_6_to_7,
+    7: _migrate_7_to_8,
 }
 
 

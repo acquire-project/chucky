@@ -2,11 +2,9 @@
 //
 // Drives aggregate_batch_by_shard_async with synthetic device-side inputs,
 // then runs the shared verifier from aggregate_contract.h. Mirrors the CPU
-// contract test (test_aggregate_contract_cpu.c). The contract is:
-//
-//   page_size > 0  : per-shard regions of size shard_capacity, leading tail
-//                    at the head, chunks pack tightly afterward.
-//   page_size == 0 : single tightly-packed prefix sum starting at 0.
+// contract test (test_aggregate_contract_cpu.c). Unlike the intentionally
+// unchanged CPU producer, GPU output is always a tightly-packed prefix sum;
+// host materialization owns page alignment and tail placement.
 
 #include "aggregate_contract.h"
 
@@ -59,8 +57,6 @@ struct gpu_run
   size_t* d_comp_sizes;
   uint32_t* d_gather;
   uint32_t* d_perm;
-  size_t* d_tail_bytes;
-  CUdeviceptr d_tail_carry;
   size_t* h_offsets;
   // Outputs filled at the end of each scenario:
   struct aggregate_result result;
@@ -74,8 +70,6 @@ gpu_run_destroy(struct gpu_run* r)
   cu_mem_free((CUdeviceptr)r->d_comp_sizes);
   cu_mem_free((CUdeviceptr)r->d_gather);
   cu_mem_free((CUdeviceptr)r->d_perm);
-  cu_mem_free((CUdeviceptr)r->d_tail_bytes);
-  cu_mem_free(r->d_tail_carry);
   cu_mem_free(r->d_compressed);
   if (r->slot.h_aggregated || r->slot.d_aggregated)
     aggregate_slot_destroy(&r->slot);
@@ -87,10 +81,7 @@ gpu_run_destroy(struct gpu_run* r)
 // is left in r->result with offsets D2H'd into r->h_offsets and chunk_sizes
 // already on the host (h_permuted_sizes).
 static int
-run_gpu_aggregate(struct gpu_run* r,
-                  const struct geom* g,
-                  size_t page_size,
-                  const size_t* tail_in /* [num_shards] or NULL */)
+run_gpu_aggregate(struct gpu_run* r, const struct geom* g, size_t page_size)
 {
   memset(r, 0, sizeof(*r));
 
@@ -120,11 +111,11 @@ run_gpu_aggregate(struct gpu_run* r,
   const uint64_t C = r->layout.covering_count;
   const uint64_t N = (uint64_t)g->batch_count * M;
   const uint64_t batch_C = (uint64_t)g->batch_count * C;
-  const uint64_t num_shards = r->layout.num_shards;
   const size_t comp_pool_bytes = N * g->max_comp;
 
   CHECK(Fail,
-        aggregate_batch_slot_init(&r->slot, batch_C, comp_pool_bytes) == 0);
+        aggregate_batch_slot_init(
+          &r->slot, batch_C, comp_pool_bytes, comp_pool_bytes) == 0);
 
   // Synthetic compressed pool: chunk i has size (10 + i%7), filled with
   // value (i+1)&0xff. Same shape as the CPU test.
@@ -169,24 +160,6 @@ run_gpu_aggregate(struct gpu_run* r,
   free(h_gather);
   free(h_perm);
 
-  // Tail-carry state. Allocated even when page_size==0 (passed as harmless
-  // nulls below) — but to stay defensive we condition on page_size>0.
-  if (page_size > 0 && num_shards > 0) {
-    CU(Fail,
-       cuMemAlloc((CUdeviceptr*)&r->d_tail_bytes, num_shards * sizeof(size_t)));
-    CU(Fail, cuMemAlloc(&r->d_tail_carry, num_shards * page_size));
-    CU(
-      Fail,
-      cuMemsetD8((CUdeviceptr)r->d_tail_bytes, 0, num_shards * sizeof(size_t)));
-    CU(Fail, cuMemsetD8(r->d_tail_carry, 0, num_shards * page_size));
-    if (tail_in) {
-      CU(Fail,
-         cuMemcpyHtoD(
-           (CUdeviceptr)r->d_tail_bytes, tail_in, num_shards * sizeof(size_t)));
-      // d_tail_carry contents don't affect the offsets contract; leave zero.
-    }
-  }
-
   free(h_sizes);
   h_sizes = NULL;
 
@@ -199,10 +172,7 @@ run_gpu_aggregate(struct gpu_run* r,
                                        N,
                                        batch_C,
                                        g->max_comp,
-                                       &r->layout,
                                        &r->slot,
-                                       r->d_tail_bytes,
-                                       r->d_tail_carry,
                                        r->stream) == 0);
 
   CU(Fail, cuStreamSynchronize(r->stream));
@@ -238,36 +208,15 @@ Fail:
 }
 
 static int
-test_carryover_no_tail(void)
+test_compact_page_aligned_layout(void)
 {
-  log_info("=== test_carryover_no_tail ===");
+  log_info("=== test_compact_page_aligned_layout ===");
   struct geom g = make_geom();
   struct gpu_run r;
-  CHECK(Fail, run_gpu_aggregate(&r, &g, 4096, NULL) == 0);
+  CHECK(Fail, run_gpu_aggregate(&r, &g, 4096) == 0);
   CHECK(Fail,
-        verify_aggregate_result_carryover(
-          &r.result, &r.layout, NULL, g.batch_count) == 0);
-  gpu_run_destroy(&r);
-  log_info("  PASS");
-  return 0;
-Fail:
-  gpu_run_destroy(&r);
-  log_error("  FAIL");
-  return 1;
-}
-
-static int
-test_carryover_with_tail(void)
-{
-  log_info("=== test_carryover_with_tail ===");
-  struct geom g = make_geom();
-  // Match the CPU test's tail values for cross-side parity.
-  const size_t tail_in[2] = { 17, 113 };
-  struct gpu_run r;
-  CHECK(Fail, run_gpu_aggregate(&r, &g, 4096, tail_in) == 0);
-  CHECK(Fail,
-        verify_aggregate_result_carryover(
-          &r.result, &r.layout, tail_in, g.batch_count) == 0);
+        verify_aggregate_result_compact(&r.result, &r.layout, g.batch_count) ==
+          0);
   gpu_run_destroy(&r);
   log_info("  PASS");
   return 0;
@@ -283,7 +232,7 @@ test_contiguous(void)
   log_info("=== test_contiguous ===");
   struct geom g = make_geom();
   struct gpu_run r;
-  CHECK(Fail, run_gpu_aggregate(&r, &g, 0, NULL) == 0);
+  CHECK(Fail, run_gpu_aggregate(&r, &g, 0) == 0);
   CHECK(Fail,
         verify_aggregate_result_contiguous(
           &r.result, &r.layout, g.batch_count) == 0);
@@ -311,8 +260,7 @@ main(int ac, char* av[])
     return 1;
 
   int rc = 0;
-  rc |= test_carryover_no_tail();
-  rc |= test_carryover_with_tail();
+  rc |= test_compact_page_aligned_layout();
   rc |= test_contiguous();
 
   cuCtxDestroy(ctx);
