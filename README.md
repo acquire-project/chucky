@@ -59,12 +59,13 @@ The default build targets SM 100 (Blackwell). For other GPUs, set
 
 ### Build
 
-The build auto-detects CUDA. If a CUDA compiler is found, GPU backends are
-enabled automatically. To force a CPU-only build, use the `cpu-only` preset or
-pass `-DCHUCKY_ENABLE_GPU=OFF`.
+The default preset enables the GPU backend. To force a CPU-only build, use the
+`cpu-only` preset or pass `-DCHUCKY_ENABLE_GPU=OFF`. When
+`CHUCKY_ENABLE_GPU` is not set explicitly, the CMake option still auto-detects
+CUDA.
 
 ```
-# Full build (auto-detects CUDA)
+# Full build (GPU + CPU)
 cmake --preset default
 cmake --build build
 

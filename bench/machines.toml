@@ -67,6 +67,8 @@ storage = "shared /mnt/main0"
 [[machine]]
 name = "auk"
 names = ["auk"]
+[machine.specs]
+storage = "2 TB Lexar NM790 NVMe SSD; measured 4.3 GB/s sequential direct write (64 GiB)"
 
 [[machine]]
 name = "oreb"

@@ -23,6 +23,29 @@
         "type": "github"
       }
     },
+    "codex-cli": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787798436,
+        "narHash": "sha256-sgQx7yUo2I1c4McylOW1vRklIxDL3Kwzq35ilr7firc=",
+        "owner": "sadjow",
+        "repo": "codex-cli-nix",
+        "rev": "18eb1cac4e17c8cbc40f3a2a83940d8f38ddace5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sadjow",
+        "repo": "codex-cli-nix",
+        "type": "github"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -119,6 +142,7 @@
     "root": {
       "inputs": {
         "claude-code": "claude-code",
+        "codex-cli": "codex-cli",
         "flake-utils": "flake-utils",
         "git-hooks": "git-hooks",
         "nixpkgs": "nixpkgs"

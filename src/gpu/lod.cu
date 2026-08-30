@@ -975,22 +975,12 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
   CUdeviceptr d_cub_temp = 0, d_params = 0;
   int ret = 1;
 
-  CUresult r;
-  r = cuMemAlloc(&d_params, sizeof(csr_level_params));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
-  r = cuMemcpyHtoD(d_params, p, sizeof(csr_level_params));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
-  r = cuMemAlloc(&d_map, 2 * src_total * sizeof(uint64_t));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
-  r = cuMemAlloc(&d_counts, dst_total * sizeof(uint64_t));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
-  r = cuMemsetD8Async(d_counts, 0, dst_total * sizeof(uint64_t), stream);
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
+  CU(cleanup, cuMemAlloc(&d_params, sizeof(csr_level_params)));
+  CU(cleanup, cuMemcpyHtoD(d_params, p, sizeof(csr_level_params)));
+  CU(cleanup, cuMemAlloc(&d_map, 2 * src_total * sizeof(uint64_t)));
+  CU(cleanup, cuMemAlloc(&d_counts, dst_total * sizeof(uint64_t)));
+  CU(cleanup,
+     cuMemsetD8Async(d_counts, 0, dst_total * sizeof(uint64_t), stream));
 
   // Step 1+2: Map + histogram.
   CUDA_LAUNCH_OR(cleanup,
@@ -1011,9 +1001,7 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
                                                (int)dst_total,
                                                stream));
     if (cub_temp_bytes > 0) {
-      r = cuMemAlloc(&d_cub_temp, cub_temp_bytes);
-      if (r != CUDA_SUCCESS)
-        goto cleanup;
+      CU(cleanup, cuMemAlloc(&d_cub_temp, cub_temp_bytes));
     }
     CUDA_CALL_OR(cleanup,
                  cub::DeviceScan::ExclusiveSum((void*)d_cub_temp,
@@ -1027,19 +1015,15 @@ lod_build_csr_gpu_launch(CUdeviceptr d_starts,
   // Sentinel: starts[dst_total] = src_total.  Writes a non-overlapping
   // element past the prefix-sum output, so no sync needed before this.
   // Synchronous copy — 8 bytes, safe from stack, negligible at init time.
-  r = cuMemcpyHtoD(
-    d_starts + dst_total * sizeof(uint64_t), &src_total, sizeof(uint64_t));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
+  CU(cleanup,
+     cuMemcpyHtoD(
+       d_starts + dst_total * sizeof(uint64_t), &src_total, sizeof(uint64_t)));
 
   // Step 4: Scatter into indices.
-  r = cuMemAlloc(&d_write_pos, dst_total * sizeof(uint64_t));
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
-  r = cuMemcpyDtoDAsync(
-    d_write_pos, d_starts, dst_total * sizeof(uint64_t), stream);
-  if (r != CUDA_SUCCESS)
-    goto cleanup;
+  CU(cleanup, cuMemAlloc(&d_write_pos, dst_total * sizeof(uint64_t)));
+  CU(cleanup,
+     cuMemcpyDtoDAsync(
+       d_write_pos, d_starts, dst_total * sizeof(uint64_t), stream));
 
   CUDA_LAUNCH_OR(
     cleanup,
