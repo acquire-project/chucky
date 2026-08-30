@@ -28,7 +28,7 @@ struct bench_config
   const char* s3_prefix;     // key prefix (no leading/trailing /)
   const char* s3_region;     // e.g. "us-east-1"
   const char* s3_endpoint;   // e.g. "https://s3.us-east-1.amazonaws.com"
-  double s3_throughput_gbps; // gigabits/s, 0 = CRT default (10.0)
+  double s3_throughput_gbps; // gigabits/s, 0 = CRT default (100.0)
   struct codec_config codec;
   enum lod_reduce_method reduce_method;
   enum lod_reduce_method append_reduce_method;
@@ -43,20 +43,20 @@ struct bench_config
   size_t memory_budget;        // 0 = auto-detect
   size_t min_shard_bytes;      // minimum uncompressed bytes per shard
   uint32_t
-    target_concurrent_shards; // cap on inner shard product (active files)
-  uint32_t min_append_shards; // require at least N shards along the outer
-                              // append dim (0 = no minimum). Forces
-                              // shard-switching in benchmarks that would
-                              // otherwise collapse to a single shard.
-  size_t append_elements;     // elements per append; 0 = default block. Set to
-                              // one frame to measure per-frame latency.
-  int json_output;            // print JSON to stdout after run
-  uint64_t io_bw_mbps;        // 0 = no bandwidth cap (MiB/s)
-  uint64_t io_latency_us;     // 0 = no fixed per-job latency
+    target_concurrent_shards;  // cap on inner shard product (active files)
+  uint32_t min_append_shards;  // require at least N shards along the outer
+                               // append dim (0 = no minimum). Forces
+                               // shard-switching in benchmarks that would
+                               // otherwise collapse to a single shard.
+  size_t append_elements;      // elements per append; 0 = default block. Set to
+                               // one frame to measure per-frame latency.
+  int json_output;             // print JSON to stdout after run
+  uint64_t io_bw_mbps;         // 0 = no bandwidth cap (MiB/s)
+  uint64_t io_latency_us;      // 0 = no fixed per-job latency
   uint64_t backpressure_bytes; // 0 = disabled; >0 = stall when pending > N
-  int max_threads;            // 0 = OpenMP default (omp_get_max_threads)
-  struct io_scheduling io;    // filesystem sink write scheduling
-  const char* io_backend;     // which write backend; NULL = the default
+  int max_threads;             // 0 = OpenMP default (omp_get_max_threads)
+  struct io_scheduling io;     // filesystem sink write scheduling
+  const char* io_backend;      // which write backend; NULL = the default
 };
 
 int

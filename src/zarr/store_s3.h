@@ -28,7 +28,7 @@ struct store*
 store_s3_create(const struct store_s3_config* cfg);
 
 // Fill zero fields with S3 transport defaults (part_size=8MiB,
-// throughput=10Gbps).
+// throughput=100Gbps).
 void
 store_s3_config_set_defaults(struct store_s3_config* cfg);
 

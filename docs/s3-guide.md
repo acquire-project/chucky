@@ -28,7 +28,7 @@ The S3 transport is configured via `store_s3_config`, defined in
 | `region` | *required* | AWS region (e.g. `"us-east-1"`) |
 | `endpoint` | *required* | S3-compatible endpoint URL (e.g. `"https://s3.us-east-1.amazonaws.com"` or `"http://localhost:9000"`) |
 | `part_size` | 8 MiB | [Multipart upload][mpu] part size (see [Limitations](#limitations)) |
-| `throughput_gbps` | 10.0 | Target throughput in gigabits/s for the CRT |
+| `throughput_gbps` | 100.0 | Target throughput in gigabits/s for the CRT |
 | `max_retries` | 10 | Retry count per part |
 | `backoff_scale_ms` | 500 | Exponential backoff scale in ms |
 | `max_backoff_secs` | 20 | Maximum backoff delay in seconds |
