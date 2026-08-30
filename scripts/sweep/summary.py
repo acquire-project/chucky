@@ -20,8 +20,10 @@ from models import retired_metrics
 # for every allocation.
 FILENAME_RE = re.compile(r"^(?P<machine>.+)-(?P<commit>[0-9a-f]{7,40})-(?P<date>\d{8})$")
 
-# Bumped to 2 when report.py started packing the runs into columns.
-OVERVIEW_VERSION = 2
+# Bumped to 2 when report.py started packing the runs into columns, to 3 when
+# canonical diagnostics were added, and to 4 when they changed from raw time
+# to percent of wall time in the trimmed overview payload.
+OVERVIEW_VERSION = 4
 
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
@@ -36,9 +38,13 @@ RUN_METRICS = (
 )
 
 STALL_METRICS = (
-    "max_append_ms", "peak_pending_mib", "backpressure_ms",
-    "flush_stall_ms", "io_fence_ms",
-    "footer_buffer_ms", "append_extent_ms", "flush_writes_ms",
+    "max_append_ms", "peak_pending_mib",
+)
+
+DIAGNOSTIC_METRICS = (
+    "batch_drain", "d2h_dispatch", "output_slot_io", "footer_buffer_io",
+    "append_extent_io", "final_io", "sink_backpressure", "prior_tail_state",
+    "staging_reuse", "chunk_metadata_d2h", "payload_d2h",
 )
 
 # The build keys a page shows. Both files this module feeds are fetched on
@@ -157,6 +163,18 @@ def trim_run(run: dict) -> dict:
                 if isinstance(stalls.get(k), (int, float))}
         if kept:
             out["stalls"] = kept
+    diagnostics = run.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        kept = {}
+        for key in DIAGNOSTIC_METRICS:
+            item = diagnostics.get(key)
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("wall_pct"), (int, float))
+            ):
+                kept[key] = {"wall_pct": item["wall_pct"]}
+        if kept:
+            out["diagnostics"] = kept
     return out
 
 

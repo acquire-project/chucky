@@ -38,17 +38,21 @@ stream_engine_init_metrics(int enable_multiscale)
     .aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS),
     .d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H),
     .sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN),
-    .flush_stall = mk_stream_metric("FlushStall", METRIC_OWNER_PRODUCER),
-    .drain_dispatch = mk_stream_metric("DrainDisp", METRIC_OWNER_DRAIN),
-    .io_fence_stall = mk_stream_metric("IOFence", METRIC_OWNER_PRODUCER),
+    .flush_stall = mk_stream_metric("Batch drain", METRIC_OWNER_PRODUCER),
+    .drain_dispatch = mk_stream_metric("D2H dispatch", METRIC_OWNER_DRAIN),
+    .io_fence_stall =
+      mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER),
     // These three are named so the report can list them, and only the CPU
     // path populates them.
-    .footer_buffer_stall = mk_stream_metric("FooterBuf", METRIC_OWNER_PRODUCER),
-    .append_extent_stall = mk_stream_metric("AppendExt", METRIC_OWNER_PRODUCER),
+    .footer_buffer_stall =
+      mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER),
+    .append_extent_stall =
+      mk_stream_metric("Closed-shard writes", METRIC_OWNER_PRODUCER),
     .flush_writes_stall =
-      mk_stream_metric("FlushWrites", METRIC_OWNER_PRODUCER),
-    .backpressure = mk_stream_metric("Backpres", METRIC_OWNER_PRODUCER),
-    .tail_gate = mk_stream_metric("TailGate", METRIC_OWNER_COMPRESS),
+      mk_stream_metric("Final queued writes", METRIC_OWNER_PRODUCER),
+    .backpressure =
+      mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER),
+    .tail_gate = mk_stream_metric("Prior tail state", METRIC_OWNER_COMPRESS),
   };
 }
 
@@ -56,9 +60,11 @@ void
 stream_engine_attach_edge_stalls(struct stream_engine* e)
 {
   e->metrics.edge_stall[0] =
-    mk_stream_metric("StagingFree", METRIC_OWNER_PRODUCER);
-  e->metrics.edge_stall[1] = mk_stream_metric("ChunkIndex", METRIC_OWNER_DRAIN);
-  e->metrics.edge_stall[2] = mk_stream_metric("D2HDone", METRIC_OWNER_DRAIN);
+    mk_stream_metric("Staging-buffer reuse", METRIC_OWNER_PRODUCER);
+  e->metrics.edge_stall[1] =
+    mk_stream_metric("Chunk offsets/sizes D2H", METRIC_OWNER_DRAIN);
+  e->metrics.edge_stall[2] =
+    mk_stream_metric("Payload D2H", METRIC_OWNER_DRAIN);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_STAGING_FREE, &e->metrics.edge_stall[0]);
   gpu_ordering_attach_stall_metric(

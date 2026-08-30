@@ -28,6 +28,13 @@ metric_arrived(const struct stream_metric* m, int expected_count)
       "  %s: a measurement ran backwards, %g ms", m->name, (double)m->best_ms);
     return 0;
   }
+  if (m->count > 0 && m->max_ms < m->best_ms) {
+    log_error("  %s: slowest measurement %g ms is below fastest %g ms",
+              m->name,
+              (double)m->max_ms,
+              (double)m->best_ms);
+    return 0;
+  }
   return 1;
 }
 

@@ -211,11 +211,12 @@ to work with. A configured ceiling is not evidence the run got near it:
 | `io_run_ms_mean` / `io_run_ms_max` | the time taken by a write once started |
 | `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
 
-Under `stalls`, each of the producer's waits on io is reported on its own by
-the CPU path, as a total and a count. `footer_buffer` and `flush_writes` break
-down the `sink` stage total; `io_fence` and `append_extent` fall outside every
-stage. `io_fence` is measured by the GPU path too; the other three are left at
-count zero there, meaning not measured rather than no wait:
+The legacy `stalls` block is retained for existing consumers. Each of the
+producer's waits on io is reported there as a total and count. `footer_buffer`
+and `flush_writes` break down the `sink` stage total; `io_fence` and
+`append_extent` fall outside every stage. `io_fence` is measured by the GPU
+path too; the other three are left at count zero there, meaning not measured
+rather than no wait:
 
 | field | holds |
 |---|---|
@@ -224,9 +225,41 @@ count zero there, meaning not measured rather than no wait:
 | `append_extent_ms` / `append_extent_count` | the wait on shards closed since the append extent was last published |
 | `flush_writes_ms` / `flush_writes_count` | the wait on every queued write, at flush |
 
-The keys kept by the overview page are listed in `summary.py`, so a new counter
-is dropped from that page unless it is named there. Everything not explicitly
-dropped is taken by the explorer, so no change is needed there.
+New code should read `diagnostics`, whose keys are stable metric IDs rather than
+display labels. Each measured entry has `label`, `kind`, `owner`, `total_ms`,
+and `samples`; current binaries also report `avg_ms`, `min_ms`, `max_ms`, and
+`wall_pct` when available. `samples` counts recorded intervals. Host-poll
+entries add `wait_calls` and record a sample only when a call actually blocked;
+`wait_calls` counts every call, so zero samples with nonzero wait calls means
+the dependency was always ready. Missing means not measured. `owner` names the
+timeline; totals from different owners can overlap and must not be added
+together.
+
+The reports label `wait_calls` as **waits** and present cumulative diagnostics
+as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
+
+| diagnostic ID | interval |
+|---|---|
+| `batch_drain` | producer blocked inside batch drain; this can include inline drain work |
+| `d2h_dispatch` | drain-thread CPU work between its metadata and payload waits |
+| `output_slot_io` | host waiting for writes that still hold an output slot |
+| `footer_buffer_io` | host waiting for a shard's previous footer-buffer write |
+| `append_extent_io` | host waiting for writes to shards closed since the last published extent |
+| `final_io` | host waiting for all queued writes at flush |
+| `sink_backpressure` | producer waiting for the sink queue to fall below its limit |
+| `prior_tail_state` | compression-to-aggregation gap waiting for the preceding tail state |
+| `staging_reuse` | producer waiting to refill a staging buffer still used by H2D |
+| `chunk_metadata_d2h` | drain host waiting for chunk offsets and compressed sizes to arrive by D2H; not chunk-index kernel time |
+| `payload_d2h` | drain host waiting for the aggregated payload to arrive by D2H |
+
+`report.py` backfills this shape in memory from legacy `stalls`, so archived
+results remain usable without rewriting them. Historical files cannot recover
+`wait_calls`, `min_ms`, or `max_ms`, and the explorer shows those cells as
+unknown.
+Values retired because their meaning changed are not backfilled under a current
+diagnostic ID.
+The overview keys are listed in `summary.py`; the explorer receives all
+diagnostics and displays them below the selected run's stage chart.
 
 Measurement is from the first queued job of any kind until the run is flushed.
 Covered: streaming and every shard's closing footer, truncate and close, but
@@ -261,6 +294,9 @@ carry the block.
 the overview leaves those out of comparisons instead of converting them. Bump
 `CURRENT_VERSION` when a metric is renamed, removed, or changes meaning. Adding
 one does not need a bump.
+
+The canonical `diagnostics` block was added without changing an existing
+metric, so it is additive and did not bump the stored sweep version.
 
 A stored sweep records only its version number, so add a line here when you
 bump it.
