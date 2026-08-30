@@ -141,6 +141,10 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 
 # GPU multi-array stream test
 add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
+# A cross-array ordering cycle would otherwise strand the GPU test runner.
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_multiarray_gpu PROPERTIES TIMEOUT 60)
+endif()
 
 # CPU stream with n_append > 1 (no CUDA)
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
