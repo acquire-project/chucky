@@ -40,7 +40,6 @@ Fail:
 }
 
 // Compute LOD strides, upload to GPU, and build gather LUT.
-// Owns d_lod_strides — freed in both success and failure paths.
 static int
 build_gather_lut_with_strides(struct lod_state* lod,
                               const struct lod_plan* p,
@@ -170,8 +169,15 @@ init_csr_reduce_luts(struct lod_state* lod)
     const struct level_dims* src_ld = &lod->plan.levels.level[l];
     const struct level_dims* dst_ld = &lod->plan.levels.level[l + 1];
 
-    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    CHECK_MUL_OVERFLOW(
+      Fail, src_ld->fixed_dims_count, src_ld->lod_nelem, UINT64_MAX);
     uint64_t src_total = src_ld->fixed_dims_count * src_ld->lod_nelem;
+    CHECK(Fail, src_total > 0);
+
+    CHECK_MUL_OVERFLOW(
+      Fail, dst_ld->fixed_dims_count, dst_ld->lod_nelem, UINT64_MAX);
+    uint64_t dst_total = dst_ld->fixed_dims_count * dst_ld->lod_nelem;
+    CHECK(Fail, dst_total > 0);
 
     CHECK(Fail, reduce_csr_gpu_alloc(&lod->csrs[l], src_total, dst_total) == 0);
     CHECK(Fail, reduce_csr_gpu_build(&lod->csrs[l], src_ld, dst_ld, 0) == 0);

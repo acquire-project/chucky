@@ -7,6 +7,9 @@
     claude-code.url = "github:sadjow/claude-code-nix";
     claude-code.inputs.nixpkgs.follows = "nixpkgs";
     claude-code.inputs.flake-utils.follows = "flake-utils";
+    codex-cli.url = "github:sadjow/codex-cli-nix";
+    codex-cli.inputs.nixpkgs.follows = "nixpkgs";
+    codex-cli.inputs.flake-utils.follows = "flake-utils";
     git-hooks.url = "github:cachix/git-hooks.nix";
     git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -17,6 +20,7 @@
       nixpkgs,
       flake-utils,
       claude-code,
+      codex-cli,
       git-hooks,
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -57,6 +61,8 @@
           c-blosc
           lz4Static
           zstdStatic
+          zlib
+          snappy
           # s3 writer
           aws-c-common
           aws-c-cal
@@ -161,6 +167,7 @@
             commonNativeBuildInputs
             ++ (with pkgs; [
               claude-code.packages.${system}.default
+              codex-cli.packages.${system}.default
               docker
               gdb
               gh

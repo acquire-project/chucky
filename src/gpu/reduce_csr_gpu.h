@@ -23,7 +23,7 @@ extern "C"
   };
 
   // Allocate device memory for starts/indices sized by src_total/dst_total.
-  // If either is zero, allocates nothing and returns success; build is a no-op.
+  // Both totals must be non-zero.
   // On failure leaves *csr in a state safe to pass to reduce_csr_gpu_free.
   // Returns 0 on success, non-zero on failure.
   int reduce_csr_gpu_alloc(struct reduce_csr_gpu* csr,

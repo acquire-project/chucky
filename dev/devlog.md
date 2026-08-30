@@ -45,9 +45,19 @@ Cleanup
 - [x] medfmt and smallepoch scenarios need some analysis/optimization
 - [ ] move bench sweep data to it's own repo
 
+## 2026-08-30
+
+Hello again devlog, it's been some time.
+
+The past few months have seen me making performance worse :/ Trying to take
+notes here to organize my thoughts around what's going wrong.
+
+- With compression, there's a problem transmitting bytes back to the host.
+- When IO has latency spikes, write performance degrades.
+
 ## 2026-04-01
 
-Noticed ls4 isn't supported by the zarr v3 spec! So so silly. Will warn here
+Noticed lz4 isn't supported by the zarr v3 spec! So so silly. Will warn here
 and rip out the thing I just did for acquire-zarr.
 
 ## 2026-03-31
