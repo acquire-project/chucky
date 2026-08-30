@@ -58,9 +58,9 @@ orch_ctx_destroy(struct orch_ctx* c)
   computed_stream_layouts_free(&c->cl);
 }
 
-// Set up all components for the flush orchestration test.
-// shard_alignment 0 models a sink with no alignment requirement, which
-// selects the pipelined depth-two schedule even with no delivery worker.
+// Set up all components for the flush orchestration test. shard_alignment 0
+// models a sink with no alignment requirement; both aligned and unaligned
+// single-stream fixtures retain the depth-two compact-aggregate schedule.
 static int
 orch_ctx_setup_aligned(struct orch_ctx* c,
                        struct tile_stream_configuration* config,
@@ -445,15 +445,17 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Before batch 2 is kicked on fc=1, the worker-unavailable fallback drains
-  // batch 1 on the producer. Batch 2 remains pending until the final drain.
+  // Page alignment no longer reduces schedule depth. With the worker absent,
+  // both compact aggregates remain outstanding until the producer performs
+  // the ordered materialization drain.
   CHECK(Fail, c.s->engine.sched.fill == 0);           // swapped back to pool 0
-  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0); // batch 1 drained
+  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
-  CHECK(Fail, c.s->engine.metrics.sink.count == 1);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 0);
 
-  // Drain the remaining pending batch.
+  // Drain both batches oldest-first; committed tail state from batch 1 places
+  // batch 2's payload before either aggregate slot is reused.
   struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
