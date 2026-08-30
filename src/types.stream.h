@@ -32,11 +32,15 @@ struct stream_metric
   enum metric_owner owner;
   float ms;                 // cumulative
   float best_ms;            // fastest measurement; 1e30f = none yet
+  float max_ms;             // slowest measurement
   double best_input_bytes;  // bytes at the fastest measurement, for its rate
   double best_output_bytes; // likewise
   double input_bytes;       // cumulative, read by the stage
   double output_bytes;      // cumulative, written by the stage
   int count;                // measurements taken, not work items
+  // Calls that could have blocked. Used by host-poll metrics so count 0 can be
+  // distinguished from a metric that was never checked.
+  uint64_t wait_calls;
 };
 
 struct stream_metrics

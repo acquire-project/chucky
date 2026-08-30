@@ -4,6 +4,85 @@
 #include "util/metric.h"
 #include "zarr/json_writer.h"
 
+enum diagnostic_section
+{
+  DIAGNOSTIC_HOST_BLOCK,
+  DIAGNOSTIC_PIPELINE_GAP,
+  DIAGNOSTIC_HOST_OVERHEAD,
+};
+
+struct diagnostic_entry
+{
+  const char* id;    // stable machine-readable identity
+  const char* label; // condition or work visible to a person
+  const char* kind;  // distinguishes waits from gaps and host work
+  enum diagnostic_section section;
+  const struct stream_metric* metric;
+};
+
+#define DIAGNOSTIC_COUNT 11
+
+static void
+diagnostic_entries(const struct stream_metrics* m,
+                   struct diagnostic_entry out[DIAGNOSTIC_COUNT])
+{
+  out[0] = (struct diagnostic_entry){ "batch_drain",
+                                      "Batch drain (wait/work)",
+                                      "host_block",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->flush_stall };
+  out[1] = (struct diagnostic_entry){ "d2h_dispatch",
+                                      "D2H dispatch work",
+                                      "host_overhead",
+                                      DIAGNOSTIC_HOST_OVERHEAD,
+                                      &m->drain_dispatch };
+  out[2] = (struct diagnostic_entry){ "output_slot_io",
+                                      "Output-slot writes",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->io_fence_stall };
+  out[3] = (struct diagnostic_entry){ "footer_buffer_io",
+                                      "Footer-buffer write",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->footer_buffer_stall };
+  out[4] = (struct diagnostic_entry){ "append_extent_io",
+                                      "Closed-shard writes",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->append_extent_stall };
+  out[5] = (struct diagnostic_entry){ "final_io",
+                                      "Final queued writes",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->flush_writes_stall };
+  out[6] = (struct diagnostic_entry){ "sink_backpressure",
+                                      "Sink queue below limit",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->backpressure };
+  out[7] = (struct diagnostic_entry){ "prior_tail_state",
+                                      "Prior tail state",
+                                      "pipeline_gap",
+                                      DIAGNOSTIC_PIPELINE_GAP,
+                                      &m->tail_gate };
+  out[8] = (struct diagnostic_entry){ "staging_reuse",
+                                      "Staging-buffer reuse",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->edge_stall[0] };
+  out[9] = (struct diagnostic_entry){ "chunk_metadata_d2h",
+                                      "Chunk offsets/sizes D2H",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->edge_stall[1] };
+  out[10] = (struct diagnostic_entry){ "payload_d2h",
+                                       "Payload D2H",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->edge_stall[2] };
+}
+
 // --- Throughput helpers ---
 
 double
@@ -81,6 +160,118 @@ print_metric_row(const struct stream_metric* m)
   } else {
     print_report(
       "  %-12s %8.2f %8s %10.2f %10s", m->name, avg_gbs, "-", avg_ms, "-");
+  }
+}
+
+static int
+diagnostic_measured(const struct stream_metric* m)
+{
+  return m->count > 0 || m->wait_calls > 0;
+}
+
+static void
+print_diagnostic_row(const struct diagnostic_entry* d, float wall_s)
+{
+  const struct stream_metric* m = d->metric;
+  const double wall_pct = wall_s > 0 ? (double)m->ms / (wall_s * 10.0) : 0.0;
+  char wait_calls[24];
+  if (m->wait_calls > 0)
+    snprintf(wait_calls,
+             sizeof(wait_calls),
+             "%llu",
+             (unsigned long long)m->wait_calls);
+  else
+    snprintf(wait_calls, sizeof(wait_calls), "-");
+
+  if (m->count > 0) {
+    print_report("  %-10s %-25s %8d %10s %9.3f %9.3f %7.2f",
+                 metric_owner_name(m->owner),
+                 d->label,
+                 m->count,
+                 wait_calls,
+                 (double)m->ms / m->count,
+                 (double)m->max_ms,
+                 wall_pct);
+  } else {
+    print_report("  %-10s %-25s %8d %10s %9s %9s %7.2f",
+                 metric_owner_name(m->owner),
+                 d->label,
+                 0,
+                 wait_calls,
+                 "-",
+                 "-",
+                 wall_pct);
+  }
+}
+
+static void
+print_diagnostic_section(const struct diagnostic_entry entries[],
+                         enum diagnostic_section section,
+                         const char* title,
+                         const char* interval_label,
+                         float wall_s)
+{
+  int have_section = 0;
+  for (size_t i = 0; i < DIAGNOSTIC_COUNT; ++i)
+    if (entries[i].section == section && diagnostic_measured(entries[i].metric))
+      have_section = 1;
+  if (!have_section)
+    return;
+
+  fputc('\n', stderr);
+  print_report("  --- %s ---", title);
+  print_report("  %-10s %-25s %8s %10s %9s %9s %7s",
+               "Timeline",
+               interval_label,
+               "samples",
+               "waits",
+               "avg ms",
+               "max ms",
+               "% wall");
+  for (size_t i = 0; i < DIAGNOSTIC_COUNT; ++i)
+    if (entries[i].section == section && diagnostic_measured(entries[i].metric))
+      print_diagnostic_row(&entries[i], wall_s);
+}
+
+void
+print_diagnostics_report(const struct stream_metrics* m, float wall_s)
+{
+  struct diagnostic_entry entries[DIAGNOSTIC_COUNT];
+  diagnostic_entries(m, entries);
+  print_diagnostic_section(entries,
+                           DIAGNOSTIC_HOST_BLOCK,
+                           "Host blocking",
+                           "Reason / awaited condition",
+                           wall_s);
+  print_diagnostic_section(entries,
+                           DIAGNOSTIC_PIPELINE_GAP,
+                           "Pipeline gaps",
+                           "Awaited condition",
+                           wall_s);
+  print_diagnostic_section(entries,
+                           DIAGNOSTIC_HOST_OVERHEAD,
+                           "Host overhead",
+                           "Measured work",
+                           wall_s);
+
+  if (m->scatter_samples_lost || m->lod_samples_lost) {
+    fputc('\n', stderr);
+    print_report("  TIMING SAMPLES LOST: scatter=%llu lod=%llu "
+                 "(stage totals under-report)",
+                 (unsigned long long)m->scatter_samples_lost,
+                 (unsigned long long)m->lod_samples_lost);
+  }
+  if (m->append_count > 0 || m->max_append_ms > 0) {
+    fputc('\n', stderr);
+    print_report("  --- Append latency ---");
+    print_append_latency(m);
+  }
+  if (m->peak_pending_bytes > 0) {
+    fputc('\n', stderr);
+    print_report("  --- Queue pressure ---");
+    char pbuf[32];
+    format_bytes(pbuf, sizeof(pbuf), m->peak_pending_bytes);
+    print_report("  peak pending:    %s", pbuf);
   }
 }
 
@@ -223,46 +414,7 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->d2h);
   print_metric_row(&metrics->sink);
 
-  // Stall stats — wall-clock time the host is blocked waiting. Emitted only
-  // if any stall was observed.
-  const size_t n_edge_stalls =
-    sizeof(metrics->edge_stall) / sizeof(metrics->edge_stall[0]);
-  int have_edge_stalls = 0;
-  for (size_t i = 0; i < n_edge_stalls; ++i)
-    if (metrics->edge_stall[i].count > 0)
-      have_edge_stalls = 1;
-  int have_stalls =
-    metrics->flush_stall.count > 0 || metrics->drain_dispatch.count > 0 ||
-    metrics->io_fence_stall.count > 0 ||
-    metrics->footer_buffer_stall.count > 0 ||
-    metrics->append_extent_stall.count > 0 ||
-    metrics->flush_writes_stall.count > 0 || metrics->backpressure.count > 0 ||
-    metrics->max_append_ms > 0 || metrics->peak_pending_bytes > 0 ||
-    metrics->tail_gate.count > 0 || metrics->scatter_samples_lost > 0 ||
-    metrics->lod_samples_lost > 0 || have_edge_stalls;
-  if (have_stalls) {
-    fputc('\n', stderr);
-    print_report("  --- Stall stats ---");
-    print_metric_row(&metrics->flush_stall);
-    print_metric_row(&metrics->drain_dispatch);
-    print_metric_row(&metrics->io_fence_stall);
-    print_metric_row(&metrics->footer_buffer_stall);
-    print_metric_row(&metrics->append_extent_stall);
-    print_metric_row(&metrics->flush_writes_stall);
-    print_metric_row(&metrics->backpressure);
-    print_metric_row(&metrics->tail_gate);
-    for (size_t i = 0; i < n_edge_stalls; ++i)
-      print_metric_row(&metrics->edge_stall[i]);
-    if (metrics->scatter_samples_lost || metrics->lod_samples_lost)
-      print_report("  TIMING SAMPLES LOST: scatter=%llu lod=%llu "
-                   "(stage totals under-report)",
-                   (unsigned long long)metrics->scatter_samples_lost,
-                   (unsigned long long)metrics->lod_samples_lost);
-    print_append_latency(metrics);
-    char pbuf[32];
-    format_bytes(pbuf, sizeof(pbuf), metrics->peak_pending_bytes);
-    print_report("  peak pending:    %s", pbuf);
-  }
+  print_diagnostics_report(metrics, wall_s);
 
   print_write_report(io);
 
@@ -322,6 +474,63 @@ json_stage_metric(struct json_writer* jw,
   jw_float(jw, in_gibs);
   jw_key(jw, "out_gibs");
   jw_float(jw, out_gibs);
+  jw_object_end(jw);
+}
+
+static void
+json_diagnostic_metric(struct json_writer* jw,
+                       const struct diagnostic_entry* d,
+                       float wall_s)
+{
+  const struct stream_metric* m = d->metric;
+  if (!diagnostic_measured(m))
+    return;
+
+  jw_key(jw, d->id);
+  jw_object_begin(jw);
+  jw_key(jw, "label");
+  jw_string(jw, d->label);
+  jw_key(jw, "kind");
+  jw_string(jw, d->kind);
+  jw_key(jw, "owner");
+  jw_string(jw, metric_owner_name(m->owner));
+  jw_key(jw, "total_ms");
+  jw_float(jw, (double)m->ms);
+  jw_key(jw, "samples");
+  jw_uint(jw, (uint64_t)m->count);
+  if (m->wait_calls > 0) {
+    jw_key(jw, "wait_calls");
+    jw_uint(jw, m->wait_calls);
+  }
+  if (m->count > 0) {
+    jw_key(jw, "avg_ms");
+    jw_float(jw, (double)m->ms / m->count);
+    if (m->best_ms < 1e29f) {
+      jw_key(jw, "min_ms");
+      jw_float(jw, (double)m->best_ms);
+    }
+    jw_key(jw, "max_ms");
+    jw_float(jw, (double)m->max_ms);
+  }
+  if (wall_s > 0) {
+    jw_key(jw, "wall_pct");
+    jw_float(jw, (double)m->ms / (wall_s * 10.0));
+  }
+  jw_object_end(jw);
+}
+
+static void
+json_diagnostics(struct json_writer* jw,
+                 const struct stream_metrics* m,
+                 float wall_s)
+{
+  struct diagnostic_entry entries[DIAGNOSTIC_COUNT];
+  diagnostic_entries(m, entries);
+
+  jw_key(jw, "diagnostics");
+  jw_object_begin(jw);
+  for (size_t i = 0; i < DIAGNOSTIC_COUNT; ++i)
+    json_diagnostic_metric(jw, &entries[i], wall_s);
   jw_object_end(jw);
 }
 
@@ -535,12 +744,17 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_end(&jw);
   jw_key(&jw, "edge_stalls");
   jw_object_begin(&jw);
+  // These keys shipped before display names and stable metric IDs were
+  // separated. Keep them frozen for existing JSON consumers.
+  static const char* legacy_edge_names[] = { "StagingFree",
+                                             "ChunkIndex",
+                                             "D2HDone" };
   for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
        ++i) {
     const struct stream_metric* es = &m->edge_stall[i];
     if (es->count <= 0 || !es->name)
       continue;
-    jw_key(&jw, es->name);
+    jw_key(&jw, legacy_edge_names[i]);
     jw_object_begin(&jw);
     jw_key(&jw, "owner");
     jw_string(&jw, metric_owner_name(es->owner));
@@ -584,6 +798,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "peak_pending_mib");
   jw_float(&jw, (double)m->peak_pending_bytes / (1024.0 * 1024.0));
   jw_object_end(&jw);
+
+  json_diagnostics(&jw, m, wall_s);
 
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));

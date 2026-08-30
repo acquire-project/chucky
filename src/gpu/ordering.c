@@ -305,6 +305,8 @@ gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i)
   ord->edge[e].waits[i]++;
 #endif
   struct stream_metric* m = ord->edge[e].stall;
+  if (m)
+    m->wait_calls++;
   struct platform_clock clk = { 0 };
   int timed = 0;
   for (;;) {

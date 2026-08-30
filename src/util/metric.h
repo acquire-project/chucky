@@ -67,6 +67,8 @@ accumulate_metric_ms(struct stream_metric* m,
   m->input_bytes += input_bytes;
   m->output_bytes += output_bytes;
   m->count++;
+  if (ms > m->max_ms)
+    m->max_ms = ms;
   if (ms < m->best_ms) {
     m->best_ms = ms;
     m->best_input_bytes = (double)input_bytes;

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "stream/layouts.h"
-#include "zarr/types.io.h"
 #include "types.stream.h"
+#include "zarr/types.io.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -47,6 +47,11 @@ print_memory_report(const struct bench_memory* mem);
 
 void
 print_metric_row(const struct stream_metric* m);
+
+// Print diagnostic intervals in separate wait, pipeline-gap, and host-work
+// sections. Unlike stage rows, these intervals do not claim a byte rate.
+void
+print_diagnostics_report(const struct stream_metrics* metrics, float wall_s);
 
 // The time taken per append is printed here.
 void

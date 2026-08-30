@@ -1140,22 +1140,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     print_metric_row(&m[k].d2h);
     print_metric_row(&m[k].sink);
 
-    int have_stalls =
-      m[k].flush_stall.count > 0 || m[k].drain_dispatch.count > 0 ||
-      m[k].io_fence_stall.count > 0 || m[k].backpressure.count > 0 ||
-      m[k].max_append_ms > 0 || m[k].peak_pending_bytes > 0;
-    if (have_stalls) {
-      fputc('\n', stderr);
-      print_report("  --- Stall stats (stream-%d) ---", k);
-      print_metric_row(&m[k].flush_stall);
-      print_metric_row(&m[k].drain_dispatch);
-      print_metric_row(&m[k].io_fence_stall);
-      print_metric_row(&m[k].backpressure);
-      print_append_latency(&m[k]);
-      char pbuf[32];
-      format_bytes(pbuf, sizeof(pbuf), m[k].peak_pending_bytes);
-      print_report("  peak pending:    %s", pbuf);
-    }
+    print_diagnostics_report(&m[k], wall_s);
   }
 
   print_report("  PASS");

@@ -50,14 +50,29 @@ input { accent-color: var(--series-1); }
 /* Charts. A chart wider than the panel scrolls inside it — letting the panel
    grow instead would drag the header and the controls off the side of a narrow
    window. */
-#chart, #stage-chart {
+#chart, #stage-chart, #diagnostic-table {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: var(--gap-md);
-  display: flex; flex-direction: column; align-items: safe center;
   overflow-x: auto;
 }
+#chart, #stage-chart {
+  display: flex; flex-direction: column; align-items: safe center;
+}
 #stage-chart { margin-top: var(--gap-md); }
-#chart:empty, #stage-chart:empty { display: none; }
+#diagnostic-table { margin-top: var(--gap-md); }
+#chart:empty, #stage-chart:empty, #diagnostic-table:empty { display: none; }
+#diagnostic-table h2 { font-size: 0.9em; margin: 0 0 8px; }
+#diagnostic-table table { border-collapse: collapse; font-size: 0.75em; width: 100%; }
+#diagnostic-table th, #diagnostic-table td {
+  border-bottom: 1px solid var(--grid); padding: 5px 8px; text-align: right;
+  white-space: nowrap;
+}
+#diagnostic-table th { color: var(--text-secondary); font-weight: 600; }
+#diagnostic-table th:nth-child(-n+3), #diagnostic-table td:nth-child(-n+3) { text-align: left; }
+#diagnostic-table .diagnostic-note {
+  color: var(--text-secondary); font-size: 0.72em; line-height: 1.45;
+  margin: 8px 0 0;
+}
 
 /* SVG axes */
 .axis text { font-size: 12px; fill: var(--text-secondary); }
@@ -210,6 +225,7 @@ input { accent-color: var(--series-1); }
 
 <div id="chart"></div>
 <div id="stage-chart"></div>
+<div id="diagnostic-table"></div>
 <div id="failures"></div>
 
 </main>
@@ -760,6 +776,7 @@ function render() {
 
   d3.select("#chart").selectAll("*").remove();
   d3.select("#stage-chart").selectAll("*").remove();
+  d3.select("#diagnostic-table").selectAll("*").remove();
 
   if (filtered.length === 0) {
     d3.select("#chart").append("p").text("No matching runs.");
@@ -1087,6 +1104,8 @@ function renderStageLines(filtered, presentChunks, presentScenarios, stageMetric
 
 function renderStages(run) {
   d3.select("#stage-chart").selectAll("*").remove();
+  d3.select("#diagnostic-table").selectAll("*").remove();
+  renderDiagnostics(run);
   if (!run.stages) {
     d3.select("#stage-chart").append("p").text("No stage data for this run.");
     return;
@@ -1100,6 +1119,69 @@ function renderStages(run) {
   } else {
     renderStagesTiming(run, stages);
   }
+}
+
+const DIAGNOSTIC_ORDER = [
+  "batch_drain", "output_slot_io", "footer_buffer_io", "append_extent_io",
+  "final_io", "sink_backpressure", "staging_reuse", "chunk_metadata_d2h",
+  "payload_d2h", "prior_tail_state", "d2h_dispatch",
+];
+
+const DIAGNOSTIC_KIND_LABELS = {
+  host_wait: "Host wait",
+  host_block: "Host block/work",
+  pipeline_gap: "Pipeline gap",
+  host_overhead: "Host overhead",
+};
+
+function diagnosticNumber(value, suffix = "") {
+  if (typeof value !== "number" || !isFinite(value)) return "—";
+  return `${d3.format(value >= 100 ? ",.1f" : ",.3f")(value)}${suffix}`;
+}
+
+function renderDiagnostics(run) {
+  if (!run.diagnostics || typeof run.diagnostics !== "object") return;
+  const present = Object.keys(run.diagnostics);
+  const ordered = DIAGNOSTIC_ORDER.filter(id => present.includes(id))
+    .concat(present.filter(id => !DIAGNOSTIC_ORDER.includes(id)).sort());
+  const entries = ordered
+    .map(id => [id, run.diagnostics[id]]);
+  if (!entries.length) return;
+
+  const root = d3.select("#diagnostic-table");
+  root.append("h2").text(
+    `Diagnostics: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+  const table = root.append("table");
+  const headers = ["Category", "Timeline", "Reason / interval", "Samples",
+                   "Waits", "Average ms", "Min ms", "Max ms", "% wall"];
+  const head = table.append("thead").append("tr");
+  headers.forEach(label => head.append("th").text(label));
+  const body = table.append("tbody");
+
+  for (const [id, diagnostic] of entries) {
+    const samples = Number.isInteger(diagnostic.samples) ? diagnostic.samples : 0;
+    const average = diagnostic.avg_ms ?? (samples > 0 ? diagnostic.total_ms / samples : null);
+    const wallPct = diagnostic.wall_pct ??
+      (run.wall_s > 0 ? diagnostic.total_ms / (run.wall_s * 10) : null);
+    const row = body.append("tr");
+    row.append("td").text(DIAGNOSTIC_KIND_LABELS[diagnostic.kind] || diagnostic.kind || "Diagnostic");
+    row.append("td").text(diagnostic.owner || "unknown");
+    row.append("td").text(diagnostic.label || id);
+    row.append("td").text(samples.toLocaleString());
+    row.append("td").text(Number.isInteger(diagnostic.wait_calls)
+      ? diagnostic.wait_calls.toLocaleString() : "—");
+    row.append("td").text(diagnosticNumber(average));
+    row.append("td").text(diagnosticNumber(diagnostic.min_ms));
+    row.append("td").text(diagnosticNumber(diagnostic.max_ms));
+    row.append("td").text(diagnosticNumber(wallPct, "%"));
+  }
+
+  root.append("p").attr("class", "diagnostic-note").text(
+    "Samples count recorded intervals. Host waits record a sample only when they actually block; " +
+    "the waits column counts all wait calls, including calls that were already ready. " +
+    "Batch drain may include inline drain work. " +
+    "Chunk offsets/sizes D2H is the drain host waiting for offsets and compressed sizes to arrive, " +
+    "not chunk-index kernel time.");
 }
 
 function renderStagesTiming(run, stages) {

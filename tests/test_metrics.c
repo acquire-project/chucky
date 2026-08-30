@@ -96,6 +96,14 @@ check_shared_stages(const struct stream_metrics* m)
     log_error("  %s: no measurement arrived", m->tail_gate.name);
     ok = 0;
   }
+  for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
+       ++i) {
+    if (m->edge_stall[i].wait_calls == 0) {
+      log_error("  %s: host dependency was never checked",
+                m->edge_stall[i].name);
+      ok = 0;
+    }
+  }
   ok &= no_samples_lost("scatter", m->scatter_samples_lost);
   // The LOD arm cannot fail while the schedule collects every epoch; it guards
   // a change in that cadence rather than proving the collector kept up.
