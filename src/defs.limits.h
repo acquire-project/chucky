@@ -28,7 +28,7 @@
 // S3
 #define S3_MAX_PARTS 10000
 #define S3_DEFAULT_PART_SIZE (8 * 1024 * 1024)
-#define S3_DEFAULT_THROUGHPUT_GBPS 10.0
+#define S3_DEFAULT_THROUGHPUT_GBPS 100.0
 
 // Shard backend limits — applied uniformly across sinks (conservative).
 // One chunk per upload part, so parts-count = chunks per shard.

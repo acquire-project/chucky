@@ -604,7 +604,7 @@ test_s3_config_defaults(void)
   struct store_s3_config cfg = { 0 };
   store_s3_config_set_defaults(&cfg);
   CHECK(Fail, cfg.part_size == 8 * 1024 * 1024);
-  CHECK(Fail, cfg.throughput_gbps == 10.0);
+  CHECK(Fail, cfg.throughput_gbps == 100.0);
 
   // Already-set values should not be overwritten
   struct store_s3_config cfg2 = { .part_size = 42, .throughput_gbps = 1.0 };
