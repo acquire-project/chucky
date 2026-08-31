@@ -85,6 +85,14 @@ struct stream_metrics
   uint64_t d2h_metadata_bytes_transferred;
   uint64_t d2h_payload_copy_count;
 
+  // Optional GPU shard write-layout totals. Physical data-region bytes are
+  // derived as logical payload plus retained internal padding. Footer
+  // alignment slack is truncated and therefore deliberately excluded.
+  uint64_t shard_padding_logical_payload_bytes;
+  uint64_t shard_padding_internal_bytes;
+  uint64_t shard_padding_physical_update_count;
+  uint64_t shard_padding_padded_update_count;
+
   float max_append_ms; // longest single append
   // High-water mark of bytes awaiting write, read once per staging buffer
   // handed to the device rather than continuously.

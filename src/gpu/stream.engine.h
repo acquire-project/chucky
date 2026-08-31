@@ -159,8 +159,9 @@ struct compress_agg_array
   struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
   uint8_t nlod;
 
-  // Persistent tails live only inside these host shard states.  Aggregation
-  // is compact and never consumes tail length or content.
+  // Fixed-extent persistent tails live only inside these host shard states.
+  // Indexed aligned delivery retains zero padding instead; aggregation stays
+  // compact and never consumes tail length or content.
   struct shard_state shard[LOD_MAX_LEVELS];
   uint64_t total_shards; // immutable sum, useful for status/tests
 };

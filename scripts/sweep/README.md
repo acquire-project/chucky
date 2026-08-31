@@ -189,6 +189,16 @@ counts copied offset/size arrays and `payload_copy_count` counts non-empty
 physical-shard-run copies. The whole block is absent in archived results, where
 these quantities are unknown rather than zero.
 
+GPU runs may additionally contain `shard_padding`. `logical_payload_bytes` and
+`internal_padding_bytes` derive `physical_data_region_bytes`; the latter is the
+payload region retained before the shard footer, not temporary footer alignment
+slack that is truncated. `physical_shard_update_count` counts nonempty runs and
+`padded_update_count` counts the subset with retained padding. `padding_ratio`
+is internal padding divided by physical data-region bytes. Fixed output,
+unaligned indexed output, and empty updates report zero internal padding. As an
+additive optional object, this leaves sweep schema version 8 unchanged and is
+unknown in archived files where it is absent.
+
 For a run with filesystem output, the write scheduling it used is recorded,
 so a sweep is comparable only against one taken with the same settings:
 
@@ -318,8 +328,9 @@ bump it.
 - **8** — GPU aggregation is compact and host materialization owns page-aligned
   tails. D2H stage bandwidth now uses actual payload transfer bytes, and the
   optional `d2h_transfer` block records logical/payload/metadata bytes and copy
-  count. Archived files keep this block absent because those values cannot be
-  reconstructed.
+  count. Aligned indexed GPU delivery later added the optional `shard_padding`
+  block without changing this version. Archived files keep optional blocks
+  absent because those values cannot be reconstructed.
 - **7** — The filesystem sink runs several writes at once instead of one, and
   pre-sizes a shard file when more than one of its writes may run together. No
   timing from a run with filesystem output is comparable across this bump; a

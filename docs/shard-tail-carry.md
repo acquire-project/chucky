@@ -1,281 +1,187 @@
-# Shard tail carry-over
+# Hybrid GPU shard delivery
 
-## What this is for
+Chucky writes Zarr v3 sharded arrays through sinks that may require aligned
+writes. Local unbuffered I/O typically requires the file offset, byte count,
+and source address to be multiples of a page. Compressed chunk extents are
+variable, so the GPU pipeline selects a delivery policy from two facts already
+known at materialization time: the aggregate extent kind and the sink's
+required shard alignment.
 
-Chucky streams compressed image data into [zarr v3 sharded
-files](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/sharding-indexed/v1.0.html).
-For throughput on local SSDs we open shard files with `O_DIRECT` (Linux),
-`F_NOCACHE` (macOS), or `FILE_FLAG_NO_BUFFERING` (Windows). Unbuffered IO has a
-hard constraint: every write's *offset*, *length*, and *source pointer* must be
-multiples of the device's page alignment.
+GPU aggregation itself is identical for every policy. It emits a compact,
+tail-free device buffer containing only real chunk payload. Padding and fixed
+tail placement are host delivery concerns and are never counted as D2H bytes.
 
-We also want the on-disk shard file to have no inter-batch padding zeros: the
-shard's index records each chunk's actual byte offset and size, and any slack
-inside the file is wasted bytes.
+## Policy
 
-Compressed chunks have variable size, so they don't naturally land on page
-boundaries. The "tail carry-over" mechanism reconciles these two demands by
-deferring the sub-page tail of each batch and prepending it to the next batch.
+| aggregate extent | sink alignment | host and shard layout |
+|---|---:|---|
+| fixed | nonzero | prepend the committed host tail and page-floor writes, keeping the shard packed |
+| fixed | zero | write the exact compact payload |
+| indexed | nonzero | independently align each physical-shard update and zero-pad non-final updates |
+| indexed | zero | write the exact compact payload |
 
-## Concepts
+An empty indexed update has no host reservation, padding, writer open, or data
+write. It still advances the logical epoch cursor so a later nonempty update
+lands in the correct index slot.
 
-| term                | meaning                                                                                  |
-|---------------------|------------------------------------------------------------------------------------------|
-| **chunk**           | independently compressed unit; the smallest thing the codec produces.                    |
-| **shard**           | one file holding many chunks plus a `[offset, size]` index at the end.                   |
-| **append dim**      | leftmost dimension(s) that grow over time (e.g. T, Z). Data streams in along these.      |
-| **shard generation**| span of `chunks_per_shard_append` epochs along the append dim that fills one shard file. |
-| **batch**           | the streaming unit; the pipeline processes N epochs end-to-end per batch.                |
-| **page alignment**  | the device's required alignment for unbuffered IO (typically 4 KiB).                     |
-| **leading tail**    | sub-page bytes from the prior batch we couldn't write yet — they prefix the next batch.  |
+This makes indexed shard bytes sink-dependent. A buffered or object-store sink
+gets compact payload. An aligned filesystem sink may retain internal zero gaps,
+but every chunk index entry continues to name the exact compressed frame and
+size. Decoded arrays are identical across those layouts; whole shard files need
+not be byte-identical.
 
-## The data path
+## Compact device aggregation
 
-A batch flows through four logical stages on the GPU:
+`src/gpu/aggregate.cu` performs one size permutation, one exclusive scan, and
+one compact gather. Offsets are absolute in that compact device aggregate.
+There are no per-shard capacity regions, device tail buffers, tail H2D uploads,
+or page-padding bytes.
 
-1. **Compute** (`src/{cpu,gpu}/`): scatters input voxels into per-LOD chunk
-   pools, compresses each chunk, and emits one variable-size compressed blob
-   per chunk.
-2. **Aggregate** (`src/gpu/aggregate.cu`): copies real chunks into one compact,
-   tail-free device buffer in shard-major delivery order. Chunk offsets are
-   absolute within that compact buffer; there is no page padding or reserved
-   per-shard capacity on the device.
-3. **Materialize** (`src/gpu/d2h.materializer.c` and
-   `src/zarr/shard_delivery.c`): after the preceding batch has committed its
-   host tail, partitions the batch into physical-shard generation runs. Each
-   run gets a page-aligned region in the pinned host slot, its committed tail
-   is copied to the front, and the run's compact payload is copied from the
-   device immediately after it.
-4. **Deliver** (`src/zarr/shard_delivery.c`): walks those host runs
-   and calls the active shard writer's `write_direct` (zero-copy reference
-   to caller memory) or `write` (copying bounce). The writer queues async
-   pwrite jobs onto a per-pool io_queue.
+Fixed output constructs its offset/size shadow from the permutation geometry.
+Indexed output first lands the device-generated offset/size metadata. The D2H
+materializer then partitions either form into physical-shard generation runs.
+Every nonempty run produces one exact payload span.
 
-Aggregation can run ahead of delivery. Indexed codecs also copy their
-offset/size metadata as soon as aggregation completes, but payload
-materialization and sink delivery remain generation-ordered because the
-preceding delivery establishes the only authoritative tail state.
+## Host materialization
 
-## Device and host aggregate buffers
+The pinned host slot is larger than the compact device slot because physical
+runs need independent source alignment.
 
-`page = sink->required_shard_alignment()` (zero means buffered IO; the rest of
-this doc assumes `page > 0`). GPU slots have separate capacities. The device
-allocation contains at most `real_chunk_count * max_comp_chunk_bytes` and
-holds only compact payload. The pinned-host allocation is larger because each
-possible physical run needs independent alignment and room for a carried
-prefix smaller than one page.
-
-Every non-empty physical run produces one payload D2H copy into a layout of
-the following form:
+Fixed aligned runs use:
 
 ```
-pinned_slot
-  physical run 0 (page-aligned): [tail_in || payload || slack]
-  physical run 1 (page-aligned): [tail_in || payload || slack]
-  ...
+aligned host base: [committed tail | fresh D2H payload]
 ```
 
-Fixed-size output builds its host offsets and sizes from the existing
-permutation geometry. Variable-size output first lands the device-generated
-offset/size arrays and then resolves exact run source ranges. All payload
-copies are enqueued before one batch-ready event and one host wait.
-
-### CPU legacy aggregate buffer
-
-The CPU aggregator and `deliver_to_shards_batch` retain the older
-shard-capacity layout below. The host-run materializer is currently GPU-only;
-this split keeps CPU output unchanged.
+Indexed aligned runs use:
 
 ```
-ws->data
-├── LOD 0 segment (page-aligned)
-│   ├── shard 0 region (shard_capacity bytes, page-aligned)
-│   │   ├── [0, tail_in)                    leading tail (from prior batch)
-│   │   ├── [tail_in, tail_in + run_real)   chunks for this batch
-│   │   └── slack to shard_capacity
-│   ├── shard 1 region
-│   └── ...
-├── LOD 1 segment
-└── ...
+aligned host base: [fresh D2H payload | zero trailing slack]
 ```
 
-`shard_capacity = align_up(active_count_max * cps_inner * max_comp_chunk_bytes
-+ page, page)`. The `+ page` reserves room for a possible leading tail
-(`< page` bytes); the rest is the worst-case real chunk bytes for one batch.
+Indexed unaligned runs use exact extents with no host padding. Capacity checks
+reserve real worst-case payload plus, for every possible physical run, the
+policy-specific prefix or rounding slack and the slack needed to align the run
+base. Every multiplication, addition, and round-up is checked before the D2H
+copy is submitted.
 
-Inside one CPU batch, chunks pack tightly per shard. Multiple shard generations
-that happen to fall inside the same batch are also contiguous — the
-aggregator does **no per-generation padding**. Generation crossings are
-handled at delivery time.
+The pinned slot remains double-buffered in this change. Increasing host slot
+depth and accumulating several small compressed updates on the GPU are separate
+optimizations.
 
-## Per-shard live state
+## Fixed packed delivery
 
-Per-LOD `struct shard_state` owns two contiguous pools, each
-`shard_inner_count` slots wide:
+For a non-final fixed run:
 
-| pool                      | purpose                                                  |
-|---------------------------|----------------------------------------------------------|
-| `tail_buf_pool`           | sub-page carry-over bytes between batches (one per shard)|
-| `footer_buf_pool`         | shard-footer scratch (one per shard, page-aligned)       |
+1. `total = committed_tail + payload`.
+2. Write `floor(total / page) * page` bytes.
+3. Copy the sub-page remainder into persistent `active_shard.tail_buf`.
+4. Advance the physical data cursor only by bytes actually written.
 
-Each `struct active_shard` is one inner shard's slice into those pools, plus
-its own per-shard state:
+The next ordered materialization copies that committed remainder before its
+fresh D2H payload. Chunk offsets therefore remain packed across batch
+boundaries.
 
-| field            | purpose                                                                       |
-|------------------|-------------------------------------------------------------------------------|
-| `writer`         | open shard-file handle from `sink->open(...)`; `NULL` between generations     |
-| `data_cursor`    | next file offset to write at                                                  |
-| `index`          | `[chunks_per_shard_total][2]` `(offset, size)` pairs, written at finalize     |
-| `tail_buf`       | slice into `tail_buf_pool`; valid bytes in `tail_bytes` (always `< page`)     |
-| `footer_buf`     | slice into `footer_buf_pool`; capacity `footer_capacity`, built lazily        |
-| `footer_io_done` | io fence for `footer_buf`; wait before refill, record after every `write_direct` |
+For a final fixed run, complete pages are written directly and the remainder
+is placed immediately before the index and CRC in the existing footer buffer.
+The aligned footer write is truncated to its logical size, leaving no gap.
 
-`footer_capacity = align_up(page + chunks_per_shard_total*16 + 4, page)`:
-one page for the trailing sub-page data, the index (16 bytes per chunk), the
-4-byte CRC, padded.
+## Indexed padded delivery
 
-## Delivery: runs and their outcomes
+For a non-final aligned indexed run with nonzero payload:
 
-Both delivery paths walk a batch in **runs**. A run is a contiguous span of
-epochs that fits inside the current shard generation:
+1. Materialize payload at an aligned host base.
+2. Zero `[payload_bytes, align_up(payload_bytes, page))`.
+3. Write the rounded byte count.
+4. Advance the physical cursor by that rounded count.
 
-```
-run_len       = min(remaining_in_shard, remaining_in_batch)
-run_finalizes = (run_len == remaining_in_shard)
-```
+The next update's chunk offsets begin after the retained gap. Padding is always
+zero, smaller than one alignment unit, and follows complete chunk frames; an
+index entry never describes a split frame.
 
-For the GPU, `host_batch_build_compact` creates one `host_batch_run` and one
-page-aligned host region for each `(inner shard, generation run)` pair. The
-run records its compact device source origin, committed tail prefix, and
-rebased chunk views. The CPU's unchanged `deliver_to_shards_batch` instead
-finds the run in its shard-capacity aggregate region.
+A final indexed run does not retain a new gap. Complete payload pages are
+written directly. Its sub-page payload remainder is copied into the footer
+buffer immediately before `[index | CRC]`, and the temporary footer alignment
+slack is truncated. A final empty run can still emit the index/footer needed to
+close a shard generation, but an empty non-final update emits no write.
 
-There are three run outcomes.
+Indexed unaligned delivery writes every nonempty run exactly and uses the same
+compact final footer without internal padding.
 
-### Non-finalizing run (batch ends mid-generation)
+## Pull-style shard drainer
 
-The run produces some bytes for shard si; more of the same generation will
-arrive in a future batch.
+`shard_drain_begin()` borrows one materialized `host_batch` and the currently
+committed per-LOD shard states. `shard_drain_next()` then yields, in run order:
 
-1. `total_run = tail_in + run_real`; `tail_in` is the leading tail from the
-   prior batch and is non-zero only on the first run for this shard in this
-   batch.
-2. `write_bytes = (total_run / page) * page` — page-aligned floor.
-3. Write `[src, src + write_bytes)`. GPU host runs are independently aligned,
-   so the normal filesystem path can use `write_direct`; sinks without that
-   operation use `write`.
-4. Save the `< page` remainder into `sh->tail_buf` for the next batch.
-5. Advance `sh->data_cursor` by `write_bytes`.
+- data commands;
+- footer commands;
+- truncate commands;
+- finalize commands.
 
-### Finalizing run (this run completes the generation)
+Each command identifies its LOD and physical shard, file offset, source range,
+physical byte count, direct-write eligibility, and buffer lease. Footer source
+bytes are prepared only after the executor waits for that shard's footer-buffer
+lease.
 
-The shard's last data goes here; we close out by writing the **footer** —
-the page-aligned `[trailing<page || index || CRC || zero-pad]` blob. This is
-**two-step** when `total_run >= page`:
+The sink executor is intentionally thin. It opens and optionally pre-sizes the
+writer, executes the command, manages sink fences, and calls
+`shard_drain_accept()` only after the sink accepts it. Accept commits index,
+cursor, tail, and generation changes. `shard_drain_abort()` is sticky and does
+not roll back commands already accepted by the sink.
 
-1. **Page-floor write**. Same as non-finalizing: write `(total_run / page) *
-   page` bytes via `write_direct` from the agg buffer. Advance `data_cursor`.
-2. **Footer write**. `wait_fence(sh->footer_io_done)` so any prior reuser of
-   `sh->footer_buf` has retired, build the footer into it, `write_direct` it
-   at the new `data_cursor`, then `record_fence` back into `footer_io_done`.
-3. **Truncate** the file to `data_cursor + logical_bytes` to drop the
-   trailing zero-pad on disk.
-4. **Finalize** (close).
-5. Reset per-shard state: `writer = NULL`, `data_cursor = 0`, `tail_bytes = 0`,
-   `index` cleared.
+This preserves oldest-first batch delivery. Multiarray streams retain their
+immediate-drain rule, so swapping per-array state never leaves a command stream
+borrowing another array's shard state.
 
-When `total_run < page`, step 1 is skipped and the footer includes all of
-`total_run` as the leading "trailing" portion.
+## Buffer lifetimes and fences
 
-### Intra-batch fresh-gen run
+`write_direct` borrows its source until the sink fence retires.
 
-When `epochs_per_batch > chunks_per_shard_append`, one batch can finalize the
-same shard slot multiple times — finalize gen N, open gen N+1, possibly
-finalize gen N+1 too. The footer write for each finalize uses the same
-`sh->footer_buf`; the per-shard fence (`footer_io_done`) makes the reuse
-safe regardless of how many finalizes happen in a batch.
+- Data commands borrow the aggregate host slot. The existing per-slot fence is
+  recorded after delivery, including after a partial failure, and waited before
+  the slot is materialized again.
+- Footer commands borrow `active_shard.footer_buf`. The executor waits that
+  shard's prior footer fence before preparing the bytes and records a new fence
+  after a direct footer write.
+- Unaligned footer commands use the copying writer path and a transient buffer.
 
-On the GPU, the non-finalizing run that follows an intra-batch finalize gets a
-new page-aligned host region and therefore an additional D2H span. The legacy
-CPU aggregate can still place that run at a non-page-aligned position and use
-the copying `write` path.
+Finalize-generation fences still guard publication of the readable append
+extent.
 
-## Carrying tails across batches
+## CPU pipeline
 
-**Same generation, next batch.** The non-finalizing run left
-`sh->tail_bytes > 0` and the bytes saved in `sh->tail_buf`. When that next
-batch reaches ordered GPU materialization, the planner copies the committed
-host tail into the front of the run's aligned pinned region and enqueues the
-fresh compact device payload at `region_base + tail_bytes`. Delivery sees one
-contiguous `[tail || fresh chunks]` region. No tail length or content is sent
-to the GPU. The CPU path performs the equivalent prefix assembly in its
-legacy aggregate layout. Every `write_bytes` write lands at a `data_cursor`
-that is a multiple of `page`, so no inter-batch padding lands on disk.
+The CPU aggregator and `deliver_to_shards_batch()` keep their existing layout
+and tail-carry behavior. The new host policy and pull drainer are GPU delivery
+mechanisms; CPU shard bytes and public stream configuration are unchanged.
 
-**Across generation boundary, fresh batch.** After the prior batch finalized
-a generation, the next batch starts with `bytes_consumed[si] = 0`,
-`writer = NULL`, `tail_bytes = 0`. The next run opens a new shard file via
-`sink->open(...)` and writes from a page-aligned source — including the
-footer later. This is the "ideal" steady-state path.
+## Write-layout statistics
 
-## End-of-stream finalize
+GPU delivery optionally reports:
 
-`finalize_shards` runs when the writer is flushed and any shard is still
-open (a partial generation at the end of the stream). It writes each
-remaining shard's footer through the same `write_footer` helper used by
-delivery — `wait_fence(footer_io_done)`, build, `write_direct`,
-`record_fence` — then truncates, closes, and resets state.
+- logical payload bytes;
+- internal padding bytes retained in shard data regions;
+- nonempty physical-shard update count;
+- padded update count.
 
-## Async, lifetime, and the io_queue
+`physical_data_region_bytes` is derived as logical payload plus internal
+padding. `padding_ratio` is internal padding divided by that physical data
+region. Footer alignment slack is excluded because it is truncated rather than
+retained. D2H payload bytes continue to equal the resolved payload spans and
+exclude both fixed tails and indexed padding.
 
-`write_direct` (`fs_slot_write_direct` → `pwrite_ref_job`) stores **only a
-pointer** to caller memory and a target offset. The io_queue worker reads
-that memory at job-execute time, which can be much later than queue time.
-That's safe only as long as the source memory stays alive and unchanged.
-Two lifetime mechanisms cover this:
+Small, highly compressible updates can consequently have a high filesystem
+padding ratio. That measurement motivates a future GPU update-accumulation
+policy; this implementation deliberately adds no size threshold.
 
-- **Pinned host run buffer** — the materialization slot is double-buffered.
-  Each batch records
-  a fence (`sink->record_fence`) after queueing all of its writes; the next
-  batch waits on that fence (`sink->wait_fence`) before reusing the slot.
-  The new remainder is copied into persistent tail storage before that slot
-  can be released, and pinned-slot pointers stay valid across async IO.
-- **Footer buffer** — every `active_shard` carries its own `footer_io_done`
-  event. `write_footer` waits on it before refilling `footer_buf` and
-  records a fresh event after each `write_direct`. Reuse is therefore
-  bounded to "after the prior IO retired", regardless of how many batches or
-  finalizes happen in between.
+## Code map
 
-`write` (`pwrite_job`) avoids the lifetime question entirely by malloc'ing a
-new buffer and copying the source bytes into it. The job carries its own
-memory; the caller can release the source immediately. Sinks that don't
-provide `write_direct` (e.g. S3) take this path for the footer write.
-
-## GPU materialization and scheduling notes
-
-GPU aggregation performs one size permutation, one exclusive scan, and one
-compact gather. It has no shard-bias kernel, device tail buffers, or tail H2D
-upload. Fixed output synthesizes the same compact index on the host; indexed
-output copies the scan metadata before planning payload spans.
-
-Compression and aggregation for the next slot may run while an older batch is
-being delivered. Payload D2H and sink delivery are ordered by batch
-generation, so the materializer reads only committed `shard_state`. A D2H or
-sink failure makes delivery sticky-failed: later materializations are
-cancelled and their slot leases retired rather than committing more shard
-state.
-
-## Where to look in the code
-
-| concept                          | file                                  |
-|----------------------------------|---------------------------------------|
-| run planning and delivery        | `src/zarr/shard_delivery.c`           |
-| `shard_state` / `active_shard`   | `src/zarr/shard_delivery.h`           |
-| CPU aggregator                   | `src/cpu/aggregate.c`                 |
-| compact GPU aggregator           | `src/gpu/aggregate.cu`                |
-| D2H materializer lifecycle       | `src/gpu/d2h.materializer.{h,c}`      |
-| scheduling / failure ordering    | `src/gpu/schedule.c`                  |
-| compact and legacy layouts       | `src/stream/types.aggregate.{h,c}`    |
-| FS shard pool, `pwrite_ref_job`  | `src/zarr/shard_pool_fs.c`            |
-| O_DIRECT alignment watchdog      | `fs_slot_write` in `shard_pool_fs.c`  |
-| writer interface (`shard_writer`)| `src/writer.h`                        |
+| concept | file |
+|---|---|
+| compact host-run materialization | `src/zarr/shard_delivery.c` |
+| pull drainer and sink executor | `src/zarr/shard_drainer.{h,c}` |
+| shard state | `src/zarr/shard_delivery.h` |
+| D2H policy selection and copies | `src/gpu/d2h.materializer.{h,c}` |
+| compact GPU aggregation | `src/gpu/aggregate.cu` |
+| scheduling and oldest-first failure handling | `src/gpu/schedule.c` |
+| CPU aggregation and delivery | `src/cpu/aggregate.c`, `src/zarr/shard_delivery.c` |
+| writer and sink interfaces | `src/writer.h` |

@@ -5,6 +5,19 @@
 
 struct batch_aggregate_layout;
 
+// Selected once from the device aggregate extent and the sink's write
+// alignment.  The scheduler deals only in host_batch objects; codec-specific
+// extent decisions stay behind the materializer boundary.
+enum host_delivery_policy
+{
+  HOST_DELIVERY_FIXED_TAIL = 0,
+  HOST_DELIVERY_INDEXED_PADDED,
+  HOST_DELIVERY_INDEXED_COMPACT,
+};
+
+enum host_delivery_policy
+host_delivery_policy_select(int fixed_extent, size_t shard_alignment);
+
 struct d2h_transfer_span
 {
   size_t device_offset;
@@ -56,6 +69,9 @@ struct host_batch
   struct host_batch_run* runs;
   size_t run_count;
   size_t run_capacity;
+  uint8_t nlod;
+  enum host_delivery_policy policy;
+  size_t shard_alignment;
   void* slot_lifetime;
   struct d2h_transfer_statistics transfer;
 };

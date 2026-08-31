@@ -242,6 +242,8 @@ test_d2h_single_epoch_none(void)
           c.metrics.d2h_logical_payload_bytes);
   CHECK(Fail, c.metrics.d2h_metadata_bytes_transferred == 0);
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
   // Tile data correctness verified by test_compress_agg
 
@@ -399,8 +401,8 @@ Fail:
 
 // ---------------------------------------------------------------------------
 // Test 3: CODEC_ZSTD, K=2 batch (full shard) — compressed data arrives
-// Verifies ZSTD round-trip end-to-end: with tail-carryover delivery, partial
-// batches stay staged in the tail buffer and only land on disk at finalize.
+// Verifies indexed ZSTD round-trip end-to-end. This full-generation batch
+// finalizes without retaining an internal padding gap.
 // ---------------------------------------------------------------------------
 static int
 test_d2h_zstd_single_epoch(void)
@@ -462,6 +464,8 @@ test_d2h_zstd_single_epoch(void)
           2 * (handoff.layout.total_batch_covering + handoff.nlod) *
             sizeof(size_t));
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
   // Decompress and verify chunk data via the on-disk index.
   {
@@ -773,6 +777,13 @@ test_d2h_zstd_double_buffer(void)
         c.metrics.d2h_payload_bytes_transferred ==
           c.metrics.d2h_logical_payload_bytes);
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 4);
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes > 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 4);
+  CHECK(Fail, c.metrics.shard_padding_padded_update_count == 2);
+  CHECK(Fail,
+        c.metrics.shard_padding_logical_payload_bytes +
+            c.metrics.shard_padding_internal_bytes >
+          c.metrics.shard_padding_logical_payload_bytes);
 
   {
     struct shard_state* ss = &c.ca.ar.shard[0];

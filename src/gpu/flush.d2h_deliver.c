@@ -71,8 +71,8 @@ record_flush_metrics(const struct flush_handoff* handoff,
     &metrics->d2h, t_d2h_start, t_d2h_ready, transferred, transferred);
 }
 
-// Deliver the drained host slot to the sink. Persistent tails stay entirely
-// in shard_state; aggregation never reads or uploads them.
+// Deliver the drained host slot to the sink. Fixed-extent persistent tails
+// stay entirely in shard_state; aggregation never reads or uploads them.
 struct writer_result
 d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
@@ -112,7 +112,7 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                                               sink,
                                               stage->shard_alignment,
                                               &sink_bytes,
-                                              NULL);
+                                              metrics);
 
     // Record an aggregate IO fence on the unified slot; the schedule waits
     // it out before the slot's next host payload copy. Record it even after a

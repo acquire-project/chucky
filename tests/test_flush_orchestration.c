@@ -108,7 +108,7 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
   // D2H+deliver stage
   CHECK(Fail,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
-                         platform_page_alignment(),
+                         shard_alignment,
                          config->codec.id == CODEC_NONE
                            ? DEVICE_AGGREGATE_FIXED_EXTENT
                            : DEVICE_AGGREGATE_INDEXED_EXTENT,
@@ -383,7 +383,7 @@ test_accumulated_sync_partial(void)
   // Batch drained
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
 
-  // Data delivered into the pipeline. With tail-carryover delivery, a partial
+  // Data delivered into the pipeline. With fixed-tail delivery, a partial
   // batch's data is staged in the in-memory tail (writes to disk only happen
   // at page-aligned boundaries / on shard finalize), so verify shard state
   // rather than on-disk size.

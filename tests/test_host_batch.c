@@ -3,6 +3,7 @@
 #include "test_shard_sink.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
+#include "zarr/shard_drainer.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -310,8 +311,13 @@ test_compact_run_planning(void)
   size_t host_capacity = 0;
   size_t max_runs = 0;
   CHECK(Fail,
-        host_batch_compact_capacity(
-          per_lod, active, 3, page, &host_capacity, &max_runs) == 0);
+        host_batch_compact_capacity(per_lod,
+                                    active,
+                                    3,
+                                    HOST_DELIVERY_FIXED_TAIL,
+                                    page,
+                                    &host_capacity,
+                                    &max_runs) == 0);
   CHECK(Fail, max_runs >= 5);
   uint8_t* host_data = (uint8_t*)platform_aligned_alloc(page, host_capacity);
   CHECK(Fail, host_data);
@@ -332,6 +338,8 @@ test_compact_run_planning(void)
                                  shards,
                                  active,
                                  3,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
                                  spans,
                                  max_runs,
                                  &span_count,
@@ -366,6 +374,8 @@ test_compact_run_planning(void)
                                  shards,
                                  active,
                                  3,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
                                  spans,
                                  max_runs,
                                  &span_count,
@@ -414,8 +424,13 @@ test_compact_extent_edges(void)
   size_t capacity = 0;
   size_t run_capacity = 0;
   CHECK(Fail,
-        host_batch_compact_capacity(
-          per_lod, active, 1, page, &capacity, &run_capacity) == 0);
+        host_batch_compact_capacity(per_lod,
+                                    active,
+                                    1,
+                                    HOST_DELIVERY_INDEXED_PADDED,
+                                    page,
+                                    &capacity,
+                                    &run_capacity) == 0);
   uint8_t* data = (uint8_t*)platform_aligned_alloc(page, capacity);
   struct d2h_transfer_span spans[3] = { 0 };
   struct host_batch host = { 0 };
@@ -432,6 +447,8 @@ test_compact_extent_edges(void)
                                  shards,
                                  active,
                                  1,
+                                 HOST_DELIVERY_INDEXED_PADDED,
+                                 page,
                                  spans,
                                  3,
                                  &span_count,
@@ -442,14 +459,41 @@ test_compact_extent_edges(void)
   CHECK(Fail, host.runs[2].payload_bytes == 130 && host.runs[2].finalizes);
   CHECK(Fail, spans[0].bytes == page && spans[1].bytes == 130);
 
+  // A batch that would cross the uint64 generation boundary is rejected
+  // during host planning, before any D2H span can be submitted.
+  shard.shard_epoch = UINT64_MAX;
+  CHECK(Fail,
+        host_batch_build_compact(&host,
+                                 data,
+                                 capacity,
+                                 offsets,
+                                 sizes,
+                                 &layout,
+                                 per_lod,
+                                 shards,
+                                 active,
+                                 1,
+                                 HOST_DELIVERY_INDEXED_PADDED,
+                                 page,
+                                 spans,
+                                 3,
+                                 &span_count,
+                                 data) != 0);
+  shard.shard_epoch = 0;
+
   host_batch_destroy(&host);
   platform_aligned_free(data);
 
   // Overflow is rejected by shared-slot capacity planning.
   per_lod[0].max_comp_chunk_bytes = SIZE_MAX;
   CHECK(Fail,
-        host_batch_compact_capacity(
-          per_lod, active, 1, page, &capacity, &run_capacity) != 0);
+        host_batch_compact_capacity(per_lod,
+                                    active,
+                                    1,
+                                    HOST_DELIVERY_INDEXED_PADDED,
+                                    page,
+                                    &capacity,
+                                    &run_capacity) != 0);
   return 0;
 
 Fail:
@@ -519,13 +563,18 @@ test_compact_host_tail_delivery(void)
   size_t capacity = 0;
   size_t run_capacity = 0;
   CHECK(Fail,
-        host_batch_compact_capacity(
-          per_lod, active_count, 1, page, &capacity, &run_capacity) == 0);
+        host_batch_compact_capacity(per_lod,
+                                    active_count,
+                                    1,
+                                    HOST_DELIVERY_FIXED_TAIL,
+                                    page,
+                                    &capacity,
+                                    &run_capacity) == 0);
   CHECK(Fail, run_capacity == 1);
   host_data = (uint8_t*)platform_aligned_alloc(page, capacity);
   CHECK(Fail, host_data);
 
-  test_sink_init(&sink, 1, 512);
+  test_sink_init(&sink, 2, 512);
   sink.shard_alignment = page;
   struct d2h_transfer_span span[1];
   size_t span_count = 0;
@@ -545,6 +594,8 @@ test_compact_host_tail_delivery(void)
                                  shards,
                                  active_count,
                                  1,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
                                  span,
                                  1,
                                  &span_count,
@@ -573,6 +624,8 @@ test_compact_host_tail_delivery(void)
                                  shards,
                                  active_count,
                                  1,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
                                  span,
                                  1,
                                  &span_count,
@@ -598,6 +651,66 @@ test_compact_host_tail_delivery(void)
   CHECK(Fail, shard.epoch_in_shard == 0 && shard.shard_epoch == 1);
   CHECK(Fail, active.tail_bytes == 0 && active.writer == NULL);
 
+  // The next generation exercises an exact-page non-final update, followed
+  // by an empty final update. The exact page is written immediately and the
+  // empty update contributes only the compact footer.
+  offsets[1] = page;
+  sizes[0] = page;
+  memset(device, 0xC3, page);
+  CHECK(Fail,
+        host_batch_build_compact(&batch,
+                                 host_data,
+                                 capacity,
+                                 offsets,
+                                 sizes,
+                                 &layout,
+                                 per_lod,
+                                 shards,
+                                 active_count,
+                                 1,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
+                                 span,
+                                 1,
+                                 &span_count,
+                                 host_data) == 0);
+  copy_planned_spans(host_data, device, span, span_count);
+  CHECK(Fail,
+        deliver_host_batch(&batch, shards, &sink.base, page, NULL, NULL) == 0);
+  CHECK(Fail, active.data_cursor == page && active.tail_bytes == 0);
+  CHECK(Fail, shard.epoch_in_shard == 1 && shard.shard_epoch == 1);
+
+  offsets[1] = 0;
+  sizes[0] = 0;
+  CHECK(Fail,
+        host_batch_build_compact(&batch,
+                                 host_data,
+                                 capacity,
+                                 offsets,
+                                 sizes,
+                                 &layout,
+                                 per_lod,
+                                 shards,
+                                 active_count,
+                                 1,
+                                 HOST_DELIVERY_FIXED_TAIL,
+                                 page,
+                                 span,
+                                 1,
+                                 &span_count,
+                                 host_data) == 0);
+  CHECK(Fail, span_count == 0);
+  CHECK(Fail,
+        deliver_host_batch(&batch, shards, &sink.base, page, NULL, NULL) == 0);
+  writer = &sink.writers[0][1];
+  CHECK(Fail, writer->finalized && writer->size == page + sizeof(index) + 4);
+  for (size_t i = 0; i < page; ++i)
+    CHECK(Fail, writer->buf[i] == 0xC3);
+  memcpy(stored_index, writer->buf + page, sizeof(stored_index));
+  CHECK(Fail, stored_index[0] == 0 && stored_index[1] == page);
+  CHECK(Fail, stored_index[2] == UINT64_MAX && stored_index[3] == UINT64_MAX);
+  CHECK(Fail, shard.epoch_in_shard == 0 && shard.shard_epoch == 2);
+
   host_batch_destroy(&batch);
   test_sink_free(&sink);
   platform_aligned_free(host_data);
@@ -612,10 +725,426 @@ Fail:
   return 1;
 }
 
+static int
+test_indexed_padded_delivery(void)
+{
+  const size_t page = 64;
+  uint8_t* footer = NULL;
+  uint8_t* host_data = NULL;
+  struct host_batch batch = { 0 };
+  struct test_shard_sink sink;
+  memset(&sink, 0, sizeof(sink));
+
+  uint64_t index[10];
+  memset(index, 0xFF, sizeof(index));
+  const size_t footer_capacity = footer_capacity_for(5, page);
+  footer = (uint8_t*)platform_aligned_alloc(page, footer_capacity);
+  CHECK(Fail, footer);
+  struct active_shard active = {
+    .index = index,
+    .footer_buf = footer,
+  };
+  struct shard_state shard = {
+    .shard_inner_count = 1,
+    .chunks_per_shard_inner = 1,
+    .chunks_per_shard_total = 5,
+    .chunks_per_shard_append = 5,
+    .shards = &active,
+    .footer_capacity = footer_capacity,
+    .shard_file_capacity = 1024,
+  };
+  struct shard_state* shards[1] = { &shard };
+  struct aggregate_layout per_lod[1] = {
+    { .chunks_per_epoch = 1,
+      .covering_count = 1,
+      .max_comp_chunk_bytes = 130,
+      .cps_inner = 1,
+      .num_shards = 1,
+      .active_count_max = 1,
+      .page_size = page,
+      .chunks_per_shard_append = 5 },
+  };
+  const uint32_t active_count[1] = { 1 };
+  struct batch_aggregate_layout layout;
+  CHECK(Fail,
+        batch_aggregate_layout_init_compact(
+          &layout, per_lod, active_count, 1) == 0);
+  size_t capacity = 0;
+  size_t run_capacity = 0;
+  CHECK(Fail,
+        host_batch_compact_capacity(per_lod,
+                                    active_count,
+                                    1,
+                                    HOST_DELIVERY_INDEXED_PADDED,
+                                    page,
+                                    &capacity,
+                                    &run_capacity) == 0);
+  CHECK(Fail, run_capacity == 1);
+  host_data = (uint8_t*)platform_aligned_alloc(page, capacity);
+  CHECK(Fail, host_data);
+  uint8_t device[130];
+  struct d2h_transfer_span spans[1];
+  struct stream_metrics metrics = { 0 };
+  test_sink_init(&sink, 1, 1024);
+  sink.shard_alignment = page;
+
+  const size_t payloads[5] = { 0, 10, 64, 130, 10 };
+  const uint8_t fills[5] = { 0, 0x11, 0x22, 0x33, 0x44 };
+  for (size_t update = 0; update < 5; ++update) {
+    const size_t payload = payloads[update];
+    size_t offsets[2] = { 0, payload };
+    size_t sizes[2] = { payload, 0 };
+    memset(device, fills[update], payload);
+    size_t span_count = 0;
+    CHECK(Fail,
+          host_batch_build_compact(&batch,
+                                   host_data,
+                                   capacity,
+                                   offsets,
+                                   sizes,
+                                   &layout,
+                                   per_lod,
+                                   shards,
+                                   active_count,
+                                   1,
+                                   HOST_DELIVERY_INDEXED_PADDED,
+                                   page,
+                                   spans,
+                                   1,
+                                   &span_count,
+                                   host_data) == 0);
+    CHECK(Fail, span_count == (payload > 0 ? 1u : 0u));
+    copy_planned_spans(host_data, device, spans, span_count);
+    CHECK(Fail,
+          deliver_host_batch(
+            &batch, shards, &sink.base, page, NULL, &metrics) == 0);
+    if (update == 0) {
+      CHECK(Fail, sink.open_count == 0 && shard.epoch_in_shard == 1);
+      CHECK(Fail, metrics.shard_padding_physical_update_count == 0);
+    }
+  }
+
+  struct test_shard_writer* writer = &sink.writers[0][0];
+  CHECK(Fail, writer->finalized && writer->size == 414);
+  CHECK(Fail, shard.epoch_in_shard == 0 && shard.shard_epoch == 1);
+  CHECK(Fail, index[0] == UINT64_MAX && index[1] == UINT64_MAX);
+  // The final ten payload bytes occupy [320, 330); the stored index follows.
+  uint64_t stored[10];
+  memcpy(stored, writer->buf + 330, sizeof(stored));
+  CHECK(Fail, stored[0] == UINT64_MAX && stored[1] == UINT64_MAX);
+  CHECK(Fail, stored[2] == 0 && stored[3] == 10);
+  CHECK(Fail, stored[4] == 64 && stored[5] == 64);
+  CHECK(Fail, stored[6] == 128 && stored[7] == 130);
+  CHECK(Fail, stored[8] == 320 && stored[9] == 10);
+  for (size_t i = 10; i < 64; ++i)
+    CHECK(Fail, writer->buf[i] == 0);
+  for (size_t i = 258; i < 320; ++i)
+    CHECK(Fail, writer->buf[i] == 0);
+  CHECK(Fail, metrics.shard_padding_logical_payload_bytes == 214);
+  CHECK(Fail, metrics.shard_padding_internal_bytes == 116);
+  CHECK(Fail, metrics.shard_padding_physical_update_count == 4);
+  CHECK(Fail, metrics.shard_padding_padded_update_count == 2);
+  CHECK(Fail,
+        metrics.shard_padding_logical_payload_bytes +
+            metrics.shard_padding_internal_bytes ==
+          330);
+
+  host_batch_destroy(&batch);
+  test_sink_free(&sink);
+  platform_aligned_free(host_data);
+  platform_aligned_free(footer);
+  return 0;
+
+Fail:
+  host_batch_destroy(&batch);
+  test_sink_free(&sink);
+  platform_aligned_free(host_data);
+  platform_aligned_free(footer);
+  return 1;
+}
+
+static int
+test_indexed_compact_delivery(void)
+{
+  uint8_t* host_data = NULL;
+  struct host_batch batch = { 0 };
+  struct test_shard_sink sink;
+  memset(&sink, 0, sizeof(sink));
+
+  uint64_t index[4];
+  memset(index, 0xFF, sizeof(index));
+  struct active_shard active = { .index = index };
+  struct shard_state shard = {
+    .shard_inner_count = 1,
+    .chunks_per_shard_inner = 1,
+    .chunks_per_shard_total = 2,
+    .chunks_per_shard_append = 2,
+    .shards = &active,
+    .shard_file_capacity = 128,
+  };
+  struct shard_state* shards[1] = { &shard };
+  struct aggregate_layout per_lod[1] = {
+    { .chunks_per_epoch = 1,
+      .covering_count = 1,
+      .max_comp_chunk_bytes = 10,
+      .cps_inner = 1,
+      .num_shards = 1,
+      .active_count_max = 1,
+      .page_size = 0,
+      .chunks_per_shard_append = 2 },
+  };
+  const uint32_t active_count[1] = { 1 };
+  struct batch_aggregate_layout layout;
+  CHECK(Fail,
+        batch_aggregate_layout_init_compact(
+          &layout, per_lod, active_count, 1) == 0);
+  size_t capacity = 0;
+  size_t run_capacity = 0;
+  CHECK(Fail,
+        host_batch_compact_capacity(per_lod,
+                                    active_count,
+                                    1,
+                                    HOST_DELIVERY_INDEXED_COMPACT,
+                                    0,
+                                    &capacity,
+                                    &run_capacity) == 0);
+  host_data = (uint8_t*)malloc(capacity);
+  CHECK(Fail, host_data);
+  struct d2h_transfer_span span[1];
+  struct stream_metrics metrics = { 0 };
+  test_sink_init(&sink, 1, 128);
+
+  for (size_t update = 0; update < 2; ++update) {
+    const size_t payload = update == 0 ? 0 : 10;
+    size_t offsets[2] = { 0, payload };
+    size_t sizes[2] = { payload, 0 };
+    size_t span_count = 0;
+    CHECK(Fail,
+          host_batch_build_compact(&batch,
+                                   host_data,
+                                   capacity,
+                                   offsets,
+                                   sizes,
+                                   &layout,
+                                   per_lod,
+                                   shards,
+                                   active_count,
+                                   1,
+                                   HOST_DELIVERY_INDEXED_COMPACT,
+                                   0,
+                                   span,
+                                   1,
+                                   &span_count,
+                                   host_data) == 0);
+    if (payload > 0) {
+      memset(host_data, 0x5A, payload);
+      CHECK(Fail, span_count == 1 && span[0].bytes == payload);
+    } else {
+      CHECK(Fail, span_count == 0);
+    }
+    CHECK(Fail,
+          deliver_host_batch(&batch, shards, &sink.base, 0, NULL, &metrics) ==
+            0);
+  }
+
+  struct test_shard_writer* writer = &sink.writers[0][0];
+  CHECK(Fail, writer->finalized && writer->size == 46);
+  for (size_t i = 0; i < 10; ++i)
+    CHECK(Fail, writer->buf[i] == 0x5A);
+  uint64_t stored[4];
+  memcpy(stored, writer->buf + 10, sizeof(stored));
+  CHECK(Fail, stored[0] == UINT64_MAX && stored[1] == UINT64_MAX);
+  CHECK(Fail, stored[2] == 0 && stored[3] == 10);
+  CHECK(Fail, sink.write_direct_count == 1 && sink.write_count == 1);
+  CHECK(Fail, metrics.shard_padding_logical_payload_bytes == 10);
+  CHECK(Fail, metrics.shard_padding_internal_bytes == 0);
+  CHECK(Fail, metrics.shard_padding_physical_update_count == 1);
+  CHECK(Fail, metrics.shard_padding_padded_update_count == 0);
+
+  host_batch_destroy(&batch);
+  test_sink_free(&sink);
+  free(host_data);
+  return 0;
+
+Fail:
+  host_batch_destroy(&batch);
+  test_sink_free(&sink);
+  free(host_data);
+  return 1;
+}
+
+static int
+test_shard_drainer_commands(void)
+{
+  const size_t page = 64;
+  uint8_t* data = NULL;
+  uint8_t* footer = NULL;
+  struct shard_drainer drain = { 0 };
+
+  data = (uint8_t*)platform_aligned_alloc(page, 128);
+  footer = (uint8_t*)platform_aligned_alloc(page, 64);
+  CHECK(Fail, data && footer);
+  memset(data, 0xAB, 70);
+  memset(data + 70, 0, 58);
+  uint64_t index[4];
+  memset(index, 0xFF, sizeof(index));
+  struct active_shard active = {
+    .index = index,
+    .footer_buf = footer,
+  };
+  struct shard_state shard = {
+    .shard_inner_count = 1,
+    .chunks_per_shard_inner = 1,
+    .chunks_per_shard_total = 1,
+    .chunks_per_shard_append = 1,
+    .shards = &active,
+    .footer_capacity = 64,
+  };
+  struct shard_state* shards[1] = { &shard };
+  size_t offsets[1] = { 0 };
+  size_t sizes[1] = { 70 };
+  struct host_batch_run run = {
+    .level = 0,
+    .inner_shard = 0,
+    .flat_shard = 0,
+    .active_count = 1,
+    .epoch_in_shard = 0,
+    .chunks_per_shard_inner = 1,
+    .finalizes = 1,
+    .ends_generation_run = 1,
+    .data = data,
+    .page_size = page,
+    .payload_bytes = 70,
+    .source_offset = 0,
+    .offsets = offsets,
+    .chunk_sizes = sizes,
+  };
+  struct host_batch host = {
+    .runs = &run,
+    .run_count = 1,
+    .run_capacity = 1,
+    .nlod = 1,
+    .policy = HOST_DELIVERY_INDEXED_PADDED,
+    .shard_alignment = page,
+    .slot_lifetime = data,
+  };
+  struct shard_drain_command command;
+  CHECK(Fail, shard_drain_begin(&drain, &host, shards) == 0);
+
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail, command.kind == SHARD_DRAIN_DATA);
+  CHECK(Fail, command.file_offset == 0 && command.physical_bytes == 64);
+  CHECK(Fail, command.direct_write_eligible);
+  CHECK(Fail, command.buffer_lease.kind == SHARD_DRAIN_LEASE_HOST_BATCH);
+  CHECK(Fail, command.logical_payload_bytes == 70);
+  CHECK(Fail, shard_drain_accept(&drain, &command) == 0);
+  CHECK(Fail, active.data_cursor == 64);
+
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail, command.kind == SHARD_DRAIN_FOOTER);
+  CHECK(Fail, command.file_offset == 64 && command.physical_bytes == 64);
+  CHECK(Fail, command.buffer_lease.kind == SHARD_DRAIN_LEASE_FOOTER);
+  CHECK(Fail,
+        command.source_begin == footer && command.source_end == footer + 64);
+  CHECK(Fail, command.logical_payload_bytes == 0);
+  CHECK(Fail, shard_drain_prepare(&drain, &command) == 0);
+  CHECK(Fail,
+        command.source_begin == footer && command.source_end == footer + 64);
+  for (size_t i = 0; i < 6; ++i)
+    CHECK(Fail, footer[i] == 0xAB);
+  uint64_t stored[2];
+  memcpy(stored, footer + 6, sizeof(stored));
+  CHECK(Fail, stored[0] == 0 && stored[1] == 70);
+  CHECK(Fail, shard_drain_accept(&drain, &command) == 0);
+  CHECK(Fail, index[0] == 0 && index[1] == 70);
+
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail,
+        command.kind == SHARD_DRAIN_TRUNCATE && command.logical_size == 90);
+  CHECK(Fail, shard_drain_accept(&drain, &command) == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail,
+        command.kind == SHARD_DRAIN_FINALIZE && command.closes_generation);
+  CHECK(Fail, shard_drain_accept(&drain, &command) == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == 0);
+  CHECK(Fail, shard.shard_epoch == 1 && shard.epoch_in_shard == 0);
+  CHECK(Fail, active.data_cursor == 0 && active.writer == NULL);
+  shard_drain_destroy(&drain);
+
+  // A rejected sink command is sticky and leaves that command's state
+  // uncommitted. Previously accepted commands would deliberately stay put.
+  memset(index, 0xFF, sizeof(index));
+  shard = (struct shard_state){
+    .shard_inner_count = 1,
+    .chunks_per_shard_inner = 1,
+    .chunks_per_shard_total = 2,
+    .chunks_per_shard_append = 2,
+    .shards = &active,
+    .footer_capacity = 64,
+  };
+  active.data_cursor = 0;
+  run.finalizes = 0;
+  run.ends_generation_run = 1;
+  run.payload_bytes = 10;
+  sizes[0] = 10;
+  CHECK(Fail, shard_drain_begin(&drain, &host, shards) == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail,
+        command.kind == SHARD_DRAIN_DATA && command.physical_bytes == page);
+  shard_drain_abort(&drain);
+  CHECK(Fail, shard_drain_next(&drain, &command) == -1);
+  CHECK(Fail, shard_drain_accept(&drain, &command) != 0);
+  CHECK(Fail, active.data_cursor == 0 && shard.epoch_in_shard == 0);
+  CHECK(Fail, index[0] == UINT64_MAX && index[1] == UINT64_MAX);
+  shard_drain_destroy(&drain);
+
+  // Empty indexed updates yield a zero-byte command so state remains
+  // acceptance-gated, but the executor can skip opening or writing a file.
+  memset(index, 0xFF, sizeof(index));
+  active.data_cursor = 0;
+  shard.epoch_in_shard = 0;
+  run.payload_bytes = 0;
+  sizes[0] = 0;
+  CHECK(Fail, shard_drain_begin(&drain, &host, shards) == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == 1);
+  CHECK(Fail,
+        command.kind == SHARD_DRAIN_DATA && command.physical_bytes == 0 &&
+          !command.counts_physical_update);
+  CHECK(Fail, shard.epoch_in_shard == 0 && active.data_cursor == 0);
+  CHECK(Fail, shard_drain_accept(&drain, &command) == 0);
+  CHECK(Fail, shard.epoch_in_shard == 1 && active.data_cursor == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == 0);
+  shard_drain_destroy(&drain);
+
+  // Physical cursor arithmetic is checked before a command is exposed.
+  active.data_cursor = UINT64_MAX - 32;
+  shard.epoch_in_shard = 0;
+  run.payload_bytes = 10;
+  sizes[0] = 10;
+  CHECK(Fail, shard_drain_begin(&drain, &host, shards) == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == -1);
+  CHECK(Fail, active.data_cursor == UINT64_MAX - 32);
+  CHECK(Fail, shard.epoch_in_shard == 0);
+  CHECK(Fail, shard_drain_next(&drain, &command) == -1);
+  shard_drain_destroy(&drain);
+
+  platform_aligned_free(data);
+  platform_aligned_free(footer);
+  return 0;
+
+Fail:
+  shard_drain_destroy(&drain);
+  platform_aligned_free(data);
+  platform_aligned_free(footer);
+  return 1;
+}
+
 int
 main(void)
 {
   return test_span_planning() || test_host_batch_runs() ||
          test_compact_layout_fixed_index() || test_compact_run_planning() ||
-         test_compact_extent_edges() || test_compact_host_tail_delivery();
+         test_compact_extent_edges() || test_compact_host_tail_delivery() ||
+         test_indexed_padded_delivery() || test_indexed_compact_delivery() ||
+         test_shard_drainer_commands();
 }

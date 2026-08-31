@@ -42,8 +42,8 @@ stream_engine_init_metrics(int enable_multiscale)
     .drain_dispatch = mk_stream_metric("D2H dispatch", METRIC_OWNER_DRAIN),
     .io_fence_stall =
       mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER),
-    // These three are named so the report can list them, and only the CPU
-    // path populates them.
+    // These are named so the report can list them. GPU delivery also uses the
+    // footer-buffer fence now that footer reuse sits behind the drainer.
     .footer_buffer_stall =
       mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER),
     .append_extent_stall =

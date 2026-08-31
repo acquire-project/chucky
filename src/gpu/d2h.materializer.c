@@ -294,11 +294,15 @@ d2h_materialize_finish(struct d2h_materializer* materializer,
 
   size_t capacity_bound = 0;
   size_t run_capacity = 0;
+  const enum host_delivery_policy policy = host_delivery_policy_select(
+    ticket->batch.extent_kind == DEVICE_AGGREGATE_FIXED_EXTENT,
+    placement->shard_alignment);
   CHECK(Error,
         host_batch_compact_capacity(placement->per_lod_layouts,
                                     ticket->batch.per_lod_n_active,
                                     ticket->batch.nlod,
-                                    placement->per_lod_layouts[0].page_size,
+                                    policy,
+                                    placement->shard_alignment,
                                     &capacity_bound,
                                     &run_capacity) == 0);
   CHECK(Error, capacity_bound <= ticket->slot->host_capacity);
@@ -314,6 +318,8 @@ d2h_materialize_finish(struct d2h_materializer* materializer,
                                  placement->shards_by_lod,
                                  ticket->batch.per_lod_n_active,
                                  ticket->batch.nlod,
+                                 policy,
+                                 placement->shard_alignment,
                                  ticket->spans,
                                  ticket->span_capacity,
                                  &ticket->span_count,

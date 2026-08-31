@@ -61,9 +61,9 @@ struct shard_state
   size_t footer_buf_pool_bytes;
   size_t footer_capacity; // bytes per shard
 
-  // Most a shard file can reach: every chunk at its worst-case compressed
-  // size, plus the footer. Zero when the size is unknown, which turns
-  // pre-sizing off.
+  // Compact upper bound: every chunk at its worst-case compressed size, plus
+  // the footer. The GPU drainer adds the worst retained indexed-padding bound
+  // when that policy is active. Zero means unknown and turns pre-sizing off.
   uint64_t shard_file_capacity;
 };
 
@@ -144,23 +144,25 @@ host_batch_build_legacy(struct host_batch* host,
                         uint8_t nlod,
                         void* slot_lifetime);
 
-// Worst-case pinned-host capacity for compact GPU materialization.  The
-// bound includes every real payload byte plus independently aligned space
-// for every physical-shard generation run and its possible carried tail.
+// Worst-case pinned-host capacity for compact GPU materialization.  Fixed
+// runs reserve a possible carried prefix plus independent alignment slack;
+// indexed-padded runs reserve trailing zero padding plus independent
+// alignment slack; indexed-compact runs reserve payload bytes only.
 // out_run_count is the maximum number of run views/spans for the supplied
 // active-count maxima.
 int
 host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
                             const uint32_t* per_lod_n_active,
                             uint8_t nlod,
-                            size_t page_size,
+                            enum host_delivery_policy policy,
+                            size_t shard_alignment,
                             size_t* out_bytes,
                             size_t* out_run_count);
 
 // Resolve compact absolute device offsets into physical-shard-run copies.
-// Every run receives its own page-aligned host region when page_size > 0.
-// Existing committed tails are copied into those regions before spans are
-// returned; payload copies begin immediately after the tail prefix.
+// Fixed runs prepend their committed host tail. Indexed-padded runs start at
+// an aligned base and zero their trailing physical-write slack. Indexed-
+// compact runs occupy exact extents. Empty indexed runs reserve no bytes.
 int
 host_batch_build_compact(struct host_batch* host,
                          void* aggregate_data,
@@ -172,6 +174,8 @@ host_batch_build_compact(struct host_batch* host,
                          struct shard_state* const* shards_by_lod,
                          const uint32_t* per_lod_n_active,
                          uint8_t nlod,
+                         enum host_delivery_policy policy,
+                         size_t shard_alignment,
                          struct d2h_transfer_span* spans,
                          size_t span_capacity,
                          size_t* out_span_count,

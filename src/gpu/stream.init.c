@@ -87,11 +87,15 @@ engine_limits_accumulate(struct engine_limits* lim,
       max_sz(lim->max_device_data_bytes, ml.total_data_bytes);
     size_t host_bytes = 0;
     size_t max_runs = 0;
+    const size_t shard_alignment = cl->per_level[0].agg_layout.page_size;
+    const enum host_delivery_policy policy = host_delivery_policy_select(
+      config->codec.id == CODEC_NONE, shard_alignment);
     CHECK(Fail,
           host_batch_compact_capacity(per_lod_layouts,
                                       per_lod_max,
                                       (uint8_t)cl->levels.nlod,
-                                      cl->per_level[0].agg_layout.page_size,
+                                      policy,
+                                      shard_alignment,
                                       &host_bytes,
                                       &max_runs) == 0);
     (void)max_runs;
@@ -315,10 +319,10 @@ stream_engine_bind_array(struct stream_engine* e,
   e->d2h_deliver.shard_alignment = ctx->shard_alignment;
 
   CHECK(Error,
-        codec_set_chunk_bytes(
-          &e->compress_agg.codec,
-          ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype),
-          e->streams.compress) == 0);
+        codec_set_chunk_bytes(&e->compress_agg.codec,
+                              ctx->layout.chunk_stride *
+                                dtype_bpe(ctx->config.dtype),
+                              e->streams.compress) == 0);
 
   // Invalidate the LUT cache: per-array layouts differ.
   e->compress_agg.lut_cache_valid = 0;

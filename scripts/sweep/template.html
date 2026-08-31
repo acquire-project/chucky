@@ -418,6 +418,15 @@ function tooltipText(r) {
          `${Number(d.metadata_bytes_transferred).toLocaleString()} metadata bytes, ` +
          `${Number(d.payload_copy_count).toLocaleString()} copies\n`;
   }
+  if (r.shard_padding) {
+    const p = r.shard_padding;
+    const ratio = Number(p.padding_ratio);
+    t += `shard layout: ${Number(p.internal_padding_bytes).toLocaleString()} padding / ` +
+         `${Number(p.physical_data_region_bytes).toLocaleString()} physical data bytes` +
+         `${Number.isFinite(ratio) ? ` (${(ratio * 100).toFixed(2)}%)` : ""}, ` +
+         `${Number(p.padded_update_count).toLocaleString()} / ` +
+         `${Number(p.physical_shard_update_count).toLocaleString()} padded updates\n`;
+  }
   return t.trim();
 }
 
@@ -1161,6 +1170,24 @@ function renderDiagnostics(run) {
      d.metadata_bytes_transferred, d.payload_copy_count]
       .forEach(value => row.append("td").text(
         Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
+  }
+  if (run.shard_padding && typeof run.shard_padding === "object") {
+    const p = run.shard_padding;
+    root.append("h2").text(
+      `Shard write layout: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    const table = root.append("table");
+    const head = table.append("thead").append("tr");
+    ["Logical payload bytes", "Internal padding bytes", "Physical data-region bytes",
+     "Physical-shard updates", "Padded updates", "Padding ratio"]
+      .forEach(label => head.append("th").text(label));
+    const ratio = Number(p.padding_ratio);
+    const values = [p.logical_payload_bytes, p.internal_padding_bytes,
+                    p.physical_data_region_bytes, p.physical_shard_update_count,
+                    p.padded_update_count];
+    const row = table.append("tbody").append("tr");
+    values.forEach(value => row.append("td").text(
+      Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
+    row.append("td").text(Number.isFinite(ratio) ? `${(ratio * 100).toFixed(2)}%` : "—");
   }
 
   if (!run.diagnostics || typeof run.diagnostics !== "object") return;

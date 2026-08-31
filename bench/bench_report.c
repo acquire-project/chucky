@@ -431,6 +431,31 @@ print_bench_report(const struct stream_metrics* metrics,
                  metadata,
                  (unsigned long long)metrics->d2h_payload_copy_count);
   }
+  if (metrics->shard_padding_logical_payload_bytes ||
+      metrics->shard_padding_internal_bytes ||
+      metrics->shard_padding_physical_update_count) {
+    const uint64_t physical = metrics->shard_padding_logical_payload_bytes +
+                              metrics->shard_padding_internal_bytes;
+    const double ratio =
+      physical > 0
+        ? (double)metrics->shard_padding_internal_bytes / (double)physical
+        : 0.0;
+    char logical[32], padding[32], physical_buf[32];
+    format_bytes(
+      logical, sizeof(logical), metrics->shard_padding_logical_payload_bytes);
+    format_bytes(
+      padding, sizeof(padding), metrics->shard_padding_internal_bytes);
+    format_bytes(physical_buf, sizeof(physical_buf), physical);
+    print_report(
+      "  Shard layout: logical %s, padding %s, physical %s "
+      "(%.2f%%), %llu/%llu padded updates",
+      logical,
+      padding,
+      physical_buf,
+      ratio * 100.0,
+      (unsigned long long)metrics->shard_padding_padded_update_count,
+      (unsigned long long)metrics->shard_padding_physical_update_count);
+  }
 
   print_diagnostics_report(metrics, wall_s);
 
@@ -697,6 +722,31 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_uint(&jw, m->d2h_metadata_bytes_transferred);
     jw_key(&jw, "payload_copy_count");
     jw_uint(&jw, m->d2h_payload_copy_count);
+    jw_object_end(&jw);
+  }
+
+  if (m->shard_padding_logical_payload_bytes ||
+      m->shard_padding_internal_bytes ||
+      m->shard_padding_physical_update_count) {
+    const uint64_t physical =
+      m->shard_padding_logical_payload_bytes + m->shard_padding_internal_bytes;
+    const double ratio =
+      physical > 0 ? (double)m->shard_padding_internal_bytes / (double)physical
+                   : 0.0;
+    jw_key(&jw, "shard_padding");
+    jw_object_begin(&jw);
+    jw_key(&jw, "logical_payload_bytes");
+    jw_uint(&jw, m->shard_padding_logical_payload_bytes);
+    jw_key(&jw, "internal_padding_bytes");
+    jw_uint(&jw, m->shard_padding_internal_bytes);
+    jw_key(&jw, "physical_data_region_bytes");
+    jw_uint(&jw, physical);
+    jw_key(&jw, "physical_shard_update_count");
+    jw_uint(&jw, m->shard_padding_physical_update_count);
+    jw_key(&jw, "padded_update_count");
+    jw_uint(&jw, m->shard_padding_padded_update_count);
+    jw_key(&jw, "padding_ratio");
+    jw_float(&jw, ratio);
     jw_object_end(&jw);
   }
 

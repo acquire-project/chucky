@@ -27,6 +27,15 @@ class D2HTransfer(BaseModel, extra="allow"):
     payload_copy_count: int
 
 
+class ShardPadding(BaseModel, extra="allow"):
+    logical_payload_bytes: int
+    internal_padding_bytes: int
+    physical_data_region_bytes: int
+    physical_shard_update_count: int
+    padded_update_count: int
+    padding_ratio: float
+
+
 class RunResult(BaseModel, extra="allow"):
     id: str
     scenario: str
@@ -68,6 +77,7 @@ class RunResult(BaseModel, extra="allow"):
     memory_measured_bytes: int | None = None
     # Absent in archived results; missing means unknown, not zero.
     d2h_transfer: D2HTransfer | None = None
+    shard_padding: ShardPadding | None = None
     s3_endpoint: str | None = None
     s3_region: str | None = None
     s3_bucket: str | None = None

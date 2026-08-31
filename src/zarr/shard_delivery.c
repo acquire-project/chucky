@@ -11,6 +11,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum host_delivery_policy
+host_delivery_policy_select(int fixed_extent, size_t shard_alignment)
+{
+  if (fixed_extent)
+    return HOST_DELIVERY_FIXED_TAIL;
+  return shard_alignment > 0 ? HOST_DELIVERY_INDEXED_PADDED
+                             : HOST_DELIVERY_INDEXED_COMPACT;
+}
+
 // Wait for every write queued up to the event, timed into the metric when one
 // is given.
 static void
@@ -810,7 +819,8 @@ int
 host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
                             const uint32_t* per_lod_n_active,
                             uint8_t nlod,
-                            size_t page_size,
+                            enum host_delivery_policy policy,
+                            size_t shard_alignment,
                             size_t* out_bytes,
                             size_t* out_run_count)
 {
@@ -823,7 +833,7 @@ host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct aggregate_layout* al = &per_lod_layouts[lv];
     const uint32_t active = per_lod_n_active[lv];
-    CHECK(Error, al->page_size == page_size);
+    CHECK(Error, al->page_size == shard_alignment);
     CHECK(Error, al->cps_inner > 0 && al->num_shards > 0);
     CHECK_MUL_OVERFLOW(Error, al->num_shards, al->cps_inner, UINT64_MAX);
     CHECK(Error, al->covering_count == al->num_shards * al->cps_inner);
@@ -842,26 +852,32 @@ host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
     CHECK(Error, physical_runs <= SIZE_MAX - runs);
     runs += physical_runs;
 
-    if (page_size == 0) {
+    if (shard_alignment == 0) {
+      CHECK(Error,
+            policy == HOST_DELIVERY_FIXED_TAIL ||
+              policy == HOST_DELIVERY_INDEXED_COMPACT);
       CHECK(Error, payload <= SIZE_MAX - bytes);
       bytes += payload;
       continue;
     }
 
-    // Sum(align_up(run_payload, page) + page) is bounded by the rounded
-    // aggregate payload plus two pages per physical run.  The first page of
-    // each pair covers a possible carried prefix; the other covers the sum
-    // of independent per-run rounding.  Keeping this checked upper bound
-    // avoids needing a committed starting epoch during shared allocation.
-    size_t rounded_payload = 0;
+    CHECK(Error, shard_alignment > 0);
     CHECK(Error,
-          checked_align_up_size(payload, page_size, &rounded_payload) == 0);
-    CHECK_MUL_OVERFLOW(Error, physical_runs, page_size, SIZE_MAX);
-    const size_t one_page_each = physical_runs * page_size;
-    CHECK(Error, one_page_each <= SIZE_MAX / 2);
-    const size_t slack = one_page_each * 2;
-    CHECK(Error, rounded_payload <= SIZE_MAX - slack);
-    const size_t level_bytes = rounded_payload + slack;
+          policy == HOST_DELIVERY_FIXED_TAIL ||
+            policy == HOST_DELIVERY_INDEXED_PADDED);
+
+    // Each physical run may start alignment-1 bytes after the previous one.
+    // Fixed runs may also prepend at most alignment-1 committed tail bytes;
+    // indexed runs may retain at most alignment-1 zero bytes after payload.
+    // The same checked bound covers both policies without knowing the
+    // committed starting epoch or the per-run payload distribution.
+    const size_t per_run_slack = shard_alignment - 1;
+    CHECK_MUL_OVERFLOW(Error, physical_runs, per_run_slack, SIZE_MAX);
+    const size_t one_slack_each = physical_runs * per_run_slack;
+    CHECK(Error, one_slack_each <= SIZE_MAX / 2);
+    const size_t slack = one_slack_each * 2;
+    CHECK(Error, payload <= SIZE_MAX - slack);
+    const size_t level_bytes = payload + slack;
     CHECK(Error, level_bytes <= SIZE_MAX - bytes);
     bytes += level_bytes;
   }
@@ -889,6 +905,8 @@ host_batch_build_compact(struct host_batch* host,
                          struct shard_state* const* shards_by_lod,
                          const uint32_t* per_lod_n_active,
                          uint8_t nlod,
+                         enum host_delivery_policy policy,
+                         size_t shard_alignment,
                          struct d2h_transfer_span* spans,
                          size_t span_capacity,
                          size_t* out_span_count,
@@ -898,6 +916,11 @@ host_batch_build_compact(struct host_batch* host,
   CHECK(Error, batch_layout && per_lod_layouts && shards_by_lod);
   CHECK(Error, per_lod_n_active && out_span_count);
   CHECK(Error, nlod == batch_layout->nlod);
+  CHECK(Error,
+        shard_alignment == 0 ? policy == HOST_DELIVERY_FIXED_TAIL ||
+                                 policy == HOST_DELIVERY_INDEXED_COMPACT
+                             : policy == HOST_DELIVERY_FIXED_TAIL ||
+                                 policy == HOST_DELIVERY_INDEXED_PADDED);
   CHECK(Error, batch_layout->total_batch_covering <= SIZE_MAX - nlod);
   const size_t metadata_entries =
     (size_t)batch_layout->total_batch_covering + nlod;
@@ -924,6 +947,9 @@ host_batch_build_compact(struct host_batch* host,
   CHECK(Error, span_capacity >= run_count);
 
   host->run_count = 0;
+  host->nlod = nlod;
+  host->policy = policy;
+  host->shard_alignment = shard_alignment;
   host->slot_lifetime = slot_lifetime;
   host->transfer.logical_payload_bytes = 0;
   *out_span_count = 0;
@@ -940,7 +966,8 @@ host_batch_build_compact(struct host_batch* host,
           seg->batch_covering_offset <= batch_layout->total_batch_covering);
     CHECK(Error, seg->batch_covering_offset <= SIZE_MAX - lv);
     const size_t metadata_base = seg->batch_covering_offset + (size_t)lv;
-    const size_t page_size = al->page_size;
+    const size_t page_size = shard_alignment;
+    CHECK(Error, al->page_size == shard_alignment);
     CHECK(Error, al->page_size == per_lod_layouts[0].page_size);
     CHECK(Error, cps == seg->chunks_per_shard_inner);
     CHECK(Error, cps == al->cps_inner);
@@ -985,8 +1012,14 @@ host_batch_build_compact(struct host_batch* host,
 
         size_t region = host_cursor;
         size_t reserve = payload;
-        const size_t tail = a == 0 ? ss->shards[si].tail_bytes : 0;
-        if (page_size > 0) {
+        const size_t tail = policy == HOST_DELIVERY_FIXED_TAIL && a == 0
+                              ? ss->shards[si].tail_bytes
+                              : 0;
+        CHECK(Error, tail <= SIZE_MAX - payload);
+        const size_t logical_run = tail + payload;
+        const int needs_region = logical_run > 0;
+        if (page_size > 0 && needs_region) {
+          CHECK(Error, policy != HOST_DELIVERY_INDEXED_COMPACT);
           CHECK(Error, tail < page_size);
           const size_t address_remainder = (host_base + region) % page_size;
           if (address_remainder != 0) {
@@ -994,10 +1027,21 @@ host_batch_build_compact(struct host_batch* host,
             CHECK(Error, region <= SIZE_MAX - pad);
             region += pad;
           }
+          if (policy == HOST_DELIVERY_FIXED_TAIL) {
+            CHECK(Error, logical_run >= payload);
+            reserve = logical_run;
+          } else {
+            CHECK(Error, policy == HOST_DELIVERY_INDEXED_PADDED);
+            CHECK(Error,
+                  checked_align_up_size(payload, page_size, &reserve) == 0);
+          }
+        } else if (!needs_region) {
+          reserve = 0;
+        } else {
           CHECK(Error,
-                checked_align_up_size(payload, page_size, &reserve) == 0);
-          CHECK(Error, reserve <= SIZE_MAX - page_size);
-          reserve += page_size;
+                policy == HOST_DELIVERY_FIXED_TAIL ||
+                  policy == HOST_DELIVERY_INDEXED_COMPACT);
+          CHECK(Error, tail == 0);
         }
         CHECK(Error, region <= aggregate_capacity);
         CHECK(Error, reserve <= aggregate_capacity - region);
@@ -1008,6 +1052,9 @@ host_batch_build_compact(struct host_batch* host,
           memcpy(
             (uint8_t*)aggregate_data + region, ss->shards[si].tail_buf, tail);
         }
+        if (policy == HOST_DELIVERY_INDEXED_PADDED && reserve > payload)
+          memset(
+            (uint8_t*)aggregate_data + region + payload, 0, reserve - payload);
 
         if (payload > 0) {
           spans[*out_span_count] = (struct d2h_transfer_span){
@@ -1017,6 +1064,8 @@ host_batch_build_compact(struct host_batch* host,
           };
           (*out_span_count)++;
         }
+
+        CHECK(Error, generation <= (UINT64_MAX - si) / ss->shard_inner_count);
 
         host->runs[host->run_count++] = (struct host_batch_run){
           .level = lv,
@@ -1046,6 +1095,7 @@ host_batch_build_compact(struct host_batch* host,
       a += run_len;
       if (finalizes) {
         epoch = 0;
+        CHECK(Error, generation < UINT64_MAX);
         generation++;
       } else {
         epoch += run_len;
@@ -1057,8 +1107,12 @@ host_batch_build_compact(struct host_batch* host,
   return 0;
 
 Error:
-  if (host)
+  if (host) {
     host->run_count = 0;
+    host->nlod = 0;
+    host->policy = HOST_DELIVERY_FIXED_TAIL;
+    host->shard_alignment = 0;
+  }
   if (out_span_count)
     *out_span_count = 0;
   return 1;
@@ -1102,6 +1156,9 @@ host_batch_build_legacy(struct host_batch* host,
   CHECK(Error, host_batch_reserve(host, count) == 0);
 
   host->run_count = 0;
+  host->nlod = nlod;
+  host->policy = HOST_DELIVERY_FIXED_TAIL;
+  host->shard_alignment = per_lod_layouts[0].page_size;
   host->slot_lifetime = slot_lifetime;
   host->transfer.logical_payload_bytes = 0;
 
@@ -1191,6 +1248,7 @@ host_batch_build_legacy(struct host_batch* host,
 Error:
   free(consumed);
   host->run_count = 0;
+  host->nlod = 0;
   return 1;
 }
 
@@ -1201,112 +1259,4 @@ host_batch_destroy(struct host_batch* host)
     return;
   free(host->runs);
   *host = (struct host_batch){ 0 };
-}
-
-static void
-record_host_run_index(struct active_shard* sh, const struct host_batch_run* run)
-{
-  const uint64_t cps = run->chunks_per_shard_inner;
-  for (uint32_t r = 0; r < run->active_count; ++r) {
-    for (uint64_t c = 0; c < cps; ++c) {
-      const uint64_t j = (uint64_t)r * cps + c;
-      const size_t chunk_size = run->chunk_sizes[j];
-      if (chunk_size == 0)
-        continue;
-      const uint64_t slot = (run->epoch_in_shard + r) * cps + c;
-      sh->index[2 * slot] = sh->data_cursor + run->tail_bytes +
-                            (run->offsets[j] - run->source_offset);
-      sh->index[2 * slot + 1] = chunk_size;
-    }
-  }
-}
-
-int
-deliver_host_batch(struct host_batch* host,
-                   struct shard_state* const* shards_by_lod,
-                   struct shard_sink* sink,
-                   size_t shard_alignment,
-                   size_t* out_bytes,
-                   struct stream_metrics* metrics)
-{
-  CHECK(Error, host && shards_by_lod && sink);
-  size_t total_bytes = 0;
-
-  for (size_t i = 0; i < host->run_count; ++i) {
-    const struct host_batch_run* run = &host->runs[i];
-    struct shard_state* ss = shards_by_lod[run->level];
-    CHECK(Error, run->inner_shard < ss->shard_inner_count);
-    CHECK(Error, ss->epoch_in_shard == run->epoch_in_shard);
-    CHECK(Error,
-          ss->shard_epoch * ss->shard_inner_count + run->inner_shard ==
-            run->flat_shard);
-
-    struct active_shard* sh = &ss->shards[run->inner_shard];
-    if (!sh->writer) {
-      sh->writer = sink->open(sink, run->level, run->flat_shard);
-      CHECK(Error, sh->writer);
-      if (sh->writer->presize)
-        CHECK(Error,
-              sh->writer->presize(sh->writer, ss->shard_file_capacity) == 0);
-    }
-
-    record_host_run_index(sh, run);
-    CHECK(Error, run->payload_bytes <= SIZE_MAX - run->tail_bytes);
-    const size_t total_run = run->tail_bytes + run->payload_bytes;
-    if (run->page_size == 0) {
-      if (run->payload_bytes > 0) {
-        int wr = sh->writer->write_direct
-                   ? sh->writer->write_direct(sh->writer,
-                                              sh->data_cursor,
-                                              run->data,
-                                              run->data + run->payload_bytes)
-                   : sh->writer->write(sh->writer,
-                                       sh->data_cursor,
-                                       run->data,
-                                       run->data + run->payload_bytes);
-        CHECK(Error, wr == 0);
-        total_bytes += run->payload_bytes;
-        sh->data_cursor += run->payload_bytes;
-      }
-    } else if (run->finalizes) {
-      CHECK(Error,
-            deliver_run_finalizing(sh,
-                                   ss,
-                                   sink,
-                                   run->data,
-                                   total_run,
-                                   NULL,
-                                   shard_alignment,
-                                   &total_bytes,
-                                   metrics) == 0);
-    } else {
-      CHECK(Error, shard_alignment == run->page_size);
-      CHECK(Error,
-            deliver_run_nonfinalizing(sh,
-                                      run->data,
-                                      total_run,
-                                      NULL,
-                                      shard_alignment,
-                                      shard_alignment,
-                                      &total_bytes) == 0);
-    }
-
-    if (run->ends_generation_run) {
-      ss->epoch_in_shard += run->active_count;
-      if (run->finalizes) {
-        if (run->page_size > 0)
-          CHECK(Error, close_finalized_shards(ss, sink) == 0);
-        else
-          CHECK(Error,
-                finalize_shards(ss, sink, shard_alignment, metrics) == 0);
-      }
-    }
-  }
-
-  if (out_bytes)
-    *out_bytes = total_bytes;
-  return 0;
-
-Error:
-  return 1;
 }

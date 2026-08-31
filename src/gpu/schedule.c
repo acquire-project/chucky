@@ -249,6 +249,7 @@ schedule_d2h_drain(struct d2h_deliver_stage* stage,
     struct d2h_host_placement placement = {
       .per_lod_layouts = handoff->per_lod_agg_layouts,
       .shards_by_lod = shard_ptrs,
+      .shard_alignment = stage->shard_alignment,
       .slot_lifetime = gpu_pool_at(handoff->agg_host, fc, 0).p,
     };
     if (d2h_materialize_finish(&stage->materializer, fc, &placement, &host))

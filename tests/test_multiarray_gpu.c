@@ -1183,13 +1183,12 @@ Fail:
   return 1;
 }
 
-// ---- Test: tail-carry across two arrays with non-zero shard alignment ----
+// ---- Test: indexed padding across two arrays with shard alignment ----
 //
-// Exercises the multistream path with page_size > 0 and host-only tails.
+// Exercises the multistream path with page_size > 0 and indexed padding.
 // Runs 2 batches per shard per array with interleaved writes, then verifies
-// the per-shard on-disk
-// invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
-// padding). Uses CODEC_ZSTD on both arrays so compression+tail-carry is
+// each index range and its zero-filled inter-update gap. Uses CODEC_ZSTD on
+// both arrays so compression+padding is
 // covered alongside the multistream switch (GPU multiarray requires all
 // arrays share a codec).
 static int
@@ -1200,14 +1199,14 @@ test_tail_carry_two_arrays(void)
   struct test_shard_sink sink0, sink1;
   test_sink_init_1(&sink0);
   test_sink_init_1(&sink1);
-  // Non-zero alignment activates page-aligned host-run assembly.
+  // Non-zero alignment activates page-padded indexed delivery.
   sink0.shard_alignment = 4096;
   sink1.shard_alignment = 4096;
 
   // Both arrays: dim0 size=4 chunk=1 cps_append=2 (→ 2 shards along dim0,
   // 2 epochs per shard). dim1 chunk=2 cps=2 (→ cps_inner=2). With
   // epochs_per_batch=1 we get 2 batches per shard, so each shard sees one
-  // tail-carry kick followed by a finalize kick.
+  // padded non-final kick followed by a compact finalize kick.
   struct dimension dims0[2];
   dims_create(dims0, "yx", (uint64_t[]){ 4, 4 });
   dims_set_chunk_sizes(dims0, 2, (uint64_t[]){ 1, 2 });
@@ -1257,9 +1256,8 @@ test_tail_carry_two_arrays(void)
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
-  // Per-shard invariant: file size == Σ chunk_bytes + index_data + crc4
-  // (no inter-batch zero padding). Read the index out of each shard buffer
-  // and sum the recorded chunk sizes, mirroring the integration tests.
+  // Read the index out of each shard buffer. Chunk ranges stay exact while a
+  // retained gap between physical updates is zero and smaller than one page.
   // shard_count_along_dim0 = 2; cps_inner = 1, cps_append = 2 → 2 chunks/shard.
   struct
   {
@@ -1283,15 +1281,27 @@ test_tail_carry_two_arrays(void)
 
       const uint8_t* index_ptr = sw->buf + sw->size - index_total;
       uint64_t expected_payload = 0;
+      uint64_t data_end = 0;
+      uint64_t internal_padding = 0;
       for (int j = 0; j < cps; ++j) {
-        uint64_t nbytes;
+        uint64_t offset, nbytes;
+        memcpy(&offset, index_ptr + (size_t)j * 16, sizeof(uint64_t));
         memcpy(&nbytes,
                index_ptr + (size_t)j * 16 + sizeof(uint64_t),
                sizeof(uint64_t));
+        CHECK(Fail, offset >= data_end && nbytes > 0);
+        uint64_t gap = offset - data_end;
+        CHECK(Fail, gap < 4096);
+        for (uint64_t p = data_end; p < offset; ++p)
+          CHECK(Fail, sw->buf[p] == 0);
+        internal_padding += gap;
         expected_payload += nbytes;
+        data_end = offset + nbytes;
       }
       CHECK(Fail, expected_payload > 0);
-      CHECK(Fail, sw->size == expected_payload + index_total);
+      CHECK(Fail, data_end == expected_payload + internal_padding);
+      CHECK(Fail, sw->size == data_end + index_total);
+      CHECK(Fail, internal_padding > 0);
       found++;
     }
     CHECK(Fail, found == cases[c].expected_shard_count);

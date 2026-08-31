@@ -37,13 +37,14 @@ struct device_aggregate_batch
   CUevent completion;
 };
 
-// Placement becomes authoritative only at finish time.  PR 1's legacy
-// materializers use it to construct run views over the existing device
-// layout; PR 2 can use the same boundary to place committed host tails.
+// Placement becomes authoritative only at finish time. The materializer uses
+// extent kind plus sink alignment to choose fixed-tail, indexed-padded, or
+// indexed-compact host delivery without exposing codec policy to scheduling.
 struct d2h_host_placement
 {
   const struct aggregate_layout* per_lod_layouts;
   struct shard_state* const* shards_by_lod;
+  size_t shard_alignment;
   void* slot_lifetime;
 };
 

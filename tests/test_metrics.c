@@ -103,6 +103,13 @@ check_shared_stages(const struct stream_metrics* m)
     log_error("  D2H transfer statistics are missing or inconsistent");
     ok = 0;
   }
+  if (m->shard_padding_logical_payload_bytes != m->d2h_logical_payload_bytes ||
+      m->shard_padding_internal_bytes != 0 ||
+      m->shard_padding_physical_update_count != m->d2h_payload_copy_count ||
+      m->shard_padding_padded_update_count != 0) {
+    log_error("  unaligned shard-layout statistics are inconsistent");
+    ok = 0;
+  }
   for (size_t i = 0; i < sizeof(m->edge_stall) / sizeof(m->edge_stall[0]);
        ++i) {
     if (m->edge_stall[i].wait_calls == 0) {
