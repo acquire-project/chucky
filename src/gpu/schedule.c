@@ -721,8 +721,6 @@ Error:
   return 1;
 }
 
-// The join wait is near-zero in steady state; the whole call accumulates
-// flush_stall.
 static struct writer_result
 drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
