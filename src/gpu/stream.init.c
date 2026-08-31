@@ -311,18 +311,20 @@ stream_engine_bind_array(struct stream_engine* e,
                          const struct engine_array_state* st,
                          const struct stream_context* ctx)
 {
+  // Select fallible shared geometry before replacing the engine's per-array
+  // views, so a failed bind leaves the prior binding intact.
+  CHECK(Error,
+        codec_set_chunk_bytes(&e->compress_agg.codec,
+                              ctx->layout.chunk_stride *
+                                dtype_bpe(ctx->config.dtype),
+                              e->streams.compress) == 0);
+
   e->sched = st->sched;
   e->sched.lod_active =
     schedule_lod_active(&e->ord, ctx->levels.enable_multiscale);
   e->lod = st->lod;
   e->compress_agg.ar = st->agg;
   e->d2h_deliver.shard_alignment = ctx->shard_alignment;
-
-  CHECK(Error,
-        codec_set_chunk_bytes(&e->compress_agg.codec,
-                              ctx->layout.chunk_stride *
-                                dtype_bpe(ctx->config.dtype),
-                              e->streams.compress) == 0);
 
   // Invalidate the LUT cache: per-array layouts differ.
   e->compress_agg.lut_cache_valid = 0;

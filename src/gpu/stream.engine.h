@@ -336,7 +336,7 @@ void
 engine_array_state_destroy(struct engine_array_state* st);
 
 // Make *st the engine's active array (whole-struct handoff plus LUT-cache
-// invalidation).
+// invalidation). On failure, the engine's per-array views are unchanged.
 int
 stream_engine_bind_array(struct stream_engine* e,
                          const struct engine_array_state* st,
