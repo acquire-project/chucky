@@ -9,6 +9,7 @@ enum diagnostic_section
   DIAGNOSTIC_HOST_BLOCK,
   DIAGNOSTIC_PIPELINE_GAP,
   DIAGNOSTIC_HOST_OVERHEAD,
+  DIAGNOSTIC_DEVICE_WORK,
 };
 
 struct diagnostic_entry
@@ -20,14 +21,14 @@ struct diagnostic_entry
   const struct stream_metric* metric;
 };
 
-#define DIAGNOSTIC_COUNT 11
+#define DIAGNOSTIC_COUNT 14
 
 static void
 diagnostic_entries(const struct stream_metrics* m,
                    struct diagnostic_entry out[DIAGNOSTIC_COUNT])
 {
   out[0] = (struct diagnostic_entry){ "batch_drain",
-                                      "Batch drain (wait/work)",
+                                      "Batch delivery (wait/work)",
                                       "host_block",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->flush_stall };
@@ -35,7 +36,7 @@ diagnostic_entries(const struct stream_metrics* m,
                                       "D2H dispatch work",
                                       "host_overhead",
                                       DIAGNOSTIC_HOST_OVERHEAD,
-                                      &m->drain_dispatch };
+                                      &m->delivery_dispatch };
   out[2] = (struct diagnostic_entry){ "output_slot_io",
                                       "Output-slot writes",
                                       "host_wait",
@@ -72,11 +73,26 @@ diagnostic_entries(const struct stream_metrics* m,
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[0] };
   out[9] = (struct diagnostic_entry){ "chunk_metadata_d2h",
-                                      "Chunk offsets/sizes D2H",
+                                      "Chunk metadata ready (inclusive)",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[1] };
-  out[10] = (struct diagnostic_entry){ "payload_d2h",
+  out[10] = (struct diagnostic_entry){ "indexed_aggregate_wait",
+                                       "Aggregate dependency before metadata",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->indexed_aggregate_wait };
+  out[11] = (struct diagnostic_entry){ "chunk_metadata_wait",
+                                       "Metadata ready after aggregate",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->chunk_metadata_wait };
+  out[12] = (struct diagnostic_entry){ "chunk_metadata_copy",
+                                       "Chunk offsets/sizes D2H copies",
+                                       "device_work",
+                                       DIAGNOSTIC_DEVICE_WORK,
+                                       &m->chunk_metadata_copy };
+  out[13] = (struct diagnostic_entry){ "payload_d2h",
                                        "Payload D2H",
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
@@ -253,6 +269,8 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
                            "Host overhead",
                            "Measured work",
                            wall_s);
+  print_diagnostic_section(
+    entries, DIAGNOSTIC_DEVICE_WORK, "Device work", "Measured work", wall_s);
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
     fputc('\n', stderr);
@@ -413,6 +431,45 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->aggregate);
   print_metric_row(&metrics->d2h);
   print_metric_row(&metrics->sink);
+
+  if (metrics->d2h_payload_bytes_transferred ||
+      metrics->d2h_metadata_bytes_transferred ||
+      metrics->d2h_payload_copy_count) {
+    char payload[32], metadata[32];
+    format_bytes(
+      payload, sizeof(payload), metrics->d2h_payload_bytes_transferred);
+    format_bytes(
+      metadata, sizeof(metadata), metrics->d2h_metadata_bytes_transferred);
+    print_report("  D2H transfer: payload %s, metadata %s, %llu copies",
+                 payload,
+                 metadata,
+                 (unsigned long long)metrics->d2h_payload_copy_count);
+  }
+  if (metrics->shard_padding_logical_payload_bytes ||
+      metrics->shard_padding_internal_bytes ||
+      metrics->shard_padding_physical_update_count) {
+    const uint64_t physical = metrics->shard_padding_logical_payload_bytes +
+                              metrics->shard_padding_internal_bytes;
+    const double ratio =
+      physical > 0
+        ? (double)metrics->shard_padding_internal_bytes / (double)physical
+        : 0.0;
+    char logical[32], padding[32], physical_buf[32];
+    format_bytes(
+      logical, sizeof(logical), metrics->shard_padding_logical_payload_bytes);
+    format_bytes(
+      padding, sizeof(padding), metrics->shard_padding_internal_bytes);
+    format_bytes(physical_buf, sizeof(physical_buf), physical);
+    print_report(
+      "  Shard layout: logical %s, padding %s, physical %s "
+      "(%.2f%%), %llu/%llu padded updates",
+      logical,
+      padding,
+      physical_buf,
+      ratio * 100.0,
+      (unsigned long long)metrics->shard_padding_padded_update_count,
+      (unsigned long long)metrics->shard_padding_physical_update_count);
+  }
 
   print_diagnostics_report(metrics, wall_s);
 
@@ -667,6 +724,35 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_array_end(&jw);
   }
 
+  if (m->d2h_payload_bytes_transferred || m->d2h_metadata_bytes_transferred ||
+      m->d2h_payload_copy_count) {
+    jw_key(&jw, "d2h_transfer");
+    jw_object_begin(&jw);
+    jw_key(&jw, "payload_bytes_transferred");
+    jw_uint(&jw, m->d2h_payload_bytes_transferred);
+    jw_key(&jw, "metadata_bytes_transferred");
+    jw_uint(&jw, m->d2h_metadata_bytes_transferred);
+    jw_key(&jw, "payload_copy_count");
+    jw_uint(&jw, m->d2h_payload_copy_count);
+    jw_object_end(&jw);
+  }
+
+  if (m->shard_padding_logical_payload_bytes ||
+      m->shard_padding_internal_bytes ||
+      m->shard_padding_physical_update_count) {
+    jw_key(&jw, "shard_padding");
+    jw_object_begin(&jw);
+    jw_key(&jw, "logical_payload_bytes");
+    jw_uint(&jw, m->shard_padding_logical_payload_bytes);
+    jw_key(&jw, "internal_padding_bytes");
+    jw_uint(&jw, m->shard_padding_internal_bytes);
+    jw_key(&jw, "physical_shard_update_count");
+    jw_uint(&jw, m->shard_padding_physical_update_count);
+    jw_key(&jw, "padded_update_count");
+    jw_uint(&jw, m->shard_padding_padded_update_count);
+    jw_object_end(&jw);
+  }
+
   jw_key(&jw, "stages");
   jw_object_begin(&jw);
   json_stage_metric(&jw, "memcpy", &m->memcpy);
@@ -690,9 +776,9 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_stall_count");
   jw_uint(&jw, (uint64_t)m->flush_stall.count);
   jw_key(&jw, "drain_dispatch_ms");
-  jw_float(&jw, (double)m->drain_dispatch.ms);
+  jw_float(&jw, (double)m->delivery_dispatch.ms);
   jw_key(&jw, "drain_dispatch_count");
-  jw_uint(&jw, (uint64_t)m->drain_dispatch.count);
+  jw_uint(&jw, (uint64_t)m->delivery_dispatch.count);
   jw_key(&jw, "io_fence_ms");
   jw_float(&jw, (double)m->io_fence_stall.ms);
   jw_key(&jw, "io_fence_count");
@@ -728,7 +814,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_stall");
   jw_string(&jw, metric_owner_name(m->flush_stall.owner));
   jw_key(&jw, "drain_dispatch");
-  jw_string(&jw, metric_owner_name(m->drain_dispatch.owner));
+  jw_string(&jw, metric_owner_name(m->delivery_dispatch.owner));
   jw_key(&jw, "io_fence");
   jw_string(&jw, metric_owner_name(m->io_fence_stall.owner));
   jw_key(&jw, "footer_buffer");

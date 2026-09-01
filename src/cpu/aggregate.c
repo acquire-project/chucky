@@ -220,7 +220,7 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
   const int use_carryover = (in->layout->page_size > 0);
 
   // Tail-carry callers must supply both arrays; legacy may pass NULL.
-  CHECK(Error, !use_carryover || (in->shards_by_lod && in->h_tail_bytes));
+  CHECK(Error, !use_carryover || (in->shards_by_level && in->h_tail_bytes));
 
   // Each LOD's offsets array has cnt + 1 entries. Adjacent LODs' end/start
   // would collide; shift each LOD's view by `lv` so every LOD owns a disjoint
@@ -275,9 +275,9 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     }
   }
 
-  // Leading-tail copy: stage prior batch's ragged tail at the front of each
-  // shard's region within the LOD segment (CPU equivalent of GPU's
-  // copy_leading_tail_k).
+  // Leading-tail copy: stage the prior batch's ragged tail at the front of
+  // each shard's legacy CPU aggregate region. GPU tail assembly now happens
+  // later in ordered host copying.
   if (use_carryover) {
     for (uint8_t lv = 0; lv < nlod; ++lv) {
       const struct lod_segment* seg = &in->layout->lods[lv];
@@ -286,7 +286,7 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
       const size_t* lv_tail = in->h_tail_bytes[lv];
       if (!lv_tail)
         continue;
-      const struct shard_state* ss = in->shards_by_lod[lv];
+      const struct shard_state* ss = in->shards_by_level[lv];
       const size_t shard_capacity = in->per_lod_layouts[lv].shard_capacity;
       char* seg_base = (char*)in->ws->data + seg->data_segment_offset;
       for (uint64_t si = 0; si < ss->shard_inner_count; ++si) {

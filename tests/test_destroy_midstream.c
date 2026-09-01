@@ -179,7 +179,7 @@ test_destroy_runs_out_queued_delivery(const char* tmpdir)
     src[i] = (uint16_t)(i * 31);
 
   // Hold the worker so a delivery stays queued through teardown.
-  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_AFTER_DRAIN);
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_AFTER_DELIVERY);
 
   // Error the sink first so every delivery fails fast.
   shard_pool_fs_set_error(z.pool);

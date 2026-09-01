@@ -54,6 +54,16 @@ mw_finalize(struct shard_writer* self)
   return 0;
 }
 
+static int
+mw_truncate(struct shard_writer* self, uint64_t logical_size)
+{
+  struct mem_writer* w = (struct mem_writer*)self;
+  if (logical_size > SHARD_CAP)
+    return 1;
+  w->size = (size_t)logical_size;
+  return 0;
+}
+
 static struct shard_writer*
 ms_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
@@ -66,6 +76,7 @@ ms_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     if (!w->buf)
       return NULL;
     w->base.write = mw_write;
+    w->base.truncate = mw_truncate;
     w->base.finalize = mw_finalize;
   }
   w->finalized = 0;
@@ -724,12 +735,10 @@ Fail:
   return 1;
 }
 
-// ---- Page-aligned tail carry (lazy pipeline) ----
-// A sink alignment requirement activates the carry-over delivery path,
-// whose tail kernels consume an upload the host makes only after the
-// previous batch delivers — later than the kernels are enqueued.
-// CODEC_NONE keeps the race window open (aggregate runs as soon as it is
-// enqueued); the CPU pipeline is the byte-exact oracle.
+// ---- Page-aligned host-tail carry ----
+// A sink alignment requirement activates host-side run assembly. Aggregation
+// may run ahead, but payload copying consumes the committed tail only
+// after the preceding delivery. The CPU pipeline is the byte-exact oracle.
 #define TC_Z 32  // 32 epochs (chunk_size 1), one shard generation
 #define TC_Y 144 // 2 chunks of 72
 #define TC_X 80  // 2 chunks of 40
@@ -845,6 +854,8 @@ test_gpu_zstd_round_trip(void)
   struct mem_sink gpu_sink, cpu_sink;
   ms_init(&gpu_sink);
   ms_init(&cpu_sink);
+  gpu_sink.alignment = 4096;
+  cpu_sink.alignment = 4096;
 
   struct tile_stream_gpu* gpu = NULL;
   struct tile_stream_cpu* cpu = NULL;
@@ -878,7 +889,7 @@ test_gpu_zstd_round_trip(void)
     .rank = 3,
     .dimensions = dims,
     .codec = { .id = CODEC_ZSTD },
-    .epochs_per_batch = 4,
+    .epochs_per_batch = 2,
   };
 
   const size_t chunk_elems = (size_t)RT_CHUNK_YX * RT_CHUNK_YX;
@@ -913,6 +924,7 @@ test_gpu_zstd_round_trip(void)
 
   {
     int errors = 0;
+    int padded_gaps = 0;
     for (int si = 0; si < n_shards; ++si) {
       const struct mem_writer* gw = &gpu_sink.w[0][si];
       const struct mem_writer* cw = &cpu_sink.w[0][si];
@@ -923,6 +935,7 @@ test_gpu_zstd_round_trip(void)
       CHECK(Fail,
             shard_index_parse(cw->buf, cw->size, tps_total, c_off, c_sz) == 0);
 
+      uint64_t gpu_data_end = 0;
       for (uint64_t slot = 0; slot < tps_total; ++slot) {
         // Zarr v3 shard index: row-major chunk coords within the shard.
         const uint64_t cz = slot / (RT_CPS * RT_CPS);
@@ -931,8 +944,17 @@ test_gpu_zstd_round_trip(void)
         const uint64_t z = (uint64_t)si * RT_CPS + cz; // chunk_size_z == 1
 
         CHECK(Fail, g_sz[slot] > 0 && c_sz[slot] > 0);
+        CHECK(Fail, g_off[slot] >= gpu_data_end);
+        if (g_off[slot] > gpu_data_end) {
+          uint64_t gap = g_off[slot] - gpu_data_end;
+          CHECK(Fail, gap < gpu_sink.alignment);
+          for (uint64_t p = gpu_data_end; p < g_off[slot]; ++p)
+            CHECK(Fail, gw->buf[p] == 0);
+          padded_gaps++;
+        }
         CHECK(Fail, g_off[slot] + g_sz[slot] <= gw->size);
         CHECK(Fail, c_off[slot] + c_sz[slot] <= cw->size);
+        gpu_data_end = g_off[slot] + g_sz[slot];
 
         CHECK(Fail,
               chunk_decompress(
@@ -963,6 +985,7 @@ test_gpu_zstd_round_trip(void)
       }
     }
     CHECK(Fail, errors == 0);
+    CHECK(Fail, padded_gaps > 0);
   }
 
   free(g_off);

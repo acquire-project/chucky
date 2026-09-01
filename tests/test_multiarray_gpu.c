@@ -1183,13 +1183,12 @@ Fail:
   return 1;
 }
 
-// ---- Test: tail-carry across two arrays with non-zero shard alignment ----
+// ---- Test: indexed padding across two arrays with shard alignment ----
 //
-// Exercises the multistream path with page_size > 0 (the tail-carry kernels
-// would null-deref before this test was written). Runs 2 batches per shard
-// per array with interleaved writes, then verifies the per-shard on-disk
-// invariant `shard_size = Σ chunk_bytes + index + crc` (no inter-batch
-// padding). Uses CODEC_ZSTD on both arrays so compression+tail-carry is
+// Exercises the multistream path with page_size > 0 and indexed padding.
+// Runs 2 batches per shard per array with interleaved writes, then verifies
+// each index range and its zero-filled inter-update gap. Uses CODEC_ZSTD on
+// both arrays so compression+padding is
 // covered alongside the multistream switch (GPU multiarray requires all
 // arrays share a codec).
 static int
@@ -1200,14 +1199,14 @@ test_tail_carry_two_arrays(void)
   struct test_shard_sink sink0, sink1;
   test_sink_init_1(&sink0);
   test_sink_init_1(&sink1);
-  // Non-zero alignment activates the carry-over path on the GPU.
+  // Non-zero alignment activates page-padded indexed delivery.
   sink0.shard_alignment = 4096;
   sink1.shard_alignment = 4096;
 
   // Both arrays: dim0 size=4 chunk=1 cps_append=2 (→ 2 shards along dim0,
   // 2 epochs per shard). dim1 chunk=2 cps=2 (→ cps_inner=2). With
   // epochs_per_batch=1 we get 2 batches per shard, so each shard sees one
-  // tail-carry kick followed by a finalize kick.
+  // padded non-final kick followed by a compact finalize kick.
   struct dimension dims0[2];
   dims_create(dims0, "yx", (uint64_t[]){ 4, 4 });
   dims_set_chunk_sizes(dims0, 2, (uint64_t[]){ 1, 2 });
@@ -1257,9 +1256,8 @@ test_tail_carry_two_arrays(void)
 
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
 
-  // Per-shard invariant: file size == Σ chunk_bytes + index_data + crc4
-  // (no inter-batch zero padding). Read the index out of each shard buffer
-  // and sum the recorded chunk sizes, mirroring the integration tests.
+  // Read the index out of each shard buffer. Chunk ranges stay exact while a
+  // retained gap between physical updates is zero and smaller than one page.
   // shard_count_along_dim0 = 2; cps_inner = 1, cps_append = 2 → 2 chunks/shard.
   struct
   {
@@ -1283,15 +1281,27 @@ test_tail_carry_two_arrays(void)
 
       const uint8_t* index_ptr = sw->buf + sw->size - index_total;
       uint64_t expected_payload = 0;
+      uint64_t data_end = 0;
+      uint64_t internal_padding = 0;
       for (int j = 0; j < cps; ++j) {
-        uint64_t nbytes;
+        uint64_t offset, nbytes;
+        memcpy(&offset, index_ptr + (size_t)j * 16, sizeof(uint64_t));
         memcpy(&nbytes,
                index_ptr + (size_t)j * 16 + sizeof(uint64_t),
                sizeof(uint64_t));
+        CHECK(Fail, offset >= data_end && nbytes > 0);
+        uint64_t gap = offset - data_end;
+        CHECK(Fail, gap < 4096);
+        for (uint64_t p = data_end; p < offset; ++p)
+          CHECK(Fail, sw->buf[p] == 0);
+        internal_padding += gap;
         expected_payload += nbytes;
+        data_end = offset + nbytes;
       }
       CHECK(Fail, expected_payload > 0);
-      CHECK(Fail, sw->size == expected_payload + index_total);
+      CHECK(Fail, data_end == expected_payload + internal_padding);
+      CHECK(Fail, sw->size == data_end + index_total);
+      CHECK(Fail, internal_padding > 0);
       found++;
     }
     CHECK(Fail, found == cases[c].expected_shard_count);
@@ -1322,13 +1332,10 @@ Fail:
 // epochs_per_batch=4 forces batch 1 to span shard 0 (3 epochs) + partial
 // shard 1 (1 epoch). Batch 2 finishes shard 1 (2 more epochs).
 //
-// In the broken implementation the GPU's stash_tail_k computes the tail
-// over both generations packed in a single shard column, while the host
-// correctly splits them per generation. The host's h_tail_bytes and the
-// GPU's d_tail_bytes diverge, and the next batch reads the wrong leading-
-// tail bytes from d_aggregated. Verified two ways: the byte-level file size
-// invariant AND decompression by following the on-disk index back to the
-// original fill bytes.
+// The host-copy stage must split the compact device aggregate into two physical
+// generation runs, prepend only the committed host tail for each run, and
+// deliver them oldest-first. Verified two ways: the byte-level file-size
+// invariant and the on-disk index back to the original fill bytes.
 static int
 test_tail_carry_cross_generation(void)
 {
@@ -1337,9 +1344,8 @@ test_tail_carry_cross_generation(void)
   // Chunk size is chosen to span just over one page (2049 * 2 == 4098 bytes
   // per chunk) so that:
   //  - gen 0's three chunks (12294 bytes) do NOT land on a page boundary;
-  //  - the post-finalize run in batch 0 lands at a mid-shard src (bounce);
-  //  - the second batch's non-finalizing run on shard 1 starts a fresh batch
-  //    at the page-aligned shard_base and takes write_direct.
+  //  - batch 0 crosses a generation boundary and needs two aligned regions;
+  //  - batch 1 prepends shard 1's committed two-byte host tail.
   const size_t kChunkX = 2049;
   const size_t kChunkBytes = kChunkX * sizeof(uint16_t); // 4098
 
@@ -1431,13 +1437,9 @@ test_tail_carry_cross_generation(void)
     found++;
   }
   CHECK(Fail, found == 2);
-  // batch 0: shard 0 finalize (3 chunks, bundle = copy); shard 1 starts
-  // gen 0 with 1 chunk (post-finalize run, bounce = copy).
-  // batch 1: shard 1 finalizes (2 more chunks, bundle = copy).
-  // No write_direct calls in this geometry — every run either bundles a
-  // finalize or bounces a fresh-gen run. The byte-level on-disk check
-  // above validates correctness through the bounce path. Steady-state
-  // write_direct coverage lives in test_tail_carry_two_arrays.
+  // Every physical run has its own aligned region, so complete pages can use
+  // write_direct even when a batch crosses a generation. The byte-level
+  // on-disk check above validates both aligned writes and footer assembly.
   log_info("  PASS (%d shards verified, write_direct=%d, write=%d)",
            found,
            sink.write_direct_count,

@@ -60,3 +60,11 @@ int
 verify_aggregate_result_contiguous(const struct aggregate_result* result,
                                    const struct aggregate_layout* layout,
                                    uint32_t n_active);
+
+// GPU compact contract: identical tight prefix semantics regardless of the
+// sink page size recorded in layout. Host copying owns all alignment
+// and tail placement.
+int
+verify_aggregate_result_compact(const struct aggregate_result* result,
+                                const struct aggregate_layout* layout,
+                                uint32_t n_active);

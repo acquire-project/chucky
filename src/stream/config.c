@@ -403,8 +403,8 @@ metric_owner_name(enum metric_owner o)
   switch (o) {
     case METRIC_OWNER_PRODUCER:
       return "producer";
-    case METRIC_OWNER_DRAIN:
-      return "drain";
+    case METRIC_OWNER_DELIVERY:
+      return "delivery";
     case METRIC_OWNER_H2D:
       return "h2d";
     case METRIC_OWNER_COMPUTE:

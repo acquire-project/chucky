@@ -411,6 +411,22 @@ function tooltipText(r) {
   if (r.worker_threads != null) t += `threads: ${r.worker_threads}\n`;
   const memory = memoryLine(r);
   if (memory) t += memory + "\n";
+  if (r.d2h_transfer) {
+    const d = r.d2h_transfer;
+    t += `D2H: ${Number(d.payload_bytes_transferred).toLocaleString()} payload bytes, ` +
+         `${Number(d.metadata_bytes_transferred).toLocaleString()} metadata bytes, ` +
+         `${Number(d.payload_copy_count).toLocaleString()} copies\n`;
+  }
+  if (r.shard_padding) {
+    const p = r.shard_padding;
+    const physical = Number(p.logical_payload_bytes) + Number(p.internal_padding_bytes);
+    const ratio = physical > 0 ? Number(p.internal_padding_bytes) / physical : 0;
+    t += `shard layout: ${Number(p.internal_padding_bytes).toLocaleString()} padding / ` +
+         `${physical.toLocaleString()} physical data bytes` +
+         `${Number.isFinite(ratio) ? ` (${(ratio * 100).toFixed(2)}%)` : ""}, ` +
+         `${Number(p.padded_update_count).toLocaleString()} / ` +
+         `${Number(p.physical_shard_update_count).toLocaleString()} padded updates\n`;
+  }
   return t.trim();
 }
 
@@ -1124,6 +1140,7 @@ function renderStages(run) {
 const DIAGNOSTIC_ORDER = [
   "batch_drain", "output_slot_io", "footer_buffer_io", "append_extent_io",
   "final_io", "sink_backpressure", "staging_reuse", "chunk_metadata_d2h",
+  "indexed_aggregate_wait", "chunk_metadata_wait", "chunk_metadata_copy",
   "payload_d2h", "prior_tail_state", "d2h_dispatch",
 ];
 
@@ -1132,6 +1149,7 @@ const DIAGNOSTIC_KIND_LABELS = {
   host_block: "Host block/work",
   pipeline_gap: "Pipeline gap",
   host_overhead: "Host overhead",
+  device_work: "Device work",
 };
 
 function diagnosticNumber(value, suffix = "") {
@@ -1140,6 +1158,41 @@ function diagnosticNumber(value, suffix = "") {
 }
 
 function renderDiagnostics(run) {
+  const root = d3.select("#diagnostic-table");
+  if (run.d2h_transfer && typeof run.d2h_transfer === "object") {
+    const d = run.d2h_transfer;
+    root.append("h2").text(
+      `D2H transfer: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    const table = root.append("table");
+    const head = table.append("thead").append("tr");
+    ["Payload bytes transferred", "Metadata bytes", "Payload copies"]
+      .forEach(label => head.append("th").text(label));
+    const row = table.append("tbody").append("tr");
+    [d.payload_bytes_transferred, d.metadata_bytes_transferred,
+     d.payload_copy_count]
+      .forEach(value => row.append("td").text(
+        Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
+  }
+  if (run.shard_padding && typeof run.shard_padding === "object") {
+    const p = run.shard_padding;
+    root.append("h2").text(
+      `Shard write layout: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
+    const table = root.append("table");
+    const head = table.append("thead").append("tr");
+    ["Logical payload bytes", "Internal padding bytes", "Physical data-region bytes",
+     "Physical-shard updates", "Padded updates", "Padding ratio"]
+      .forEach(label => head.append("th").text(label));
+    const physical = Number(p.logical_payload_bytes) + Number(p.internal_padding_bytes);
+    const ratio = physical > 0 ? Number(p.internal_padding_bytes) / physical : 0;
+    const values = [p.logical_payload_bytes, p.internal_padding_bytes,
+                    physical, p.physical_shard_update_count,
+                    p.padded_update_count];
+    const row = table.append("tbody").append("tr");
+    values.forEach(value => row.append("td").text(
+      Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
+    row.append("td").text(Number.isFinite(ratio) ? `${(ratio * 100).toFixed(2)}%` : "—");
+  }
+
   if (!run.diagnostics || typeof run.diagnostics !== "object") return;
   const present = Object.keys(run.diagnostics);
   const ordered = DIAGNOSTIC_ORDER.filter(id => present.includes(id))
@@ -1148,7 +1201,6 @@ function renderDiagnostics(run) {
     .map(id => [id, run.diagnostics[id]]);
   if (!entries.length) return;
 
-  const root = d3.select("#diagnostic-table");
   root.append("h2").text(
     `Diagnostics: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
   const table = root.append("table");
@@ -1179,9 +1231,9 @@ function renderDiagnostics(run) {
   root.append("p").attr("class", "diagnostic-note").text(
     "Samples count recorded intervals. Host waits record a sample only when they actually block; " +
     "the waits column counts all wait calls, including calls that were already ready. " +
-    "Batch drain may include inline drain work. " +
-    "Chunk offsets/sizes D2H is the drain host waiting for offsets and compressed sizes to arrive, " +
-    "not chunk-index kernel time.");
+    "Batch delivery may include inline delivery work. " +
+    "The inclusive indexed-metadata wait is partitioned at aggregate readiness; " +
+    "the D2H-copy row is CUDA event time for the two control-array copies.");
 }
 
 function renderStagesTiming(run, stages) {

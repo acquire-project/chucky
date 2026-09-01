@@ -13,7 +13,8 @@ extern "C"
   {
     enum compression_codec type;
     size_t max_output_size; // max compressed bytes per chunk
-    size_t chunk_bytes;     // uncompressed bytes per chunk
+    size_t chunk_bytes;     // active uncompressed bytes per chunk
+    size_t chunk_capacity;  // largest input size accepted by this instance
     size_t batch_size;      // number of chunks
 
     // Device state (owned, allocated by codec_init)
@@ -49,6 +50,13 @@ extern "C"
                  enum compression_codec type,
                  size_t chunk_bytes,
                  size_t batch_size);
+
+  // Select the active input geometry for a shared codec instance. The codec
+  // allocations remain sized to chunk_capacity/max_output_size; the per-chunk
+  // size arrays are refreshed on stream before the next compression/aggregate.
+  int codec_set_chunk_bytes(struct codec* c,
+                            size_t chunk_bytes,
+                            CUstream stream);
 
   // Free device resources.
   void codec_free(struct codec* c);

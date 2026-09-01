@@ -76,6 +76,14 @@ fill_ptrs_kernel(void** d_ptrs,
   }
 }
 
+__global__ void
+fill_sizes_kernel(size_t* d_sizes, size_t value, size_t count)
+{
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < count)
+    d_sizes[i] = value;
+}
+
 // --- codec_alignment ---
 
 extern "C" size_t
@@ -221,6 +229,7 @@ codec_init(struct codec* c,
   memset(c, 0, sizeof(*c));
   c->type = type;
   c->chunk_bytes = chunk_bytes;
+  c->chunk_capacity = chunk_bytes;
   c->batch_size = batch_size;
 
   if (!codec_is_gpu_supported(type)) {
@@ -280,6 +289,31 @@ codec_init(struct codec* c,
 
 Fail:
   codec_free(c);
+  return 1;
+}
+
+extern "C" int
+codec_set_chunk_bytes(struct codec* c, size_t chunk_bytes, CUstream stream)
+{
+  const unsigned block = 256;
+  unsigned grid = 0;
+  cudaStream_t cuda_stream = (cudaStream_t)stream;
+  CHECK(Fail, c && chunk_bytes > 0 && chunk_bytes <= c->chunk_capacity);
+  if (chunk_bytes == c->chunk_bytes)
+    return 0;
+
+  grid = (unsigned)((c->batch_size + block - 1) / block);
+  CUDA_LAUNCH_OR(Fail,
+                 fill_sizes_kernel<<<grid, block, 0, cuda_stream>>>(
+                   c->d_uncomp_sizes, chunk_bytes, c->batch_size));
+  if (c->type == CODEC_NONE)
+    CUDA_LAUNCH_OR(Fail,
+                   fill_sizes_kernel<<<grid, block, 0, cuda_stream>>>(
+                     c->d_comp_sizes, chunk_bytes, c->batch_size));
+  c->chunk_bytes = chunk_bytes;
+  return 0;
+
+Fail:
   return 1;
 }
 
