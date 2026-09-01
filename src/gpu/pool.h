@@ -78,6 +78,17 @@ gpu_pool_host_acquire_consume(struct gpu_pool* p,
                               int slot,
                               struct gpu_pool_view* out);
 
+// As above, with a diagnostic-only split of the inclusive ready-edge wait at
+// an upstream prerequisite. The pool's ready edge remains the only ordering
+// condition that authorizes host access to the returned payload.
+int
+gpu_pool_host_acquire_consume_split(struct gpu_pool* p,
+                                    int slot,
+                                    enum gpu_edge prerequisite,
+                                    struct stream_metric* before,
+                                    struct stream_metric* after,
+                                    struct gpu_pool_view* out);
+
 // Payload offset with no ordering queued. Only for host-ordered paths
 // (sync flush, bind, teardown) and offsets within a generation this caller
 // already acquired on the same stream.

@@ -30,7 +30,7 @@ struct test_ctx
   struct d2h_deliver_stage d2h;
   CUstream compute;
   CUstream d2h_stream;
-  CUstream drain_stream;
+  CUstream payload_copy_stream;
   CUdeviceptr d_pool;
   struct gpu_ordering ord; // edge registry the harness pools draw from
   struct gpu_pool pool;    // chunk pool; slots rebound per kick's pool_buf
@@ -64,7 +64,7 @@ test_ctx_destroy(struct test_ctx* c)
   free(c->batch_active_masks);
   cu_stream_destroy(c->compute);
   cu_stream_destroy(c->d2h_stream);
-  cu_stream_destroy(c->drain_stream);
+  cu_stream_destroy(c->payload_copy_stream);
 }
 
 // Setup: compute layouts, init compress_agg + d2h_deliver, allocate pool.
@@ -83,13 +83,14 @@ test_ctx_setup(struct test_ctx* c,
 
   CU(Fail, cuStreamCreate(&c->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&c->d2h_stream, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&c->drain_stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&c->payload_copy_stream, CU_STREAM_NON_BLOCKING));
 
   CHECK(Fail, gpu_ordering_init(&c->ord, c->compute) == 0);
   c->ord_inited = 1;
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_COMPUTE, c->compute);
   gpu_ordering_register_stream(&c->ord, GPU_STREAM_D2H, c->d2h_stream);
-  gpu_ordering_register_stream(&c->ord, GPU_STREAM_DRAIN, c->drain_stream);
+  gpu_ordering_register_stream(
+    &c->ord, GPU_STREAM_PAYLOAD_COPY, c->payload_copy_stream);
 
   CHECK(Fail,
         compress_agg_init(&c->ca, &c->cl, config, &c->ord, c->compute) == 0);
@@ -98,8 +99,11 @@ test_ctx_setup(struct test_ctx* c,
   CHECK(Fail,
         d2h_deliver_init(&c->d2h,
                          platform_page_alignment(),
+                         config->codec.id == CODEC_NONE
+                           ? AGGREGATE_FIXED_SIZE
+                           : AGGREGATE_VARIABLE_SIZE,
                          &c->ord,
-                         c->drain_stream,
+                         c->payload_copy_stream,
                          c->compute) == 0);
   c->d2h_inited = 1;
 
@@ -125,7 +129,7 @@ Fail:
   return 1;
 }
 
-// Run the compress_agg kick + d2h_deliver kick + drain for a batch.
+// Run compression, aggregation, host copies, and delivery for a batch.
 static int
 test_ctx_kick_and_drain(struct test_ctx* c,
                         const struct tile_stream_configuration* config,
@@ -153,17 +157,17 @@ test_ctx_kick_and_drain(struct test_ctx* c,
         schedule_compress_agg_kick(
           &c->ca, &in, &c->cl.levels, &c->pool, 0, c->compute, handoff) == 0);
 
-  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, sink, c->d2h_stream) == 0);
+  CHECK(Fail, schedule_d2h_kick(&c->d2h, handoff, c->d2h_stream) == 0);
 
-  struct writer_result r = schedule_d2h_drain(&c->d2h,
-                                              handoff,
-                                              &c->cl.levels,
-                                              &c->cl.dims,
-                                              &c->cl.layouts[0],
-                                              config,
-                                              sink,
-                                              &c->metrics,
-                                              &c->metadata_clock);
+  struct writer_result r = schedule_deliver_batch(&c->d2h,
+                                                  handoff,
+                                                  &c->cl.levels,
+                                                  &c->cl.dims,
+                                                  &c->cl.layouts[0],
+                                                  config,
+                                                  sink,
+                                                  &c->metrics,
+                                                  &c->metadata_clock);
   CHECK(Fail, r.error == 0);
 
   return 0;
@@ -213,7 +217,7 @@ test_d2h_single_epoch_none(void)
   // Record pool-filled after the fill
   CHECK(Fail, gpu_pool_release_produce(&c.pool, 0, c.compute) == 0);
 
-  // Kick compress_agg + D2H + drain
+  // Kick compression, aggregation, host copies, and delivery.
   struct flush_handoff handoff;
   CHECK(Fail,
         test_ctx_kick_and_drain(
@@ -231,7 +235,14 @@ test_d2h_single_epoch_none(void)
   CHECK(Fail, metric_arrived(&c.metrics.compress, 0));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail,
+        c.metrics.d2h_payload_bytes_transferred == total_chunks * chunk_bytes);
+  CHECK(Fail, c.metrics.d2h_metadata_bytes_transferred == 0);
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, metric_arrived(&c.metrics.chunk_metadata_copy, 0));
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
   // Tile data correctness verified by test_compress_agg
 
@@ -389,8 +400,8 @@ Fail:
 
 // ---------------------------------------------------------------------------
 // Test 3: CODEC_ZSTD, K=2 batch (full shard) — compressed data arrives
-// Verifies ZSTD round-trip end-to-end: with tail-carryover delivery, partial
-// batches stay staged in the tail buffer and only land on disk at finalize.
+// Verifies variable-size ZSTD round-trip end-to-end. This full-generation batch
+// finalizes without retaining an internal padding gap.
 // ---------------------------------------------------------------------------
 static int
 test_d2h_zstd_single_epoch(void)
@@ -443,7 +454,21 @@ test_d2h_zstd_single_epoch(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 1));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail, c.metrics.d2h_payload_bytes_transferred > 0);
+  CHECK(Fail,
+        c.metrics.d2h_metadata_bytes_transferred ==
+          2 *
+            (handoff.batch.layout.total_batch_covering +
+             handoff.batch.layout.nlod) *
+            sizeof(size_t));
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, metric_arrived_timed(&c.metrics.chunk_metadata_copy, 1));
+  CHECK(Fail,
+        c.metrics.chunk_metadata_copy.input_bytes ==
+          c.metrics.d2h_metadata_bytes_transferred);
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
   // Decompress and verify chunk data via the on-disk index.
   {
@@ -515,7 +540,7 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Two consecutive kick+drain cycles (double buffer, fc=0 then fc=1)
+// Test 4: Two consecutive deliveries (double buffer, fc=0 then fc=1)
 // ---------------------------------------------------------------------------
 static int
 test_d2h_double_buffer(void)
@@ -706,8 +731,8 @@ test_d2h_zstd_double_buffer(void)
 
   CHECK(Fail, sink.finalize_count == 1);
 
-  // Cycle 3: reuse fc=0. compress_agg's GPU_EDGE_SLOT_DRAINED wait depends
-  // on the drain having recorded the edge in cycle 1.
+  // Cycle 3: reuse fc=0. compress_agg's GPU_EDGE_SLOT_COPY_DONE wait depends
+  // on delivery having recorded the edge in cycle 1.
   CHECK(
     Fail,
     fill_pool_epoch(
@@ -750,7 +775,17 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 4));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.chunk_metadata_copy, 4));
+  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
+  CHECK(Fail, c.metrics.d2h_payload_bytes_transferred > 0);
+  CHECK(Fail, c.metrics.d2h_payload_copy_count == 4);
+  CHECK(Fail, c.metrics.shard_padding_internal_bytes > 0);
+  CHECK(Fail, c.metrics.shard_padding_physical_update_count == 4);
+  CHECK(Fail, c.metrics.shard_padding_padded_update_count == 2);
+  CHECK(Fail,
+        c.metrics.shard_padding_logical_payload_bytes +
+            c.metrics.shard_padding_internal_bytes >
+          c.metrics.shard_padding_logical_payload_bytes);
 
   {
     struct shard_state* ss = &c.ca.ar.shard[0];

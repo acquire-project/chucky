@@ -1031,14 +1031,12 @@ test_midstream_metadata_update(const char* tmpdir)
     // Follow the advertised extent into the shard files the way a reader
     // would. Every shard it names must carry a real index; a shard still
     // being written has chunk data where the index belongs.
-    const uint64_t append_shards =
-      finalized_chunks / dims[0].chunks_per_shard;
+    const uint64_t append_shards = finalized_chunks / dims[0].chunks_per_shard;
     const size_t chunks_per_shard_total = (size_t)dims[0].chunks_per_shard *
                                           dims[1].chunks_per_shard *
                                           dims[2].chunks_per_shard;
-    const int x_shards =
-      (int)ceildiv(ceildiv(dims[2].size, dims[2].chunk_size),
-                   dims[2].chunks_per_shard);
+    const int x_shards = (int)ceildiv(ceildiv(dims[2].size, dims[2].chunk_size),
+                                      dims[2].chunks_per_shard);
     for (uint64_t sz = 0; sz < append_shards; ++sz) {
       for (int sx = 0; sx < x_shards; ++sx) {
         char spath[4096];
@@ -1053,9 +1051,8 @@ test_midstream_metadata_update(const char* tmpdir)
         uint8_t* shard_data;
         size_t shard_len;
         CHECK(Fail4, read_file_all(spath, &shard_data, &shard_len) == 0);
-        int index_ok =
-          shard_index_check_crc(shard_data, shard_len, chunks_per_shard_total) ==
-          0;
+        int index_ok = shard_index_check_crc(
+                         shard_data, shard_len, chunks_per_shard_total) == 0;
         free(shard_data);
         CHECK(Fail4, index_ok);
       }
@@ -1196,13 +1193,26 @@ test_unbuffered_pipeline(const char* tmpdir)
         &chunk_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
     }
 
-    // Tail-carryover invariant: shard files are exactly
-    //   Σ chunk_nbytes + index + crc, no inter-batch zero padding.
+    // Indexed aligned delivery keeps exact chunk ranges and may retain one
+    // zero-filled sub-page gap between physical updates.
     {
       uint64_t expected_payload = 0;
-      for (int i = 0; i < chunks_per_shard_total; ++i)
+      uint64_t data_end = 0;
+      uint64_t internal_padding = 0;
+      const size_t alignment = platform_page_alignment();
+      for (int i = 0; i < chunks_per_shard_total; ++i) {
+        CHECK(Fail4, chunk_offsets[i] >= data_end);
+        uint64_t gap = chunk_offsets[i] - data_end;
+        CHECK(Fail4, gap < alignment);
+        for (uint64_t p = data_end; p < chunk_offsets[i]; ++p)
+          CHECK(Fail4, shard_data[p] == 0);
+        internal_padding += gap;
         expected_payload += chunk_nbytes[i];
-      CHECK(Fail4, shard_len == expected_payload + index_total_bytes);
+        data_end = chunk_offsets[i] + chunk_nbytes[i];
+      }
+      CHECK(Fail4, data_end == expected_payload + internal_padding);
+      CHECK(Fail4, shard_len == data_end + index_total_bytes);
+      CHECK(Fail4, internal_padding > 0);
     }
 
     size_t chunk_stride_bytes =
@@ -1418,16 +1428,34 @@ test_unbuffered_pipeline_multishard(const char* tmpdir)
           &chunk_nbytes[i], index_ptr + (size_t)i * 16 + 8, sizeof(uint64_t));
       }
 
-      // Tail-carryover invariant: shard files are exactly
-      //   Σ chunk_nbytes + index + crc, no inter-batch zero padding.
+      // Exact chunk ranges may be separated by retained, zero-filled padding.
       uint64_t expected_payload = 0;
-      for (int i = 0; i < chunks_per_shard_total; ++i)
+      uint64_t data_end = 0;
+      uint64_t internal_padding = 0;
+      const size_t alignment = platform_page_alignment();
+      for (int i = 0; i < chunks_per_shard_total; ++i) {
+        if (chunk_offsets[i] < data_end) {
+          errors++;
+          continue;
+        }
+        uint64_t gap = chunk_offsets[i] - data_end;
+        if (gap >= alignment) {
+          errors++;
+          continue;
+        }
+        for (uint64_t p = data_end; p < chunk_offsets[i]; ++p)
+          if (shard_data[p] != 0)
+            errors++;
+        internal_padding += gap;
         expected_payload += chunk_nbytes[i];
-      if (shard_len != expected_payload + index_total_bytes) {
-        log_error("shard %d: file size %zu != payload %llu + index %zu",
+        data_end = chunk_offsets[i] + chunk_nbytes[i];
+      }
+      if (data_end != expected_payload + internal_padding ||
+          shard_len != data_end + index_total_bytes) {
+        log_error("shard %d: file size %zu != data region %llu + index %zu",
                   i_shard,
                   shard_len,
-                  (unsigned long long)expected_payload,
+                  (unsigned long long)data_end,
                   index_total_bytes);
         errors++;
       }

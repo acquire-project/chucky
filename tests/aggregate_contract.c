@@ -127,7 +127,7 @@ verify_aggregate_result_contiguous(const struct aggregate_result* result,
               result->offsets[0]);
     ++violations;
   }
-  for (uint64_t j = 0; j + 1 < covering; ++j) {
+  for (uint64_t j = 0; j < covering; ++j) {
     const size_t delta = result->offsets[j + 1] - result->offsets[j];
     const size_t sz = result->chunk_sizes[j];
     if (delta != sz) {
@@ -138,6 +138,38 @@ verify_aggregate_result_contiguous(const struct aggregate_result* result,
                 delta,
                 j,
                 sz);
+      ++violations;
+    }
+  }
+  return violations;
+}
+
+int
+verify_aggregate_result_compact(const struct aggregate_result* result,
+                                const struct aggregate_layout* layout,
+                                uint32_t n_active)
+{
+  int violations = 0;
+  if (!result || !layout) {
+    log_error("contract: NULL compact result/layout");
+    return 1;
+  }
+  if (n_active == 0)
+    return 0;
+  const uint64_t covering = (uint64_t)n_active * layout->covering_count;
+  if (result->offsets[0] != 0) {
+    log_error("contract: compact offsets[0]=%zu, expected 0",
+              result->offsets[0]);
+    ++violations;
+  }
+  for (uint64_t j = 0; j < covering; ++j) {
+    const size_t delta = result->offsets[j + 1] - result->offsets[j];
+    if (delta != result->chunk_sizes[j]) {
+      log_error("contract: compact offset delta at %" PRIu64
+                " is %zu, expected %zu",
+                j,
+                delta,
+                result->chunk_sizes[j]);
       ++violations;
     }
   }

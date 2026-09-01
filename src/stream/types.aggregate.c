@@ -209,6 +209,124 @@ Error:
   return 1;
 }
 
+int
+batch_aggregate_layout_init_compact(struct batch_aggregate_layout* out,
+                                    const struct aggregate_layout* per_lod,
+                                    const uint32_t* per_lod_n_active,
+                                    uint8_t nlod)
+{
+  CHECK(Error, out && per_lod && per_lod_n_active);
+  CHECK(Error, nlod >= 1 && nlod <= LOD_MAX_LEVELS);
+
+  memset(out, 0, sizeof(*out));
+  out->nlod = nlod;
+  out->page_size = 0;
+  out->max_comp_chunk_bytes = per_lod[0].max_comp_chunk_bytes;
+
+  uint64_t chunk_acc = 0;
+  uint64_t covering_acc = 0;
+  size_t data_acc = 0;
+  for (uint8_t lv = 0; lv < nlod; ++lv) {
+    const struct aggregate_layout* in = &per_lod[lv];
+    struct lod_segment* seg = &out->lods[lv];
+    CHECK(Error, in->max_comp_chunk_bytes == out->max_comp_chunk_bytes);
+    CHECK_MUL_OVERFLOW(
+      Error, per_lod_n_active[lv], in->chunks_per_epoch, UINT64_MAX);
+    CHECK_MUL_OVERFLOW(
+      Error, per_lod_n_active[lv], in->covering_count, UINT64_MAX);
+    const uint64_t batch_chunks =
+      (uint64_t)per_lod_n_active[lv] * in->chunks_per_epoch;
+    const uint64_t batch_covering =
+      (uint64_t)per_lod_n_active[lv] * in->covering_count;
+    CHECK_MUL_OVERFLOW(Error, batch_chunks, in->max_comp_chunk_bytes, SIZE_MAX);
+    const size_t segment_bytes =
+      (size_t)batch_chunks * in->max_comp_chunk_bytes;
+    CHECK(Error, chunk_acc <= UINT64_MAX - batch_chunks);
+    CHECK(Error, covering_acc <= UINT64_MAX - batch_covering);
+    CHECK(Error, data_acc <= SIZE_MAX - segment_bytes);
+
+    *seg = (struct lod_segment){
+      .chunks_per_epoch = in->chunks_per_epoch,
+      .covering_count = in->covering_count,
+      .chunks_per_shard_inner = in->cps_inner,
+      .n_active = per_lod_n_active[lv],
+      .batch_chunk_offset = chunk_acc,
+      .batch_covering_offset = covering_acc,
+      .data_segment_offset = data_acc,
+      .data_segment_bytes = segment_bytes,
+    };
+    chunk_acc += batch_chunks;
+    covering_acc += batch_covering;
+    data_acc += segment_bytes;
+  }
+
+  out->total_batch_chunks = chunk_acc;
+  out->total_batch_covering = covering_acc;
+  out->total_data_bytes = data_acc;
+  return 0;
+
+Error:
+  if (out)
+    memset(out, 0, sizeof(*out));
+  return 1;
+}
+
+int
+aggregate_fixed_host_index(const struct batch_aggregate_layout* layout,
+                           const struct aggregate_layout* per_lod,
+                           size_t fixed_chunk_bytes,
+                           size_t* offsets,
+                           size_t* chunk_sizes)
+{
+  CHECK(Error, layout && per_lod && offsets && chunk_sizes);
+  CHECK(Error, layout->total_batch_covering <= SIZE_MAX - layout->nlod);
+  const size_t count = (size_t)layout->total_batch_covering + layout->nlod;
+  CHECK(Error, count > 0);
+  CHECK_MUL_OVERFLOW(Error, count, sizeof(*chunk_sizes), SIZE_MAX);
+  memset(chunk_sizes, 0, count * sizeof(*chunk_sizes));
+
+  for (uint8_t lv = 0; lv < layout->nlod; ++lv) {
+    const struct lod_segment* seg = &layout->lods[lv];
+    const struct aggregate_layout* agg = &per_lod[lv];
+    CHECK(Error, seg->covering_count == agg->covering_count);
+    CHECK(Error, seg->chunks_per_epoch == agg->chunks_per_epoch);
+    CHECK(Error, seg->chunks_per_shard_inner == agg->cps_inner);
+    CHECK(Error, agg->cps_inner > 0);
+    CHECK(Error, agg->covering_count % agg->cps_inner == 0);
+    const uint64_t num_shards = agg->covering_count / agg->cps_inner;
+    const uint64_t shard_shape[2] = { num_shards, agg->cps_inner };
+    const int64_t shard_strides[2] = {
+      (int64_t)seg->n_active * (int64_t)agg->cps_inner,
+      1,
+    };
+    const uint64_t metadata_base = seg->batch_covering_offset + lv;
+
+    for (uint32_t a = 0; a < seg->n_active; ++a) {
+      for (uint64_t j = 0; j < agg->chunks_per_epoch; ++j) {
+        const uint64_t perm_pos =
+          ravel(agg->lifted_rank, agg->lifted_shape, agg->lifted_strides, j);
+        const uint64_t target = metadata_base +
+                                ravel(2, shard_shape, shard_strides, perm_pos) +
+                                (uint64_t)a * agg->cps_inner;
+        CHECK(Error, target < count);
+        chunk_sizes[target] = fixed_chunk_bytes;
+      }
+    }
+  }
+
+  size_t cursor = 0;
+  for (size_t i = 0; i < count; ++i) {
+    offsets[i] = cursor;
+    CHECK(Error, chunk_sizes[i] <= SIZE_MAX - cursor);
+    cursor += chunk_sizes[i];
+  }
+  CHECK(Error, cursor <= layout->total_data_bytes);
+  return 0;
+
+Error:
+  return 1;
+}
+
 void
 aggregate_batch_luts_unified(const struct batch_aggregate_layout* layout,
                              const struct aggregate_layout* per_lod,

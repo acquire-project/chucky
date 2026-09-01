@@ -38,8 +38,8 @@ shard_file_capacity_for(uint64_t chunks_per_shard_total,
                         size_t footer_capacity)
 {
   if (max_comp_chunk_bytes == 0 ||
-      chunks_per_shard_total > (UINT64_MAX - footer_capacity) /
-                                 max_comp_chunk_bytes)
+      chunks_per_shard_total >
+        (UINT64_MAX - footer_capacity) / max_comp_chunk_bytes)
     return 0;
   return chunks_per_shard_total * max_comp_chunk_bytes + footer_capacity;
 }
@@ -166,7 +166,8 @@ shard_tail_set(struct active_shard* sh,
                size_t n)
 {
   sh->tail_bytes = n;
-  *h_tail_bytes_si = n;
+  if (h_tail_bytes_si)
+    *h_tail_bytes_si = n;
   if (n > 0)
     memcpy(sh->tail_buf, src, n);
 }
@@ -350,10 +351,9 @@ finalize_shards(struct shard_state* ss,
 }
 
 // Sum chunk_sizes for chunks in shard si over epoch range [a, a+run_len).
-// Used in place of `offsets[j_run_end] - offsets[j_run_start]` because
-// add_shard_bias_k on the GPU side biases offsets[base..base+tps_group-1]
-// but not the shard-end sentinel — an offsets diff that hits the sentinel
-// underflows.
+// Used in the legacy shard-capacity path instead of
+// `offsets[j_run_end] - offsets[j_run_start]`: each shard's local offsets do
+// not guarantee that a cross-region sentinel forms a valid difference.
 static size_t
 sum_run_chunks(const size_t* chunk_sizes,
                uint64_t si,

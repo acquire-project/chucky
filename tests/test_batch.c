@@ -72,13 +72,14 @@ coordinator_sink_has_output(const struct test_shard_sink* sink,
 
 #define COORDINATOR_MAX_CHUNKS_PER_SHARD 64
 
-// A batch whose aggregation read a stale tail length places its first chunk
-// at the wrong offset. The shard still finalizes with a plausible byte count,
-// so the only thing that catches it is the recorded layout: every chunk must
-// begin exactly where the previous one ended.
+// Validate chunk ranges in index order. Fixed delivery remains packed; indexed
+// aligned delivery may retain one zero-filled sub-alignment gap between
+// physical-shard updates.
 static int
-coordinator_shards_are_packed(const struct test_shard_sink* sink,
-                              const struct compress_agg_array* ar)
+coordinator_shards_have_valid_layout(const struct test_shard_sink* sink,
+                                     const struct compress_agg_array* ar,
+                                     int allow_padding,
+                                     size_t alignment)
 {
   uint64_t offsets[COORDINATOR_MAX_CHUNKS_PER_SHARD];
   uint64_t sizes[COORDINATOR_MAX_CHUNKS_PER_SHARD];
@@ -91,7 +92,7 @@ coordinator_shards_are_packed(const struct test_shard_sink* sink,
     if (!w->finalized)
       continue;
 
-    const uint64_t nchunks = ar->shard[si].chunks_per_shard_total;
+    const uint64_t nchunks = ar->shard[0].chunks_per_shard_total;
     if (nchunks > COORDINATOR_MAX_CHUNKS_PER_SHARD ||
         shard_index_parse(w->buf, w->size, nchunks, offsets, sizes)) {
       log_error("  shard %llu: cannot read a %llu chunk index from %zu bytes",
@@ -109,7 +110,11 @@ coordinator_shards_are_packed(const struct test_shard_sink* sink,
         past_end = 1;
         continue;
       }
-      if (past_end || sizes[k] == 0 || offsets[k] != expected_offset) {
+      uint64_t gap = offsets[k] >= expected_offset
+                       ? offsets[k] - expected_offset
+                       : UINT64_MAX;
+      if (past_end || sizes[k] == 0 || offsets[k] < expected_offset ||
+          (gap > 0 && (!allow_padding || alignment == 0 || gap >= alignment))) {
         log_error("  shard %llu chunk %llu: offset %llu size %llu, "
                   "expected offset %llu%s",
                   (unsigned long long)si,
@@ -119,6 +124,15 @@ coordinator_shards_are_packed(const struct test_shard_sink* sink,
                   (unsigned long long)expected_offset,
                   past_end ? " (after an unwritten chunk)" : "");
         return 0;
+      }
+      for (uint64_t p = expected_offset; p < offsets[k]; ++p) {
+        if (p >= w->size || w->buf[p] != 0) {
+          log_error("  shard %llu chunk %llu: nonzero padding at %llu",
+                    (unsigned long long)si,
+                    (unsigned long long)k,
+                    (unsigned long long)p);
+          return 0;
+        }
       }
       expected_offset = offsets[k] + sizes[k];
     }
@@ -636,9 +650,9 @@ Fail0:
   return 1;
 }
 
-// Hold generation 1 after submission but before drain. Generation 2 may
-// compress and reach PREPARED, but cannot aggregate until generation 1 has
-// delivered and synchronously uploaded its tail state.
+// Hold generation 1 after submission but before drain. Generation 2 must be
+// fully aggregated and host-copy-begun while payload placement remains
+// ordered behind generation 1 delivery.
 static int
 run_host_coordinator_hold(enum compression_codec codec)
 {
@@ -654,7 +668,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   int held = 0;
   int ok = 0;
   CHECK(Fail, s);
-  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_HOST_COORDINATED);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
   CHECK(Fail, s->engine.sched.epochs_per_batch == 1);
   CHECK(Fail, s->engine.compress_agg.ar.total_shards > 1);
 
@@ -662,7 +676,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   src = make_src(2 * epoch_elements);
   CHECK(Fail, src);
 
-  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DRAIN);
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DELIVERY);
   held = 1;
   {
     struct slice input = { .beg = src, .end = src + 2 * epoch_elements };
@@ -676,31 +690,30 @@ run_host_coordinator_hold(enum compression_codec codec)
           DELIVERY_JOB_SUBMITTED);
   CHECK(Fail,
         gpu_delivery_job_state(&s->engine.delivery, 1, &generation1) ==
-          DELIVERY_JOB_PREPARED);
+          DELIVERY_JOB_SUBMITTED);
   CHECK(Fail, generation0 == 1);
   CHECK(Fail, generation1 == 2);
-  {
-    uint64_t submitted = 0;
-    uint64_t tail_ready = 0;
-    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
-    CHECK(Fail, submitted == 1);
-    CHECK(Fail, tail_ready == 0);
-  }
+  CHECK(Fail, gpu_delivery_submitted_generation(&s->engine.delivery) == 2);
 
   gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_NONE);
   held = 0;
   CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
-  {
-    uint64_t submitted = 0;
-    uint64_t tail_ready = 0;
-    gpu_delivery_generations(&s->engine.delivery, &submitted, &tail_ready);
-    CHECK(Fail, submitted == 2);
-    CHECK(Fail, tail_ready == 2);
-  }
+  CHECK(Fail, gpu_delivery_submitted_generation(&s->engine.delivery) == 2);
+  CHECK(Fail, s->engine.metrics.tail_gate.count == 0);
   CHECK(
     Fail,
     coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
-  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
+  CHECK(Fail,
+        coordinator_shards_have_valid_layout(&sink,
+                                             &s->engine.compress_agg.ar,
+                                             codec != CODEC_NONE,
+                                             sink.shard_alignment));
+  if (codec == CODEC_NONE) {
+    CHECK(Fail, s->engine.metrics.shard_padding_internal_bytes == 0);
+  } else {
+    CHECK(Fail, s->engine.metrics.shard_padding_internal_bytes > 0);
+    CHECK(Fail, s->engine.metrics.shard_padding_padded_update_count > 0);
+  }
   ok = 1;
 
 Fail:
@@ -723,9 +736,8 @@ test_host_coordinator_hold(void)
   return error;
 }
 
-// Force the worker-unavailable selection after construction, before any job
-// is queued. Page-aligned tail carry must remain correct on the direct,
-// drain-before-kick fallback.
+// Force the worker-unavailable path after construction, before any job is
+// queued. Host-only tail carry must remain correct with inline slot drains.
 static int
 test_worker_unavailable_fallback(void)
 {
@@ -744,9 +756,8 @@ test_worker_unavailable_fallback(void)
   CHECK(Fail, s);
 
   gpu_delivery_stop_join(&s->engine.delivery);
-  schedule_select(
-    &s->engine.sched, &s->engine.compress_agg.ar, &s->engine.delivery);
-  CHECK(Fail, s->engine.sched.mode == SCHEDULE_DRAIN_BEFORE_KICK);
+  schedule_select(&s->engine.sched, &s->engine.delivery);
+  CHECK(Fail, s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
 
   const size_t epoch_elements = tile_stream_gpu_layout(s)->epoch_elements;
   src = make_src(4 * epoch_elements);
@@ -759,7 +770,10 @@ test_worker_unavailable_fallback(void)
   CHECK(
     Fail,
     coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));
-  CHECK(Fail, coordinator_shards_are_packed(&sink, &s->engine.compress_agg.ar));
+  CHECK(Fail,
+        coordinator_shards_have_valid_layout(
+          &sink, &s->engine.compress_agg.ar, 1, sink.shard_alignment));
+  CHECK(Fail, s->engine.metrics.shard_padding_internal_bytes > 0);
   ok = 1;
 
 Fail:

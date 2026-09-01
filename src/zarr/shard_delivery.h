@@ -5,6 +5,7 @@
 #include "stream/types.aggregate.h"
 #include "types.stream.h"
 #include "writer.h"
+#include "zarr/host_batch.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -49,8 +50,9 @@ struct shard_state
   struct io_event finalized_fence;
   int fence_pending; // finalized_fence not waited on yet
 
-  // Contiguous tail pool, layout matches GPU's d_tail_carry so a single
-  // bulk HtoD upload covers all shards. NULL when page == 0.
+  // Persistent host-only tail pool.  Materialization copies the committed
+  // prefix into each page-aligned pinned run before payload D2H. NULL when
+  // page == 0.
   uint8_t* tail_buf_pool;
   size_t tail_buf_pool_bytes;
 
@@ -59,9 +61,9 @@ struct shard_state
   size_t footer_buf_pool_bytes;
   size_t footer_capacity; // bytes per shard
 
-  // Most a shard file can reach: every chunk at its worst-case compressed
-  // size, plus the footer. Zero when the size is unknown, which turns
-  // pre-sizing off.
+  // Compact upper bound: every chunk at its worst-case compressed size, plus
+  // the footer. The GPU write plan adds the worst retained padding bound
+  // when that policy is active. Zero means unknown and turns pre-sizing off.
   uint64_t shard_file_capacity;
 };
 

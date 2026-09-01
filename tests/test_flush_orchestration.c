@@ -58,9 +58,9 @@ orch_ctx_destroy(struct orch_ctx* c)
   computed_stream_layouts_free(&c->cl);
 }
 
-// Set up all components for the flush orchestration test.
-// shard_alignment 0 models a sink with no alignment requirement, which
-// selects the pipelined depth-two schedule even with no delivery worker.
+// Set up all components for the flush orchestration test. shard_alignment 0
+// models a sink with no alignment requirement; both aligned and unaligned
+// single-stream fixtures retain the depth-two compact-aggregate schedule.
 static int
 orch_ctx_setup_aligned(struct orch_ctx* c,
                        struct tile_stream_configuration* config,
@@ -108,9 +108,12 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
   // D2H+deliver stage
   CHECK(Fail,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
-                         platform_page_alignment(),
+                         shard_alignment,
+                         config->codec.id == CODEC_NONE
+                           ? AGGREGATE_FIXED_SIZE
+                           : AGGREGATE_VARIABLE_SIZE,
                          &c->s->engine.ord,
-                         c->s->engine.streams.drain,
+                         c->s->engine.streams.payload_copy,
                          c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools
@@ -128,16 +131,15 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
                        pool_bytes,
                        c->s->engine.streams.compute));
   }
-  // This fixture has no delivery worker, so the depth follows from the
-  // array's alignment exactly as it does when worker setup fails for real.
+  // This fixture has no delivery worker; single-array scheduling still uses
+  // depth two and drains the oldest slot inline on reuse.
   c->s->engine.sched.epochs_per_batch = K;
   for (int fc = 0; fc < 2; ++fc) {
     c->s->engine.sched.slot[fc].batch_active_masks =
       (uint32_t*)calloc(K, sizeof(uint32_t));
     CHECK(Fail, c->s->engine.sched.slot[fc].batch_active_masks);
   }
-  schedule_select(
-    &c->s->engine.sched, &c->s->engine.compress_agg.ar, &c->s->engine.delivery);
+  schedule_select(&c->s->engine.sched, &c->s->engine.delivery);
 
   // Non-multiscale: zeroed lod
   memset(&c->s->engine.lod, 0, sizeof(c->s->engine.lod));
@@ -148,7 +150,7 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
   c->s->engine.metrics.aggregate =
     mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS);
   c->s->engine.metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
-  c->s->engine.metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
+  c->s->engine.metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DELIVERY);
   c->s->engine.metrics.lod_gather =
     mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
 
@@ -275,7 +277,7 @@ test_full_batch_auto_flush(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // After full batch: drain_kick_and_swap fired
+  // After full batch: deliver_kick_and_swap fired
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
   CHECK(Fail, c.s->engine.sched.fill == 1);           // swapped to pool 1
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending at fc=0
@@ -297,7 +299,7 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Full batch + drain → data arrives in sink
+// Test 3: Full batch delivery sends data to the sink.
 // ---------------------------------------------------------------------------
 static int
 test_drain_delivers_data(void)
@@ -326,7 +328,7 @@ test_drain_delivers_data(void)
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1);
 
   // Drain the pending batch
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
@@ -381,7 +383,7 @@ test_accumulated_sync_partial(void)
   // Batch drained
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
 
-  // Data delivered into the pipeline. With tail-carryover delivery, a partial
+  // Data delivered into the pipeline. With fixed-tail delivery, a partial
   // batch's data is staged in the in-memory tail (writes to disk only happen
   // at page-aligned boundaries / on shard finalize), so verify shard state
   // rather than on-disk size.
@@ -443,16 +445,18 @@ test_two_batch_cycle(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch3) == 0);
   CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // Before batch 2 is kicked on fc=1, the worker-unavailable fallback drains
-  // batch 1 on the producer. Batch 2 remains pending until the final drain.
+  // Page alignment no longer reduces schedule depth. With the worker absent,
+  // both compact aggregates remain outstanding until the producer performs
+  // the ordered host copy.
   CHECK(Fail, c.s->engine.sched.fill == 0);           // swapped back to pool 0
-  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0); // batch 1 drained
+  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 1); // batch 2 pending
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
-  CHECK(Fail, c.s->engine.metrics.sink.count == 1);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 0);
 
-  // Drain the remaining pending batch.
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  // Drain both batches oldest-first; committed tail state from batch 1 places
+  // batch 2's payload before either aggregate slot is reused.
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
@@ -519,11 +523,60 @@ test_two_batch_cycle_pipelined(void)
         c.s->engine.sched.slot[0].generation <
           c.s->engine.sched.slot[1].generation);
 
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
   CHECK(Fail, sink.finalize_count >= 2);
+  CHECK(Fail, c.s->engine.metrics.sink.count == 2);
+
+  ok = 1;
+
+Fail:
+  orch_ctx_destroy(&c);
+  test_sink_free(&sink);
+  log_info("  %s", ok ? "PASS" : "FAIL");
+  return ok ? 0 : 1;
+}
+
+// A direct-mode stream can lose its delivery worker after construction.  A
+// partial flush must still deliver an older full batch before resolving the
+// partial batch's committed tail placement.
+static int
+test_partial_flush_inline_oldest_first(void)
+{
+  log_info("=== test_partial_flush_inline_oldest_first ===");
+
+  struct dimension dims[3];
+  struct tile_stream_configuration config;
+  make_test_config(&config, dims, (struct codec_config){ .id = CODEC_NONE }, 2);
+
+  struct test_shard_sink sink;
+  test_sink_init(&sink, TEST_SHARD_SINK_MAX_SHARDS, 1024 * 1024);
+
+  struct orch_ctx c;
+  orch_ctx_init(&c);
+  int ok = 0;
+
+  CHECK(Fail, orch_ctx_setup_aligned(&c, &config, &sink.base, 0) == 0);
+  gpu_delivery_stop_join(&c.s->engine.delivery);
+  schedule_select(&c.s->engine.sched, &c.s->engine.delivery);
+  CHECK(Fail, c.s->engine.sched.mode == SCHEDULE_PIPELINED_DIRECT);
+
+  // Full generation 1 remains queued in slot 0.
+  CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch0) == 0);
+  CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
+  CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1);
+
+  // Generation 2 is partial in slot 1. The flush kicks it, then drains both
+  // generations oldest-first even though no worker is available.
+  CHECK(Fail, orch_ctx_fill_epoch(&c, 0, &config, fill_epoch2) == 0);
+  CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, schedule_flush_accumulated(&c.s->engine, &c.s->ctx).error == 0);
+  CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
+  CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
   CHECK(Fail, c.s->engine.metrics.sink.count == 2);
 
   ok = 1;
@@ -540,4 +593,6 @@ RUN_GPU_TESTS({ "accumulate_one_epoch", test_accumulate_one_epoch },
               { "drain_delivers_data", test_drain_delivers_data },
               { "accumulated_sync_partial", test_accumulated_sync_partial },
               { "two_batch_cycle", test_two_batch_cycle },
-              { "two_batch_cycle_pipelined", test_two_batch_cycle_pipelined }, )
+              { "two_batch_cycle_pipelined", test_two_batch_cycle_pipelined },
+              { "partial_flush_inline_oldest_first",
+                test_partial_flush_inline_oldest_first }, )

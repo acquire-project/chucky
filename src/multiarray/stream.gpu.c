@@ -59,13 +59,12 @@ close_impl(struct multiarray_writer* self);
 // ---- Bind / Unbind ----
 // Copy per-array mutable state between descriptor and engine sub-structs.
 
-static void
+static int
 bind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   // Whole-struct handoff; shared engine resources (sized to maxima) are
-  // untouched. The bind upload failing leaves the engine no worse than the
-  // current array's first kick failing, which the writer paths report.
-  (void)stream_engine_bind_array(e, &desc->st, &desc->ctx);
+  // untouched. Tails remain in the per-array host shard state.
+  return stream_engine_bind_array(e, &desc->st, &desc->ctx);
 }
 
 static void
@@ -156,10 +155,10 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
     }
 
     unbind_context(e, departing);
+    ms->active = -1;
   }
 
-  ms->active = array_index;
-  bind_context(e, &ms->arrays[array_index]);
+  CHECK(Fail, bind_context(e, &ms->arrays[array_index]) == 0);
 
   // Zero both pools for the incoming array. This is the correctness-critical
   // zero: it ensures no stale data from the departing array leaks into the
@@ -177,9 +176,13 @@ switch_to_array(struct multiarray_tile_stream_gpu* ms, int array_index)
                        e->pool_bytes,
                        e->streams.compute));
 
+  // Commit the switch only after the incoming geometry is bound and both
+  // shared pools are safe for its scatter path. A failed setup is retryable.
+  ms->active = array_index;
   return 0;
 
 Fail:
+  ms->active = -1;
   return multiarray_writer_fail;
 }
 
@@ -251,6 +254,7 @@ flush_impl(struct multiarray_writer* self)
     if (stream_dispatch_staged(&ms->engine).error)
       failed = 1;
     unbind_context(&ms->engine, desc);
+    ms->active = -1;
   }
 
   // Flush each array that has data
@@ -264,12 +268,18 @@ flush_impl(struct multiarray_writer* self)
       continue;
     }
 
+    // A bind can fail while selecting this array's codec geometry. Do not
+    // flush against whatever per-array state the engine held previously.
+    if (bind_context(&ms->engine, desc)) {
+      failed = 1;
+      continue;
+    }
     ms->active = a;
-    bind_context(&ms->engine, desc);
 
     struct writer_result r = stream_flush_body(&ms->engine, &desc->ctx);
 
     unbind_context(&ms->engine, desc);
+    ms->active = -1;
     // Latched even on failure: a flush that died partway may already have
     // closed shards, so taking more input would append past them. Those writes
     // are new, so an earlier close no longer covers them.
@@ -278,8 +288,6 @@ flush_impl(struct multiarray_writer* self)
     if (r.error)
       failed = 1;
   }
-
-  ms->active = -1;
 
   cu_ctx_pop(pushed);
   return (struct multiarray_writer_result){
@@ -308,9 +316,8 @@ close_impl(struct multiarray_writer* self)
     }
     // desc->st.agg is only refreshed by unbind_context, so a still-bound array
     // has its live shard state in the engine.
-    struct compress_agg_array* agg = (ms->active == a)
-                                       ? &ms->engine.compress_agg.ar
-                                       : &desc->st.agg;
+    struct compress_agg_array* agg =
+      (ms->active == a) ? &ms->engine.compress_agg.ar : &desc->st.agg;
     desc->close_failed = (stream_close_body(agg, &desc->ctx).error != 0);
     failed |= desc->close_failed;
     desc->closed = 1;
@@ -321,7 +328,6 @@ close_impl(struct multiarray_writer* self)
     .error = failed ? multiarray_writer_fail : multiarray_writer_ok,
   };
 }
-
 
 // ---- Create / Destroy ----
 

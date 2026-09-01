@@ -115,6 +115,10 @@ add_test_exe(test_aggregate_contract_cpu test_aggregate_contract_cpu.c
     aggregate_cpu shard_delivery aggregate_contract threadpool stream_config lod_plan chucky_log
 )
 
+# CUDA-free coverage for the GPU host-copy stage's span and host-run contracts.
+add_test_exe(test_host_batch test_host_batch.c
+    shard_delivery stream_config test_shard_sink chucky_log)
+
 # Aggregate-result contract test (GPU)
 add_gpu_test_exe(test_aggregate_contract_gpu test_aggregate_contract_gpu.c
     LINKS CUDA::cuda_driver CUDA::cudart_static aggregate aggregate_contract stream_config lod_plan chucky_log
@@ -137,6 +141,10 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 
 # GPU multi-array stream test
 add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
+# A cross-array ordering cycle would otherwise strand the GPU test runner.
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_multiarray_gpu PROPERTIES TIMEOUT 60)
+endif()
 
 # CPU stream with n_append > 1 (no CUDA)
 add_test_exe(test_multi_append test_multi_append.c stream_cpu writer test_shard_sink chucky_log)
@@ -201,7 +209,8 @@ add_test_exe(test_flush_drain_cpu test_flush_drain_cpu.c stream_cpu zarr_array s
 set_tests_properties(test-test_flush_drain_cpu PROPERTIES TIMEOUT 60)
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(
-        test-test_destroy_drain test-test_flush_drain_gpu
+        test-test_destroy_drain
+        test-test_flush_drain_gpu
         test-test_destroy_midstream
         PROPERTIES TIMEOUT 120
     )

@@ -10,7 +10,10 @@ add_src_lib(zarr_metadata SOURCES zarr_metadata.c zarr_metadata.h
     LINKS json_writer attr_set dimension dtype codec_types chucky_log
 )
 
-add_src_lib(shard_delivery SOURCES shard_delivery.c shard_delivery.h
+add_src_lib(shard_delivery SOURCES
+    shard_delivery.c shard_delivery.h
+    shard_write_plan.c shard_write_plan.h
+    host_batch.c host_batch.h
     LINKS crc32c writer platform stream_config chucky_log
 )
 

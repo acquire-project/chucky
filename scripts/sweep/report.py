@@ -63,7 +63,7 @@ SITE_FILES = {
 # io_write_sizes is a list of objects, so it defeats the columnar packing and
 # no page reads it.
 EXPLORER_OMITS = ("id", "io_write_sizes")
-EXPLORER_VERSION = 6
+EXPLORER_VERSION = 7
 
 # These are the fields kept in the explorer's sweep list for each summarized sweep.
 EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu",

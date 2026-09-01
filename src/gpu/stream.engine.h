@@ -2,6 +2,7 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
+#include "gpu/host_batch.copy.h"
 #include "gpu/ordering.h"
 #include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
@@ -149,22 +150,6 @@ struct compress_agg_input
   uint32_t epochs_per_batch;
 };
 
-// Per-shard layout tables shared across arrays, sized to the max
-// total_shards. d_base_offsets / d_tps_group / d_offsets_base depend on
-// per-batch active counts and are re-uploaded every kick; d_shard_capacity
-// is constant per array and uploaded at bind.
-struct shard_tables
-{
-  size_t* h_base_offsets;   // base byte offset in d_aggregated
-  uint64_t* h_tps_group;    // chunks-per-shard within a batch
-  uint64_t* h_offsets_base; // base index in d_offsets / d_permuted_sizes
-
-  size_t* d_base_offsets;
-  size_t* d_shard_capacity;
-  uint64_t* d_tps_group;
-  uint64_t* d_offsets_base;
-};
-
 // Per-array slice of compress+aggregate state. Multiarray swaps this into
 // the engine wholesale on array switch; any new per-array field added here
 // rides along with that single assignment.
@@ -174,26 +159,11 @@ struct compress_agg_array
   struct aggregate_layout per_lod_agg_layouts[LOD_MAX_LEVELS];
   uint8_t nlod;
 
-  // Stays per-LOD because deliver_to_shards_batch and finalize_shards
-  // iterate it; the per-shard tail/carry bytes the GPU kernels consume
-  // live below instead.
+  // Fixed-extent persistent tails live only inside these host shard states.
+  // Indexed aligned delivery retains zero padding instead; aggregation stays
+  // compact and never consumes tail length or content.
   struct shard_state shard[LOD_MAX_LEVELS];
-
-  uint64_t total_shards;    // sum_lv num_shards[lv]
-  size_t* h_shard_capacity; // per shard; uploaded to shards.d_shard_capacity
-
-  // Persistent across-batch tail state, unified across all shards. Sized to
-  // total_shards / total_shards * page_size. d_* uploaded by host after each
-  // batch's delivery; replaces the per-LOD d_tail_bytes / d_tail_carry pair.
-  size_t page_size; // uniform: sink-required alignment, or 0 for legacy
-  size_t* h_tail_bytes;
-  size_t* d_tail_bytes;
-  CUdeviceptr d_tail_carry;
-  size_t tail_carry_bytes; // == total_shards * page_size
-
-  // Per-LOD slice info, needed by delivery to view the unified slot buffers.
-  uint32_t shards_begin[LOD_MAX_LEVELS]; // first global shard index for LOD lv
-  uint32_t n_shards[LOD_MAX_LEVELS];     // num_shards_lv
+  uint64_t total_shards; // immutable sum, useful for status/tests
 };
 
 struct compress_agg_stage
@@ -203,13 +173,13 @@ struct compress_agg_stage
   CUdeviceptr d_compressed[2];
   CUevent t_compress_start[2];  // timing
   CUevent t_compress_end[2];    // timing
-  CUevent t_aggregate_start[2]; // timing; recorded when aggregation is
-                                // submitted after prior tail readiness
+  CUevent t_aggregate_start[2]; // aggregation timing start
 
   uint32_t* pool_epochs_scratch; // [LOD_MAX_LEVELS * K] scratch for mask scans
 
   // Unified aggregate slot (per-fc), sized to max_batch_layout maxima. Holds:
-  //   d_aggregated:     max_batch_layout.total_data_bytes
+  //   d_aggregated:     max compact payload capacity
+  //   h_aggregated:     larger host-run/alignment capacity
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
   //   plus pinned host shadows of matching size.
   // Non-init code reaches a slot through the pools below; each guards a
@@ -218,12 +188,13 @@ struct compress_agg_stage
   struct gpu_pool agg_pool;  // device facet: ready=AGG_DONE,
                              //               consumed=SLOT_DRAINED
   struct gpu_pool agg_host;  // h_aggregated facet: ready=D2H_DONE (alias);
-                             // consumed is the drain-before-rekick host rule
+                             // consumed is the deliver-before-rekick host rule
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
-  size_t max_total_data_bytes;
+  size_t max_device_data_bytes;
+  size_t max_host_data_bytes;
 
   // Unified LUTs. Sized to max_total_batch_chunks. Uploaded per kick when the
   // firing pattern shifts; cached in steady state by comparing both the
@@ -234,13 +205,10 @@ struct compress_agg_stage
   CUdeviceptr d_batch_perm;
   uint32_t* h_lut_gather_scratch; // for building unified LUT host-side
   uint32_t* h_lut_perm_scratch;
-  uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded counts
+  uint32_t cached_active_count_by_level[LOD_MAX_LEVELS]; // last uploaded counts
   uint32_t* cached_pool_epochs; // [LOD_MAX_LEVELS * pool_epochs_stride]
   uint32_t pool_epochs_stride;  // max K used by scratch + cache
   int lut_cache_valid;
-
-  // Per-shard tables shared across arrays (sized to maxima).
-  struct shard_tables shards;
 
   // Per-array state; swapped on multiarray bind.
   struct compress_agg_array ar;
@@ -248,13 +216,9 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  struct gpu_ordering* ord;     // borrowed
-  CUevent t_d2h_start[2];       // timing; kick-time, before the worker handoff
-  CUevent t_d2h_drain_start[2]; // timing; immediately before the payload copy
-  CUstream drain_stream;        // borrowed (gpu_streams.drain)
+  struct host_batch_copy copy;
 
-  size_t shard_alignment;         // from sink; 0 = no alignment
-  struct stream_metrics* metrics; // borrowed, for stall-time accumulation
+  size_t shard_alignment; // from sink; 0 = no alignment
 };
 
 // All per-array mutable engine state, grouped so a multiarray array switch
@@ -306,8 +270,8 @@ struct stream_engine
   struct lod_shared_state lod_shared; // engine-owned shared LOD resources
   struct lod_state lod;               // per-array; overwritten on array switch
   struct threadpool* copy_pool;       // staging-copy helpers (append body)
-  struct gpu_delivery delivery;       // drain worker (pipelined schedule)
-  // The context the streams and device memory belong to. The drain worker
+  struct gpu_delivery delivery;       // delivery worker (pipelined schedule)
+  // The context the streams and device memory belong to. The delivery worker
   // clears its own copy when it fails to start, and the engine runs on.
   CUcontext cuda;
   struct stream_metrics metrics;
@@ -329,8 +293,8 @@ struct engine_limits
   int max_nlod;
   uint64_t max_total_batch_chunks;
   uint64_t max_total_batch_covering;
-  size_t max_total_data_bytes;
-  uint64_t max_total_shards;
+  size_t max_device_data_bytes;
+  size_t max_host_data_bytes;
   size_t lod_linear_bytes;
   size_t lod_morton_bytes;
   int any_multiscale;
@@ -371,8 +335,8 @@ engine_array_state_init(struct engine_array_state* st,
 void
 engine_array_state_destroy(struct engine_array_state* st);
 
-// Make *st the engine's active array (whole-struct handoff + per-array
-// shard-capacity upload + LUT-cache invalidation).
+// Make *st the engine's active array (whole-struct handoff plus LUT-cache
+// invalidation). On failure, the engine's per-array views are unchanged.
 int
 stream_engine_bind_array(struct stream_engine* e,
                          const struct engine_array_state* st,

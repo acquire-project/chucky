@@ -182,6 +182,24 @@ backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
 
+GPU runs may also contain a `d2h_transfer` block.
+`payload_bytes_transferred` is the compact shard payload copied across PCIe.
+`metadata_bytes_transferred`
+counts two transient control arrays: compact-payload offsets and exact compressed
+sizes permuted into physical shard order. They are not Zarr JSON or shard-footer
+metadata. `payload_copy_count` counts non-empty physical-shard-run copies. The
+whole block is absent in archived results, where these quantities are unknown
+rather than zero.
+
+GPU runs may additionally contain `shard_padding`. `logical_payload_bytes` plus
+`internal_padding_bytes` is the physical data-region size; that size is the
+payload region retained before the shard footer, not temporary footer alignment
+slack that is truncated. `physical_shard_update_count` counts nonempty runs and
+`padded_update_count` counts the subset with retained padding. The report derives
+the padding ratio as internal padding divided by physical data-region bytes.
+Fixed output, unaligned variable-size output, and empty updates report zero
+internal padding. The block is unknown in archived files where it is absent.
+
 For a run with filesystem output, the write scheduling it used is recorded,
 so a sweep is comparable only against one taken with the same settings:
 
@@ -240,22 +258,30 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 
 | diagnostic ID | interval |
 |---|---|
-| `batch_drain` | producer blocked inside batch drain; this can include inline drain work |
-| `d2h_dispatch` | drain-thread CPU work between its metadata and payload waits |
+| `batch_drain` | producer blocked during batch delivery; this can include inline delivery work |
+| `d2h_dispatch` | delivery-thread CPU work between its metadata and payload waits |
 | `output_slot_io` | host waiting for writes that still hold an output slot |
 | `footer_buffer_io` | host waiting for a shard's previous footer-buffer write |
 | `append_extent_io` | host waiting for writes to shards closed since the last published extent |
 | `final_io` | host waiting for all queued writes at flush |
 | `sink_backpressure` | producer waiting for the sink queue to fall below its limit |
-| `prior_tail_state` | compression-to-aggregation gap waiting for the preceding tail state |
+| `prior_tail_state` | archived compression-to-aggregation gap from the former GPU tail gate; new runs omit it |
 | `staging_reuse` | producer waiting to refill a staging buffer still used by H2D |
-| `chunk_metadata_d2h` | drain host waiting for chunk offsets and compressed sizes to arrive by D2H; not chunk-index kernel time |
-| `payload_d2h` | drain host waiting for the aggregated payload to arrive by D2H |
+| `chunk_metadata_d2h` | inclusive delivery-host wait for indexed chunk metadata; retained for archived-result compatibility |
+| `indexed_aggregate_wait` | portion of that host wait before the compact compressed aggregate is ready |
+| `chunk_metadata_wait` | remaining host wait after aggregate readiness, until the offset/size copies are ready |
+| `chunk_metadata_copy` | CUDA event time for the two offset/size D2H copies; device work, not a host wait |
+| `payload_d2h` | delivery host waiting for the aggregated payload to arrive by D2H |
 
 `report.py` backfills this shape in memory from legacy `stalls`, so archived
 results remain usable without rewriting them. Historical files cannot recover
 `wait_calls`, `min_ms`, or `max_ms`, and the explorer shows those cells as
 unknown.
+
+The legacy root `tail_gate_ms` and `tail_gate_count` fields remain present as
+zero for compatibility. They do not produce a canonical `prior_tail_state`
+entry when there are no samples.
+
 Values retired because their meaning changed are not backfilled under a current
 diagnostic ID.
 The overview keys are listed in `summary.py`; the explorer receives all
@@ -295,14 +321,23 @@ the overview leaves those out of comparisons instead of converting them. Bump
 `CURRENT_VERSION` when a metric is renamed, removed, or changes meaning. Adding
 one does not need a bump.
 
-The canonical `diagnostics` block was added without changing an existing
-metric, so it is additive and did not bump the stored sweep version.
+The canonical `diagnostics` block and its child diagnostics were additive and
+did not initially change the stored sweep version.
 
 A stored sweep records only its version number, so add a line here when you
 bump it.
 
 ### Version history
 
+- **9** — Redundant derived padding fields and the duplicate D2H logical-byte
+  field were removed. Diagnostic IDs ending in `_ready` were renamed to
+  `_wait`; migration preserves their values in archived version-8 results.
+- **8** — GPU aggregation is compact and host copying owns page-aligned
+  tails. D2H stage bandwidth now uses actual payload transfer bytes, and the
+  optional `d2h_transfer` block records logical/payload/metadata bytes and copy
+  count. Aligned indexed GPU delivery later added the optional `shard_padding`
+  block without changing this version. Archived files keep optional blocks
+  absent because those values cannot be reconstructed.
 - **7** — The filesystem sink runs several writes at once instead of one, and
   pre-sizes a shard file when more than one of its writes may run together. No
   timing from a run with filesystem output is comparable across this bump; a

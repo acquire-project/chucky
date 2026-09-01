@@ -97,6 +97,23 @@ gpu_pool_host_acquire_consume(struct gpu_pool* p,
   return 0;
 }
 
+int
+gpu_pool_host_acquire_consume_split(struct gpu_pool* p,
+                                    int slot,
+                                    enum gpu_edge prerequisite,
+                                    struct stream_metric* before,
+                                    struct stream_metric* after,
+                                    struct gpu_pool_view* out)
+{
+  if (p->ready != GPU_EDGE_COUNT &&
+      gpu_edge_host_wait_split(
+        p->ord, p->ready, prerequisite, inst(p->ready, slot), before, after))
+    return 1;
+  if (out)
+    out->p = p->payload[slot];
+  return 0;
+}
+
 struct gpu_pool_view
 gpu_pool_at(struct gpu_pool* p, int slot, size_t byte_offset)
 {
