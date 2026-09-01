@@ -672,7 +672,10 @@ deliver_host_batch(struct host_batch* host,
         if (command.kind == SHARD_WRITE_DATA ||
             command.kind == SHARD_WRITE_FOOTER) {
           const uint8_t* end = command.source + command.write_size;
-          int use_direct = sh->writer->write_direct != NULL;
+          const int transient_footer =
+            command.kind == SHARD_WRITE_FOOTER && plan.shard_alignment == 0;
+          int use_direct =
+            sh->writer->write_direct != NULL && !transient_footer;
           if (use_direct && plan.shard_alignment > 0) {
             const size_t alignment = plan.shard_alignment;
             use_direct = (uintptr_t)command.source % alignment == 0 &&
