@@ -110,10 +110,10 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
         d2h_deliver_init(&c->s->engine.d2h_deliver,
                          shard_alignment,
                          config->codec.id == CODEC_NONE
-                           ? DEVICE_AGGREGATE_FIXED_EXTENT
-                           : DEVICE_AGGREGATE_INDEXED_EXTENT,
+                           ? AGGREGATE_FIXED_SIZE
+                           : AGGREGATE_VARIABLE_SIZE,
                          &c->s->engine.ord,
-                         c->s->engine.streams.drain,
+                         c->s->engine.streams.payload_copy,
                          c->s->engine.streams.compute) == 0);
 
   // Double-buffered chunk pools
@@ -150,7 +150,7 @@ orch_ctx_setup_aligned(struct orch_ctx* c,
   c->s->engine.metrics.aggregate =
     mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS);
   c->s->engine.metrics.d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H);
-  c->s->engine.metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN);
+  c->s->engine.metrics.sink = mk_stream_metric("Sink", METRIC_OWNER_DELIVERY);
   c->s->engine.metrics.lod_gather =
     mk_stream_metric("LOD Gather", METRIC_OWNER_COMPUTE);
 
@@ -277,7 +277,7 @@ test_full_batch_auto_flush(void)
   CHECK(Fail, orch_ctx_fill_epoch(&c, 1, &config, fill_epoch1) == 0);
   CHECK(Fail, schedule_accumulate_epoch(&c.s->engine, &c.s->ctx).error == 0);
 
-  // After full batch: drain_kick_and_swap fired
+  // After full batch: deliver_kick_and_swap fired
   CHECK(Fail, c.s->engine.sched.accumulated == 0);
   CHECK(Fail, c.s->engine.sched.fill == 1);           // swapped to pool 1
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending at fc=0
@@ -299,7 +299,7 @@ Fail:
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Full batch + drain → data arrives in sink
+// Test 3: Full batch delivery sends data to the sink.
 // ---------------------------------------------------------------------------
 static int
 test_drain_delivers_data(void)
@@ -328,7 +328,7 @@ test_drain_delivers_data(void)
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1);
 
   // Drain the pending batch
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
@@ -447,7 +447,7 @@ test_two_batch_cycle(void)
 
   // Page alignment no longer reduces schedule depth. With the worker absent,
   // both compact aggregates remain outstanding until the producer performs
-  // the ordered materialization drain.
+  // the ordered host copy.
   CHECK(Fail, c.s->engine.sched.fill == 0);           // swapped back to pool 0
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 1); // batch 1 pending
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 1); // batch 2 pending
@@ -456,7 +456,7 @@ test_two_batch_cycle(void)
 
   // Drain both batches oldest-first; committed tail state from batch 1 places
   // batch 2's payload before either aggregate slot is reused.
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
@@ -523,7 +523,7 @@ test_two_batch_cycle_pipelined(void)
         c.s->engine.sched.slot[0].generation <
           c.s->engine.sched.slot[1].generation);
 
-  struct writer_result r = schedule_drain_kicked(&c.s->engine, &c.s->ctx);
+  struct writer_result r = schedule_deliver_kicked(&c.s->engine, &c.s->ctx);
   CHECK(Fail, r.error == 0);
   CHECK(Fail, c.s->engine.sched.slot[0].kicked == 0);
   CHECK(Fail, c.s->engine.sched.slot[1].kicked == 0);
@@ -540,7 +540,7 @@ Fail:
 }
 
 // A direct-mode stream can lose its delivery worker after construction.  A
-// partial flush must still drain an older full batch before resolving the
+// partial flush must still deliver an older full batch before resolving the
 // partial batch's committed tail placement.
 static int
 test_partial_flush_inline_oldest_first(void)

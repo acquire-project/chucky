@@ -11,12 +11,12 @@
 
 // An owner is the resource whose timeline a measurement belongs to. Times may
 // be added together only within one owner. Named by role, not by thread,
-// because the drain does not always run on the same one.
+// because delivery does not always run on the same one.
 enum metric_owner
 {
   METRIC_OWNER_NONE = 0,
   METRIC_OWNER_PRODUCER,
-  METRIC_OWNER_DRAIN,
+  METRIC_OWNER_DELIVERY,
   METRIC_OWNER_H2D,
   METRIC_OWNER_COMPUTE,
   METRIC_OWNER_COMPRESS,
@@ -61,13 +61,13 @@ struct stream_metrics
 
   // Time spent waiting. The producer and the delivery worker are separate
   // threads, so their entries overlap and may not be summed together; the
-  // worker's own entries are disjoint and may be. When the drain runs on the
+  // worker's own entries are disjoint and may be. When delivery runs on the
   // producer instead of the worker, the producer entry contains the worker's
   // rather than overlapping it. An entry a backend never fills keeps count 0,
   // meaning not measured rather than no wait.
-  struct stream_metric flush_stall;    // producer: waiting for a drain
-  struct stream_metric drain_dispatch; // worker: its work between the waits
-  struct stream_metric io_fence_stall; // queued writes still holding a slot
+  struct stream_metric flush_stall;       // producer: waiting for delivery
+  struct stream_metric delivery_dispatch; // worker work between waits
+  struct stream_metric io_fence_stall;    // queued writes still holding a slot
   struct stream_metric footer_buffer_stall; // a shard's previous footer write
   struct stream_metric append_extent_stall; // shards closed since the extent
                                             // was last published
@@ -77,17 +77,16 @@ struct stream_metrics
   // two host-timeline children. The children partition that wait at aggregate
   // readiness; chunk_metadata_copy separately measures the two D2H copies on
   // the device timeline.
-  struct stream_metric indexed_aggregate_ready;
-  struct stream_metric chunk_metadata_ready;
+  struct stream_metric indexed_aggregate_wait;
+  struct stream_metric chunk_metadata_wait;
   struct stream_metric chunk_metadata_copy;
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which
-  // Compatibility-only legacy field. GPU host-tail materialization leaves it
-  // at zero; archived runs may still contain samples.
+  // Compatibility-only legacy field. GPU host copying leaves it at zero;
+  // archived runs may still contain samples.
   struct stream_metric tail_gate;
 
-  // Optional GPU D2H materialization totals.  They remain zero for CPU runs.
-  uint64_t d2h_logical_payload_bytes;
+  // Optional GPU D2H copy totals. They remain zero for CPU runs.
   uint64_t d2h_payload_bytes_transferred;
   uint64_t d2h_metadata_bytes_transferred;
   uint64_t d2h_payload_copy_count;

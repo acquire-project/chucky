@@ -8,7 +8,7 @@
 //
 // Timing-only events are excluded (they must not masquerade as ordering):
 //   staging t_h2d_start and the rotated scatter pairs; compress
-//   t_compress_start/end; aggregate t_aggregate_start; materializer
+//   t_compress_start/end; aggregate t_aggregate_start; host-copy stage
 //   payload_start; lod timing t_start/t_scatter_end/t_reduce_end/
 //   t_append_end/t_end.
 
@@ -25,7 +25,7 @@ enum gpu_stream_id
   GPU_STREAM_COMPUTE,
   GPU_STREAM_COMPRESS,
   GPU_STREAM_D2H,
-  GPU_STREAM_DRAIN, // gpu_streams.drain
+  GPU_STREAM_PAYLOAD_COPY, // gpu_streams.payload_copy
   GPU_STREAM_ID_COUNT,
 };
 
@@ -45,22 +45,22 @@ enum gpu_edge
                                  // h_in safe to refill (stream.c poll)
 
   // Batch pipeline (instanced by fc unless noted).
-  GPU_EDGE_POOL_FILLED,   // compute -> compress: chunk-pool batch contents
-                          // (single instance; one batch in flight at record)
-  GPU_EDGE_LOD_DONE,      // compute -> compress: LOD chunks in pool
-                          // (multiscale only)
-  GPU_EDGE_AGG_DONE,      // compress -> d2h: aggregate slot outputs ready
-  GPU_EDGE_POOL_CONSUMED, // compress -> compute (alias of AGG_DONE):
-                          // pool buf[fc] reuse / re-zero (#140)
-  GPU_EDGE_SLOT_DRAINED,  // d2h|drain -> compress: agg slot reuse
-  GPU_EDGE_D2H_DONE,      // d2h|drain -> HOST (alias of SLOT_DRAINED):
-                          // h_aggregated stable for sink delivery
+  GPU_EDGE_POOL_FILLED,    // compute -> compress: chunk-pool batch contents
+                           // (single instance; one batch in flight at record)
+  GPU_EDGE_LOD_DONE,       // compute -> compress: LOD chunks in pool
+                           // (multiscale only)
+  GPU_EDGE_AGG_DONE,       // compress -> d2h: aggregate slot outputs ready
+  GPU_EDGE_POOL_CONSUMED,  // compress -> compute (alias of AGG_DONE):
+                           // pool buf[fc] reuse / re-zero (#140)
+  GPU_EDGE_SLOT_COPY_DONE, // payload copy -> compress: aggregate slot reuse
+  GPU_EDGE_D2H_DONE,       // payload copy -> HOST (alias of SLOT_COPY_DONE):
+                           // h_aggregated stable for sink delivery
   GPU_EDGE_CHUNK_INDEX_READY, // d2h -> HOST: h_offsets/h_permuted_sizes
-                              // landed; drain copy source stable
+                              // landed; payload-copy source stable
 
   // Host call-order invariants (debug-asserted; no GPU primitive).
-  GPU_EDGE_DRAIN_BEFORE_REKICK,  // drain pending[fc] before re-kicking fc
-  GPU_EDGE_DELIVER_OLDEST_FIRST, // drains follow batch generation order
+  GPU_EDGE_DELIVER_BEFORE_REKICK, // deliver pending[fc] before re-kicking fc
+  GPU_EDGE_DELIVER_OLDEST_FIRST,  // delivery follows batch generation order
 
   GPU_EDGE_COUNT,
 };

@@ -651,7 +651,7 @@ Fail0:
 }
 
 // Hold generation 1 after submission but before drain. Generation 2 must be
-// fully aggregated and materialization-begun while payload placement remains
+// fully aggregated and host-copy-begun while payload placement remains
 // ordered behind generation 1 delivery.
 static int
 run_host_coordinator_hold(enum compression_codec codec)
@@ -676,7 +676,7 @@ run_host_coordinator_hold(enum compression_codec codec)
   src = make_src(2 * epoch_elements);
   CHECK(Fail, src);
 
-  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DRAIN);
+  gpu_delivery_set_hold(&s->engine.delivery, DELIVERY_HOLD_BEFORE_DELIVERY);
   held = 1;
   {
     struct slice input = { .beg = src, .end = src + 2 * epoch_elements };

@@ -154,7 +154,7 @@ Fail:
 static struct aggregate_slot*
 handoff_slot(const struct flush_handoff* handoff)
 {
-  return gpu_pool_at(handoff->agg_host, handoff->fc, 0).p;
+  return gpu_pool_at(handoff->batch.host_pool, handoff->batch.slot_index, 0).p;
 }
 
 // D2H aggregate offsets and data for level 0. Caller frees *out_agg_data.
@@ -171,7 +171,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                  void** out_agg_data)
 {
   struct aggregate_slot* agg = handoff_slot(handoff);
-  const struct lod_segment* seg = &handoff->layout.lods[0];
+  const struct lod_segment* seg = &handoff->batch.layout.lods[0];
   const uint64_t base = seg->batch_covering_offset + 0; // lv=0
 
   // (n_covering + 1) entries for LOD 0's offsets, shifted by base.
@@ -186,7 +186,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
                   (CUdeviceptr)(agg->d_permuted_sizes + base),
                   n_covering * sizeof(size_t)));
 
-  size_t pool_bytes = handoff->layout.total_data_bytes;
+  size_t pool_bytes = handoff->batch.layout.total_data_bytes;
   void* h_agg = malloc(pool_bytes);
   CHECK(Fail, h_agg);
   CU(Fail,
@@ -209,9 +209,9 @@ verify_tiles_none(const struct flush_handoff* handoff,
                   const void* h_agg,
                   uint16_t (*fill_fn)(uint64_t))
 {
-  const struct aggregate_layout* al = &handoff->per_lod_agg_layouts[0];
+  const struct aggregate_layout* al = &handoff->batch.level_layouts[0];
   const struct aggregate_slot* agg = handoff_slot(handoff);
-  const struct lod_segment* seg = &handoff->layout.lods[0];
+  const struct lod_segment* seg = &handoff->batch.layout.lods[0];
   const size_t* lv_offsets = agg->h_offsets + seg->batch_covering_offset + 0;
   const uint64_t total_chunks = c->cl.levels.total_chunks;
   const uint64_t chunk_stride = c->cl.layouts[0].chunk_stride;
@@ -273,21 +273,21 @@ test_compress_agg_single_epoch(void)
   // Verify handoff
   const size_t chunk_bytes =
     c.cl.layouts[0].chunk_stride * dtype_bpe(c.config.dtype);
-  CHECK(Fail, handoff.fc == 0);
-  CHECK(Fail, handoff.n_epochs == 1);
-  CHECK(Fail, handoff.active_levels_mask == 0x1);
-  CHECK(Fail, handoff.t_aggregate_end != 0);
-  CHECK(Fail, handoff.t_compress_start != 0);
-  CHECK(Fail, handoff.t_compress_end != 0);
-  CHECK(Fail, handoff.max_output_size == chunk_bytes);
-  CHECK(Fail, handoff.agg_pool != NULL);
-  CHECK(Fail, handoff.per_lod_agg_layouts != NULL);
+  CHECK(Fail, handoff.batch.slot_index == 0);
+  CHECK(Fail, handoff.batch.epoch_count == 1);
+  CHECK(Fail, handoff.batch.active_count_by_level[0] == 1);
+  CHECK(Fail, handoff.compress_start != 0);
+  CHECK(Fail, handoff.compress_end != 0);
+  CHECK(Fail,
+        handoff.batch.level_layouts[0].max_comp_chunk_bytes == chunk_bytes);
+  CHECK(Fail, handoff.batch.aggregate_pool != NULL);
+  CHECK(Fail, handoff.batch.level_layouts != NULL);
 
   // D2H and verify
-  const struct lod_segment* seg0 = &handoff.layout.lods[0];
+  const struct lod_segment* seg0 = &handoff.batch.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg0->batch_covering_offset + 0;
-  uint64_t C = handoff.per_lod_agg_layouts[0].covering_count;
+  uint64_t C = handoff.batch.level_layouts[0].covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
 
@@ -334,12 +334,13 @@ test_compress_agg_batch(void)
 
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
-  CHECK(Fail, handoff.n_epochs == 2);
-  CHECK(Fail, handoff.max_output_size == chunk_bytes);
+  CHECK(Fail, handoff.batch.epoch_count == 2);
+  CHECK(Fail,
+        handoff.batch.level_layouts[0].max_comp_chunk_bytes == chunk_bytes);
 
   // D2H aggregate
-  const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
-  const struct lod_segment* seg = &handoff.layout.lods[0];
+  const struct aggregate_layout* al = &handoff.batch.level_layouts[0];
+  const struct lod_segment* seg = &handoff.batch.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
@@ -430,14 +431,14 @@ test_compress_agg_partial_batch(void)
   // Kick with n_epochs=1 even though K=2 -> partial batch
   struct flush_handoff handoff;
   CHECK(Fail, ca_ctx_kick(&c, 1, &handoff) == 0);
-  CHECK(Fail, handoff.n_epochs == 1);
+  CHECK(Fail, handoff.batch.epoch_count == 1);
 
   const size_t chunk_bytes =
     c.cl.layouts[0].chunk_stride * dtype_bpe(c.config.dtype);
-  const struct lod_segment* seg = &handoff.layout.lods[0];
+  const struct lod_segment* seg = &handoff.batch.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
-  uint64_t C = handoff.per_lod_agg_layouts[0].covering_count;
+  uint64_t C = handoff.batch.level_layouts[0].covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, C, &h_agg) == 0);
   CHECK(Fail, verify_offsets_monotonic(lv_offsets, C) == 0);
 
@@ -485,8 +486,8 @@ test_compress_agg_zstd_single_epoch(void)
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
 
-  const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
-  const struct lod_segment* seg = &handoff.layout.lods[0];
+  const struct aggregate_layout* al = &handoff.batch.level_layouts[0];
+  const struct lod_segment* seg = &handoff.batch.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   const size_t* lv_sizes =
@@ -505,7 +506,7 @@ test_compress_agg_zstd_single_epoch(void)
     size_t off = lv_offsets[pi];
     size_t comp_sz = lv_sizes[pi];
     CHECK(Fail, comp_sz > 0);
-    CHECK(Fail, comp_sz <= handoff.max_output_size);
+    CHECK(Fail, comp_sz <= handoff.batch.level_layouts[0].max_comp_chunk_bytes);
 
     size_t result =
       ZSTD_decompress(decomp_buf, chunk_bytes, (char*)h_agg + off, comp_sz);
@@ -570,8 +571,8 @@ test_compress_agg_zstd_batch(void)
 
   const uint64_t chunk_stride = c.cl.layouts[0].chunk_stride;
   const size_t chunk_bytes = chunk_stride * dtype_bpe(c.config.dtype);
-  const struct aggregate_layout* al = &handoff.per_lod_agg_layouts[0];
-  const struct lod_segment* seg = &handoff.layout.lods[0];
+  const struct aggregate_layout* al = &handoff.batch.level_layouts[0];
+  const struct lod_segment* seg = &handoff.batch.layout.lods[0];
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   const size_t* lv_sizes =
@@ -608,7 +609,8 @@ test_compress_agg_zstd_batch(void)
         ZSTD_findFrameCompressedSize((char*)h_agg + off, slot_sz);
       CHECK(Fail, !ZSTD_isError(comp_sz));
       CHECK(Fail, comp_sz == slot_sz);
-      CHECK(Fail, comp_sz <= handoff.max_output_size);
+      CHECK(Fail,
+            comp_sz <= handoff.batch.level_layouts[0].max_comp_chunk_bytes);
 
       size_t result =
         ZSTD_decompress(decomp_buf, chunk_bytes, (char*)h_agg + off, comp_sz);
@@ -775,7 +777,7 @@ test_compress_agg_lut_cache_position_shift(void)
   }
 
   // The aggregated data must reflect epoch 1, not epoch 0.
-  uint64_t C = handoff2.per_lod_agg_layouts[0].covering_count;
+  uint64_t C = handoff2.batch.level_layouts[0].covering_count;
   CHECK(Fail, ca_ctx_fetch_agg(&handoff2, C, &h_agg) == 0);
   CHECK(Fail, verify_tiles_none(&handoff2, &c, h_agg, fill_epoch1) == 0);
 

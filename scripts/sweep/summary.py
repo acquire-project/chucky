@@ -44,8 +44,8 @@ STALL_METRICS = (
 DIAGNOSTIC_METRICS = (
     "batch_drain", "d2h_dispatch", "output_slot_io", "footer_buffer_io",
     "append_extent_io", "final_io", "sink_backpressure", "prior_tail_state",
-    "staging_reuse", "chunk_metadata_d2h", "indexed_aggregate_ready",
-    "chunk_metadata_ready", "chunk_metadata_copy", "payload_d2h",
+    "staging_reuse", "chunk_metadata_d2h", "indexed_aggregate_wait",
+    "chunk_metadata_wait", "chunk_metadata_copy", "payload_d2h",
 )
 
 # The build keys a page shows. Both files this module feeds are fetched on

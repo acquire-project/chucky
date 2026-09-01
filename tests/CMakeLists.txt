@@ -115,7 +115,7 @@ add_test_exe(test_aggregate_contract_cpu test_aggregate_contract_cpu.c
     aggregate_cpu shard_delivery aggregate_contract threadpool stream_config lod_plan chucky_log
 )
 
-# CUDA-free coverage for the GPU materializer's span and host-run contracts.
+# CUDA-free coverage for the GPU host-copy stage's span and host-run contracts.
 add_test_exe(test_host_batch test_host_batch.c
     shard_delivery stream_config test_shard_sink chucky_log)
 

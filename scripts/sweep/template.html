@@ -413,16 +413,16 @@ function tooltipText(r) {
   if (memory) t += memory + "\n";
   if (r.d2h_transfer) {
     const d = r.d2h_transfer;
-    t += `D2H: ${Number(d.payload_bytes_transferred).toLocaleString()} payload / ` +
-         `${Number(d.logical_payload_bytes).toLocaleString()} logical bytes, ` +
+    t += `D2H: ${Number(d.payload_bytes_transferred).toLocaleString()} payload bytes, ` +
          `${Number(d.metadata_bytes_transferred).toLocaleString()} metadata bytes, ` +
          `${Number(d.payload_copy_count).toLocaleString()} copies\n`;
   }
   if (r.shard_padding) {
     const p = r.shard_padding;
-    const ratio = Number(p.padding_ratio);
+    const physical = Number(p.logical_payload_bytes) + Number(p.internal_padding_bytes);
+    const ratio = physical > 0 ? Number(p.internal_padding_bytes) / physical : 0;
     t += `shard layout: ${Number(p.internal_padding_bytes).toLocaleString()} padding / ` +
-         `${Number(p.physical_data_region_bytes).toLocaleString()} physical data bytes` +
+         `${physical.toLocaleString()} physical data bytes` +
          `${Number.isFinite(ratio) ? ` (${(ratio * 100).toFixed(2)}%)` : ""}, ` +
          `${Number(p.padded_update_count).toLocaleString()} / ` +
          `${Number(p.physical_shard_update_count).toLocaleString()} padded updates\n`;
@@ -1140,7 +1140,7 @@ function renderStages(run) {
 const DIAGNOSTIC_ORDER = [
   "batch_drain", "output_slot_io", "footer_buffer_io", "append_extent_io",
   "final_io", "sink_backpressure", "staging_reuse", "chunk_metadata_d2h",
-  "indexed_aggregate_ready", "chunk_metadata_ready", "chunk_metadata_copy",
+  "indexed_aggregate_wait", "chunk_metadata_wait", "chunk_metadata_copy",
   "payload_d2h", "prior_tail_state", "d2h_dispatch",
 ];
 
@@ -1165,11 +1165,11 @@ function renderDiagnostics(run) {
       `D2H transfer: ${run.scenario} ${run.chunk_bytes_label} ${run.codec} (${run.backend})`);
     const table = root.append("table");
     const head = table.append("thead").append("tr");
-    ["Logical payload bytes", "Payload bytes transferred", "Metadata bytes", "Payload copies"]
+    ["Payload bytes transferred", "Metadata bytes", "Payload copies"]
       .forEach(label => head.append("th").text(label));
     const row = table.append("tbody").append("tr");
-    [d.logical_payload_bytes, d.payload_bytes_transferred,
-     d.metadata_bytes_transferred, d.payload_copy_count]
+    [d.payload_bytes_transferred, d.metadata_bytes_transferred,
+     d.payload_copy_count]
       .forEach(value => row.append("td").text(
         Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"));
   }
@@ -1182,9 +1182,10 @@ function renderDiagnostics(run) {
     ["Logical payload bytes", "Internal padding bytes", "Physical data-region bytes",
      "Physical-shard updates", "Padded updates", "Padding ratio"]
       .forEach(label => head.append("th").text(label));
-    const ratio = Number(p.padding_ratio);
+    const physical = Number(p.logical_payload_bytes) + Number(p.internal_padding_bytes);
+    const ratio = physical > 0 ? Number(p.internal_padding_bytes) / physical : 0;
     const values = [p.logical_payload_bytes, p.internal_padding_bytes,
-                    p.physical_data_region_bytes, p.physical_shard_update_count,
+                    physical, p.physical_shard_update_count,
                     p.padded_update_count];
     const row = table.append("tbody").append("tr");
     values.forEach(value => row.append("td").text(
@@ -1230,7 +1231,7 @@ function renderDiagnostics(run) {
   root.append("p").attr("class", "diagnostic-note").text(
     "Samples count recorded intervals. Host waits record a sample only when they actually block; " +
     "the waits column counts all wait calls, including calls that were already ready. " +
-    "Batch drain may include inline drain work. " +
+    "Batch delivery may include inline delivery work. " +
     "The inclusive indexed-metadata wait is partitioned at aggregate readiness; " +
     "the D2H-copy row is CUDA event time for the two control-array copies.");
 }

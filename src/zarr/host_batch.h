@@ -3,20 +3,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct aggregate_layout;
 struct batch_aggregate_layout;
+struct shard_state;
 
-// Selected once from the device aggregate extent and the sink's write
-// alignment.  The scheduler deals only in host_batch objects; codec-specific
-// extent decisions stay behind the materializer boundary.
-enum host_delivery_policy
+enum host_batch_storage
 {
-  HOST_DELIVERY_FIXED_TAIL = 0,
-  HOST_DELIVERY_INDEXED_PADDED,
-  HOST_DELIVERY_INDEXED_COMPACT,
+  HOST_BATCH_FIXED_SIZE = 0,
+  HOST_BATCH_PAGE_PADDED,
+  HOST_BATCH_PACKED,
 };
 
-enum host_delivery_policy
-host_delivery_policy_select(int fixed_extent, size_t shard_alignment);
+enum host_batch_storage
+host_batch_storage_select(int fixed_size, size_t shard_alignment);
 
 struct d2h_transfer_span
 {
@@ -25,34 +24,24 @@ struct d2h_transfer_span
   size_t bytes;
 };
 
-// Statistics owned by materialization rather than sink delivery.  Logical
-// bytes exclude carried tails and padding; transferred bytes are the actual
-// payload bytes copied from device memory.
 struct d2h_transfer_statistics
 {
-  size_t logical_payload_bytes;
   size_t payload_bytes_transferred;
   size_t metadata_bytes_transferred;
   size_t payload_copy_count;
 };
 
-// One physical shard's portion of one append-generation run.  Offsets remain
-// absolute in the device aggregate; source_offset is their normalization
-// origin.  data points at the run's leading host-tail prefix, if any.
 struct host_batch_run
 {
   uint8_t level;
   uint64_t inner_shard;
   uint64_t flat_shard;
-
   uint32_t active_begin;
   uint32_t active_count;
   uint64_t epoch_in_shard;
   uint64_t chunks_per_shard_inner;
-
   int finalizes;
   int ends_generation_run;
-
   uint8_t* data;
   size_t page_size;
   size_t tail_bytes;
@@ -62,30 +51,41 @@ struct host_batch_run
   const size_t* chunk_sizes;
 };
 
-// Normalized materialized batch.  slot_lifetime is deliberately opaque: the
-// GPU schedule owns the pool lease and sink fence that keep these views alive.
 struct host_batch
 {
   struct host_batch_run* runs;
   size_t run_count;
   size_t run_capacity;
   uint8_t nlod;
-  enum host_delivery_policy policy;
+  enum host_batch_storage storage;
   size_t shard_alignment;
-  void* slot_lifetime;
   struct d2h_transfer_statistics transfer;
 };
 
-// Behavior-preserving span planner for the legacy device layout.  Fixed
-// extents copy the reserved aggregate as one span.  Indexed extents use the
-// landed metadata to trim each LOD (or the one contiguous aggregate).
 int
-d2h_plan_legacy_spans(const struct batch_aggregate_layout* layout,
-                      uint8_t nlod,
-                      const uint32_t* per_lod_n_active,
-                      const size_t* offsets,
-                      const size_t* chunk_sizes,
-                      int fixed_extent,
-                      struct d2h_transfer_span* spans,
-                      size_t span_capacity,
-                      size_t* out_count);
+host_batch_capacity(const struct aggregate_layout* level_layouts,
+                    const uint32_t* active_count_by_level,
+                    uint8_t nlod,
+                    enum host_batch_storage storage,
+                    size_t shard_alignment,
+                    size_t* out_bytes,
+                    size_t* out_run_count);
+
+int
+host_batch_build(struct host_batch* host,
+                 void* aggregate_data,
+                 size_t aggregate_capacity,
+                 const size_t* offsets,
+                 const size_t* chunk_sizes,
+                 const struct batch_aggregate_layout* batch_layout,
+                 const struct aggregate_layout* level_layouts,
+                 struct shard_state* const* shards_by_level,
+                 const uint32_t* active_count_by_level,
+                 enum host_batch_storage storage,
+                 size_t shard_alignment,
+                 struct d2h_transfer_span* spans,
+                 size_t span_capacity,
+                 size_t* out_span_count);
+
+void
+host_batch_destroy(struct host_batch* host);

@@ -96,23 +96,22 @@ check_shared_stages(const struct stream_metrics* m)
     log_error("  %s: legacy metric is not zero", m->tail_gate.name);
     ok = 0;
   }
-  if (m->d2h_logical_payload_bytes == 0 ||
-      m->d2h_payload_bytes_transferred != m->d2h_logical_payload_bytes ||
+  if (m->d2h_payload_bytes_transferred == 0 ||
       m->d2h_metadata_bytes_transferred == 0 ||
       m->d2h_payload_copy_count == 0) {
     log_error("  D2H transfer statistics are missing or inconsistent");
     ok = 0;
   }
-  if (m->indexed_aggregate_ready.wait_calls == 0 ||
-      m->chunk_metadata_ready.wait_calls == 0 ||
-      m->indexed_aggregate_ready.wait_calls != m->edge_stall[1].wait_calls ||
-      m->chunk_metadata_ready.wait_calls != m->edge_stall[1].wait_calls) {
+  if (m->indexed_aggregate_wait.wait_calls == 0 ||
+      m->chunk_metadata_wait.wait_calls == 0 ||
+      m->indexed_aggregate_wait.wait_calls != m->edge_stall[1].wait_calls ||
+      m->chunk_metadata_wait.wait_calls != m->edge_stall[1].wait_calls) {
     log_error("  indexed metadata host-wait split was not checked");
     ok = 0;
   }
   {
     const float split_ms =
-      m->indexed_aggregate_ready.ms + m->chunk_metadata_ready.ms;
+      m->indexed_aggregate_wait.ms + m->chunk_metadata_wait.ms;
     const float inclusive_ms = m->edge_stall[1].ms;
     const float delta_ms = split_ms > inclusive_ms ? split_ms - inclusive_ms
                                                    : inclusive_ms - split_ms;
@@ -127,7 +126,8 @@ check_shared_stages(const struct stream_metrics* m)
     log_error("  indexed metadata copy timing is missing or inconsistent");
     ok = 0;
   }
-  if (m->shard_padding_logical_payload_bytes != m->d2h_logical_payload_bytes ||
+  if (m->shard_padding_logical_payload_bytes !=
+        m->d2h_payload_bytes_transferred ||
       m->shard_padding_internal_bytes != 0 ||
       m->shard_padding_physical_update_count != m->d2h_payload_copy_count ||
       m->shard_padding_padded_update_count != 0) {

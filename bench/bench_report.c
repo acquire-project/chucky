@@ -28,7 +28,7 @@ diagnostic_entries(const struct stream_metrics* m,
                    struct diagnostic_entry out[DIAGNOSTIC_COUNT])
 {
   out[0] = (struct diagnostic_entry){ "batch_drain",
-                                      "Batch drain (wait/work)",
+                                      "Batch delivery (wait/work)",
                                       "host_block",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->flush_stall };
@@ -36,7 +36,7 @@ diagnostic_entries(const struct stream_metrics* m,
                                       "D2H dispatch work",
                                       "host_overhead",
                                       DIAGNOSTIC_HOST_OVERHEAD,
-                                      &m->drain_dispatch };
+                                      &m->delivery_dispatch };
   out[2] = (struct diagnostic_entry){ "output_slot_io",
                                       "Output-slot writes",
                                       "host_wait",
@@ -77,16 +77,16 @@ diagnostic_entries(const struct stream_metrics* m,
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[1] };
-  out[10] = (struct diagnostic_entry){ "indexed_aggregate_ready",
+  out[10] = (struct diagnostic_entry){ "indexed_aggregate_wait",
                                        "Aggregate dependency before metadata",
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
-                                       &m->indexed_aggregate_ready };
-  out[11] = (struct diagnostic_entry){ "chunk_metadata_ready",
+                                       &m->indexed_aggregate_wait };
+  out[11] = (struct diagnostic_entry){ "chunk_metadata_wait",
                                        "Metadata ready after aggregate",
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
-                                       &m->chunk_metadata_ready };
+                                       &m->chunk_metadata_wait };
   out[12] = (struct diagnostic_entry){ "chunk_metadata_copy",
                                        "Chunk offsets/sizes D2H copies",
                                        "device_work",
@@ -432,19 +432,15 @@ print_bench_report(const struct stream_metrics* metrics,
   print_metric_row(&metrics->d2h);
   print_metric_row(&metrics->sink);
 
-  if (metrics->d2h_logical_payload_bytes ||
-      metrics->d2h_payload_bytes_transferred ||
+  if (metrics->d2h_payload_bytes_transferred ||
       metrics->d2h_metadata_bytes_transferred ||
       metrics->d2h_payload_copy_count) {
-    char logical[32], payload[32], metadata[32];
-    format_bytes(logical, sizeof(logical), metrics->d2h_logical_payload_bytes);
+    char payload[32], metadata[32];
     format_bytes(
       payload, sizeof(payload), metrics->d2h_payload_bytes_transferred);
     format_bytes(
       metadata, sizeof(metadata), metrics->d2h_metadata_bytes_transferred);
-    print_report("  D2H transfer: logical %s, payload %s, metadata %s, "
-                 "%llu copies",
-                 logical,
+    print_report("  D2H transfer: payload %s, metadata %s, %llu copies",
                  payload,
                  metadata,
                  (unsigned long long)metrics->d2h_payload_copy_count);
@@ -728,12 +724,10 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_array_end(&jw);
   }
 
-  if (m->d2h_logical_payload_bytes || m->d2h_payload_bytes_transferred ||
-      m->d2h_metadata_bytes_transferred || m->d2h_payload_copy_count) {
+  if (m->d2h_payload_bytes_transferred || m->d2h_metadata_bytes_transferred ||
+      m->d2h_payload_copy_count) {
     jw_key(&jw, "d2h_transfer");
     jw_object_begin(&jw);
-    jw_key(&jw, "logical_payload_bytes");
-    jw_uint(&jw, m->d2h_logical_payload_bytes);
     jw_key(&jw, "payload_bytes_transferred");
     jw_uint(&jw, m->d2h_payload_bytes_transferred);
     jw_key(&jw, "metadata_bytes_transferred");
@@ -746,25 +740,16 @@ print_bench_json_pass(const struct stream_metrics* m,
   if (m->shard_padding_logical_payload_bytes ||
       m->shard_padding_internal_bytes ||
       m->shard_padding_physical_update_count) {
-    const uint64_t physical =
-      m->shard_padding_logical_payload_bytes + m->shard_padding_internal_bytes;
-    const double ratio =
-      physical > 0 ? (double)m->shard_padding_internal_bytes / (double)physical
-                   : 0.0;
     jw_key(&jw, "shard_padding");
     jw_object_begin(&jw);
     jw_key(&jw, "logical_payload_bytes");
     jw_uint(&jw, m->shard_padding_logical_payload_bytes);
     jw_key(&jw, "internal_padding_bytes");
     jw_uint(&jw, m->shard_padding_internal_bytes);
-    jw_key(&jw, "physical_data_region_bytes");
-    jw_uint(&jw, physical);
     jw_key(&jw, "physical_shard_update_count");
     jw_uint(&jw, m->shard_padding_physical_update_count);
     jw_key(&jw, "padded_update_count");
     jw_uint(&jw, m->shard_padding_padded_update_count);
-    jw_key(&jw, "padding_ratio");
-    jw_float(&jw, ratio);
     jw_object_end(&jw);
   }
 
@@ -791,9 +776,9 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_stall_count");
   jw_uint(&jw, (uint64_t)m->flush_stall.count);
   jw_key(&jw, "drain_dispatch_ms");
-  jw_float(&jw, (double)m->drain_dispatch.ms);
+  jw_float(&jw, (double)m->delivery_dispatch.ms);
   jw_key(&jw, "drain_dispatch_count");
-  jw_uint(&jw, (uint64_t)m->drain_dispatch.count);
+  jw_uint(&jw, (uint64_t)m->delivery_dispatch.count);
   jw_key(&jw, "io_fence_ms");
   jw_float(&jw, (double)m->io_fence_stall.ms);
   jw_key(&jw, "io_fence_count");
@@ -829,7 +814,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "flush_stall");
   jw_string(&jw, metric_owner_name(m->flush_stall.owner));
   jw_key(&jw, "drain_dispatch");
-  jw_string(&jw, metric_owner_name(m->drain_dispatch.owner));
+  jw_string(&jw, metric_owner_name(m->delivery_dispatch.owner));
   jw_key(&jw, "io_fence");
   jw_string(&jw, metric_owner_name(m->io_fence_stall.owner));
   jw_key(&jw, "footer_buffer");

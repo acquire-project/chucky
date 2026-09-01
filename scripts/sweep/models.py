@@ -21,7 +21,6 @@ VALID_STATUSES = {"pass", "error", "timeout", "missing", "unknown"}
 
 
 class D2HTransfer(BaseModel, extra="allow"):
-    logical_payload_bytes: int
     payload_bytes_transferred: int
     metadata_bytes_transferred: int
     payload_copy_count: int
@@ -30,10 +29,8 @@ class D2HTransfer(BaseModel, extra="allow"):
 class ShardPadding(BaseModel, extra="allow"):
     logical_payload_bytes: int
     internal_padding_bytes: int
-    physical_data_region_bytes: int
     physical_shard_update_count: int
     padded_update_count: int
-    padding_ratio: float
 
 
 class RunResult(BaseModel, extra="allow"):
@@ -111,7 +108,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 8
+CURRENT_VERSION = 9
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -179,10 +176,24 @@ def _migrate_6_to_7(data: dict) -> None:
 
 def _migrate_7_to_8(data: dict) -> None:
     # GPU aggregation became compact and page-aligned tail assembly moved to
-    # ordered host materialization. D2H stage bytes now mean actual payload
+    # ordered host copying. D2H stage bytes now mean actual payload
     # bytes transferred. The new d2h_transfer block is deliberately not
     # backfilled: archived transfer totals are unknown, not zero.
     pass
+
+
+def _migrate_8_to_9(data: dict) -> None:
+    renamed = {
+        "indexed_aggregate_ready": "indexed_aggregate_wait",
+        "chunk_metadata_ready": "chunk_metadata_wait",
+    }
+    for run in data.get("runs", []):
+        diagnostics = run.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        for old_name, new_name in renamed.items():
+            if old_name in diagnostics:
+                diagnostics.setdefault(new_name, diagnostics.pop(old_name))
 
 
 _MIGRATIONS = {
@@ -193,6 +204,7 @@ _MIGRATIONS = {
     5: _migrate_5_to_6,
     6: _migrate_6_to_7,
     7: _migrate_7_to_8,
+    8: _migrate_8_to_9,
 }
 
 
@@ -202,7 +214,7 @@ _MIGRATIONS = {
 # runs emitted by a current benchmark binary.
 _LEGACY_DIAGNOSTICS = {
     "batch_drain": {
-        "label": "Batch drain (wait/work)", "kind": "host_block",
+        "label": "Batch delivery (wait/work)", "kind": "host_block",
         "ms": "flush_stall_ms", "count": "flush_stall_count",
         "owner": "flush_stall",
     },

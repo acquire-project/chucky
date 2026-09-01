@@ -23,7 +23,7 @@ gpu_streams_init(struct gpu_streams* s)
   CU(Fail, cuStreamCreate(&s->compute, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&s->compress, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&s->d2h, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&s->drain, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&s->payload_copy, CU_STREAM_NON_BLOCKING));
   return 0;
 Fail:
   return 1;
@@ -36,7 +36,7 @@ gpu_streams_destroy(struct gpu_streams* s)
   cu_stream_destroy(s->compute);
   cu_stream_destroy(s->compress);
   cu_stream_destroy(s->d2h);
-  cu_stream_destroy(s->drain);
+  cu_stream_destroy(s->payload_copy);
 }
 
 void
@@ -46,7 +46,7 @@ gpu_streams_sync(const struct gpu_streams* s)
   cu_stream_sync(s->compute);
   cu_stream_sync(s->compress);
   cu_stream_sync(s->d2h);
-  cu_stream_sync(s->drain);
+  cu_stream_sync(s->payload_copy);
 }
 
 void
@@ -56,7 +56,7 @@ gpu_streams_register(const struct gpu_streams* s, struct gpu_ordering* ord)
   gpu_ordering_register_stream(ord, GPU_STREAM_COMPUTE, s->compute);
   gpu_ordering_register_stream(ord, GPU_STREAM_COMPRESS, s->compress);
   gpu_ordering_register_stream(ord, GPU_STREAM_D2H, s->d2h);
-  gpu_ordering_register_stream(ord, GPU_STREAM_DRAIN, s->drain);
+  gpu_ordering_register_stream(ord, GPU_STREAM_PAYLOAD_COPY, s->payload_copy);
 }
 
 // --- Selection ---
@@ -66,7 +66,7 @@ schedule_select(struct gpu_scheduler* sched,
                 const struct gpu_delivery* delivery)
 {
   if (!delivery)
-    sched->mode = SCHEDULE_DRAIN_AFTER_KICK;
+    sched->mode = SCHEDULE_DELIVER_AFTER_KICK;
   else
     sched->mode = SCHEDULE_PIPELINED_DIRECT;
   if (sched->next_generation == 0)
@@ -92,7 +92,7 @@ schedule_compress_agg_prepare(struct compress_agg_stage* stage,
                               struct schedule_slot* slot)
 {
   // Ahead of the pool acquires, so these uploads overlap the previous batch's
-  // drain instead of queueing behind the wait for it.
+  // delivery instead of queueing behind the wait for it.
   CHECK(Error,
         compress_agg_prepare(stage, in, levels, compress_stream, &slot->plan) ==
           0);
@@ -128,7 +128,7 @@ schedule_compress_agg_submit(struct compress_agg_stage* stage,
                              struct schedule_slot* slot,
                              CUstream compress_stream)
 {
-  const int fc = slot->handoff.fc;
+  const int fc = slot->handoff.batch.slot_index;
 
   CHECK(Error,
         compress_agg_aggregate(stage,
@@ -172,7 +172,7 @@ Error:
   return 1;
 }
 
-// --- D2H kick / drain ---
+// --- D2H kick / delivery ---
 
 // Wait time already attributed to the ordering edges.
 static float
@@ -209,62 +209,56 @@ schedule_d2h_kick(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,
                   CUstream d2h_stream)
 {
-  return d2h_materialize_begin(
-    &stage->materializer, &handoff->device_batch, d2h_stream);
+  return host_batch_copy_begin(&stage->copy, &handoff->batch, d2h_stream);
 }
 
 struct writer_result
-schedule_d2h_drain(struct d2h_deliver_stage* stage,
-                   const struct flush_handoff* handoff,
-                   const struct level_geometry* levels,
-                   const struct dim_info* dims,
-                   const struct tile_stream_layout* layout,
-                   const struct tile_stream_configuration* config,
-                   struct shard_sink* sink,
-                   struct stream_metrics* metrics,
-                   struct platform_clock* metadata_update_clock)
+schedule_deliver_batch(struct d2h_deliver_stage* stage,
+                       const struct flush_handoff* handoff,
+                       const struct level_geometry* levels,
+                       const struct dim_info* dims,
+                       const struct tile_stream_layout* layout,
+                       const struct tile_stream_configuration* config,
+                       struct shard_sink* sink,
+                       struct stream_metrics* metrics,
+                       struct platform_clock* metadata_update_clock)
 {
-  const int fc = handoff->fc;
+  const int fc = handoff->batch.slot_index;
   struct host_batch* host = NULL;
   int err = 1;
 
   if (sink->has_error && sink->has_error(sink)) {
-    (void)d2h_materialize_cancel(&stage->materializer, fc);
+    (void)host_batch_copy_cancel(&stage->copy, fc);
     goto Done;
   }
 
   // Metadata does not share the pinned payload region, so begin() can run
   // ahead of this wait. Retire async writes only when ordered finish() is
   // about to assemble tails and overwrite that host slot.
-  wait_io_fences(gpu_pool_at(handoff->agg_host, fc, 0).p, sink, metrics);
+  wait_io_fences(gpu_pool_at(handoff->batch.host_pool, fc, 0).p, sink, metrics);
 
   {
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
     const float polls_before = edge_stall_total_ms(metrics);
 
-    struct shard_state* shard_ptrs[LOD_MAX_LEVELS] = { 0 };
-    for (uint8_t lv = 0; lv < handoff->nlod; ++lv)
-      shard_ptrs[lv] = handoff->shards_by_lod[lv];
-    struct d2h_host_placement placement = {
-      .per_lod_layouts = handoff->per_lod_agg_layouts,
-      .shards_by_lod = shard_ptrs,
-      .shard_alignment = stage->shard_alignment,
-      .slot_lifetime = gpu_pool_at(handoff->agg_host, fc, 0).p,
-    };
-    if (d2h_materialize_finish(&stage->materializer, fc, &placement, &host))
+    if (host_batch_copy_finish(&stage->copy,
+                               fc,
+                               handoff->shards_by_level,
+                               stage->shard_alignment,
+                               &host))
       goto Done;
 
     float block_ms = platform_toc(&kick_clk) * 1000.0f;
     float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
     accumulate_metric_ms(
-      &metrics->drain_dispatch, own_ms > 0 ? own_ms : 0.0f, 0, 0);
+      &metrics->delivery_dispatch, own_ms > 0 ? own_ms : 0.0f, 0, 0);
   }
 
-  err = d2h_deliver_drain_sink(stage,
+  err = d2h_deliver_host_batch(stage,
                                handoff,
                                host,
-                               stage->materializer.ticket[fc].payload_start,
+                               stage->copy.state[fc].payload_start,
                                levels,
                                layout,
                                config,
@@ -298,20 +292,20 @@ schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
 // --- Delivery worker ---
 
 static struct writer_result
-drain_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
+deliver_payload(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
-  return schedule_d2h_drain(&e->d2h_deliver,
-                            &e->sched.slot[fc].handoff,
-                            &ctx->levels,
-                            &ctx->dims,
-                            &ctx->layout,
-                            &ctx->config,
-                            ctx->sink,
-                            &e->metrics,
-                            &e->metadata_update_clock);
+  return schedule_deliver_batch(&e->d2h_deliver,
+                                &e->sched.slot[fc].handoff,
+                                &ctx->levels,
+                                &ctx->dims,
+                                &ctx->layout,
+                                &ctx->config,
+                                ctx->sink,
+                                &e->metrics,
+                                &e->metadata_update_clock);
 }
 
-// d->mu must be held. Once one generation fails, later materializations are
+// d->mu must be held. Once one generation fails, later host copies are
 // cancelled in generation order so every already-submitted aggregate lease is
 // released without committing more shard state.
 static void
@@ -360,7 +354,7 @@ delivery_main(void* arg)
     struct delivery_job* j = &d->job[fc];
     const uint64_t generation = j->generation;
 
-    delivery_park(d, DELIVERY_HOLD_BEFORE_DRAIN);
+    delivery_park(d, DELIVERY_HOLD_BEFORE_DELIVERY);
     if (j->state != DELIVERY_JOB_SUBMITTED)
       continue;
 
@@ -375,11 +369,11 @@ delivery_main(void* arg)
 
     struct writer_result r;
     if (cancel) {
-      (void)d2h_materialize_cancel(&e->d2h_deliver.materializer, fc);
+      (void)host_batch_copy_cancel(&e->d2h_deliver.copy, fc);
       r = writer_error();
     } else {
       gpu_edge_host_rule(&e->ord, GPU_EDGE_DELIVER_OLDEST_FIRST, oldest);
-      r = drain_payload(e, ctx, fc);
+      r = deliver_payload(e, ctx, fc);
     }
 
     platform_mutex_lock(d->mu);
@@ -392,7 +386,7 @@ delivery_main(void* arg)
     // completion notification explicit now that tails are host-only.
     platform_cond_broadcast(d->cv);
 
-    delivery_park(d, DELIVERY_HOLD_AFTER_DRAIN);
+    delivery_park(d, DELIVERY_HOLD_AFTER_DELIVERY);
   }
   platform_mutex_unlock(d->mu);
 }
@@ -450,7 +444,7 @@ gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
                                int fc,
                                uint64_t generation)
 {
-  // Aggregation is already queued, so without a worker the producer can drain
+  // Aggregation is already queued, so without a worker the producer can deliver
   // this slot itself when it comes to refill it.
   if (!d->thread)
     return 0;
@@ -597,7 +591,7 @@ Error:
 // The join wait is near-zero in steady state; the whole call accumulates
 // flush_stall.
 static struct writer_result
-drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
+deliver_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
 {
   struct schedule_slot* s = &e->sched.slot[fc];
   if (!s->kicked)
@@ -616,13 +610,13 @@ drain_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
     r = gpu_delivery_join(&e->delivery, fc);
   } else if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT &&
              !e->delivery.thread && e->delivery.sticky_error) {
-    (void)d2h_materialize_cancel(&e->d2h_deliver.materializer, fc);
+    (void)host_batch_copy_cancel(&e->d2h_deliver.copy, fc);
     r = writer_error();
   } else {
-    r = drain_payload(e, ctx, fc);
+    r = deliver_payload(e, ctx, fc);
     // A single-array stream without a worker can still have the other slot
-    // materialized ahead. Preserve the worker's sticky-failure semantics so
-    // schedule_drain_kicked() cancels that later generation.
+    // copied ahead. Preserve the worker's sticky-failure semantics so
+    // schedule_deliver_kicked() cancels that later generation.
     if (r.error && e->sched.mode == SCHEDULE_PIPELINED_DIRECT &&
         !e->delivery.thread)
       e->delivery.sticky_error = 1;
@@ -641,7 +635,7 @@ kick_batch(struct stream_engine* e,
            uint32_t n_epochs)
 {
   gpu_edge_host_rule(
-    &e->ord, GPU_EDGE_DRAIN_BEFORE_REKICK, !e->sched.slot[fc].kicked);
+    &e->ord, GPU_EDGE_DELIVER_BEFORE_REKICK, !e->sched.slot[fc].kicked);
   struct compress_agg_input in = make_compress_input(e, fc, n_epochs);
   struct schedule_slot* s = &e->sched.slot[fc];
 
@@ -667,8 +661,8 @@ kick_batch(struct stream_engine* e,
 
   s->kicked = 1;
 
-  // Multiarray drains inline. Single-array batches queue only their
-  // oldest-first materialization and delivery.
+  // Multiarray delivers inline. Single-array batches queue only their
+  // oldest-first host copying and delivery.
   if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT)
     CHECK(Error,
           gpu_delivery_enqueue_submitted(
@@ -680,16 +674,16 @@ Error:
   return 1;
 }
 
-// The slot about to be refilled holds the oldest undelivered batch, so
-// draining it first keeps shard writes in batch order.
+// The slot about to be refilled holds the oldest undelivered batch. Delivering
+// it first keeps shard writes in batch order.
 static struct writer_result
-drain_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
+deliver_kick_and_swap(struct stream_engine* e, struct stream_context* ctx)
 {
   const uint32_t K = e->sched.epochs_per_batch;
   const int fc = e->sched.fill;
 
   {
-    struct writer_result r = drain_slot(e, ctx, fc);
+    struct writer_result r = deliver_slot(e, ctx, fc);
     if (r.error)
       return r;
   }
@@ -737,17 +731,17 @@ schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
     return writer_ok();
 
   // Release pool-filled once after the last epoch's scatter; compute-stream
-  // ordering means this subsumes per-epoch ready signals. The drain-after-kick
-  // path releases inside schedule_flush_accumulated, so skip it here to avoid
-  // re-recording the same edge on the same stream.
-  if (e->sched.mode != SCHEDULE_DRAIN_AFTER_KICK)
+  // ordering means this subsumes per-epoch ready signals. The
+  // immediate-delivery path releases inside schedule_flush_accumulated, so skip
+  // it here to avoid re-recording the same edge on the same stream.
+  if (e->sched.mode != SCHEDULE_DELIVER_AFTER_KICK)
     CHECK(Error,
           gpu_pool_release_produce(
             &e->pools.p, e->sched.fill, e->streams.compute) == 0);
 
-  if (e->sched.mode == SCHEDULE_DRAIN_AFTER_KICK) {
+  if (e->sched.mode == SCHEDULE_DELIVER_AFTER_KICK) {
     struct writer_result r = schedule_flush_accumulated(e, ctx);
-    // Host-ordered re-acquire: the drain above host-completed this slot's
+    // Host-ordered re-acquire: the delivery above completed this slot's
     // D2H, so no device wait is queued.
     if (!r.error) {
       size_t bpe = dtype_bpe(ctx->config.dtype);
@@ -766,7 +760,7 @@ schedule_accumulate_epoch(struct stream_engine* e, struct stream_context* ctx)
     return writer_error();
   }
 
-  return drain_kick_and_swap(e, ctx);
+  return deliver_kick_and_swap(e, ctx);
 
 Error:
   return writer_error();
@@ -784,9 +778,9 @@ schedule_add_partial_epoch(struct stream_engine* e, struct stream_context* ctx)
 }
 
 // A worker left running owns shard state the caller reads and buffers destroy
-// frees, so every kicked slot is drained even after one fails.
+// frees, so every kicked slot is delivered even after one fails.
 struct writer_result
-schedule_drain_kicked(struct stream_engine* e, struct stream_context* ctx)
+schedule_deliver_kicked(struct stream_engine* e, struct stream_context* ctx)
 {
   struct writer_result first = writer_ok();
   for (int i = 0; i < 2; ++i) {
@@ -801,7 +795,7 @@ schedule_drain_kicked(struct stream_engine* e, struct stream_context* ctx)
     }
     if (pick < 0)
       break;
-    struct writer_result r = drain_slot(e, ctx, pick);
+    struct writer_result r = deliver_slot(e, ctx, pick);
     if (r.error && !first.error)
       first = r;
   }
@@ -824,11 +818,11 @@ schedule_flush_accumulated(struct stream_engine* e, struct stream_context* ctx)
   if (kick_batch(e, ctx, fc, e->sched.accumulated))
     return writer_error();
 
-  // Normally stream_flush_body() has already drained older batches.  Keep
+  // Normally stream_flush_body() has already delivered older batches. Keep
   // this entry point correct on its own as well: an inline/no-worker caller
   // may still have the other slot outstanding, and tail placement must never
   // observe a newer generation first.
-  struct writer_result r = schedule_drain_kicked(e, ctx);
+  struct writer_result r = schedule_deliver_kicked(e, ctx);
   if (r.error)
     return r;
 
@@ -874,7 +868,7 @@ schedule_flush_partial_append(struct stream_engine* e,
         gpu_pool_release_produce(&e->pools.p, fc, e->streams.compute) == 0);
   if (kick_batch(e, ctx, fc, 1))
     return writer_error();
-  return schedule_drain_kicked(e, ctx);
+  return schedule_deliver_kicked(e, ctx);
 
 Error:
   return writer_error();

@@ -4,7 +4,7 @@
 #include "gpu/prelude.cuda.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
-#include "zarr/shard_delivery.h"
+#include "zarr/shard_write_plan.h"
 
 #include <string.h>
 
@@ -13,15 +13,15 @@
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
-                 enum device_aggregate_extent_kind extent_kind,
-                 struct gpu_ordering* ord,
-                 CUstream drain_stream,
+                 enum aggregate_size_kind size_kind,
+                 struct gpu_ordering* ordering,
+                 CUstream payload_copy_stream,
                  CUstream compute)
 {
   memset(stage, 0, sizeof(*stage));
   stage->shard_alignment = shard_alignment;
-  return d2h_materializer_init(
-    &stage->materializer, extent_kind, ord, drain_stream, compute);
+  return host_batch_copy_init(
+    &stage->copy, size_kind, ordering, payload_copy_stream, compute);
 }
 
 void
@@ -29,7 +29,7 @@ d2h_deliver_destroy(struct d2h_deliver_stage* stage)
 {
   if (!stage)
     return;
-  d2h_materializer_destroy(&stage->materializer);
+  host_batch_copy_destroy(&stage->copy);
 }
 
 // --- Internal helpers ---
@@ -41,7 +41,7 @@ record_flush_metrics(const struct flush_handoff* handoff,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
                      struct stream_metrics* metrics,
-                     int indexed,
+                     int variable_size,
                      CUevent t_metadata_copy_start,
                      CUevent t_metadata_copy_ready,
                      CUevent t_d2h_start,
@@ -49,15 +49,16 @@ record_flush_metrics(const struct flush_handoff* handoff,
 {
   // An empty batch dispatched no kernels and moved no bytes, so it has no
   // interval to report.
-  if (handoff->layout.total_batch_chunks == 0)
+  if (handoff->batch.layout.total_batch_chunks == 0)
     return;
 
-  const size_t pool_bytes = (uint64_t)handoff->n_epochs * levels->total_chunks *
-                            layout->chunk_stride * dtype_bpe(config->dtype);
+  const size_t pool_bytes = (uint64_t)handoff->batch.epoch_count *
+                            levels->total_chunks * layout->chunk_stride *
+                            dtype_bpe(config->dtype);
 
-  const size_t agg_bytes = host->transfer.logical_payload_bytes;
+  const size_t agg_bytes = host->transfer.payload_bytes_transferred;
 
-  if (indexed && host->transfer.metadata_bytes_transferred > 0) {
+  if (variable_size && host->transfer.metadata_bytes_transferred > 0) {
     accumulate_metric_cu_if_ready(&metrics->chunk_metadata_copy,
                                   t_metadata_copy_start,
                                   t_metadata_copy_ready,
@@ -66,26 +67,29 @@ record_flush_metrics(const struct flush_handoff* handoff,
   }
 
   // Pass-through runs no codec, so it has no compress interval to report.
-  if (!handoff->passthrough)
+  if (handoff->batch.size_kind != AGGREGATE_FIXED_SIZE)
     accumulate_metric_cu_if_ready(&metrics->compress,
-                                  handoff->t_compress_start,
-                                  handoff->t_compress_end,
+                                  handoff->compress_start,
+                                  handoff->compress_end,
                                   pool_bytes,
                                   agg_bytes);
-  accumulate_metric_cu_if_ready(&metrics->aggregate,
-                                handoff->t_aggregate_start,
-                                handoff->t_aggregate_end,
-                                agg_bytes,
-                                agg_bytes);
+  accumulate_metric_cu_if_ready(
+    &metrics->aggregate,
+    handoff->aggregate_start,
+    gpu_ordering_event(handoff->batch.aggregate_pool->ord,
+                       GPU_EDGE_AGG_DONE,
+                       handoff->batch.slot_index),
+    agg_bytes,
+    agg_bytes);
   const size_t transferred = host->transfer.payload_bytes_transferred;
   accumulate_metric_cu_if_ready(
     &metrics->d2h, t_d2h_start, t_d2h_ready, transferred, transferred);
 }
 
-// Deliver the drained host slot to the sink. Fixed-extent persistent tails
+// Deliver the copied host batch to the sink. Fixed-size persistent tails
 // stay entirely in shard_state; aggregation never reads or uploads them.
 struct writer_result
-d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
+d2h_deliver_host_batch(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
                        struct host_batch* host,
                        CUevent payload_start,
@@ -95,7 +99,7 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
                        struct shard_sink* sink,
                        struct stream_metrics* metrics)
 {
-  const int fc = handoff->fc;
+  const int fc = handoff->batch.slot_index;
 
   record_flush_metrics(
     handoff,
@@ -104,13 +108,12 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     layout,
     config,
     metrics,
-    handoff->device_batch.extent_kind == DEVICE_AGGREGATE_INDEXED_EXTENT,
-    stage->materializer.metadata_copy_start[fc],
-    gpu_ordering_event(stage->materializer.ord, GPU_EDGE_CHUNK_INDEX_READY, fc),
+    handoff->batch.size_kind == AGGREGATE_VARIABLE_SIZE,
+    stage->copy.metadata_copy_start[fc],
+    gpu_ordering_event(stage->copy.ordering, GPU_EDGE_CHUNK_INDEX_READY, fc),
     payload_start,
-    gpu_ordering_event(stage->materializer.ord, GPU_EDGE_SLOT_DRAINED, fc));
+    gpu_ordering_event(stage->copy.ordering, GPU_EDGE_SLOT_COPY_DONE, fc));
 
-  metrics->d2h_logical_payload_bytes += host->transfer.logical_payload_bytes;
   metrics->d2h_payload_bytes_transferred +=
     host->transfer.payload_bytes_transferred;
   metrics->d2h_metadata_bytes_transferred +=
@@ -121,19 +124,14 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     struct platform_clock sink_clock = { 0 };
     platform_toc(&sink_clock);
     size_t sink_bytes = 0;
-    const int sink_error = deliver_host_batch(host,
-                                              handoff->shards_by_lod,
-                                              sink,
-                                              stage->shard_alignment,
-                                              &sink_bytes,
-                                              metrics);
+    const int sink_error = deliver_host_batch(
+      host, handoff->shards_by_level, sink, &sink_bytes, metrics);
 
-    // Record an aggregate IO fence on the unified slot; the schedule waits
-    // it out before the slot's next host payload copy. Record it even after a
-    // partial sink failure because already-submitted writes may borrow bytes.
-    if (sink->record_fence)
-      ((struct aggregate_slot*)host->slot_lifetime)->io_done =
-        sink->record_fence(sink);
+    if (sink->record_fence) {
+      struct aggregate_slot* slot =
+        gpu_pool_at(handoff->batch.host_pool, fc, 0).p;
+      slot->io_done = sink->record_fence(sink);
+    }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
@@ -163,8 +161,8 @@ d2h_deliver_update_metadata(const struct flush_handoff* handoff,
     return 0;
 
   *metadata_update_clock = peek;
-  for (uint8_t lv = 0; lv < handoff->nlod; ++lv) {
-    struct shard_state* ss = handoff->shards_by_lod[lv];
+  for (uint8_t lv = 0; lv < handoff->batch.layout.nlod; ++lv) {
+    struct shard_state* ss = handoff->shards_by_level[lv];
     if (ss && shard_state_publish_append(ss, sink, dims_info, lv, NULL, NULL))
       return 1;
   }

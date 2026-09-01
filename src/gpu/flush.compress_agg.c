@@ -48,7 +48,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   memset(stage, 0, sizeof(*stage));
   stage->ord = ord;
   gpu_pool_init(
-    &stage->agg_pool, ord, GPU_EDGE_AGG_DONE, GPU_EDGE_SLOT_DRAINED);
+    &stage->agg_pool, ord, GPU_EDGE_AGG_DONE, GPU_EDGE_SLOT_COPY_DONE);
   gpu_pool_init(&stage->agg_host, ord, GPU_EDGE_D2H_DONE, GPU_EDGE_COUNT);
   gpu_pool_init(
     &stage->agg_index, ord, GPU_EDGE_CHUNK_INDEX_READY, GPU_EDGE_COUNT);
@@ -329,7 +329,7 @@ build_and_upload_luts(struct compress_agg_stage* stage,
   const uint32_t stride = stage->pool_epochs_stride;
 
   int lut_steady =
-    stage->lut_cache_valid && memcmp(stage->cached_per_lod_n_active,
+    stage->lut_cache_valid && memcmp(stage->cached_active_count_by_level,
                                      per_lod_n_active,
                                      (size_t)nlod * sizeof(uint32_t)) == 0;
   for (uint8_t lv = 0; lut_steady && lv < nlod; ++lv) {
@@ -362,7 +362,7 @@ build_and_upload_luts(struct compress_agg_stage* stage,
                          layout->total_batch_chunks * sizeof(uint32_t),
                          compress_stream));
   }
-  memcpy(stage->cached_per_lod_n_active,
+  memcpy(stage->cached_active_count_by_level,
          per_lod_n_active,
          (size_t)nlod * sizeof(uint32_t));
   for (uint8_t lv = 0; lv < nlod; ++lv) {
@@ -388,14 +388,16 @@ compress_agg_prepare(struct compress_agg_stage* stage,
 {
   const uint32_t* per_lod_pool_epochs[LOD_MAX_LEVELS] = { 0 };
   memset(plan, 0, sizeof(*plan));
-  scan_active_masks(stage, in, plan->per_lod_n_active, per_lod_pool_epochs);
+  scan_active_masks(
+    stage, in, plan->active_count_by_level, per_lod_pool_epochs);
   CHECK(Error,
-        build_batch_layout(stage, plan->per_lod_n_active, &plan->layout) == 0);
+        build_batch_layout(stage, plan->active_count_by_level, &plan->layout) ==
+          0);
   CHECK(Error,
         build_and_upload_luts(stage,
                               &plan->layout,
                               levels,
-                              plan->per_lod_n_active,
+                              plan->active_count_by_level,
                               per_lod_pool_epochs,
                               compress_stream) == 0);
   return 0;
@@ -447,9 +449,9 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
                                         ? gpu_pool_view_d(pool_buf)
                                         : stage->d_compressed[fc];
   if (plan->layout.total_batch_chunks > 0) {
-    const size_t aggregate_source_stride =
-      stage->codec.type == CODEC_NONE ? stage->codec.chunk_bytes
-                                      : stage->codec.max_output_size;
+    const size_t aggregate_source_stride = stage->codec.type == CODEC_NONE
+                                             ? stage->codec.chunk_bytes
+                                             : stage->codec.max_output_size;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
@@ -477,43 +479,25 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
 {
   const int fc = in->fc;
   const uint8_t nlod = stage->ar.nlod;
-  out->fc = fc;
-  out->n_epochs = in->n_epochs;
-  out->active_levels_mask = in->active_levels_mask;
-  out->batch_active_masks = in->batch_active_masks;
-  out->nlod = nlod;
-  memcpy(out->per_lod_n_active,
-         plan->per_lod_n_active,
-         (size_t)nlod * sizeof(uint32_t));
-  out->t_aggregate_end = gpu_ordering_event(stage->ord, GPU_EDGE_AGG_DONE, fc);
-  out->t_compress_start = stage->t_compress_start[fc];
-  out->t_compress_end = stage->t_compress_end[fc];
-  out->t_aggregate_start = stage->t_aggregate_start[fc];
-  out->max_output_size = stage->ar.per_lod_agg_layouts[0].max_comp_chunk_bytes;
-  out->passthrough = (stage->codec.type == CODEC_NONE);
-  out->agg_pool = &stage->agg_pool;
-  out->agg_host = &stage->agg_host;
-  out->agg_index = &stage->agg_index;
-  out->layout = plan->layout;
-  out->per_lod_agg_layouts = stage->ar.per_lod_agg_layouts;
+  out->compress_start = stage->t_compress_start[fc];
+  out->compress_end = stage->t_compress_end[fc];
+  out->aggregate_start = stage->t_aggregate_start[fc];
   for (uint8_t lv = 0; lv < nlod; ++lv)
-    out->shards_by_lod[lv] = &stage->ar.shard[lv];
+    out->shards_by_level[lv] = &stage->ar.shard[lv];
 
-  out->device_batch = (struct device_aggregate_batch){
+  out->batch = (struct aggregate_batch){
     .slot_index = fc,
-    .extent_kind = stage->codec.type == CODEC_NONE
-                     ? DEVICE_AGGREGATE_FIXED_EXTENT
-                     : DEVICE_AGGREGATE_INDEXED_EXTENT,
+    .size_kind = stage->codec.type == CODEC_NONE ? AGGREGATE_FIXED_SIZE
+                                                 : AGGREGATE_VARIABLE_SIZE,
+    .epoch_count = in->n_epochs,
     .layout = plan->layout,
-    .nlod = nlod,
-    .per_lod_layouts = stage->ar.per_lod_agg_layouts,
+    .level_layouts = stage->ar.per_lod_agg_layouts,
     .fixed_chunk_bytes = stage->codec.chunk_bytes,
     .aggregate_pool = &stage->agg_pool,
     .host_pool = &stage->agg_host,
     .index_pool = &stage->agg_index,
-    .completion = out->t_aggregate_end,
   };
-  memcpy(out->device_batch.per_lod_n_active,
-         plan->per_lod_n_active,
+  memcpy(out->batch.active_count_by_level,
+         plan->active_count_by_level,
          (size_t)nlod * sizeof(uint32_t));
 }

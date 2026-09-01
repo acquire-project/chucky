@@ -15,7 +15,7 @@ add_src_lib(stream
         ordering.c ordering.h
         pool.c pool.h
         schedule.c schedule.h
-        d2h.materializer.c d2h.materializer.h
+        host_batch.copy.c host_batch.copy.h
         flush.compress_agg.c flush.compress_agg.h
         flush.d2h_deliver.c flush.d2h_deliver.h
         flush.handoff.h

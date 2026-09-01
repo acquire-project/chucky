@@ -37,13 +37,14 @@ stream_engine_init_metrics(int enable_multiscale)
     .compress = mk_stream_metric("Compress", METRIC_OWNER_COMPRESS),
     .aggregate = mk_stream_metric("Aggregate", METRIC_OWNER_COMPRESS),
     .d2h = mk_stream_metric("D2H", METRIC_OWNER_D2H),
-    .sink = mk_stream_metric("Sink", METRIC_OWNER_DRAIN),
-    .flush_stall = mk_stream_metric("Batch drain", METRIC_OWNER_PRODUCER),
-    .drain_dispatch = mk_stream_metric("D2H dispatch", METRIC_OWNER_DRAIN),
+    .sink = mk_stream_metric("Sink", METRIC_OWNER_DELIVERY),
+    .flush_stall = mk_stream_metric("Batch delivery", METRIC_OWNER_PRODUCER),
+    .delivery_dispatch =
+      mk_stream_metric("D2H dispatch", METRIC_OWNER_DELIVERY),
     .io_fence_stall =
       mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER),
     // These are named so the report can list them. GPU delivery also uses the
-    // footer-buffer fence now that footer reuse sits behind the drainer.
+    // footer-buffer fence now that footer reuse sits behind the write plan.
     .footer_buffer_stall =
       mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER),
     .append_extent_stall =
@@ -52,10 +53,10 @@ stream_engine_init_metrics(int enable_multiscale)
       mk_stream_metric("Final queued writes", METRIC_OWNER_PRODUCER),
     .backpressure =
       mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER),
-    .indexed_aggregate_ready =
-      mk_stream_metric("Aggregate before metadata", METRIC_OWNER_DRAIN),
-    .chunk_metadata_ready =
-      mk_stream_metric("Metadata after aggregate", METRIC_OWNER_DRAIN),
+    .indexed_aggregate_wait =
+      mk_stream_metric("Aggregate before metadata", METRIC_OWNER_DELIVERY),
+    .chunk_metadata_wait =
+      mk_stream_metric("Metadata after aggregate", METRIC_OWNER_DELIVERY),
     .chunk_metadata_copy =
       mk_stream_metric("Chunk metadata D2H", METRIC_OWNER_D2H),
     .tail_gate = mk_stream_metric("Prior tail state", METRIC_OWNER_COMPRESS),
@@ -68,18 +69,18 @@ stream_engine_attach_edge_stalls(struct stream_engine* e)
   e->metrics.edge_stall[0] =
     mk_stream_metric("Staging-buffer reuse", METRIC_OWNER_PRODUCER);
   e->metrics.edge_stall[1] =
-    mk_stream_metric("Chunk offsets/sizes D2H", METRIC_OWNER_DRAIN);
+    mk_stream_metric("Chunk offsets/sizes D2H", METRIC_OWNER_DELIVERY);
   e->metrics.edge_stall[2] =
-    mk_stream_metric("Payload D2H", METRIC_OWNER_DRAIN);
+    mk_stream_metric("Payload D2H", METRIC_OWNER_DELIVERY);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_STAGING_FREE, &e->metrics.edge_stall[0]);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_CHUNK_INDEX_READY, &e->metrics.edge_stall[1]);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
-  d2h_materializer_attach_metadata_stalls(&e->d2h_deliver.materializer,
-                                          &e->metrics.indexed_aggregate_ready,
-                                          &e->metrics.chunk_metadata_ready);
+  host_batch_copy_set_wait_metrics(&e->d2h_deliver.copy,
+                                   &e->metrics.indexed_aggregate_wait,
+                                   &e->metrics.chunk_metadata_wait);
 }
 
 static size_t
@@ -388,7 +389,7 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
   // to be joined: the worker writes the shard state this function goes on to
   // read, and its queued writes point into buffers destroy frees.
   {
-    struct writer_result d = schedule_drain_kicked(e, ctx);
+    struct writer_result d = schedule_deliver_kicked(e, ctx);
     if (d.error)
       ctx->append_failed = 1;
     if (!r.error)

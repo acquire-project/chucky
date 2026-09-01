@@ -737,7 +737,7 @@ Fail:
 
 // ---- Page-aligned host-tail carry ----
 // A sink alignment requirement activates host-side run assembly. Aggregation
-// may run ahead, but payload materialization consumes the committed tail only
+// may run ahead, but payload copying consumes the committed tail only
 // after the preceding delivery. The CPU pipeline is the byte-exact oracle.
 #define TC_Z 32  // 32 epochs (chunk_size 1), one shard generation
 #define TC_Y 144 // 2 chunks of 72

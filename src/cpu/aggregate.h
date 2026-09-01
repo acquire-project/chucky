@@ -65,10 +65,10 @@ struct aggregate_cpu_inputs
   const struct aggregate_layout* per_lod_layouts; // [layout->nlod]
 
   // Tail-carry inputs (carry-over mode only). Both NULL when page_size == 0.
-  // shards_by_lod[lv] is the shard_state for LOD lv. Each entry is independent;
-  // the function does not assume a contiguous backing array.
-  struct shard_state* const* shards_by_lod; // [layout->nlod]
-  size_t* const* h_tail_bytes;              // [layout->nlod]
+  // shards_by_level[lv] is the shard_state for LOD lv. Each entry is
+  // independent; the function does not assume a contiguous backing array.
+  struct shard_state* const* shards_by_level; // [layout->nlod]
+  size_t* const* h_tail_bytes;                // [layout->nlod]
 
   // Workspace (reused) and outputs (per-LOD result views).
   struct aggregate_cpu_workspace* ws;
@@ -84,7 +84,7 @@ struct aggregate_cpu_inputs
 // When layout->page_size > 0, lays out per-shard `shard_capacity`-sized
 // regions matching the GPU tail-carry path: each shard's first chunk is
 // anchored at `si*shard_capacity + h_tail_bytes[lv][si]`, and the leading
-// tail bytes are copied from `shards_by_lod[lv]->shards[si].tail_buf`. When
+// tail bytes are copied from `shards_by_level[lv]->shards[si].tail_buf`. When
 // page_size is zero, falls back to a single contiguous prefix-sum per LOD.
 int
 aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in);

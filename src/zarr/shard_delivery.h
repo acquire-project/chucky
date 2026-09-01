@@ -62,7 +62,7 @@ struct shard_state
   size_t footer_capacity; // bytes per shard
 
   // Compact upper bound: every chunk at its worst-case compressed size, plus
-  // the footer. The GPU drainer adds the worst retained indexed-padding bound
+  // the footer. The GPU write plan adds the worst retained padding bound
   // when that policy is active. Zero means unknown and turns pre-sizing off.
   uint64_t shard_file_capacity;
 };
@@ -126,72 +126,3 @@ deliver_to_shards_batch(uint8_t level,
                         size_t shard_alignment,
                         size_t* out_bytes,
                         struct stream_metrics* metrics);
-
-// Build run views over the existing aggregate layout without changing any
-// shard state.  This is the behavior-preserving bridge used by the first GPU
-// materializer refactor: page-aligned layouts already contain their carried
-// tail at the head of each shard region, while contiguous layouts have no
-// prefix.  The caller owns host->runs and may reuse the allocation.
-int
-host_batch_build_legacy(struct host_batch* host,
-                        void* aggregate_data,
-                        const size_t* offsets,
-                        const size_t* chunk_sizes,
-                        const struct batch_aggregate_layout* batch_layout,
-                        const struct aggregate_layout* per_lod_layouts,
-                        struct shard_state* const* shards_by_lod,
-                        const uint32_t* per_lod_n_active,
-                        uint8_t nlod,
-                        void* slot_lifetime);
-
-// Worst-case pinned-host capacity for compact GPU materialization.  Fixed
-// runs reserve a possible carried prefix plus independent alignment slack;
-// indexed-padded runs reserve trailing zero padding plus independent
-// alignment slack; indexed-compact runs reserve payload bytes only.
-// out_run_count is the maximum number of run views/spans for the supplied
-// active-count maxima.
-int
-host_batch_compact_capacity(const struct aggregate_layout* per_lod_layouts,
-                            const uint32_t* per_lod_n_active,
-                            uint8_t nlod,
-                            enum host_delivery_policy policy,
-                            size_t shard_alignment,
-                            size_t* out_bytes,
-                            size_t* out_run_count);
-
-// Resolve compact absolute device offsets into physical-shard-run copies.
-// Fixed runs prepend their committed host tail. Indexed-padded runs start at
-// an aligned base and zero their trailing physical-write slack. Indexed-
-// compact runs occupy exact extents. Empty indexed runs reserve no bytes.
-int
-host_batch_build_compact(struct host_batch* host,
-                         void* aggregate_data,
-                         size_t aggregate_capacity,
-                         const size_t* offsets,
-                         const size_t* chunk_sizes,
-                         const struct batch_aggregate_layout* batch_layout,
-                         const struct aggregate_layout* per_lod_layouts,
-                         struct shard_state* const* shards_by_lod,
-                         const uint32_t* per_lod_n_active,
-                         uint8_t nlod,
-                         enum host_delivery_policy policy,
-                         size_t shard_alignment,
-                         struct d2h_transfer_span* spans,
-                         size_t span_capacity,
-                         size_t* out_span_count,
-                         void* slot_lifetime);
-
-void
-host_batch_destroy(struct host_batch* host);
-
-// Deliver run views in their recorded order.  This is GPU-only call-site
-// behavior but intentionally CUDA-free so planning and delivery can be unit
-// tested on a CPU.  The CPU pipeline continues to use
-// deliver_to_shards_batch unchanged.
-int
-deliver_host_batch(struct host_batch* host,
-                   struct shard_state* const* shards_by_lod,
-                   struct shard_sink* sink,
-                   size_t shard_alignment,
-                   size_t* out_bytes,
-                   struct stream_metrics* metrics);

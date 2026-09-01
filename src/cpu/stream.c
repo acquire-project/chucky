@@ -247,7 +247,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.scatter = mk_stream_metric("scatter", METRIC_OWNER_COMPUTE);
   s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
   s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
-  s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
+  s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
   s->metrics.io_fence_stall =
     mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER);
   s->metrics.footer_buffer_stall =
@@ -260,8 +260,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   // ever populates them.
   s->metrics.flush_stall =
     mk_stream_metric("Batch drain", METRIC_OWNER_PRODUCER);
-  s->metrics.drain_dispatch =
-    mk_stream_metric("D2H dispatch", METRIC_OWNER_DRAIN);
+  s->metrics.delivery_dispatch =
+    mk_stream_metric("D2H dispatch", METRIC_OWNER_DELIVERY);
   s->metrics.backpressure =
     mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER);
   if (s->levels.enable_multiscale) {

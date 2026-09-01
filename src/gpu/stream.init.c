@@ -88,16 +88,16 @@ engine_limits_accumulate(struct engine_limits* lim,
     size_t host_bytes = 0;
     size_t max_runs = 0;
     const size_t shard_alignment = cl->per_level[0].agg_layout.page_size;
-    const enum host_delivery_policy policy = host_delivery_policy_select(
+    const enum host_batch_storage storage = host_batch_storage_select(
       config->codec.id == CODEC_NONE, shard_alignment);
     CHECK(Fail,
-          host_batch_compact_capacity(per_lod_layouts,
-                                      per_lod_max,
-                                      (uint8_t)cl->levels.nlod,
-                                      policy,
-                                      shard_alignment,
-                                      &host_bytes,
-                                      &max_runs) == 0);
+          host_batch_capacity(per_lod_layouts,
+                              per_lod_max,
+                              (uint8_t)cl->levels.nlod,
+                              storage,
+                              shard_alignment,
+                              &host_bytes,
+                              &max_runs) == 0);
     (void)max_runs;
     lim->max_host_data_bytes = max_sz(lim->max_host_data_bytes, host_bytes);
   }
@@ -148,7 +148,7 @@ stream_engine_init(struct stream_engine* e,
   }
 
   if (gpu_delivery_init(&e->delivery, e->cuda))
-    log_warn("delivery worker unavailable; using inline ordered drains");
+    log_warn("delivery worker unavailable; using inline ordered delivery");
 
   e->pool_bytes = lim->pool_bytes;
   gpu_pool_init(
@@ -171,11 +171,10 @@ stream_engine_init(struct stream_engine* e,
   CHECK(Fail,
         d2h_deliver_init(&e->d2h_deliver,
                          0,
-                         codec_id == CODEC_NONE
-                           ? DEVICE_AGGREGATE_FIXED_EXTENT
-                           : DEVICE_AGGREGATE_INDEXED_EXTENT,
+                         codec_id == CODEC_NONE ? AGGREGATE_FIXED_SIZE
+                                                : AGGREGATE_VARIABLE_SIZE,
                          &e->ord,
-                         e->streams.drain,
+                         e->streams.payload_copy,
                          e->streams.compute) == 0);
 
   // Shared LOD buffers (sized to the max across arrays).
@@ -355,7 +354,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   }
 
   // A failed flush can leave delivery jobs queued. Run valid jobs out and
-  // cancel later materializations made unsafe by the sticky error before
+  // cancel later host copies made unsafe by the sticky error before
   // synchronizing or freeing their stage storage.
   gpu_delivery_stop_join(&s->engine.delivery);
 

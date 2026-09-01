@@ -4,7 +4,7 @@
 // then runs the shared verifier from aggregate_contract.h. Mirrors the CPU
 // contract test (test_aggregate_contract_cpu.c). Unlike the intentionally
 // unchanged CPU producer, GPU output is always a tightly-packed prefix sum;
-// host materialization owns page alignment and tail placement.
+// host copying owns page alignment and tail placement.
 
 #include "aggregate_contract.h"
 

@@ -3,23 +3,23 @@
 #include "gpu/stream.internal.h"
 #include "stream/dim_info.h"
 
-// drain_stream is borrowed; it must not be the d2h stream because exact-size
+// payload_copy_stream must not be the D2H metadata stream because exact-size
 // payload copies are dispatched only after the metadata copies host-complete.
 int
 d2h_deliver_init(struct d2h_deliver_stage* stage,
                  size_t shard_alignment,
-                 enum device_aggregate_extent_kind extent_kind,
-                 struct gpu_ordering* ord,
-                 CUstream drain_stream,
+                 enum aggregate_size_kind size_kind,
+                 struct gpu_ordering* ordering,
+                 CUstream payload_copy_stream,
                  CUstream compute);
 
 void
 d2h_deliver_destroy(struct d2h_deliver_stage* stage);
 
 // Sink delivery for the host-complete batch. CUDA copy planning and readiness
-// live behind d2h_materializer; delivery deliberately stays outside it.
+// live behind host_batch_copy; delivery deliberately stays outside it.
 struct writer_result
-d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
+d2h_deliver_host_batch(struct d2h_deliver_stage* stage,
                        const struct flush_handoff* handoff,
                        struct host_batch* host,
                        CUevent payload_start,

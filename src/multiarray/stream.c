@@ -453,7 +453,7 @@ multiarray_tile_stream_cpu_create(
     ms->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
     ms->metrics.aggregate =
       mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
-    ms->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DRAIN);
+    ms->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
     int any_multiscale = 0;
     for (int i = 0; i < n_arrays; ++i)
       any_multiscale |= ms->arrays[i].levels.enable_multiscale;

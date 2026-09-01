@@ -2,7 +2,7 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
-#include "gpu/d2h.materializer.h"
+#include "gpu/host_batch.copy.h"
 #include "gpu/ordering.h"
 #include "gpu/pool.h"
 #include "gpu/reduce_csr_gpu.h"
@@ -188,7 +188,7 @@ struct compress_agg_stage
   struct gpu_pool agg_pool;  // device facet: ready=AGG_DONE,
                              //               consumed=SLOT_DRAINED
   struct gpu_pool agg_host;  // h_aggregated facet: ready=D2H_DONE (alias);
-                             // consumed is the drain-before-rekick host rule
+                             // consumed is the deliver-before-rekick host rule
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
   size_t max_total_batch_chunks;
@@ -205,7 +205,7 @@ struct compress_agg_stage
   CUdeviceptr d_batch_perm;
   uint32_t* h_lut_gather_scratch; // for building unified LUT host-side
   uint32_t* h_lut_perm_scratch;
-  uint32_t cached_per_lod_n_active[LOD_MAX_LEVELS]; // last uploaded counts
+  uint32_t cached_active_count_by_level[LOD_MAX_LEVELS]; // last uploaded counts
   uint32_t* cached_pool_epochs; // [LOD_MAX_LEVELS * pool_epochs_stride]
   uint32_t pool_epochs_stride;  // max K used by scratch + cache
   int lut_cache_valid;
@@ -216,7 +216,7 @@ struct compress_agg_stage
 
 struct d2h_deliver_stage
 {
-  struct d2h_materializer materializer;
+  struct host_batch_copy copy;
 
   size_t shard_alignment; // from sink; 0 = no alignment
 };
@@ -270,8 +270,8 @@ struct stream_engine
   struct lod_shared_state lod_shared; // engine-owned shared LOD resources
   struct lod_state lod;               // per-array; overwritten on array switch
   struct threadpool* copy_pool;       // staging-copy helpers (append body)
-  struct gpu_delivery delivery;       // drain worker (pipelined schedule)
-  // The context the streams and device memory belong to. The drain worker
+  struct gpu_delivery delivery;       // delivery worker (pipelined schedule)
+  // The context the streams and device memory belong to. The delivery worker
   // clears its own copy when it fails to start, and the engine runs on.
   CUcontext cuda;
   struct stream_metrics metrics;

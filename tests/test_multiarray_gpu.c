@@ -1332,7 +1332,7 @@ Fail:
 // epochs_per_batch=4 forces batch 1 to span shard 0 (3 epochs) + partial
 // shard 1 (1 epoch). Batch 2 finishes shard 1 (2 more epochs).
 //
-// The materializer must split the compact device aggregate into two physical
+// The host-copy stage must split the compact device aggregate into two physical
 // generation runs, prepend only the committed host tail for each run, and
 // deliver them oldest-first. Verified two ways: the byte-level file-size
 // invariant and the on-disk index back to the original fill bytes.
