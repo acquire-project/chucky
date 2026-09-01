@@ -243,7 +243,7 @@ _LEGACY_DIAGNOSTICS = {
 
 _LEGACY_EDGE_DIAGNOSTICS = {
     "staging_reuse": ("StagingFree", "Staging-buffer reuse"),
-    "chunk_metadata_d2h": ("ChunkIndex", "Chunk offsets/sizes D2H"),
+    "chunk_metadata_d2h": ("ChunkIndex", "Chunk metadata ready (inclusive)"),
     "payload_d2h": ("D2HDone", "Payload D2H"),
 }
 

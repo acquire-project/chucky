@@ -41,6 +41,9 @@ record_flush_metrics(const struct flush_handoff* handoff,
                      const struct tile_stream_layout* layout,
                      const struct tile_stream_configuration* config,
                      struct stream_metrics* metrics,
+                     int indexed,
+                     CUevent t_metadata_copy_start,
+                     CUevent t_metadata_copy_ready,
                      CUevent t_d2h_start,
                      CUevent t_d2h_ready)
 {
@@ -53,6 +56,14 @@ record_flush_metrics(const struct flush_handoff* handoff,
                             layout->chunk_stride * dtype_bpe(config->dtype);
 
   const size_t agg_bytes = host->transfer.logical_payload_bytes;
+
+  if (indexed && host->transfer.metadata_bytes_transferred > 0) {
+    accumulate_metric_cu_if_ready(&metrics->chunk_metadata_copy,
+                                  t_metadata_copy_start,
+                                  t_metadata_copy_ready,
+                                  host->transfer.metadata_bytes_transferred,
+                                  host->transfer.metadata_bytes_transferred);
+  }
 
   // Pass-through runs no codec, so it has no compress interval to report.
   if (!handoff->passthrough)
@@ -93,6 +104,9 @@ d2h_deliver_drain_sink(struct d2h_deliver_stage* stage,
     layout,
     config,
     metrics,
+    handoff->device_batch.extent_kind == DEVICE_AGGREGATE_INDEXED_EXTENT,
+    stage->materializer.metadata_copy_start[fc],
+    gpu_ordering_event(stage->materializer.ord, GPU_EDGE_CHUNK_INDEX_READY, fc),
     payload_start,
     gpu_ordering_event(stage->materializer.ord, GPU_EDGE_SLOT_DRAINED, fc));
 

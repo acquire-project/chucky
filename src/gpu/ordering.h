@@ -144,6 +144,20 @@ gpu_edge_wait(struct gpu_ordering* ord,
 int
 gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i);
 
+// Host-poll `e` exactly as gpu_edge_host_wait does, while observing an
+// upstream event to partition the blocked interval. `before` accrues until
+// `prerequisite` is observed ready and `after` accrues from there until `e` is
+// ready. The prerequisite query is diagnostic-only: `e` remains the ordering
+// edge protecting host access, and its attached stall metric remains the
+// inclusive wait.
+int
+gpu_edge_host_wait_split(struct gpu_ordering* ord,
+                         enum gpu_edge e,
+                         enum gpu_edge prerequisite,
+                         int i,
+                         struct stream_metric* before,
+                         struct stream_metric* after);
+
 void
 gpu_ordering_attach_stall_metric(struct gpu_ordering* ord,
                                  enum gpu_edge e,

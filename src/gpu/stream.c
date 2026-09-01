@@ -52,6 +52,12 @@ stream_engine_init_metrics(int enable_multiscale)
       mk_stream_metric("Final queued writes", METRIC_OWNER_PRODUCER),
     .backpressure =
       mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER),
+    .indexed_aggregate_ready =
+      mk_stream_metric("Aggregate before metadata", METRIC_OWNER_DRAIN),
+    .chunk_metadata_ready =
+      mk_stream_metric("Metadata after aggregate", METRIC_OWNER_DRAIN),
+    .chunk_metadata_copy =
+      mk_stream_metric("Chunk metadata D2H", METRIC_OWNER_D2H),
     .tail_gate = mk_stream_metric("Prior tail state", METRIC_OWNER_COMPRESS),
   };
 }
@@ -71,6 +77,9 @@ stream_engine_attach_edge_stalls(struct stream_engine* e)
     &e->ord, GPU_EDGE_CHUNK_INDEX_READY, &e->metrics.edge_stall[1]);
   gpu_ordering_attach_stall_metric(
     &e->ord, GPU_EDGE_D2H_DONE, &e->metrics.edge_stall[2]);
+  d2h_materializer_attach_metadata_stalls(&e->d2h_deliver.materializer,
+                                          &e->metrics.indexed_aggregate_ready,
+                                          &e->metrics.chunk_metadata_ready);
 }
 
 static size_t

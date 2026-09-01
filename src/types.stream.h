@@ -73,6 +73,13 @@ struct stream_metrics
                                             // was last published
   struct stream_metric flush_writes_stall;  // every queued write, at flush
   struct stream_metric backpressure;        // sink queue over its watermark
+  // Indexed metadata readiness is reported as one inclusive host wait plus
+  // two host-timeline children. The children partition that wait at aggregate
+  // readiness; chunk_metadata_copy separately measures the two D2H copies on
+  // the device timeline.
+  struct stream_metric indexed_aggregate_ready;
+  struct stream_metric chunk_metadata_ready;
+  struct stream_metric chunk_metadata_copy;
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which
   // Compatibility-only legacy field. GPU host-tail materialization leaves it

@@ -40,7 +40,16 @@ or page-padding bytes.
 Fixed output constructs its offset/size shadow from the permutation geometry.
 Indexed output first lands the device-generated offset/size metadata. The D2H
 materializer then partitions either form into physical-shard generation runs.
-Every nonempty run produces one exact payload span.
+Here "metadata" means two transient per-batch control arrays: offsets into the
+compact aggregate and exact compressed sizes permuted into physical shard order.
+It is neither Zarr JSON nor the shard index/footer. Every nonempty run produces
+one exact payload span.
+
+The benchmark keeps the original inclusive host wait for those arrays and adds
+three child diagnostics. Two host-timeline children partition the wait at
+aggregate readiness; a CUDA-event interval measures the two D2H copies
+themselves. This distinguishes an upstream codec/aggregation dependency from
+PCIe work without changing the stored sweep schema.
 
 ## Host materialization
 

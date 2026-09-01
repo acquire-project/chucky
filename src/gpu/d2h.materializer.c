@@ -155,22 +155,23 @@ indexed_begin(struct d2h_materializer* materializer,
               struct d2h_ticket* ticket,
               CUstream stream)
 {
-  (void)materializer;
+  const int fc = ticket->batch.slot_index;
+  int err = 0;
   struct gpu_pool_view lease;
   CHECK(Error,
-        gpu_pool_acquire_consume(ticket->batch.aggregate_pool,
-                                 ticket->batch.slot_index,
-                                 stream,
-                                 &lease) == 0);
+        gpu_pool_acquire_consume(
+          ticket->batch.aggregate_pool, fc, stream, &lease) == 0);
   ticket->slot = lease.p;
   ticket->aggregate_acquired = 1;
-  int err = enqueue_metadata(ticket, stream);
-  if (gpu_pool_release_produce(
-        ticket->batch.index_pool, ticket->batch.slot_index, stream))
+  D2H_TRY(err,
+          "cuEventRecord",
+          cuEventRecord(materializer->metadata_copy_start[fc], stream));
+  if (!err)
+    err = enqueue_metadata(ticket, stream);
+  if (gpu_pool_release_produce(ticket->batch.index_pool, fc, stream))
     err = 1;
   if (err) {
-    if (gpu_pool_release_consume(
-          ticket->batch.aggregate_pool, ticket->batch.slot_index, stream)) {
+    if (gpu_pool_release_consume(ticket->batch.aggregate_pool, fc, stream)) {
       err = 1;
     } else {
       ticket->aggregate_released = 1;
@@ -186,10 +187,14 @@ static int
 indexed_prepare_payload(struct d2h_materializer* materializer,
                         struct d2h_ticket* ticket)
 {
-  (void)materializer;
   const int fc = ticket->batch.slot_index;
   struct gpu_pool_view index;
-  if (gpu_pool_host_acquire_consume(ticket->batch.index_pool, fc, &index))
+  if (gpu_pool_host_acquire_consume_split(ticket->batch.index_pool,
+                                          fc,
+                                          GPU_EDGE_AGG_DONE,
+                                          materializer->aggregate_ready_stall,
+                                          materializer->metadata_ready_stall,
+                                          &index))
     return 1;
   ticket->slot = index.p;
   return 0;
@@ -219,7 +224,10 @@ d2h_materializer_init(struct d2h_materializer* materializer,
   materializer->ord = ord;
   materializer->payload_stream = payload_stream;
   for (int fc = 0; fc < 2; ++fc) {
+    CU(Fail,
+       cuEventCreate(&materializer->metadata_copy_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&materializer->payload_event[fc], CU_EVENT_DEFAULT));
+    CU(Fail, cuEventRecord(materializer->metadata_copy_start[fc], seed_stream));
     CU(Fail, cuEventRecord(materializer->payload_event[fc], seed_stream));
   }
   return 0;
@@ -230,11 +238,21 @@ Fail:
 }
 
 void
+d2h_materializer_attach_metadata_stalls(struct d2h_materializer* materializer,
+                                        struct stream_metric* aggregate_ready,
+                                        struct stream_metric* metadata_ready)
+{
+  materializer->aggregate_ready_stall = aggregate_ready;
+  materializer->metadata_ready_stall = metadata_ready;
+}
+
+void
 d2h_materializer_destroy(struct d2h_materializer* materializer)
 {
   if (!materializer)
     return;
   for (int fc = 0; fc < 2; ++fc) {
+    cu_event_destroy(materializer->metadata_copy_start[fc]);
     cu_event_destroy(materializer->payload_event[fc]);
     free(materializer->ticket[fc].spans);
     host_batch_destroy(&materializer->ticket[fc].host);

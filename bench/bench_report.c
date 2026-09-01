@@ -9,6 +9,7 @@ enum diagnostic_section
   DIAGNOSTIC_HOST_BLOCK,
   DIAGNOSTIC_PIPELINE_GAP,
   DIAGNOSTIC_HOST_OVERHEAD,
+  DIAGNOSTIC_DEVICE_WORK,
 };
 
 struct diagnostic_entry
@@ -20,7 +21,7 @@ struct diagnostic_entry
   const struct stream_metric* metric;
 };
 
-#define DIAGNOSTIC_COUNT 11
+#define DIAGNOSTIC_COUNT 14
 
 static void
 diagnostic_entries(const struct stream_metrics* m,
@@ -72,11 +73,26 @@ diagnostic_entries(const struct stream_metrics* m,
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[0] };
   out[9] = (struct diagnostic_entry){ "chunk_metadata_d2h",
-                                      "Chunk offsets/sizes D2H",
+                                      "Chunk metadata ready (inclusive)",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[1] };
-  out[10] = (struct diagnostic_entry){ "payload_d2h",
+  out[10] = (struct diagnostic_entry){ "indexed_aggregate_ready",
+                                       "Aggregate dependency before metadata",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->indexed_aggregate_ready };
+  out[11] = (struct diagnostic_entry){ "chunk_metadata_ready",
+                                       "Metadata ready after aggregate",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->chunk_metadata_ready };
+  out[12] = (struct diagnostic_entry){ "chunk_metadata_copy",
+                                       "Chunk offsets/sizes D2H copies",
+                                       "device_work",
+                                       DIAGNOSTIC_DEVICE_WORK,
+                                       &m->chunk_metadata_copy };
+  out[13] = (struct diagnostic_entry){ "payload_d2h",
                                        "Payload D2H",
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
@@ -253,6 +269,8 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
                            "Host overhead",
                            "Measured work",
                            wall_s);
+  print_diagnostic_section(
+    entries, DIAGNOSTIC_DEVICE_WORK, "Device work", "Measured work", wall_s);
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
     fputc('\n', stderr);

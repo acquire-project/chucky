@@ -176,6 +176,7 @@
               neocmakelsp
               nixd
               llvmPackages.llvm # llvm-profdata, llvm-cov for coverage
+              cudaPackages_13_2.nsight_systems
               perf
               tmux
               tokei

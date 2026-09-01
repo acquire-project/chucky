@@ -242,6 +242,7 @@ test_d2h_single_epoch_none(void)
           c.metrics.d2h_logical_payload_bytes);
   CHECK(Fail, c.metrics.d2h_metadata_bytes_transferred == 0);
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, metric_arrived(&c.metrics.chunk_metadata_copy, 0));
   CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
   CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
@@ -464,6 +465,10 @@ test_d2h_zstd_single_epoch(void)
           2 * (handoff.layout.total_batch_covering + handoff.nlod) *
             sizeof(size_t));
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 1);
+  CHECK(Fail, metric_arrived_timed(&c.metrics.chunk_metadata_copy, 1));
+  CHECK(Fail,
+        c.metrics.chunk_metadata_copy.input_bytes ==
+          c.metrics.d2h_metadata_bytes_transferred);
   CHECK(Fail, c.metrics.shard_padding_internal_bytes == 0);
   CHECK(Fail, c.metrics.shard_padding_physical_update_count == 1);
 
@@ -772,6 +777,7 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));
+  CHECK(Fail, metric_arrived_timed(&c.metrics.chunk_metadata_copy, 4));
   CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
   CHECK(Fail,
         c.metrics.d2h_payload_bytes_transferred ==

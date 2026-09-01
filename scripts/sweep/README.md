@@ -185,9 +185,11 @@ thread per allowed core, so it matches `cpu_count`.
 GPU runs may also contain a `d2h_transfer` block. Its
 `logical_payload_bytes` is the compact shard payload, while
 `payload_bytes_transferred` is what crossed PCIe. `metadata_bytes_transferred`
-counts copied offset/size arrays and `payload_copy_count` counts non-empty
-physical-shard-run copies. The whole block is absent in archived results, where
-these quantities are unknown rather than zero.
+counts two transient control arrays: compact-payload offsets and exact compressed
+sizes permuted into physical shard order. They are not Zarr JSON or shard-footer
+metadata. `payload_copy_count` counts non-empty physical-shard-run copies. The
+whole block is absent in archived results, where these quantities are unknown
+rather than zero.
 
 GPU runs may additionally contain `shard_padding`. `logical_payload_bytes` and
 `internal_padding_bytes` derive `physical_data_region_bytes`; the latter is the
@@ -266,7 +268,10 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 | `sink_backpressure` | producer waiting for the sink queue to fall below its limit |
 | `prior_tail_state` | archived compression-to-aggregation gap from the former GPU tail gate; new runs omit it |
 | `staging_reuse` | producer waiting to refill a staging buffer still used by H2D |
-| `chunk_metadata_d2h` | drain host waiting for chunk offsets and compressed sizes to arrive by D2H; not chunk-index kernel time |
+| `chunk_metadata_d2h` | inclusive drain-host wait for indexed chunk metadata; retained for archived-result compatibility |
+| `indexed_aggregate_ready` | portion of that host wait before the compact compressed aggregate is ready |
+| `chunk_metadata_ready` | remaining host wait after aggregate readiness, until the offset/size copies are ready |
+| `chunk_metadata_copy` | CUDA event time for the two offset/size D2H copies; device work, not a host wait |
 | `payload_d2h` | drain host waiting for the aggregated payload to arrive by D2H |
 
 `report.py` backfills this shape in memory from legacy `stalls`, so archived
@@ -319,6 +324,9 @@ one does not need a bump.
 
 The canonical `diagnostics` block was added without changing an existing
 metric, so it is additive and did not bump the stored sweep version.
+The indexed-metadata child diagnostics are likewise additive: the existing
+inclusive `chunk_metadata_d2h` quantity is unchanged, so version 8 remains
+current.
 
 A stored sweep records only its version number, so add a line here when you
 bump it.

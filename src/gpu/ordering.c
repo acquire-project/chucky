@@ -308,6 +308,48 @@ Error:
   return 1;
 }
 
+static int
+event_query_ready(CUevent ev, enum gpu_edge e, int i, int* ready)
+{
+  const CUresult r = cuEventQuery(ev);
+  if (r == CUDA_SUCCESS) {
+    *ready = 1;
+    return 0;
+  }
+  if (r == CUDA_ERROR_DEINITIALIZED) {
+    // Context torn down (shutdown); data needed by this poll site is already
+    // on the host, so a clean exit is correct. Logged so the swallow is
+    // observable outside teardown.
+    log_debug("gpu_ordering: %s[%d] poll saw DEINITIALIZED", DESC[e].name, i);
+    *ready = 1;
+    return 0;
+  }
+  if (r == CUDA_ERROR_NOT_READY) {
+    *ready = 0;
+    return 0;
+  }
+  handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+  return 1;
+}
+
+static void
+metric_wait_begin(struct stream_metric* m,
+                  struct platform_clock* clk,
+                  int* timed)
+{
+  if (m && !*timed) {
+    platform_toc(clk);
+    *timed = 1;
+  }
+}
+
+static void
+metric_wait_end(struct stream_metric* m, struct platform_clock* clk, int timed)
+{
+  if (m && timed)
+    accumulate_metric_ms(m, (float)(platform_toc(clk) * 1000.0), 0, 0);
+}
+
 int
 gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i)
 {
@@ -322,30 +364,78 @@ gpu_edge_host_wait(struct gpu_ordering* ord, enum gpu_edge e, int i)
   struct platform_clock clk = { 0 };
   int timed = 0;
   for (;;) {
-    CUresult r = cuEventQuery(ev);
-    if (r == CUDA_SUCCESS)
-      break;
-    if (r == CUDA_ERROR_DEINITIALIZED) {
-      // Context torn down (shutdown); data needed by this poll site is
-      // already on the host, so a clean exit is correct. Logged so the
-      // swallow is observable outside teardown.
-      log_debug("gpu_ordering: %s[%d] poll saw DEINITIALIZED", DESC[e].name, i);
-      break;
-    }
-    if (r != CUDA_ERROR_NOT_READY) {
-      handle_curesult(LOG_ERROR, r, __FILE__, __LINE__, "cuEventQuery");
+    int ready = 0;
+    if (event_query_ready(ev, e, i, &ready))
       return 1;
-    }
-    if (m && !timed) {
-      platform_toc(&clk);
-      timed = 1;
-    }
+    if (ready)
+      break;
+    metric_wait_begin(m, &clk, &timed);
     platform_sleep_ns(50000); // 50 us
   }
   // Only blocked polls become samples — a zero sample per call would turn
   // the stall rows into poll counts rather than stall time.
-  if (m && timed)
-    accumulate_metric_ms(m, (float)(platform_toc(&clk) * 1000.0), 0, 0);
+  metric_wait_end(m, &clk, timed);
+  return 0;
+}
+
+int
+gpu_edge_host_wait_split(struct gpu_ordering* ord,
+                         enum gpu_edge e,
+                         enum gpu_edge prerequisite,
+                         int i,
+                         struct stream_metric* before,
+                         struct stream_metric* after)
+{
+  const CUevent ev = ord->edge[owner_of(e)].ev[i];
+  const CUevent prerequisite_ev = ord->edge[owner_of(prerequisite)].ev[i];
+#ifndef NDEBUG
+  assert(DESC[e].kind == GPU_EDGE_EVENT && DESC[e].consumer == GPU_STREAM_HOST);
+  assert(DESC[prerequisite].kind == GPU_EDGE_EVENT);
+  ord->edge[e].waits[i]++;
+#endif
+  struct stream_metric* inclusive = ord->edge[e].stall;
+  if (inclusive)
+    inclusive->wait_calls++;
+  if (before)
+    before->wait_calls++;
+  if (after)
+    after->wait_calls++;
+
+  struct platform_clock inclusive_clk = { 0 };
+  struct platform_clock phase_clk = { 0 };
+  int inclusive_timed = 0;
+  int phase_timed = 0;
+  int prerequisite_ready = 0;
+
+  for (;;) {
+    int ready = 0;
+    if (event_query_ready(ev, e, i, &ready))
+      return 1;
+    if (ready)
+      break;
+
+    metric_wait_begin(inclusive, &inclusive_clk, &inclusive_timed);
+    if (!prerequisite_ready) {
+      if (event_query_ready(
+            prerequisite_ev, prerequisite, i, &prerequisite_ready))
+        return 1;
+      if (prerequisite_ready) {
+        metric_wait_end(before, &phase_clk, phase_timed);
+        phase_timed = 0;
+      } else {
+        metric_wait_begin(before, &phase_clk, &phase_timed);
+      }
+    }
+    if (prerequisite_ready)
+      metric_wait_begin(after, &phase_clk, &phase_timed);
+    platform_sleep_ns(50000); // 50 us
+  }
+
+  metric_wait_end(inclusive, &inclusive_clk, inclusive_timed);
+  if (prerequisite_ready)
+    metric_wait_end(after, &phase_clk, phase_timed);
+  else
+    metric_wait_end(before, &phase_clk, phase_timed);
   return 0;
 }
 

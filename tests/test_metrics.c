@@ -103,6 +103,30 @@ check_shared_stages(const struct stream_metrics* m)
     log_error("  D2H transfer statistics are missing or inconsistent");
     ok = 0;
   }
+  if (m->indexed_aggregate_ready.wait_calls == 0 ||
+      m->chunk_metadata_ready.wait_calls == 0 ||
+      m->indexed_aggregate_ready.wait_calls != m->edge_stall[1].wait_calls ||
+      m->chunk_metadata_ready.wait_calls != m->edge_stall[1].wait_calls) {
+    log_error("  indexed metadata host-wait split was not checked");
+    ok = 0;
+  }
+  {
+    const float split_ms =
+      m->indexed_aggregate_ready.ms + m->chunk_metadata_ready.ms;
+    const float inclusive_ms = m->edge_stall[1].ms;
+    const float delta_ms = split_ms > inclusive_ms ? split_ms - inclusive_ms
+                                                   : inclusive_ms - split_ms;
+    if (delta_ms > 1.0f + 0.02f * inclusive_ms) {
+      log_error(
+        "  indexed metadata host-wait split does not match inclusive wait");
+      ok = 0;
+    }
+  }
+  if (!metric_any_arrived_timed(&m->chunk_metadata_copy) ||
+      m->chunk_metadata_copy.input_bytes != m->d2h_metadata_bytes_transferred) {
+    log_error("  indexed metadata copy timing is missing or inconsistent");
+    ok = 0;
+  }
   if (m->shard_padding_logical_payload_bytes != m->d2h_logical_payload_bytes ||
       m->shard_padding_internal_bytes != 0 ||
       m->shard_padding_physical_update_count != m->d2h_payload_copy_count ||

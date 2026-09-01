@@ -12,6 +12,7 @@
 struct aggregate_layout;
 struct gpu_ordering;
 struct shard_state;
+struct stream_metric;
 
 enum device_aggregate_extent_kind
 {
@@ -79,7 +80,10 @@ struct d2h_materializer
   enum device_aggregate_extent_kind extent_kind;
   struct gpu_ordering* ord;
   CUstream payload_stream;
+  CUevent metadata_copy_start[2];
   CUevent payload_event[2];
+  struct stream_metric* aggregate_ready_stall;
+  struct stream_metric* metadata_ready_stall;
   struct d2h_ticket ticket[2];
 };
 
@@ -89,6 +93,11 @@ d2h_materializer_init(struct d2h_materializer* materializer,
                       struct gpu_ordering* ord,
                       CUstream payload_stream,
                       CUstream seed_stream);
+
+void
+d2h_materializer_attach_metadata_stalls(struct d2h_materializer* materializer,
+                                        struct stream_metric* aggregate_ready,
+                                        struct stream_metric* metadata_ready);
 
 void
 d2h_materializer_destroy(struct d2h_materializer* materializer);
