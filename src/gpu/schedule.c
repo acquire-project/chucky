@@ -196,8 +196,16 @@ wait_io_fences(struct aggregate_slot* slot,
     return;
   struct platform_clock clk = { 0 };
   platform_toc(&clk);
-  if (slot->io_done.seq > 0)
+  if (slot->io_done.seq > 0) {
     sink->wait_fence(sink, slot->io_done);
+    if (metrics && slot->writes_posted_ns > 0) {
+      const float lifetime_ms =
+        (float)(platform_monotonic_ns() - slot->writes_posted_ns) / 1e6f;
+      record_duration_ms(&metrics->delivery.writes_posted_to_completion,
+                         lifetime_ms);
+    }
+    slot->writes_posted_ns = 0;
+  }
   if (metrics) {
     float ms = (float)(platform_toc(&clk) * 1000.0);
     accumulate_metric_ms(&metrics->io_fence_stall, ms, 0, 0);
@@ -223,6 +231,7 @@ schedule_deliver_batch(struct d2h_deliver_stage* stage,
                        struct stream_metrics* metrics,
                        struct platform_clock* metadata_update_clock)
 {
+  const int64_t delivery_start_ns = platform_monotonic_ns();
   const int fc = handoff->batch.slot_index;
   struct host_batch* host = NULL;
   int err = 1;
@@ -248,6 +257,12 @@ schedule_deliver_batch(struct d2h_deliver_stage* stage,
                                stage->shard_alignment,
                                &host))
       goto Done;
+
+    if (metrics) {
+      const float ready_ms =
+        (float)(platform_monotonic_ns() - delivery_start_ns) / 1e6f;
+      record_duration_ms(&metrics->delivery.start_to_payload_ready, ready_ms);
+    }
 
     float block_ms = platform_toc(&kick_clk) * 1000.0f;
     float own_ms = block_ms - (edge_stall_total_ms(metrics) - polls_before);
@@ -283,8 +298,8 @@ schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
   for (int fc = 0; fc < 2; ++fc) {
     struct aggregate_slot* slot =
       gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
-    if (slot->io_done.seq > 0 && sink->wait_fence)
-      sink->wait_fence(sink, slot->io_done);
+    if (slot->io_done.seq > 0)
+      wait_io_fences(slot, sink, &e->metrics);
     slot->io_done.seq = 0;
   }
 }
@@ -365,6 +380,11 @@ delivery_main(void* arg)
     struct stream_engine* e = j->e;
     struct stream_context* ctx = j->ctx;
     const int cancel = d->sticky_error;
+    if (!cancel && j->submitted_ns > 0) {
+      const float queue_ms =
+        (float)(platform_monotonic_ns() - j->submitted_ns) / 1e6f;
+      record_duration_ms(&e->metrics.delivery.submitted_to_start, queue_ms);
+    }
     platform_mutex_unlock(d->mu);
 
     struct writer_result r;
@@ -417,7 +437,8 @@ gpu_delivery_enqueue(struct gpu_delivery* d,
                      struct stream_engine* e,
                      struct stream_context* ctx,
                      int fc,
-                     uint64_t generation)
+                     uint64_t generation,
+                     int64_t submitted_ns)
 {
   if (!d->thread)
     return 1;
@@ -427,6 +448,7 @@ gpu_delivery_enqueue(struct gpu_delivery* d,
   d->job[fc] = (struct delivery_job){
     .state = DELIVERY_JOB_SUBMITTED,
     .generation = generation,
+    .submitted_ns = submitted_ns,
     .e = e,
     .ctx = ctx,
   };
@@ -442,13 +464,14 @@ gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
                                struct stream_engine* e,
                                struct stream_context* ctx,
                                int fc,
-                               uint64_t generation)
+                               uint64_t generation,
+                               int64_t submitted_ns)
 {
   // Aggregation is already queued, so without a worker the producer can deliver
   // this slot itself when it comes to refill it.
   if (!d->thread)
     return 0;
-  return gpu_delivery_enqueue(d, e, ctx, fc, generation);
+  return gpu_delivery_enqueue(d, e, ctx, fc, generation, submitted_ns);
 }
 
 int
@@ -622,6 +645,13 @@ deliver_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
+  if (s->delivery_submitted_ns > 0) {
+    const float reuse_ms =
+      (float)(platform_monotonic_ns() - s->delivery_submitted_ns) / 1e6f;
+    record_duration_ms(&e->metrics.delivery.submitted_to_slot_reuse, reuse_ms);
+    s->delivery_submitted_ns = 0;
+  }
+
   s->kicked = 0;
   return r;
 }
@@ -658,13 +688,15 @@ kick_batch(struct stream_engine* e,
         schedule_d2h_kick(&e->d2h_deliver, &s->handoff, e->streams.d2h) == 0);
 
   s->kicked = 1;
+  s->delivery_submitted_ns = platform_monotonic_ns();
 
   // Multiarray delivers inline. Single-array batches queue only their
   // oldest-first host copying and delivery.
   if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT)
     CHECK(Error,
           gpu_delivery_enqueue_submitted(
-            &e->delivery, e, ctx, fc, generation) == 0);
+            &e->delivery, e, ctx, fc, generation, s->delivery_submitted_ns) ==
+            0);
 
   return 0;
 

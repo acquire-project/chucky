@@ -249,6 +249,54 @@ print_diagnostic_section(const struct diagnostic_entry entries[],
       print_diagnostic_row(&entries[i], wall_s);
 }
 
+static int
+delivery_timing_measured(const struct delivery_timing* timing)
+{
+  return timing->submitted_to_start.count > 0 ||
+         timing->start_to_payload_ready.count > 0 ||
+         timing->payload_ready_to_writes_posted.count > 0 ||
+         timing->writes_posted_to_completion.count > 0 ||
+         timing->submitted_to_slot_reuse.count > 0;
+}
+
+static void
+print_duration_row(const char* label, const struct duration_stats* stats)
+{
+  if (stats->count == 0)
+    return;
+  print_report("  %-34s %8llu %9.3f %9.3f %9.3f",
+               label,
+               (unsigned long long)stats->count,
+               (double)stats->total_ms / stats->count,
+               (double)stats->min_ms,
+               (double)stats->max_ms);
+}
+
+static void
+print_delivery_timing(const struct delivery_timing* timing)
+{
+  if (!delivery_timing_measured(timing))
+    return;
+
+  fputc('\n', stderr);
+  print_report("  --- Delivery latency ---");
+  print_report("  %-34s %8s %9s %9s %9s",
+               "Interval",
+               "samples",
+               "avg ms",
+               "min ms",
+               "max ms");
+  print_duration_row("Submitted to worker start", &timing->submitted_to_start);
+  print_duration_row("Delivery start to payload ready",
+                     &timing->start_to_payload_ready);
+  print_duration_row("Payload ready to writes posted",
+                     &timing->payload_ready_to_writes_posted);
+  print_duration_row("Writes posted to completion observed",
+                     &timing->writes_posted_to_completion);
+  print_duration_row("Submitted to slot reuse",
+                     &timing->submitted_to_slot_reuse);
+}
+
 void
 print_diagnostics_report(const struct stream_metrics* m, float wall_s)
 {
@@ -271,6 +319,8 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
                            wall_s);
   print_diagnostic_section(
     entries, DIAGNOSTIC_DEVICE_WORK, "Device work", "Measured work", wall_s);
+
+  print_delivery_timing(&m->delivery);
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
     fputc('\n', stderr);
@@ -591,6 +641,62 @@ json_diagnostics(struct json_writer* jw,
   jw_object_end(jw);
 }
 
+static void
+json_duration_stats(struct json_writer* jw,
+                    const char* id,
+                    const char* label,
+                    const struct duration_stats* stats)
+{
+  if (stats->count == 0)
+    return;
+  jw_key(jw, id);
+  jw_object_begin(jw);
+  jw_key(jw, "label");
+  jw_string(jw, label);
+  jw_key(jw, "total_ms");
+  jw_float(jw, (double)stats->total_ms);
+  jw_key(jw, "samples");
+  jw_uint(jw, stats->count);
+  jw_key(jw, "avg_ms");
+  jw_float(jw, (double)stats->total_ms / stats->count);
+  jw_key(jw, "min_ms");
+  jw_float(jw, (double)stats->min_ms);
+  jw_key(jw, "max_ms");
+  jw_float(jw, (double)stats->max_ms);
+  jw_object_end(jw);
+}
+
+static void
+json_delivery_timing(struct json_writer* jw,
+                     const struct delivery_timing* timing)
+{
+  if (!delivery_timing_measured(timing))
+    return;
+  jw_key(jw, "delivery_timing");
+  jw_object_begin(jw);
+  json_duration_stats(jw,
+                      "submitted_to_start",
+                      "Submitted to worker start",
+                      &timing->submitted_to_start);
+  json_duration_stats(jw,
+                      "start_to_payload_ready",
+                      "Delivery start to payload ready",
+                      &timing->start_to_payload_ready);
+  json_duration_stats(jw,
+                      "payload_ready_to_writes_posted",
+                      "Payload ready to writes posted",
+                      &timing->payload_ready_to_writes_posted);
+  json_duration_stats(jw,
+                      "writes_posted_to_completion",
+                      "Writes posted to completion observed",
+                      &timing->writes_posted_to_completion);
+  json_duration_stats(jw,
+                      "submitted_to_slot_reuse",
+                      "Submitted to slot reuse",
+                      &timing->submitted_to_slot_reuse);
+  jw_object_end(jw);
+}
+
 void
 print_bench_json_pass(const struct stream_metrics* m,
                       const struct stream_metric* sink_metric,
@@ -886,6 +992,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_end(&jw);
 
   json_diagnostics(&jw, m, wall_s);
+  json_delivery_timing(&jw, &m->delivery);
 
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));
