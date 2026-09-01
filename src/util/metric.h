@@ -75,3 +75,14 @@ accumulate_metric_ms(struct stream_metric* m,
     m->best_output_bytes = (double)output_bytes;
   }
 }
+
+static inline void
+record_duration_ms(struct duration_stats* stats, float ms)
+{
+  stats->total_ms += ms;
+  if (stats->count == 0 || ms < stats->min_ms)
+    stats->min_ms = ms;
+  if (stats->count == 0 || ms > stats->max_ms)
+    stats->max_ms = ms;
+  stats->count++;
+}

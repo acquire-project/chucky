@@ -131,10 +131,14 @@ d2h_deliver_host_batch(struct d2h_deliver_stage* stage,
       struct aggregate_slot* slot =
         gpu_pool_at(handoff->batch.host_pool, fc, 0).p;
       slot->io_done = sink->record_fence(sink);
+      slot->writes_posted_ns =
+        slot->io_done.seq > 0 ? platform_monotonic_ns() : 0;
     }
 
     float sink_ms = platform_toc(&sink_clock) * 1000.0f;
     accumulate_metric_ms(&metrics->sink, sink_ms, sink_bytes, sink_bytes);
+    record_duration_ms(&metrics->delivery.payload_ready_to_writes_posted,
+                       sink_ms);
     if (sink_error)
       goto Error;
   }

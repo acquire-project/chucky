@@ -43,6 +43,23 @@ struct stream_metric
   uint64_t wait_calls;
 };
 
+struct duration_stats
+{
+  float total_ms;
+  float min_ms;
+  float max_ms;
+  uint64_t count;
+};
+
+struct delivery_timing
+{
+  struct duration_stats submitted_to_start;
+  struct duration_stats start_to_payload_ready;
+  struct duration_stats payload_ready_to_writes_posted;
+  struct duration_stats writes_posted_to_completion;
+  struct duration_stats submitted_to_slot_reuse;
+};
+
 struct stream_metrics
 {
   // Work done. Bytes may be summed across stages; times may not, since the
@@ -85,6 +102,8 @@ struct stream_metrics
   // Compatibility-only legacy field. GPU host copying leaves it at zero;
   // archived runs may still contain samples.
   struct stream_metric tail_gate;
+
+  struct delivery_timing delivery;
 
   // Optional GPU D2H copy totals. They remain zero for CPU runs.
   uint64_t d2h_payload_bytes_transferred;

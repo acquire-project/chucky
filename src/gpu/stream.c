@@ -409,8 +409,10 @@ stream_flush_body(struct stream_engine* e, struct stream_context* ctx)
 
   // Writes queued anywhere above can still fail, and destroy frees the buffers
   // they read.
-  if (shard_sink_drain(ctx->sink))
+  if (shard_sink_drain(ctx->sink)) {
     r = writer_error();
+  }
+  schedule_quiesce_output(e, ctx->sink);
 
   collect_ingest_timing(e);
 

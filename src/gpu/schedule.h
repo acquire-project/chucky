@@ -72,6 +72,7 @@ struct schedule_slot
   uint32_t* batch_active_masks; // [epochs_per_batch]; per-array allocation
   int kicked;
   uint64_t generation;
+  int64_t delivery_submitted_ns;
 
   // Retained through submission and oldest-first host copying. The views
   // remain owned by their pools; this slot carries their generation.
@@ -108,6 +109,7 @@ struct delivery_job
 {
   enum delivery_job_state state;
   uint64_t generation;
+  int64_t submitted_ns;
   struct stream_engine* e;
   struct stream_context* ctx;
   struct writer_result result;
@@ -145,7 +147,8 @@ gpu_delivery_enqueue_submitted(struct gpu_delivery* d,
                                struct stream_engine* e,
                                struct stream_context* ctx,
                                int fc,
-                               uint64_t generation);
+                               uint64_t generation,
+                               int64_t submitted_ns);
 
 int
 gpu_delivery_pending(struct gpu_delivery* d, int fc);

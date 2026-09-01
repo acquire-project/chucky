@@ -30,6 +30,7 @@ extern "C"
     size_t device_capacity;
     size_t host_capacity;
     struct io_event io_done; // tracks IO completion from this slot's data
+    int64_t writes_posted_ns;
   };
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);

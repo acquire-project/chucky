@@ -70,6 +70,30 @@ metric_any_arrived_timed(const struct stream_metric* m)
   return 1;
 }
 
+static inline int
+duration_any_arrived_timed(const char* name, const struct duration_stats* stats)
+{
+  if (stats->count == 0) {
+    log_error("  %s: no measurement arrived", name);
+    return 0;
+  }
+  if (!(stats->total_ms > 0.0f)) {
+    log_error("  %s: %llu measurements totalling %g ms",
+              name,
+              (unsigned long long)stats->count,
+              (double)stats->total_ms);
+    return 0;
+  }
+  if (stats->min_ms < 0.0f || stats->max_ms < stats->min_ms) {
+    log_error("  %s: invalid range %g to %g ms",
+              name,
+              (double)stats->min_ms,
+              (double)stats->max_ms);
+    return 0;
+  }
+  return 1;
+}
+
 // A ring that overwrote a measurement before anyone read it under-reports its
 // stage, and this counter is the only trace.
 static inline int
