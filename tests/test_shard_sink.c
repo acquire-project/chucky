@@ -38,6 +38,17 @@ test_sink_write_direct(struct shard_writer* self,
 }
 
 static int
+test_sink_write_from_output(struct shard_writer* self,
+                            uint64_t offset,
+                            const void* beg,
+                            const void* end,
+                            struct host_output_group* group)
+{
+  (void)group;
+  return test_sink_write_direct(self, offset, beg, end);
+}
+
+static int
 test_sink_truncate(struct shard_writer* self, uint64_t logical_size)
 {
   struct test_shard_writer* w = (struct test_shard_writer*)self;
@@ -114,6 +125,7 @@ test_sink_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
     w->capacity = s->per_shard_capacity;
     w->base.write = test_sink_write;
     w->base.write_direct = test_sink_write_direct;
+    w->base.write_from_output = test_sink_write_from_output;
     w->base.truncate = test_sink_truncate;
     w->base.finalize = test_sink_finalize;
     w->sink = s;

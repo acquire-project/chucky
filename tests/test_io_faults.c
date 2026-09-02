@@ -2,7 +2,7 @@
 #include "platform/platform.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 #include "zarr/shard_pool_fs.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
@@ -192,7 +192,7 @@ arm_fault(struct io_faults* f, uint8_t op, uint8_t fault)
 static int
 post_noop(struct io_faults* f)
 {
-  return io_queue_post(f->queue, (struct io_request){ .op = IO_OP_NOOP });
+  return io_scheduler_post(f->queue, (struct io_request){ .op = IO_OP_NOOP });
 }
 
 int
@@ -214,4 +214,10 @@ void
 io_faults_fail_next_truncate(struct io_faults* f)
 {
   arm_fault(f, IO_OP_TRUNCATE, IO_FAULT_FAIL);
+}
+
+void
+io_faults_fail_next_write(struct io_faults* f)
+{
+  arm_fault(f, IO_OP_WRITE, IO_FAULT_FAIL);
 }

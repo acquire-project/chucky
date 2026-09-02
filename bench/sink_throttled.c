@@ -1,5 +1,6 @@
 #include "sink_throttled.h"
 #include "platform/platform.h"
+#include "stream/host_output_pool.h"
 
 // --- Throttled shard_sink: synthetic IO pressure for measurement ---
 //
@@ -31,8 +32,8 @@ throttled_execute(void* ctx,
 static int
 throttled_post(struct throttled_shard_sink* s, size_t nbytes)
 {
-  return io_queue_post(
-    s->queue, (struct io_request){ .op = IO_OP_WRITE, .nbytes = nbytes });
+  return io_scheduler_post(
+    s->scheduler, (struct io_request){ .op = IO_OP_WRITE, .nbytes = nbytes });
 }
 
 static int
@@ -59,6 +60,40 @@ throttled_shard_write_direct(struct shard_writer* self,
   return throttled_post(w->parent, nbytes);
 }
 
+static void
+throttled_output_complete(void* ctx, const struct io_completion* completion)
+{
+  (void)completion;
+  host_output_group_complete((struct host_output_group*)ctx);
+}
+
+static int
+throttled_shard_write_from_output(struct shard_writer* self,
+                                  uint64_t offset,
+                                  const void* beg,
+                                  const void* end,
+                                  struct host_output_group* group)
+{
+  (void)offset;
+  struct throttled_shard_writer* w = (struct throttled_shard_writer*)self;
+  const size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  if (host_output_group_retain(group))
+    return 1;
+  if (io_scheduler_post(w->parent->scheduler,
+                        (struct io_request){
+                          .op = IO_OP_WRITE,
+                          .borrowed = 1,
+                          .payload = beg,
+                          .nbytes = nbytes,
+                          .completion_ctx = group,
+                          .completed = throttled_output_complete,
+                        })) {
+    host_output_group_complete(group);
+    return 1;
+  }
+  return 0;
+}
+
 static int
 throttled_shard_finalize(struct shard_writer* self)
 {
@@ -81,14 +116,14 @@ static struct io_event
 throttled_shard_record_fence(struct shard_sink* self)
 {
   struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
-  return io_queue_record(s->queue);
+  return io_scheduler_record(s->scheduler);
 }
 
 static void
 throttled_shard_wait_fence(struct shard_sink* self, struct io_event ev)
 {
   struct throttled_shard_sink* s = (struct throttled_shard_sink*)self;
-  io_event_wait(s->queue, ev);
+  io_event_wait(s->scheduler, ev);
 }
 
 static int
@@ -103,7 +138,7 @@ throttled_shard_pending_bytes(const struct shard_sink* self)
 {
   const struct throttled_shard_sink* s =
     (const struct throttled_shard_sink*)self;
-  return io_queue_pending_bytes(s->queue);
+  return io_scheduler_pending_bytes(s->scheduler);
 }
 
 int
@@ -116,10 +151,10 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
   s->bytes_per_sec = io_bw_mbps * 1024ull * 1024ull;
   // Defaults, which is one worker running one write at a time: a modeled
   // drive with a bandwidth is only a bandwidth if one write holds it.
-  s->queue = io_queue_create(
+  s->scheduler = io_scheduler_create(
     (struct io_backend){ .ctx = s, .execute = throttled_execute },
-    (struct io_queue_limits){ 0 });
-  if (!s->queue)
+    (struct io_scheduler_limits){ 0 });
+  if (!s->scheduler)
     return 1;
 
   s->base.open = throttled_shard_open;
@@ -131,6 +166,7 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
   s->writer = (struct throttled_shard_writer){
     .base = { .write = throttled_shard_write,
               .write_direct = throttled_shard_write_direct,
+              .write_from_output = throttled_shard_write_from_output,
               .finalize = throttled_shard_finalize },
     .parent = s,
   };
@@ -140,9 +176,9 @@ throttled_shard_sink_init(struct throttled_shard_sink* s,
 void
 throttled_shard_sink_teardown(struct throttled_shard_sink* s)
 {
-  if (s->queue) {
-    io_event_wait(s->queue, io_queue_record(s->queue));
-    io_queue_destroy(s->queue);
+  if (s->scheduler) {
+    io_event_wait(s->scheduler, io_scheduler_record(s->scheduler));
+    io_scheduler_destroy(s->scheduler);
   }
   *s = (struct throttled_shard_sink){ 0 };
 }

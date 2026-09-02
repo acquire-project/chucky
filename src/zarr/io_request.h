@@ -13,6 +13,8 @@ enum io_op
   IO_OP_CLOSE,    // barrier: last request naming this token
 };
 
+struct io_completion;
+
 // A token names one open of one shard file. A generation is never reused, so
 // a late request naming a closed file is refused rather than applied to
 // whoever holds the descriptor now. Generation 0 means no file.
@@ -42,6 +44,9 @@ struct io_request
   // payload has none.
   void* owned;
   void (*owned_free)(void*);
+
+  void* completion_ctx;
+  void (*completed)(void* ctx, const struct io_completion* completion);
 };
 
 // The part of a write still to be done is returned here, for the backend to
@@ -72,6 +77,6 @@ enum io_status
 struct io_completion
 {
   uint64_t seq;
-  uint64_t nbytes; // written; never more than asked for, and not read here
-  int status;      // not read here, so a backend raises the error flag itself
+  uint64_t nbytes; // written; never more than asked for
+  int status;
 };

@@ -29,6 +29,20 @@ counting_write_direct(struct shard_writer* self,
 }
 
 static int
+counting_write_from_output(struct shard_writer* self,
+                           uint64_t offset,
+                           const void* beg,
+                           const void* end,
+                           struct host_output_group* group)
+{
+  struct counting_writer* w = (struct counting_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  atomic_fetch_add(&w->parent->direct_calls, 1);
+  atomic_fetch_add(&w->parent->direct_bytes, (uint64_t)nbytes);
+  return w->inner->write_from_output(w->inner, offset, beg, end, group);
+}
+
+static int
 counting_presize(struct shard_writer* self, uint64_t nbytes)
 {
   struct counting_writer* w = (struct counting_writer*)self;
@@ -65,6 +79,8 @@ counting_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
       cs->writers[i].inner = inner;
       cs->writers[i].base.write_direct =
         inner->write_direct ? counting_write_direct : NULL;
+      cs->writers[i].base.write_from_output =
+        inner->write_from_output ? counting_write_from_output : NULL;
       cs->writers[i].base.presize = inner->presize ? counting_presize : NULL;
       cs->writers[i].base.truncate = inner->truncate ? counting_truncate : NULL;
       return &cs->writers[i].base;

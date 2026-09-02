@@ -41,9 +41,14 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
     LINKS platform
 )
 
-add_src_lib(io_queue SOURCES zarr/io_queue.c zarr/io_queue.h zarr/types.io.h
-    zarr/io_request.h zarr/io_backend.h zarr/io_queue_stats.c zarr/io_queue_stats.h
+add_src_lib(io_queue SOURCES zarr/io_queue.c zarr/io_queue.h
+    zarr/io_request.h zarr/io_backend.h
     LINKS Threads::Threads platform chucky_log)
+
+add_src_lib(io_scheduler SOURCES
+    zarr/io_scheduler.c zarr/io_scheduler.h zarr/types.io.h
+    zarr/io_scheduler_stats.c zarr/io_scheduler_stats.h
+    LINKS io_queue Threads::Threads platform chucky_log)
 
 add_src_lib(platform_io SOURCES platform/platform_io.h)
 add_platform_sources(platform_io platform/platform_io)
@@ -51,11 +56,15 @@ add_platform_sources(platform_io platform/platform_io)
 add_src_lib(platform_cmd SOURCES platform/platform_cmd.h)
 add_platform_sources(platform_cmd platform/platform_cmd)
 
-add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_queue chucky_log)
+add_src_lib(writer SOURCES writer.c writer.h LINKS platform io_scheduler chucky_log)
 
 add_src_lib(store_api SOURCES store.c store.h)
 
 add_src_lib(codec_types SOURCES types.codec.c types.codec.h)
+
+add_src_lib(host_output_pool SOURCES
+    stream/host_output_pool.c stream/host_output_pool.h
+    LINKS platform chucky_log)
 
 add_src_lib(stream_config SOURCES stream/config.c stream/config.h stream/layouts.h
     stream/dim_info.c stream/dim_info.h

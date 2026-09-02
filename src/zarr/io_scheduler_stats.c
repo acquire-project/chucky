@@ -1,8 +1,8 @@
-#include "zarr/io_queue_stats.h"
+#include "zarr/io_scheduler_stats.h"
 
 // Call before every change to either count, and again on read.
 static void
-fold(struct io_queue_counters* c, int64_t now)
+fold(struct io_scheduler_counters* c, int64_t now)
 {
   const double elapsed = (double)(now - c->weighted_from_ns);
   c->files_weighted_ns += (double)c->files_waiting * elapsed;
@@ -22,9 +22,9 @@ size_bucket(uint64_t nbytes)
 }
 
 void
-io_queue_counters_files_waiting(struct io_queue_counters* c,
-                                uint64_t files,
-                                int64_t now)
+io_scheduler_counters_files_waiting(struct io_scheduler_counters* c,
+                                    uint64_t files,
+                                    int64_t now)
 {
   fold(c, now);
   c->files_waiting = files;
@@ -33,9 +33,9 @@ io_queue_counters_files_waiting(struct io_queue_counters* c,
 }
 
 void
-io_queue_counters_in_flight(struct io_queue_counters* c,
-                            uint64_t in_flight,
-                            int64_t now)
+io_scheduler_counters_in_flight(struct io_scheduler_counters* c,
+                                uint64_t in_flight,
+                                int64_t now)
 {
   fold(c, now);
   c->in_flight = in_flight;
@@ -44,11 +44,11 @@ io_queue_counters_in_flight(struct io_queue_counters* c,
 }
 
 void
-io_queue_counters_posted(struct io_queue_counters* c,
-                         const struct io_request* req,
-                         uint64_t jobs_waiting,
-                         uint64_t bytes_waiting,
-                         int64_t now)
+io_scheduler_counters_posted(struct io_scheduler_counters* c,
+                             const struct io_request* req,
+                             uint64_t jobs_waiting,
+                             uint64_t bytes_waiting,
+                             int64_t now)
 {
   if (c->start_ns == 0) {
     c->start_ns = now;
@@ -72,11 +72,11 @@ io_queue_counters_posted(struct io_queue_counters* c,
 }
 
 void
-io_queue_counters_finished(struct io_queue_counters* c,
-                           const struct io_request* req,
-                           int64_t post_ns,
-                           int64_t started_ns,
-                           int64_t finished_ns)
+io_scheduler_counters_finished(struct io_scheduler_counters* c,
+                               const struct io_request* req,
+                               int64_t post_ns,
+                               int64_t started_ns,
+                               int64_t finished_ns)
 {
   if (req->nbytes == 0)
     return;
@@ -93,9 +93,9 @@ io_queue_counters_finished(struct io_queue_counters* c,
 }
 
 void
-io_queue_counters_read(struct io_queue_counters* c,
-                       struct io_queue_stats* out,
-                       int64_t now)
+io_scheduler_counters_read(struct io_scheduler_counters* c,
+                           struct io_queue_stats* out,
+                           int64_t now)
 {
   fold(c, now);
   *out = c->published;

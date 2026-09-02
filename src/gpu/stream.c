@@ -53,6 +53,10 @@ stream_engine_init_metrics(int enable_multiscale)
       mk_stream_metric("Final queued writes", METRIC_OWNER_PRODUCER),
     .backpressure =
       mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER),
+    .host_output_wait =
+      mk_stream_metric("Host-output buffer", METRIC_OWNER_DELIVERY),
+    .host_output_lifetime =
+      mk_stream_metric("Host-output lifetime", METRIC_OWNER_NONE),
     .indexed_aggregate_wait =
       mk_stream_metric("Aggregate before metadata", METRIC_OWNER_DELIVERY),
     .chunk_metadata_wait =
@@ -451,7 +455,9 @@ stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
 struct stream_metrics
 tile_stream_gpu_get_metrics(const struct tile_stream_gpu* s)
 {
-  return s->engine.metrics;
+  struct stream_metrics metrics = s->engine.metrics;
+  host_output_pool_accumulate_metrics(s->ar.agg.output_pool, &metrics);
+  return metrics;
 }
 
 // --- tile_stream_gpu writer wrappers ---

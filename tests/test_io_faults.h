@@ -8,7 +8,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-struct io_queue;
+struct io_scheduler;
 struct shard_pool;
 struct store;
 
@@ -22,7 +22,7 @@ enum io_fault
 struct io_faults
 {
   struct io_backend inner;
-  struct io_queue* queue;
+  struct io_scheduler* queue;
   struct shard_pool* pool;
 
   // One fault is armed at a time. The op is in the high byte and the fault in
@@ -64,3 +64,6 @@ io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate);
 // worker reaches a truncate the caller's own code posted.
 void
 io_faults_fail_next_truncate(struct io_faults* f);
+
+void
+io_faults_fail_next_write(struct io_faults* f);

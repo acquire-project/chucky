@@ -2,6 +2,7 @@
 
 #include "gpu/aggregate.h"
 #include "gpu/pool.h"
+#include "stream/host_output_pool.h"
 #include "stream/types.aggregate.h"
 #include "zarr/host_batch.h"
 
@@ -32,6 +33,7 @@ struct aggregate_batch
   struct gpu_pool* aggregate_pool;
   struct gpu_pool* host_pool;
   struct gpu_pool* index_pool;
+  struct host_output_pool* output_pool;
 };
 
 enum d2h_copy_status
@@ -51,6 +53,7 @@ struct d2h_copy_state
   size_t span_count;
   size_t span_capacity;
   struct host_batch host;
+  struct host_output output;
   CUevent payload_start;
   int aggregate_acquired;
   int aggregate_released;

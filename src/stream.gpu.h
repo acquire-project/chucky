@@ -22,10 +22,14 @@ struct tile_stream_memory_info
   // Breakdown (host heap, not pinned)
   size_t shard_bytes; // active_shard arrays + index buffers
 
+  size_t host_output_pool_bytes;
+
   // Key parameters used in the estimate
   uint64_t chunks_per_epoch; // L0
   uint64_t total_chunks;     // sum across all LOD levels
   size_t max_output_size;    // compressed chunk bound
+  size_t host_output_bytes;
+  uint64_t host_output_count;
   int nlod;                  // number of LOD levels
   uint32_t epochs_per_batch; // K
 };

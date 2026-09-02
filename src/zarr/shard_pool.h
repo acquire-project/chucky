@@ -4,7 +4,7 @@
 #pragma once
 
 #include "writer.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 
 #include <stddef.h>
 #include <stdint.h>

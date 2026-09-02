@@ -185,31 +185,15 @@ edge_stall_total_ms(const struct stream_metrics* m)
   return t;
 }
 
-// Wait for any pending IO fence on the unified slot (across all LODs that
-// share it). Accumulates wall time into io_fence_stall.
 static void
-wait_io_fences(struct aggregate_slot* slot,
-               struct shard_sink* sink,
-               struct stream_metrics* metrics)
+record_slot_reuse(const struct flush_handoff* handoff,
+                  struct stream_metrics* metrics)
 {
-  if (!sink->wait_fence)
+  if (!metrics || handoff->slot_reuse_start_ns <= 0)
     return;
-  struct platform_clock clk = { 0 };
-  platform_toc(&clk);
-  if (slot->io_done.seq > 0) {
-    sink->wait_fence(sink, slot->io_done);
-    if (metrics && slot->writes_posted_ns > 0) {
-      const float lifetime_ms =
-        (float)(platform_monotonic_ns() - slot->writes_posted_ns) / 1e6f;
-      record_duration_ms(&metrics->delivery.writes_posted_to_completion,
-                         lifetime_ms);
-    }
-    slot->writes_posted_ns = 0;
-  }
-  if (metrics) {
-    float ms = (float)(platform_toc(&clk) * 1000.0);
-    accumulate_metric_ms(&metrics->io_fence_stall, ms, 0, 0);
-  }
+  const float ms =
+    (float)(platform_monotonic_ns() - handoff->slot_reuse_start_ns) / 1e6f;
+  record_duration_ms(&metrics->delivery.submitted_to_slot_reuse, ms);
 }
 
 int
@@ -238,24 +222,22 @@ schedule_deliver_batch(struct d2h_deliver_stage* stage,
 
   if (sink->has_error && sink->has_error(sink)) {
     (void)host_batch_copy_cancel(&stage->copy, fc);
+    record_slot_reuse(handoff, metrics);
     goto Done;
   }
-
-  // Metadata does not share the pinned payload region, so begin() can run
-  // ahead of this wait. Retire async writes only when ordered finish() is
-  // about to assemble tails and overwrite that host slot.
-  wait_io_fences(gpu_pool_at(handoff->batch.host_pool, fc, 0).p, sink, metrics);
 
   {
     struct platform_clock kick_clk = { 0 };
     platform_toc(&kick_clk);
     const float polls_before = edge_stall_total_ms(metrics);
 
-    if (host_batch_copy_finish(&stage->copy,
-                               fc,
-                               handoff->shards_by_level,
-                               stage->shard_alignment,
-                               &host))
+    const int copy_error = host_batch_copy_finish(&stage->copy,
+                                                  fc,
+                                                  handoff->shards_by_level,
+                                                  stage->shard_alignment,
+                                                  &host);
+    record_slot_reuse(handoff, metrics);
+    if (copy_error)
       goto Done;
 
     if (metrics) {
@@ -293,15 +275,9 @@ Done:
 void
 schedule_quiesce_output(struct stream_engine* e, struct shard_sink* sink)
 {
+  (void)sink;
   cuStreamSynchronize(e->streams.d2h);
-  // Host-ordered slot access: the sync above quiesced the slots.
-  for (int fc = 0; fc < 2; ++fc) {
-    struct aggregate_slot* slot =
-      gpu_pool_at(&e->compress_agg.agg_host, fc, 0).p;
-    if (slot->io_done.seq > 0)
-      wait_io_fences(slot, sink, &e->metrics);
-    slot->io_done.seq = 0;
-  }
+  cuStreamSynchronize(e->streams.payload_copy);
 }
 
 // --- Delivery worker ---
@@ -390,6 +366,7 @@ delivery_main(void* arg)
     struct writer_result r;
     if (cancel) {
       (void)host_batch_copy_cancel(&e->d2h_deliver.copy, fc);
+      record_slot_reuse(&e->sched.slot[fc].handoff, &e->metrics);
       r = writer_error();
     } else {
       gpu_edge_host_rule(&e->ord, GPU_EDGE_DELIVER_OLDEST_FIRST, oldest);
@@ -632,6 +609,7 @@ deliver_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
   } else if (e->sched.mode == SCHEDULE_PIPELINED_DIRECT &&
              !e->delivery.thread && e->delivery.sticky_error) {
     (void)host_batch_copy_cancel(&e->d2h_deliver.copy, fc);
+    record_slot_reuse(&s->handoff, &e->metrics);
     r = writer_error();
   } else {
     r = deliver_payload(e, ctx, fc);
@@ -645,13 +623,7 @@ deliver_slot(struct stream_engine* e, struct stream_context* ctx, int fc)
   float ms = (float)(platform_toc(&stall_clk) * 1000.0);
   accumulate_metric_ms(&e->metrics.flush_stall, ms, 0, 0);
 
-  if (s->delivery_submitted_ns > 0) {
-    const float reuse_ms =
-      (float)(platform_monotonic_ns() - s->delivery_submitted_ns) / 1e6f;
-    record_duration_ms(&e->metrics.delivery.submitted_to_slot_reuse, reuse_ms);
-    s->delivery_submitted_ns = 0;
-  }
-
+  s->delivery_submitted_ns = 0;
   s->kicked = 0;
   return r;
 }
@@ -689,6 +661,7 @@ kick_batch(struct stream_engine* e,
 
   s->kicked = 1;
   s->delivery_submitted_ns = platform_monotonic_ns();
+  s->handoff.slot_reuse_start_ns = s->delivery_submitted_ns;
 
   // Multiarray delivers inline. Single-array batches queue only their
   // oldest-first host copying and delivery.

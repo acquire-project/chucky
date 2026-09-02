@@ -54,9 +54,10 @@ struct bench_config
   uint64_t io_bw_mbps;         // 0 = no bandwidth cap (MiB/s)
   uint64_t io_latency_us;      // 0 = no fixed per-job latency
   uint64_t backpressure_bytes; // 0 = disabled; >0 = stall when pending > N
-  int max_threads;             // 0 = OpenMP default (omp_get_max_threads)
-  struct io_scheduling io;     // filesystem sink write scheduling
-  const char* io_backend;      // which write backend; NULL = the default
+  uint64_t host_output_budget_bytes; // 0 = two maximum-size outputs
+  int max_threads;                   // 0 = OpenMP default (omp_get_max_threads)
+  struct io_scheduling io;           // filesystem sink write scheduling
+  const char* io_backend;            // which write backend; NULL = the default
 };
 
 int

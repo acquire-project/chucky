@@ -88,7 +88,7 @@ enqueue_payload_spans(struct d2h_copy_state* copy_state,
     D2H_TRY(err,
             "cuMemcpyDtoHAsync",
             cuMemcpyDtoHAsync(
-              (uint8_t*)copy_state->slot->h_aggregated + span->host_offset,
+              (uint8_t*)copy_state->output.data + span->host_offset,
               (CUdeviceptr)copy_state->slot->d_aggregated + span->device_offset,
               span->bytes,
               stream));
@@ -108,6 +108,19 @@ enqueue_payload_spans(struct d2h_copy_state* copy_state,
     copy_state->aggregate_released = 1;
   }
   return err;
+}
+
+static void
+release_output(struct d2h_copy_state* copy_state)
+{
+  if (copy_state->host.output_group) {
+    struct host_output_group* group = copy_state->host.output_group;
+    copy_state->host.output_group = NULL;
+    host_output_group_seal(group);
+  } else if (copy_state->output.group) {
+    host_output_group_seal(copy_state->output.group);
+  }
+  copy_state->output = (struct host_output){ 0 };
 }
 
 static int
@@ -230,6 +243,7 @@ host_batch_copy_destroy(struct host_batch_copy* copy)
     cu_event_destroy(copy->metadata_copy_start[fc]);
     cu_event_destroy(copy->payload_event[fc]);
     free(copy->state[fc].spans);
+    release_output(&copy->state[fc]);
     host_batch_destroy(&copy->state[fc].host);
   }
   memset(copy, 0, sizeof(*copy));
@@ -249,11 +263,13 @@ host_batch_copy_begin(struct host_batch_copy* copy,
           copy_state->status == D2H_COPY_HOST_READY ||
           copy_state->status == D2H_COPY_ERROR);
 
+  release_output(copy_state);
   copy_state->batch = *batch;
   copy_state->slot = gpu_pool_at(batch->aggregate_pool, batch->slot_index, 0).p;
   copy_state->span_count = 0;
   copy_state->host.run_count = 0;
   copy_state->host.transfer = (struct d2h_transfer_statistics){ 0 };
+  copy_state->output = (struct host_output){ 0 };
   copy_state->aggregate_acquired = 0;
   copy_state->aggregate_released = 0;
   copy_state->status = batch->size_kind == AGGREGATE_FIXED_SIZE
@@ -290,6 +306,10 @@ host_batch_copy_finish(struct host_batch_copy* copy,
                               ? fixed_prepare_payload(copy, copy_state)
                               : variable_prepare_payload(copy, copy_state);
   CHECK(Error, prepare_error == 0);
+  CHECK(Error, copy_state->batch.output_pool);
+  CHECK(Error,
+        host_output_pool_acquire(copy_state->batch.output_pool,
+                                 &copy_state->output) == 0);
 
   size_t capacity_bound = 0;
   size_t run_capacity = 0;
@@ -303,12 +323,12 @@ host_batch_copy_finish(struct host_batch_copy* copy,
                             shard_alignment,
                             &capacity_bound,
                             &run_capacity) == 0);
-  CHECK(Error, capacity_bound <= copy_state->slot->host_capacity);
+  CHECK(Error, capacity_bound <= copy_state->output.capacity);
   CHECK(Error, copy_state_reserve_spans(copy_state, run_capacity) == 0);
   CHECK(Error,
         host_batch_build(&copy_state->host,
-                         copy_state->slot->h_aggregated,
-                         copy_state->slot->host_capacity,
+                         copy_state->output.data,
+                         copy_state->output.capacity,
                          copy_state->slot->h_offsets,
                          copy_state->slot->h_permuted_sizes,
                          &copy_state->batch.layout,
@@ -320,6 +340,8 @@ host_batch_copy_finish(struct host_batch_copy* copy,
                          copy_state->spans,
                          copy_state->span_capacity,
                          &copy_state->span_count) == 0);
+  copy_state->host.output_group = copy_state->output.group;
+  copy_state->output.group = NULL;
   copy_state->status = D2H_COPY_PAYLOAD_PENDING;
   const int payload_error = enqueue_payload_spans(
     copy_state, copy->payload_stream, copy->payload_event[slot_index]);
@@ -346,6 +368,7 @@ host_batch_copy_cancel(struct host_batch_copy* copy, int slot_index)
   struct d2h_copy_state* copy_state = &copy->state[slot_index];
   if (copy_state->status == D2H_COPY_EMPTY ||
       copy_state->status == D2H_COPY_HOST_READY) {
+    release_output(copy_state);
     copy_state->status = D2H_COPY_ERROR;
     return 0;
   }
@@ -354,6 +377,7 @@ host_batch_copy_cancel(struct host_batch_copy* copy, int slot_index)
     CHECK(Error,
           gpu_pool_host_acquire_consume(
             copy_state->batch.host_pool, slot_index, NULL) == 0);
+    release_output(copy_state);
     copy_state->status = D2H_COPY_ERROR;
     return 0;
   }
@@ -380,11 +404,14 @@ host_batch_copy_cancel(struct host_batch_copy* copy, int slot_index)
   copy_state->aggregate_released = 1;
   (void)gpu_pool_host_acquire_consume(
     copy_state->batch.host_pool, slot_index, NULL);
+  release_output(copy_state);
   copy_state->status = D2H_COPY_ERROR;
   return 0;
 
 Error:
-  if (copy && slot_index >= 0 && slot_index < 2)
+  if (copy && slot_index >= 0 && slot_index < 2) {
+    release_output(&copy->state[slot_index]);
     copy->state[slot_index].status = D2H_COPY_ERROR;
+  }
   return 1;
 }

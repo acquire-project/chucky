@@ -5,6 +5,7 @@
 #include "lod/reduce_csr.h"
 #include "platform/platform.h"
 #include "stream.cpu.h"
+#include "stream/host_output_pool.h"
 #include "stream/layouts.h"
 #include "zarr/shard_delivery.h"
 
@@ -30,20 +31,17 @@ struct tile_stream_cpu
   struct shard_state shard[LOD_MAX_LEVELS];
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
 
-  // Per-LOD ragged-tail length carried across batches. NULL when page_size==0.
-  size_t* h_tail_bytes[LOD_MAX_LEVELS];
-
-  // Unified per-batch aggregate output (across all LODs), double-buffered
-  // so aggregate of batch N+1 overlaps prior pwrites on batch N's slot.
-  // Each slot owns a page-aligned data buffer plus unified scratch arrays
-  // sized for the worst-case batch.
+  // Two aggregate scratch sets shared across all LODs. Host output buffers
+  // have an independent bounded pool and remain leased until their borrowed
+  // writes retire.
   struct cpu_agg_slot agg_slots[2];
+  struct host_output_pool* output_pool;
+  size_t host_output_bytes;
   uint8_t agg_current; // next slot to use (0 or 1)
 
   uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
 
-  // Worst-case batch layout used to size scratch and the shared data
-  // buffer once per slot at create time.
+  // Worst-case batch layout used to size scratch and host outputs.
   struct batch_aggregate_layout max_batch_layout;
 
   // LOD (multiscale only)
@@ -68,7 +66,7 @@ struct tile_stream_cpu
   uint64_t total_element_limit; // configured stream length in elements (across
                                 // all append chunks). 0 = unbounded.
   int pool_fully_covered;       // 1 if scatter overwrites every pool position
-  int flushed;      // 1 once finalized; no further input is taken
+  int flushed;                  // 1 once finalized; no further input is taken
   int flush_failed; // outcome of that finalize, re-reported by later calls
   int closed;       // 1 once close drained and, on success, published
   int close_failed; // outcome of that close, re-reported by later calls
@@ -78,9 +76,8 @@ struct tile_stream_cpu
   uint32_t* batch_active_masks;  // [K] per-epoch active level mask
   uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
 
-  // IO fence state: per-slot pending IO so we don't overwrite the shared
-  // aggregate buffer before write_direct completes. Single fence per slot
-  // covers writes from all LODs in the batch.
+  // Latest write fence recorded by each alternating scratch set. These are
+  // waited only by finalization; output lifetime is tracked by the pool.
   struct io_event io_done[2];
 
   struct threadpool* pool; // owned by stream

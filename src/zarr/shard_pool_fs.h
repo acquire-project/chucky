@@ -1,5 +1,5 @@
 // Filesystem-backed shard writer pool.
-// Uses io_queue for async pwrite with sequence-number fencing.
+// Uses a command scheduler over asynchronous filesystem workers.
 #pragma once
 
 #include "zarr/io_backend.h"
@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-struct io_queue;
+struct io_scheduler;
 
 // Create a filesystem shard pool with nslots writer slots.
 // root: filesystem root path (keys are relative to this).
@@ -30,9 +30,9 @@ shard_pool_fs_scheduling_defaults(struct io_scheduling* io);
 struct shard_pool_fs_wrapper
 {
   void* ctx;
-  // The pool's backend is the argument, and the queue calls the result.
+  // The pool's backend is the argument, and its executor calls the result.
   struct io_backend (*wrap)(void* ctx, struct io_backend inner);
-  struct io_queue** queue; // receives the queue the pool built
+  struct io_scheduler** queue; // receives the scheduler the pool built
 };
 
 // Create a filesystem shard pool with the wrapper between its queue and its

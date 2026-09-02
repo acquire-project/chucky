@@ -207,9 +207,9 @@ schedule_compress_agg_kick(struct compress_agg_stage* stage,
                            CUstream compress_stream,
                            struct flush_handoff* out);
 
-// Slot-reuse fence wait plus the host-copy stage begin lifecycle.  The selected
-// host-copy stage owns device/index pool leases and every codec-specific copy
-// decision behind this call.
+// Acquire a host output and begin the host-copy stage. The selected stage owns
+// device/index pool leases and every codec-specific copy decision behind this
+// call.
 int
 schedule_d2h_kick(struct d2h_deliver_stage* stage,
                   const struct flush_handoff* handoff,

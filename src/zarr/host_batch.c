@@ -1,6 +1,7 @@
 #include "zarr/host_batch.h"
 
 #include "defs.limits.h"
+#include "stream/host_output_pool.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
@@ -208,8 +209,7 @@ host_batch_build(struct host_batch* host,
     }
   }
   CHECK(Error, host_batch_reserve(host, run_count) == 0);
-  CHECK(Error, run_count == 0 || spans);
-  CHECK(Error, span_capacity >= run_count);
+  CHECK(Error, !spans || span_capacity >= run_count);
 
   host->run_count = 0;
   host->nlod = nlod;
@@ -319,7 +319,7 @@ host_batch_build(struct host_batch* host,
           memset(
             (uint8_t*)aggregate_data + region + payload, 0, reserve - payload);
 
-        if (payload > 0) {
+        if (payload > 0 && spans) {
           spans[*out_span_count] = (struct d2h_transfer_span){
             .device_offset = source,
             .host_offset = region + tail,
@@ -383,6 +383,8 @@ host_batch_destroy(struct host_batch* host)
 {
   if (!host)
     return;
+  if (host->output_group)
+    host_output_group_seal(host->output_group);
   free(host->runs);
   *host = (struct host_batch){ 0 };
 }

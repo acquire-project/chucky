@@ -2,7 +2,7 @@
 #include "test_io_backend_fake.h"
 #include "test_platform.h"
 #include "util/prelude.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -26,18 +26,18 @@ test_ordering(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   for (uint64_t i = 0; i < 100; ++i)
     CHECK(Fail2,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = i + 1 }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = i + 1 }) == 0);
 
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
   CHECK(Fail2, io_backend_fake_record_count(&fake) == 100);
   for (uint64_t i = 0; i < 100; ++i) {
@@ -45,11 +45,11 @@ test_ordering(void)
     CHECK(Fail2, fake.records[i].seq == i + 1);
   }
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -62,21 +62,22 @@ test_event_wait(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
-  struct io_event ev = io_queue_record(q);
+  CHECK(Fail2,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  struct io_event ev = io_scheduler_record(q);
   io_event_wait(q, ev);
 
   CHECK(Fail2, io_backend_fake_record_count(&fake) == 1);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -102,8 +103,8 @@ test_owned_payload_released(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   _Atomic int released;
@@ -114,24 +115,24 @@ test_owned_payload_released(void)
     CHECK(Fail2, b);
     b->released = &released;
     CHECK(Fail2,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .payload = b,
-                                             .nbytes = sizeof(*b),
-                                             .owned = b,
-                                             .owned_free = release_block }) ==
-            0);
+          io_scheduler_post(
+            q,
+            (struct io_request){ .op = IO_OP_WRITE,
+                                 .file = file_token(1),
+                                 .payload = b,
+                                 .nbytes = sizeof(*b),
+                                 .owned = b,
+                                 .owned_free = release_block }) == 0);
   }
 
   // A payload is released after its request retires, outside the lock, so the
   // count is only final after the join.
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   CHECK(Fail, atomic_load(&released) == 10);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -144,20 +145,20 @@ test_destroy_drains(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   for (int i = 0; i < 50; ++i)
     CHECK(Fail2,
-          io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+          io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   CHECK(Fail, io_backend_fake_record_count(&fake) == 50);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -170,21 +171,21 @@ test_empty_queue_event(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   // Recording an event on an empty queue should return immediately
-  struct io_event ev = io_queue_record(q);
+  struct io_event ev = io_scheduler_record(q);
   io_event_wait(q, ev);
 
   CHECK(Fail2, io_backend_fake_record_count(&fake) == 0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -200,46 +201,48 @@ test_pending_bytes(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
-  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+  CHECK(Fail2, io_scheduler_pending_bytes(q) == 0);
 
   // Hold the worker on the first request so the rest stay queued.
   _Atomic int gate;
   atomic_store(&gate, 0);
   io_backend_fake_hold(&fake, &gate);
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  CHECK(Fail2,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
   uint64_t posted = 0;
   for (uint64_t i = 1; i <= 8; ++i) {
     const uint64_t nbytes = i * 1024;
     CHECK(Fail3,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = nbytes }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = nbytes }) == 0);
     posted += nbytes;
-    CHECK(Fail3, io_queue_pending_bytes(q) == posted);
+    CHECK(Fail3, io_scheduler_pending_bytes(q) == posted);
   }
 
   atomic_store(&gate, 1);
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Fail2, io_scheduler_pending_bytes(q) == 0);
 
   // The figure is left alone by a request posted without a byte count.
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+  CHECK(Fail2,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Fail2, io_scheduler_pending_bytes(q) == 0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail3:
   atomic_store(&gate, 1);
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -254,21 +257,22 @@ test_stats(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   // Hold the worker so everything posted behind it stays waiting.
   _Atomic int gate;
   atomic_store(&gate, 0);
   io_backend_fake_hold(&fake, &gate);
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  CHECK(Fail2,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
 
   // Three files, two writes each, round-robin: three only if files differ.
   for (int round = 0; round < 2; ++round)
     for (uint64_t file = 1; file <= 3; ++file)
       CHECK(Fail3,
-            io_queue_post(
+            io_scheduler_post(
               q,
               (struct io_request){ .op = IO_OP_WRITE,
                                    .nbytes = 4096,
@@ -276,7 +280,7 @@ test_stats(void)
                                    .borrowed = (uint8_t)(file == 1) }) == 0);
 
   struct io_queue_stats st;
-  io_queue_get_stats(q, &st);
+  io_scheduler_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
   CHECK(Fail3, st.writes == 6);
   CHECK(Fail3, st.bytes_borrowed == 2 * 4096);
@@ -285,40 +289,41 @@ test_stats(void)
   CHECK(Fail3, st.size_buckets[12] == 6); // 4096 == 1 << 12
 
   // No file named: no change to the file count.
-  CHECK(Fail3, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
-  io_queue_get_stats(q, &st);
+  CHECK(Fail3,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  io_scheduler_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
   // Not counted for truncate and close: no payload.
   CHECK(Fail3,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_TRUNCATE,
-                                           .file = file_token(4),
-                                           .logical_size = 4096 }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_TRUNCATE,
+                                               .file = file_token(4),
+                                               .logical_size = 4096 }) == 0);
   CHECK(Fail3,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = file_token(5) }) == 0);
-  io_queue_get_stats(q, &st);
+        io_scheduler_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = file_token(5) }) ==
+          0);
+  io_scheduler_get_stats(q, &st);
   CHECK(Fail3, st.files_waiting_peak == 3);
 
   atomic_store(&gate, 1);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
-  io_queue_get_stats(q, &st);
+  io_scheduler_get_stats(q, &st);
   // Peak is a high-water mark, safe from draining; the mean must be positive.
   CHECK(Fail2, st.files_waiting_peak == 3);
   CHECK(Fail2, st.files_waiting_mean > 0.0);
   // Every write was held behind the gate before it could start.
   CHECK(Fail2, st.wait_ms_max > 0.0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail3:
   atomic_store(&gate, 1);
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -333,37 +338,39 @@ test_timing_mean_counts_finished(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   // One write, held behind a gate so its wait is measurable, then released.
   _Atomic int gate;
   atomic_store(&gate, 0);
   io_backend_fake_hold(&fake, &gate);
-  CHECK(Fail2, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  CHECK(Fail2,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   CHECK(Fail3,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = 4096 }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = 4096 }) == 0);
   atomic_store(&gate, 1);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
   // Five more are posted behind the second gate and stay unfinished.
   _Atomic int held;
   atomic_store(&held, 0);
   io_backend_fake_hold(&fake, &held);
-  CHECK(Fail4, io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+  CHECK(Fail4,
+        io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   for (int i = 0; i < 5; ++i)
     CHECK(Fail4,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = 4096 }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = 4096 }) == 0);
 
   struct io_queue_stats st;
-  io_queue_get_stats(q, &st);
+  io_scheduler_get_stats(q, &st);
   CHECK(Fail4, st.writes == 6);
   CHECK(Fail4, st.wait_ms_max > 0.0);
   // One finished write, so its wait is both the average and the maximum.
@@ -371,7 +378,7 @@ test_timing_mean_counts_finished(void)
   CHECK(Fail4, st.run_ms_mean == st.run_ms_max);
 
   atomic_store(&held, 1);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail4:
@@ -379,7 +386,7 @@ Fail4:
 Fail3:
   atomic_store(&gate, 1);
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -436,16 +443,16 @@ wait_out_of_execute(const struct io_backend_fake* f, int timeout_ms)
 }
 
 static void
-answer(struct io_queue* q, uint64_t* answered, struct io_completion c)
+answer(struct io_scheduler* q, uint64_t* answered, struct io_completion c)
 {
   *answered |= (uint64_t)1 << c.seq;
-  io_queue_complete(q, c);
+  io_scheduler_complete(q, c);
 }
 
 // Every exit from a deferring case has to come through here, because destroy
 // is blocked until each deferred request has been answered.
 static void
-answer_the_rest(struct io_queue* q,
+answer_the_rest(struct io_scheduler* q,
                 struct io_backend_fake* f,
                 uint64_t* answered)
 {
@@ -472,11 +479,27 @@ answer_the_rest(struct io_queue* q,
 
 struct fence_wait
 {
-  struct io_queue* q;
+  struct io_scheduler* q;
   struct io_event ev;
   _Atomic int entered;
   _Atomic int done;
 };
+
+struct completion_capture
+{
+  _Atomic int count;
+  uint64_t nbytes;
+  int status;
+};
+
+static void
+capture_completion(void* ctx, const struct io_completion* completion)
+{
+  struct completion_capture* capture = (struct completion_capture*)ctx;
+  capture->nbytes = completion->nbytes;
+  capture->status = completion->status;
+  atomic_fetch_add(&capture->count, 1);
+}
 
 static void
 fence_wait_fn(void* arg)
@@ -492,7 +515,7 @@ fence_wait_fn(void* arg)
 static int
 fence_wait_start(struct fence_wait* w,
                  test_thread** thr,
-                 struct io_queue* q,
+                 struct io_scheduler* q,
                  struct io_event ev)
 {
   w->q = q;
@@ -513,8 +536,8 @@ test_out_of_order_retirement(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -523,19 +546,19 @@ test_out_of_order_retirement(void)
   struct fence_wait w;
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES }) == 0);
-  const struct io_event ev_first = io_queue_record(q);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = WRITE_BYTES }) == 0);
+  const struct io_event ev_first = io_scheduler_record(q);
 
   for (uint64_t i = 1; i < OUT_OF_ORDER_COUNT; ++i)
     CHECK(Cleanup,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(i + 1),
-                                             .nbytes = WRITE_BYTES }) == 0);
-  const struct io_event ev_all = io_queue_record(q);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(i + 1),
+                                                 .nbytes = WRITE_BYTES }) == 0);
+  const struct io_event ev_all = io_scheduler_record(q);
 
   // Each request names a different file, so none is held behind another.
   CHECK(Cleanup,
@@ -552,20 +575,20 @@ test_out_of_order_retirement(void)
 
   // Three are answered and the oldest is not, so the watermark has not moved.
   CHECK(Cleanup, test_wait_flag(&w.done, HOLD_OBSERVE_MS) == -1);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == WRITE_BYTES);
 
   answer(
     q, &answered, (struct io_completion){ .seq = 1, .nbytes = WRITE_BYTES });
   CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
 
   io_event_wait(q, ev_all);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
   test_thread_join(thr);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -581,22 +604,22 @@ barrier_after_write(int write_status)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
   uint64_t answered = 0;
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(7),
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(7),
+                                               .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = file_token(7) }) == 0);
+        io_scheduler_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = file_token(7) }) ==
+          0);
 
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
   platform_sleep_ns((int64_t)HOLD_OBSERVE_MS * 1000000LL);
@@ -616,7 +639,7 @@ barrier_after_write(int write_status)
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -636,64 +659,113 @@ test_barrier_runs_after_failed_write(void)
   return barrier_after_write(IO_FAILED);
 }
 
-// --- test: a short or failed answer still returns all the room ---
+// --- test: a short answer is retried and final callbacks run once ---
 
 static int
 test_room_returns_after_short_answer(void)
 {
+  char payload[WRITE_BYTES];
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
   uint64_t answered = 0;
   test_thread* thr = NULL;
   struct fence_wait w;
+  struct completion_capture short_capture = { 0 };
+  struct completion_capture failed_capture = { 0 };
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(
+          q,
+          (struct io_request){ .op = IO_OP_WRITE,
+                               .file = file_token(1),
+                               .payload = payload,
+                               .nbytes = WRITE_BYTES,
+                               .completion_ctx = &short_capture,
+                               .completed = capture_completion }) == 0);
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(2),
-                                           .nbytes = 2 * WRITE_BYTES }) == 0);
+        io_scheduler_post(
+          q,
+          (struct io_request){ .op = IO_OP_WRITE,
+                               .file = file_token(2),
+                               .nbytes = 2 * WRITE_BYTES,
+                               .completion_ctx = &failed_capture,
+                               .completed = capture_completion }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 2, HANDOVER_TIMEOUT_MS) == 0);
-  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
+  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_scheduler_record(q)) == 0);
 
-  answer(
-    q,
-    &answered,
-    (struct io_completion){ .seq = 1, .nbytes = 100, .status = IO_PARTIAL });
+  io_scheduler_complete(
+    q, (struct io_completion){ .seq = 1, .nbytes = 100, .status = IO_PARTIAL });
   answer(q,
          &answered,
          (struct io_completion){ .seq = 2, .nbytes = 0, .status = IO_FAILED });
 
-  CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, wait_for_records(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, wait_for_deferred(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, fake.records[2].seq == 1);
+  CHECK(Cleanup, fake.records[2].nbytes == WRITE_BYTES - 100);
+  const struct io_request* remaining =
+    io_backend_fake_deferred_request(&fake, 2);
+  CHECK(Cleanup, remaining);
+  CHECK(Cleanup, remaining->payload == payload + 100);
+  CHECK(Cleanup, remaining->offset == 100);
+  CHECK(Cleanup, atomic_load(&short_capture.count) == 0);
+  CHECK(Cleanup,
+        test_wait_flag(&failed_capture.count, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, failed_capture.status == IO_FAILED);
+  CHECK(Cleanup, failed_capture.nbytes == 0);
+  CHECK(Cleanup, test_wait_flag(&w.done, HOLD_OBSERVE_MS) == -1);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == WRITE_BYTES);
 
-  // The same short count is reported by the backend this time, as it finishes.
+  answer(q,
+         &answered,
+         (struct io_completion){
+           .seq = 1, .nbytes = WRITE_BYTES - 100, .status = IO_OK });
+  CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup,
+        test_wait_flag(&short_capture.count, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, atomic_load(&short_capture.count) == 1);
+  CHECK(Cleanup, short_capture.status == IO_OK);
+  CHECK(Cleanup, short_capture.nbytes == WRITE_BYTES);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
+
+  // Synchronous short answers follow the same path.
   io_backend_fake_defer(&fake, 0);
   io_backend_fake_set_outcome(&fake, IO_PARTIAL, 100);
+  struct completion_capture immediate_capture = { 0 };
+  const uint64_t record_start = io_backend_fake_record_count(&fake);
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(3),
-                                           .nbytes = 4 * WRITE_BYTES }) == 0);
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+        io_scheduler_post(
+          q,
+          (struct io_request){ .op = IO_OP_WRITE,
+                               .file = file_token(3),
+                               .nbytes = 400,
+                               .completion_ctx = &immediate_capture,
+                               .completed = capture_completion }) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Cleanup,
+        test_wait_flag(&immediate_capture.count, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, atomic_load(&immediate_capture.count) == 1);
+  CHECK(Cleanup, immediate_capture.status == IO_OK);
+  CHECK(Cleanup, immediate_capture.nbytes == 400);
+  CHECK(Cleanup, io_backend_fake_record_count(&fake) == record_start + 4);
+  for (uint64_t i = 0; i < 4; ++i) {
+    CHECK(Cleanup, fake.records[record_start + i].seq == 3);
+    CHECK(Cleanup, fake.records[record_start + i].nbytes == 400 - 100 * i);
+  }
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
   test_thread_join(thr);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -706,7 +778,7 @@ Fail:
 
 struct ceiling_post
 {
-  struct io_queue* q;
+  struct io_scheduler* q;
   _Atomic int entered;
   _Atomic int done;
 };
@@ -716,10 +788,10 @@ ceiling_post_fn(void* arg)
 {
   struct ceiling_post* c = (struct ceiling_post*)arg;
   atomic_store(&c->entered, 1);
-  io_queue_post(c->q,
-                (struct io_request){ .op = IO_OP_WRITE,
-                                     .file = file_token(1),
-                                     .nbytes = WRITE_BYTES });
+  io_scheduler_post(c->q,
+                    (struct io_request){ .op = IO_OP_WRITE,
+                                         .file = file_token(1),
+                                         .nbytes = WRITE_BYTES });
   atomic_store(&c->done, 1);
 }
 
@@ -729,9 +801,9 @@ test_byte_ceiling_holds_a_post(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q =
-    io_queue_create(io_backend_fake_as_backend(&fake),
-                    (struct io_queue_limits){ .max_bytes = WRITE_BYTES });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake),
+    (struct io_scheduler_limits){ .max_bytes = WRITE_BYTES });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -745,11 +817,11 @@ test_byte_ceiling_holds_a_post(void)
   io_backend_fake_hold(&fake, &gate);
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES }) == 0);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = WRITE_BYTES }) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == WRITE_BYTES);
 
   CHECK(Cleanup, test_thread_start(&thr, ceiling_post_fn, &c) == 0);
   CHECK(Cleanup, test_wait_flag(&c.entered, HANDOVER_TIMEOUT_MS) == 0);
@@ -757,20 +829,20 @@ test_byte_ceiling_holds_a_post(void)
   // The ceiling is already spent, so the second post cannot get through until
   // the first write retires.
   CHECK(Cleanup, test_wait_flag(&c.done, HOLD_OBSERVE_MS) == -1);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == WRITE_BYTES);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == WRITE_BYTES);
 
   atomic_store(&gate, 1);
   CHECK(Cleanup, test_wait_flag(&c.done, HANDOVER_TIMEOUT_MS) == 0);
 
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   CHECK(Cleanup, io_backend_fake_record_count(&fake) == 2);
   rc = 0;
 
 Cleanup:
   atomic_store(&gate, 1);
   test_thread_join(thr);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -783,25 +855,26 @@ test_byte_ceiling_admits_an_oversize_write(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q =
-    io_queue_create(io_backend_fake_as_backend(&fake),
-                    (struct io_queue_limits){ .max_bytes = WRITE_BYTES });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake),
+    (struct io_scheduler_limits){ .max_bytes = WRITE_BYTES });
   CHECK(Fail, q);
 
   CHECK(Fail2,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES * 8 }) == 0);
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = WRITE_BYTES * 8 }) ==
+          0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Fail2, io_scheduler_pending_bytes(q) == 0);
   CHECK(Fail2, io_backend_fake_record_count(&fake) == 1);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -812,32 +885,32 @@ test_zero_byte_write(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   CHECK(Fail2,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = 0 }) == 0);
-  io_event_wait(q, io_queue_record(q));
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = 0 }) == 0);
+  io_event_wait(q, io_scheduler_record(q));
 
   CHECK(Fail2, io_backend_fake_record_count(&fake) == 1);
-  CHECK(Fail2, io_queue_pending_bytes(q) == 0);
+  CHECK(Fail2, io_scheduler_pending_bytes(q) == 0);
 
   struct io_queue_stats st;
-  io_queue_get_stats(q, &st);
+  io_scheduler_get_stats(q, &st);
   CHECK(Fail2, st.writes == 0);
   CHECK(Fail2, st.bytes_copied == 0);
   CHECK(Fail2, st.bytes_borrowed == 0);
   CHECK(Fail2, st.files_waiting_peak == 0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -851,22 +924,26 @@ test_cancelled_answer_retires(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
   uint64_t answered = 0;
   test_thread* thr = NULL;
   struct fence_wait w;
+  struct completion_capture capture = { 0 };
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(
+          q,
+          (struct io_request){ .op = IO_OP_WRITE,
+                               .file = file_token(1),
+                               .nbytes = WRITE_BYTES,
+                               .completion_ctx = &capture,
+                               .completed = capture_completion }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
-  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
+  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_scheduler_record(q)) == 0);
 
   answer(
     q,
@@ -874,13 +951,17 @@ test_cancelled_answer_retires(void)
     (struct io_completion){ .seq = 1, .nbytes = 0, .status = IO_CANCELLED });
 
   CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, test_wait_flag(&capture.count, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup, atomic_load(&capture.count) == 1);
+  CHECK(Cleanup, capture.status == IO_CANCELLED);
+  CHECK(Cleanup, capture.nbytes == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
   test_thread_join(thr);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -898,8 +979,8 @@ fence_during_destroy_round(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -908,37 +989,37 @@ fence_during_destroy_round(void)
 
   for (int i = 0; i < FENCE_DESTROY_JOBS; ++i)
     CHECK(Fail2,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES }) == 0);
 
-  CHECK(Fail2, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
+  CHECK(Fail2, fence_wait_start(&w, &thr, q, io_scheduler_record(q)) == 0);
   CHECK(Fail3, test_wait_flag(&w.entered, HANDOVER_TIMEOUT_MS) == 0);
   // The flag is set just before the wait, so it does not mean the thread is
   // inside the queue yet. Only threads already parked are drained by destroy;
   // one still on its way to the lock would be left holding a freed lock. Wait
   // until the thread is either parked or already back out.
-  for (int waited_ms = 0; !io_queue_parked_threads(q); ++waited_ms) {
+  for (int waited_ms = 0; !io_scheduler_parked_threads(q); ++waited_ms) {
     if (atomic_load(&w.done))
       break;
     CHECK(Fail3, waited_ms < HANDOVER_TIMEOUT_MS);
     platform_sleep_ns(1000000LL);
   }
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   q = NULL;
 
   CHECK(Fail3, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
   rc = 0;
 
 Fail3:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   test_thread_join(thr);
   return rc;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -972,14 +1053,14 @@ holds_at_records(const struct io_backend_fake* f, uint64_t n)
 // Deferring holds every request open, so what the backend has been handed is
 // what is running.
 static int
-in_flight_ceilings(struct io_queue_limits limits, uint64_t expect_running)
+in_flight_ceilings(struct io_scheduler_limits limits, uint64_t expect_running)
 {
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q =
-    io_queue_create(io_backend_fake_as_backend(&fake), limits);
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake), limits);
   CHECK(Fail, q);
 
   int rc = 1;
@@ -987,25 +1068,26 @@ in_flight_ceilings(struct io_queue_limits limits, uint64_t expect_running)
 
   for (uint64_t i = 0; i < BACKLOG; ++i)
     CHECK(Cleanup,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES,
-                                             .offset = i * WRITE_BYTES }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES,
+                                                 .offset = i * WRITE_BYTES }) ==
+            0);
 
   CHECK(Cleanup, holds_at_records(&fake, expect_running) == 0);
 
   // One answered frees exactly one slot, so one more is handed over.
-  answer(q,
-         &answered,
-         (struct io_completion){ .seq = fake.deferred[0],
-                                 .nbytes = WRITE_BYTES });
+  answer(
+    q,
+    &answered,
+    (struct io_completion){ .seq = fake.deferred[0], .nbytes = WRITE_BYTES });
   CHECK(Cleanup, holds_at_records(&fake, expect_running + 1) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1021,34 +1103,36 @@ test_in_flight_is_measured(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){
-                                         .workers = BACKLOG,
-                                         .writes_in_flight = 3,
-                                         .writes_in_flight_per_file = BACKLOG,
-                                       });
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = BACKLOG,
+                          .writes_in_flight = 3,
+                          .writes_in_flight_per_file = BACKLOG,
+                        });
   CHECK(Fail, q);
 
   int rc = 1;
   uint64_t answered = 0;
   struct io_queue_stats stats;
 
-  io_queue_get_stats(q, &stats);
+  io_scheduler_get_stats(q, &stats);
   CHECK(Cleanup, stats.writes_in_flight_peak == 0);
 
   for (uint64_t i = 0; i < BACKLOG; ++i)
     CHECK(Cleanup,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES,
-                                             .offset = i * WRITE_BYTES }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES,
+                                                 .offset = i * WRITE_BYTES }) ==
+            0);
 
   CHECK(Cleanup, holds_at_records(&fake, 3) == 0);
 
   // Eight were posted and eight workers were free, so a peak of three is the
   // ceiling holding rather than the backlog running out.
-  io_queue_get_stats(q, &stats);
+  io_scheduler_get_stats(q, &stats);
   CHECK(Cleanup, stats.writes_in_flight_peak == 3);
   CHECK(Cleanup, stats.writes_in_flight_mean > 0.0);
   CHECK(Cleanup, stats.writes_in_flight_mean <= 3.0);
@@ -1056,7 +1140,7 @@ test_in_flight_is_measured(void)
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1066,22 +1150,24 @@ Fail:
 static int
 test_writes_in_flight_ceiling(void)
 {
-  return in_flight_ceilings((struct io_queue_limits){
-                              .workers = BACKLOG,
-                              .writes_in_flight = 3,
-                              .writes_in_flight_per_file = BACKLOG,
-                            },
-                            3);
+  return in_flight_ceilings(
+    (struct io_scheduler_limits){
+      .workers = BACKLOG,
+      .writes_in_flight = 3,
+      .writes_in_flight_per_file = BACKLOG,
+    },
+    3);
 }
 
 static int
 test_per_file_ceiling(void)
 {
-  return in_flight_ceilings((struct io_queue_limits){
-                              .workers = BACKLOG,
-                              .writes_in_flight_per_file = 2,
-                            },
-                            2);
+  return in_flight_ceilings(
+    (struct io_scheduler_limits){
+      .workers = BACKLOG,
+      .writes_in_flight_per_file = 2,
+    },
+    2);
 }
 
 // --- test: files take turns ---
@@ -1102,13 +1188,13 @@ test_files_take_turns(void)
   atomic_store(&gate, 0);
   io_backend_fake_hold(&fake, &gate);
 
-  struct io_queue* q = io_queue_create(
-    io_backend_fake_as_backend(&fake),
-    (struct io_queue_limits){
-      .workers = TURN_FILES,
-      .writes_in_flight = TURN_FILES,
-      .writes_in_flight_per_file = TURN_WRITES_PER_FILE,
-    });
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = TURN_FILES,
+                          .writes_in_flight = TURN_FILES,
+                          .writes_in_flight_per_file = TURN_WRITES_PER_FILE,
+                        });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -1122,18 +1208,18 @@ test_files_take_turns(void)
   // is the scheduler's choice rather than a race with the posting.
   for (uint64_t i = 0; i < TURN_FILES; ++i)
     CHECK(Cleanup,
-          io_queue_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
+          io_scheduler_post(q, (struct io_request){ .op = IO_OP_NOOP }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, TURN_FILES, HANDOVER_TIMEOUT_MS) == 0);
 
   for (uint64_t f = 1; f <= TURN_FILES; ++f)
     for (uint64_t i = 0; i < TURN_WRITES_PER_FILE; ++i)
       CHECK(Cleanup,
-            io_queue_post(q,
-                          (struct io_request){ .op = IO_OP_WRITE,
-                                               .file = file_token(f),
-                                               .nbytes = WRITE_BYTES,
-                                               .offset = i * WRITE_BYTES }) ==
-              0);
+            io_scheduler_post(
+              q,
+              (struct io_request){ .op = IO_OP_WRITE,
+                                   .file = file_token(f),
+                                   .nbytes = WRITE_BYTES,
+                                   .offset = i * WRITE_BYTES }) == 0);
 
   atomic_store(&gate, 1);
   CHECK(Cleanup,
@@ -1154,7 +1240,7 @@ test_files_take_turns(void)
 Cleanup:
   atomic_store(&gate, 1);
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1172,11 +1258,12 @@ test_barrier_waits_with_many_workers(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){
-                                         .workers = BACKLOG,
-                                         .writes_in_flight_per_file = BACKLOG,
-                                       });
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = BACKLOG,
+                          .writes_in_flight_per_file = BACKLOG,
+                        });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -1184,13 +1271,14 @@ test_barrier_waits_with_many_workers(void)
 
   for (uint64_t i = 0; i < BARRIER_WRITES; ++i)
     CHECK(Cleanup,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES,
-                                             .offset = i * WRITE_BYTES }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES,
+                                                 .offset = i * WRITE_BYTES }) ==
+            0);
   CHECK(Cleanup,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = file_token(1) }) ==
           0);
 
@@ -1204,13 +1292,66 @@ test_barrier_waits_with_many_workers(void)
            &answered,
            (struct io_completion){ .seq = seq, .nbytes = WRITE_BYTES });
 
-  CHECK(Cleanup, wait_for_records(&fake, BARRIER_WRITES + 1, HANDOVER_TIMEOUT_MS) == 0);
+  CHECK(Cleanup,
+        wait_for_records(&fake, BARRIER_WRITES + 1, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, fake.records[BARRIER_WRITES].op == IO_OP_CLOSE);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
+  return rc;
+
+Fail:
+  return 1;
+}
+
+static int
+test_presize_holds_later_writes(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  io_backend_fake_defer(&fake, 1);
+
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = BACKLOG,
+                          .writes_in_flight_per_file = BACKLOG,
+                        });
+  CHECK(Fail, q);
+
+  int rc = 1;
+  uint64_t answered = 0;
+  CHECK(Cleanup,
+        io_scheduler_post(q,
+                          (struct io_request){
+                            .op = IO_OP_TRUNCATE,
+                            .file = file_token(1),
+                            .logical_size = BARRIER_WRITES * WRITE_BYTES,
+                          }) == 0);
+  for (uint64_t i = 0; i < BARRIER_WRITES; ++i)
+    CHECK(Cleanup,
+          io_scheduler_post(q,
+                            (struct io_request){
+                              .op = IO_OP_WRITE,
+                              .file = file_token(1),
+                              .nbytes = WRITE_BYTES,
+                              .offset = i * WRITE_BYTES,
+                            }) == 0);
+
+  CHECK(Cleanup, holds_at_records(&fake, 1) == 0);
+  CHECK(Cleanup, fake.records[0].op == IO_OP_TRUNCATE);
+  answer(q, &answered, (struct io_completion){ .seq = 1 });
+  CHECK(Cleanup,
+        wait_for_records(&fake, BARRIER_WRITES + 1, HANDOVER_TIMEOUT_MS) == 0);
+  for (uint64_t i = 1; i <= BARRIER_WRITES; ++i)
+    CHECK(Cleanup, fake.records[i].op == IO_OP_WRITE);
+  rc = 0;
+
+Cleanup:
+  answer_the_rest(q, &fake, &answered);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1229,11 +1370,12 @@ test_index_reused_before_close_retires(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){
-                                         .workers = 2,
-                                         .writes_in_flight_per_file = 2,
-                                       });
+  struct io_scheduler* q =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = 2,
+                          .writes_in_flight_per_file = 2,
+                        });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -1242,14 +1384,13 @@ test_index_reused_before_close_retires(void)
   const struct io_file_token second = { .generation = 2, .index = 0 };
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = first,
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = first,
+                                               .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_CLOSE,
-                                           .file = first }) == 0);
+        io_scheduler_post(
+          q, (struct io_request){ .op = IO_OP_CLOSE, .file = first }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
   answer(
     q, &answered, (struct io_completion){ .seq = 1, .nbytes = WRITE_BYTES });
@@ -1259,10 +1400,10 @@ test_index_reused_before_close_retires(void)
   // The close is running and has not retired, which is the window the
   // backend hands the index back in.
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = second,
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = second,
+                                               .nbytes = WRITE_BYTES }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, fake.records[2].generation == 2);
 
@@ -1270,13 +1411,13 @@ test_index_reused_before_close_retires(void)
   answer(
     q, &answered, (struct io_completion){ .seq = 3, .nbytes = WRITE_BYTES });
 
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1296,8 +1437,8 @@ test_refused_request_is_handed_over_again(void)
   io_backend_fake_init(&fake);
   io_backend_fake_refuse(&fake, REFUSALS);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -1305,31 +1446,32 @@ test_refused_request_is_handed_over_again(void)
 
   for (uint64_t i = 0; i < 2; ++i)
     CHECK(Cleanup,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES,
-                                             .offset = i * WRITE_BYTES }) == 0);
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES,
+                                                 .offset = i * WRITE_BYTES }) ==
+            0);
 
   CHECK(Cleanup,
         wait_for_records(&fake, REFUSALS + 2, HANDOVER_TIMEOUT_MS) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
   CHECK(Cleanup, io_backend_fake_refused_count(&fake) == REFUSALS);
   CHECK(Cleanup, io_backend_fake_record_count(&fake) == REFUSALS + 2);
   for (uint64_t i = 0; i <= REFUSALS; ++i)
     CHECK(Cleanup, fake.records[i].seq == 1);
   CHECK(Cleanup, fake.records[REFUSALS + 1].seq == 2);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
 
   // One worker, so a refusal that left the request counted as running would
   // show up as a peak of two.
-  io_queue_get_stats(q, &stats);
+  io_scheduler_get_stats(q, &stats);
   CHECK(Cleanup, stats.writes_in_flight_peak == 1);
   rc = 0;
 
 Cleanup:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1347,34 +1489,35 @@ test_refused_barrier_keeps_the_file_moving(void)
   io_backend_fake_init(&fake);
   io_backend_fake_refuse(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_TRUNCATE,
-                                           .file = file_token(1),
-                                           .logical_size = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_TRUNCATE,
+                                               .file = file_token(1),
+                                               .logical_size = WRITE_BYTES }) ==
+          0);
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = file_token(1),
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = file_token(1),
+                                               .nbytes = WRITE_BYTES }) == 0);
 
   CHECK(Cleanup, wait_for_records(&fake, 3, HANDOVER_TIMEOUT_MS) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
   CHECK(Cleanup, fake.records[0].op == IO_OP_TRUNCATE);
   CHECK(Cleanup, fake.records[1].op == IO_OP_TRUNCATE);
   CHECK(Cleanup, fake.records[2].op == IO_OP_WRITE);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1391,28 +1534,29 @@ test_backend_is_stopped_at_teardown(void)
   struct io_backend_fake fake;
   io_backend_fake_init(&fake);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   for (uint64_t i = 0; i < STOP_REQUESTS; ++i)
     CHECK(Fail2,
-          io_queue_post(q,
-                        (struct io_request){ .op = IO_OP_WRITE,
-                                             .file = file_token(1),
-                                             .nbytes = WRITE_BYTES,
-                                             .offset = i * WRITE_BYTES }) == 0);
-  io_event_wait(q, io_queue_record(q));
+          io_scheduler_post(q,
+                            (struct io_request){ .op = IO_OP_WRITE,
+                                                 .file = file_token(1),
+                                                 .nbytes = WRITE_BYTES,
+                                                 .offset = i * WRITE_BYTES }) ==
+            0);
+  io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail2, fake.stops == 0);
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 
   CHECK(Fail, fake.stops == 1);
   CHECK(Fail, fake.records_when_stopped == STOP_REQUESTS);
   return 0;
 
 Fail2:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail:
   return 1;
 }
@@ -1431,32 +1575,33 @@ test_request_outlives_execute(void)
   io_backend_fake_init(&fake);
   io_backend_fake_defer(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
   uint64_t answered = 0;
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .borrowed = 1,
-                                           .file = file_token(5),
-                                           .payload = first_payload,
-                                           .nbytes = WRITE_BYTES,
-                                           .offset = 7 * WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .borrowed = 1,
+                                               .file = file_token(5),
+                                               .payload = first_payload,
+                                               .nbytes = WRITE_BYTES,
+                                               .offset = 7 * WRITE_BYTES }) ==
+          0);
   CHECK(Cleanup, wait_for_deferred(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
 
   // The file is a different one, so this write is not held behind the first.
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .borrowed = 1,
-                                           .file = file_token(6),
-                                           .payload = second_payload,
-                                           .nbytes = WRITE_BYTES / 2,
-                                           .offset = 0 }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .borrowed = 1,
+                                               .file = file_token(6),
+                                               .payload = second_payload,
+                                               .nbytes = WRITE_BYTES / 2,
+                                               .offset = 0 }) == 0);
   CHECK(Cleanup, wait_for_deferred(&fake, 2, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, wait_out_of_execute(&fake, HANDOVER_TIMEOUT_MS) == 0);
 
@@ -1481,13 +1626,13 @@ test_request_outlives_execute(void)
          &answered,
          (struct io_completion){ .seq = fake.deferred[1],
                                  .nbytes = second->nbytes });
-  io_event_wait(q, io_queue_record(q));
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  io_event_wait(q, io_scheduler_record(q));
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   answer_the_rest(q, &fake, &answered);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1514,21 +1659,21 @@ test_short_write_is_finished_by_the_backend(void)
   io_backend_fake_write_into(&fake, landed, sizeof(landed));
   io_backend_fake_short_write(&fake, SHORT_WRITE_BYTES);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
 
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .borrowed = 1,
-                                           .file = file_token(1),
-                                           .payload = payload,
-                                           .nbytes = WRITE_BYTES,
-                                           .offset = WRITE_BYTES }) == 0);
-  io_event_wait(q, io_queue_record(q));
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .borrowed = 1,
+                                               .file = file_token(1),
+                                               .payload = payload,
+                                               .nbytes = WRITE_BYTES,
+                                               .offset = WRITE_BYTES }) == 0);
+  io_event_wait(q, io_scheduler_record(q));
 
   CHECK(Cleanup, io_backend_fake_record_count(&fake) == 1);
   CHECK(Cleanup,
@@ -1540,11 +1685,11 @@ test_short_write_is_finished_by_the_backend(void)
   for (uint64_t i = 0; i < WRITE_BYTES; ++i)
     landed_before_the_offset += (uint64_t)(landed[i] != 0);
   CHECK(Cleanup, landed_before_the_offset == 0);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1568,8 +1713,8 @@ test_refused_request_after_the_index_is_reused(void)
   io_backend_fake_hold(&fake, &gate);
   io_backend_fake_refuse(&fake, 1);
 
-  struct io_queue* q = io_queue_create(io_backend_fake_as_backend(&fake),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fake_as_backend(&fake), (struct io_scheduler_limits){ 0 });
   CHECK(Fail, q);
 
   int rc = 1;
@@ -1579,29 +1724,29 @@ test_refused_request_after_the_index_is_reused(void)
   const struct io_file_token second = { .generation = 2, .index = 0 };
 
   CHECK(Cleanup,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = first }) == 0);
   CHECK(Cleanup, wait_for_records(&fake, 1, HANDOVER_TIMEOUT_MS) == 0);
 
   // The close is waiting in the backend, the window a new open needs.
   CHECK(Cleanup,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .file = second,
-                                           .nbytes = WRITE_BYTES }) == 0);
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = second,
+                                               .nbytes = WRITE_BYTES }) == 0);
 
   // One worker, so the close is refused first and the write is taken after.
   atomic_store(&gate, 1);
-  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_queue_record(q)) == 0);
+  CHECK(Cleanup, fence_wait_start(&w, &thr, q, io_scheduler_record(q)) == 0);
   CHECK(Cleanup, test_wait_flag(&w.done, HANDOVER_TIMEOUT_MS) == 0);
   CHECK(Cleanup, io_backend_fake_refused_count(&fake) == 1);
-  CHECK(Cleanup, io_queue_pending_bytes(q) == 0);
+  CHECK(Cleanup, io_scheduler_pending_bytes(q) == 0);
   rc = 0;
 
 Cleanup:
   atomic_store(&gate, 1);
   test_thread_join(thr);
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   return rc;
 
 Fail:
@@ -1641,8 +1786,8 @@ main(void)
     { "writes_in_flight_ceiling", test_writes_in_flight_ceiling },
     { "per_file_ceiling", test_per_file_ceiling },
     { "files_take_turns", test_files_take_turns },
-    { "barrier_waits_with_many_workers",
-      test_barrier_waits_with_many_workers },
+    { "barrier_waits_with_many_workers", test_barrier_waits_with_many_workers },
+    { "presize_holds_later_writes", test_presize_holds_later_writes },
     { "index_reused_before_close_retires",
       test_index_reused_before_close_retires },
     { "refused_request_is_handed_over_again",

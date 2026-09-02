@@ -85,21 +85,6 @@ engine_limits_accumulate(struct engine_limits* lim,
       max_u64(lim->max_total_batch_covering, ml.total_batch_covering);
     lim->max_device_data_bytes =
       max_sz(lim->max_device_data_bytes, ml.total_data_bytes);
-    size_t host_bytes = 0;
-    size_t max_runs = 0;
-    const size_t shard_alignment = cl->per_level[0].agg_layout.page_size;
-    const enum host_batch_storage storage = host_batch_storage_select(
-      config->codec.id == CODEC_NONE, shard_alignment);
-    CHECK(Fail,
-          host_batch_capacity(per_lod_layouts,
-                              per_lod_max,
-                              (uint8_t)cl->levels.nlod,
-                              storage,
-                              shard_alignment,
-                              &host_bytes,
-                              &max_runs) == 0);
-    (void)max_runs;
-    lim->max_host_data_bytes = max_sz(lim->max_host_data_bytes, host_bytes);
   }
 
   return 0;
@@ -271,6 +256,7 @@ engine_array_state_init(struct engine_array_state* st,
   }
 
   CHECK(Fail, compress_agg_array_init(&st->agg, cl) == 0);
+  CHECK(Fail, compress_agg_array_init_output(&st->agg, cl, &ctx->config) == 0);
   schedule_select(&st->sched, delivery);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
@@ -367,11 +353,10 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (writer_close(&s->writer).error)
     log_error("GPU stream close failed during destroy");
 
-  // s->ar owns the per-array allocations; the engine holds a bound copy of
-  // the same pointers, so destroy strictly after engine teardown would
-  // double-free — free once, here.
-  engine_array_state_destroy(&s->ar);
+  // Copy state can still name the per-array output pool after a failed
+  // cancellation, so tear down the shared stages before their array state.
   stream_engine_destroy(&s->engine);
+  engine_array_state_destroy(&s->ar);
   cu_ctx_pop(pushed);
   free(s);
 }
@@ -402,6 +387,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
   CHECK(FailPhase1b, out);
 
+  out->flushed = 1;
+  out->closed = 1;
   out->ctx.config = *config;
   out->ctx.sink = sink;
   out->ctx.shard_alignment = shard_sink_required_shard_alignment(sink);
@@ -420,6 +407,8 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(FailPhase2,
         stream_engine_bind_array(&out->engine, &out->ar, &out->ctx) == 0);
 
+  out->flushed = 0;
+  out->closed = 0;
   computed_stream_layouts_free(&cl);
   return out;
 
@@ -521,6 +510,14 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                    &aggregate_host))
     goto Fail;
 
+  if (compress_agg_host_output_requirements(
+        &cl, config, &info->host_output_bytes, &info->host_output_count))
+    goto Fail;
+  CHECK_MUL_OVERFLOW(
+    Fail, info->host_output_count, info->host_output_bytes, SIZE_MAX);
+  info->host_output_pool_bytes =
+    info->host_output_count * info->host_output_bytes;
+
   // LOD: per-array state plus the engine-shared linear/morton buffers.
   info->lod_bytes = lod_state_device_bytes(&cl, config);
   if (cl.levels.enable_multiscale)
@@ -533,7 +530,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   info->device_bytes = info->staging_bytes + info->chunk_pool_bytes +
                        info->compressed_pool_bytes + info->aggregate_bytes +
                        info->lod_bytes + info->codec_bytes;
-  info->host_pinned_bytes = info->staging_bytes + aggregate_host;
+  info->host_pinned_bytes =
+    info->staging_bytes + aggregate_host + info->host_output_pool_bytes;
 
   info->chunks_per_epoch = cl.layouts[0].chunks_per_epoch;
   info->total_chunks = cl.levels.total_chunks;

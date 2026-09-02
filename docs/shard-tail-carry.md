@@ -143,11 +143,15 @@ borrowing another array's shard state.
 
 ## Buffer lifetimes and fences
 
-`write_direct` borrows its source until the sink fence retires.
+`write_direct` borrows its source until the sink fence retires. Stream output
+uses `write_from_output`, which reports lifetime through a completion group.
 
-- Data commands borrow the aggregate host slot. The existing per-slot fence is
-  recorded after delivery, including after a partial failure, and waited before
-  the slot is copied again.
+- Data commands borrow a separately leased host output. Every expanded
+  filesystem command retains its completion group; sealing after expansion and
+  completing every retired or cancelled command releases the output without a
+  global-prefix wait.
+- CPU aggregate scratch and GPU device aggregate slots are independent of host
+  output lifetime. A GPU device slot is reusable after its D2H copy completes.
 - Footer commands borrow `active_shard.footer_buf`. The executor waits that
   shard's prior footer fence before preparing the bytes and records a new fence
   after a direct footer write.
@@ -158,9 +162,9 @@ extent.
 
 ## CPU pipeline
 
-The CPU aggregator and `deliver_to_shards_batch()` keep their existing layout
-and tail-carry behavior. The host storage choice and write plan are GPU delivery
-mechanisms; CPU shard bytes and public stream configuration are unchanged.
+The CPU aggregator writes into the same leased-output layout and uses the same
+logical shard plan as GPU delivery. Two CPU scratch sets remain available while
+host-output capacity supplies bounded storage backpressure.
 
 ## Write-layout statistics
 

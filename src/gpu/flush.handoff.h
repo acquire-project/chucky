@@ -19,6 +19,7 @@ struct compress_agg_plan
 struct flush_handoff
 {
   struct aggregate_batch batch;
+  int64_t slot_reuse_start_ns;
   CUevent compress_start;
   CUevent compress_end;
   CUevent aggregate_start;

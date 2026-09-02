@@ -40,6 +40,7 @@ struct io_write_scheduling
 {
   struct io_scheduling io;
   const char* backend; // NULL when the run wrote nothing
+  uint64_t host_output_budget_bytes;
 };
 
 void

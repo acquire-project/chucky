@@ -28,12 +28,12 @@ make_flush_params(struct cpu_stream_view* v)
     .cl = v->cl,
     .levels_geo = v->levels,
     .per_lod_agg_layouts = v->agg_layout,
-    .h_tail_bytes = v->h_tail_bytes,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .pool = v->pool,
     .pool_epochs_scratch = v->pool_epochs_scratch,
     .agg_slots = v->agg_slots,
+    .output_pool = v->output_pool,
     .io_done = v->io_done,
     .agg_current = v->agg_current,
     .metrics = v->metrics,
@@ -84,6 +84,7 @@ validate_view(const struct cpu_stream_view* v)
   assert(v->config && v->sink && v->cl && v->layout && v->levels);
   assert(v->cursor_elements && v->batch_accumulated && v->batch_active_masks);
   assert(v->shard && v->agg_layout && v->batch_active_count && v->io_done);
+  assert(v->output_pool);
   assert(v->chunk_pool);
   if (v->levels->enable_multiscale) {
     assert(v->linear && v->lod_values);

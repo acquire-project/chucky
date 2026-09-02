@@ -46,7 +46,6 @@ aggregate_slot_destroy(struct aggregate_slot* slot)
   cuMemFree((CUdeviceptr)slot->d_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_offsets);
   cuMemFree((CUdeviceptr)slot->d_aggregated);
-  cuMemFreeHost(slot->h_aggregated);
   cuMemFreeHost(slot->h_offsets);
   cuMemFreeHost(slot->h_permuted_sizes);
   cuMemFree((CUdeviceptr)slot->d_temp);
@@ -106,7 +105,6 @@ gather_batch_k(const void* __restrict__ d_compressed,
 extern "C" int
 aggregate_batch_slot_memory(uint64_t batch_covering_count,
                             size_t device_data_bytes,
-                            size_t host_data_bytes,
                             size_t* device_bytes,
                             size_t* host_bytes)
 {
@@ -117,8 +115,7 @@ aggregate_batch_slot_memory(uint64_t batch_covering_count,
   *device_bytes = 2 * (C + 1) * sizeof(size_t) // d_permuted_sizes + d_offsets
                   + device_data_bytes          // d_aggregated
                   + temp;                      // d_temp
-  *host_bytes = host_data_bytes                // h_aggregated
-                + (C + 1) * sizeof(size_t)     // h_offsets
+  *host_bytes = (C + 1) * sizeof(size_t)       // h_offsets
                 + C * sizeof(size_t);          // h_permuted_sizes
   return 0;
 }
@@ -130,8 +127,7 @@ aggregate_batch_slot_memory(uint64_t batch_covering_count,
 extern "C" int
 aggregate_batch_slot_init(struct aggregate_slot* slot,
                           uint64_t batch_covering_count,
-                          size_t device_data_bytes,
-                          size_t host_data_bytes)
+                          size_t device_data_bytes)
 {
   uint64_t C = batch_covering_count;
 
@@ -144,7 +140,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
   CU(Error,
      cuMemAlloc((CUdeviceptr*)&slot->d_offsets, (C + 1) * sizeof(size_t)));
   CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_aggregated, device_data_bytes));
-  CU(Error, cuMemHostAlloc(&slot->h_aggregated, host_data_bytes, 0));
   CU(Error,
      cuMemHostAlloc((void**)&slot->h_offsets, (C + 1) * sizeof(size_t), 0));
   CU(Error,
@@ -163,7 +158,6 @@ aggregate_batch_slot_init(struct aggregate_slot* slot,
     CU(Error, cuMemAlloc((CUdeviceptr*)&slot->d_temp, slot->temp_bytes));
 
   slot->device_capacity = device_data_bytes;
-  slot->host_capacity = host_data_bytes;
 
   return 0;
 

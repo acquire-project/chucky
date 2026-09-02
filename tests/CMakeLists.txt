@@ -177,10 +177,12 @@ add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
-add_test_exe(test_io_queue    test_io_queue.c    io_queue test_io_backend_fake test_platform chucky_log)
+add_test_exe(test_io_queue    test_io_queue.c    io_scheduler test_io_backend_fake test_platform chucky_log)
+add_test_exe(test_filesystem_command_map test_filesystem_command_map.c filesystem_command_map chucky_log)
+add_test_exe(test_host_output_pool test_host_output_pool.c host_output_pool test_platform chucky_log)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_io_queue PROPERTIES TIMEOUT 60)
-add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform test_platform chucky_log test_io_faults)
+add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform host_output_pool test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_store_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_zarr_attribute test_zarr_attribute.c zarr_array zarr_group store_fs store_api stream_cpu writer test_platform chucky_log)

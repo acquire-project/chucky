@@ -58,6 +58,7 @@ struct gpu_run
   uint32_t* d_gather;
   uint32_t* d_perm;
   size_t* h_offsets;
+  void* h_aggregated;
   // Outputs filled at the end of each scenario:
   struct aggregate_result result;
 };
@@ -71,8 +72,10 @@ gpu_run_destroy(struct gpu_run* r)
   cu_mem_free((CUdeviceptr)r->d_gather);
   cu_mem_free((CUdeviceptr)r->d_perm);
   cu_mem_free(r->d_compressed);
-  if (r->slot.h_aggregated || r->slot.d_aggregated)
+  if (r->slot.d_aggregated)
     aggregate_slot_destroy(&r->slot);
+  if (r->h_aggregated)
+    cuMemFreeHost(r->h_aggregated);
   cu_stream_destroy(r->stream);
   memset(r, 0, sizeof(*r));
 }
@@ -114,8 +117,8 @@ run_gpu_aggregate(struct gpu_run* r, const struct geom* g, size_t page_size)
   const size_t comp_pool_bytes = N * g->max_comp;
 
   CHECK(Fail,
-        aggregate_batch_slot_init(
-          &r->slot, batch_C, comp_pool_bytes, comp_pool_bytes) == 0);
+        aggregate_batch_slot_init(&r->slot, batch_C, comp_pool_bytes) == 0);
+  CU(Fail, cuMemHostAlloc(&r->h_aggregated, comp_pool_bytes, 0));
 
   // Synthetic compressed pool: chunk i has size (10 + i%7), filled with
   // value (i+1)&0xff. Same shape as the CPU test.
@@ -192,8 +195,13 @@ run_gpu_aggregate(struct gpu_run* r, const struct geom* g, size_t page_size)
      cuMemcpyDtoH(r->slot.h_permuted_sizes,
                   (CUdeviceptr)r->slot.d_permuted_sizes,
                   batch_C * sizeof(size_t)));
+  CHECK(Fail, r->h_offsets[batch_C] <= comp_pool_bytes);
+  CU(Fail,
+     cuMemcpyDtoH(r->h_aggregated,
+                  (CUdeviceptr)r->slot.d_aggregated,
+                  r->h_offsets[batch_C]));
 
-  r->result.data = r->slot.h_aggregated;
+  r->result.data = r->h_aggregated;
   r->result.offsets = r->h_offsets;
   r->result.chunk_sizes = r->slot.h_permuted_sizes;
   return 0;

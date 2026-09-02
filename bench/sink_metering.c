@@ -39,6 +39,25 @@ metering_write_direct(struct shard_writer* self,
 }
 
 static int
+metering_write_from_output(struct shard_writer* self,
+                           uint64_t offset,
+                           const void* beg,
+                           const void* end,
+                           struct host_output_group* group)
+{
+  struct metering_writer* w = (struct metering_writer*)self;
+  size_t nbytes = (size_t)((const char*)end - (const char*)beg);
+  platform_toc(&w->parent->clock);
+  int rc = w->inner->write_from_output(w->inner, offset, beg, end, group);
+  w->parent->total_bytes += nbytes;
+  accumulate_metric_ms(&w->parent->metric,
+                       (float)(platform_toc(&w->parent->clock) * 1000.0),
+                       nbytes,
+                       0);
+  return rc;
+}
+
+static int
 metering_presize(struct shard_writer* self, uint64_t nbytes)
 {
   struct metering_writer* w = (struct metering_writer*)self;
@@ -75,6 +94,8 @@ metering_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
       ms->writers[i].inner = inner;
       ms->writers[i].base.write_direct =
         inner->write_direct ? metering_write_direct : NULL;
+      ms->writers[i].base.write_from_output =
+        inner->write_from_output ? metering_write_from_output : NULL;
       ms->writers[i].base.presize = inner->presize ? metering_presize : NULL;
       ms->writers[i].base.truncate = inner->truncate ? metering_truncate : NULL;
       return &ms->writers[i].base;

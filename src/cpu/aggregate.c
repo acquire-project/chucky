@@ -3,6 +3,7 @@
 #include "threadpool/threadpool.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
+#include "zarr/host_batch.h"
 #include "zarr/shard_delivery.h"
 
 #include <stdlib.h>
@@ -212,8 +213,12 @@ aggregate_cpu_batch_into(const void* compressed_base,
 // ---- Unified-across-LODs per-batch aggregate ----
 
 int
-aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
+aggregate_cpu_batch_prepare_unified(const struct aggregate_cpu_inputs* in)
 {
+  CHECK(Error, in && in->layout && in->per_lod_layouts && in->ws);
+  CHECK(Error, in->compressed_base && in->comp_sizes_base && in->gather);
+  CHECK(Error, in->ws->perm && in->ws->permuted_sizes && in->ws->offsets);
+  CHECK(Error, in->ws->chunk_sizes);
   const uint64_t total_chunks = in->layout->total_batch_chunks;
   const uint64_t total_covering = in->layout->total_batch_covering;
   const uint8_t nlod = in->layout->nlod;
@@ -275,6 +280,20 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
     }
   }
 
+  return 0;
+
+Error:
+  return 1;
+}
+
+int
+aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
+{
+  CHECK(Error, aggregate_cpu_batch_prepare_unified(in) == 0);
+  CHECK(Error, in->ws->data && in->per_lod_results && in->pool);
+  const uint8_t nlod = in->layout->nlod;
+  const int use_carryover = (in->layout->page_size > 0);
+
   // Leading-tail copy: stage the prior batch's ragged tail at the front of
   // each shard's legacy CPU aggregate region. GPU tail assembly now happens
   // later in ordered host copying.
@@ -326,7 +345,7 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
 
   // Per-LOD result views. result.data is shifted to the LOD's segment base
   // so deliver-time addressing through (data + si*shard_capacity + ...) is
-  // correct, matching the GPU side's per-level h_aggregated.
+  // correct, matching the GPU side's per-level host output view.
   for (uint8_t lv = 0; lv < nlod; ++lv) {
     const struct lod_segment* seg = &in->layout->lods[lv];
     in->per_lod_results[lv].data =
@@ -337,6 +356,103 @@ aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in)
       in->ws->chunk_sizes + seg->batch_covering_offset + lv;
   }
 
+  return 0;
+
+Error:
+  return 1;
+}
+
+struct gather_host_ctx
+{
+  const char* compressed;
+  const size_t* comp_sizes;
+  const uint32_t* gather;
+  const uint32_t* perm;
+  const size_t* destinations;
+  char* data;
+  size_t max_comp;
+};
+
+static void
+gather_host_range(size_t beg, size_t end, int tid, void* vctx)
+{
+  (void)tid;
+  struct gather_host_ctx* c = (struct gather_host_ctx*)vctx;
+  for (size_t i = beg; i < end; ++i) {
+    const uint32_t source = c->gather[i];
+    const size_t nbytes = c->comp_sizes[source];
+    if (nbytes == 0)
+      continue;
+    memcpy(c->data + c->destinations[c->perm[i]],
+           c->compressed + (uint64_t)source * c->max_comp,
+           nbytes);
+  }
+}
+
+int
+aggregate_cpu_batch_copy_to_host(const struct aggregate_cpu_inputs* in,
+                                 const struct host_batch* host)
+{
+  CHECK(Error, in && in->layout && in->ws && host && in->pool);
+  CHECK(Error, in->ws->data && in->ws->perm && in->ws->permuted_sizes);
+  CHECK(Error, in->ws->offsets && in->ws->chunk_sizes);
+  CHECK(Error, in->compressed_base && in->comp_sizes_base && in->gather);
+  CHECK(Error, in->layout->total_batch_covering <= SIZE_MAX - in->layout->nlod);
+  const size_t metadata_count =
+    (size_t)in->layout->total_batch_covering + in->layout->nlod;
+  memset(in->ws->permuted_sizes, 0xFF, metadata_count * sizeof(size_t));
+
+  const uintptr_t output = (uintptr_t)in->ws->data;
+  for (size_t r = 0; r < host->run_count; ++r) {
+    const struct host_batch_run* run = &host->runs[r];
+    CHECK(Error, run->offsets >= in->ws->offsets);
+    const size_t metadata_base = (size_t)(run->offsets - in->ws->offsets);
+    CHECK_MUL_OVERFLOW(
+      Error, run->active_count, run->chunks_per_shard_inner, SIZE_MAX);
+    const size_t chunks =
+      (size_t)run->active_count * run->chunks_per_shard_inner;
+    CHECK(Error, metadata_base <= metadata_count);
+    CHECK(Error, chunks <= metadata_count - metadata_base);
+    CHECK(Error, (uintptr_t)run->data >= output);
+    const size_t run_offset = (size_t)((uintptr_t)run->data - output);
+    CHECK(Error, run_offset <= in->ws->data_capacity);
+    CHECK(Error, run->tail_bytes <= in->ws->data_capacity - run_offset);
+    const size_t payload_offset = run_offset + run->tail_bytes;
+
+    for (size_t j = 0; j < chunks; ++j) {
+      CHECK(Error, run->offsets[j] >= run->source_offset);
+      const size_t relative = run->offsets[j] - run->source_offset;
+      CHECK(Error, relative <= run->payload_bytes);
+      CHECK(Error, run->chunk_sizes[j] <= run->payload_bytes - relative);
+      CHECK(Error, payload_offset <= in->ws->data_capacity);
+      CHECK(Error, relative <= in->ws->data_capacity - payload_offset);
+      const size_t destination = payload_offset + relative;
+      CHECK(Error, run->chunk_sizes[j] <= in->ws->data_capacity - destination);
+      in->ws->permuted_sizes[metadata_base + j] = destination;
+    }
+  }
+
+  for (uint64_t i = 0; i < in->layout->total_batch_chunks; ++i) {
+    const uint32_t target = in->ws->perm[i];
+    CHECK(Error, target < metadata_count);
+    CHECK(Error, in->ws->permuted_sizes[target] != SIZE_MAX);
+    const size_t nbytes = in->comp_sizes_base[in->gather[i]];
+    CHECK(Error, nbytes <= in->layout->max_comp_chunk_bytes);
+    CHECK(Error,
+          nbytes <= in->ws->data_capacity - in->ws->permuted_sizes[target]);
+  }
+
+  struct gather_host_ctx context = {
+    .compressed = (const char*)in->compressed_base,
+    .comp_sizes = in->comp_sizes_base,
+    .gather = in->gather,
+    .perm = in->ws->perm,
+    .destinations = in->ws->permuted_sizes,
+    .data = (char*)in->ws->data,
+    .max_comp = in->layout->max_comp_chunk_bytes,
+  };
+  threadpool_for_n(
+    in->pool, in->layout->total_batch_chunks, gather_host_range, &context);
   return 0;
 
 Error:

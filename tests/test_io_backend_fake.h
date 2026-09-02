@@ -63,7 +63,7 @@ void
 io_backend_fake_hold(struct io_backend_fake* f, _Atomic int* gate);
 
 // Answer IO_SUBMITTED instead of finishing in place. Every deferred sequence
-// number is kept in deferred[], to hand to io_queue_complete in any order.
+// number is kept in deferred[], to hand to io_scheduler_complete in any order.
 void
 io_backend_fake_defer(struct io_backend_fake* f, int defer);
 

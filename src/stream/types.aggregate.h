@@ -131,10 +131,8 @@ extern "C"
                                   uint8_t nlod,
                                   size_t page_size);
 
-  // GPU compact layout.  Unlike batch_aggregate_layout_init(), this never
-  // reserves shard regions, leading-tail space, or page padding: every LOD
-  // contributes only its real chunks at the codec's maximum extent.  The
-  // CPU pipeline intentionally continues to use the legacy initializer.
+  // Compact CPU/GPU aggregate layout. Unlike batch_aggregate_layout_init(),
+  // this reserves no shard regions, leading-tail space, or page padding.
   int batch_aggregate_layout_init_compact(
     struct batch_aggregate_layout* out,
     const struct aggregate_layout* per_lod,

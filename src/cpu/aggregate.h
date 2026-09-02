@@ -5,6 +5,7 @@
 
 struct threadpool;
 struct shard_state;
+struct host_batch;
 
 // Pre-allocated workspace for zero-allocation aggregation.
 struct aggregate_cpu_workspace
@@ -88,3 +89,10 @@ struct aggregate_cpu_inputs
 // page_size is zero, falls back to a single contiguous prefix-sum per LOD.
 int
 aggregate_cpu_batch_into_unified(const struct aggregate_cpu_inputs* in);
+
+int
+aggregate_cpu_batch_prepare_unified(const struct aggregate_cpu_inputs* in);
+
+int
+aggregate_cpu_batch_copy_to_host(const struct aggregate_cpu_inputs* in,
+                                 const struct host_batch* host);

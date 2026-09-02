@@ -563,6 +563,7 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `codec` | none / lz4 / zstd | Compression codec |
 | `epochs_per_batch` | ≥ 0 | Epochs per batch ($K$); 0 = auto (from `target_batch_bytes`) |
 | `target_batch_bytes` | > 0 | Target uncompressed bytes per batch for auto-$K$ (default 512 MiB) |
+| `host_output_budget_bytes` | ≥ 0 | Host-output memory budget; 0 keeps two maximum-size outputs |
 | `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |
@@ -635,6 +636,9 @@ Each `struct shard_writer` returned by `open` provides:
   byte offset.
 - **`write_direct(self, offset, beg, end)`** — zero-copy variant; the caller
   guarantees the buffer remains valid until the write completes.
+- **`write_from_output(self, offset, beg, end, group)`** — borrow a slice of a
+  leased host output. The writer retains the group for each physical request
+  and completes those retains as the requests retire.
 - **`finalize(self)`** — mark the shard complete.
 
 #### Memory estimation
@@ -643,7 +647,8 @@ Each `struct shard_writer` returned by `open` provides:
 returns a `tile_stream_memory_info` containing total `device_bytes` and
 `host_pinned_bytes`, plus a per-component breakdown (staging, chunk pool,
 compressed pool, aggregate, LOD, codec workspace) and derived parameters
-(`chunks_per_epoch`, `total_chunks`, `epochs_per_batch`). This lets callers
+(`chunks_per_epoch`, `total_chunks`, `epochs_per_batch`). The estimate also
+reports the resolved host-output size, count, and pool bytes. This lets callers
 verify resource requirements before allocating.
 
 #### Example

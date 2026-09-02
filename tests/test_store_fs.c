@@ -1,12 +1,13 @@
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "store.h"
+#include "stream/host_output_pool.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/io_backend.fs.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
@@ -446,6 +447,62 @@ Fail:
 }
 
 static int
+test_failed_output_write_releases_buffer(void)
+{
+  log_info("=== test_failed_output_write_releases_buffer ===");
+  struct io_faults faults;
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0, NULL);
+  CHECK(Fail, pool);
+
+  const size_t page = platform_page_alignment();
+  struct host_output_pool* outputs =
+    host_output_pool_create(1, page, page, (struct host_output_allocator){ 0 });
+  CHECK(CleanupPool, outputs);
+  struct host_output output = { 0 };
+  CHECK(CleanupOutputs, host_output_pool_acquire(outputs, &output) == 0);
+  memset(output.data, 0xa5, page);
+
+  struct shard_writer* writer = pool->open(pool, 0, "failed-output/shard.bin");
+  CHECK(CleanupOutput, writer && writer->write_from_output);
+  io_faults_fail_next_write(&faults);
+  CHECK(
+    CleanupOutput,
+    writer->write_from_output(
+      writer, 0, output.data, (const char*)output.data + page, output.group) ==
+      0);
+  host_output_group_seal(output.group);
+  CHECK(CleanupOutputs, pool->flush(pool) != 0);
+
+  shard_pool_destroy(pool);
+  pool = NULL;
+  struct host_output_pool_stats stats;
+  host_output_pool_get_stats(outputs, &stats);
+  if (stats.buffers_in_use != 0) {
+    host_output_group_complete(output.group);
+    log_error("  failed write kept its host output");
+    goto CleanupOutputs;
+  }
+  CHECK(CleanupOutputs, stats.lifetime_count == 1);
+
+  host_output_pool_destroy(outputs);
+  log_info("  PASS");
+  return 0;
+
+CleanupOutput:
+  host_output_group_seal(output.group);
+CleanupOutputs:
+  shard_pool_destroy(pool);
+  host_output_pool_destroy(outputs);
+  log_error("  FAIL");
+  return 1;
+CleanupPool:
+  shard_pool_destroy(pool);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
 test_has_existing_data(void)
 {
   log_info("=== test_has_existing_data ===");
@@ -716,9 +773,8 @@ closed_shard_size(struct shard_pool* pool,
   struct shard_writer* w = pool->open(pool, 0, key);
   if (!w || !w->presize || w->presize(w, presize_to))
     return -1;
-  if (payload_bytes > 0 &&
-      (w->write(w, 0, payload, payload + payload_bytes) ||
-       w->truncate(w, payload_bytes)))
+  if (payload_bytes > 0 && (w->write(w, 0, payload, payload + payload_bytes) ||
+                            w->truncate(w, payload_bytes)))
     return -1;
   if (w->finalize(w) || pool->flush(pool))
     return -1;
@@ -747,13 +803,17 @@ presize_leaves_file_at(uint64_t writes_per_file, long expected_presized)
   static const char payload[] = "held";
   char key[256];
 
-  snprintf(key, sizeof(key), "presize%llu_empty.bin",
+  snprintf(key,
+           sizeof(key),
+           "presize%llu_empty.bin",
            (unsigned long long)writes_per_file);
   CHECK(Fail3,
         closed_shard_size(pool, key, PRESIZE_BYTES, NULL, 0) ==
           expected_presized);
 
-  snprintf(key, sizeof(key), "presize%llu_trimmed.bin",
+  snprintf(key,
+           sizeof(key),
+           "presize%llu_trimmed.bin",
            (unsigned long long)writes_per_file);
   CHECK(Fail3,
         closed_shard_size(pool, key, PRESIZE_BYTES, payload, sizeof(payload)) ==
@@ -780,8 +840,7 @@ test_shard_pool_presize(void)
   // a platform where setting the size does not stop a write extending the
   // file. Either way the file grows with its writes.
   const long presized = platform_should_presize_shard() ? PRESIZE_BYTES : 0;
-  return presize_leaves_file_at(4, presized) ||
-         presize_leaves_file_at(1, 0);
+  return presize_leaves_file_at(4, presized) || presize_leaves_file_at(1, 0);
 }
 
 // --- stale file token ---
@@ -804,8 +863,8 @@ test_stale_file_token_refused(void)
   struct io_backend_fs* backend = io_backend_fs_create(&io_error);
   CHECK(Fail, backend);
 
-  struct io_queue* q = io_queue_create(io_backend_fs_as_backend(backend),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fs_as_backend(backend), (struct io_scheduler_limits){ 0 });
   CHECK(Fail2, q);
 
   platform_fd fd = platform_open_write(first_path, 0);
@@ -814,9 +873,9 @@ test_stale_file_token_refused(void)
   CHECK(Fail3, retired.generation != 0);
 
   CHECK(Fail3,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = retired }) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 0);
 
   // The slot freed by the close is reused under a new generation.
@@ -829,21 +888,22 @@ test_stale_file_token_refused(void)
 
   static const char payload[] = "must not land anywhere";
   CHECK(Fail3,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .borrowed = 1,
-                                           .file = retired,
-                                           .payload = payload,
-                                           .nbytes = sizeof(payload) }) == 0);
-  io_event_wait(q, io_queue_record(q));
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .borrowed = 1,
+                                               .file = retired,
+                                               .payload = payload,
+                                               .nbytes = sizeof(payload) }) ==
+          0);
+  io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 1);
 
   CHECK(Fail3,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = fresh }) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   io_backend_fs_destroy(backend);
 
   CHECK(Fail, file_size(first_path) == 0);
@@ -853,7 +913,7 @@ test_stale_file_token_refused(void)
   return 0;
 
 Fail3:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail2:
   io_backend_fs_destroy(backend);
 Fail:
@@ -879,6 +939,7 @@ main(void)
   err |= test_shard_pool_io_stats();
   err |= test_store_scheduling_reaches_pool();
   err |= test_shard_pool_error_propagation();
+  err |= test_failed_output_write_releases_buffer();
   err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();

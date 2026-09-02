@@ -21,7 +21,7 @@ struct diagnostic_entry
   const struct stream_metric* metric;
 };
 
-#define DIAGNOSTIC_COUNT 14
+#define DIAGNOSTIC_COUNT 16
 
 static void
 diagnostic_entries(const struct stream_metrics* m,
@@ -97,6 +97,16 @@ diagnostic_entries(const struct stream_metrics* m,
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
                                        &m->edge_stall[2] };
+  out[14] = (struct diagnostic_entry){ "host_output_wait",
+                                       "Host-output buffer",
+                                       "host_wait",
+                                       DIAGNOSTIC_HOST_BLOCK,
+                                       &m->host_output_wait };
+  out[15] = (struct diagnostic_entry){ "host_output_lifetime",
+                                       "Host-output lifetime",
+                                       "lifetime",
+                                       DIAGNOSTIC_HOST_OVERHEAD,
+                                       &m->host_output_lifetime };
 }
 
 // --- Throughput helpers ---
@@ -297,6 +307,23 @@ print_delivery_timing(const struct delivery_timing* timing)
                      &timing->submitted_to_slot_reuse);
 }
 
+static void
+print_host_output_occupancy(const struct stream_metrics* m)
+{
+  if (m->host_output_buffers_in_use_peak == 0)
+    return;
+  char current[32];
+  char peak[32];
+  format_bytes(current, sizeof(current), m->host_output_bytes_in_use);
+  format_bytes(peak, sizeof(peak), m->host_output_bytes_in_use_peak);
+  fputc('\n', stderr);
+  print_report("  --- Host-output occupancy ---");
+  print_report("  buffers: current %llu, peak %llu",
+               (unsigned long long)m->host_output_buffers_in_use,
+               (unsigned long long)m->host_output_buffers_in_use_peak);
+  print_report("  bytes:   current %s, peak %s", current, peak);
+}
+
 void
 print_diagnostics_report(const struct stream_metrics* m, float wall_s)
 {
@@ -319,8 +346,8 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
                            wall_s);
   print_diagnostic_section(
     entries, DIAGNOSTIC_DEVICE_WORK, "Device work", "Measured work", wall_s);
-
   print_delivery_timing(&m->delivery);
+  print_host_output_occupancy(m);
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
     fputc('\n', stderr);
@@ -773,6 +800,11 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "worker_threads");
   jw_uint(&jw, (uint64_t)worker_threads);
 
+  if (scheduling) {
+    jw_key(&jw, "host_output_budget_bytes");
+    jw_uint(&jw, scheduling->host_output_budget_bytes);
+  }
+
   if (scheduling && scheduling->backend) {
     jw_key(&jw, "io_backend");
     jw_string(&jw, scheduling->backend);
@@ -993,6 +1025,14 @@ print_bench_json_pass(const struct stream_metrics* m,
 
   json_diagnostics(&jw, m, wall_s);
   json_delivery_timing(&jw, &m->delivery);
+  jw_key(&jw, "host_output_buffers_in_use");
+  jw_uint(&jw, m->host_output_buffers_in_use);
+  jw_key(&jw, "host_output_bytes_in_use");
+  jw_uint(&jw, m->host_output_bytes_in_use);
+  jw_key(&jw, "host_output_buffers_in_use_peak");
+  jw_uint(&jw, m->host_output_buffers_in_use_peak);
+  jw_key(&jw, "host_output_bytes_in_use_peak");
+  jw_uint(&jw, m->host_output_bytes_in_use_peak);
 
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));

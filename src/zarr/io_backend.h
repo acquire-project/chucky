@@ -8,12 +8,12 @@
 enum io_dispatch
 {
   IO_DONE = 0,  // finished; *out is filled in
-  IO_SUBMITTED, // finished later, through io_queue_complete
+  IO_SUBMITTED, // finished later, through io_scheduler_complete
   IO_BUSY,      // not taken; handed over again
 };
 
-// Descriptors and syscalls live behind this; the queue owns admission,
-// ordering and retirement. The creator owns the backend and outlives the queue.
+// Descriptors and syscalls live behind this; the scheduler owns admission,
+// ordering and retirement. The creator owns the backend and outlives it.
 struct io_backend
 {
   void* ctx;

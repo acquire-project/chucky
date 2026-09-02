@@ -30,14 +30,12 @@ struct cpu_stream_view
   // Per-array shard/LOD state
   struct shard_state* shard;           // [LOD_MAX_LEVELS] array
   struct aggregate_layout* agg_layout; // [LOD_MAX_LEVELS] array
-  size_t** h_tail_bytes;               // [LOD_MAX_LEVELS] of [num_shards_lv]
   uint32_t* batch_active_count;        // [LOD_MAX_LEVELS] array
   struct reduce_csr* csrs;             // [nlod-1] CSR LUTs
   void* append_accum;
   uint32_t* append_counts; // [LOD_MAX_LEVELS]
 
-  // Shared, per-slot fences and slot alternator. Single fence per slot
-  // covers writes from all LODs in a batch.
+  // Latest finalization fences and scratch alternator.
   struct io_event* io_done; // [2]
   uint8_t* agg_current;     // single byte (slot 0 or 1)
 
@@ -47,6 +45,7 @@ struct cpu_stream_view
   void* compressed;
   size_t* comp_sizes;
   struct cpu_agg_slot* agg_slots; // [2] unified per-batch workspace
+  struct host_output_pool* output_pool;
   void* linear;
   void* lod_values;
 

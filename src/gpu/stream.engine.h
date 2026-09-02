@@ -164,6 +164,9 @@ struct compress_agg_array
   // compact and never consumes tail length or content.
   struct shard_state shard[LOD_MAX_LEVELS];
   uint64_t total_shards; // immutable sum, useful for status/tests
+  struct host_output_pool* output_pool;
+  size_t host_output_bytes;
+  uint64_t host_output_count;
 };
 
 struct compress_agg_stage
@@ -179,7 +182,6 @@ struct compress_agg_stage
 
   // Unified aggregate slot (per-fc), sized to max_batch_layout maxima. Holds:
   //   d_aggregated:     max compact payload capacity
-  //   h_aggregated:     larger host-run/alignment capacity
   //   d_offsets/sizes:  total_batch_covering + LOD_MAX_LEVELS (+ 1 for offsets)
   //   plus pinned host shadows of matching size.
   // Non-init code reaches a slot through the pools below; each guards a
@@ -187,14 +189,12 @@ struct compress_agg_stage
   struct aggregate_slot agg[2];
   struct gpu_pool agg_pool;  // device facet: ready=AGG_DONE,
                              //               consumed=SLOT_DRAINED
-  struct gpu_pool agg_host;  // h_aggregated facet: ready=D2H_DONE (alias);
-                             // consumed is the deliver-before-rekick host rule
+  struct gpu_pool agg_host;  // payload-copy completion edge for host delivery
   struct gpu_pool agg_index; // h_offsets/h_permuted_sizes facet:
                              // ready=CHUNK_INDEX_READY (compressed only)
   size_t max_total_batch_chunks;
   size_t max_total_batch_covering;
   size_t max_device_data_bytes;
-  size_t max_host_data_bytes;
 
   // Unified LUTs. Sized to max_total_batch_chunks. Uploaded per kick when the
   // firing pattern shifts; cached in steady state by comparing both the
@@ -294,7 +294,6 @@ struct engine_limits
   uint64_t max_total_batch_chunks;
   uint64_t max_total_batch_covering;
   size_t max_device_data_bytes;
-  size_t max_host_data_bytes;
   size_t lod_linear_bytes;
   size_t lod_morton_bytes;
   int any_multiscale;

@@ -14,7 +14,9 @@ internal conventions, and key concepts.
 | `platform` | `src/platform/platform.*.c` | OS abstraction (page size, clock) |
 | `platform_io` | `src/platform/platform_io.*.c` | Unbuffered file I/O |
 | `platform_cmd` | `src/platform/platform_cmd.*.c` | Subprocess execution |
-| `io_queue` | `src/zarr/io_queue.*.c` | Async I/O queue (threaded) |
+| `io_scheduler` | `src/zarr/io_scheduler.*` | Filesystem command ordering and limits |
+| `io_queue` | `src/zarr/io_queue.*` | FIFO filesystem command execution |
+| `host_output_pool` | `src/stream/host_output_pool.*` | Bounded host-output leases |
 | `index_ops` | `src/util/index.ops.c` | Mixed-radix index arithmetic |
 | `crc32c` | `src/zarr/crc32c.c` | CRC-32C checksum |
 | `writer` | `src/writer.c` | `struct writer` dispatch + backpressure helpers |

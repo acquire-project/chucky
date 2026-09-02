@@ -4,45 +4,13 @@
 #include "cpu/compress.h"
 #include "cpu/lod.h"
 #include "platform/platform.h"
+#include "stream/host_output_pool.h"
 #include "util/metric.h"
 #include "util/prelude.h"
+#include "zarr/host_batch.h"
+#include "zarr/shard_write_plan.h"
 
 #include <stdlib.h>
-
-// ---- flush_batch helpers ----
-
-// Deliver one LOD's aggregate result to its shards, with optional metrics.
-static int
-deliver_aggregate(int lv,
-                  const struct flush_batch_params* p,
-                  const struct flush_level_view* lvl,
-                  struct aggregate_result* ar,
-                  uint32_t active_count)
-{
-  struct platform_clock sink_clk = { 0 };
-  if (p->metrics)
-    platform_toc(&sink_clk);
-
-  size_t sink_bytes = 0;
-  size_t* h_tail = (p->h_tail_bytes ? p->h_tail_bytes[lv] : NULL);
-  if (deliver_to_shards_batch((uint8_t)lv,
-                              lvl->shard,
-                              ar,
-                              &p->per_lod_agg_layouts[lv],
-                              h_tail,
-                              active_count,
-                              p->sink,
-                              p->shard_alignment_bytes,
-                              &sink_bytes,
-                              p->metrics))
-    return 1;
-
-  if (p->metrics) {
-    float ms = (float)(platform_toc(&sink_clk) * 1000.0);
-    accumulate_metric_ms(&p->metrics->sink, ms, sink_bytes, 0);
-  }
-  return 0;
-}
 
 // ---- flush_batch ----
 
@@ -98,30 +66,9 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   // across LODs (sourced from the sink at config time), so reading it from
   // the first per-LOD layout is authoritative.
   struct batch_aggregate_layout layout;
-  if (batch_aggregate_layout_init(&layout,
-                                  p->per_lod_agg_layouts,
-                                  per_lod_n_active,
-                                  (uint8_t)p->nlod,
-                                  p->per_lod_agg_layouts[0].page_size))
+  if (batch_aggregate_layout_init_compact(
+        &layout, p->per_lod_agg_layouts, per_lod_n_active, (uint8_t)p->nlod))
     return 1;
-
-  // Pick the slot to write into and wait on its previous use.
-  const uint8_t cur = *p->agg_current;
-  struct cpu_agg_slot* slot = &p->agg_slots[cur];
-
-  if (slot->data_capacity_bytes < layout.total_data_bytes)
-    return 1;
-
-  if (p->sink->wait_fence) {
-    struct platform_clock fence_clk = { 0 };
-    if (p->metrics)
-      platform_toc(&fence_clk);
-    p->sink->wait_fence(p->sink, p->io_done[cur]);
-    if (p->metrics) {
-      float fence_ms = (float)(platform_toc(&fence_clk) * 1000.0);
-      accumulate_metric_ms(&p->metrics->io_fence_stall, fence_ms, 0, 0);
-    }
-  }
 
   if (p->sink->has_error && p->sink->has_error(p->sink))
     return 1;
@@ -131,6 +78,11 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   if (layout.total_batch_chunks == 0)
     return 0;
 
+  const uint8_t cur = *p->agg_current;
+  struct cpu_agg_slot* slot = &p->agg_slots[cur];
+  struct host_output output = { 0 };
+  struct host_output_group* output_group = NULL;
+
   // Build unified gather + perm into the slot's scratch.
   aggregate_batch_luts_unified(&layout,
                                p->per_lod_agg_layouts,
@@ -139,7 +91,9 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                                slot->gather,
                                slot->perm);
 
-  // Aggregate (single OpenMP loop spans all LODs in pass 3).
+  CHECK(Error, host_output_pool_acquire(p->output_pool, &output) == 0);
+  output_group = output.group;
+
   struct platform_clock agg_clk = { 0 };
   if (p->metrics)
     platform_toc(&agg_clk);
@@ -149,46 +103,77 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     .permuted_sizes = slot->permuted_sizes,
     .offsets = slot->offsets,
     .chunk_sizes = slot->chunk_sizes,
-    .data = slot->data,
-    .data_capacity = slot->data_capacity_bytes,
+    .data = output.data,
+    .data_capacity = output.capacity,
   };
-  struct aggregate_result per_lod_results[LOD_MAX_LEVELS];
   struct shard_state* shards_by_level[LOD_MAX_LEVELS] = { 0 };
   for (int lv = 0; lv < p->nlod; ++lv)
     shards_by_level[lv] = p->levels[lv].shard;
-  if (aggregate_cpu_batch_into_unified(&(struct aggregate_cpu_inputs){
-        .compressed_base = p->compressed,
-        .comp_sizes_base = p->comp_sizes,
-        .gather = slot->gather,
-        .layout = &layout,
-        .per_lod_layouts = p->per_lod_agg_layouts,
-        .shards_by_level = shards_by_level,
-        .h_tail_bytes = p->h_tail_bytes,
-        .ws = &ws,
-        .per_lod_results = per_lod_results,
-        .pool = p->pool,
-      }))
-    return 1;
+  const struct aggregate_cpu_inputs aggregate = {
+    .compressed_base = p->compressed,
+    .comp_sizes_base = p->comp_sizes,
+    .gather = slot->gather,
+    .layout = &layout,
+    .per_lod_layouts = p->per_lod_agg_layouts,
+    .ws = &ws,
+    .pool = p->pool,
+  };
+  CHECK(Error, aggregate_cpu_batch_prepare_unified(&aggregate) == 0);
+
+  const enum host_batch_storage storage = host_batch_storage_select(
+    p->codec.id == CODEC_NONE, p->shard_alignment_bytes);
+  size_t required_bytes = 0;
+  size_t required_runs = 0;
+  CHECK(Error,
+        host_batch_capacity(p->per_lod_agg_layouts,
+                            per_lod_n_active,
+                            (uint8_t)p->nlod,
+                            storage,
+                            p->shard_alignment_bytes,
+                            &required_bytes,
+                            &required_runs) == 0);
+  CHECK(Error, required_bytes <= output.capacity);
+  (void)required_runs;
+  size_t span_count = 0;
+  CHECK(Error,
+        host_batch_build(&slot->host,
+                         output.data,
+                         output.capacity,
+                         slot->offsets,
+                         slot->chunk_sizes,
+                         &layout,
+                         p->per_lod_agg_layouts,
+                         shards_by_level,
+                         per_lod_n_active,
+                         storage,
+                         p->shard_alignment_bytes,
+                         NULL,
+                         0,
+                         &span_count) == 0);
+  CHECK(Error, aggregate_cpu_batch_copy_to_host(&aggregate, &slot->host) == 0);
 
   if (p->metrics) {
     float ms = (float)(platform_toc(&agg_clk) * 1000.0);
-    size_t agg_bytes = layout.total_data_bytes;
+    size_t agg_bytes = required_bytes;
     accumulate_metric_ms(&p->metrics->aggregate, ms, agg_bytes, 0);
   }
 
-  // Per-LOD deliver. Sink dispatches per-level; the fence is shared.
-  for (int lv = 0; lv < p->nlod; ++lv) {
-    const struct flush_level_view* lvl = &p->levels[lv];
-    const uint32_t active_count = per_lod_n_active[lv];
-    if (active_count == 0)
-      continue;
-    if (deliver_aggregate(lv, p, lvl, &per_lod_results[lv], active_count))
-      return 1;
-  }
+  struct platform_clock sink_clk = { 0 };
+  if (p->metrics)
+    platform_toc(&sink_clk);
+  slot->host.output_group = output_group;
+  output_group = NULL;
+  size_t sink_bytes = 0;
+  CHECK(Error,
+        deliver_host_batch(
+          &slot->host, shards_by_level, p->sink, &sink_bytes, p->metrics) == 0);
+  if (p->metrics)
+    accumulate_metric_ms(&p->metrics->sink,
+                         (float)(platform_toc(&sink_clk) * 1000.0),
+                         sink_bytes,
+                         0);
 
-  // Single fence on the just-delivered slot covers all LODs' IO. Shard sinks
-  // share one IO queue across levels, so one fence is enough — the next slot
-  // reuse waits for every pwrite from this batch.
+  // One finalization fence covers every level written by this batch.
   if (p->sink->record_fence)
     p->io_done[cur] = p->sink->record_fence(p->sink);
 
@@ -196,6 +181,16 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   *p->agg_current = cur ^ 1;
 
   return 0;
+
+Error:
+  if (output_group)
+    host_output_group_seal(output_group);
+  if (slot && slot->host.output_group) {
+    struct host_output_group* group = slot->host.output_group;
+    slot->host.output_group = NULL;
+    host_output_group_seal(group);
+  }
+  return 1;
 }
 
 // ---- scatter_epoch ----

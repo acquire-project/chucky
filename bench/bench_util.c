@@ -163,6 +163,7 @@ resolve_chunk_sizing(const struct bench_config* cfg,
       .reduce_method = cfg->reduce_method,
       .append_reduce_method = cfg->append_reduce_method,
       .target_batch_bytes = resolved_batch_bytes(cfg),
+      .host_output_budget_bytes = cfg->host_output_budget_bytes,
     };
     struct advise_layout_diagnostic diag = { 0 };
     int advise_ok;
@@ -434,6 +435,7 @@ run_bench(const struct bench_config* cfg)
     .epochs_per_batch = chosen_epochs_per_batch,
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
+    .host_output_budget_bytes = cfg->host_output_budget_bytes,
     .max_threads = cfg->max_threads,
   };
 
@@ -459,6 +461,10 @@ run_bench(const struct bench_config* cfg)
       format_bytes(a, sizeof(a), mem.comp_sizes_bytes);
       format_bytes(b, sizeof(b), mem.aggregate_bytes);
       print_report("    comp_sizes: %s   aggregate: %s", a, b);
+      format_bytes(a, sizeof(a), mem.host_output_pool_bytes);
+      print_report("    host output: %s (%llu buffers)",
+                   a,
+                   (unsigned long long)mem.host_output_count);
       format_bytes(a, sizeof(a), mem.lod_bytes);
       format_bytes(b, sizeof(b), mem.shard_bytes);
       print_report("    lod:       %s   shards:    %s", a, b);
@@ -602,6 +608,7 @@ run_bench(const struct bench_config* cfg)
       const struct io_write_scheduling scheduling = {
         .io = cfg->io,
         .backend = output_path ? cfg->io_backend : NULL,
+        .host_output_budget_bytes = cfg->host_output_budget_bytes,
       };
       print_bench_json_pass(&m,
                             sink_metric,
@@ -663,6 +670,7 @@ struct bench_cli_args
   uint64_t io_bw_mbps;
   uint64_t io_latency_us;
   uint64_t backpressure_bytes;
+  uint64_t host_output_budget_bytes;
   int max_threads;
   struct io_scheduling io;
   const char* io_backend;
@@ -696,7 +704,7 @@ read_size(const char* flag, const char* text, uint64_t* out)
 //   --fill --codec --reduce --backend --dtype --frames --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads --io-workers --io-writes-in-flight
+//   --host-output-budget --max-threads --io-workers --io-writes-in-flight
 //   --io-writes-in-flight-per-file --io-backend.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
@@ -722,6 +730,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_bw_mbps = 0;
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
+  out->host_output_budget_bytes = 0;
   out->max_threads = 0;
   out->io = (struct io_scheduling){ 0 };
   out->io_backend = "threads";
@@ -781,6 +790,10 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       if (!read_size(av[i], av[i + 1], &out->backpressure_bytes))
         return 1;
       ++i;
+    } else if (strcmp(av[i], "--host-output-budget") == 0 && i + 1 < ac) {
+      if (!read_size(av[i], av[i + 1], &out->host_output_budget_bytes))
+        return 1;
+      ++i;
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
     } else if (strcmp(av[i], "--io-workers") == 0 && i + 1 < ac) {
@@ -805,6 +818,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
+              "[--host-output-budget N (bytes)] "
               "[--max-threads N (0 = OpenMP default)] "
               "[--io-workers N] [--io-writes-in-flight N] "
               "[--io-writes-in-flight-per-file N] [--io-backend threads]\n",
@@ -861,6 +875,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
+    .host_output_budget_bytes = a.host_output_budget_bytes,
     .max_threads = a.max_threads,
     .io = a.io,
     .io_backend = a.io_backend,
@@ -1034,6 +1049,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .epochs_per_batch = chosen_epochs_per_batch,
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
+    .host_output_budget_bytes = cfg->host_output_budget_bytes,
     .max_threads = cfg->max_threads,
   };
 
@@ -1220,6 +1236,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_bw_mbps = a.io_bw_mbps,
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
+    .host_output_budget_bytes = a.host_output_budget_bytes,
     .max_threads = a.max_threads,
     .io = a.io,
     .io_backend = a.io_backend,
