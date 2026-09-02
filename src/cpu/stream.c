@@ -96,7 +96,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       const struct level_layout_info* li = &s->cl.per_level[lv];
       s->agg_layout[lv] = li->agg_layout;
-      s->batch_active_count[lv] = li->batch_active_count;
       CHECK(Fail, init_shard_state(&s->shard[lv], li) == 0);
     }
 
@@ -106,11 +105,12 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     {
       uint32_t worst[LOD_MAX_LEVELS];
       for (int lv = 0; lv < s->levels.nlod; ++lv) {
-        uint32_t k = s->batch_active_count[lv];
-        worst[lv] = k > 0 ? k : 1;
+        const uint32_t count = s->cl.per_level[lv].batch_active_count;
+        worst[lv] = count ? count : 1;
       }
+      struct batch_aggregate_layout max_batch_layout;
       CHECK(Fail,
-            batch_aggregate_layout_init_compact(&s->max_batch_layout,
+            batch_aggregate_layout_init_compact(&max_batch_layout,
                                                 s->agg_layout,
                                                 worst,
                                                 (uint8_t)s->levels.nlod) == 0);
@@ -128,27 +128,19 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
                                 &required_output_bytes,
                                 &run_count) == 0);
       (void)run_count;
+      size_t host_output_bytes = 0;
       CHECK(Fail,
             host_output_size(required_output_bytes,
                              platform_page_alignment(),
-                             &s->host_output_bytes) == 0);
-      uint64_t output_count = 0;
-      CHECK(Fail,
-            host_output_count(config->host_output_budget_bytes,
-                              s->host_output_bytes,
-                              &output_count) == 0);
+                             &host_output_bytes) == 0);
       s->output_pool =
-        host_output_pool_create(output_count,
-                                s->host_output_bytes,
+        host_output_pool_create(host_output_bytes,
                                 platform_page_alignment(),
                                 (struct host_output_allocator){ 0 });
       CHECK(Fail, s->output_pool);
-    }
 
-    // Allocate the two double-buffered aggregate scratch slots once each.
-    {
-      const uint64_t cap_chunks = s->max_batch_layout.total_batch_chunks;
-      const uint64_t cap_cov = s->max_batch_layout.total_batch_covering;
+      const uint64_t cap_chunks = max_batch_layout.total_batch_chunks;
+      const uint64_t cap_cov = max_batch_layout.total_batch_covering;
       for (int fc = 0; fc < 2; ++fc) {
         struct cpu_agg_slot* as = &s->agg_slots[fc];
         if (cap_chunks > 0) {
@@ -259,8 +251,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
   s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
   s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
-  s->metrics.io_fence_stall =
-    mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER);
   s->metrics.footer_buffer_stall =
     mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER);
   s->metrics.append_extent_stall =
@@ -275,10 +265,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     mk_stream_metric("D2H dispatch", METRIC_OWNER_DELIVERY);
   s->metrics.backpressure =
     mk_stream_metric("Sink queue below limit", METRIC_OWNER_PRODUCER);
-  s->metrics.host_output_wait =
-    mk_stream_metric("Host-output buffer", METRIC_OWNER_PRODUCER);
-  s->metrics.host_output_lifetime =
-    mk_stream_metric("Host-output lifetime", METRIC_OWNER_NONE);
   if (s->levels.enable_multiscale) {
     s->metrics.lod_gather =
       mk_stream_metric("lod_gather", METRIC_OWNER_COMPUTE);
@@ -387,9 +373,7 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
 struct stream_metrics
 tile_stream_cpu_get_metrics(const struct tile_stream_cpu* s)
 {
-  struct stream_metrics metrics = s->metrics;
-  host_output_pool_accumulate_metrics(s->output_pool, &metrics);
-  return metrics;
+  return s->metrics;
 }
 
 const struct tile_stream_layout*
@@ -482,14 +466,9 @@ compute_memory_info(const struct computed_stream_layouts* cl,
           host_output_size(required_output_bytes,
                            platform_page_alignment(),
                            &info->host_output_bytes) == 0);
-    CHECK(Error,
-          host_output_count(config->host_output_budget_bytes,
-                            info->host_output_bytes,
-                            &info->host_output_count) == 0);
     CHECK_MUL_OVERFLOW(
-      Error, info->host_output_count, info->host_output_bytes, SIZE_MAX);
-    info->host_output_pool_bytes =
-      info->host_output_count * info->host_output_bytes;
+      Error, HOST_OUTPUT_COUNT, info->host_output_bytes, SIZE_MAX);
+    info->host_output_pool_bytes = HOST_OUTPUT_COUNT * info->host_output_bytes;
 
     // Batch state: per-epoch active mask + per-LOD pool_epochs scratch.
     agg += (size_t)K * sizeof(uint32_t);
@@ -774,14 +753,11 @@ make_view(struct tile_stream_cpu* s)
     .pool_fully_covered = s->pool_fully_covered,
     .shard = s->shard,
     .agg_layout = s->agg_layout,
-    .batch_active_count = s->batch_active_count,
     .csrs = s->csrs,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
-    .io_done = s->io_done,
     .agg_current = &s->agg_current,
     .chunk_pool = s->chunk_pool,
-    .chunk_pool_bytes = 0,
     .compressed = s->compressed,
     .comp_sizes = s->comp_sizes,
     .agg_slots = s->agg_slots,

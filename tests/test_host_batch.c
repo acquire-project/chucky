@@ -21,7 +21,6 @@ test_compact_layout_fixed_index(void)
       .max_comp_chunk_bytes = 7,
       .cps_inner = 2,
       .num_shards = 2,
-      .active_count_max = 2,
       .chunks_per_shard_append = 4,
     },
   };
@@ -32,7 +31,6 @@ test_compact_layout_fixed_index(void)
   CHECK(Fail, layout.total_batch_chunks == 6);
   CHECK(Fail, layout.total_batch_covering == 8);
   CHECK(Fail, layout.total_data_bytes == 42);
-  CHECK(Fail, layout.page_size == 0);
 
   size_t offsets[9] = { 0 };
   size_t sizes[9] = { 0 };
@@ -98,7 +96,6 @@ test_compact_run_planning(void)
       .max_comp_chunk_bytes = 16,
       .cps_inner = 2,
       .num_shards = 2,
-      .active_count_max = 3,
       .page_size = page,
       .chunks_per_shard_append = 2 },
     { .chunks_per_epoch = 1,
@@ -106,7 +103,6 @@ test_compact_run_planning(void)
       .max_comp_chunk_bytes = 16,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 1,
       .page_size = page,
       .chunks_per_shard_append = 4 },
     { .chunks_per_epoch = 1,
@@ -114,7 +110,6 @@ test_compact_run_planning(void)
       .max_comp_chunk_bytes = 16,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 0,
       .page_size = page,
       .chunks_per_shard_append = 2 },
   };
@@ -234,7 +229,6 @@ test_compact_extent_edges(void)
       .max_comp_chunk_bytes = 130,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 3,
       .page_size = page,
       .chunks_per_shard_append = 1 },
   };
@@ -370,7 +364,6 @@ test_compact_host_tail_delivery(void)
       .max_comp_chunk_bytes = 70,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 1,
       .page_size = page,
       .chunks_per_shard_append = 2 },
   };
@@ -568,7 +561,6 @@ test_variable_size_padded_delivery(void)
       .max_comp_chunk_bytes = 130,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 1,
       .page_size = page,
       .chunks_per_shard_append = 5 },
   };
@@ -694,7 +686,6 @@ test_variable_size_compact_delivery(void)
       .max_comp_chunk_bytes = 10,
       .cps_inner = 1,
       .num_shards = 1,
-      .active_count_max = 1,
       .page_size = 0,
       .chunks_per_shard_append = 2 },
   };

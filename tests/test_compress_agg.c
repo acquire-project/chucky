@@ -161,10 +161,8 @@ handoff_slot(const struct flush_handoff* handoff)
 // The GPU aggregate is compact: offsets are absolute in one tightly packed
 // batch buffer and contain neither shard padding nor a leading host tail.
 //
-// Unified handoff: the slot holds all LODs' offsets/sizes/data in a single
-// buffer. For single-LOD tests (lv=0), seg->batch_covering_offset == 0 and
-// seg->data_segment_offset == 0, so the +lv shift accounts for the per-LOD
-// disjoint-span offset built into aggregate_batch_luts_unified.
+// Unified handoff: the slot holds all LODs' offsets, sizes, and data in one
+// buffer. These tests use level 0, whose metadata starts at zero.
 static int
 ca_ctx_fetch_agg(struct flush_handoff* handoff,
                  uint64_t n_covering,
@@ -189,11 +187,7 @@ ca_ctx_fetch_agg(struct flush_handoff* handoff,
   size_t pool_bytes = handoff->batch.layout.total_data_bytes;
   void* h_agg = malloc(pool_bytes);
   CHECK(Fail, h_agg);
-  CU(Fail,
-     cuMemcpyDtoH(h_agg,
-                  (CUdeviceptr)((const uint8_t*)agg->d_aggregated +
-                                seg->data_segment_offset),
-                  pool_bytes));
+  CU(Fail, cuMemcpyDtoH(h_agg, (CUdeviceptr)agg->d_aggregated, pool_bytes));
 
   *out_agg_data = h_agg;
   return 0;
@@ -294,8 +288,8 @@ test_compress_agg_single_epoch(void)
   {
     // h_offsets[C] is the compact prefix-sum sentinel: the sum of all real
     // permuted sizes, with zero-sized covering entries contributing nothing.
-    uint64_t N = (uint64_t)c.stage.ar.per_lod_agg_layouts[0].active_count_max *
-                 c.cl.levels.level[0].chunk_count;
+    uint64_t N =
+      (uint64_t)handoff.batch.epoch_count * c.cl.levels.level[0].chunk_count;
     CHECK(Fail, lv_offsets[C] == N * chunk_bytes);
   }
   CHECK(Fail, verify_tiles_none(&handoff, &c, h_agg, fill_epoch0) == 0);
@@ -344,7 +338,7 @@ test_compress_agg_batch(void)
   const size_t* lv_offsets =
     handoff_slot(&handoff)->h_offsets + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
-  uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
+  uint32_t batch_count = handoff.batch.epoch_count;
   uint64_t batch_covering = (uint64_t)batch_count * C;
 
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, batch_covering, &h_agg) == 0);
@@ -578,7 +572,7 @@ test_compress_agg_zstd_batch(void)
   const size_t* lv_sizes =
     handoff_slot(&handoff)->h_permuted_sizes + seg->batch_covering_offset + 0;
   uint64_t C = al->covering_count;
-  uint32_t batch_count = c.stage.ar.per_lod_agg_layouts[0].active_count_max;
+  uint32_t batch_count = handoff.batch.epoch_count;
   uint64_t batch_covering = (uint64_t)batch_count * C;
 
   CHECK(Fail, ca_ctx_fetch_agg(&handoff, batch_covering, &h_agg) == 0);

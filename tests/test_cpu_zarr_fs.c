@@ -1,5 +1,5 @@
 // Test tile_stream_cpu + zarr store integration.
-// Exercises the write_direct -> io_queue async path that requires fencing.
+// Exercises the asynchronous write_direct path that requires fencing.
 
 #include "platform/platform.h"
 #include "stream.cpu.h"
@@ -540,7 +540,7 @@ test_partial_batch_readback(const char* tmpdir)
 
 // Unbuffered FS sinks (O_DIRECT) require page-aligned source pointers for
 // the zero-copy write_direct path. If the aggregate buffer is not
-// page-aligned, deliver_to_shards_batch falls back to the copying write
+// page-aligned, host delivery falls back to the copying write
 // path on every shard run — silently halving throughput. This test feeds
 // realistic-sized data through an unbuffered sink wrapped in a counting
 // shim and asserts that at least one mid-shard batch took write_direct.

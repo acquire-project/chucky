@@ -1,6 +1,6 @@
 // The pool reports the bytes its queued writes still carry. The count lives in
-// the io queue, and tests/test_io_queue.c covers it there. This checks that the
-// pool passes the figure through, over both write paths.
+// the scheduler, and tests/test_io_scheduler.c covers it there. This checks
+// that the pool passes the figure through, over both write paths.
 
 #include "test_io_faults.h"
 #include "test_platform.h"
@@ -33,11 +33,12 @@ test_counts_every_write(const char* tmpdir, int direct)
 
   // One worker and one write at a time, so the injected blocking job holds
   // up every write behind it and the count can be read between posts.
-  const struct io_scheduling io = { .workers = 1,
-                                    .writes_in_flight = 1,
-                                    .writes_in_flight_per_file = 1 };
-  pool =
-    io_faults_pool_create(&faults, tmpdir, /*nslots=*/1, /*unbuffered=*/0, &io);
+  const struct io_scheduler_limits limits = {
+    .workers = 1,
+    .max_in_flight_per_file = 1,
+  };
+  pool = io_faults_pool_create(
+    &faults, tmpdir, /*nslots=*/1, /*unbuffered=*/0, &limits);
   CHECK(Cleanup, pool);
   CHECK(Cleanup, shard_pool_pending_bytes(pool) == 0);
 

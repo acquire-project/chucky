@@ -37,7 +37,6 @@ struct host_batch_run
   uint8_t level;
   uint64_t inner_shard;
   uint64_t flat_shard;
-  uint32_t active_begin;
   uint32_t active_count;
   uint64_t epoch_in_shard;
   uint64_t chunks_per_shard_inner;

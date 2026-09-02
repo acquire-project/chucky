@@ -22,9 +22,3 @@ io_backend_fs_as_backend(struct io_backend_fs* b);
 // the descriptor was not taken and the caller still owns fd.
 struct io_file_token
 io_backend_fs_add_file(struct io_backend_fs* b, platform_fd fd);
-
-uint64_t
-io_backend_fs_files_opened(const struct io_backend_fs* b);
-
-uint64_t
-io_backend_fs_files_open_peak(const struct io_backend_fs* b);

@@ -243,11 +243,6 @@ host_batch_build(struct host_batch* host,
     const size_t segment_entries = (size_t)n_active * al->covering_count;
     CHECK(Error, metadata_base < metadata_entries);
     CHECK(Error, segment_entries <= metadata_entries - metadata_base - 1);
-    CHECK(Error, seg->data_segment_offset <= batch_layout->total_data_bytes);
-    CHECK(Error,
-          seg->data_segment_bytes <=
-            batch_layout->total_data_bytes - seg->data_segment_offset);
-
     uint32_t a = 0;
     uint64_t epoch = ss->epoch_in_shard;
     uint64_t generation = ss->shard_epoch;
@@ -334,7 +329,6 @@ host_batch_build(struct host_batch* host,
           .level = lv,
           .inner_shard = si,
           .flat_shard = generation * ss->shard_inner_count + si,
-          .active_begin = a,
           .active_count = run_len,
           .epoch_in_shard = epoch,
           .chunks_per_shard_inner = cps,

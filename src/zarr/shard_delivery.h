@@ -109,20 +109,3 @@ finalize_shards(struct shard_state* ss,
                 struct shard_sink* sink,
                 size_t shard_alignment,
                 struct stream_metrics* metrics);
-
-// Deliver compressed chunks from one batch's aggregate slot to shards.
-//   layout: aggregate layout for shard_capacity / num_shards / page_size.
-//   h_tail_bytes: [num_shards] sub-page leading-tail bytes carried in;
-//                 updated in place. NULL only when page_size == 0.
-//   metrics: times the footer-buffer wait, or NULL.
-int
-deliver_to_shards_batch(uint8_t level,
-                        struct shard_state* ss,
-                        struct aggregate_result* result,
-                        const struct aggregate_layout* layout,
-                        size_t* h_tail_bytes,
-                        uint32_t n_active,
-                        struct shard_sink* sink,
-                        size_t shard_alignment,
-                        size_t* out_bytes,
-                        struct stream_metrics* metrics);

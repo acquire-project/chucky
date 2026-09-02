@@ -57,6 +57,11 @@ engine_limits_accumulate(struct engine_limits* lim,
     lim->epochs_per_batch = K;
   if (cl->levels.nlod > lim->max_nlod)
     lim->max_nlod = cl->levels.nlod;
+  size_t host_output_bytes = 0;
+  CHECK(Fail,
+        compress_agg_host_output_requirements(cl, config, &host_output_bytes) ==
+          0);
+  lim->host_output_bytes = max_sz(lim->host_output_bytes, host_output_bytes);
 
   if (cl->levels.enable_multiscale) {
     lim->any_multiscale = 1;
@@ -256,7 +261,6 @@ engine_array_state_init(struct engine_array_state* st,
   }
 
   CHECK(Fail, compress_agg_array_init(&st->agg, cl) == 0);
-  CHECK(Fail, compress_agg_array_init_output(&st->agg, cl, &ctx->config) == 0);
   schedule_select(&st->sched, delivery);
 
   // total_element_limit: configured stream length (0 = unbounded). Lets the
@@ -353,7 +357,7 @@ tile_stream_gpu_destroy(struct tile_stream_gpu* s)
   if (writer_close(&s->writer).error)
     log_error("GPU stream close failed during destroy");
 
-  // Copy state can still name the per-array output pool after a failed
+  // Copy state can still name the output pool after a failed
   // cancellation, so tear down the shared stages before their array state.
   stream_engine_destroy(&s->engine);
   engine_array_state_destroy(&s->ar);
@@ -404,6 +408,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   CHECK(FailPhase2,
         engine_array_state_init(
           &out->ar, &out->ctx, &cl, &out->engine.delivery) == 0);
+  CHECK(FailPhase2,
+        compress_agg_array_init_output(&out->ar.agg, lim.host_output_bytes) ==
+          0);
   CHECK(FailPhase2,
         stream_engine_bind_array(&out->engine, &out->ar, &out->ctx) == 0);
 
@@ -510,13 +517,10 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                                    &aggregate_host))
     goto Fail;
 
-  if (compress_agg_host_output_requirements(
-        &cl, config, &info->host_output_bytes, &info->host_output_count))
-    goto Fail;
+  info->host_output_bytes = lim.host_output_bytes;
   CHECK_MUL_OVERFLOW(
-    Fail, info->host_output_count, info->host_output_bytes, SIZE_MAX);
-  info->host_output_pool_bytes =
-    info->host_output_count * info->host_output_bytes;
+    Fail, HOST_OUTPUT_COUNT, info->host_output_bytes, SIZE_MAX);
+  info->host_output_pool_bytes = HOST_OUTPUT_COUNT * info->host_output_bytes;
 
   // LOD: per-array state plus the engine-shared linear/morton buffers.
   info->lod_bytes = lod_state_device_bytes(&cl, config);

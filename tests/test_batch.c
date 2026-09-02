@@ -699,7 +699,6 @@ run_host_coordinator_hold(enum compression_codec codec)
   held = 0;
   CHECK(Fail, writer_flush(tile_stream_gpu_writer(s)).error == 0);
   CHECK(Fail, gpu_delivery_submitted_generation(&s->engine.delivery) == 2);
-  CHECK(Fail, s->engine.metrics.tail_gate.count == 0);
   CHECK(
     Fail,
     coordinator_sink_has_output(&sink, s->engine.compress_agg.ar.total_shards));

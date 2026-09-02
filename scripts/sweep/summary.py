@@ -33,8 +33,6 @@ CONFIG_KEYS = (
 RUN_METRICS = (
     "throughput_in_gibs", "throughput_out_gibs", "compression_fold",
     "input_gib", "compressed_gib", "elapsed_s", "wall_s", "init_s",
-    "io_files_waiting_mean", "io_files_waiting_peak", "io_files_open_peak",
-    "io_queued_bytes_peak", "io_wait_ms_mean", "io_run_ms_mean",
 )
 
 STALL_METRICS = (
@@ -42,8 +40,8 @@ STALL_METRICS = (
 )
 
 DIAGNOSTIC_METRICS = (
-    "batch_drain", "d2h_dispatch", "output_slot_io", "footer_buffer_io",
-    "append_extent_io", "final_io", "sink_backpressure", "prior_tail_state",
+    "batch_drain", "d2h_dispatch", "footer_buffer_io",
+    "append_extent_io", "final_io", "sink_backpressure",
     "staging_reuse", "chunk_metadata_d2h", "indexed_aggregate_wait",
     "chunk_metadata_wait", "chunk_metadata_copy", "payload_d2h",
 )

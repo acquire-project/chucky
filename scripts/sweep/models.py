@@ -46,25 +46,6 @@ class RunResult(BaseModel, extra="allow"):
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
-    io_backend: str | None = None
-    io_workers: int | None = None
-    io_writes_in_flight: int | None = None
-    io_writes_in_flight_per_file: int | None = None
-    io_writes_in_flight_mean: float | None = None
-    io_writes_in_flight_peak: int | None = None
-    io_files_waiting_mean: float | None = None
-    io_files_waiting_peak: int | None = None
-    io_files_opened: int | None = None
-    io_files_open_peak: int | None = None
-    io_writes: int | None = None
-    io_bytes_copied: int | None = None
-    io_bytes_borrowed: int | None = None
-    io_queued_bytes_peak: int | None = None
-    io_queued_jobs_peak: int | None = None
-    io_wait_ms_mean: float | None = None
-    io_wait_ms_max: float | None = None
-    io_run_ms_mean: float | None = None
-    io_run_ms_max: float | None = None
     memory_estimate_total_bytes: int | None = None
     memory_estimate_pinned_bytes: int | None = None
     memory_host_baseline_bytes: int | None = None
@@ -108,7 +89,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 9
+CURRENT_VERSION = 10
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -196,6 +177,56 @@ def _migrate_8_to_9(data: dict) -> None:
                 diagnostics.setdefault(new_name, diagnostics.pop(old_name))
 
 
+def _migrate_9_to_10(data: dict) -> None:
+    removed = {
+        "host_output_budget_bytes",
+        "host_output_buffers_in_use",
+        "host_output_bytes_in_use",
+        "host_output_buffers_in_use_peak",
+        "host_output_bytes_in_use_peak",
+        "io_backend",
+        "io_workers",
+        "io_writes_in_flight",
+        "io_writes_in_flight_per_file",
+        "io_writes_in_flight_mean",
+        "io_writes_in_flight_peak",
+        "io_files_waiting_mean",
+        "io_files_waiting_peak",
+        "io_files_opened",
+        "io_files_open_peak",
+        "io_writes",
+        "io_bytes_copied",
+        "io_bytes_borrowed",
+        "io_queued_bytes_peak",
+        "io_queued_jobs_peak",
+        "io_wait_ms_mean",
+        "io_wait_ms_max",
+        "io_run_ms_mean",
+        "io_run_ms_max",
+        "io_write_sizes",
+    }
+    for run in data.get("runs", []):
+        for key in removed:
+            run.pop(key, None)
+        diagnostics = run.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            for key in ("output_slot_io", "prior_tail_state",
+                        "host_output_wait", "host_output_lifetime"):
+                diagnostics.pop(key, None)
+        delivery = run.get("delivery_timing")
+        if isinstance(delivery, dict):
+            delivery.pop("writes_posted_to_completion", None)
+        stalls = run.get("stalls")
+        if isinstance(stalls, dict):
+            for key in ("io_fence_ms", "io_fence_count",
+                        "tail_gate_ms", "tail_gate_count"):
+                stalls.pop(key, None)
+            owners = stalls.get("owners")
+            if isinstance(owners, dict):
+                owners.pop("io_fence", None)
+                owners.pop("tail_gate", None)
+
+
 _MIGRATIONS = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
@@ -205,6 +236,7 @@ _MIGRATIONS = {
     6: _migrate_6_to_7,
     7: _migrate_7_to_8,
     8: _migrate_8_to_9,
+    9: _migrate_9_to_10,
 }
 
 
@@ -222,10 +254,6 @@ _LEGACY_DIAGNOSTICS = {
         "label": "D2H dispatch work", "kind": "host_overhead",
         "ms": "drain_dispatch_ms", "count": "drain_dispatch_count",
         "owner": "drain_dispatch",
-    },
-    "output_slot_io": {
-        "label": "Output-slot writes", "kind": "host_wait",
-        "ms": "io_fence_ms", "count": "io_fence_count", "owner": "io_fence",
     },
     "footer_buffer_io": {
         "label": "Footer-buffer write", "kind": "host_wait",
@@ -246,10 +274,6 @@ _LEGACY_DIAGNOSTICS = {
         "label": "Sink queue below limit", "kind": "host_wait",
         "ms": "backpressure_ms", "count": "backpressure_count",
         "owner": "backpressure",
-    },
-    "prior_tail_state": {
-        "label": "Prior tail state", "kind": "pipeline_gap",
-        "ms": "tail_gate_ms", "count": "tail_gate_count", "owner": "tail_gate",
     },
 }
 

@@ -563,7 +563,6 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `codec` | none / lz4 / zstd | Compression codec |
 | `epochs_per_batch` | ≥ 0 | Epochs per batch ($K$); 0 = auto (from `target_batch_bytes`) |
 | `target_batch_bytes` | > 0 | Target uncompressed bytes per batch for auto-$K$ (default 512 MiB) |
-| `host_output_budget_bytes` | ≥ 0 | Host-output memory budget; 0 keeps two maximum-size outputs |
 | `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |

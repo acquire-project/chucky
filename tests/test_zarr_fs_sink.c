@@ -1552,9 +1552,9 @@ Fail:
 }
 
 static int
-test_host_output_budget_estimate(void)
+test_host_output_memory_estimate(void)
 {
-  log_info("=== test_host_output_budget_estimate ===");
+  log_info("=== test_host_output_memory_estimate ===");
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -1580,46 +1580,11 @@ test_host_output_budget_estimate(void)
     .codec = { .id = CODEC_NONE },
     .epochs_per_batch = 2,
   };
-  struct tile_stream_memory_info default_info;
-  struct tile_stream_memory_info one_info;
-  struct tile_stream_memory_info two_info;
-  struct tile_stream_memory_info four_info;
+  struct tile_stream_memory_info info;
 
-  CHECK(Fail,
-        tile_stream_gpu_memory_estimate(&config, 4096, &default_info) == 0);
-  CHECK(Fail, default_info.host_output_bytes > 0);
-  CHECK(Fail, default_info.host_output_count == 2);
-  CHECK(Fail,
-        default_info.host_output_pool_bytes ==
-          2 * default_info.host_output_bytes);
-
-  config.host_output_budget_bytes = 2 * default_info.host_output_bytes;
-  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &two_info) == 0);
-  CHECK(Fail, two_info.host_output_count == 2);
-  CHECK(Fail, two_info.host_pinned_bytes == default_info.host_pinned_bytes);
-  CHECK(Fail, two_info.device_bytes == default_info.device_bytes);
-
-  config.host_output_budget_bytes = default_info.host_output_bytes;
-  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &one_info) == 0);
-  CHECK(Fail, one_info.host_output_count == 1);
-  CHECK(Fail,
-        one_info.host_pinned_bytes + default_info.host_output_bytes ==
-          default_info.host_pinned_bytes);
-  CHECK(Fail, one_info.device_bytes == default_info.device_bytes);
-
-  config.host_output_budget_bytes =
-    4 * default_info.host_output_bytes + default_info.host_output_bytes / 2;
-  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &four_info) == 0);
-  CHECK(Fail, four_info.host_output_count == 4);
-  CHECK(Fail,
-        four_info.host_output_pool_bytes == 4 * default_info.host_output_bytes);
-  CHECK(Fail,
-        four_info.host_pinned_bytes ==
-          default_info.host_pinned_bytes + 2 * default_info.host_output_bytes);
-  CHECK(Fail, four_info.device_bytes == default_info.device_bytes);
-
-  config.host_output_budget_bytes = default_info.host_output_bytes - 1;
-  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &one_info) != 0);
+  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &info) == 0);
+  CHECK(Fail, info.host_output_bytes > 0);
+  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
   log_info("  PASS");
   return 0;
 
@@ -2396,7 +2361,7 @@ main(int ac, char* av[])
 
   // zarr_for_each_intermediate unit test (no CUDA, no tmpdir needed)
   ecode |= test_for_each_intermediate();
-  ecode |= test_host_output_budget_estimate();
+  ecode |= test_host_output_memory_estimate();
 
   // Metadata tests (no CUDA needed)
   {

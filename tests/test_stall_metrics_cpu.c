@@ -221,16 +221,6 @@ every_wait_is_charged(const struct run_result* r)
 }
 
 static int
-not_measured(const struct stream_metric* m)
-{
-  if (m->count != 0 || m->ms != 0.0f) {
-    log_error("  %s: expected no measurements", m->name);
-    return 0;
-  }
-  return 1;
-}
-
-static int
 measured(const struct stream_metric* m)
 {
   if (m->count <= 0) {
@@ -286,11 +276,9 @@ slow_fences_land_in_the_wait_metrics(void)
   CHECK(Fail, every_wait_is_charged(&r));
 
   const double one_hold = HOLD_MS * 0.9;
-  CHECK(Fail, not_measured(&r.streaming.io_fence_stall));
   CHECK(Fail, at_least_ms(&r.streaming.footer_buffer_stall, one_hold));
   CHECK(Fail, at_least_ms(&r.streaming.append_extent_stall, one_hold));
-  // The flush waits on both aggregate slots inside the one measurement.
-  CHECK(Fail, at_least_ms(&r.final.flush_writes_stall, 2 * one_hold));
+  CHECK(Fail, at_least_ms(&r.final.flush_writes_stall, one_hold));
   return 0;
 Fail:
   return 1;
@@ -319,7 +307,6 @@ slow_writes_stay_out_of_the_wait_metrics(void)
   CHECK(Fail, r.write_count > 0 && r.open_count > 0);
   CHECK(Fail, (double)r.final.sink.ms > held * 0.9);
 
-  CHECK(Fail, not_measured(&r.final.io_fence_stall));
   CHECK(Fail, under_ms(&r.final.footer_buffer_stall, HOLD_MS));
   CHECK(Fail, under_ms(&r.final.append_extent_stall, HOLD_MS));
   CHECK(Fail, under_ms(&r.final.flush_writes_stall, HOLD_MS));

@@ -165,8 +165,7 @@ struct compress_agg_array
   struct shard_state shard[LOD_MAX_LEVELS];
   uint64_t total_shards; // immutable sum, useful for status/tests
   struct host_output_pool* output_pool;
-  size_t host_output_bytes;
-  uint64_t host_output_count;
+  int owns_output_pool;
 };
 
 struct compress_agg_stage
@@ -296,6 +295,7 @@ struct engine_limits
   size_t max_device_data_bytes;
   size_t lod_linear_bytes;
   size_t lod_morton_bytes;
+  size_t host_output_bytes;
   int any_multiscale;
   int max_threads; // max over arrays; 0 = platform default
 };

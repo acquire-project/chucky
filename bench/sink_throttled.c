@@ -4,20 +4,16 @@
 
 // --- Throttled shard_sink: synthetic IO pressure for measurement ---
 //
-// Same async shape as shard_pool_fs: owns its own io_queue, worker sleeps
-// proportional to bytes+latency instead of doing real IO. Exercises the
+// Same async shape as shard_pool_fs: owns its own scheduler, whose worker
+// sleeps proportional to bytes+latency instead of doing real IO. Exercises the
 // record_fence/wait_fence/pending_bytes path so stall timing in the GPU
 // flush pipeline can be measured on machines where the real GPU can't
 // saturate disk IO.
 
-static int
-throttled_execute(void* ctx,
-                  const struct io_request* req,
-                  uint64_t seq,
-                  struct io_completion* out)
+static void
+throttled_execute(void* ctx, const struct io_request* req)
 {
   struct throttled_shard_sink* s = (struct throttled_shard_sink*)ctx;
-  out->seq = seq;
 
   int64_t ns = (int64_t)s->latency_ns;
   if (s->bytes_per_sec > 0)
@@ -25,7 +21,6 @@ throttled_execute(void* ctx,
   if (ns > 0)
     platform_sleep_ns(ns);
   atomic_fetch_add(&s->total_bytes, req->nbytes);
-  return IO_DONE;
 }
 
 // No file named, so no barrier ever holds one of these back.
@@ -61,9 +56,8 @@ throttled_shard_write_direct(struct shard_writer* self,
 }
 
 static void
-throttled_output_complete(void* ctx, const struct io_completion* completion)
+throttled_output_finished(void* ctx)
 {
-  (void)completion;
   host_output_group_complete((struct host_output_group*)ctx);
 }
 
@@ -82,11 +76,10 @@ throttled_shard_write_from_output(struct shard_writer* self,
   if (io_scheduler_post(w->parent->scheduler,
                         (struct io_request){
                           .op = IO_OP_WRITE,
-                          .borrowed = 1,
                           .payload = beg,
                           .nbytes = nbytes,
-                          .completion_ctx = group,
-                          .completed = throttled_output_complete,
+                          .finished_ctx = group,
+                          .finished = throttled_output_finished,
                         })) {
     host_output_group_complete(group);
     return 1;

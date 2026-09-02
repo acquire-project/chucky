@@ -103,7 +103,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // Gate sits in the io_queue ahead of the footer jobs the flush will queue
+  // Gate sits in the scheduler ahead of the footer jobs the flush will queue
   // behind it.
   CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
 

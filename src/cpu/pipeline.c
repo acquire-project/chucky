@@ -106,15 +106,11 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
     .data = output.data,
     .data_capacity = output.capacity,
   };
-  struct shard_state* shards_by_level[LOD_MAX_LEVELS] = { 0 };
-  for (int lv = 0; lv < p->nlod; ++lv)
-    shards_by_level[lv] = p->levels[lv].shard;
   const struct aggregate_cpu_inputs aggregate = {
     .compressed_base = p->compressed,
     .comp_sizes_base = p->comp_sizes,
     .gather = slot->gather,
     .layout = &layout,
-    .per_lod_layouts = p->per_lod_agg_layouts,
     .ws = &ws,
     .pool = p->pool,
   };
@@ -143,7 +139,7 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
                          slot->chunk_sizes,
                          &layout,
                          p->per_lod_agg_layouts,
-                         shards_by_level,
+                         p->shards_by_level,
                          per_lod_n_active,
                          storage,
                          p->shard_alignment_bytes,
@@ -166,16 +162,13 @@ cpu_pipeline_flush_batch(const struct flush_batch_params* p,
   size_t sink_bytes = 0;
   CHECK(Error,
         deliver_host_batch(
-          &slot->host, shards_by_level, p->sink, &sink_bytes, p->metrics) == 0);
+          &slot->host, p->shards_by_level, p->sink, &sink_bytes, p->metrics) ==
+          0);
   if (p->metrics)
     accumulate_metric_ms(&p->metrics->sink,
                          (float)(platform_toc(&sink_clk) * 1000.0),
                          sink_bytes,
                          0);
-
-  // One finalization fence covers every level written by this batch.
-  if (p->sink->record_fence)
-    p->io_done[cur] = p->sink->record_fence(p->sink);
 
   // Next batch uses the other slot.
   *p->agg_current = cur ^ 1;

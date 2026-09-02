@@ -57,6 +57,7 @@ struct d2h_copy_state
   CUevent payload_start;
   int aggregate_acquired;
   int aggregate_released;
+  int payload_started;
   enum d2h_copy_status status;
 };
 

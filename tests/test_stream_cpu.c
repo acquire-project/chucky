@@ -591,9 +591,9 @@ Fail:
 }
 
 static int
-test_host_output_budget(void)
+test_host_output_memory_estimate(void)
 {
-  log_info("=== test_host_output_budget ===");
+  log_info("=== test_host_output_memory_estimate ===");
   struct dimension dims[] = {
     { .size = 0,
       .chunk_size = 1,
@@ -617,57 +617,13 @@ test_host_output_budget(void)
     .epochs_per_batch = 2,
   };
 
-  struct tile_stream_cpu_memory_info default_info;
-  struct tile_stream_cpu_memory_info two_info;
-  struct tile_stream_cpu_memory_info one_info;
-  struct tile_stream_cpu_memory_info four_info;
-  CHECK(Fail,
-        tile_stream_cpu_memory_estimate(&config, 4096, &default_info) == 0);
-  CHECK(Fail, default_info.host_output_bytes > 0);
-  CHECK(Fail, default_info.host_output_count == 2);
-  CHECK(Fail,
-        default_info.host_output_pool_bytes ==
-          2 * default_info.host_output_bytes);
-
-  config.host_output_budget_bytes = 2 * default_info.host_output_bytes;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &two_info) == 0);
-  CHECK(Fail, two_info.host_output_count == 2);
-  CHECK(Fail, two_info.heap_bytes == default_info.heap_bytes);
-
-  config.host_output_budget_bytes = default_info.host_output_bytes;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &one_info) == 0);
-  CHECK(Fail, one_info.host_output_count == 1);
-  CHECK(Fail,
-        one_info.host_output_pool_bytes == default_info.host_output_bytes);
-  CHECK(Fail,
-        one_info.heap_bytes + default_info.host_output_bytes ==
-          default_info.heap_bytes);
-
-  config.host_output_budget_bytes =
-    4 * default_info.host_output_bytes + default_info.host_output_bytes / 2;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &four_info) == 0);
-  CHECK(Fail, four_info.host_output_count == 4);
-  CHECK(Fail,
-        four_info.host_output_pool_bytes == 4 * default_info.host_output_bytes);
-  CHECK(Fail,
-        four_info.heap_bytes ==
-          default_info.heap_bytes + 2 * default_info.host_output_bytes);
-
-  config.host_output_budget_bytes = default_info.host_output_bytes - 1;
-  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &one_info) != 0);
-  struct test_shard_sink sink;
-  test_sink_init(&sink, 4, SHARD_CAP);
-  sink.shard_alignment = 4096;
-  struct tile_stream_cpu* stream = tile_stream_cpu_create(&config, &sink.base);
-  CHECK(Cleanup, stream == NULL);
-  test_sink_free(&sink);
+  struct tile_stream_cpu_memory_info info;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &info) == 0);
+  CHECK(Fail, info.host_output_bytes > 0);
+  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
 
   log_info("  PASS");
   return 0;
-
-Cleanup:
-  tile_stream_cpu_destroy(stream);
-  test_sink_free(&sink);
 Fail:
   log_error("  FAIL");
   return 1;
@@ -691,6 +647,6 @@ main(int ac, char* av[])
   rc |= test_advise_parts_limit();
   rc |= test_advise_halves_k();
   rc |= test_advise_user_k_respected();
-  rc |= test_host_output_budget();
+  rc |= test_host_output_memory_estimate();
   return rc;
 }

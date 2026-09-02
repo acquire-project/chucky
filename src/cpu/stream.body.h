@@ -30,18 +30,14 @@ struct cpu_stream_view
   // Per-array shard/LOD state
   struct shard_state* shard;           // [LOD_MAX_LEVELS] array
   struct aggregate_layout* agg_layout; // [LOD_MAX_LEVELS] array
-  uint32_t* batch_active_count;        // [LOD_MAX_LEVELS] array
   struct reduce_csr* csrs;             // [nlod-1] CSR LUTs
   void* append_accum;
   uint32_t* append_counts; // [LOD_MAX_LEVELS]
 
-  // Latest finalization fences and scratch alternator.
-  struct io_event* io_done; // [2]
-  uint8_t* agg_current;     // single byte (slot 0 or 1)
+  uint8_t* agg_current; // single byte (slot 0 or 1)
 
   // Shared buffers
   void* chunk_pool;
-  size_t chunk_pool_bytes;
   void* compressed;
   size_t* comp_sizes;
   struct cpu_agg_slot* agg_slots; // [2] unified per-batch workspace
@@ -68,11 +64,8 @@ struct writer_result
 cpu_stream_append_body(struct cpu_stream_view* v, struct slice input);
 
 // Shared flush body: partial epoch + batch + append drain + shard finalize.
-// Used by both single-array and multiarray CPU streams.
-//
-// Queues the writes and returns; it does not wait for them to retire. Pair it
-// with cpu_stream_close_body before the buffers those writes point into are
-// freed.
+// Used by both single-array and multiarray CPU streams. Drains every write it
+// queues before returning.
 struct writer_result
 cpu_stream_flush_body(struct cpu_stream_view* v);
 

@@ -26,7 +26,6 @@ struct array_descriptor
   struct tile_stream_layout layout;
   struct level_geometry levels;
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
-  uint32_t batch_active_count[LOD_MAX_LEVELS];
   struct shard_state shard[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   uint64_t cursor_elements;
@@ -37,18 +36,12 @@ struct array_descriptor
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
-  struct io_event io_done[2]; // per-slot fences (single fence covers batch)
-  uint8_t agg_current;        // next slot to use (0 or 1)
-  // Worst-case unified batch layout for this array — used to pre-size
-  // per-array view of the shared agg_slots scratch.
-  struct batch_aggregate_layout max_batch_layout;
-  struct host_output_pool* output_pool;
-  size_t host_output_bytes;
-  size_t shard_alignment; // from sink; 0 = no alignment
-  int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 once finalized; no further input is taken
-  int closed;             // 1 once close drained and, on success, published
-  int close_failed;       // outcome of that close, re-reported by later calls
+  uint8_t agg_current;     // next slot to use (0 or 1)
+  size_t shard_alignment;  // from sink; 0 = no alignment
+  int pool_fully_covered;  // 1 if scatter overwrites every pool position
+  int flushed;             // 1 once finalized; no further input is taken
+  int closed;              // 1 once close drained and, on success, published
+  int close_failed;        // outcome of that close, re-reported by later calls
 };
 
 // ---- Main struct ----
@@ -69,6 +62,7 @@ struct multiarray_tile_stream_cpu
   size_t chunk_pool_bytes;
   void* compressed;
   size_t* comp_sizes;
+  struct host_output_pool* output_pool;
 
   // Shared aggregate workspace: one double-buffered scratch pair across all
   // LODs, sized for the worst-case unified batch across all arrays.
@@ -123,9 +117,9 @@ struct pool_maxima
   size_t chunk_pool_bytes;
   size_t compressed_bytes;
   size_t comp_sizes_count;
-  size_t pool_epochs_scratch_count; // LOD_MAX_LEVELS * max_K
   size_t linear_bytes;
   size_t lod_values_bytes;
+  size_t host_output_bytes;
 
   // Unified per-batch maxima across all arrays.
   uint64_t total_batch_chunks_max;   // unified gather/perm len
@@ -207,7 +201,6 @@ init_array_descriptor(struct array_descriptor* desc,
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
     desc->agg_layout[lv] = li->agg_layout;
-    desc->batch_active_count[lv] = li->batch_active_count;
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
   }
@@ -217,10 +210,11 @@ init_array_descriptor(struct array_descriptor* desc,
   {
     uint32_t worst[LOD_MAX_LEVELS];
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-      uint32_t k = desc->batch_active_count[lv];
-      worst[lv] = k > 0 ? k : 1;
+      const uint32_t count = desc->cl.per_level[lv].batch_active_count;
+      worst[lv] = count ? count : 1;
     }
-    if (batch_aggregate_layout_init_compact(&desc->max_batch_layout,
+    struct batch_aggregate_layout max_batch_layout;
+    if (batch_aggregate_layout_init_compact(&max_batch_layout,
                                             desc->agg_layout,
                                             worst,
                                             (uint8_t)desc->levels.nlod))
@@ -238,34 +232,17 @@ init_array_descriptor(struct array_descriptor* desc,
                             &run_count))
       return 1;
     (void)run_count;
-    if (host_output_size(required_output_bytes,
-                         platform_page_alignment(),
-                         &desc->host_output_bytes))
+    size_t output_bytes = 0;
+    if (host_output_size(
+          required_output_bytes, platform_page_alignment(), &output_bytes))
       return 1;
-    uint64_t output_count = 0;
-    if (host_output_count(config->host_output_budget_bytes,
-                          desc->host_output_bytes,
-                          &output_count))
-      return 1;
-    desc->output_pool =
-      host_output_pool_create(output_count,
-                              desc->host_output_bytes,
-                              platform_page_alignment(),
-                              (struct host_output_allocator){ 0 });
-    if (!desc->output_pool)
-      return 1;
-    if (desc->max_batch_layout.total_batch_chunks >
-        maxima->total_batch_chunks_max)
-      maxima->total_batch_chunks_max =
-        desc->max_batch_layout.total_batch_chunks;
-    if (desc->max_batch_layout.total_batch_covering >
+    maxima->host_output_bytes = max_sz(maxima->host_output_bytes, output_bytes);
+    if (max_batch_layout.total_batch_chunks > maxima->total_batch_chunks_max)
+      maxima->total_batch_chunks_max = max_batch_layout.total_batch_chunks;
+    if (max_batch_layout.total_batch_covering >
         maxima->total_batch_covering_max)
-      maxima->total_batch_covering_max =
-        desc->max_batch_layout.total_batch_covering;
+      maxima->total_batch_covering_max = max_batch_layout.total_batch_covering;
   }
-
-  maxima->pool_epochs_scratch_count =
-    max_sz(maxima->pool_epochs_scratch_count, (size_t)LOD_MAX_LEVELS * K);
 
   // LOD sizes.
   if (desc->levels.enable_multiscale) {
@@ -344,6 +321,11 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     ms->comp_sizes = (size_t*)calloc(mx->comp_sizes_count, sizeof(size_t));
     CHECK(Fail, ms->comp_sizes);
   }
+  ms->output_pool =
+    host_output_pool_create(mx->host_output_bytes,
+                            platform_page_alignment(),
+                            (struct host_output_allocator){ 0 });
+  CHECK(Fail, ms->output_pool);
 
   // Unified per-batch aggregate scratch slots, double-buffered.
   {
@@ -457,10 +439,6 @@ multiarray_tile_stream_cpu_create(
     ms->metrics.aggregate =
       mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
     ms->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
-    ms->metrics.host_output_wait =
-      mk_stream_metric("Host-output buffer", METRIC_OWNER_PRODUCER);
-    ms->metrics.host_output_lifetime =
-      mk_stream_metric("Host-output lifetime", METRIC_OWNER_NONE);
     int any_multiscale = 0;
     for (int i = 0; i < n_arrays; ++i)
       any_multiscale |= ms->arrays[i].levels.enable_multiscale;
@@ -507,7 +485,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
         shard_state_destroy(&desc->shard[lv]);
       }
-      host_output_pool_destroy(desc->output_pool);
       free(desc->append_accum);
       free(desc->batch_active_masks);
       free(desc->pool_epochs_scratch);
@@ -535,6 +512,7 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
     free(as->offsets);
     free(as->chunk_sizes);
   }
+  host_output_pool_destroy(ms->output_pool);
   for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
     free(ms->morton_lut[lv]);
     free(ms->lod_fixed_dims_offsets[lv]);
@@ -557,10 +535,7 @@ struct stream_metrics
 multiarray_tile_stream_cpu_get_metrics(
   const struct multiarray_tile_stream_cpu* ms)
 {
-  struct stream_metrics metrics = ms->metrics;
-  for (int i = 0; i < ms->n_arrays; ++i)
-    host_output_pool_accumulate_metrics(ms->arrays[i].output_pool, &metrics);
-  return metrics;
+  return ms->metrics;
 }
 
 // ---- LUT recomputation ----
@@ -647,18 +622,15 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .pool_fully_covered = desc->pool_fully_covered,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
-    .batch_active_count = desc->batch_active_count,
     .csrs = desc->csrs,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
-    .io_done = desc->io_done,
     .agg_current = &desc->agg_current,
     .chunk_pool = ms->chunk_pool,
-    .chunk_pool_bytes = ms->chunk_pool_bytes,
     .compressed = ms->compressed,
     .comp_sizes = ms->comp_sizes,
     .agg_slots = ms->agg_slots,
-    .output_pool = desc->output_pool,
+    .output_pool = ms->output_pool,
     .linear = desc->levels.enable_multiscale ? ms->linear : NULL,
     .lod_values = desc->levels.enable_multiscale ? ms->lod_values : NULL,
     .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,

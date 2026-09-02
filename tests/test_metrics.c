@@ -100,21 +100,6 @@ check_shared_stages(const struct stream_metrics* m)
                                    &m->delivery.payload_ready_to_writes_posted);
   ok &= duration_any_arrived_timed("delivery submitted to slot reuse",
                                    &m->delivery.submitted_to_slot_reuse);
-  if (m->delivery.writes_posted_to_completion.count != 0) {
-    log_error("  test sink unexpectedly reported asynchronous writes");
-    ok = 0;
-  }
-  if (m->host_output_wait.wait_calls == 0 ||
-      m->host_output_lifetime.count == 0 ||
-      m->host_output_buffers_in_use_peak == 0 ||
-      m->host_output_bytes_in_use_peak == 0) {
-    log_error("  host-output diagnostics are missing");
-    ok = 0;
-  }
-  if (m->tail_gate.count != 0 || m->tail_gate.ms != 0) {
-    log_error("  %s: legacy metric is not zero", m->tail_gate.name);
-    ok = 0;
-  }
   if (m->d2h_payload_bytes_transferred == 0 ||
       m->d2h_metadata_bytes_transferred == 0 ||
       m->d2h_payload_copy_count == 0) {

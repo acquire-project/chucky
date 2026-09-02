@@ -56,7 +56,6 @@ struct delivery_timing
   struct duration_stats submitted_to_start;
   struct duration_stats start_to_payload_ready;
   struct duration_stats payload_ready_to_writes_posted;
-  struct duration_stats writes_posted_to_completion;
   struct duration_stats submitted_to_slot_reuse;
 };
 
@@ -82,16 +81,13 @@ struct stream_metrics
   // producer instead of the worker, the producer entry contains the worker's
   // rather than overlapping it. An entry a backend never fills keeps count 0,
   // meaning not measured rather than no wait.
-  struct stream_metric flush_stall;       // producer: waiting for delivery
-  struct stream_metric delivery_dispatch; // worker work between waits
-  struct stream_metric io_fence_stall;    // queued writes still holding a slot
-  struct stream_metric footer_buffer_stall;  // a shard's previous footer write
-  struct stream_metric append_extent_stall;  // shards closed since the extent
-                                             // was last published
-  struct stream_metric flush_writes_stall;   // every queued write, at flush
-  struct stream_metric backpressure;         // sink queue over its watermark
-  struct stream_metric host_output_wait;     // waiting for a host output buffer
-  struct stream_metric host_output_lifetime; // leased until borrowed writes end
+  struct stream_metric flush_stall;         // producer: waiting for delivery
+  struct stream_metric delivery_dispatch;   // worker work between waits
+  struct stream_metric footer_buffer_stall; // a shard's previous footer write
+  struct stream_metric append_extent_stall; // shards closed since the extent
+                                            // was last published
+  struct stream_metric flush_writes_stall;  // every queued write, at flush
+  struct stream_metric backpressure;        // sink queue over its watermark
   // Indexed metadata readiness is reported as one inclusive host wait plus
   // two host-timeline children. The children partition that wait at aggregate
   // readiness; chunk_metadata_copy separately measures the two D2H copies on
@@ -101,10 +97,6 @@ struct stream_metrics
   struct stream_metric chunk_metadata_copy;
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which
-  // Compatibility-only legacy field. GPU host copying leaves it at zero;
-  // archived runs may still contain samples.
-  struct stream_metric tail_gate;
-
   struct delivery_timing delivery;
 
   // Optional GPU D2H copy totals. They remain zero for CPU runs.
@@ -124,11 +116,6 @@ struct stream_metrics
   // High-water mark of bytes awaiting write, read once per staging buffer
   // handed to the device rather than continuously.
   uint64_t peak_pending_bytes;
-
-  uint64_t host_output_buffers_in_use;
-  uint64_t host_output_bytes_in_use;
-  uint64_t host_output_buffers_in_use_peak;
-  uint64_t host_output_bytes_in_use_peak;
 
   // The time taken per append is counted in time buckets. A caller asking
   // whether it can keep up needs the slow tail, not the average, and there are
@@ -162,7 +149,6 @@ struct tile_stream_configuration
                                // staging buffer to the device when the sink
                                // reports more pending than this
   int max_threads;             // 0 = OpenMP default
-  uint64_t host_output_budget_bytes; // 0 = two maximum-size output buffers
 };
 
 struct tile_stream_status

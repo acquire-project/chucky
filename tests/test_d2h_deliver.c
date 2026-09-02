@@ -235,7 +235,6 @@ test_d2h_single_epoch_none(void)
   CHECK(Fail, metric_arrived(&c.metrics.compress, 0));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
   CHECK(Fail,
         c.metrics.d2h_payload_bytes_transferred == total_chunks * chunk_bytes);
   CHECK(Fail, c.metrics.d2h_metadata_bytes_transferred == 0);
@@ -325,7 +324,7 @@ test_d2h_batch_none(void)
     // Shard output layout: [num_shards, batch_count, cps_inner] row-major.
     // Slot → (si, epoch, ci) via unravel, then perm_pos = si * cps_inner + ci.
     const struct aggregate_layout* al = &c.ca.ar.per_lod_agg_layouts[0];
-    uint32_t batch_count = c.ca.ar.per_lod_agg_layouts[0].active_count_max;
+    uint32_t batch_count = handoff.batch.epoch_count;
     uint32_t cps_inner = (uint32_t)al->cps_inner;
     uint32_t num_shards = (uint32_t)(al->covering_count / cps_inner);
     uint64_t chunks_lv = c.cl.levels.level[0].chunk_count;
@@ -454,7 +453,6 @@ test_d2h_zstd_single_epoch(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.compress, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 1));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 1));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
   CHECK(Fail, c.metrics.d2h_payload_bytes_transferred > 0);
   CHECK(Fail,
         c.metrics.d2h_metadata_bytes_transferred ==
@@ -776,7 +774,6 @@ test_d2h_zstd_double_buffer(void)
   CHECK(Fail, metric_arrived_timed(&c.metrics.aggregate, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.d2h, 4));
   CHECK(Fail, metric_arrived_timed(&c.metrics.chunk_metadata_copy, 4));
-  CHECK(Fail, metric_arrived(&c.metrics.tail_gate, 0));
   CHECK(Fail, c.metrics.d2h_payload_bytes_transferred > 0);
   CHECK(Fail, c.metrics.d2h_payload_copy_count == 4);
   CHECK(Fail, c.metrics.shard_padding_internal_bytes > 0);

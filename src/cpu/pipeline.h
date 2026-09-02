@@ -28,13 +28,6 @@ struct cpu_agg_slot
 
 // ---- flush_batch ----
 
-struct flush_level_view
-{
-  uint32_t batch_active_count;
-  uint64_t chunk_offset;
-  struct shard_state* shard;
-};
-
 struct flush_batch_params
 {
   struct codec_config codec;
@@ -53,14 +46,13 @@ struct flush_batch_params
   // at a contiguous LOD_MAX_LEVELS-element array (typically owned by the
   // stream).
   const struct aggregate_layout* per_lod_agg_layouts;
-  struct flush_level_view levels[LOD_MAX_LEVELS];
+  struct shard_state* shards_by_level[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
   struct threadpool* pool;        // owned by stream
   uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
   struct cpu_agg_slot* agg_slots; // [2] shared per-batch workspace
   struct host_output_pool* output_pool;
-  struct io_event* io_done;       // [2] finalization fences
   uint8_t* agg_current;           // single alternator byte (0 or 1)
   struct stream_metrics* metrics; // NULL to skip timing
 };

@@ -1,8 +1,5 @@
 #pragma once
 
-#include "stream/types.aggregate.h"
-#include "writer.h"
-
 #include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -26,7 +23,6 @@ extern "C"
     size_t* h_permuted_sizes; // host pinned: C size_t (real compressed sizes)
     void* d_temp;             // CUB scratch
     size_t temp_bytes;
-    size_t device_capacity;
   };
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);
@@ -40,18 +36,6 @@ extern "C"
                                   size_t device_data_bytes,
                                   size_t* device_bytes,
                                   size_t* host_bytes);
-
-  // Aggregate one LOD into a compact shard-major byte stream.  Offsets are
-  // absolute within d_aggregated and contain no page bias or host-tail prefix.
-  int aggregate_batch_by_shard_async(const void* d_compressed,
-                                     size_t* d_comp_sizes,
-                                     const uint32_t* d_batch_gather,
-                                     const uint32_t* d_batch_perm,
-                                     uint64_t batch_chunk_count,
-                                     uint64_t batch_covering_count,
-                                     size_t max_comp_chunk_bytes,
-                                     struct aggregate_slot* slot,
-                                     CUstream stream);
 
   // clang-format off
   // Single compact dispatch across all LODs. Per-LOD gather and permutation

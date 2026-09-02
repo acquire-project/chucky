@@ -45,6 +45,7 @@ struct multiarray_tile_stream_gpu
   int n_arrays;
   int active; // -1 = none
   struct array_descriptor_gpu* arrays;
+  struct host_output_pool* output_pool;
 };
 
 // ---- Forward declarations ----
@@ -356,7 +357,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (ms->arrays && close_impl(&ms->writer).error)
     log_error("GPU multiarray close failed during destroy");
 
-  // Copy state can still name a per-array output pool after a failed
+  // Copy state can still name the shared output pool after a failed
   // cancellation, so tear down the shared stages before the descriptors.
   stream_engine_destroy(&ms->engine);
 
@@ -365,6 +366,7 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);
   }
+  host_output_pool_destroy(ms->output_pool);
 
   cu_ctx_pop(pushed);
   free(ms);
@@ -434,6 +436,11 @@ multiarray_tile_stream_gpu_create(
                            ms->arrays[0].ctx.config.codec.id,
                            all_multiscale) == 0);
 
+  ms->output_pool = compress_agg_output_pool_create(lim.host_output_bytes);
+  CHECK(Fail, ms->output_pool);
+  for (int a = 0; a < n_arrays; ++a)
+    ms->arrays[a].st.agg.output_pool = ms->output_pool;
+
   return ms;
 
 Fail:
@@ -453,9 +460,5 @@ struct stream_metrics
 multiarray_tile_stream_gpu_get_metrics(
   const struct multiarray_tile_stream_gpu* ms)
 {
-  struct stream_metrics metrics = ms->engine.metrics;
-  for (int i = 0; i < ms->n_arrays; ++i)
-    host_output_pool_accumulate_metrics(ms->arrays[i].st.agg.output_pool,
-                                        &metrics);
-  return metrics;
+  return ms->engine.metrics;
 }

@@ -36,13 +36,7 @@ struct tile_stream_cpu
   // writes retire.
   struct cpu_agg_slot agg_slots[2];
   struct host_output_pool* output_pool;
-  size_t host_output_bytes;
   uint8_t agg_current; // next slot to use (0 or 1)
-
-  uint32_t batch_active_count[LOD_MAX_LEVELS]; // K_l per level
-
-  // Worst-case batch layout used to size scratch and host outputs.
-  struct batch_aggregate_layout max_batch_layout;
 
   // LOD (multiscale only)
   void* linear; // linear epoch buffer (input accumulated here before scatter)
@@ -75,10 +69,6 @@ struct tile_stream_cpu
   uint32_t batch_accumulated;    // 0..K-1
   uint32_t* batch_active_masks;  // [K] per-epoch active level mask
   uint32_t* pool_epochs_scratch; // [K] scratch for kick-time mask scans
-
-  // Latest write fence recorded by each alternating scratch set. These are
-  // waited only by finalization; output lifetime is tracked by the pool.
-  struct io_event io_done[2];
 
   struct threadpool* pool; // owned by stream
   size_t shard_alignment;  // from sink; 0 = no alignment

@@ -10,11 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int
-faults_execute(void* ctx,
-               const struct io_request* req,
-               uint64_t seq,
-               struct io_completion* out)
+static void
+faults_execute(void* ctx, const struct io_request* req)
 {
   struct io_faults* f = (struct io_faults*)ctx;
 
@@ -27,10 +24,7 @@ faults_execute(void* ctx,
   if (fault == IO_FAULT_FAIL) {
     log_error("io_faults: injected failure of io op %u", (unsigned)req->op);
     shard_pool_fs_set_error(f->pool);
-    out->seq = seq;
-    out->nbytes = 0;
-    out->status = IO_FAILED;
-    return IO_DONE;
+    return;
   }
 
   if (fault == IO_FAULT_BLOCK) {
@@ -38,15 +32,7 @@ faults_execute(void* ctx,
       platform_sleep_ns(1000000LL);
   }
 
-  return f->inner.execute(f->inner.ctx, req, seq, out);
-}
-
-static void
-faults_stop(void* ctx)
-{
-  struct io_faults* f = (struct io_faults*)ctx;
-  if (f->inner.stop)
-    f->inner.stop(f->inner.ctx);
+  f->inner.execute(f->inner.ctx, req);
 }
 
 static struct io_backend
@@ -54,9 +40,7 @@ faults_wrap(void* ctx, struct io_backend inner)
 {
   struct io_faults* f = (struct io_faults*)ctx;
   f->inner = inner;
-  return (struct io_backend){ .ctx = f,
-                              .execute = faults_execute,
-                              .stop = faults_stop };
+  return (struct io_backend){ .ctx = f, .execute = faults_execute };
 }
 
 static struct shard_pool*
@@ -64,12 +48,12 @@ pool_create(struct io_faults* f,
             const char* root,
             uint64_t nslots,
             int unbuffered,
-            const struct io_scheduling* io)
+            const struct io_scheduler_limits* limits)
 {
   f->pool = shard_pool_fs_create_wrapped(root,
                                          nslots,
                                          unbuffered,
-                                         io,
+                                         limits,
                                          (struct shard_pool_fs_wrapper){
                                            .ctx = f,
                                            .wrap = faults_wrap,
@@ -83,10 +67,10 @@ io_faults_pool_create(struct io_faults* f,
                       const char* root,
                       uint64_t nslots,
                       int unbuffered,
-                      const struct io_scheduling* io)
+                      const struct io_scheduler_limits* limits)
 {
   memset(f, 0, sizeof(*f));
-  return pool_create(f, root, nslots, unbuffered, io);
+  return pool_create(f, root, nslots, unbuffered, limits);
 }
 
 // --- Store ---
@@ -98,7 +82,7 @@ struct faults_store
   struct io_faults* faults;
   struct strbuf root; // owned
   int unbuffered;
-  struct io_scheduling io; // held until the pool is built
+  struct io_scheduler_limits limits;
 };
 
 static int
@@ -133,7 +117,7 @@ faults_store_create_pool(struct store* self, uint64_t nslots)
   // backend.
   CHECK(Fail, !s->faults->pool);
   return pool_create(
-    s->faults, strbuf_cstr(&s->root), nslots, s->unbuffered, &s->io);
+    s->faults, strbuf_cstr(&s->root), nslots, s->unbuffered, &s->limits);
 Fail:
   return NULL;
 }
@@ -151,7 +135,7 @@ struct store*
 io_faults_store_create(struct io_faults* f,
                        const char* root,
                        int unbuffered,
-                       const struct io_scheduling* io)
+                       const struct io_scheduler_limits* limits)
 {
   memset(f, 0, sizeof(*f));
 
@@ -165,8 +149,8 @@ io_faults_store_create(struct io_faults* f,
   s->base.destroy = faults_store_destroy;
   s->faults = f;
   s->unbuffered = unbuffered;
-  if (io)
-    s->io = *io;
+  if (limits)
+    s->limits = *limits;
   CHECK(Fail_alloc, strbuf_set(&s->root, root) == 0);
 
   s->inner = store_fs_create(root, unbuffered);

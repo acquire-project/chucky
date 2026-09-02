@@ -42,15 +42,15 @@ target_link_libraries(index_ops_util PUBLIC index_ops stream_config)
 add_test_lib(morton_util morton.util.c morton.util.h)
 target_link_libraries(morton_util PUBLIC lod_plan index_ops)
 
-# Fake io backend for the io queue tests
+# Fake io backend for the scheduler tests
 add_test_lib(test_io_backend_fake test_io_backend_fake.c test_io_backend_fake.h)
-target_link_libraries(test_io_backend_fake PUBLIC io_queue platform)
+target_link_libraries(test_io_backend_fake PUBLIC io_scheduler platform)
 
 # Filesystem io that can be made to fail or block, for the drain tests
 add_test_lib(test_io_faults test_io_faults.c test_io_faults.h)
 target_link_libraries(
     test_io_faults
-    PUBLIC shard_pool_fs store_fs io_queue platform strbuf chucky_log
+    PUBLIC shard_pool_fs store_fs io_scheduler platform strbuf chucky_log
 )
 
 # Shared test shard sink (multi-shard-safe)
@@ -70,10 +70,6 @@ target_link_libraries(test_shard_verify PUBLIC chucky_log crc32c Zstd::Zstd)
 
 # Shared voxel coordinate encoding helpers
 add_test_lib(test_voxel_encode test_voxel_encode.c test_voxel_encode.h)
-
-# Aggregate-result contract verifier (used by CPU and GPU contract tests)
-add_test_lib(aggregate_contract aggregate_contract.c aggregate_contract.h)
-target_link_libraries(aggregate_contract PUBLIC stream_config chucky_log)
 
 # Shared zarr sink test helpers (store + pool + array/multiscale setup)
 add_test_lib(test_zarr_helpers test_zarr_helpers.c test_zarr_helpers.h)
@@ -107,22 +103,9 @@ add_test_exe(test_transpose_cpu test_transpose_cpu.c transpose_cpu threadpool in
 # CPU compress test (no CUDA)
 add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chucky_log)
 
-# CPU aggregate test (no CUDA)
-add_test_exe(test_aggregate_cpu test_aggregate_cpu.c aggregate_cpu threadpool stream_config chucky_log)
-
-# Aggregate-result contract test (CPU)
-add_test_exe(test_aggregate_contract_cpu test_aggregate_contract_cpu.c
-    aggregate_cpu shard_delivery aggregate_contract threadpool stream_config lod_plan chucky_log
-)
-
 # CUDA-free coverage for the GPU host-copy stage's span and host-run contracts.
 add_test_exe(test_host_batch test_host_batch.c
     shard_delivery stream_config test_shard_sink chucky_log)
-
-# Aggregate-result contract test (GPU)
-add_gpu_test_exe(test_aggregate_contract_gpu test_aggregate_contract_gpu.c
-    LINKS CUDA::cuda_driver CUDA::cudart_static aggregate aggregate_contract stream_config lod_plan chucky_log
-)
 
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)
@@ -177,11 +160,11 @@ add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_dr
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
-add_test_exe(test_io_queue    test_io_queue.c    io_scheduler test_io_backend_fake test_platform chucky_log)
-add_test_exe(test_filesystem_command_map test_filesystem_command_map.c filesystem_command_map chucky_log)
+add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
+add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
 add_test_exe(test_host_output_pool test_host_output_pool.c host_output_pool test_platform chucky_log)
 # A worker left held would hang rather than fail; bound it.
-set_tests_properties(test-test_io_queue PROPERTIES TIMEOUT 60)
+set_tests_properties(test-test_io_scheduler PROPERTIES TIMEOUT 60)
 add_test_exe(test_store_fs    test_store_fs.c    store_fs store_api zarr_group platform host_output_pool test_platform chucky_log test_io_faults)
 # A worker left held would hang rather than fail; bound it.
 set_tests_properties(test-test_store_fs PROPERTIES TIMEOUT 60)

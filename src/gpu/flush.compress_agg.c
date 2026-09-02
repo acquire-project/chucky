@@ -191,7 +191,8 @@ compress_agg_array_destroy(struct compress_agg_array* ar)
 {
   if (!ar)
     return;
-  host_output_pool_destroy(ar->output_pool);
+  if (ar->owns_output_pool)
+    host_output_pool_destroy(ar->output_pool);
   for (int lv = 0; lv < ar->nlod; ++lv)
     shard_state_destroy(&ar->shard[lv]);
   memset(ar, 0, sizeof(*ar));
@@ -201,10 +202,9 @@ int
 compress_agg_host_output_requirements(
   const struct computed_stream_layouts* cl,
   const struct tile_stream_configuration* config,
-  size_t* output_bytes,
-  uint64_t* output_count)
+  size_t* output_bytes)
 {
-  CHECK(Error, cl && config && output_bytes && output_count);
+  CHECK(Error, cl && config && output_bytes);
   struct aggregate_layout layouts[LOD_MAX_LEVELS];
   uint32_t active[LOD_MAX_LEVELS] = { 0 };
   for (int lv = 0; lv < cl->levels.nlod; ++lv) {
@@ -229,9 +229,6 @@ compress_agg_host_output_requirements(
   CHECK(Error,
         host_output_size(
           required_output_bytes, platform_page_alignment(), output_bytes) == 0);
-  CHECK(Error,
-        host_output_count(
-          config->host_output_budget_bytes, *output_bytes, output_count) == 0);
   return 0;
 
 Error:
@@ -269,26 +266,27 @@ release_pinned_output(void* ctx, void* data)
 
 int
 compress_agg_array_init_output(struct compress_agg_array* ar,
-                               const struct computed_stream_layouts* cl,
-                               const struct tile_stream_configuration* config)
+                               size_t output_bytes)
 {
   CHECK(Error, ar && !ar->output_pool);
-  CHECK(Error,
-        compress_agg_host_output_requirements(
-          cl, config, &ar->host_output_bytes, &ar->host_output_count) == 0);
-  ar->output_pool =
-    host_output_pool_create(ar->host_output_count,
-                            ar->host_output_bytes,
-                            platform_page_alignment(),
-                            (struct host_output_allocator){
-                              .allocate = allocate_pinned_output,
-                              .release = release_pinned_output,
-                            });
+  ar->output_pool = compress_agg_output_pool_create(output_bytes);
   CHECK(Error, ar->output_pool);
+  ar->owns_output_pool = 1;
   return 0;
 
 Error:
   return 1;
+}
+
+struct host_output_pool*
+compress_agg_output_pool_create(size_t output_bytes)
+{
+  return host_output_pool_create(output_bytes,
+                                 platform_page_alignment(),
+                                 (struct host_output_allocator){
+                                   .allocate = allocate_pinned_output,
+                                   .release = release_pinned_output,
+                                 });
 }
 
 int
@@ -305,7 +303,10 @@ compress_agg_init(struct compress_agg_stage* stage,
         compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
           0);
   CHECK(Fail, compress_agg_array_init(&stage->ar, cl) == 0);
-  CHECK(Fail, compress_agg_array_init_output(&stage->ar, cl, config) == 0);
+  size_t output_bytes = 0;
+  CHECK(Fail,
+        compress_agg_host_output_requirements(cl, config, &output_bytes) == 0);
+  CHECK(Fail, compress_agg_array_init_output(&stage->ar, output_bytes) == 0);
   return 0;
 
 Fail:
