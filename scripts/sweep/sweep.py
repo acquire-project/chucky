@@ -203,11 +203,16 @@ def lod_runs() -> list[RunSpec]:
 def io_runs() -> list[RunSpec]:
     """I/O tier: measure impact of zarr output vs discard sink."""
     runs = []
-    chunk_labels = ["32K", "256K", "2M"]
+    default_chunk_labels = ["32K", "256K", "2M"]
     scenarios = ["orca2_single", "256cube_single",
                   "orca2_multiscale_dim0", "256cube_multiscale_dim0",
                   "smallepoch_single", "smallepoch_4shards"]
     for sc in scenarios:
+        chunk_labels = (
+            ["16K", *default_chunk_labels]
+            if sc == "orca2_single"
+            else default_chunk_labels
+        )
         for cl in chunk_labels:
             for codec in ["none", "zstd"]:
                 for backend in ["gpu", "cpu"]:
@@ -221,7 +226,7 @@ def io_runs() -> list[RunSpec]:
 def fill_runs() -> list[RunSpec]:
     """Fill-pattern sweep: xor vs zeros vs rand across codecs and chunk sizes."""
     runs = []
-    chunk_labels = ["32K", "256K", "2M"]
+    chunk_labels = ["16K", "32K", "256K", "2M"]
     scenarios = ["orca2_single", "256cube_single"]
     for sc in scenarios:
         for fill in ["xor", "zeros", "rand"]:
