@@ -39,6 +39,11 @@ static int (*inner_write_direct)(struct shard_writer*,
                                  uint64_t,
                                  const void*,
                                  const void*);
+static int (*inner_write_from_output)(struct shard_writer*,
+                                      uint64_t,
+                                      const void*,
+                                      const void*,
+                                      struct host_output_group*);
 
 static struct io_event
 hold_record_fence(struct shard_sink* self)
@@ -79,18 +84,32 @@ hold_write_direct(struct shard_writer* self,
   return inner_write_direct(self, offset, beg, end);
 }
 
+static int
+hold_write_from_output(struct shard_writer* self,
+                       uint64_t offset,
+                       const void* beg,
+                       const void* end,
+                       struct host_output_group* group)
+{
+  if (holds.write_ns)
+    platform_sleep_ns(holds.write_ns);
+  return inner_write_from_output(self, offset, beg, end, group);
+}
+
 static struct shard_writer*
 hold_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 {
   if (holds.open_ns)
     platform_sleep_ns(holds.open_ns);
   struct shard_writer* w = inner_open(self, level, shard_index);
-  if (w && w->write && w->write_direct &&
+  if (w && w->write && w->write_direct && w->write_from_output &&
       w->write_direct != hold_write_direct) {
     inner_write = w->write;
     inner_write_direct = w->write_direct;
+    inner_write_from_output = w->write_from_output;
     w->write = hold_write;
     w->write_direct = hold_write_direct;
+    w->write_from_output = hold_write_from_output;
   }
   return w;
 }
@@ -100,7 +119,7 @@ struct run_result
   struct stream_metrics streaming; // read before the flush
   struct stream_metrics final;
   int fence_waits_streaming;
-  int write_direct_count;
+  int write_count;
   int open_count;
 };
 
@@ -173,7 +192,7 @@ run_stream(struct hold_times h, struct run_result* out)
   CHECK(Fail, writer_close(w).error == 0);
 
   out->final = tile_stream_cpu_get_metrics(s);
-  out->write_direct_count = sink.write_direct_count;
+  out->write_count = sink.write_count + sink.write_direct_count;
   out->open_count = sink.open_count;
   failed = 0;
 
@@ -190,8 +209,8 @@ static int
 every_wait_is_charged(const struct run_result* r)
 {
   const struct stream_metrics* m = &r->streaming;
-  const int charged = m->io_fence_stall.count + m->footer_buffer_stall.count +
-                      m->append_extent_stall.count;
+  const int charged =
+    m->footer_buffer_stall.count + m->append_extent_stall.count;
   if (charged != r->fence_waits_streaming) {
     log_error("  %d of %d waits charged to a metric",
               charged,
@@ -257,11 +276,9 @@ slow_fences_land_in_the_wait_metrics(void)
   CHECK(Fail, every_wait_is_charged(&r));
 
   const double one_hold = HOLD_MS * 0.9;
-  CHECK(Fail, at_least_ms(&r.streaming.io_fence_stall, one_hold));
   CHECK(Fail, at_least_ms(&r.streaming.footer_buffer_stall, one_hold));
   CHECK(Fail, at_least_ms(&r.streaming.append_extent_stall, one_hold));
-  // The flush waits on both aggregate slots inside the one measurement.
-  CHECK(Fail, at_least_ms(&r.final.flush_writes_stall, 2 * one_hold));
+  CHECK(Fail, at_least_ms(&r.final.flush_writes_stall, one_hold));
   return 0;
 Fail:
   return 1;
@@ -282,15 +299,14 @@ slow_writes_stay_out_of_the_wait_metrics(void)
   CHECK(Fail, every_wait_is_charged(&r));
   // Without this the run proves nothing: the holds have to land in the stage
   // the wait metrics are carved out of.
-  const double held = (double)(r.write_direct_count + r.open_count) * HOLD_MS;
+  const double held = (double)(r.write_count + r.open_count) * HOLD_MS;
   log_info("  %d writes and %d opens held, sink total %g ms",
-           r.write_direct_count,
+           r.write_count,
            r.open_count,
            (double)r.final.sink.ms);
-  CHECK(Fail, r.write_direct_count > 0 && r.open_count > 0);
+  CHECK(Fail, r.write_count > 0 && r.open_count > 0);
   CHECK(Fail, (double)r.final.sink.ms > held * 0.9);
 
-  CHECK(Fail, under_ms(&r.final.io_fence_stall, HOLD_MS));
   CHECK(Fail, under_ms(&r.final.footer_buffer_stall, HOLD_MS));
   CHECK(Fail, under_ms(&r.final.append_extent_stall, HOLD_MS));
   CHECK(Fail, under_ms(&r.final.flush_writes_stall, HOLD_MS));

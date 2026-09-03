@@ -135,14 +135,6 @@ shard_pool_pending_bytes(const struct shard_pool* p)
   return (p && p->pending_bytes) ? p->pending_bytes(p) : 0;
 }
 
-void
-shard_pool_io_stats(const struct shard_pool* p, struct shard_pool_io_stats* out)
-{
-  memset(out, 0, sizeof(*out));
-  if (p && p->io_stats)
-    p->io_stats(p, out);
-}
-
 size_t
 shard_pool_required_shard_alignment(const struct shard_pool* p)
 {

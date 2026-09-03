@@ -4,19 +4,17 @@
 #include "stream/layouts.h"
 #include "types.codec.h"
 #include "types.stream.h"
+#include "zarr/host_batch.h"
 #include "zarr/shard_delivery.h"
 
 struct threadpool;
+struct host_output_pool;
 
-// Per-slot aggregate workspace shared across all LODs in a batch. The data
-// buffer is page-aligned so deliver-time write_direct guards still hold
-// against unbuffered (O_DIRECT) shard sinks. Scratch arrays are sized for
-// the worst-case unified batch (every LOD active across every epoch).
+// Per-slot aggregate scratch shared across all LODs in a batch. Arrays are
+// sized for the worst-case unified batch (every LOD active across every
+// epoch). Aggregate bytes are written into a separately leased host output.
 struct cpu_agg_slot
 {
-  void* data; // aggregated compressed chunks in shard order
-  size_t data_capacity_bytes;
-
   // Unified scratch sized to max(total_batch_chunks, 1).
   uint32_t* perm;
   uint32_t* gather;
@@ -25,16 +23,10 @@ struct cpu_agg_slot
   size_t* permuted_sizes;
   size_t* offsets;     // [max_total_covering + 1] exclusive prefix sum
   size_t* chunk_sizes; // [max_total_covering] pre-padding sizes
+  struct host_batch host;
 };
 
 // ---- flush_batch ----
-
-struct flush_level_view
-{
-  uint32_t batch_active_count;
-  uint64_t chunk_offset;
-  struct shard_state* shard;
-};
 
 struct flush_batch_params
 {
@@ -54,17 +46,13 @@ struct flush_batch_params
   // at a contiguous LOD_MAX_LEVELS-element array (typically owned by the
   // stream).
   const struct aggregate_layout* per_lod_agg_layouts;
-  // Per-LOD per-shard ragged-tail length carried across batches. NULL when
-  // page_size==0. h_tail_bytes[lv] is a [num_shards_lv] array; entries are
-  // updated in place by deliver_to_shards_batch.
-  size_t** h_tail_bytes;
-  struct flush_level_view levels[LOD_MAX_LEVELS];
+  struct shard_state* shards_by_level[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   size_t shard_alignment_bytes;
   struct threadpool* pool;        // owned by stream
   uint32_t* pool_epochs_scratch;  // [K] scratch for LUT recompute
   struct cpu_agg_slot* agg_slots; // [2] shared per-batch workspace
-  struct io_event* io_done;       // [2] per-slot pending-IO fence
+  struct host_output_pool* output_pool;
   uint8_t* agg_current;           // single alternator byte (0 or 1)
   struct stream_metrics* metrics; // NULL to skip timing
 };

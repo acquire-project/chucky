@@ -6,6 +6,7 @@
 struct aggregate_layout;
 struct batch_aggregate_layout;
 struct shard_state;
+struct host_output_group;
 
 enum host_batch_storage
 {
@@ -36,7 +37,6 @@ struct host_batch_run
   uint8_t level;
   uint64_t inner_shard;
   uint64_t flat_shard;
-  uint32_t active_begin;
   uint32_t active_count;
   uint64_t epoch_in_shard;
   uint64_t chunks_per_shard_inner;
@@ -59,6 +59,7 @@ struct host_batch
   uint8_t nlod;
   enum host_batch_storage storage;
   size_t shard_alignment;
+  struct host_output_group* output_group;
   struct d2h_transfer_statistics transfer;
 };
 

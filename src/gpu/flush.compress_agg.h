@@ -25,6 +25,19 @@ compress_agg_array_init(struct compress_agg_array* ar,
 void
 compress_agg_array_destroy(struct compress_agg_array* ar);
 
+int
+compress_agg_host_output_requirements(
+  const struct computed_stream_layouts* cl,
+  const struct tile_stream_configuration* config,
+  size_t* output_bytes);
+
+int
+compress_agg_array_init_output(struct compress_agg_array* ar,
+                               size_t output_bytes);
+
+struct host_output_pool*
+compress_agg_output_pool_create(size_t output_bytes);
+
 // Single-array convenience: shared + array init from one layout, with the
 // shard-capacity table uploaded.
 int

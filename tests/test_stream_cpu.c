@@ -590,6 +590,45 @@ Fail:
   return 1;
 }
 
+static int
+test_host_output_memory_estimate(void)
+{
+  log_info("=== test_host_output_memory_estimate ===");
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .storage_position = 2 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 2,
+  };
+
+  struct tile_stream_cpu_memory_info info;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 4096, &info) == 0);
+  CHECK(Fail, info.host_output_bytes > 0);
+  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
+
+  log_info("  PASS");
+  return 0;
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(int ac, char* av[])
 {
@@ -608,5 +647,6 @@ main(int ac, char* av[])
   rc |= test_advise_parts_limit();
   rc |= test_advise_halves_k();
   rc |= test_advise_user_k_respected();
+  rc |= test_host_output_memory_estimate();
   return rc;
 }

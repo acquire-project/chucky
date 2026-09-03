@@ -41,8 +41,6 @@ stream_engine_init_metrics(int enable_multiscale)
     .flush_stall = mk_stream_metric("Batch delivery", METRIC_OWNER_PRODUCER),
     .delivery_dispatch =
       mk_stream_metric("D2H dispatch", METRIC_OWNER_DELIVERY),
-    .io_fence_stall =
-      mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER),
     // These are named so the report can list them. GPU delivery also uses the
     // footer-buffer fence now that footer reuse sits behind the write plan.
     .footer_buffer_stall =
@@ -59,7 +57,6 @@ stream_engine_init_metrics(int enable_multiscale)
       mk_stream_metric("Metadata after aggregate", METRIC_OWNER_DELIVERY),
     .chunk_metadata_copy =
       mk_stream_metric("Chunk metadata D2H", METRIC_OWNER_D2H),
-    .tail_gate = mk_stream_metric("Prior tail state", METRIC_OWNER_COMPRESS),
   };
 }
 

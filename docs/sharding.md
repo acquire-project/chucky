@@ -159,11 +159,15 @@ data), but the total volume is just the compressed epoch size.
 
 ## D2H Transfer
 
-The D2H stream transfers:
-- `h_aggregated ← d_aggregated` (up to `comp_pool_bytes`, actual used portion is `d_offsets[M]`)
-- `h_offsets ← d_offsets` ($({M+1}) \times \text{sizeof(size\_t)}$ bytes)
+For variable-size data, the D2H stream first transfers the offsets and actual
+chunk sizes. The host uses that metadata to lay out exact transfer spans in a
+leased pinned output, then copies only those spans from `d_aggregated`. Fixed
+size data can build the same layout without the metadata transfer.
 
-Both are double-buffered alongside the existing chunk pool slots.
+There are always two device aggregate slots. A slot is reusable as soon as its
+copy into the leased output completes. Host outputs come from a separate
+bounded pool and remain leased until every filesystem command borrowing their
+bytes retires.
 
 ## Host-Side Shard Accumulation
 
@@ -192,7 +196,7 @@ for j in 0..M-1:
     slot = within_outer * chunks_per_shard_inner + within_inner
 
     size = h_offsets[j+1] - h_offsets[j]
-    src  = h_aggregated + h_offsets[j]
+    src  = host_output + host_offsets[j]
 
     append src (size bytes) to shards[shard_idx].data
     shards[shard_idx].index[2*slot]     = data_write_offset
@@ -201,7 +205,7 @@ for j in 0..M-1:
 
 Because chunks arrive in shard-major order, the first `chunks_per_shard_inner`
 chunks all go to shard 0, the next batch to shard 1, etc. The inner loop over
-each shard's chunks is a contiguous `memcpy` from `h_aggregated`.
+each shard's chunks occupies a contiguous slice of the leased host output.
 
 ### Shard emission
 

@@ -1551,6 +1551,48 @@ Fail:
   return 1;
 }
 
+static int
+test_host_output_memory_estimate(void)
+{
+  log_info("=== test_host_output_memory_estimate ===");
+  struct dimension dims[] = {
+    { .size = 0,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 4,
+      .chunks_per_shard = 2,
+      .name = "x",
+      .storage_position = 2 },
+  };
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 3,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 2,
+  };
+  struct tile_stream_memory_info info;
+
+  CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 4096, &info) == 0);
+  CHECK(Fail, info.host_output_bytes > 0);
+  CHECK(Fail, info.host_output_pool_bytes == 2 * info.host_output_bytes);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 // --- Test: storage_order validation (no CUDA needed) ---
 
 static int
@@ -2319,6 +2361,7 @@ main(int ac, char* av[])
 
   // zarr_for_each_intermediate unit test (no CUDA, no tmpdir needed)
   ecode |= test_for_each_intermediate();
+  ecode |= test_host_output_memory_estimate();
 
   // Metadata tests (no CUDA needed)
   {

@@ -417,13 +417,6 @@ ngff_multiscale_pending_bytes(const struct ngff_multiscale* ms)
   return ms ? ms->pool->pending_bytes(ms->pool) : 0;
 }
 
-void
-ngff_multiscale_io_stats(const struct ngff_multiscale* ms,
-                         struct shard_pool_io_stats* out)
-{
-  shard_pool_io_stats(ms ? ms->pool : NULL, out);
-}
-
 int
 ngff_multiscale_set_attribute(struct ngff_multiscale* ms,
                               const char* attr_key,

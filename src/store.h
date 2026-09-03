@@ -6,7 +6,6 @@
 
 #include "dimension.h"
 #include "dtype.h"
-#include "zarr/types.io.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,11 +17,6 @@ struct store;
 // Returns NULL on error.
 struct store*
 store_fs_create(const char* root, int unbuffered);
-
-// How much of the write backlog the shard pools created from here on run at
-// once. A zero field takes the default. Ignored by an S3 store.
-void
-store_fs_set_io_scheduling(struct store* s, struct io_scheduling io);
 
 // --- S3 store ---
 

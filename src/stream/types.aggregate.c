@@ -1,29 +1,10 @@
 #include "stream/types.aggregate.h"
 
-#include "platform/platform.h"
 #include "stream/layouts.h"
 #include "util/index.ops.h"
 #include "util/prelude.h"
 
 #include <string.h>
-
-size_t
-agg_pool_bytes(uint64_t chunk_count,
-               size_t max_comp_chunk_bytes,
-               uint64_t covering_count,
-               uint64_t cps_inner,
-               size_t page_size)
-{
-  CHECK_MUL_OVERFLOW(Overflow, chunk_count, max_comp_chunk_bytes, SIZE_MAX);
-  size_t bytes = chunk_count * max_comp_chunk_bytes;
-  if (page_size > 0 && cps_inner > 0) {
-    uint64_t num_shards = covering_count / cps_inner;
-    bytes += num_shards * page_size + page_size;
-  }
-  return bytes;
-Overflow:
-  return 0;
-}
 
 size_t
 footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
@@ -40,27 +21,6 @@ footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size)
   if (logical > SIZE_MAX - page_size)
     return 0;
   return align_up(page_size + logical, page_size);
-Overflow:
-  return 0;
-}
-
-size_t
-agg_pool_bytes_layout(const struct aggregate_layout* layout)
-{
-  if (!layout || layout->num_shards == 0)
-    return 0;
-  if (layout->shard_capacity == 0) {
-    // Layout was computed without a shard_capacity (page_size == 0 path).
-    // Fall back to the un-paginated chunk pool size, sized for the worst-case
-    // batch (active_count_max epochs).
-    uint32_t active = layout->active_count_max ? layout->active_count_max : 1;
-    CHECK_MUL_OVERFLOW(
-      Overflow, layout->covering_count, layout->max_comp_chunk_bytes, SIZE_MAX);
-    size_t per_epoch = layout->covering_count * layout->max_comp_chunk_bytes;
-    CHECK_MUL_OVERFLOW(Overflow, per_epoch, (uint64_t)active, SIZE_MAX);
-    return per_epoch * active;
-  }
-  return layout->num_shards * layout->shard_capacity;
 Overflow:
   return 0;
 }
@@ -102,113 +62,6 @@ aggregate_batch_luts(const struct aggregate_layout* agg,
   }
 }
 
-// Populate a batch_aggregate_layout from per-LOD layouts and the per-LOD
-// active counts in this batch. Each LOD's data segment offset is rounded
-// up to page alignment so deliver-time write_direct guards still hold.
-int
-batch_aggregate_layout_init(struct batch_aggregate_layout* out,
-                            const struct aggregate_layout* per_lod,
-                            const uint32_t* per_lod_n_active,
-                            uint8_t nlod,
-                            size_t page_size)
-{
-  CHECK(Error, out);
-  CHECK(Error, per_lod);
-  CHECK(Error, per_lod_n_active);
-  CHECK(Error, nlod >= 1 && nlod <= LOD_MAX_LEVELS);
-
-  memset(out, 0, sizeof(*out));
-  out->nlod = nlod;
-  out->page_size = page_size;
-  out->max_comp_chunk_bytes = per_lod[0].max_comp_chunk_bytes;
-
-  const size_t page_align =
-    page_size > 0 ? page_size : platform_page_alignment();
-
-  uint64_t chunk_acc = 0;
-  uint64_t covering_acc = 0;
-  size_t data_acc = 0;
-
-  for (uint8_t lv = 0; lv < nlod; ++lv) {
-    const struct aggregate_layout* in = &per_lod[lv];
-    struct lod_segment* seg = &out->lods[lv];
-
-    // Pool stride is uniform across LODs (see stream/config.c:357 — same
-    // max_output_size is passed to every aggregate_layout_compute call).
-    CHECK(Error, in->max_comp_chunk_bytes == out->max_comp_chunk_bytes);
-
-    seg->chunks_per_epoch = in->chunks_per_epoch;
-    seg->covering_count = in->covering_count;
-    seg->chunks_per_shard_inner = in->cps_inner;
-    seg->n_active = per_lod_n_active[lv];
-
-    seg->batch_chunk_offset = chunk_acc;
-    seg->batch_covering_offset = covering_acc;
-    seg->data_segment_offset = data_acc;
-
-    const uint64_t batch_chunks =
-      (uint64_t)seg->n_active * seg->chunks_per_epoch;
-    const uint64_t batch_cov = (uint64_t)seg->n_active * seg->covering_count;
-
-    chunk_acc += batch_chunks;
-    covering_acc += batch_cov;
-
-    // Per-LOD segment capacity. With carry-over (page_size > 0) the gather
-    // places shard si at base + si*shard_capacity, so the segment must reserve
-    // num_shards*shard_capacity — not the tightly-packed agg_pool_bytes value.
-    // Without carry-over fall back to the legacy chunk-pool sizing.
-    size_t seg_bytes;
-    if (page_size > 0 && in->shard_capacity > 0) {
-      seg_bytes = agg_pool_bytes_layout(in);
-      if (seg_bytes == 0 && in->num_shards > 0) {
-        log_error("batch_aggregate_layout_init: lod %u layout overflow "
-                  "(num_shards=%llu, shard_capacity=%zu)",
-                  (unsigned)lv,
-                  (unsigned long long)in->num_shards,
-                  in->shard_capacity);
-        goto Error;
-      }
-    } else {
-      seg_bytes = agg_pool_bytes(batch_chunks,
-                                 in->max_comp_chunk_bytes,
-                                 batch_cov,
-                                 seg->n_active * in->cps_inner,
-                                 page_size);
-      if (seg_bytes == 0 && batch_chunks > 0) {
-        log_error("batch_aggregate_layout_init: lod %u agg_pool_bytes overflow "
-                  "(batch_chunks=%llu, max_comp=%zu)",
-                  (unsigned)lv,
-                  (unsigned long long)batch_chunks,
-                  in->max_comp_chunk_bytes);
-        goto Error;
-      }
-    }
-
-    seg->data_segment_bytes = seg_bytes;
-
-    // Round each segment up to a page boundary so the next LOD's segment
-    // base is also page-aligned within the unified buffer.
-    if (lv + 1 < nlod) {
-      size_t next = data_acc + seg_bytes;
-      next = align_up(next, page_align);
-      data_acc = next;
-    } else {
-      data_acc += seg_bytes;
-    }
-  }
-
-  out->total_batch_chunks = chunk_acc;
-  out->total_batch_covering = covering_acc;
-  out->total_data_bytes = align_up(data_acc, page_align);
-
-  return 0;
-
-Error:
-  if (out)
-    memset(out, 0, sizeof(*out));
-  return 1;
-}
-
 int
 batch_aggregate_layout_init_compact(struct batch_aggregate_layout* out,
                                     const struct aggregate_layout* per_lod,
@@ -220,7 +73,6 @@ batch_aggregate_layout_init_compact(struct batch_aggregate_layout* out,
 
   memset(out, 0, sizeof(*out));
   out->nlod = nlod;
-  out->page_size = 0;
   out->max_comp_chunk_bytes = per_lod[0].max_comp_chunk_bytes;
 
   uint64_t chunk_acc = 0;
@@ -252,8 +104,6 @@ batch_aggregate_layout_init_compact(struct batch_aggregate_layout* out,
       .n_active = per_lod_n_active[lv],
       .batch_chunk_offset = chunk_acc,
       .batch_covering_offset = covering_acc,
-      .data_segment_offset = data_acc,
-      .data_segment_bytes = segment_bytes,
     };
     chunk_acc += batch_chunks;
     covering_acc += batch_covering;
@@ -373,7 +223,6 @@ aggregate_layout_compute(struct aggregate_layout* layout,
                          const uint64_t* chunks_per_shard,
                          uint64_t chunks_per_epoch,
                          size_t max_comp_chunk_bytes,
-                         uint32_t active_count_max,
                          size_t page_size,
                          uint64_t chunks_per_shard_append)
 {
@@ -420,18 +269,8 @@ aggregate_layout_compute(struct aggregate_layout* layout,
 
   layout->cps_inner = cps_inner;
   layout->num_shards = layout->covering_count / cps_inner;
-  layout->active_count_max = active_count_max;
   layout->page_size = page_size;
   layout->chunks_per_shard_append = chunks_per_shard_append;
-
-  // Per-shard reservation in d_aggregated: worst-case batch real chunk
-  // bytes plus one page slack for a leading carry-over tail.
-  if (page_size > 0 && active_count_max > 0) {
-    size_t worst = (size_t)active_count_max * cps_inner * max_comp_chunk_bytes;
-    layout->shard_capacity = align_up(worst + page_size, page_size);
-  } else {
-    layout->shard_capacity = 0;
-  }
 
   // Shard strides: stride(sc[d]) = prod(sc[j] for j>d) * cps_inner
   {

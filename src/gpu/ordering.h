@@ -54,7 +54,7 @@ enum gpu_edge
                            // pool buf[fc] reuse / re-zero (#140)
   GPU_EDGE_SLOT_COPY_DONE, // payload copy -> compress: aggregate slot reuse
   GPU_EDGE_D2H_DONE,       // payload copy -> HOST (alias of SLOT_COPY_DONE):
-                           // h_aggregated stable for sink delivery
+                           // leased host output stable for sink delivery
   GPU_EDGE_CHUNK_INDEX_READY, // d2h -> HOST: h_offsets/h_permuted_sizes
                               // landed; payload-copy source stable
 

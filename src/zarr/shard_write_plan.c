@@ -2,6 +2,7 @@
 
 #include "log/log.h"
 #include "platform/platform.h"
+#include "stream/host_output_pool.h"
 #include "util/metric.h"
 #include "zarr/crc32c.h"
 
@@ -597,6 +598,16 @@ wait_footer_fence(struct shard_sink* sink,
                          0);
 }
 
+static void
+release_host_output(struct host_batch* host)
+{
+  if (!host || !host->output_group)
+    return;
+  struct host_output_group* group = host->output_group;
+  host->output_group = NULL;
+  host_output_group_seal(group);
+}
+
 static int
 ensure_writer(struct shard_sink* sink,
               const struct shard_write_plan* plan,
@@ -632,13 +643,17 @@ deliver_host_batch(struct host_batch* host,
                    size_t* out_bytes,
                    struct stream_metrics* metrics)
 {
-  if (!host || !shards_by_level || !sink)
+  if (!host || !shards_by_level || !sink) {
+    release_host_output(host);
     return 1;
+  }
 
   struct shard_write_plan plan;
   memset(&plan, 0, sizeof(plan));
-  if (shard_write_begin(&plan, host, shards_by_level))
+  if (shard_write_begin(&plan, host, shards_by_level)) {
+    release_host_output(host);
     return 1;
+  }
 
   size_t total_bytes = 0;
   struct shard_write_command command;
@@ -674,8 +689,11 @@ deliver_host_batch(struct host_batch* host,
           const uint8_t* end = command.source + command.write_size;
           const int transient_footer =
             command.kind == SHARD_WRITE_FOOTER && plan.shard_alignment == 0;
-          int use_direct =
-            sh->writer->write_direct != NULL && !transient_footer;
+          const int output_backed = host->output_group != NULL;
+          int use_output = command.kind == SHARD_WRITE_DATA && output_backed &&
+                           sh->writer->write_from_output;
+          int use_direct = sh->writer->write_direct != NULL &&
+                           !transient_footer && !output_backed;
           if (use_direct && plan.shard_alignment > 0) {
             const size_t alignment = plan.shard_alignment;
             use_direct = (uintptr_t)command.source % alignment == 0 &&
@@ -683,7 +701,13 @@ deliver_host_batch(struct host_batch* host,
                          command.write_size % alignment == 0;
           }
           int wr = 1;
-          if (use_direct) {
+          if (use_output) {
+            wr = sh->writer->write_from_output(sh->writer,
+                                               command.file_offset,
+                                               command.source,
+                                               end,
+                                               host->output_group);
+          } else if (use_direct) {
             wr = sh->writer->write_direct(
               sh->writer, command.file_offset, command.source, end);
             if (!wr && command.kind == SHARD_WRITE_FOOTER && sink->record_fence)
@@ -727,11 +751,13 @@ deliver_host_batch(struct host_batch* host,
     goto Error;
   if (out_bytes)
     *out_bytes = total_bytes;
+  release_host_output(host);
   shard_write_destroy(&plan);
   return 0;
 
 Error:
   shard_write_abort(&plan);
+  release_host_output(host);
   shard_write_destroy(&plan);
   return 1;
 }

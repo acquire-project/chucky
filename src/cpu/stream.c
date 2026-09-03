@@ -43,6 +43,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   if (!s)
     return NULL;
 
+  s->flushed = 1;
+  s->closed = 1;
   s->config = *config;
   {
     int nthreads = config->max_threads > 0 ? config->max_threads
@@ -94,17 +96,7 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     for (int lv = 0; lv < s->levels.nlod; ++lv) {
       const struct level_layout_info* li = &s->cl.per_level[lv];
       s->agg_layout[lv] = li->agg_layout;
-      s->batch_active_count[lv] = li->batch_active_count;
       CHECK(Fail, init_shard_state(&s->shard[lv], li) == 0);
-
-      // Per-LOD tail-carry shadow. Updated in place by deliver_to_shards_batch
-      // once tail-carry delivery is wired up.
-      const uint64_t num_shards = li->agg_layout.num_shards;
-      const size_t page = li->agg_layout.page_size;
-      if (num_shards > 0 && page > 0) {
-        s->h_tail_bytes[lv] = (size_t*)calloc(num_shards, sizeof(size_t));
-        CHECK(Fail, s->h_tail_bytes[lv]);
-      }
     }
 
     // Worst-case unified batch layout: every LOD active across every epoch
@@ -113,33 +105,44 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     {
       uint32_t worst[LOD_MAX_LEVELS];
       for (int lv = 0; lv < s->levels.nlod; ++lv) {
-        uint32_t k = s->batch_active_count[lv];
-        worst[lv] = k > 0 ? k : 1;
+        const uint32_t count = s->cl.per_level[lv].batch_active_count;
+        worst[lv] = count ? count : 1;
       }
-      const size_t page = s->cl.per_level[0].agg_layout.page_size;
+      struct batch_aggregate_layout max_batch_layout;
       CHECK(Fail,
-            batch_aggregate_layout_init(&s->max_batch_layout,
-                                        s->agg_layout,
-                                        worst,
-                                        (uint8_t)s->levels.nlod,
-                                        page) == 0);
-    }
+            batch_aggregate_layout_init_compact(&max_batch_layout,
+                                                s->agg_layout,
+                                                worst,
+                                                (uint8_t)s->levels.nlod) == 0);
 
-    // Allocate the two double-buffered slots once each. Each slot owns a
-    // page-aligned data buffer and unified scratch arrays. cap_data is
-    // already page-aligned by batch_aggregate_layout_init.
-    {
-      const uint64_t cap_chunks = s->max_batch_layout.total_batch_chunks;
-      const uint64_t cap_cov = s->max_batch_layout.total_batch_covering;
-      const size_t cap_data = s->max_batch_layout.total_data_bytes;
-      const size_t align = platform_page_alignment();
+      size_t run_count = 0;
+      size_t required_output_bytes = 0;
+      const enum host_batch_storage storage = host_batch_storage_select(
+        config->codec.id == CODEC_NONE, s->shard_alignment);
+      CHECK(Fail,
+            host_batch_capacity(s->agg_layout,
+                                worst,
+                                (uint8_t)s->levels.nlod,
+                                storage,
+                                s->shard_alignment,
+                                &required_output_bytes,
+                                &run_count) == 0);
+      (void)run_count;
+      size_t host_output_bytes = 0;
+      CHECK(Fail,
+            host_output_size(required_output_bytes,
+                             platform_page_alignment(),
+                             &host_output_bytes) == 0);
+      s->output_pool =
+        host_output_pool_create(host_output_bytes,
+                                platform_page_alignment(),
+                                (struct host_output_allocator){ 0 });
+      CHECK(Fail, s->output_pool);
+
+      const uint64_t cap_chunks = max_batch_layout.total_batch_chunks;
+      const uint64_t cap_cov = max_batch_layout.total_batch_covering;
       for (int fc = 0; fc < 2; ++fc) {
         struct cpu_agg_slot* as = &s->agg_slots[fc];
-        as->data_capacity_bytes = cap_data;
-        if (cap_data > 0) {
-          as->data = platform_aligned_alloc(align, cap_data);
-          CHECK(Fail, as->data);
-        }
         if (cap_chunks > 0) {
           as->perm = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
           as->gather = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
@@ -248,8 +251,6 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
   s->metrics.compress = mk_stream_metric("compress", METRIC_OWNER_COMPRESS);
   s->metrics.aggregate = mk_stream_metric("aggregate", METRIC_OWNER_COMPRESS);
   s->metrics.sink = mk_stream_metric("sink", METRIC_OWNER_DELIVERY);
-  s->metrics.io_fence_stall =
-    mk_stream_metric("Output-slot writes", METRIC_OWNER_PRODUCER);
   s->metrics.footer_buffer_stall =
     mk_stream_metric("Footer-buffer write", METRIC_OWNER_PRODUCER);
   s->metrics.append_extent_stall =
@@ -295,6 +296,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
 
   platform_toc(&s->metadata_update_clock);
 
+  s->flushed = 0;
+  s->closed = 0;
   return s;
 
 Fail:
@@ -326,20 +329,21 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
 
   for (int lv = 0; lv < s->levels.nlod; ++lv) {
     shard_state_destroy(&s->shard[lv]);
-    free(s->h_tail_bytes[lv]);
     free(s->morton_lut[lv]);
     free(s->lod_fixed_dims_offsets[lv]);
   }
 
   for (int fc = 0; fc < 2; ++fc) {
     struct cpu_agg_slot* as = &s->agg_slots[fc];
-    platform_aligned_free(as->data);
+    host_batch_destroy(&as->host);
     free(as->perm);
     free(as->gather);
     free(as->permuted_sizes);
     free(as->offsets);
     free(as->chunk_sizes);
   }
+
+  host_output_pool_destroy(s->output_pool);
 
   free(s->chunk_pool);
   free(s->compressed);
@@ -400,11 +404,12 @@ tile_stream_cpu_worker_threads(const struct tile_stream_cpu* s)
 
 // Compute memory sizing from pre-computed layouts.
 // Used by memory_estimate for reporting.
-static void
+static int
 compute_memory_info(const struct computed_stream_layouts* cl,
-                    size_t bytes_per_element,
+                    const struct tile_stream_configuration* config,
                     struct tile_stream_cpu_memory_info* info)
 {
+  const size_t bytes_per_element = dtype_bpe(config->dtype);
   const uint32_t K = cl->epochs_per_batch;
   const uint64_t total_chunks = cl->levels.total_chunks;
   const size_t chunk_stride_bytes =
@@ -427,24 +432,43 @@ compute_memory_info(const struct computed_stream_layouts* cl,
       uint32_t k = cl->per_level[lv].batch_active_count;
       worst[lv] = k > 0 ? k : 1;
     }
-    const size_t page = cl->per_level[0].agg_layout.page_size;
     struct batch_aggregate_layout layout;
-    if (batch_aggregate_layout_init(
-          &layout, per_lod, worst, (uint8_t)cl->levels.nlod, page) == 0) {
-      const uint64_t cap_chunks = layout.total_batch_chunks;
-      const uint64_t cap_cov = layout.total_batch_covering;
-      const size_t cap_data = layout.total_data_bytes;
-      const uint64_t cov_alloc = cap_cov + LOD_MAX_LEVELS;
+    CHECK(Error,
+          batch_aggregate_layout_init_compact(
+            &layout, per_lod, worst, (uint8_t)cl->levels.nlod) == 0);
+    const uint64_t cap_chunks = layout.total_batch_chunks;
+    const uint64_t cap_cov = layout.total_batch_covering;
+    CHECK(Error, cap_cov <= UINT64_MAX - LOD_MAX_LEVELS);
+    const uint64_t cov_alloc = cap_cov + LOD_MAX_LEVELS;
 
-      // Per slot: data + perm + gather + permuted_sizes + offsets +
-      // chunk_sizes (the last three carry +LOD_MAX_LEVELS shift slack).
-      const size_t per_slot = cap_data + cap_chunks * sizeof(uint32_t) + // perm
-                              cap_chunks * sizeof(uint32_t) + // gather
-                              cov_alloc * sizeof(size_t) +    // permuted_sizes
-                              cov_alloc * sizeof(size_t) +    // offsets
-                              cov_alloc * sizeof(size_t);     // chunk_sizes
-      agg += 2 * per_slot;
-    }
+    const size_t per_slot = cap_chunks * sizeof(uint32_t) + // perm
+                            cap_chunks * sizeof(uint32_t) + // gather
+                            cov_alloc * sizeof(size_t) +    // permuted_sizes
+                            cov_alloc * sizeof(size_t) +    // offsets
+                            cov_alloc * sizeof(size_t);     // chunk_sizes
+    agg += 2 * per_slot;
+
+    size_t run_count = 0;
+    size_t required_output_bytes = 0;
+    const size_t shard_alignment = per_lod[0].page_size;
+    const enum host_batch_storage storage = host_batch_storage_select(
+      config->codec.id == CODEC_NONE, shard_alignment);
+    CHECK(Error,
+          host_batch_capacity(per_lod,
+                              worst,
+                              (uint8_t)cl->levels.nlod,
+                              storage,
+                              shard_alignment,
+                              &required_output_bytes,
+                              &run_count) == 0);
+    (void)run_count;
+    CHECK(Error,
+          host_output_size(required_output_bytes,
+                           platform_page_alignment(),
+                           &info->host_output_bytes) == 0);
+    CHECK_MUL_OVERFLOW(
+      Error, HOST_OUTPUT_COUNT, info->host_output_bytes, SIZE_MAX);
+    info->host_output_pool_bytes = HOST_OUTPUT_COUNT * info->host_output_bytes;
 
     // Batch state: per-epoch active mask + per-LOD pool_epochs scratch.
     agg += (size_t)K * sizeof(uint32_t);
@@ -512,14 +536,18 @@ compute_memory_info(const struct computed_stream_layouts* cl,
 
   info->heap_bytes = sizeof(struct tile_stream_cpu) + info->chunk_pool_bytes +
                      info->compressed_pool_bytes + info->comp_sizes_bytes +
-                     info->aggregate_bytes + info->lod_bytes +
-                     info->shard_bytes;
+                     info->aggregate_bytes + info->host_output_pool_bytes +
+                     info->lod_bytes + info->shard_bytes;
 
   info->chunks_per_epoch = cl->layouts[0].chunks_per_epoch;
   info->total_chunks = total_chunks;
   info->max_output_size = max_out;
   info->nlod = cl->levels.nlod;
   info->epochs_per_batch = K;
+  return 0;
+
+Error:
+  return 1;
 }
 
 int
@@ -537,7 +565,10 @@ tile_stream_cpu_memory_estimate(const struct tile_stream_configuration* config,
         config, 1, compress_cpu_max_output_size, shard_alignment, &cl))
     return 1;
 
-  compute_memory_info(&cl, dtype_bpe(config->dtype), info);
+  if (compute_memory_info(&cl, config, info)) {
+    computed_stream_layouts_free(&cl);
+    return 1;
+  }
   computed_stream_layouts_free(&cl);
   return 0;
 }
@@ -722,18 +753,15 @@ make_view(struct tile_stream_cpu* s)
     .pool_fully_covered = s->pool_fully_covered,
     .shard = s->shard,
     .agg_layout = s->agg_layout,
-    .h_tail_bytes = s->h_tail_bytes,
-    .batch_active_count = s->batch_active_count,
     .csrs = s->csrs,
     .append_accum = s->append_accum,
     .append_counts = s->append_counts,
-    .io_done = s->io_done,
     .agg_current = &s->agg_current,
     .chunk_pool = s->chunk_pool,
-    .chunk_pool_bytes = 0,
     .compressed = s->compressed,
     .comp_sizes = s->comp_sizes,
     .agg_slots = s->agg_slots,
+    .output_pool = s->output_pool,
     .linear = s->linear,
     .lod_values = s->lod_values,
     .scatter_lut = s->scatter_lut,

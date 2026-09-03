@@ -1,8 +1,5 @@
 #pragma once
 
-#include "stream/types.aggregate.h"
-#include "writer.h"
-
 #include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,42 +19,23 @@ extern "C"
     size_t* d_permuted_sizes; // device: (C+1) size_t, zeroed each epoch
     size_t* d_offsets;        // device: (C+1) size_t
     void* d_aggregated;       // device: compact aggregate capacity
-    void* h_aggregated;       // host pinned: aligned run capacity
     size_t* h_offsets;        // host pinned: (C+1) size_t
     size_t* h_permuted_sizes; // host pinned: C size_t (real compressed sizes)
     void* d_temp;             // CUB scratch
     size_t temp_bytes;
-    size_t device_capacity;
-    size_t host_capacity;
-    struct io_event io_done; // tracks IO completion from this slot's data
-    int64_t writes_posted_ns;
   };
 
   void aggregate_slot_destroy(struct aggregate_slot* slot);
 
   int aggregate_batch_slot_init(struct aggregate_slot* slot,
                                 uint64_t batch_covering_count,
-                                size_t device_data_bytes,
-                                size_t host_data_bytes);
+                                size_t device_data_bytes);
 
   // Sizing mirror of aggregate_batch_slot_init, for the memory estimate.
   int aggregate_batch_slot_memory(uint64_t batch_covering_count,
                                   size_t device_data_bytes,
-                                  size_t host_data_bytes,
                                   size_t* device_bytes,
                                   size_t* host_bytes);
-
-  // Aggregate one LOD into a compact shard-major byte stream.  Offsets are
-  // absolute within d_aggregated and contain no page bias or host-tail prefix.
-  int aggregate_batch_by_shard_async(const void* d_compressed,
-                                     size_t* d_comp_sizes,
-                                     const uint32_t* d_batch_gather,
-                                     const uint32_t* d_batch_perm,
-                                     uint64_t batch_chunk_count,
-                                     uint64_t batch_covering_count,
-                                     size_t max_comp_chunk_bytes,
-                                     struct aggregate_slot* slot,
-                                     CUstream stream);
 
   // clang-format off
   // Single compact dispatch across all LODs. Per-LOD gather and permutation

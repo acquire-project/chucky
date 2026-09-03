@@ -1,6 +1,7 @@
 #include "zarr/host_batch.h"
 
 #include "defs.limits.h"
+#include "stream/host_output_pool.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
 
@@ -208,8 +209,7 @@ host_batch_build(struct host_batch* host,
     }
   }
   CHECK(Error, host_batch_reserve(host, run_count) == 0);
-  CHECK(Error, run_count == 0 || spans);
-  CHECK(Error, span_capacity >= run_count);
+  CHECK(Error, !spans || span_capacity >= run_count);
 
   host->run_count = 0;
   host->nlod = nlod;
@@ -243,11 +243,6 @@ host_batch_build(struct host_batch* host,
     const size_t segment_entries = (size_t)n_active * al->covering_count;
     CHECK(Error, metadata_base < metadata_entries);
     CHECK(Error, segment_entries <= metadata_entries - metadata_base - 1);
-    CHECK(Error, seg->data_segment_offset <= batch_layout->total_data_bytes);
-    CHECK(Error,
-          seg->data_segment_bytes <=
-            batch_layout->total_data_bytes - seg->data_segment_offset);
-
     uint32_t a = 0;
     uint64_t epoch = ss->epoch_in_shard;
     uint64_t generation = ss->shard_epoch;
@@ -319,7 +314,7 @@ host_batch_build(struct host_batch* host,
           memset(
             (uint8_t*)aggregate_data + region + payload, 0, reserve - payload);
 
-        if (payload > 0) {
+        if (payload > 0 && spans) {
           spans[*out_span_count] = (struct d2h_transfer_span){
             .device_offset = source,
             .host_offset = region + tail,
@@ -334,7 +329,6 @@ host_batch_build(struct host_batch* host,
           .level = lv,
           .inner_shard = si,
           .flat_shard = generation * ss->shard_inner_count + si,
-          .active_begin = a,
           .active_count = run_len,
           .epoch_in_shard = epoch,
           .chunks_per_shard_inner = cps,
@@ -383,6 +377,8 @@ host_batch_destroy(struct host_batch* host)
 {
   if (!host)
     return;
+  if (host->output_group)
+    host_output_group_seal(host->output_group);
   free(host->runs);
   *host = (struct host_batch){ 0 };
 }

@@ -4,6 +4,7 @@
 #include "multiarray.cpu.h"
 #include "platform/platform.h"
 #include "stream/config.h"
+#include "stream/host_output_pool.h"
 #include "threadpool/threadpool.h"
 #include "zarr/shard_delivery.h"
 
@@ -25,12 +26,7 @@ struct array_descriptor
   struct tile_stream_layout layout;
   struct level_geometry levels;
   struct aggregate_layout agg_layout[LOD_MAX_LEVELS];
-  uint32_t batch_active_count[LOD_MAX_LEVELS];
   struct shard_state shard[LOD_MAX_LEVELS];
-  // Per-LOD ragged-tail length carried across batches. Descriptor-owned so
-  // an array switch doesn't contaminate the next array's first batch with the
-  // prior array's tail. NULL when page_size==0.
-  size_t* h_tail_bytes[LOD_MAX_LEVELS];
   struct shard_sink* sink;
   uint64_t cursor_elements;
   uint64_t total_element_limit;
@@ -40,16 +36,12 @@ struct array_descriptor
   uint32_t append_counts[LOD_MAX_LEVELS];
   void* append_accum;
   struct reduce_csr* csrs; // [nlod-1] CSR reduce LUTs (multiscale only), owned
-  struct io_event io_done[2]; // per-slot fences (single fence covers batch)
-  uint8_t agg_current;        // next slot to use (0 or 1)
-  // Worst-case unified batch layout for this array — used to pre-size
-  // per-array view of the shared agg_slots scratch.
-  struct batch_aggregate_layout max_batch_layout;
-  size_t shard_alignment; // from sink; 0 = no alignment
-  int pool_fully_covered; // 1 if scatter overwrites every pool position
-  int flushed;            // 1 once finalized; no further input is taken
-  int closed;             // 1 once close drained and, on success, published
-  int close_failed;       // outcome of that close, re-reported by later calls
+  uint8_t agg_current;     // next slot to use (0 or 1)
+  size_t shard_alignment;  // from sink; 0 = no alignment
+  int pool_fully_covered;  // 1 if scatter overwrites every pool position
+  int flushed;             // 1 once finalized; no further input is taken
+  int closed;              // 1 once close drained and, on success, published
+  int close_failed;        // outcome of that close, re-reported by later calls
 };
 
 // ---- Main struct ----
@@ -70,10 +62,10 @@ struct multiarray_tile_stream_cpu
   size_t chunk_pool_bytes;
   void* compressed;
   size_t* comp_sizes;
+  struct host_output_pool* output_pool;
 
-  // Shared aggregate workspace: one double-buffered pair across all LODs.
-  // Each slot owns a page-aligned data buffer plus unified scratch arrays
-  // sized for the worst-case unified batch across all arrays.
+  // Shared aggregate workspace: one double-buffered scratch pair across all
+  // LODs, sized for the worst-case unified batch across all arrays.
   struct cpu_agg_slot agg_slots[2];
 
   // Shared LUT storage (recomputed on switch).
@@ -125,12 +117,11 @@ struct pool_maxima
   size_t chunk_pool_bytes;
   size_t compressed_bytes;
   size_t comp_sizes_count;
-  size_t pool_epochs_scratch_count; // LOD_MAX_LEVELS * max_K
   size_t linear_bytes;
   size_t lod_values_bytes;
+  size_t host_output_bytes;
 
   // Unified per-batch maxima across all arrays.
-  size_t agg_data_bytes_total;       // shared data buffer per slot
   uint64_t total_batch_chunks_max;   // unified gather/perm len
   uint64_t total_batch_covering_max; // unified offsets/sizes len
 
@@ -210,19 +201,8 @@ init_array_descriptor(struct array_descriptor* desc,
   for (int lv = 0; lv < desc->levels.nlod; ++lv) {
     const struct level_layout_info* li = &desc->cl.per_level[lv];
     desc->agg_layout[lv] = li->agg_layout;
-    desc->batch_active_count[lv] = li->batch_active_count;
     if (init_shard_state(&desc->shard[lv], li))
       return 1;
-
-    // Per-LOD tail-carry shadow. Updated in place by deliver_to_shards_batch
-    // once tail-carry delivery is wired up.
-    const uint64_t num_shards = li->agg_layout.num_shards;
-    const size_t page = li->agg_layout.page_size;
-    if (num_shards > 0 && page > 0) {
-      desc->h_tail_bytes[lv] = (size_t*)calloc(num_shards, sizeof(size_t));
-      if (!desc->h_tail_bytes[lv])
-        return 1;
-    }
   }
 
   // Worst-case unified batch layout for this array — every LOD active for
@@ -230,31 +210,39 @@ init_array_descriptor(struct array_descriptor* desc,
   {
     uint32_t worst[LOD_MAX_LEVELS];
     for (int lv = 0; lv < desc->levels.nlod; ++lv) {
-      uint32_t k = desc->batch_active_count[lv];
-      worst[lv] = k > 0 ? k : 1;
+      const uint32_t count = desc->cl.per_level[lv].batch_active_count;
+      worst[lv] = count ? count : 1;
     }
-    const size_t page = desc->cl.per_level[0].agg_layout.page_size;
-    if (batch_aggregate_layout_init(&desc->max_batch_layout,
-                                    desc->agg_layout,
-                                    worst,
-                                    (uint8_t)desc->levels.nlod,
-                                    page))
+    struct batch_aggregate_layout max_batch_layout;
+    if (batch_aggregate_layout_init_compact(&max_batch_layout,
+                                            desc->agg_layout,
+                                            worst,
+                                            (uint8_t)desc->levels.nlod))
       return 1;
-
-    maxima->agg_data_bytes_total = max_sz(
-      maxima->agg_data_bytes_total, desc->max_batch_layout.total_data_bytes);
-    if (desc->max_batch_layout.total_batch_chunks >
-        maxima->total_batch_chunks_max)
-      maxima->total_batch_chunks_max =
-        desc->max_batch_layout.total_batch_chunks;
-    if (desc->max_batch_layout.total_batch_covering >
+    size_t run_count = 0;
+    size_t required_output_bytes = 0;
+    const enum host_batch_storage storage = host_batch_storage_select(
+      config->codec.id == CODEC_NONE, desc->shard_alignment);
+    if (host_batch_capacity(desc->agg_layout,
+                            worst,
+                            (uint8_t)desc->levels.nlod,
+                            storage,
+                            desc->shard_alignment,
+                            &required_output_bytes,
+                            &run_count))
+      return 1;
+    (void)run_count;
+    size_t output_bytes = 0;
+    if (host_output_size(
+          required_output_bytes, platform_page_alignment(), &output_bytes))
+      return 1;
+    maxima->host_output_bytes = max_sz(maxima->host_output_bytes, output_bytes);
+    if (max_batch_layout.total_batch_chunks > maxima->total_batch_chunks_max)
+      maxima->total_batch_chunks_max = max_batch_layout.total_batch_chunks;
+    if (max_batch_layout.total_batch_covering >
         maxima->total_batch_covering_max)
-      maxima->total_batch_covering_max =
-        desc->max_batch_layout.total_batch_covering;
+      maxima->total_batch_covering_max = max_batch_layout.total_batch_covering;
   }
-
-  maxima->pool_epochs_scratch_count =
-    max_sz(maxima->pool_epochs_scratch_count, (size_t)LOD_MAX_LEVELS * K);
 
   // LOD sizes.
   if (desc->levels.enable_multiscale) {
@@ -333,21 +321,18 @@ alloc_shared_buffers(struct multiarray_tile_stream_cpu* ms,
     ms->comp_sizes = (size_t*)calloc(mx->comp_sizes_count, sizeof(size_t));
     CHECK(Fail, ms->comp_sizes);
   }
+  ms->output_pool =
+    host_output_pool_create(mx->host_output_bytes,
+                            platform_page_alignment(),
+                            (struct host_output_allocator){ 0 });
+  CHECK(Fail, ms->output_pool);
 
-  // Unified per-batch aggregate slots, double-buffered. cap_data is already
-  // page-aligned by batch_aggregate_layout_init.
+  // Unified per-batch aggregate scratch slots, double-buffered.
   {
     const uint64_t cap_chunks = mx->total_batch_chunks_max;
     const uint64_t cap_cov = mx->total_batch_covering_max;
-    const size_t cap_data = mx->agg_data_bytes_total;
-    const size_t align = platform_page_alignment();
     for (int fc = 0; fc < 2; ++fc) {
       struct cpu_agg_slot* as = &ms->agg_slots[fc];
-      as->data_capacity_bytes = cap_data;
-      if (cap_data > 0) {
-        as->data = platform_aligned_alloc(align, cap_data);
-        CHECK(Fail, as->data);
-      }
       if (cap_chunks > 0) {
         as->perm = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
         as->gather = (uint32_t*)malloc(cap_chunks * sizeof(uint32_t));
@@ -499,7 +484,6 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
       struct array_descriptor* desc = &ms->arrays[i];
       for (int lv = 0; lv < desc->levels.nlod; ++lv) {
         shard_state_destroy(&desc->shard[lv]);
-        free(desc->h_tail_bytes[lv]);
       }
       free(desc->append_accum);
       free(desc->batch_active_masks);
@@ -521,13 +505,14 @@ multiarray_tile_stream_cpu_destroy(struct multiarray_tile_stream_cpu* ms)
 
   for (int fc = 0; fc < 2; ++fc) {
     struct cpu_agg_slot* as = &ms->agg_slots[fc];
-    platform_aligned_free(as->data);
+    host_batch_destroy(&as->host);
     free(as->perm);
     free(as->gather);
     free(as->permuted_sizes);
     free(as->offsets);
     free(as->chunk_sizes);
   }
+  host_output_pool_destroy(ms->output_pool);
   for (int lv = 0; lv < LOD_MAX_LEVELS; ++lv) {
     free(ms->morton_lut[lv]);
     free(ms->lod_fixed_dims_offsets[lv]);
@@ -637,18 +622,15 @@ make_multiarray_view(struct multiarray_tile_stream_cpu* ms,
     .pool_fully_covered = desc->pool_fully_covered,
     .shard = desc->shard,
     .agg_layout = desc->agg_layout,
-    .h_tail_bytes = desc->h_tail_bytes,
-    .batch_active_count = desc->batch_active_count,
     .csrs = desc->csrs,
     .append_accum = desc->append_accum,
     .append_counts = desc->append_counts,
-    .io_done = desc->io_done,
     .agg_current = &desc->agg_current,
     .chunk_pool = ms->chunk_pool,
-    .chunk_pool_bytes = ms->chunk_pool_bytes,
     .compressed = ms->compressed,
     .comp_sizes = ms->comp_sizes,
     .agg_slots = ms->agg_slots,
+    .output_pool = ms->output_pool,
     .linear = desc->levels.enable_multiscale ? ms->linear : NULL,
     .lod_values = desc->levels.enable_multiscale ? ms->lod_values : NULL,
     .scatter_lut = desc->levels.enable_multiscale ? ms->scatter_lut : NULL,

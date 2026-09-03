@@ -269,10 +269,6 @@ const METRIC_LABELS = {
   compression_fold: "Compression ratio",
   wall_s: "Wall-clock time (s)",
   init_s: "Startup time (s)",
-  io_files_waiting_mean: "Files with writes waiting",
-  io_files_waiting_peak: "Files with writes waiting, peak",
-  io_wait_ms_mean: "Wait before a write starts (ms)",
-  io_run_ms_mean: "Time to run a write (ms)",
 };
 
 // The stage views swap in their own metrics and swap these back, so the wording
@@ -289,10 +285,6 @@ const COLOR_SCHEMES = {
   compression_fold: d3.interpolatePlasma,
   wall_s: d3.interpolateInferno,
   init_s: d3.interpolateInferno,
-  io_files_waiting_mean: d3.interpolateViridis,
-  io_files_waiting_peak: d3.interpolateViridis,
-  io_wait_ms_mean: d3.interpolateInferno,
-  io_run_ms_mean: d3.interpolateInferno,
 };
 
 // =========================================================================
@@ -1138,16 +1130,15 @@ function renderStages(run) {
 }
 
 const DIAGNOSTIC_ORDER = [
-  "batch_drain", "output_slot_io", "footer_buffer_io", "append_extent_io",
+  "batch_drain", "footer_buffer_io", "append_extent_io",
   "final_io", "sink_backpressure", "staging_reuse", "chunk_metadata_d2h",
   "indexed_aggregate_wait", "chunk_metadata_wait", "chunk_metadata_copy",
-  "payload_d2h", "prior_tail_state", "d2h_dispatch",
+  "payload_d2h", "d2h_dispatch",
 ];
 
 const DIAGNOSTIC_KIND_LABELS = {
   host_wait: "Host wait",
   host_block: "Host block/work",
-  pipeline_gap: "Pipeline gap",
   host_overhead: "Host overhead",
   device_work: "Device work",
 };

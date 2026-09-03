@@ -371,7 +371,6 @@ compute_stream_layouts(const struct tile_stream_configuration* config,
                                    so_chunks_per_shard,
                                    chunks_lv,
                                    out->max_output_size,
-                                   batch_count,
                                    shard_alignment,
                                    cps_append) == 0);
     out->per_level[lv].chunks_per_shard_inner = 1;

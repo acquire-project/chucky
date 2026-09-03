@@ -30,8 +30,7 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
                    enum dtype data_type,
                    double fill_value,
                    struct codec_config codec,
-                   int is_multiscale,
-                   struct io_scheduling io)
+                   int is_multiscale)
 {
   *z = (struct bench_zarr_handle){ 0 };
 
@@ -41,7 +40,6 @@ bench_zarr_open_fs(struct bench_zarr_handle* z,
 
   z->store = store_fs_create(store_path, 1 /* unbuffered */);
   CHECK(Fail, z->store);
-  store_fs_set_io_scheduling(z->store, io);
   z->store->mkdirs(z->store, ".");
 
   // Write root group
@@ -189,16 +187,6 @@ bench_zarr_pending_bytes(struct bench_zarr_handle* z)
   if (z->ms)
     return ngff_multiscale_pending_bytes(z->ms);
   return zarr_array_pending_bytes(z->array);
-}
-
-void
-bench_zarr_io_stats(struct bench_zarr_handle* z,
-                    struct shard_pool_io_stats* out)
-{
-  if (z->ms)
-    ngff_multiscale_io_stats(z->ms, out);
-  else
-    zarr_array_io_stats(z->array, out);
 }
 
 void

@@ -56,7 +56,6 @@ struct delivery_timing
   struct duration_stats submitted_to_start;
   struct duration_stats start_to_payload_ready;
   struct duration_stats payload_ready_to_writes_posted;
-  struct duration_stats writes_posted_to_completion;
   struct duration_stats submitted_to_slot_reuse;
 };
 
@@ -82,9 +81,8 @@ struct stream_metrics
   // producer instead of the worker, the producer entry contains the worker's
   // rather than overlapping it. An entry a backend never fills keeps count 0,
   // meaning not measured rather than no wait.
-  struct stream_metric flush_stall;       // producer: waiting for delivery
-  struct stream_metric delivery_dispatch; // worker work between waits
-  struct stream_metric io_fence_stall;    // queued writes still holding a slot
+  struct stream_metric flush_stall;         // producer: waiting for delivery
+  struct stream_metric delivery_dispatch;   // worker work between waits
   struct stream_metric footer_buffer_stall; // a shard's previous footer write
   struct stream_metric append_extent_stall; // shards closed since the extent
                                             // was last published
@@ -99,10 +97,6 @@ struct stream_metrics
   struct stream_metric chunk_metadata_copy;
   struct stream_metric edge_stall[3]; // one declared ordering edge each; the
                                       // name says which
-  // Compatibility-only legacy field. GPU host copying leaves it at zero;
-  // archived runs may still contain samples.
-  struct stream_metric tail_gate;
-
   struct delivery_timing delivery;
 
   // Optional GPU D2H copy totals. They remain zero for CPU runs.

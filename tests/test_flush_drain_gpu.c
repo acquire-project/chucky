@@ -100,7 +100,7 @@ test_flush_waits_for_sink_io(const char* tmpdir)
     CHECK(Cleanup, r.error == 0);
   }
 
-  // Gate sits at seq=1 in the io_queue ahead of any pwrite jobs the
+  // Gate sits at seq=1 in the scheduler ahead of any pwrite jobs the
   // flush will queue behind it.
   CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
 

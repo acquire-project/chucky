@@ -1,10 +1,12 @@
 #include "zarr/shard_pool_fs.h"
 #include "platform/platform.h"
 #include "platform/platform_io.h"
+#include "stream/host_output_pool.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
+#include "zarr/filesystem_write.h"
 #include "zarr/io_backend.fs.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -18,7 +20,7 @@ struct shard_pool_fs
 {
   struct shard_pool base;
   struct io_backend_fs* backend;
-  struct io_queue* queue;
+  struct io_scheduler* queue;
   struct fs_slot* slots;
   uint64_t nslots;
   int unbuffered;
@@ -32,7 +34,7 @@ struct fs_slot
 {
   struct shard_writer base;
   struct io_file_token token; // zero generation means no file is open here
-  struct io_queue* queue;
+  struct io_scheduler* queue;
   size_t alignment; // 0 = normal malloc, >0 = page-aligned allocation
   int presize;      // set the file's size up front
 };
@@ -61,10 +63,6 @@ fs_slot_write(struct shard_writer* self,
     .offset = offset,
   };
 
-  // Room is claimed before the buffer is allocated, so the copy stays under
-  // the ceiling on queued memory.
-  CHECK_SILENT(Error, io_queue_reserve(w->queue, req) == 0);
-
   void* buf;
   void (*buf_free)(void*);
   if (w->alignment > 0) {
@@ -74,17 +72,18 @@ fs_slot_write(struct shard_writer* self,
     buf = malloc(nbytes);
     buf_free = free;
   }
-  CHECK(Release, buf);
+  CHECK(Error, buf);
   memcpy(buf, beg, nbytes);
 
   req.payload = buf;
   req.owned = buf;
   req.owned_free = buf_free;
-  io_queue_commit(w->queue, req);
+  if (io_scheduler_post(w->queue, req)) {
+    buf_free(buf);
+    goto Error;
+  }
   return 0;
 
-Release:
-  io_queue_release(w->queue, nbytes);
 Error:
   return 1;
 }
@@ -101,15 +100,63 @@ fs_slot_write_direct(struct shard_writer* self,
   if (nbytes == 0)
     return 0;
 
-  return io_queue_post(w->queue,
-                       (struct io_request){
-                         .op = IO_OP_WRITE,
-                         .borrowed = 1,
-                         .file = w->token,
-                         .payload = beg,
-                         .nbytes = nbytes,
-                         .offset = offset,
-                       });
+  return io_scheduler_post(w->queue,
+                           (struct io_request){
+                             .op = IO_OP_WRITE,
+                             .file = w->token,
+                             .payload = beg,
+                             .nbytes = nbytes,
+                             .offset = offset,
+                           });
+}
+
+static void
+output_write_finished(void* ctx)
+{
+  host_output_group_complete((struct host_output_group*)ctx);
+}
+
+static int
+fs_slot_write_from_output(struct shard_writer* self,
+                          uint64_t offset,
+                          const void* beg,
+                          const void* end,
+                          struct host_output_group* group)
+{
+  struct fs_slot* w = (struct fs_slot*)self;
+  const uint64_t nbytes = (uint64_t)((const char*)end - (const char*)beg);
+  if (nbytes == 0)
+    return 0;
+
+  const struct filesystem_write write = {
+    .offset = offset,
+    .nbytes = nbytes,
+    .alignment = w->alignment,
+  };
+  const uint64_t count = filesystem_write_count(&write);
+  for (uint64_t i = 0; i < count; ++i) {
+    struct filesystem_write_part part;
+    CHECK(Error, filesystem_write_at(&write, i, &part) == 0);
+    CHECK(Error, host_output_group_retain(group) == 0);
+    if (io_scheduler_post(
+          w->queue,
+          (struct io_request){
+            .op = IO_OP_WRITE,
+            .file = w->token,
+            .payload = (const char*)beg + (part.offset - offset),
+            .nbytes = part.nbytes,
+            .offset = part.offset,
+            .finished_ctx = group,
+            .finished = output_write_finished,
+          })) {
+      host_output_group_complete(group);
+      goto Error;
+    }
+  }
+  return 0;
+
+Error:
+  return 1;
 }
 
 // Growing the file is a barrier, so the writes posted behind it wait for it
@@ -121,12 +168,12 @@ fs_slot_presize(struct shard_writer* self, uint64_t nbytes)
   if (w->token.generation == 0 || !w->presize || nbytes == 0)
     return 0;
 
-  return io_queue_post(w->queue,
-                       (struct io_request){
-                         .op = IO_OP_TRUNCATE,
-                         .file = w->token,
-                         .logical_size = nbytes,
-                       });
+  return io_scheduler_post(w->queue,
+                           (struct io_request){
+                             .op = IO_OP_TRUNCATE,
+                             .file = w->token,
+                             .logical_size = nbytes,
+                           });
 }
 
 static int
@@ -136,12 +183,12 @@ fs_slot_truncate(struct shard_writer* self, uint64_t logical_size)
   if (w->token.generation == 0)
     return 0;
 
-  return io_queue_post(w->queue,
-                       (struct io_request){
-                         .op = IO_OP_TRUNCATE,
-                         .file = w->token,
-                         .logical_size = logical_size,
-                       });
+  return io_scheduler_post(w->queue,
+                           (struct io_request){
+                             .op = IO_OP_TRUNCATE,
+                             .file = w->token,
+                             .logical_size = logical_size,
+                           });
 }
 
 static int
@@ -151,8 +198,8 @@ fs_slot_finalize(struct shard_writer* self)
   if (w->token.generation == 0)
     return 0;
 
-  if (io_queue_post(w->queue,
-                    (struct io_request){ .op = IO_OP_CLOSE, .file = w->token }))
+  if (io_scheduler_post(
+        w->queue, (struct io_request){ .op = IO_OP_CLOSE, .file = w->token }))
     return 1;
 
   w->token = (struct io_file_token){ 0 };
@@ -167,9 +214,8 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 
   struct fs_slot* w = &p->slots[slot];
 
-  // Finalize previous use of this slot if still open
   if (w->token.generation != 0)
-    fs_slot_finalize(&w->base);
+    CHECK(Fail, fs_slot_finalize(&w->base) == 0);
 
   struct strbuf path = { 0 };
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
@@ -213,7 +259,7 @@ static struct io_event
 pool_fs_record_fence(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  return io_queue_record(p->queue);
+  return io_scheduler_record(p->queue);
 }
 
 static void
@@ -227,7 +273,7 @@ static int
 pool_fs_flush(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
-  struct io_event ev = io_queue_record(p->queue);
+  struct io_event ev = io_scheduler_record(p->queue);
   io_event_wait(p->queue, ev);
   return atomic_load(&p->io_error);
 }
@@ -245,17 +291,7 @@ pool_fs_pending_bytes(const struct shard_pool* self)
 {
   const struct shard_pool_fs* p =
     container_of(self, struct shard_pool_fs, base);
-  return io_queue_pending_bytes(p->queue);
-}
-
-static void
-pool_fs_io_stats(const struct shard_pool* self, struct shard_pool_io_stats* out)
-{
-  const struct shard_pool_fs* p =
-    container_of(self, struct shard_pool_fs, base);
-  io_queue_get_stats(p->queue, &out->queue);
-  out->files_opened = io_backend_fs_files_opened(p->backend);
-  out->files_open_peak = io_backend_fs_files_open_peak(p->backend);
+  return io_scheduler_pending_bytes(p->queue);
 }
 
 static size_t
@@ -278,7 +314,7 @@ pool_fs_destroy(struct shard_pool* self)
   }
 
   // The worker has to be gone before the backend holding its descriptors is.
-  io_queue_destroy(p->queue);
+  io_scheduler_destroy(p->queue);
   io_backend_fs_destroy(p->backend);
 
   free(p->slots);
@@ -293,54 +329,38 @@ shard_pool_fs_set_error(struct shard_pool* self)
   atomic_store(&p->io_error, 1);
 }
 
-// Eight is where the sweep peaks on both an md RAID10 of eight drives (1.34x)
-// and a two-drive mirror (1.21x); past it the rest of the pipeline, not the
-// drive, is what is waited on, and throughput falls back. Four per file hides
-// one write's latency behind the next on a shard file written by itself.
 #define DEFAULT_WORKERS 8u
-#define DEFAULT_WRITES_IN_FLIGHT 8u
-#define DEFAULT_WRITES_IN_FLIGHT_PER_FILE 4u
+#define DEFAULT_MAX_IN_FLIGHT_PER_FILE 4u
 
-// Room for the payloads the queue holds. The deepest backlog measured is
-// 1392 MiB, from an uncompressed 256cube run with one write at a time, so
-// this bounds a runaway rather than throttling work that is merely busy.
 #define DEFAULT_MAX_QUEUED_BYTES (2ull << 30)
 
-void
-shard_pool_fs_scheduling_defaults(struct io_scheduling* io)
+static struct io_scheduler_limits
+resolve_limits(const struct io_scheduler_limits* limits)
 {
-  if (!io->workers)
-    io->workers = DEFAULT_WORKERS;
-  if (!io->writes_in_flight)
-    io->writes_in_flight = DEFAULT_WRITES_IN_FLIGHT;
-  if (!io->writes_in_flight_per_file)
-    io->writes_in_flight_per_file = DEFAULT_WRITES_IN_FLIGHT_PER_FILE;
-}
-
-static struct io_queue_limits
-limits_from(const struct io_scheduling* io)
-{
-  struct io_scheduling resolved = io ? *io : (struct io_scheduling){ 0 };
-  shard_pool_fs_scheduling_defaults(&resolved);
-  return (struct io_queue_limits){
-    .max_bytes = DEFAULT_MAX_QUEUED_BYTES,
-    .workers = resolved.workers,
-    .writes_in_flight = resolved.writes_in_flight,
-    .writes_in_flight_per_file = resolved.writes_in_flight_per_file,
-  };
+  struct io_scheduler_limits resolved = limits ? *limits
+                                               : (struct io_scheduler_limits){
+                                                   0,
+                                                 };
+  if (!resolved.max_bytes)
+    resolved.max_bytes = DEFAULT_MAX_QUEUED_BYTES;
+  if (!resolved.workers)
+    resolved.workers = DEFAULT_WORKERS;
+  if (!resolved.max_in_flight_per_file)
+    resolved.max_in_flight_per_file = DEFAULT_MAX_IN_FLIGHT_PER_FILE;
+  return resolved;
 }
 
 struct shard_pool*
 shard_pool_fs_create_wrapped(const char* root,
                              uint64_t nslots,
                              int unbuffered,
-                             const struct io_scheduling* io,
+                             const struct io_scheduler_limits* requested_limits,
                              struct shard_pool_fs_wrapper wrapper)
 {
   CHECK(Fail, root);
   CHECK(Fail, nslots > 0);
 
-  const struct io_queue_limits limits = limits_from(io);
+  const struct io_scheduler_limits limits = resolve_limits(requested_limits);
 
   struct shard_pool_fs* p =
     (struct shard_pool_fs*)calloc(1, sizeof(struct shard_pool_fs));
@@ -353,7 +373,6 @@ shard_pool_fs_create_wrapped(const char* root,
   p->base.has_error = pool_fs_has_error;
   p->base.pending_bytes = pool_fs_pending_bytes;
   p->base.required_shard_alignment = pool_fs_required_shard_alignment;
-  p->base.io_stats = pool_fs_io_stats;
   p->base.destroy = pool_fs_destroy;
   p->nslots = nslots;
   p->unbuffered = unbuffered;
@@ -366,7 +385,7 @@ shard_pool_fs_create_wrapped(const char* root,
   if (wrapper.wrap)
     backend = wrapper.wrap(wrapper.ctx, backend);
 
-  p->queue = io_queue_create(backend, limits);
+  p->queue = io_scheduler_create(backend, limits);
   CHECK(Fail_backend, p->queue);
 
   p->slots = (struct fs_slot*)calloc((size_t)nslots, sizeof(struct fs_slot));
@@ -377,13 +396,14 @@ shard_pool_fs_create_wrapped(const char* root,
     struct fs_slot* s = &p->slots[i];
     s->base.write = fs_slot_write;
     s->base.write_direct = fs_slot_write_direct;
+    s->base.write_from_output = fs_slot_write_from_output;
     s->base.presize = fs_slot_presize;
     s->base.truncate = fs_slot_truncate;
     s->base.finalize = fs_slot_finalize;
     s->queue = p->queue;
     s->alignment = page_size;
     s->presize =
-      limits.writes_in_flight_per_file > 1 && platform_should_presize_shard();
+      limits.max_in_flight_per_file > 1 && platform_should_presize_shard();
   }
 
   if (wrapper.queue)
@@ -392,7 +412,7 @@ shard_pool_fs_create_wrapped(const char* root,
   return &p->base;
 
 Fail_queue:
-  io_queue_destroy(p->queue);
+  io_scheduler_destroy(p->queue);
 Fail_backend:
   io_backend_fs_destroy(p->backend);
 Fail_alloc:
@@ -403,11 +423,8 @@ Fail:
 }
 
 struct shard_pool*
-shard_pool_fs_create(const char* root,
-                     uint64_t nslots,
-                     int unbuffered,
-                     const struct io_scheduling* io)
+shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered)
 {
   return shard_pool_fs_create_wrapped(
-    root, nslots, unbuffered, io, (struct shard_pool_fs_wrapper){ 0 });
+    root, nslots, unbuffered, NULL, (struct shard_pool_fs_wrapper){ 0 });
 }

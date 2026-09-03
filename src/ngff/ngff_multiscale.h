@@ -21,8 +21,3 @@ struct zarr_array;
 // Used by tests to set per-level attributes that exercise the flush cascade.
 struct zarr_array*
 ngff_multiscale_level(const struct ngff_multiscale* ms, int level);
-
-// Copy out the write measurements; one pool, so all levels at once.
-void
-ngff_multiscale_io_stats(const struct ngff_multiscale* ms,
-                         struct shard_pool_io_stats* out);

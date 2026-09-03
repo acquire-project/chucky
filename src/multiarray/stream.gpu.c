@@ -45,6 +45,7 @@ struct multiarray_tile_stream_gpu
   int n_arrays;
   int active; // -1 = none
   struct array_descriptor_gpu* arrays;
+  struct host_output_pool* output_pool;
 };
 
 // ---- Forward declarations ----
@@ -71,8 +72,8 @@ static void
 unbind_context(struct stream_engine* e, struct array_descriptor_gpu* desc)
 {
   // Without this, the next array would inherit stale fences from a
-  // different sink (deadlock — fences only retire on the sink that issued
-  // them) or reuse aggregate buffers the prior sink is still reading.
+  // different sink or reuse aggregate buffers the prior D2H copy is still
+  // reading.
   schedule_quiesce_output(e, desc->ctx.sink);
 
   // Wholesale: shard_state, accumulator counts, and schedule progress all
@@ -356,15 +357,16 @@ multiarray_tile_stream_gpu_destroy(struct multiarray_tile_stream_gpu* ms)
   if (ms->arrays && close_impl(&ms->writer).error)
     log_error("GPU multiarray close failed during destroy");
 
+  // Copy state can still name the shared output pool after a failed
+  // cancellation, so tear down the shared stages before the descriptors.
+  stream_engine_destroy(&ms->engine);
+
   if (ms->arrays) {
     for (int a = 0; a < ms->n_arrays; ++a)
       destroy_array_descriptor(&ms->arrays[a]);
     free(ms->arrays);
   }
-
-  // The per-array fields of e->lod / e->compress_agg.ar are views of the
-  // last-bound descriptor (freed above by destroy_array_descriptor).
-  stream_engine_destroy(&ms->engine);
+  host_output_pool_destroy(ms->output_pool);
 
   cu_ctx_pop(pushed);
   free(ms);
@@ -433,6 +435,11 @@ multiarray_tile_stream_gpu_create(
                            &lim,
                            ms->arrays[0].ctx.config.codec.id,
                            all_multiscale) == 0);
+
+  ms->output_pool = compress_agg_output_pool_create(lim.host_output_bytes);
+  CHECK(Fail, ms->output_pool);
+  for (int a = 0; a < n_arrays; ++a)
+    ms->arrays[a].st.agg.output_pool = ms->output_pool;
 
   return ms;
 

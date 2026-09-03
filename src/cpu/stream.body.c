@@ -28,23 +28,17 @@ make_flush_params(struct cpu_stream_view* v)
     .cl = v->cl,
     .levels_geo = v->levels,
     .per_lod_agg_layouts = v->agg_layout,
-    .h_tail_bytes = v->h_tail_bytes,
     .sink = v->sink,
     .shard_alignment_bytes = v->shard_alignment,
     .pool = v->pool,
     .pool_epochs_scratch = v->pool_epochs_scratch,
     .agg_slots = v->agg_slots,
-    .io_done = v->io_done,
+    .output_pool = v->output_pool,
     .agg_current = v->agg_current,
     .metrics = v->metrics,
   };
-  for (int lv = 0; lv < v->levels->nlod; ++lv) {
-    p.levels[lv] = (struct flush_level_view){
-      .batch_active_count = v->batch_active_count[lv],
-      .chunk_offset = v->levels->level[lv].chunk_offset,
-      .shard = &v->shard[lv],
-    };
-  }
+  for (int lv = 0; lv < v->levels->nlod; ++lv)
+    p.shards_by_level[lv] = &v->shard[lv];
   return p;
 }
 
@@ -83,7 +77,8 @@ validate_view(const struct cpu_stream_view* v)
 {
   assert(v->config && v->sink && v->cl && v->layout && v->levels);
   assert(v->cursor_elements && v->batch_accumulated && v->batch_active_masks);
-  assert(v->shard && v->agg_layout && v->batch_active_count && v->io_done);
+  assert(v->shard && v->agg_layout);
+  assert(v->output_pool);
   assert(v->chunk_pool);
   if (v->levels->enable_multiscale) {
     assert(v->linear && v->lod_values);
@@ -309,13 +304,11 @@ cpu_stream_flush_body(struct cpu_stream_view* v)
     struct platform_clock emit_clk = { 0 };
     platform_toc(&emit_clk);
 
-    // Both slots may hold in-flight IO from this batch; wait on both before
-    // finalize. Single fence per slot covers all LODs (one shared IO queue).
-    if (v->sink->wait_fence) {
+    if (v->sink->record_fence && v->sink->wait_fence) {
       struct platform_clock fence_clk = { 0 };
       platform_toc(&fence_clk);
-      v->sink->wait_fence(v->sink, v->io_done[0]);
-      v->sink->wait_fence(v->sink, v->io_done[1]);
+      const struct io_event event = v->sink->record_fence(v->sink);
+      v->sink->wait_fence(v->sink, event);
       if (v->metrics)
         accumulate_metric_ms(&v->metrics->flush_writes_stall,
                              (float)(platform_toc(&fence_clk) * 1000.0),

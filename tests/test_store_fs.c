@@ -1,12 +1,13 @@
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "store.h"
+#include "stream/host_output_pool.h"
 #include "test_io_faults.h"
 #include "test_platform.h"
 #include "util/prelude.h"
 #include "zarr.h"
 #include "zarr/io_backend.fs.h"
-#include "zarr/io_queue.h"
+#include "zarr/io_scheduler.h"
 #include "zarr/shard_pool.h"
 #include "zarr/store.h"
 #include "zarr/store_fs.h"
@@ -251,7 +252,7 @@ test_shard_pool_unbuffered(void)
   memset(data, 0xAB, page);
   CHECK(Fail4, w->write(w, 0, data, data + page) == 0);
 
-  // The payload is borrowed by write_direct, not copied.
+  // The write_direct payload is not copied.
   if (w->write_direct) {
     CHECK(Fail4, w->write_direct(w, page, data, data + page) == 0);
   }
@@ -273,138 +274,6 @@ test_shard_pool_unbuffered(void)
 
 Fail4:
   platform_aligned_free(data);
-Fail3:
-  shard_pool_destroy(pool);
-Fail2:
-  s->destroy(s);
-Fail:
-  log_error("  FAIL");
-  return 1;
-}
-
-static int
-test_shard_pool_io_stats(void)
-{
-  log_info("=== test_shard_pool_io_stats ===");
-
-  // One worker running one write at a time, so the injected blocking job
-  // holds up everything behind it. A queued close keeps its handle, so all
-  // six files stay open.
-  const struct io_scheduling scheduling = { .workers = 1,
-                                            .writes_in_flight = 1,
-                                            .writes_in_flight_per_file = 1 };
-  struct io_faults faults;
-  struct store* s = io_faults_store_create(&faults, tmpdir, 0, &scheduling);
-  CHECK(Fail, s);
-  CHECK(Fail2, s->mkdirs(s, "stats") == 0);
-
-  struct shard_pool* pool = s->create_pool(s, 2);
-  CHECK(Fail2, pool);
-
-  atomic_int gate = 0;
-  CHECK(Fail4, io_faults_inject_blocking_job(&faults, &gate) == 0);
-
-  for (int i = 0; i < 6; ++i) {
-    char key[256];
-    snprintf(key, sizeof(key), "stats/s%d.bin", i);
-    struct shard_writer* w = pool->open(pool, (uint64_t)(i % 2), key);
-    CHECK(Fail4, w);
-    char data[32];
-    int dlen = snprintf(data, sizeof(data), "shard_%d", i);
-    CHECK(Fail4, w->write(w, 0, data, data + dlen) == 0);
-    CHECK(Fail4, w->finalize(w) == 0);
-  }
-
-  struct shard_pool_io_stats io;
-  shard_pool_io_stats(pool, &io);
-  CHECK(Fail4, io.files_opened == 6);
-  CHECK(Fail4, io.files_open_peak == 6);
-  // Six distinct files, all with work still queued behind the gate.
-  CHECK(Fail4, io.queue.files_waiting_peak == 6);
-
-  atomic_store(&gate, 1);
-  pool->wait_fence(pool, pool->record_fence(pool));
-
-  shard_pool_io_stats(pool, &io);
-  CHECK(Fail3, io.queue.writes == 6);
-  // Copying path, so nothing is borrowed.
-  CHECK(Fail3, io.queue.bytes_copied > 0);
-  CHECK(Fail3, io.queue.bytes_borrowed == 0);
-  // Peaks are high-water marks, unaffected by draining.
-  CHECK(Fail3, io.files_open_peak == 6);
-
-  shard_pool_destroy(pool);
-  s->destroy(s);
-  log_info("  PASS");
-  return 0;
-
-Fail4:
-  atomic_store(&gate, 1);
-Fail3:
-  shard_pool_destroy(pool);
-Fail2:
-  s->destroy(s);
-Fail:
-  log_error("  FAIL");
-  return 1;
-}
-
-// --- store scheduling ---
-
-#define HELD_WRITE_BYTES 4096
-#define HELD_WRITES 8
-
-// The pool is built after the store, so the scheduling must be kept until then.
-// With one request in flight, nothing behind the gated job can be started.
-static int
-test_store_scheduling_reaches_pool(void)
-{
-  log_info("=== test_store_scheduling_reaches_pool ===");
-
-  const struct io_scheduling scheduling = { .workers = 1,
-                                            .writes_in_flight = 1,
-                                            .writes_in_flight_per_file = 1 };
-  struct io_faults faults;
-  struct store* s = io_faults_store_create(&faults, tmpdir, 0, &scheduling);
-  CHECK(Fail, s);
-  CHECK(Fail2, s->mkdirs(s, "scheduling") == 0);
-
-  struct shard_pool* pool = s->create_pool(s, 1);
-  CHECK(Fail2, pool);
-
-  struct shard_writer* w = pool->open(pool, 0, "scheduling/held.bin");
-  CHECK(Fail3, w);
-
-  atomic_int gate = 0;
-  CHECK(Fail4, io_faults_inject_blocking_job(&faults, &gate) == 0);
-
-  static const char payload[HELD_WRITE_BYTES] = { 0 };
-  for (uint64_t i = 0; i < HELD_WRITES; ++i)
-    CHECK(Fail4,
-          w->write(
-            w, i * HELD_WRITE_BYTES, payload, payload + HELD_WRITE_BYTES) == 0);
-
-  CHECK(Fail4,
-        shard_pool_pending_bytes(pool) ==
-          (uint64_t)HELD_WRITES * HELD_WRITE_BYTES);
-
-  atomic_store(&gate, 1);
-  CHECK(Fail3, pool->flush(pool) == 0);
-  CHECK(Fail3, shard_pool_pending_bytes(pool) == 0);
-
-  // On the defaults the gated job would be overlapped with the writes behind
-  // it. A depth of one means the pool was given the scheduling.
-  struct shard_pool_io_stats io;
-  shard_pool_io_stats(pool, &io);
-  CHECK(Fail3, io.queue.writes_in_flight_peak == 1);
-
-  shard_pool_destroy(pool);
-  s->destroy(s);
-  log_info("  PASS");
-  return 0;
-
-Fail4:
-  atomic_store(&gate, 1);
 Fail3:
   shard_pool_destroy(pool);
 Fail2:
@@ -439,6 +308,53 @@ test_shard_pool_error_propagation(void)
   return 0;
 
 Fail2:
+  shard_pool_destroy(pool);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_failed_output_write_releases_buffer(void)
+{
+  log_info("=== test_failed_output_write_releases_buffer ===");
+  struct io_faults faults;
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0, NULL);
+  CHECK(Fail, pool);
+
+  const size_t page = platform_page_alignment();
+  struct host_output_pool* outputs =
+    host_output_pool_create(page, page, (struct host_output_allocator){ 0 });
+  CHECK(CleanupPool, outputs);
+  struct host_output output = { 0 };
+  CHECK(CleanupOutputs, host_output_pool_acquire(outputs, &output) == 0);
+  memset(output.data, 0xa5, page);
+
+  struct shard_writer* writer = pool->open(pool, 0, "failed-output/shard.bin");
+  CHECK(CleanupOutput, writer && writer->write_from_output);
+  io_faults_fail_next_write(&faults);
+  CHECK(
+    CleanupOutput,
+    writer->write_from_output(
+      writer, 0, output.data, (const char*)output.data + page, output.group) ==
+      0);
+  host_output_group_seal(output.group);
+  CHECK(CleanupOutputs, pool->flush(pool) != 0);
+
+  shard_pool_destroy(pool);
+  pool = NULL;
+  host_output_pool_destroy(outputs);
+  log_info("  PASS");
+  return 0;
+
+CleanupOutput:
+  host_output_group_seal(output.group);
+CleanupOutputs:
+  shard_pool_destroy(pool);
+  host_output_pool_destroy(outputs);
+  log_error("  FAIL");
+  return 1;
+CleanupPool:
   shard_pool_destroy(pool);
 Fail:
   log_error("  FAIL");
@@ -716,9 +632,8 @@ closed_shard_size(struct shard_pool* pool,
   struct shard_writer* w = pool->open(pool, 0, key);
   if (!w || !w->presize || w->presize(w, presize_to))
     return -1;
-  if (payload_bytes > 0 &&
-      (w->write(w, 0, payload, payload + payload_bytes) ||
-       w->truncate(w, payload_bytes)))
+  if (payload_bytes > 0 && (w->write(w, 0, payload, payload + payload_bytes) ||
+                            w->truncate(w, payload_bytes)))
     return -1;
   if (w->finalize(w) || pool->flush(pool))
     return -1;
@@ -731,15 +646,12 @@ closed_shard_size(struct shard_pool* pool,
 // A pre-sized file is as long as it was told to be, and the truncate at the
 // end brings it back to what it holds.
 static int
-presize_leaves_file_at(uint64_t writes_per_file, long expected_presized)
+test_shard_pool_presize(void)
 {
-  log_info("=== test_shard_pool_presize (%llu per file) ===",
-           (unsigned long long)writes_per_file);
+  log_info("=== test_shard_pool_presize ===");
 
   struct store* s = store_fs_create(tmpdir, 0);
   CHECK(Fail, s);
-  store_fs_set_io_scheduling(
-    s, (struct io_scheduling){ .writes_in_flight_per_file = writes_per_file });
 
   struct shard_pool* pool = s->create_pool(s, 1);
   CHECK(Fail2, pool);
@@ -747,14 +659,12 @@ presize_leaves_file_at(uint64_t writes_per_file, long expected_presized)
   static const char payload[] = "held";
   char key[256];
 
-  snprintf(key, sizeof(key), "presize%llu_empty.bin",
-           (unsigned long long)writes_per_file);
+  snprintf(key, sizeof(key), "presize_empty.bin");
+  const long presized = platform_should_presize_shard() ? PRESIZE_BYTES : 0;
   CHECK(Fail3,
-        closed_shard_size(pool, key, PRESIZE_BYTES, NULL, 0) ==
-          expected_presized);
+        closed_shard_size(pool, key, PRESIZE_BYTES, NULL, 0) == presized);
 
-  snprintf(key, sizeof(key), "presize%llu_trimmed.bin",
-           (unsigned long long)writes_per_file);
+  snprintf(key, sizeof(key), "presize_trimmed.bin");
   CHECK(Fail3,
         closed_shard_size(pool, key, PRESIZE_BYTES, payload, sizeof(payload)) ==
           (long)sizeof(payload));
@@ -771,17 +681,6 @@ Fail2:
 Fail:
   log_error("  FAIL");
   return 1;
-}
-
-static int
-test_shard_pool_presize(void)
-{
-  // Nothing to gain from pre-sizing at one write at a time per file, nor on
-  // a platform where setting the size does not stop a write extending the
-  // file. Either way the file grows with its writes.
-  const long presized = platform_should_presize_shard() ? PRESIZE_BYTES : 0;
-  return presize_leaves_file_at(4, presized) ||
-         presize_leaves_file_at(1, 0);
 }
 
 // --- stale file token ---
@@ -804,8 +703,8 @@ test_stale_file_token_refused(void)
   struct io_backend_fs* backend = io_backend_fs_create(&io_error);
   CHECK(Fail, backend);
 
-  struct io_queue* q = io_queue_create(io_backend_fs_as_backend(backend),
-                                       (struct io_queue_limits){ 0 });
+  struct io_scheduler* q = io_scheduler_create(
+    io_backend_fs_as_backend(backend), (struct io_scheduler_limits){ 0 });
   CHECK(Fail2, q);
 
   platform_fd fd = platform_open_write(first_path, 0);
@@ -814,9 +713,9 @@ test_stale_file_token_refused(void)
   CHECK(Fail3, retired.generation != 0);
 
   CHECK(Fail3,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = retired }) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 0);
 
   // The slot freed by the close is reused under a new generation.
@@ -829,21 +728,21 @@ test_stale_file_token_refused(void)
 
   static const char payload[] = "must not land anywhere";
   CHECK(Fail3,
-        io_queue_post(q,
-                      (struct io_request){ .op = IO_OP_WRITE,
-                                           .borrowed = 1,
-                                           .file = retired,
-                                           .payload = payload,
-                                           .nbytes = sizeof(payload) }) == 0);
-  io_event_wait(q, io_queue_record(q));
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_WRITE,
+                                               .file = retired,
+                                               .payload = payload,
+                                               .nbytes = sizeof(payload) }) ==
+          0);
+  io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 1);
 
   CHECK(Fail3,
-        io_queue_post(
+        io_scheduler_post(
           q, (struct io_request){ .op = IO_OP_CLOSE, .file = fresh }) == 0);
-  io_event_wait(q, io_queue_record(q));
+  io_event_wait(q, io_scheduler_record(q));
 
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
   io_backend_fs_destroy(backend);
 
   CHECK(Fail, file_size(first_path) == 0);
@@ -853,7 +752,7 @@ test_stale_file_token_refused(void)
   return 0;
 
 Fail3:
-  io_queue_destroy(q);
+  io_scheduler_destroy(q);
 Fail2:
   io_backend_fs_destroy(backend);
 Fail:
@@ -876,9 +775,8 @@ main(void)
   err |= test_shard_pool_fence();
   err |= test_shard_pool_on_demand_mkdir();
   err |= test_shard_pool_unbuffered();
-  err |= test_shard_pool_io_stats();
-  err |= test_store_scheduling_reaches_pool();
   err |= test_shard_pool_error_propagation();
+  err |= test_failed_output_write_releases_buffer();
   err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();

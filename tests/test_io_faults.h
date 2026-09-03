@@ -3,12 +3,12 @@
 #pragma once
 
 #include "zarr/io_backend.h"
-#include "zarr/types.io.h"
+#include "zarr/io_scheduler.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
 
-struct io_queue;
+struct io_scheduler;
 struct shard_pool;
 struct store;
 
@@ -22,7 +22,7 @@ enum io_fault
 struct io_faults
 {
   struct io_backend inner;
-  struct io_queue* queue;
+  struct io_scheduler* queue;
   struct shard_pool* pool;
 
   // One fault is armed at a time. The op is in the high byte and the fault in
@@ -31,23 +31,20 @@ struct io_faults
   _Atomic int* block_gate;
 };
 
-// Create a filesystem shard pool whose io can be made to fail or block.
-// io: the limit on the write backlog run at once; NULL for the defaults.
 struct shard_pool*
 io_faults_pool_create(struct io_faults* f,
                       const char* root,
                       uint64_t nslots,
                       int unbuffered,
-                      const struct io_scheduling* io);
+                      const struct io_scheduler_limits* limits);
 
 // Create a filesystem store whose pool can be made to fail or block. Only one
 // pool can be built from it, even after that pool is destroyed.
-// io: the limit on the write backlog run at once; NULL for the defaults.
 struct store*
 io_faults_store_create(struct io_faults* f,
                        const char* root,
                        int unbuffered,
-                       const struct io_scheduling* io);
+                       const struct io_scheduler_limits* limits);
 
 // Queue a job that marks the pool errored when it runs. Returns 0 on a
 // successful enqueue.
@@ -64,3 +61,6 @@ io_faults_inject_blocking_job(struct io_faults* f, _Atomic int* gate);
 // worker reaches a truncate the caller's own code posted.
 void
 io_faults_fail_next_truncate(struct io_faults* f);
+
+void
+io_faults_fail_next_write(struct io_faults* f);

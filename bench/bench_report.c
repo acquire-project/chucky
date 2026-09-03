@@ -7,7 +7,6 @@
 enum diagnostic_section
 {
   DIAGNOSTIC_HOST_BLOCK,
-  DIAGNOSTIC_PIPELINE_GAP,
   DIAGNOSTIC_HOST_OVERHEAD,
   DIAGNOSTIC_DEVICE_WORK,
 };
@@ -16,12 +15,12 @@ struct diagnostic_entry
 {
   const char* id;    // stable machine-readable identity
   const char* label; // condition or work visible to a person
-  const char* kind;  // distinguishes waits from gaps and host work
+  const char* kind;  // distinguishes waits from host and device work
   enum diagnostic_section section;
   const struct stream_metric* metric;
 };
 
-#define DIAGNOSTIC_COUNT 14
+#define DIAGNOSTIC_COUNT 12
 
 static void
 diagnostic_entries(const struct stream_metrics* m,
@@ -37,62 +36,52 @@ diagnostic_entries(const struct stream_metrics* m,
                                       "host_overhead",
                                       DIAGNOSTIC_HOST_OVERHEAD,
                                       &m->delivery_dispatch };
-  out[2] = (struct diagnostic_entry){ "output_slot_io",
-                                      "Output-slot writes",
-                                      "host_wait",
-                                      DIAGNOSTIC_HOST_BLOCK,
-                                      &m->io_fence_stall };
-  out[3] = (struct diagnostic_entry){ "footer_buffer_io",
+  out[2] = (struct diagnostic_entry){ "footer_buffer_io",
                                       "Footer-buffer write",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->footer_buffer_stall };
-  out[4] = (struct diagnostic_entry){ "append_extent_io",
+  out[3] = (struct diagnostic_entry){ "append_extent_io",
                                       "Closed-shard writes",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->append_extent_stall };
-  out[5] = (struct diagnostic_entry){ "final_io",
+  out[4] = (struct diagnostic_entry){ "final_io",
                                       "Final queued writes",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->flush_writes_stall };
-  out[6] = (struct diagnostic_entry){ "sink_backpressure",
+  out[5] = (struct diagnostic_entry){ "sink_backpressure",
                                       "Sink queue below limit",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->backpressure };
-  out[7] = (struct diagnostic_entry){ "prior_tail_state",
-                                      "Prior tail state",
-                                      "pipeline_gap",
-                                      DIAGNOSTIC_PIPELINE_GAP,
-                                      &m->tail_gate };
-  out[8] = (struct diagnostic_entry){ "staging_reuse",
+  out[6] = (struct diagnostic_entry){ "staging_reuse",
                                       "Staging-buffer reuse",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[0] };
-  out[9] = (struct diagnostic_entry){ "chunk_metadata_d2h",
+  out[7] = (struct diagnostic_entry){ "chunk_metadata_d2h",
                                       "Chunk metadata ready (inclusive)",
                                       "host_wait",
                                       DIAGNOSTIC_HOST_BLOCK,
                                       &m->edge_stall[1] };
-  out[10] = (struct diagnostic_entry){ "indexed_aggregate_wait",
-                                       "Aggregate dependency before metadata",
-                                       "host_wait",
-                                       DIAGNOSTIC_HOST_BLOCK,
-                                       &m->indexed_aggregate_wait };
-  out[11] = (struct diagnostic_entry){ "chunk_metadata_wait",
-                                       "Metadata ready after aggregate",
-                                       "host_wait",
-                                       DIAGNOSTIC_HOST_BLOCK,
-                                       &m->chunk_metadata_wait };
-  out[12] = (struct diagnostic_entry){ "chunk_metadata_copy",
+  out[8] = (struct diagnostic_entry){ "indexed_aggregate_wait",
+                                      "Aggregate dependency before metadata",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->indexed_aggregate_wait };
+  out[9] = (struct diagnostic_entry){ "chunk_metadata_wait",
+                                      "Metadata ready after aggregate",
+                                      "host_wait",
+                                      DIAGNOSTIC_HOST_BLOCK,
+                                      &m->chunk_metadata_wait };
+  out[10] = (struct diagnostic_entry){ "chunk_metadata_copy",
                                        "Chunk offsets/sizes D2H copies",
                                        "device_work",
                                        DIAGNOSTIC_DEVICE_WORK,
                                        &m->chunk_metadata_copy };
-  out[13] = (struct diagnostic_entry){ "payload_d2h",
+  out[11] = (struct diagnostic_entry){ "payload_d2h",
                                        "Payload D2H",
                                        "host_wait",
                                        DIAGNOSTIC_HOST_BLOCK,
@@ -255,7 +244,6 @@ delivery_timing_measured(const struct delivery_timing* timing)
   return timing->submitted_to_start.count > 0 ||
          timing->start_to_payload_ready.count > 0 ||
          timing->payload_ready_to_writes_posted.count > 0 ||
-         timing->writes_posted_to_completion.count > 0 ||
          timing->submitted_to_slot_reuse.count > 0;
 }
 
@@ -291,8 +279,6 @@ print_delivery_timing(const struct delivery_timing* timing)
                      &timing->start_to_payload_ready);
   print_duration_row("Payload ready to writes posted",
                      &timing->payload_ready_to_writes_posted);
-  print_duration_row("Writes posted to completion observed",
-                     &timing->writes_posted_to_completion);
   print_duration_row("Submitted to slot reuse",
                      &timing->submitted_to_slot_reuse);
 }
@@ -308,18 +294,12 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
                            "Reason / awaited condition",
                            wall_s);
   print_diagnostic_section(entries,
-                           DIAGNOSTIC_PIPELINE_GAP,
-                           "Pipeline gaps",
-                           "Awaited condition",
-                           wall_s);
-  print_diagnostic_section(entries,
                            DIAGNOSTIC_HOST_OVERHEAD,
                            "Host overhead",
                            "Measured work",
                            wall_s);
   print_diagnostic_section(
     entries, DIAGNOSTIC_DEVICE_WORK, "Device work", "Measured work", wall_s);
-
   print_delivery_timing(&m->delivery);
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
@@ -379,52 +359,6 @@ log_bench_header(const struct tile_stream_layout* layout,
   }
 }
 
-// Writes, and the room for running several at once.
-static void
-print_write_report(const struct shard_pool_io_stats* io)
-{
-  if (!io || io->queue.writes == 0)
-    return;
-
-  fputc('\n', stderr);
-  print_report("  --- Writes ---");
-  print_report("  files waiting:   %.2f avg, %llu peak",
-               io->queue.files_waiting_mean,
-               (unsigned long long)io->queue.files_waiting_peak);
-  print_report("  files opened:    %llu (%llu open at once)",
-               (unsigned long long)io->files_opened,
-               (unsigned long long)io->files_open_peak);
-
-  char buf[32];
-  format_bytes(buf, sizeof(buf), io->queue.bytes_waiting_peak);
-  // Two high-water marks, not one moment; the running job is in the bytes.
-  print_report("  queued peak:     %s, %llu jobs",
-               buf,
-               (unsigned long long)io->queue.jobs_waiting_peak);
-
-  format_bytes(buf, sizeof(buf), io->queue.bytes_borrowed);
-  char cbuf[32];
-  format_bytes(cbuf, sizeof(cbuf), io->queue.bytes_copied);
-  print_report("  writes:          %llu (%s borrowed, %s copied)",
-               (unsigned long long)io->queue.writes,
-               buf,
-               cbuf);
-  print_report("  wait per write:  %.3f ms avg, %.3f ms max",
-               io->queue.wait_ms_mean,
-               io->queue.wait_ms_max);
-  print_report("  run per write:   %.3f ms avg, %.3f ms max",
-               io->queue.run_ms_mean,
-               io->queue.run_ms_max);
-
-  for (uint64_t i = 0; i < IO_SIZE_BUCKETS; ++i) {
-    if (io->queue.size_buckets[i] == 0)
-      continue;
-    format_bytes(buf, sizeof(buf), (uint64_t)1 << i);
-    print_report(
-      "    >= %-10s %llu", buf, (unsigned long long)io->queue.size_buckets[i]);
-  }
-}
-
 void
 print_bench_report(const struct stream_metrics* metrics,
                    const struct tile_stream_layout* layout,
@@ -435,8 +369,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   uint64_t flush_pending_bytes,
-                   const struct shard_pool_io_stats* io)
+                   uint64_t flush_pending_bytes)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -522,8 +455,6 @@ print_bench_report(const struct stream_metrics* metrics,
   }
 
   print_diagnostics_report(metrics, wall_s);
-
-  print_write_report(io);
 
   double throughput_gib =
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
@@ -687,10 +618,6 @@ json_delivery_timing(struct json_writer* jw,
                       "Payload ready to writes posted",
                       &timing->payload_ready_to_writes_posted);
   json_duration_stats(jw,
-                      "writes_posted_to_completion",
-                      "Writes posted to completion observed",
-                      &timing->writes_posted_to_completion);
-  json_duration_stats(jw,
                       "submitted_to_slot_reuse",
                       "Submitted to slot reuse",
                       &timing->submitted_to_slot_reuse);
@@ -709,9 +636,7 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads,
-                      const struct io_write_scheduling* scheduling,
-                      const struct shard_pool_io_stats* io)
+                      int worker_threads)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -773,63 +698,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_key(&jw, "worker_threads");
   jw_uint(&jw, (uint64_t)worker_threads);
 
-  if (scheduling && scheduling->backend) {
-    jw_key(&jw, "io_backend");
-    jw_string(&jw, scheduling->backend);
-    jw_key(&jw, "io_workers");
-    jw_uint(&jw, scheduling->io.workers);
-    jw_key(&jw, "io_writes_in_flight");
-    jw_uint(&jw, scheduling->io.writes_in_flight);
-    jw_key(&jw, "io_writes_in_flight_per_file");
-    jw_uint(&jw, scheduling->io.writes_in_flight_per_file);
-  }
-
-  if (io && io->queue.writes > 0) {
-    jw_key(&jw, "io_files_waiting_mean");
-    jw_float(&jw, io->queue.files_waiting_mean);
-    jw_key(&jw, "io_files_waiting_peak");
-    jw_uint(&jw, io->queue.files_waiting_peak);
-    jw_key(&jw, "io_writes_in_flight_mean");
-    jw_float(&jw, io->queue.writes_in_flight_mean);
-    jw_key(&jw, "io_writes_in_flight_peak");
-    jw_uint(&jw, io->queue.writes_in_flight_peak);
-    jw_key(&jw, "io_files_opened");
-    jw_uint(&jw, io->files_opened);
-    jw_key(&jw, "io_files_open_peak");
-    jw_uint(&jw, io->files_open_peak);
-    jw_key(&jw, "io_writes");
-    jw_uint(&jw, io->queue.writes);
-    jw_key(&jw, "io_bytes_copied");
-    jw_uint(&jw, io->queue.bytes_copied);
-    jw_key(&jw, "io_bytes_borrowed");
-    jw_uint(&jw, io->queue.bytes_borrowed);
-    jw_key(&jw, "io_queued_bytes_peak");
-    jw_uint(&jw, io->queue.bytes_waiting_peak);
-    jw_key(&jw, "io_queued_jobs_peak");
-    jw_uint(&jw, io->queue.jobs_waiting_peak);
-    jw_key(&jw, "io_wait_ms_mean");
-    jw_float(&jw, io->queue.wait_ms_mean);
-    jw_key(&jw, "io_wait_ms_max");
-    jw_float(&jw, io->queue.wait_ms_max);
-    jw_key(&jw, "io_run_ms_mean");
-    jw_float(&jw, io->queue.run_ms_mean);
-    jw_key(&jw, "io_run_ms_max");
-    jw_float(&jw, io->queue.run_ms_max);
-    jw_key(&jw, "io_write_sizes");
-    jw_array_begin(&jw);
-    for (uint64_t i = 0; i < IO_SIZE_BUCKETS; ++i) {
-      if (io->queue.size_buckets[i] == 0)
-        continue;
-      jw_object_begin(&jw);
-      jw_key(&jw, "at_least");
-      jw_uint(&jw, (uint64_t)1 << i);
-      jw_key(&jw, "n");
-      jw_uint(&jw, io->queue.size_buckets[i]);
-      jw_object_end(&jw);
-    }
-    jw_array_end(&jw);
-  }
-
   if (m->d2h_payload_bytes_transferred || m->d2h_metadata_bytes_transferred ||
       m->d2h_payload_copy_count) {
     jw_key(&jw, "d2h_transfer");
@@ -885,10 +753,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->delivery_dispatch.ms);
   jw_key(&jw, "drain_dispatch_count");
   jw_uint(&jw, (uint64_t)m->delivery_dispatch.count);
-  jw_key(&jw, "io_fence_ms");
-  jw_float(&jw, (double)m->io_fence_stall.ms);
-  jw_key(&jw, "io_fence_count");
-  jw_uint(&jw, (uint64_t)m->io_fence_stall.count);
   jw_key(&jw, "footer_buffer_ms");
   jw_float(&jw, (double)m->footer_buffer_stall.ms);
   jw_key(&jw, "footer_buffer_count");
@@ -905,10 +769,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_float(&jw, (double)m->backpressure.ms);
   jw_key(&jw, "backpressure_count");
   jw_uint(&jw, (uint64_t)m->backpressure.count);
-  jw_key(&jw, "tail_gate_ms");
-  jw_float(&jw, (double)m->tail_gate.ms);
-  jw_key(&jw, "tail_gate_count");
-  jw_uint(&jw, (uint64_t)m->tail_gate.count);
   // Non-zero means the stage totals above are under-reported.
   jw_key(&jw, "scatter_samples_lost");
   jw_uint(&jw, m->scatter_samples_lost);
@@ -921,8 +781,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_string(&jw, metric_owner_name(m->flush_stall.owner));
   jw_key(&jw, "drain_dispatch");
   jw_string(&jw, metric_owner_name(m->delivery_dispatch.owner));
-  jw_key(&jw, "io_fence");
-  jw_string(&jw, metric_owner_name(m->io_fence_stall.owner));
   jw_key(&jw, "footer_buffer");
   jw_string(&jw, metric_owner_name(m->footer_buffer_stall.owner));
   jw_key(&jw, "append_extent");
@@ -931,8 +789,6 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_string(&jw, metric_owner_name(m->flush_writes_stall.owner));
   jw_key(&jw, "backpressure");
   jw_string(&jw, metric_owner_name(m->backpressure.owner));
-  jw_key(&jw, "tail_gate");
-  jw_string(&jw, metric_owner_name(m->tail_gate.owner));
   jw_object_end(&jw);
   jw_key(&jw, "edge_stalls");
   jw_object_begin(&jw);
@@ -993,7 +849,6 @@ print_bench_json_pass(const struct stream_metrics* m,
 
   json_diagnostics(&jw, m, wall_s);
   json_delivery_timing(&jw, &m->delivery);
-
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));
   strbuf_free(&json_buf);

@@ -2,7 +2,6 @@
 
 #include "stream/layouts.h"
 #include "types.stream.h"
-#include "zarr/types.io.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,23 +32,14 @@ struct bench_memory
   uint64_t measured_bytes;
 };
 
-// The write scheduling a run used, for the results file. Recorded even when
-// nothing was written, so a run with no output is still told apart from one
-// taken with different settings.
-struct io_write_scheduling
-{
-  struct io_scheduling io;
-  const char* backend; // NULL when the run wrote nothing
-};
-
 void
 print_memory_report(const struct bench_memory* mem);
 
 void
 print_metric_row(const struct stream_metric* m);
 
-// Print diagnostic intervals in separate wait, pipeline-gap, and host-work
-// sections. Unlike stage rows, these intervals do not claim a byte rate.
+// Print diagnostic intervals grouped by where the work or wait happened.
+// Unlike stage rows, these intervals do not claim a byte rate.
 void
 print_diagnostics_report(const struct stream_metrics* metrics, float wall_s);
 
@@ -76,8 +66,7 @@ print_bench_report(const struct stream_metrics* metrics,
                    float wall_s,
                    float init_s,
                    float flush_s,
-                   uint64_t flush_pending_bytes,
-                   const struct shard_pool_io_stats* io);
+                   uint64_t flush_pending_bytes);
 
 // Emit the pass-case JSON report to stdout. sink_metric may be NULL (no sink
 // block is written in that case).
@@ -93,9 +82,7 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads,
-                      const struct io_write_scheduling* scheduling,
-                      const struct shard_pool_io_stats* io);
+                      int worker_threads);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

@@ -9,21 +9,6 @@ extern "C"
 {
 #endif
 
-  // Compute the aggregated-buffer size including page-alignment padding slack.
-  // covering_count and cps_inner are per-epoch values.
-  // Returns 0 on overflow (callers use this for allocation sizes).
-  size_t agg_pool_bytes(uint64_t chunk_count,
-                        size_t max_comp_chunk_bytes,
-                        uint64_t covering_count,
-                        uint64_t cps_inner,
-                        size_t page_size);
-
-  // Compute the legacy page-aligned aggregate size used by the CPU pipeline
-  // (shard-capacity-sized regions per shard). Returns 0 on overflow or when
-  // num_shards is 0.
-  struct aggregate_layout;
-  size_t agg_pool_bytes_layout(const struct aggregate_layout* layout);
-
   struct aggregate_layout
   {
     uint8_t lifted_rank; // 2 * (rank - n_append)
@@ -32,16 +17,10 @@ extern "C"
     uint64_t chunks_per_epoch; // M: actual chunk count
     uint64_t covering_count;   // C >= M: product of padded dims
     size_t max_comp_chunk_bytes;
-    uint64_t cps_inner;        // product of chunks_per_shard for inner dims
-    uint64_t num_shards;       // covering_count / cps_inner
-    uint32_t active_count_max; // worst-case active epochs per batch
-    size_t page_size;          // 0 = no padding
+    uint64_t cps_inner;  // product of chunks_per_shard for inner dims
+    uint64_t num_shards; // covering_count / cps_inner
+    size_t page_size;    // 0 = no padding
     uint64_t chunks_per_shard_append; // shard length along append dims
-    // Per-shard reservation in d_aggregated. Worst-case batch_active_count
-    // * cps_inner * max_comp_chunk_bytes plus one page slack for a leading
-    // carry-over tail (< page_size) from the prior batch. Page-aligned.
-    // Zero when page_size == 0.
-    size_t shard_capacity;
   };
 
   // Per-shard footer size: one page for trailing sub-page data, index
@@ -51,11 +30,6 @@ extern "C"
   size_t footer_capacity_for(uint64_t chunks_per_shard_total, size_t page_size);
 
   // Compute host-side aggregate layout fields (pure CPU, no GPU allocation).
-  // active_count_max is the maximum number of active epochs per batch for this
-  // level (used to size shard_capacity). chunks_per_shard_append is the shard
-  // length along append dims at this level (after any per-level downsample
-  // divisor). It enters the shard_capacity reservation so the agg buffer has
-  // room for intra-batch generation-boundary pads.
   int aggregate_layout_compute(struct aggregate_layout* layout,
                                uint8_t rank,
                                uint8_t n_append,
@@ -63,21 +37,12 @@ extern "C"
                                const uint64_t* chunks_per_shard,
                                uint64_t chunks_per_epoch,
                                size_t max_comp_chunk_bytes,
-                               uint32_t active_count_max,
                                size_t page_size,
                                uint64_t chunks_per_shard_append);
 
-  // Aggregated output for shard delivery (CUDA-free).
-  struct aggregate_result
-  {
-    void* data;          // aggregated compressed chunks in shard order
-    size_t* offsets;     // [C+1] byte offsets (prefix sum)
-    size_t* chunk_sizes; // [C] real pre-padding compressed sizes
-  };
-
   // Compute gather + perm LUTs for a batch of active_count epochs.
   // pool_epochs[a] gives the compressed-pool epoch index for active slot a.
-  // Perm uses epoch-major shard order matching deliver_to_shards_batch():
+  // Perm uses epoch-major shard order:
   //   target = si * active_count * cps_inner + a * cps_inner + c
   struct level_geometry;
   void aggregate_batch_luts(const struct aggregate_layout* agg,
@@ -101,10 +66,6 @@ extern "C"
 
     uint64_t batch_chunk_offset;    // start in unified gather/perm
     uint64_t batch_covering_offset; // start in unified offsets/chunk_sizes/...
-    // Static capacity range. In compact indexed output, actual bytes from
-    // adjacent LODs pack across these worst-case boundaries.
-    size_t data_segment_offset;
-    size_t data_segment_bytes;
   };
 
   // Unified per-batch aggregate layout: collects per-LOD segment info plus
@@ -112,7 +73,6 @@ extern "C"
   struct batch_aggregate_layout
   {
     uint8_t nlod;
-    size_t page_size;
     size_t max_comp_chunk_bytes; // shared across LODs (uniform pool stride)
     struct lod_segment lods[LOD_MAX_LEVELS];
 
@@ -121,20 +81,7 @@ extern "C"
     size_t total_data_bytes;       // total aggregate capacity across all LODs
   };
 
-  // Populate a batch layout from the per-LOD aggregate_layouts and active
-  // counts. Each LOD's data segment offset is page-aligned within the
-  // unified buffer so deliver-time write_direct guards still hold.
-  // Returns 0 on success, non-zero on overflow / inconsistency.
-  int batch_aggregate_layout_init(struct batch_aggregate_layout* out,
-                                  const struct aggregate_layout* per_lod,
-                                  const uint32_t* per_lod_n_active,
-                                  uint8_t nlod,
-                                  size_t page_size);
-
-  // GPU compact layout.  Unlike batch_aggregate_layout_init(), this never
-  // reserves shard regions, leading-tail space, or page padding: every LOD
-  // contributes only its real chunks at the codec's maximum extent.  The
-  // CPU pipeline intentionally continues to use the legacy initializer.
+  // Compact CPU/GPU aggregate layout.
   int batch_aggregate_layout_init_compact(
     struct batch_aggregate_layout* out,
     const struct aggregate_layout* per_lod,

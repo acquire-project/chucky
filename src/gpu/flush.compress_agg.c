@@ -4,6 +4,8 @@
 #include "gpu/aggregate.h"
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
+#include "platform/platform.h"
+#include "stream/host_output_pool.h"
 #include "stream/layouts.h"
 #include "util/prelude.h"
 #include "zarr/shard_delivery.h"
@@ -88,17 +90,14 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   stage->max_total_batch_chunks = lim->max_total_batch_chunks;
   stage->max_total_batch_covering = lim->max_total_batch_covering;
   stage->max_device_data_bytes = lim->max_device_data_bytes;
-  stage->max_host_data_bytes = lim->max_host_data_bytes;
 
   if (stage->max_total_batch_chunks > 0) {
     const uint64_t C_max =
       stage->max_total_batch_covering + (uint64_t)lim->max_nlod;
     for (int fc = 0; fc < 2; ++fc) {
       CHECK(Fail,
-            aggregate_batch_slot_init(&stage->agg[fc],
-                                      C_max,
-                                      stage->max_device_data_bytes,
-                                      stage->max_host_data_bytes) == 0);
+            aggregate_batch_slot_init(
+              &stage->agg[fc], C_max, stage->max_device_data_bytes) == 0);
     }
 
     CU(Fail,
@@ -192,9 +191,102 @@ compress_agg_array_destroy(struct compress_agg_array* ar)
 {
   if (!ar)
     return;
+  if (ar->owns_output_pool)
+    host_output_pool_destroy(ar->output_pool);
   for (int lv = 0; lv < ar->nlod; ++lv)
     shard_state_destroy(&ar->shard[lv]);
   memset(ar, 0, sizeof(*ar));
+}
+
+int
+compress_agg_host_output_requirements(
+  const struct computed_stream_layouts* cl,
+  const struct tile_stream_configuration* config,
+  size_t* output_bytes)
+{
+  CHECK(Error, cl && config && output_bytes);
+  struct aggregate_layout layouts[LOD_MAX_LEVELS];
+  uint32_t active[LOD_MAX_LEVELS] = { 0 };
+  for (int lv = 0; lv < cl->levels.nlod; ++lv) {
+    layouts[lv] = cl->per_level[lv].agg_layout;
+    const uint32_t count = cl->per_level[lv].batch_active_count;
+    active[lv] = count > 0 ? count : 1;
+  }
+  size_t run_count = 0;
+  size_t required_output_bytes = 0;
+  const size_t alignment = layouts[0].page_size;
+  const enum host_batch_storage storage =
+    host_batch_storage_select(config->codec.id == CODEC_NONE, alignment);
+  CHECK(Error,
+        host_batch_capacity(layouts,
+                            active,
+                            (uint8_t)cl->levels.nlod,
+                            storage,
+                            alignment,
+                            &required_output_bytes,
+                            &run_count) == 0);
+  (void)run_count;
+  CHECK(Error,
+        host_output_size(
+          required_output_bytes, platform_page_alignment(), output_bytes) == 0);
+  return 0;
+
+Error:
+  return 1;
+}
+
+static void*
+allocate_pinned_output(void* ctx, size_t alignment, size_t bytes)
+{
+  (void)ctx;
+  void* output = platform_aligned_alloc(alignment, bytes);
+  if (!output)
+    return NULL;
+  const CUresult result = cuMemHostRegister(output, bytes, 0);
+  if (result != CUDA_SUCCESS) {
+    handle_curesult(LOG_ERROR, result, __FILE__, __LINE__, "cuMemHostRegister");
+    platform_aligned_free(output);
+    return NULL;
+  }
+  return output;
+}
+
+static void
+release_pinned_output(void* ctx, void* data)
+{
+  (void)ctx;
+  if (!data)
+    return;
+  const CUresult result = cuMemHostUnregister(data);
+  if (result != CUDA_SUCCESS)
+    handle_curesult(
+      LOG_ERROR, result, __FILE__, __LINE__, "cuMemHostUnregister");
+  platform_aligned_free(data);
+}
+
+int
+compress_agg_array_init_output(struct compress_agg_array* ar,
+                               size_t output_bytes)
+{
+  CHECK(Error, ar && !ar->output_pool);
+  ar->output_pool = compress_agg_output_pool_create(output_bytes);
+  CHECK(Error, ar->output_pool);
+  ar->owns_output_pool = 1;
+  return 0;
+
+Error:
+  return 1;
+}
+
+struct host_output_pool*
+compress_agg_output_pool_create(size_t output_bytes)
+{
+  return host_output_pool_create(output_bytes,
+                                 platform_page_alignment(),
+                                 (struct host_output_allocator){
+                                   .allocate = allocate_pinned_output,
+                                   .release = release_pinned_output,
+                                 });
 }
 
 int
@@ -211,6 +303,10 @@ compress_agg_init(struct compress_agg_stage* stage,
         compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
           0);
   CHECK(Fail, compress_agg_array_init(&stage->ar, cl) == 0);
+  size_t output_bytes = 0;
+  CHECK(Fail,
+        compress_agg_host_output_requirements(cl, config, &output_bytes) == 0);
+  CHECK(Fail, compress_agg_array_init_output(&stage->ar, output_bytes) == 0);
   return 0;
 
 Fail:
@@ -258,11 +354,8 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
     size_t slot_dev = 0;
     size_t slot_host = 0;
     CHECK(Error,
-          aggregate_batch_slot_memory(C_max,
-                                      lim->max_device_data_bytes,
-                                      lim->max_host_data_bytes,
-                                      &slot_dev,
-                                      &slot_host) == 0);
+          aggregate_batch_slot_memory(
+            C_max, lim->max_device_data_bytes, &slot_dev, &slot_host) == 0);
     dev += 2 * slot_dev; // agg[2]
     host += 2 * slot_host;
     dev += 2 * lim->max_total_batch_chunks *
@@ -496,6 +589,7 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
     .aggregate_pool = &stage->agg_pool,
     .host_pool = &stage->agg_host,
     .index_pool = &stage->agg_index,
+    .output_pool = stage->ar.output_pool,
   };
   memcpy(out->batch.active_count_by_level,
          plan->active_count_by_level,

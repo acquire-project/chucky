@@ -411,8 +411,7 @@ run_bench(const struct bench_config* cfg)
                              dtype,
                              0,
                              cfg->codec,
-                             is_multiscale,
-                             cfg->io) == 0);
+                             is_multiscale) == 0);
     metering_sink_init(&meter, bench_zarr_as_shard_sink(&zarr));
     sink = &meter.base;
   } else if (cfg->io_bw_mbps > 0 || cfg->io_latency_us > 0) {
@@ -459,6 +458,8 @@ run_bench(const struct bench_config* cfg)
       format_bytes(a, sizeof(a), mem.comp_sizes_bytes);
       format_bytes(b, sizeof(b), mem.aggregate_bytes);
       print_report("    comp_sizes: %s   aggregate: %s", a, b);
+      format_bytes(a, sizeof(a), mem.host_output_pool_bytes);
+      print_report("    host output: %s", a);
       format_bytes(a, sizeof(a), mem.lod_bytes);
       format_bytes(b, sizeof(b), mem.shard_bytes);
       print_report("    lod:       %s   shards:    %s", a, b);
@@ -570,10 +571,6 @@ run_bench(const struct bench_config* cfg)
   {
     struct stream_metrics m = bench_get_metrics(&h);
     int has_output = output_path || cfg->s3_bucket;
-    // Read after flush, so this covers streaming plus every shard close.
-    struct shard_pool_io_stats io_stats = { 0 };
-    if (has_output)
-      bench_zarr_io_stats(&zarr, &io_stats);
     size_t sink_total_bytes;
     if (has_output)
       sink_total_bytes = meter.total_bytes;
@@ -592,17 +589,12 @@ run_bench(const struct bench_config* cfg)
                        wall_s,
                        init_s,
                        flush_s,
-                       pending_bytes,
-                       &io_stats);
+                       pending_bytes);
     print_memory_report(&mem_used);
 
     if (cfg->json_output) {
       const struct stream_metric* sink_metric =
         meter.metric.count > 0 ? &meter.metric : NULL;
-      const struct io_write_scheduling scheduling = {
-        .io = cfg->io,
-        .backend = output_path ? cfg->io_backend : NULL,
-      };
       print_bench_json_pass(&m,
                             sink_metric,
                             layout,
@@ -614,9 +606,7 @@ run_bench(const struct bench_config* cfg)
                             init_s,
                             flush_s,
                             &mem_used,
-                            bench_worker_threads(&h),
-                            &scheduling,
-                            &io_stats);
+                            bench_worker_threads(&h));
     }
   }
 
@@ -664,23 +654,7 @@ struct bench_cli_args
   uint64_t io_latency_us;
   uint64_t backpressure_bytes;
   int max_threads;
-  struct io_scheduling io;
-  const char* io_backend;
 };
-
-// Only the thread backend exists; step 4 of the write-path work adds the
-// io_uring one. The name is read and recorded so a sweep taken now can be
-// told apart from one taken then.
-static int
-parse_io_backend(const char* text, const char** out)
-{
-  if (strcmp(text, "threads") == 0) {
-    *out = "threads";
-    return 1;
-  }
-  fprintf(stderr, "--io-backend: unknown backend \"%s\"\n", text);
-  return 0;
-}
 
 static int
 read_size(const char* flag, const char* text, uint64_t* out)
@@ -696,8 +670,7 @@ read_size(const char* flag, const char* text, uint64_t* out)
 //   --fill --codec --reduce --backend --dtype --frames --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads --io-workers --io-writes-in-flight
-//   --io-writes-in-flight-per-file --io-backend.
+//   --max-threads.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
 static int
@@ -723,8 +696,6 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
-  out->io = (struct io_scheduling){ 0 };
-  out->io_backend = "threads";
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -783,16 +754,6 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       ++i;
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
-    } else if (strcmp(av[i], "--io-workers") == 0 && i + 1 < ac) {
-      out->io.workers = strtoull(av[++i], NULL, 10);
-    } else if (strcmp(av[i], "--io-writes-in-flight") == 0 && i + 1 < ac) {
-      out->io.writes_in_flight = strtoull(av[++i], NULL, 10);
-    } else if (strcmp(av[i], "--io-writes-in-flight-per-file") == 0 &&
-               i + 1 < ac) {
-      out->io.writes_in_flight_per_file = strtoull(av[++i], NULL, 10);
-    } else if (strcmp(av[i], "--io-backend") == 0 && i + 1 < ac) {
-      if (!parse_io_backend(av[++i], &out->io_backend))
-        return 1;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -805,9 +766,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
-              "[--max-threads N (0 = OpenMP default)] "
-              "[--io-workers N] [--io-writes-in-flight N] "
-              "[--io-writes-in-flight-per-file N] [--io-backend threads]\n",
+              "[--max-threads N (0 = OpenMP default)]\n",
               av[0]);
       return 1;
     }
@@ -862,12 +821,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
-    .io = a.io,
-    .io_backend = a.io_backend,
   };
-  // Resolved here rather than inside the pool, so that what the run used is
-  // what the results file records.
-  shard_pool_fs_scheduling_defaults(&cfg.io);
   int ecode = run_bench(&cfg);
 
   if (a.backend == BENCH_GPU)
@@ -1001,8 +955,7 @@ run_bench_two_streams(const struct bench_config* cfg)
                                dtype,
                                0,
                                cfg->codec,
-                               0 /* single array */,
-                               cfg->io) == 0);
+                               0 /* single array */) == 0);
       metering_sink_init(&meter[k], bench_zarr_as_shard_sink(&zarr[k]));
       sink[k] = &meter[k].base;
     }
@@ -1221,10 +1174,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
-    .io = a.io,
-    .io_backend = a.io_backend,
   };
-  shard_pool_fs_scheduling_defaults(&cfg.io);
   int ecode = run_bench_two_streams(&cfg);
 
   bench_gpu_context_destroy();

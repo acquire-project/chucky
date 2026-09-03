@@ -15,20 +15,6 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
-## Running the write-depth tier
-
-The `iodepth` tier sweeps the write-queue depth of the filesystem sink, from
-1 to 32 writes at once, at one and at four per shard file. Run it when the
-write path changes.
-
-    uv run scripts/sweep/sweep.py --tier iodepth
-
-Read it in the explorer, not on the overview page: the overview picks the best
-run per scenario, input, codec, backend and sink, and every run in this tier
-matches on all five, so only the fastest depth would show. The run id carries
-the depth — `__wif16__perfile4` is sixteen writes at once, four of them to any
-one shard file.
-
 ## Running S3 benchmarks
 
 The S3 tier measures against
@@ -200,45 +186,14 @@ the padding ratio as internal padding divided by physical data-region bytes.
 Fixed output, unaligned variable-size output, and empty updates report zero
 internal padding. The block is unknown in archived files where it is absent.
 
-For a run with filesystem output, the write scheduling it used is recorded,
-so a sweep is comparable only against one taken with the same settings:
-
-| field | holds |
-|---|---|
-| `io_backend` | which write backend ran the requests; `threads` is the only one so far |
-| `io_workers` | threads the sink's queue ran requests on |
-| `io_writes_in_flight` | most requests handed to the backend at once, over every shard file |
-| `io_writes_in_flight_per_file` | most on any one shard file; above one the file is pre-sized so its writes do not extend it |
-
-What the write path then did is also recorded. Read `io_writes_in_flight_*`,
-the depth reached, against `io_files_waiting_*`, the depth the scheduler had
-to work with. A configured ceiling is not evidence the run got near it:
-
-| field | holds |
-|---|---|
-| `io_files_waiting_mean` | shard files with a write waiting, averaged over time |
-| `io_files_waiting_peak` | the most at once |
-| `io_writes_in_flight_mean` | requests the backend was running at once, averaged over time: the depth reached, against the two rows above, which are the depth available |
-| `io_writes_in_flight_peak` | the most at once |
-| `io_files_opened` | shard files opened over the run |
-| `io_files_open_peak` | the most open at once |
-| `io_writes` | writes run by the queue |
-| `io_bytes_copied` / `io_bytes_borrowed` | payload bytes owned by the write, against bytes borrowed from a pinned buffer |
-| `io_queued_bytes_peak` / `io_queued_jobs_peak` | the largest backlog, in payload bytes and in jobs, counting a shard's finalizing truncate and close |
-| `io_wait_ms_mean` / `io_wait_ms_max` | the wait before a write starts |
-| `io_run_ms_mean` / `io_run_ms_max` | the time taken by a write once started |
-| `io_write_sizes` | request-size histogram, as `{at_least, n}` in powers of two |
-
 The legacy `stalls` block is retained for existing consumers. Each of the
 producer's waits on io is reported there as a total and count. `footer_buffer`
-and `flush_writes` break down the `sink` stage total; `io_fence` and
-`append_extent` fall outside every stage. `io_fence` is measured by the GPU
-path too; the other three are left at count zero there, meaning not measured
-rather than no wait:
+and `flush_writes` break down the `sink` stage total; `append_extent` falls
+outside every stage. The CPU path records these waits; the GPU path leaves
+them at count zero, meaning not measured rather than no wait:
 
 | field | holds |
 |---|---|
-| `io_fence_ms` / `io_fence_count` | the wait on an aggregate slot's previous writes, before the slot is filled again |
 | `footer_buffer_ms` / `footer_buffer_count` | the wait on a shard's previous footer write, before its footer buffer is filled again |
 | `append_extent_ms` / `append_extent_count` | the wait on shards closed since the append extent was last published |
 | `flush_writes_ms` / `flush_writes_count` | the wait on every queued write, at flush |
@@ -260,12 +215,10 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 |---|---|
 | `batch_drain` | producer blocked during batch delivery; this can include inline delivery work |
 | `d2h_dispatch` | delivery-thread CPU work between its metadata and payload waits |
-| `output_slot_io` | host waiting for writes that still hold an output slot |
 | `footer_buffer_io` | host waiting for a shard's previous footer-buffer write |
 | `append_extent_io` | host waiting for writes to shards closed since the last published extent |
 | `final_io` | host waiting for all queued writes at flush |
 | `sink_backpressure` | producer waiting for the sink queue to fall below its limit |
-| `prior_tail_state` | archived compression-to-aggregation gap from the former GPU tail gate; new runs omit it |
 | `staging_reuse` | producer waiting to refill a staging buffer still used by H2D |
 | `chunk_metadata_d2h` | inclusive delivery-host wait for indexed chunk metadata; retained for archived-result compatibility |
 | `indexed_aggregate_wait` | portion of that host wait before the compact compressed aggregate is ready |
@@ -277,10 +230,6 @@ as `% wall`; `total_ms` remains in the full JSON as the lossless raw value.
 results remain usable without rewriting them. Historical files cannot recover
 `wait_calls`, `min_ms`, or `max_ms`, and the explorer shows those cells as
 unknown.
-
-The legacy root `tail_gate_ms` and `tail_gate_count` fields remain present as
-zero for compatibility. They do not produce a canonical `prior_tail_state`
-entry when there are no samples.
 
 Values retired because their meaning changed are not backfilled under a current
 diagnostic ID.
@@ -329,6 +278,9 @@ bump it.
 
 ### Version history
 
+- **10** — Write-scheduler tuning and measurements, host-output occupancy and
+  lifetime measurements, the output-slot wait, and the former tail-gap fields
+  were removed.
 - **9** — Redundant derived padding fields and the duplicate D2H logical-byte
   field were removed. Diagnostic IDs ending in `_ready` were renamed to
   `_wait`; migration preserves their values in archived version-8 results.

@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct host_output_group;
+
 struct io_event
 {
   uint64_t seq;
@@ -62,6 +64,13 @@ struct shard_writer
                       uint64_t offset,
                       const void* beg,
                       const void* end);
+  // The writer retains group for every request that still points into this
+  // output and completes each retain when that request retires.
+  int (*write_from_output)(struct shard_writer* self,
+                           uint64_t offset,
+                           const void* beg,
+                           const void* end,
+                           struct host_output_group* group);
   // Optional: set the shard's size to nbytes before anything is written. On
   // some filesystems a write that extends a file takes the file's lock for
   // itself, so this is what lets a shard's writes run together. No space is
