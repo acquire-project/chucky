@@ -195,11 +195,45 @@ ngff_multiscale_flush_fn(struct shard_sink* self)
 
 // --- Shared create logic ---
 
+static int
+plan_from_config(struct lod_plan* plan,
+                 const struct ngff_multiscale_config* cfg)
+{
+  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
+  return lod_plan_init_from_dims(plan, cfg->dimensions, cfg->rank, max_lev, 0);
+}
+
+static void
+level_dimensions(struct dimension* out,
+                 const struct ngff_multiscale_config* cfg,
+                 const struct lod_plan* plan,
+                 int level)
+{
+  const struct level_dims* ld = &plan->levels.level[level];
+  for (int d = 0; d < cfg->rank; ++d) {
+    out[d] = cfg->dimensions[d];
+    out[d].size =
+      (d == 0 && cfg->dimensions[0].size == 0) ? 0 : ld->dim[d].size;
+    out[d].chunk_size = ld->dim[d].chunk_size;
+    out[d].chunks_per_shard = ld->dim[d].chunks_per_shard;
+  }
+}
+
+// Spacing a slot range and advancing it must use one count.
+static uint64_t
+dims_slot_count(const struct dimension* dims, uint8_t rank)
+{
+  uint64_t shard_counts[MAX_ZARR_RANK], chunks_per_shard[MAX_ZARR_RANK];
+  return dims_compute_shard_geometry(
+    dims, rank, shard_counts, chunks_per_shard);
+}
+
 // Shared init: caller provides a pre-computed LOD plan.
 // The plan is consumed (freed on success, freed on failure).
 static struct ngff_multiscale*
 ngff_multiscale_init(struct store* store,
                      struct shard_pool* pool,
+                     uint64_t slot_base,
                      const char* prefix,
                      const struct ngff_multiscale_config* cfg,
                      struct lod_plan* plan)
@@ -237,20 +271,9 @@ ngff_multiscale_init(struct store* store,
     (struct zarr_array**)calloc((size_t)plan->levels.nlod, sizeof(void*));
   CHECK(Fail_ms, ms->levels);
 
-  uint64_t slot_base = 0;
   for (int lv = 0; lv < plan->levels.nlod; ++lv) {
     struct dimension lv_dims[MAX_ZARR_RANK];
-
-    for (int d = 0; d < cfg->rank; ++d) {
-      lv_dims[d] = cfg->dimensions[d];
-      if (d == 0 && cfg->dimensions[0].size == 0)
-        lv_dims[d].size = 0;
-      else
-        lv_dims[d].size = plan->levels.level[lv].dim[d].size;
-      lv_dims[d].chunk_size = plan->levels.level[lv].dim[d].chunk_size;
-      lv_dims[d].chunks_per_shard =
-        plan->levels.level[lv].dim[d].chunks_per_shard;
-    }
+    level_dimensions(lv_dims, cfg, plan, lv);
 
     struct strbuf level_prefix = { 0 };
     int lp_rc = (prefix && prefix[0])
@@ -277,8 +300,7 @@ ngff_multiscale_init(struct store* store,
     strbuf_free(&level_prefix);
     CHECK(Fail_levels, ms->levels[lv]);
 
-    uint64_t sc[MAX_ZARR_RANK], cps[MAX_ZARR_RANK];
-    slot_base += dims_compute_shard_geometry(lv_dims, cfg->rank, sc, cps);
+    slot_base += dims_slot_count(lv_dims, cfg->rank);
   }
 
   CHECK(Fail_levels, write_ngff_group_metadata(ms) == 0);
@@ -303,9 +325,33 @@ Fail_plan:
 
 // --- Private API ---
 
+uint64_t
+ngff_multiscale_slot_count(const struct ngff_multiscale_config* cfg)
+{
+  CHECK(Fail, cfg);
+  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
+  CHECK(Fail, cfg->dimensions);
+
+  struct lod_plan plan = { 0 };
+  CHECK(Fail, plan_from_config(&plan, cfg) == 0);
+
+  uint64_t total = 0;
+  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
+    struct dimension lv_dims[MAX_ZARR_RANK];
+    level_dimensions(lv_dims, cfg, &plan, lv);
+    total += dims_slot_count(lv_dims, cfg->rank);
+  }
+  lod_plan_free(&plan);
+  return total;
+
+Fail:
+  return 0;
+}
+
 struct ngff_multiscale*
 ngff_multiscale_create_with_pool(struct store* store,
                                  struct shard_pool* pool,
+                                 uint64_t slot_base,
                                  const char* prefix,
                                  const struct ngff_multiscale_config* cfg)
 {
@@ -316,12 +362,9 @@ ngff_multiscale_create_with_pool(struct store* store,
   CHECK(Fail, cfg->dimensions);
 
   struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
+  CHECK(Fail, plan_from_config(&plan, cfg) == 0);
 
-  return ngff_multiscale_init(store, pool, prefix, cfg, &plan);
+  return ngff_multiscale_init(store, pool, slot_base, prefix, cfg, &plan);
 
 Fail:
   return NULL;
@@ -335,41 +378,21 @@ ngff_multiscale_create(struct store* store,
                        const struct ngff_multiscale_config* cfg)
 {
   CHECK(Fail, store);
-  CHECK(Fail, cfg);
-  CHECK(Fail, cfg->rank > 0 && cfg->rank <= MAX_ZARR_RANK);
-  CHECK(Fail, cfg->dimensions);
 
-  struct lod_plan plan = { 0 };
-  int max_lev = cfg->nlod > 0 ? cfg->nlod : LOD_MAX_LEVELS;
-  CHECK(Fail,
-        lod_plan_init_from_dims(
-          &plan, cfg->dimensions, cfg->rank, max_lev, 0) == 0);
-
-  uint8_t na = dims_n_append(cfg->dimensions, cfg->rank);
-  uint64_t total_slots = 0;
-  for (int lv = 0; lv < plan.levels.nlod; ++lv) {
-    uint64_t sic = 1;
-    for (int d = na; d < cfg->rank; ++d)
-      sic *= plan.levels.level[lv].dim[d].shard_count;
-    total_slots += sic;
-  }
-  CHECK(Fail_plan, total_slots > 0);
+  uint64_t total_slots = ngff_multiscale_slot_count(cfg);
+  CHECK(Fail, total_slots > 0);
 
   struct shard_pool* pool = store->create_pool(store, total_slots);
-  CHECK(Fail_plan, pool);
+  CHECK(Fail, pool);
 
-  // plan ownership transfers to ngff_multiscale_init
   struct ngff_multiscale* ms =
-    ngff_multiscale_init(store, pool, prefix, cfg, &plan);
+    ngff_multiscale_create_with_pool(store, pool, 0, prefix, cfg);
   if (!ms) {
     shard_pool_destroy(pool);
     return NULL;
   }
   ms->owns_pool = 1;
   return ms;
-
-Fail_plan:
-  lod_plan_free(&plan);
 
 Fail:
   return NULL;

@@ -12,6 +12,9 @@ struct shard_pool
 {
   // Open writer slot for shard data at the given key.
   // If the slot has a pending finalize, waits for it first.
+  // Callers sharing a pool must use slot ranges that do not overlap. Slot
+  // reuse is how a caller reaches its next shard, so the pool cannot tell it
+  // from an overlap.
   struct shard_writer* (*open)(struct shard_pool* self,
                                uint64_t slot,
                                const char* key);

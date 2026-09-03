@@ -306,6 +306,115 @@ Fail:
   return 1;
 }
 
+// --- Test: two fields open at the same time keep their own shard files ---
+
+static int
+test_hcs_two_fields_open_together(void)
+{
+  log_info("=== test_hcs_two_fields_open_together ===");
+
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Fail, store);
+  store->mkdirs(store, ".");
+
+  // A field spans several slots here, so a wrong stride between fields
+  // collides.
+  struct dimension dims[] = {
+    { .size = 32,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .downsample = 1,
+      .storage_position = 0 },
+    { .size = 32,
+      .chunk_size = 16,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .downsample = 1,
+      .storage_position = 1 },
+  };
+
+  struct hcs_plate_config cfg = {
+    .name = "together",
+    .rows = 1,
+    .cols = 1,
+    .field_count = 2,
+    .fov = {
+      .data_type = dtype_u8,
+      .rank = 2,
+      .dimensions = dims,
+    },
+  };
+
+  struct hcs_plate* plate = hcs_plate_create(store, &cfg);
+  CHECK(Fail2, plate);
+
+  const struct
+  {
+    int field;
+    int level;
+    int shard;
+  } opens[] = {
+    { 0, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 },
+    { 1, 0, 0 }, { 1, 0, 1 }, { 1, 1, 0 },
+  };
+  struct shard_writer* writers[countof(opens)] = { 0 };
+  uint8_t payload[256];
+
+  for (uint64_t i = 0; i < countof(opens); ++i) {
+    struct shard_sink* sink = hcs_plate_fov_sink(plate, 0, 0, opens[i].field);
+    CHECK(Fail3, sink);
+    writers[i] =
+      sink->open(sink, (uint8_t)opens[i].level, (uint64_t)opens[i].shard);
+    CHECK(Fail3, writers[i]);
+    for (uint64_t j = 0; j < i; ++j)
+      CHECK(Fail3, writers[i] != writers[j]);
+  }
+
+  // Every writer is open before any write, so a shared slot misroutes bytes.
+  for (uint64_t i = 0; i < countof(opens); ++i) {
+    memset(payload, (uint8_t)(0x10 + i), sizeof(payload));
+    CHECK(Fail3,
+          writers[i]->write(
+            writers[i], 0, payload, payload + sizeof(payload)) == 0);
+  }
+  for (uint64_t i = 0; i < countof(opens); ++i)
+    CHECK(Fail3, writers[i]->finalize(writers[i]) == 0);
+
+  // Destroying the plate drains the writes, so the files are complete.
+  hcs_plate_destroy(plate);
+  plate = NULL;
+
+  char path[4096], buf[8192];
+  size_t len;
+
+  for (uint64_t i = 0; i < countof(opens); ++i) {
+    snprintf(path,
+             sizeof(path),
+             "%s/together/A/1/%d/%d/c/0/%d",
+             tmpdir,
+             opens[i].field,
+             opens[i].level,
+             opens[i].shard);
+    memset(payload, (uint8_t)(0x10 + i), sizeof(payload));
+    CHECK(Fail3, read_file(path, buf, sizeof(buf), &len) == 0);
+    CHECK(Fail3, len == sizeof(payload));
+    CHECK(Fail3, memcmp(buf, payload, sizeof(payload)) == 0);
+  }
+
+  store_destroy(store);
+  log_info("  PASS");
+  return 0;
+
+Fail3:
+  hcs_plate_destroy(plate);
+Fail2:
+  store_destroy(store);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 int
 main(void)
 {
@@ -319,6 +428,7 @@ main(void)
   err |= test_plate_metadata_with_mask();
   err |= test_hcs_plate_create();
   err |= test_hcs_well_mask();
+  err |= test_hcs_two_fields_open_together();
 
   test_tmpdir_remove(tmpdir);
 
