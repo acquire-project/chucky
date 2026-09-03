@@ -7,7 +7,7 @@ ARG CUDA_VERSION=13.2.1
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04
 # Re-declare ARGs needed in subsequent layers; they are reset by FROM.
 ARG CUDA_MAJOR=13
-ARG NVCOMP_VERSION=5.1.0.21
+ARG NVCOMP_VERSION=5.3.0.16
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
