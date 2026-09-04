@@ -347,7 +347,13 @@ test_file_barriers(void)
   CHECK(Fail, scheduler);
 
   const struct io_file_token file = { .generation = 1, .index = 0 };
-  CHECK(Cleanup, io_scheduler_post(scheduler, file_write(1, 0)) == 0);
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_OPEN,
+                            .file = file,
+                            .path = "shard",
+                          }) == 0);
   CHECK(Cleanup, wait_for_started(&fake, 1, WAIT_MS) == 0);
   CHECK(Cleanup,
         io_scheduler_post(scheduler,
@@ -355,6 +361,14 @@ test_file_barriers(void)
                             .op = IO_OP_TRUNCATE,
                             .file = file,
                             .logical_size = 4096,
+                          }) == 0);
+  CHECK(Cleanup, io_scheduler_post(scheduler, file_write(1, 0)) == 0);
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){
+                            .op = IO_OP_TRUNCATE,
+                            .file = file,
+                            .logical_size = 1,
                           }) == 0);
   CHECK(Cleanup,
         io_scheduler_post(scheduler,
@@ -367,12 +381,62 @@ test_file_barriers(void)
 
   atomic_store(&gate, 1);
   io_event_wait(scheduler, io_scheduler_record(scheduler));
-  CHECK(Cleanup, wait_for_started(&fake, 3, WAIT_MS) == 0);
-  CHECK(Cleanup, fake.records[0].op == IO_OP_WRITE);
+  CHECK(Cleanup, wait_for_started(&fake, 5, WAIT_MS) == 0);
+  CHECK(Cleanup, fake.records[0].op == IO_OP_OPEN);
   CHECK(Cleanup, fake.records[1].op == IO_OP_TRUNCATE);
   CHECK(Cleanup, fake.records[1].logical_size == 4096);
-  CHECK(Cleanup, fake.records[2].op == IO_OP_CLOSE);
+  CHECK(Cleanup, fake.records[2].op == IO_OP_WRITE);
+  CHECK(Cleanup, fake.records[3].op == IO_OP_TRUNCATE);
+  CHECK(Cleanup, fake.records[3].logical_size == 1);
+  CHECK(Cleanup, fake.records[4].op == IO_OP_CLOSE);
 
+  io_scheduler_destroy(scheduler);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  io_scheduler_destroy(scheduler);
+Fail:
+  return 1;
+}
+
+static int
+test_file_opens_overlap(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  _Atomic int gate = 0;
+  io_backend_fake_hold(&fake, &gate);
+  struct io_scheduler* scheduler =
+    io_scheduler_create(io_backend_fake_as_backend(&fake),
+                        (struct io_scheduler_limits){
+                          .workers = 4,
+                          .max_in_flight_per_file = 4,
+                        });
+  CHECK(Fail, scheduler);
+
+  for (uint32_t i = 0; i < 2; ++i) {
+    const struct io_file_token file = { .generation = i + 1, .index = i };
+    CHECK(Cleanup,
+          io_scheduler_post(scheduler,
+                            (struct io_request){
+                              .op = IO_OP_OPEN,
+                              .file = file,
+                              .path = "shard",
+                            }) == 0);
+    CHECK(Cleanup, io_scheduler_post(scheduler, file_write(i + 1, i)) == 0);
+  }
+
+  CHECK(Cleanup, wait_for_started(&fake, 2, WAIT_MS) == 0);
+  platform_sleep_ns(20000000LL);
+  CHECK(Cleanup, io_backend_fake_started(&fake) == 2);
+  CHECK(Cleanup, io_backend_fake_active(&fake) == 2);
+  CHECK(Cleanup, fake.records[0].op == IO_OP_OPEN);
+  CHECK(Cleanup, fake.records[1].op == IO_OP_OPEN);
+
+  atomic_store(&gate, 1);
+  io_event_wait(scheduler, io_scheduler_record(scheduler));
+  CHECK(Cleanup, io_backend_fake_started(&fake) == 4);
   io_scheduler_destroy(scheduler);
   return 0;
 
@@ -550,6 +614,7 @@ main(void)
     { "per_file_ceiling", test_per_file_ceiling },
     { "files_take_turns", test_files_take_turns },
     { "file_barriers", test_file_barriers },
+    { "file_opens_overlap", test_file_opens_overlap },
     { "file_generation_reuse", test_file_generation_reuse },
     { "destroy_releases_waiters_and_drains",
       test_destroy_releases_waiters_and_drains },

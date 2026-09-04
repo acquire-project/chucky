@@ -88,7 +88,8 @@ queue_wait(struct io_scheduler* q, struct platform_cond* cond)
 static int
 is_barrier(const struct io_request* req)
 {
-  return req->op == IO_OP_TRUNCATE || req->op == IO_OP_CLOSE;
+  return req->op == IO_OP_OPEN || req->op == IO_OP_TRUNCATE ||
+         req->op == IO_OP_CLOSE;
 }
 
 static void

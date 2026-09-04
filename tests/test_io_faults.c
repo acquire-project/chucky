@@ -205,3 +205,9 @@ io_faults_fail_next_write(struct io_faults* f)
 {
   arm_fault(f, IO_OP_WRITE, IO_FAULT_FAIL);
 }
+
+void
+io_faults_fail_next_open(struct io_faults* f)
+{
+  arm_fault(f, IO_OP_OPEN, IO_FAULT_FAIL);
+}

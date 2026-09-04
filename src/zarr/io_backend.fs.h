@@ -18,6 +18,12 @@ io_backend_fs_destroy(struct io_backend_fs* b);
 struct io_backend
 io_backend_fs_as_backend(struct io_backend_fs* b);
 
+struct io_file_token
+io_backend_fs_reserve_file(struct io_backend_fs* b);
+
+void
+io_backend_fs_cancel_file(struct io_backend_fs* b, struct io_file_token file);
+
 // Take ownership of an open descriptor and name it. A zero generation means
 // the descriptor was not taken and the caller still owns fd.
 struct io_file_token

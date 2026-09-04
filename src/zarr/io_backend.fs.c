@@ -1,8 +1,10 @@
 #include "zarr/io_backend.fs.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #define FREE_LIST_END UINT32_MAX
 
@@ -82,7 +84,7 @@ io_backend_fs_destroy(struct io_backend_fs* b)
     return;
 
   for (uint32_t i = 0; i < b->files_cap; ++i) {
-    if (b->files[i].generation != 0)
+    if (b->files[i].generation != 0 && b->files[i].fd != PLATFORM_FD_INVALID)
       platform_close(b->files[i].fd);
   }
 
@@ -114,6 +116,12 @@ io_backend_fs_add_file(struct io_backend_fs* b, platform_fd fd)
   return token;
 }
 
+struct io_file_token
+io_backend_fs_reserve_file(struct io_backend_fs* b)
+{
+  return io_backend_fs_add_file(b, PLATFORM_FD_INVALID);
+}
+
 static int
 resolve(struct io_backend_fs* b, struct io_file_token file, platform_fd* fd)
 {
@@ -140,11 +148,83 @@ release(struct io_backend_fs* b, struct io_file_token file)
   platform_mutex_unlock(b->mutex);
 }
 
+void
+io_backend_fs_cancel_file(struct io_backend_fs* b, struct io_file_token file)
+{
+  platform_mutex_lock(b->mutex);
+  if (file.generation != 0 && file.index < b->files_cap) {
+    struct file_entry* e = &b->files[file.index];
+    if (e->generation == file.generation && e->fd == PLATFORM_FD_INVALID) {
+      e->generation = 0;
+      e->next_free = b->free_head;
+      b->free_head = file.index;
+    }
+  }
+  platform_mutex_unlock(b->mutex);
+}
+
 static void
 record_failure(struct io_backend_fs* b, const char* message)
 {
   log_error("%s", message);
   atomic_store(b->io_error, 1);
+}
+
+static platform_fd
+open_write(const char* path, int flags)
+{
+  platform_fd fd = platform_open_write(path, flags);
+  if (fd != PLATFORM_FD_INVALID)
+    return fd;
+
+  const char* last_slash = strrchr(path, '/');
+  if (!last_slash)
+    return PLATFORM_FD_INVALID;
+
+  struct strbuf dir = { 0 };
+  if (strbuf_append(&dir, path, (size_t)(last_slash - path)) == 0 &&
+      platform_mkdirp(strbuf_cstr(&dir)) == 0)
+    fd = platform_open_write(path, flags);
+  strbuf_free(&dir);
+  return fd;
+}
+
+static int
+install_fd(struct io_backend_fs* b, struct io_file_token file, platform_fd fd)
+{
+  int installed = 0;
+  platform_mutex_lock(b->mutex);
+  if (file.generation != 0 && file.index < b->files_cap) {
+    struct file_entry* e = &b->files[file.index];
+    if (e->generation == file.generation && e->fd == PLATFORM_FD_INVALID) {
+      e->fd = fd;
+      installed = 1;
+    }
+  }
+  platform_mutex_unlock(b->mutex);
+  return installed;
+}
+
+static void
+execute_open(struct io_backend_fs* b, const struct io_request* req)
+{
+  platform_fd existing = PLATFORM_FD_INVALID;
+  if (!req->path || !resolve(b, req->file, &existing) ||
+      existing != PLATFORM_FD_INVALID) {
+    record_failure(b, "io_backend_fs: invalid open request");
+    return;
+  }
+
+  platform_fd fd = open_write(req->path, req->open_flags);
+  if (fd == PLATFORM_FD_INVALID) {
+    log_error("io_backend_fs: open(%s) failed", req->path);
+    atomic_store(b->io_error, 1);
+    return;
+  }
+  if (!install_fd(b, req->file, fd)) {
+    platform_close(fd);
+    record_failure(b, "io_backend_fs: open token became stale");
+  }
 }
 
 static void
@@ -155,6 +235,11 @@ fs_execute(void* ctx, const struct io_request* req)
   if (req->op == IO_OP_NOOP)
     return;
 
+  if (req->op == IO_OP_OPEN) {
+    execute_open(b, req);
+    return;
+  }
+
   platform_fd fd = PLATFORM_FD_INVALID;
   if (!resolve(b, req->file, &fd)) {
     record_failure(b, "io_backend_fs: stale file token");
@@ -163,15 +248,18 @@ fs_execute(void* ctx, const struct io_request* req)
 
   switch (req->op) {
     case IO_OP_WRITE:
-      if (platform_pwrite(fd, req->payload, (size_t)req->nbytes, req->offset))
+      if (fd != PLATFORM_FD_INVALID &&
+          platform_pwrite(fd, req->payload, (size_t)req->nbytes, req->offset))
         record_failure(b, "io_backend_fs: pwrite failed");
       break;
     case IO_OP_TRUNCATE:
-      if (platform_ftruncate(fd, req->logical_size))
+      if (fd != PLATFORM_FD_INVALID &&
+          platform_ftruncate(fd, req->logical_size))
         record_failure(b, "io_backend_fs: ftruncate failed");
       break;
     case IO_OP_CLOSE:
-      platform_close(fd);
+      if (fd != PLATFORM_FD_INVALID)
+        platform_close(fd);
       release(b, req->file);
       break;
     default:

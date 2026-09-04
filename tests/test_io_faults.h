@@ -64,3 +64,6 @@ io_faults_fail_next_truncate(struct io_faults* f);
 
 void
 io_faults_fail_next_write(struct io_faults* f);
+
+void
+io_faults_fail_next_open(struct io_faults* f);

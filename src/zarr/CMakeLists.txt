@@ -20,7 +20,7 @@ add_src_lib(shard_delivery SOURCES
 add_src_lib(filesystem_write SOURCES filesystem_write.c filesystem_write.h)
 
 add_src_lib(io_backend_fs SOURCES io_backend.fs.c io_backend.fs.h
-    LINKS platform platform_io chucky_log
+    LINKS platform platform_io strbuf chucky_log
 )
 
 add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h

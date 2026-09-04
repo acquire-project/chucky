@@ -315,6 +315,32 @@ Fail:
 }
 
 static int
+test_shard_pool_open_failure(void)
+{
+  log_info("=== test_shard_pool_open_failure ===");
+
+  struct io_faults faults;
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0, NULL);
+  CHECK(Fail, pool);
+
+  io_faults_fail_next_open(&faults);
+  struct shard_writer* writer = pool->open(pool, 0, "failed-open/shard.bin");
+  CHECK(Fail2, writer);
+  CHECK(Fail2, writer->finalize(writer) == 0);
+  CHECK(Fail2, pool->flush(pool) != 0);
+
+  shard_pool_destroy(pool);
+  log_info("  PASS");
+  return 0;
+
+Fail2:
+  shard_pool_destroy(pool);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
 test_failed_output_write_releases_buffer(void)
 {
   log_info("=== test_failed_output_write_releases_buffer ===");
@@ -776,6 +802,7 @@ main(void)
   err |= test_shard_pool_on_demand_mkdir();
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_error_propagation();
+  err |= test_shard_pool_open_failure();
   err |= test_failed_output_write_releases_buffer();
   err |= test_shard_pool_presize();
   err |= test_stale_file_token_refused();
