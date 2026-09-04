@@ -350,7 +350,12 @@ codec_validate_gpu(struct codec_config config,
     return 1;
   }
   // A single block must fit C-Blosc's decompressor scratch-size contract.
-  const size_t max_block = ((size_t)INT_MAX - 255 * 4) / 3;
+  size_t max_block = ((size_t)INT_MAX - 255 * 4) / 3;
+  const size_t nvcomp_limit = config.id == CODEC_BLOSC_LZ4
+                                ? nvcompLZ4CompressionMaxAllowedChunkSize
+                                : nvcompZstdCompressionMaxAllowedChunkSize;
+  if (max_block > nvcomp_limit)
+    max_block = nvcomp_limit;
   if (chunk_bytes == 0 || chunk_bytes > max_block) {
     log_error("GPU blosc single-block input %zu exceeds limit %zu",
               chunk_bytes,

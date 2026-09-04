@@ -6,6 +6,7 @@
 #include "util/prelude.h"
 
 #include <blosc.h>
+#include <nvcomp/lz4.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -273,6 +274,16 @@ test_rebind_and_rejection(void)
   int result = 1;
 
   CHECK(Fail, codec_validate_gpu(invalid, 4, 4096) != 0);
+  {
+    struct codec_config lz4 = initial;
+    lz4.id = CODEC_BLOSC_LZ4;
+    CHECK(Fail,
+          codec_validate_gpu(lz4, 4, nvcompLZ4CompressionMaxAllowedChunkSize) ==
+            0);
+    CHECK(Fail,
+          codec_validate_gpu(
+            lz4, 4, nvcompLZ4CompressionMaxAllowedChunkSize + 1) != 0);
+  }
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CHECK(Fail, codec_init_config(&c, initial, 2, 65536, 3, 1) == 0);
   CHECK(Fail, codec_bind(&c, rebound, 8, 4096, stream) == 0);
@@ -501,11 +512,13 @@ test_frame_boundary(void)
   int result = 1;
 
   fill_input(input, sizeof(input), PATTERN_RAMP);
+  memset(encoded, 0xa5, sizeof(encoded));
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuMemAlloc(&d_input, sizeof(input)));
   CU(Fail, cuMemAlloc(&d_encoded, sizeof(encoded)));
   CU(Fail, cuMemAlloc(&d_sizes, sizeof(sizes)));
   CU(Fail, cuMemcpyHtoD(d_input, input, sizeof(input)));
+  CU(Fail, cuMemcpyHtoD(d_encoded, encoded, sizeof(encoded)));
   CU(Fail, cuMemcpyHtoD(d_sizes, sizes, sizeof(sizes)));
   CHECK(Fail,
         gpu_blosc_finalize_async(CODEC_BLOSC_LZ4,
@@ -528,6 +541,11 @@ test_frame_boundary(void)
   CHECK(Fail, (encoded[2] & BLOSC_MEMCPYED) == 0);
   CHECK(Fail, get_u32le(encoded + 16) == 20);
   CHECK(Fail, get_u32le(encoded + 20) == CHUNK_BYTES - 9);
+  // The compressed payload must survive finalization even when its length is
+  // just below the fallback threshold. Header-only assertions miss overwrites
+  // by other warps that observed the newly published frame size.
+  for (size_t i = 24; i < CHUNK_BYTES + 15; ++i)
+    CHECK(Fail, encoded[i] == 0xa5);
   for (size_t i = 1; i < BATCH; ++i) {
     const uint8_t* chunk = encoded + i * STRIDE;
     CHECK(Fail, sizes[i] == CHUNK_BYTES + BLOSC_MAX_OVERHEAD);

@@ -28,9 +28,17 @@ finalize_kernel(const unsigned char* original,
     return;
 
   unsigned char* dst = encoded + chunk * encoded_stride;
-  const size_t payload_bytes = force_copy ? 0 : sizes[chunk];
-  const int compressed =
-    !force_copy && chunk_bytes > 8 && payload_bytes < chunk_bytes - 8;
+  __shared__ size_t payload_bytes;
+  __shared__ int compressed;
+  if (threadIdx.x == 0) {
+    payload_bytes = force_copy ? 0 : sizes[chunk];
+    compressed =
+      !force_copy && chunk_bytes > 8 && payload_bytes < chunk_bytes - 8;
+  }
+  // All warps must use the payload size before thread 0 replaces sizes[chunk]
+  // with the complete frame size. A late read could otherwise select fallback
+  // and overwrite a compressed payload near the compression threshold.
+  __syncthreads();
   unsigned char flags = (unsigned char)(0x10 | (codec_format << 5));
   if (shuffle == CODEC_SHUFFLE_BYTE)
     flags |= 0x01;
