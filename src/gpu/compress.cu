@@ -277,7 +277,7 @@ extern "C" size_t
 codec_device_bytes(enum compression_codec type,
                    size_t chunk_bytes,
                    size_t batch_size,
-                   int reserve_byte_shuffle)
+                   int reserve_shuffle)
 {
   if (batch_size == 0 || batch_size > SIZE_MAX / sizeof(size_t))
     return 0;
@@ -295,7 +295,7 @@ codec_device_bytes(enum compression_codec type,
   if (temp > SIZE_MAX - bytes)
     return 0;
   bytes += temp; // d_temp
-  if (codec_is_blosc(type) && reserve_byte_shuffle) {
+  if (codec_is_blosc(type) && reserve_shuffle) {
     const size_t alignment = codec_alignment(type);
     if (alignment == 0 || chunk_bytes > SIZE_MAX - (alignment - 1))
       return 0;
@@ -339,12 +339,9 @@ codec_validate_gpu(struct codec_config config,
     log_error("blosc level must be 0..9 (got %u)", config.level);
     return 1;
   }
-  if (config.shuffle == CODEC_SHUFFLE_BIT) {
-    log_error("GPU blosc bitshuffle is not supported");
-    return 1;
-  }
   if (config.shuffle != CODEC_SHUFFLE_NONE &&
-      config.shuffle != CODEC_SHUFFLE_BYTE) {
+      config.shuffle != CODEC_SHUFFLE_BYTE &&
+      config.shuffle != CODEC_SHUFFLE_BIT) {
     log_error("invalid GPU blosc shuffle mode %d", (int)config.shuffle);
     return 1;
   }
@@ -374,7 +371,7 @@ codec_init_config(struct codec* c,
                   size_t typesize,
                   size_t chunk_bytes,
                   size_t batch_size,
-                  int reserve_byte_shuffle)
+                  int reserve_shuffle)
 {
   memset(c, 0, sizeof(*c));
   c->type = config.id;
@@ -437,7 +434,7 @@ codec_init_config(struct codec* c,
     CU(Fail, cuMemAlloc((CUdeviceptr*)&c->d_temp, c->temp_bytes));
   }
 
-  if (codec_is_blosc(config.id) && reserve_byte_shuffle) {
+  if (codec_is_blosc(config.id) && reserve_shuffle) {
     c->shuffle_stride = align_up(chunk_bytes, codec_alignment(config.id));
     CHECK_MUL_OVERFLOW(Fail, batch_size, c->shuffle_stride, SIZE_MAX);
     CU(Fail,
@@ -472,8 +469,9 @@ codec_bind(struct codec* c,
         c && config.id == c->type && chunk_bytes > 0 &&
           chunk_bytes <= c->chunk_capacity);
   CHECK(Fail, codec_validate_gpu(config, typesize, chunk_bytes) == 0);
-  if (config.shuffle == CODEC_SHUFFLE_BYTE && !c->has_shuffle_scratch) {
-    log_error("GPU blosc byte shuffle scratch was not reserved");
+  if (codec_is_blosc(c->type) && config.shuffle != CODEC_SHUFFLE_NONE &&
+      !c->has_shuffle_scratch) {
+    log_error("GPU blosc shuffle scratch was not reserved");
     goto Fail;
   }
   if (chunk_bytes == c->chunk_bytes && typesize == c->typesize &&
@@ -579,17 +577,29 @@ codec_compress(struct codec* c,
     return 0;
   }
 
-  if (is_blosc && c->config.shuffle == CODEC_SHUFFLE_BYTE && c->typesize > 1) {
+  if (is_blosc && c->config.shuffle != CODEC_SHUFFLE_NONE &&
+      !(c->config.shuffle == CODEC_SHUFFLE_BYTE && c->typesize == 1)) {
     CHECK_MUL_OVERFLOW(Fail, n, c->chunk_bytes, SIZE_MAX);
-    CHECK(Fail,
-          gpu_blosc_shuffle_async(d_input,
-                                  input_stride,
-                                  c->d_shuffle,
-                                  c->shuffle_stride,
-                                  c->chunk_bytes,
-                                  c->typesize,
-                                  n,
-                                  stream) == 0);
+    if (c->config.shuffle == CODEC_SHUFFLE_BIT)
+      CHECK(Fail,
+            gpu_blosc_bitshuffle_async(d_input,
+                                       input_stride,
+                                       c->d_shuffle,
+                                       c->shuffle_stride,
+                                       c->chunk_bytes,
+                                       c->typesize,
+                                       n,
+                                       stream) == 0);
+    else
+      CHECK(Fail,
+            gpu_blosc_shuffle_async(d_input,
+                                    input_stride,
+                                    c->d_shuffle,
+                                    c->shuffle_stride,
+                                    c->chunk_bytes,
+                                    c->typesize,
+                                    n,
+                                    stream) == 0);
     nvcomp_input = c->d_shuffle;
     nvcomp_input_stride = c->shuffle_stride;
   }

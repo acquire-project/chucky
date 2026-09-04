@@ -28,7 +28,7 @@ extern "C"
     void** d_ptrs;          // [2 * batch_size] scratch for nvcomp ptr arrays
     void* d_temp;           // workspace
     size_t temp_bytes;      // workspace size
-    void* d_shuffle;        // Blosc byte-shuffle batch scratch
+    void* d_shuffle;        // Blosc byte/bit-shuffle batch scratch
   };
 
   // Alignment required of every uncompressed chunk handed to the codec.
@@ -47,12 +47,12 @@ extern "C"
   size_t codec_output_stride(enum compression_codec type, size_t chunk_bytes);
 
   // Total device bytes codec_init_config allocates (size arrays, ptr table,
-  // nvCOMP temp, and optional byte-shuffle scratch) — sizing mirror for the
+  // nvCOMP temp, and optional shuffle scratch) — sizing mirror for the
   // memory estimate (no GPU allocation).
   size_t codec_device_bytes(enum compression_codec type,
                             size_t chunk_bytes,
                             size_t batch_size,
-                            int reserve_byte_shuffle);
+                            int reserve_shuffle);
 
   size_t codec_temp_bytes(enum compression_codec type,
                           size_t chunk_bytes,
@@ -69,7 +69,7 @@ extern "C"
                         size_t typesize,
                         size_t chunk_bytes,
                         size_t batch_size,
-                        int reserve_byte_shuffle);
+                        int reserve_shuffle);
 
   // Select the active input geometry for a shared codec instance. The codec
   // allocations remain sized to chunk_capacity/output_stride; the per-chunk

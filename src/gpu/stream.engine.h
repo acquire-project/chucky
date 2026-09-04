@@ -297,7 +297,7 @@ struct engine_limits
   size_t lod_morton_bytes;
   size_t host_output_bytes;
   int any_multiscale;
-  int any_byte_shuffle;
+  int any_shuffle;
   int max_threads; // max over arrays; 0 = platform default
 };
 

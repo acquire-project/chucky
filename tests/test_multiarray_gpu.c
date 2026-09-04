@@ -32,7 +32,7 @@ static int
 verify_one_blosc_chunk(const struct test_shard_sink* sink,
                        size_t chunk_bytes,
                        size_t typesize,
-                       int shuffled,
+                       enum codec_shuffle shuffle,
                        uint8_t expected)
 {
   uint8_t* recovered = NULL;
@@ -47,7 +47,12 @@ verify_one_blosc_chunk(const struct test_shard_sink* sink,
     CHECK(Fail, index[0] != UINT64_MAX && index[1] <= chunk_bytes + 16);
     const uint8_t* encoded = sw->buf + index[0];
     CHECK(Fail, encoded[3] == typesize);
-    CHECK(Fail, ((encoded[2] & BLOSC_DOSHUFFLE) != 0) == shuffled);
+    CHECK(Fail,
+          ((encoded[2] & BLOSC_DOSHUFFLE) != 0) ==
+            (shuffle == CODEC_SHUFFLE_BYTE));
+    CHECK(Fail,
+          ((encoded[2] & BLOSC_DOBITSHUFFLE) != 0) ==
+            (shuffle == CODEC_SHUFFLE_BIT));
     recovered = (uint8_t*)malloc(chunk_bytes);
     CHECK(Fail, recovered);
     CHECK(Fail,
@@ -257,7 +262,7 @@ test_blosc_rebind(void)
       .dimensions = dims1,
       .codec = { .id = CODEC_BLOSC_ZSTD,
                  .level = 8,
-                 .shuffle = CODEC_SHUFFLE_BYTE } },
+                 .shuffle = CODEC_SHUFFLE_BIT } },
   };
   struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
 
@@ -272,11 +277,17 @@ test_blosc_rebind(void)
           multiarray_writer_ok);
   CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
   CHECK(Fail,
-        verify_one_blosc_chunk(
-          &sink0, 256 * sizeof(uint16_t), sizeof(uint16_t), 0, 0x11) == 0);
+        verify_one_blosc_chunk(&sink0,
+                               256 * sizeof(uint16_t),
+                               sizeof(uint16_t),
+                               CODEC_SHUFFLE_NONE,
+                               0x11) == 0);
   CHECK(Fail,
-        verify_one_blosc_chunk(
-          &sink1, 256 * sizeof(uint64_t), sizeof(uint64_t), 1, 0x22) == 0);
+        verify_one_blosc_chunk(&sink1,
+                               256 * sizeof(uint64_t),
+                               sizeof(uint64_t),
+                               CODEC_SHUFFLE_BIT,
+                               0x22) == 0);
 
   multiarray_tile_stream_gpu_destroy(ms);
   test_sink_free(&sink0);

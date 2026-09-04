@@ -34,6 +34,8 @@ finalize_kernel(const unsigned char* original,
   unsigned char flags = (unsigned char)(0x10 | (codec_format << 5));
   if (shuffle == CODEC_SHUFFLE_BYTE)
     flags |= 0x01;
+  else if (shuffle == CODEC_SHUFFLE_BIT)
+    flags |= 0x04;
   if (!compressed)
     flags |= 0x02;
 
