@@ -24,11 +24,12 @@ platform_mkdirp(const char* path);
 // Flags for platform_open_write.
 enum
 {
-  PLATFORM_OPEN_UNBUFFERED = 1
+  PLATFORM_OPEN_UNBUFFERED = 1,
+  PLATFORM_OPEN_EXISTING = 2
 };
 
-// Open a file for writing (create/truncate). Returns PLATFORM_FD_INVALID on
-// error.
+// Open a file for writing. PLATFORM_OPEN_EXISTING preserves its contents;
+// otherwise it is created or truncated. Returns PLATFORM_FD_INVALID on error.
 platform_fd
 platform_open_write(const char* path, int flags);
 

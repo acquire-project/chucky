@@ -1,12 +1,13 @@
 #pragma once
 
-#include "platform/platform_io.h"
 #include "zarr/io_backend.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
 
 struct io_backend_fs;
+
+#define IO_BACKEND_FS_MAX_OPEN_FILES 64u
 
 // io_error is the pool's flag; it is raised on any failure.
 struct io_backend_fs*
@@ -24,7 +25,8 @@ io_backend_fs_reserve_file(struct io_backend_fs* b);
 void
 io_backend_fs_cancel_file(struct io_backend_fs* b, struct io_file_token file);
 
-// Take ownership of an open descriptor and name it. A zero generation means
-// the descriptor was not taken and the caller still owns fd.
-struct io_file_token
-io_backend_fs_add_file(struct io_backend_fs* b, platform_fd fd);
+uint32_t
+io_backend_fs_handle_count(const struct io_backend_fs* b);
+
+uint32_t
+io_backend_fs_peak_handle_count(const struct io_backend_fs* b);

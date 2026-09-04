@@ -341,6 +341,41 @@ Fail:
 }
 
 static int
+test_shard_pool_close_failure(void)
+{
+  log_info("=== test_shard_pool_close_failure ===");
+
+  struct io_faults faults;
+  struct shard_pool* pool = io_faults_pool_create(&faults, tmpdir, 1, 0, NULL);
+  CHECK(Fail, pool);
+
+  const char* key = "failed-close/shard.bin";
+  struct shard_writer* writer = pool->open(pool, 0, key);
+  CHECK(Cleanup, writer);
+  const char byte = 'x';
+  CHECK(Cleanup, writer->write(writer, 0, &byte, &byte + 1) == 0);
+  io_faults_fail_next_close(&faults);
+  CHECK(Cleanup, writer->finalize(writer) == 0);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+
+  shard_pool_destroy(pool);
+  pool = NULL;
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Fail, platform_remove_file(path) == 0);
+
+  log_info("  PASS");
+  return 0;
+
+Cleanup:
+  shard_pool_destroy(pool);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
 test_failed_output_write_releases_buffer(void)
 {
   log_info("=== test_failed_output_write_releases_buffer ===");
@@ -709,6 +744,220 @@ Fail:
   return 1;
 }
 
+static int
+test_shard_pool_more_files_than_handle_limit(void)
+{
+  log_info("=== test_shard_pool_more_files_than_handle_limit ===");
+
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Fail, store);
+  struct shard_pool* pool =
+    store->create_pool(store, IO_BACKEND_FS_MAX_OPEN_FILES + 1);
+  CHECK(CleanupStore, pool);
+
+  struct shard_writer* writers[IO_BACKEND_FS_MAX_OPEN_FILES + 1];
+  const char first = 'a';
+  char key[256];
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    snprintf(key, sizeof(key), "handle-pool/%u.bin", i);
+    writers[i] = pool->open(pool, i, key);
+    CHECK(CleanupPool, writers[i]);
+    CHECK(CleanupPool,
+          writers[i]->write(writers[i], 0, &first, &first + 1) == 0);
+  }
+  CHECK(CleanupPool, pool->flush(pool) == 0);
+
+  const char second = 'b';
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    CHECK(CleanupPool,
+          writers[i]->write(writers[i], 1, &second, &second + 1) == 0);
+    CHECK(CleanupPool, writers[i]->finalize(writers[i]) == 0);
+  }
+  CHECK(CleanupPool, pool->flush(pool) == 0);
+
+  char path[4096];
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    snprintf(path, sizeof(path), "%s/handle-pool/%u.bin", tmpdir, i);
+    FILE* f = fopen(path, "rb");
+    CHECK(CleanupPool, f);
+    char contents[2];
+    const size_t nread = fread(contents, 1, sizeof(contents), f);
+    fclose(f);
+    CHECK(CleanupPool, nread == sizeof(contents));
+    CHECK(CleanupPool, contents[0] == first && contents[1] == second);
+  }
+
+  shard_pool_destroy(pool);
+  store->destroy(store);
+  log_info("  PASS");
+  return 0;
+
+CleanupPool:
+  shard_pool_destroy(pool);
+CleanupStore:
+  store->destroy(store);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_backend_handle_bound(void)
+{
+  log_info("=== test_backend_handle_bound ===");
+
+  _Atomic int io_error;
+  atomic_store(&io_error, 0);
+  struct io_backend_fs* backend = io_backend_fs_create(&io_error);
+  CHECK(Fail, backend);
+  const struct io_backend raw = io_backend_fs_as_backend(backend);
+  struct io_file_token files[IO_BACKEND_FS_MAX_OPEN_FILES + 1];
+
+  const char first = 'a';
+  char path[4096];
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    snprintf(path, sizeof(path), "%s/handle-bound-%u.bin", tmpdir, i);
+    files[i] = io_backend_fs_reserve_file(backend);
+    CHECK(Cleanup, files[i].generation != 0);
+    raw.execute(
+      raw.ctx,
+      &(struct io_request){ .op = IO_OP_OPEN, .file = files[i], .path = path });
+    raw.execute(
+      raw.ctx,
+      &(struct io_request){
+        .op = IO_OP_WRITE, .file = files[i], .payload = &first, .nbytes = 1 });
+    CHECK(Cleanup, atomic_load(&io_error) == 0);
+    CHECK(Cleanup,
+          io_backend_fs_handle_count(backend) <= IO_BACKEND_FS_MAX_OPEN_FILES);
+  }
+
+  CHECK(Cleanup,
+        io_backend_fs_handle_count(backend) == IO_BACKEND_FS_MAX_OPEN_FILES);
+  CHECK(Cleanup,
+        io_backend_fs_peak_handle_count(backend) ==
+          IO_BACKEND_FS_MAX_OPEN_FILES);
+
+  const char second = 'b';
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    raw.execute(raw.ctx,
+                &(struct io_request){ .op = IO_OP_WRITE,
+                                      .file = files[i],
+                                      .payload = &second,
+                                      .nbytes = 1,
+                                      .offset = 1 });
+    CHECK(Cleanup, atomic_load(&io_error) == 0);
+    CHECK(Cleanup,
+          io_backend_fs_handle_count(backend) <= IO_BACKEND_FS_MAX_OPEN_FILES);
+  }
+
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i)
+    raw.execute(raw.ctx,
+                &(struct io_request){ .op = IO_OP_CLOSE, .file = files[i] });
+  CHECK(Cleanup, io_backend_fs_handle_count(backend) == 0);
+
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    snprintf(path, sizeof(path), "%s/handle-bound-%u.bin", tmpdir, i);
+    FILE* f = fopen(path, "rb");
+    CHECK(Cleanup, f);
+    char contents[2];
+    const size_t nread = fread(contents, 1, sizeof(contents), f);
+    fclose(f);
+    CHECK(Cleanup, nread == sizeof(contents));
+    CHECK(Cleanup, contents[0] == first && contents[1] == second);
+  }
+
+  io_backend_fs_destroy(backend);
+  log_info("  PASS");
+  return 0;
+
+Cleanup:
+  io_backend_fs_destroy(backend);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
+static int
+test_backend_open_failure_cleanup(void)
+{
+  log_info("=== test_backend_open_failure_cleanup ===");
+
+  char parent[4096];
+  char path[4096];
+  snprintf(parent, sizeof(parent), "%s/open-parent-is-file", tmpdir);
+  snprintf(path, sizeof(path), "%s/child.bin", parent);
+  FILE* parent_file = fopen(parent, "wb");
+  CHECK(Fail, parent_file);
+  fclose(parent_file);
+
+  _Atomic int io_error;
+  atomic_store(&io_error, 0);
+  struct io_backend_fs* backend = io_backend_fs_create(&io_error);
+  CHECK(Fail, backend);
+  const struct io_backend raw = io_backend_fs_as_backend(backend);
+
+  const struct io_file_token failed = io_backend_fs_reserve_file(backend);
+  CHECK(Cleanup, failed.generation != 0);
+  raw.execute(
+    raw.ctx,
+    &(struct io_request){ .op = IO_OP_OPEN, .file = failed, .path = path });
+  CHECK(Cleanup, atomic_load(&io_error) != 0);
+  CHECK(Cleanup, io_backend_fs_handle_count(backend) == 0);
+  raw.execute(
+    raw.ctx,
+    &(struct io_request){
+      .op = IO_OP_WRITE, .file = failed, .payload = "x", .nbytes = 1 });
+  raw.execute(raw.ctx,
+              &(struct io_request){ .op = IO_OP_CLOSE, .file = failed });
+
+  const struct io_file_token cancelled = io_backend_fs_reserve_file(backend);
+  CHECK(Cleanup, cancelled.index == failed.index);
+  CHECK(Cleanup, cancelled.generation != failed.generation);
+  io_backend_fs_cancel_file(backend, cancelled);
+  const struct io_file_token reused = io_backend_fs_reserve_file(backend);
+  CHECK(Cleanup, reused.index == cancelled.index);
+  io_backend_fs_cancel_file(backend, reused);
+
+  atomic_store(&io_error, 0);
+  struct io_file_token files[IO_BACKEND_FS_MAX_OPEN_FILES + 1];
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i) {
+    snprintf(path, sizeof(path), "%s/reopen-failure-%u.bin", tmpdir, i);
+    files[i] = io_backend_fs_reserve_file(backend);
+    CHECK(Cleanup, files[i].generation != 0);
+    raw.execute(
+      raw.ctx,
+      &(struct io_request){ .op = IO_OP_OPEN, .file = files[i], .path = path });
+  }
+  CHECK(Cleanup, atomic_load(&io_error) == 0);
+  CHECK(Cleanup,
+        io_backend_fs_handle_count(backend) == IO_BACKEND_FS_MAX_OPEN_FILES);
+
+  snprintf(path, sizeof(path), "%s/reopen-failure-0.bin", tmpdir);
+  CHECK(Cleanup, platform_remove_file(path) == 0);
+  raw.execute(
+    raw.ctx,
+    &(struct io_request){
+      .op = IO_OP_WRITE, .file = files[0], .payload = "x", .nbytes = 1 });
+  CHECK(Cleanup, atomic_load(&io_error) != 0);
+  CHECK(Cleanup,
+        io_backend_fs_handle_count(backend) < IO_BACKEND_FS_MAX_OPEN_FILES);
+
+  for (uint32_t i = 0; i < IO_BACKEND_FS_MAX_OPEN_FILES + 1; ++i)
+    raw.execute(raw.ctx,
+                &(struct io_request){ .op = IO_OP_CLOSE, .file = files[i] });
+  CHECK(Cleanup, io_backend_fs_handle_count(backend) == 0);
+
+  io_backend_fs_destroy(backend);
+  log_info("  PASS");
+  return 0;
+
+Cleanup:
+  io_backend_fs_destroy(backend);
+Fail:
+  log_error("  FAIL");
+  return 1;
+}
+
 // --- stale file token ---
 
 // A pool slot's token is private and is cleared on finalize, so a retired
@@ -733,10 +982,13 @@ test_stale_file_token_refused(void)
     io_backend_fs_as_backend(backend), (struct io_scheduler_limits){ 0 });
   CHECK(Fail2, q);
 
-  platform_fd fd = platform_open_write(first_path, 0);
-  CHECK(Fail3, fd != PLATFORM_FD_INVALID);
-  const struct io_file_token retired = io_backend_fs_add_file(backend, fd);
+  const struct io_file_token retired = io_backend_fs_reserve_file(backend);
   CHECK(Fail3, retired.generation != 0);
+  CHECK(Fail3,
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_OPEN,
+                                               .file = retired,
+                                               .path = first_path }) == 0);
 
   CHECK(Fail3,
         io_scheduler_post(
@@ -745,9 +997,7 @@ test_stale_file_token_refused(void)
   CHECK(Fail3, atomic_load(&io_error) == 0);
 
   // The slot freed by the close is reused under a new generation.
-  platform_fd second_fd = platform_open_write(second_path, 0);
-  CHECK(Fail3, second_fd != PLATFORM_FD_INVALID);
-  const struct io_file_token fresh = io_backend_fs_add_file(backend, second_fd);
+  const struct io_file_token fresh = io_backend_fs_reserve_file(backend);
   CHECK(Fail3, fresh.generation != 0);
   CHECK(Fail3, fresh.index == retired.index);
   CHECK(Fail3, fresh.generation != retired.generation);
@@ -762,6 +1012,11 @@ test_stale_file_token_refused(void)
           0);
   io_event_wait(q, io_scheduler_record(q));
   CHECK(Fail3, atomic_load(&io_error) == 1);
+  CHECK(Fail3,
+        io_scheduler_post(q,
+                          (struct io_request){ .op = IO_OP_OPEN,
+                                               .file = fresh,
+                                               .path = second_path }) == 0);
 
   CHECK(Fail3,
         io_scheduler_post(
@@ -803,8 +1058,12 @@ main(void)
   err |= test_shard_pool_unbuffered();
   err |= test_shard_pool_error_propagation();
   err |= test_shard_pool_open_failure();
+  err |= test_shard_pool_close_failure();
   err |= test_failed_output_write_releases_buffer();
   err |= test_shard_pool_presize();
+  err |= test_shard_pool_more_files_than_handle_limit();
+  err |= test_backend_handle_bound();
+  err |= test_backend_open_failure_cleanup();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

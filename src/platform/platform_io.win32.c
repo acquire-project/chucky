@@ -44,9 +44,10 @@ platform_open_write(const char* path, int flags)
 {
   // PLATFORM_OPEN_UNBUFFERED is a no-op on Windows: NO_BUFFERING + sub-sector
   // EOF corrupts the trailing partial sector on 4K-logical NTFS volumes.
-  (void)flags;
+  const DWORD creation =
+    flags & PLATFORM_OPEN_EXISTING ? OPEN_EXISTING : CREATE_ALWAYS;
   return CreateFileA(
-    path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    path, GENERIC_WRITE, 0, NULL, creation, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
 int

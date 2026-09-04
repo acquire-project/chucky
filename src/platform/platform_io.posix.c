@@ -42,7 +42,9 @@ platform_mkdirp(const char* path)
 platform_fd
 platform_open_write(const char* path, int flags)
 {
-  int oflags = O_WRONLY | O_CREAT | O_TRUNC;
+  int oflags = O_WRONLY;
+  if (!(flags & PLATFORM_OPEN_EXISTING))
+    oflags |= O_CREAT | O_TRUNC;
   if (flags & PLATFORM_OPEN_UNBUFFERED)
     oflags |= O_DIRECT;
   return open(path, oflags, 0644);
