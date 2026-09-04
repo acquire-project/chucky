@@ -10,8 +10,8 @@
 #include <stdlib.h>
 
 #define NT 4
-#define NY 16
-#define NX 16
+#define NY 256
+#define NX 256
 
 static int
 write_zarr(const char* store_path, struct codec_config codec)
@@ -24,7 +24,9 @@ write_zarr(const char* store_path, struct codec_config codec)
 
   struct dimension dims[3];
   dims_create(dims, "tyx", (uint64_t[]){ 0, NY, NX });
-  dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 1, 8, 8 });
+  // Each 32 KiB chunk spans two Blosc blocks. Four chunks per image also
+  // exercise the existing multidimensional reorder before block partitioning.
+  dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 1, 128, 128 });
   dims[0].chunks_per_shard = NT;
   dims_set_shard_counts(dims, 3, (uint64_t[]){ 0, 1, 1 });
 

@@ -126,6 +126,36 @@ struct store* store = store_s3_create(&s3cfg);
 
 ## Key concepts
 
+### GPU Blosc
+
+`CODEC_BLOSC_LZ4` and `CODEC_BLOSC_ZSTD` produce C-Blosc 1.x compatible
+chunks with no shuffle, byte shuffle, or bitshuffle. The GPU encoder divides
+each Zarr chunk into 16 KiB Blosc blocks, with a shorter final block when
+needed. This internal block size is independent of Zarr chunk and shard sizes.
+Zarr metadata uses `blocksize: 0` (encoder chosen); each binary Blosc header
+records the actual block size.
+
+The existing multidimensional scatter and LOD layouts already place each
+chunk's contents contiguously. The codec addresses blocks as spans of those
+contents, applies filters within each block, and batches the spans through
+nvCOMP. A per-chunk CUB scan computes the block record offsets, then a gather
+packs the records into the existing fixed-stride output slots. Aggregation,
+shard ordering, and delivery continue to operate on complete encoded chunks.
+
+Blocks are unsplit (`DONT_SPLIT`). An incompressible block stores its filtered
+bytes in a raw block record. If the complete framed result would not be
+smaller than the original plus the 16-byte header, the whole chunk instead
+uses `MEMCPYED` with original, unfiltered bytes. Level 0 and inputs below 128
+bytes also use this form. Levels 1–9 all select nvCOMP's single compression
+mode; they do not reproduce CPU Blosc's level-dependent tuning.
+
+Each chunk remains bounded by `nbytes + 16` encoded bytes and Blosc's signed
+32-bit frame limit. Raw nvCOMP block output uses a separate aligned scratch
+pool sized to nvCOMP's worst-case bound. The GPU memory estimate includes
+that pool, block size/offset/pointer arrays, compressor workspace, and any
+shuffle scratch. Array switches update active block counts and filter state
+within the reserved capacity.
+
 ### Store
 
 `struct store` (`store.h`) is an opaque storage backend. Users create one

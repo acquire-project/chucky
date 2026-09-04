@@ -22,10 +22,20 @@ extern "C"
     int has_shuffle_scratch;
     size_t batch_size; // number of chunks
 
+    // Blosc partitions the existing contiguous chunk layout into small nvCOMP
+    // inputs. Rebinding changes active geometry, never these allocations.
+    size_t block_bytes;
+    size_t blocks_per_chunk;
+    size_t block_capacity; // maximum flattened chunk/block count
+    size_t block_output_stride;
+    void* d_block_data;      // aligned raw nvCOMP block destinations
+    size_t* d_block_sizes;   // raw nvCOMP output sizes
+    size_t* d_block_offsets; // per-block record offsets within each frame
+
     // Device state (owned, allocated by codec_init)
     size_t* d_comp_sizes;   // [batch_size] filled by codec_compress
-    size_t* d_uncomp_sizes; // [batch_size] pre-filled with chunk_bytes
-    void** d_ptrs;          // [2 * batch_size] scratch for nvcomp ptr arrays
+    size_t* d_uncomp_sizes; // [block_capacity for Blosc, else batch_size]
+    void** d_ptrs;          // twice the nvCOMP input count
     void* d_temp;           // workspace
     size_t temp_bytes;      // workspace size
     void* d_shuffle;        // Blosc byte/bit-shuffle batch scratch
@@ -41,9 +51,8 @@ extern "C"
   // nvCOMP codecs return an aligned slot bound; Blosc returns nbytes + 16.
   size_t codec_max_output_size(enum compression_codec type, size_t chunk_bytes);
 
-  // Fixed device slot stride. For Blosc this includes the 24-byte frame
-  // prefix plus nvCOMP's payload bound; it is intentionally distinct from
-  // codec_max_output_size(), the nbytes + 16 wire-format bound.
+  // Fixed device slot stride. Blosc packs into aligned nbytes + 16 slots;
+  // its raw nvCOMP block destinations are separate codec-owned scratch.
   size_t codec_output_stride(enum compression_codec type, size_t chunk_bytes);
 
   // Total device bytes codec_init_config allocates (size arrays, ptr table,
