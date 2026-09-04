@@ -29,7 +29,8 @@ extern "C"
     enum compression_codec id;
     uint8_t level;              // LZ4: 1..12 (HC), 0 rejected.
                                 // ZSTD: 0 valid (ZSTD default).
-                                // Blosc: 0 = store only.
+                                // Blosc: 0 = store only; on GPU, 1..9 are
+                                // accepted hints for nvCOMP's single mode.
     enum codec_shuffle shuffle; // blosc only
   };
 

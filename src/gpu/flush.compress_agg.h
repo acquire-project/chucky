@@ -10,7 +10,8 @@ struct engine_limits;
 int
 compress_agg_init_shared(struct compress_agg_stage* stage,
                          const struct engine_limits* lim,
-                         enum compression_codec codec_id,
+                         struct codec_config codec,
+                         size_t typesize,
                          struct gpu_ordering* ord,
                          CUstream compute);
 

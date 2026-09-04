@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HAVE_BLOSC
+#include <blosc.h>
+#endif
+
 #define SHARD_CAP (1 << 20)
 #define SINK_N_SHARDS 16
 #define test_sink_init_1(s) test_sink_init((s), SINK_N_SHARDS, SHARD_CAP)
@@ -22,6 +26,44 @@ test_sink_shard_count(const struct test_shard_sink* s)
       count++;
   return count;
 }
+
+#ifdef HAVE_BLOSC
+static int
+verify_one_blosc_chunk(const struct test_shard_sink* sink,
+                       size_t chunk_bytes,
+                       size_t typesize,
+                       int shuffled,
+                       uint8_t expected)
+{
+  uint8_t* recovered = NULL;
+  int result = 1;
+  for (int i = 0; i < TEST_SHARD_SINK_MAX_SHARDS; ++i) {
+    const struct test_shard_writer* sw = &sink->writers[0][i];
+    if (!sw->buf || sw->size == 0)
+      continue;
+    const size_t footer = 2 * sizeof(uint64_t) + 4;
+    CHECK(Fail, sw->size > footer);
+    const uint64_t* index = (const uint64_t*)(sw->buf + sw->size - footer);
+    CHECK(Fail, index[0] != UINT64_MAX && index[1] <= chunk_bytes + 16);
+    const uint8_t* encoded = sw->buf + index[0];
+    CHECK(Fail, encoded[3] == typesize);
+    CHECK(Fail, ((encoded[2] & BLOSC_DOSHUFFLE) != 0) == shuffled);
+    recovered = (uint8_t*)malloc(chunk_bytes);
+    CHECK(Fail, recovered);
+    CHECK(Fail,
+          blosc_decompress_ctx(encoded, recovered, chunk_bytes, 1) ==
+            (int)chunk_bytes);
+    for (size_t j = 0; j < chunk_bytes; ++j)
+      CHECK(Fail, recovered[j] == expected);
+    result = 0;
+    break;
+  }
+
+Fail:
+  free(recovered);
+  return result;
+}
+#endif
 
 // Helper: 2D config with given dtype. Shape 4x4, chunk 2x2, 2 shards along
 // dim0, 1 along dim1 (cps 1x2). epoch_elements = 8.
@@ -183,6 +225,73 @@ Fail:
   log_error("  FAIL");
   return 1;
 }
+
+#ifdef HAVE_BLOSC
+static int
+test_blosc_rebind(void)
+{
+  log_info("=== test_blosc_rebind ===");
+  struct test_shard_sink sink0, sink1;
+  struct multiarray_tile_stream_gpu* ms = NULL;
+  test_sink_init_1(&sink0);
+  test_sink_init_1(&sink1);
+
+  struct dimension dims0[2], dims1[2];
+  dims_create(dims0, "ty", (uint64_t[]){ 2, 256 });
+  dims_create(dims1, "ty", (uint64_t[]){ 2, 256 });
+  dims_set_chunk_sizes(dims0, 2, (uint64_t[]){ 1, 256 });
+  dims_set_chunk_sizes(dims1, 2, (uint64_t[]){ 1, 256 });
+  dims_set_shard_counts(dims0, 2, (uint64_t[]){ 2, 1 });
+  dims_set_shard_counts(dims1, 2, (uint64_t[]){ 2, 1 });
+  struct tile_stream_configuration configs[] = {
+    { .buffer_capacity_bytes = 4096,
+      .dtype = dtype_u16,
+      .rank = 2,
+      .dimensions = dims0,
+      .codec = { .id = CODEC_BLOSC_ZSTD,
+                 .level = 1,
+                 .shuffle = CODEC_SHUFFLE_NONE } },
+    { .buffer_capacity_bytes = 4096,
+      .dtype = dtype_u64,
+      .rank = 2,
+      .dimensions = dims1,
+      .codec = { .id = CODEC_BLOSC_ZSTD,
+                 .level = 8,
+                 .shuffle = CODEC_SHUFFLE_BYTE } },
+  };
+  struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
+
+  ms = multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, ms);
+  struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);
+  CHECK(Fail,
+        write_fill(w, 0, 256, sizeof(uint16_t), 0x11).error ==
+          multiarray_writer_ok);
+  CHECK(Fail,
+        write_fill(w, 1, 256, sizeof(uint64_t), 0x22).error ==
+          multiarray_writer_ok);
+  CHECK(Fail, w->flush(w).error == multiarray_writer_ok);
+  CHECK(Fail,
+        verify_one_blosc_chunk(
+          &sink0, 256 * sizeof(uint16_t), sizeof(uint16_t), 0, 0x11) == 0);
+  CHECK(Fail,
+        verify_one_blosc_chunk(
+          &sink1, 256 * sizeof(uint64_t), sizeof(uint64_t), 1, 0x22) == 0);
+
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_info("  PASS");
+  return 0;
+
+Fail:
+  multiarray_tile_stream_gpu_destroy(ms);
+  test_sink_free(&sink0);
+  test_sink_free(&sink1);
+  log_error("  FAIL");
+  return 1;
+}
+#endif
 
 // ---- Test: switch mid-epoch rejected ----
 
@@ -1479,6 +1588,9 @@ main(int ac, char* av[])
   int ret = 0;
   ret |= test_basic_two_array();
   ret |= test_switch_at_epoch_boundary();
+#ifdef HAVE_BLOSC
+  ret |= test_blosc_rebind();
+#endif
   ret |= test_switch_mid_epoch_rejected();
   ret |= test_flush_all();
   ret |= test_one_array_failure_spares_the_others();

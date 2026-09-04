@@ -53,6 +53,8 @@ engine_limits_accumulate(struct engine_limits* lim,
     max_sz(lim->pool_bytes, (size_t)K * total_chunks * chunk_stride * bpe);
   lim->chunk_bytes = max_sz(lim->chunk_bytes, chunk_stride * bpe);
   lim->codec_batch = max_u64(lim->codec_batch, (uint64_t)K * total_chunks);
+  if (config->codec.shuffle == CODEC_SHUFFLE_BYTE)
+    lim->any_byte_shuffle = 1;
   if (K > lim->epochs_per_batch)
     lim->epochs_per_batch = K;
   if (cl->levels.nlod > lim->max_nlod)
@@ -110,7 +112,8 @@ destroy_chunk_pools(struct pool_state* pools)
 int
 stream_engine_init(struct stream_engine* e,
                    const struct engine_limits* lim,
-                   enum compression_codec codec_id,
+                   struct codec_config codec,
+                   size_t typesize,
                    int scatter_is_copy)
 {
   if (cuCtxGetCurrent(&e->cuda) != CUDA_SUCCESS)
@@ -153,15 +156,17 @@ stream_engine_init(struct stream_engine* e,
 
   e->sched.epochs_per_batch = lim->epochs_per_batch;
 
-  CHECK(Fail,
-        compress_agg_init_shared(
-          &e->compress_agg, lim, codec_id, &e->ord, e->streams.compute) == 0);
+  CHECK(
+    Fail,
+    compress_agg_init_shared(
+      &e->compress_agg, lim, codec, typesize, &e->ord, e->streams.compute) ==
+      0);
 
   // shard_alignment is per-array; set by stream_engine_bind_array.
   CHECK(Fail,
         d2h_deliver_init(&e->d2h_deliver,
                          0,
-                         codec_id == CODEC_NONE ? AGGREGATE_FIXED_SIZE
+                         codec.id == CODEC_NONE ? AGGREGATE_FIXED_SIZE
                                                 : AGGREGATE_VARIABLE_SIZE,
                          &e->ord,
                          e->streams.payload_copy,
@@ -303,10 +308,11 @@ stream_engine_bind_array(struct stream_engine* e,
   // Select fallible shared geometry before replacing the engine's per-array
   // views, so a failed bind leaves the prior binding intact.
   CHECK(Error,
-        codec_set_chunk_bytes(&e->compress_agg.codec,
-                              ctx->layout.chunk_stride *
-                                dtype_bpe(ctx->config.dtype),
-                              e->streams.compress) == 0);
+        codec_bind(&e->compress_agg.codec,
+                   ctx->config.codec,
+                   dtype_bpe(ctx->config.dtype),
+                   ctx->layout.chunk_stride * dtype_bpe(ctx->config.dtype),
+                   e->streams.compress) == 0);
 
   e->sched = st->sched;
   e->sched.lod_active =
@@ -386,6 +392,11 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
                                codec_max_output_size,
                                shard_sink_required_shard_alignment(sink),
                                &cl) == 0);
+  CHECK(FailPhase1,
+        codec_validate_gpu(config->codec,
+                           dtype_bpe(config->dtype),
+                           cl.layouts[0].chunk_stride *
+                             dtype_bpe(config->dtype)) == 0);
 
   struct tile_stream_gpu* out =
     (struct tile_stream_gpu*)calloc(1, sizeof(*out));
@@ -402,9 +413,11 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
   memset(&lim, 0, sizeof(lim));
   CHECK(FailPhase2, engine_limits_accumulate(&lim, &cl, config) == 0);
   CHECK(FailPhase2,
-        stream_engine_init(
-          &out->engine, &lim, config->codec.id, cl.levels.enable_multiscale) ==
-          0);
+        stream_engine_init(&out->engine,
+                           &lim,
+                           config->codec,
+                           dtype_bpe(config->dtype),
+                           cl.levels.enable_multiscale) == 0);
   CHECK(FailPhase2,
         engine_array_state_init(
           &out->ar, &out->ctx, &cl, &out->engine.delivery) == 0);
@@ -494,6 +507,10 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
                              shard_alignment,
                              &cl))
     return 1;
+  if (codec_validate_gpu(config->codec,
+                         dtype_bpe(config->dtype),
+                         cl.layouts[0].chunk_stride * dtype_bpe(config->dtype)))
+    goto Fail;
 
   struct engine_limits lim;
   memset(&lim, 0, sizeof(lim));
