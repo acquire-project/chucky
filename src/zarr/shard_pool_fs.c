@@ -211,6 +211,7 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
   struct strbuf path = { 0 };
+  char* owned_path = NULL;
   CHECK(Fail, slot < p->nslots);
 
   struct fs_slot* w = &p->slots[slot];
@@ -221,14 +222,20 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
 
-  const struct io_file_token token =
-    io_backend_fs_reserve_file(p->backend,
-                               strbuf_cstr(&path),
-                               p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0);
+  const size_t path_bytes = strbuf_len(&path) + 1;
+  owned_path = (char*)malloc(path_bytes);
+  CHECK(Fail, owned_path);
+  memcpy(owned_path, strbuf_cstr(&path), path_bytes);
+
+  const struct io_file_token token = io_backend_fs_reserve_file(p->backend);
   CHECK(Fail, token.generation != 0);
 
-  if (io_scheduler_post(
-        p->queue, (struct io_request){ .op = IO_OP_OPEN, .file = token })) {
+  if (io_scheduler_post(p->queue,
+                        (struct io_request){ .op = IO_OP_OPEN,
+                                             .file = token,
+                                             .path = owned_path,
+                                             .owned = owned_path,
+                                             .owned_free = free })) {
     io_backend_fs_cancel_file(p->backend, token);
     goto Fail;
   }
@@ -238,6 +245,7 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   return &w->base;
 
 Fail:
+  free(owned_path);
   strbuf_free(&path);
   return NULL;
 }
@@ -365,7 +373,8 @@ shard_pool_fs_create_wrapped(const char* root,
   p->unbuffered = unbuffered;
   CHECK(Fail_alloc, strbuf_set(&p->root, root) == 0);
 
-  p->backend = io_backend_fs_create(&p->io_error);
+  p->backend = io_backend_fs_create(&p->io_error,
+                                    unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0);
   CHECK(Fail_alloc, p->backend);
 
   struct io_backend backend = io_backend_fs_as_backend(p->backend);

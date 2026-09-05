@@ -12,10 +12,8 @@
 struct file_entry
 {
   platform_fd fd;
-  char* path;
   uint64_t generation;
   uint32_t next_free;
-  int open_flags;
 };
 
 struct io_backend_fs
@@ -27,6 +25,7 @@ struct io_backend_fs
   uint32_t handle_count;
   uint32_t peak_handle_count;
   uint64_t next_generation;
+  int open_flags;
   _Atomic int* io_error;
 };
 
@@ -53,12 +52,13 @@ Fail:
 }
 
 struct io_backend_fs*
-io_backend_fs_create(_Atomic int* io_error)
+io_backend_fs_create(_Atomic int* io_error, int open_flags)
 {
   CHECK(Fail, io_error);
   struct io_backend_fs* b = (struct io_backend_fs*)calloc(1, sizeof(*b));
   CHECK(Fail, b);
   b->io_error = io_error;
+  b->open_flags = open_flags;
   b->free_head = FREE_LIST_END;
   b->mutex = platform_mutex_new();
   CHECK(Fail_alloc, b->mutex && grow_locked(b) == 0);
@@ -77,7 +77,6 @@ io_backend_fs_destroy(struct io_backend_fs* b)
   for (uint32_t i = 0; i < b->files_cap; ++i) {
     if (b->files[i].fd != PLATFORM_FD_INVALID)
       platform_close(b->files[i].fd);
-    free(b->files[i].path);
   }
   free(b->files);
   platform_mutex_free(b->mutex);
@@ -85,16 +84,8 @@ io_backend_fs_destroy(struct io_backend_fs* b)
 }
 
 struct io_file_token
-io_backend_fs_reserve_file(struct io_backend_fs* b,
-                           const char* path,
-                           int open_flags)
+io_backend_fs_reserve_file(struct io_backend_fs* b)
 {
-  CHECK(Fail, path);
-  const size_t nbytes = strlen(path) + 1;
-  char* copy = (char*)malloc(nbytes);
-  CHECK(Fail, copy);
-  memcpy(copy, path, nbytes);
-
   platform_mutex_lock(b->mutex);
   CHECK(Unlock, b->free_head != FREE_LIST_END || grow_locked(b) == 0);
   CHECK(Unlock, b->next_generation != UINT64_MAX);
@@ -102,17 +93,13 @@ io_backend_fs_reserve_file(struct io_backend_fs* b,
   struct file_entry* e = &b->files[index];
   b->free_head = e->next_free;
   *e = (struct file_entry){ .fd = PLATFORM_FD_INVALID,
-                            .path = copy,
-                            .generation = ++b->next_generation,
-                            .open_flags = open_flags };
+                            .generation = ++b->next_generation };
   const struct io_file_token token = { .generation = e->generation,
                                        .index = index };
   platform_mutex_unlock(b->mutex);
   return token;
 Unlock:
   platform_mutex_unlock(b->mutex);
-  free(copy);
-Fail:
   return (struct io_file_token){ 0 };
 }
 
@@ -129,7 +116,6 @@ static void
 release_locked(struct io_backend_fs* b, struct io_file_token file)
 {
   struct file_entry* e = &b->files[file.index];
-  free(e->path);
   *e =
     (struct file_entry){ .fd = PLATFORM_FD_INVALID, .next_free = b->free_head };
   b->free_head = file.index;
@@ -140,7 +126,7 @@ io_backend_fs_cancel_file(struct io_backend_fs* b, struct io_file_token file)
 {
   platform_mutex_lock(b->mutex);
   struct file_entry* e = find_locked(b, file);
-  if (e && e->path)
+  if (e && e->fd == PLATFORM_FD_INVALID)
     release_locked(b, file);
   platform_mutex_unlock(b->mutex);
 }
@@ -190,32 +176,28 @@ open_write(const char* path, int flags)
 }
 
 static void
-execute_open(struct io_backend_fs* b, struct io_file_token file)
+execute_open(struct io_backend_fs* b, const struct io_request* req)
 {
   platform_mutex_lock(b->mutex);
-  struct file_entry* e = find_locked(b, file);
-  if (!e || !e->path) {
+  struct file_entry* e = find_locked(b, req->file);
+  if (!e || e->fd != PLATFORM_FD_INVALID || !req->path) {
     platform_mutex_unlock(b->mutex);
     record_failure(b, "io_backend_fs: invalid open request");
     return;
   }
-  char* path = e->path;
-  const int flags = e->open_flags;
-  e->path = NULL;
   b->handle_count++;
   if (b->handle_count > b->peak_handle_count)
     b->peak_handle_count = b->handle_count;
   platform_mutex_unlock(b->mutex);
 
-  const platform_fd fd = open_write(path, flags);
+  const platform_fd fd = open_write(req->path, b->open_flags);
   if (fd == PLATFORM_FD_INVALID) {
-    log_error("io_backend_fs: open(%s) failed", path);
+    log_error("io_backend_fs: open(%s) failed", req->path);
     atomic_store(b->io_error, 1);
   }
-  free(path);
 
   platform_mutex_lock(b->mutex);
-  b->files[file.index].fd = fd;
+  b->files[req->file.index].fd = fd;
   if (fd == PLATFORM_FD_INVALID)
     b->handle_count--;
   platform_mutex_unlock(b->mutex);
@@ -228,7 +210,7 @@ fs_execute(void* ctx, const struct io_request* req)
   if (req->op == IO_OP_NOOP)
     return;
   if (req->op == IO_OP_OPEN) {
-    execute_open(b, req->file);
+    execute_open(b, req);
     return;
   }
 
