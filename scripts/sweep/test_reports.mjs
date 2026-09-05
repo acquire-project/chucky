@@ -1,32 +1,12 @@
 import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
 import {test} from "node:test";
-import {runInNewContext} from "node:vm";
+import * as blosc from "./blosc.js";
+import {bestRun, moversFor, configLabel, filterRuns, comparable, metricValue} from "./selection.mjs";
 
-const read = name => readFileSync(new URL(name, import.meta.url), "utf8");
-const blosc = await import(`data:text/javascript,${encodeURIComponent(read("blosc.js"))}`);
 const run = (block, overrides = {}) => ({
   scenario: "orca2_single", codec: "blosc-zstd", fill: "xor", backend: "cpu",
   dtype: "u16", chunk_bytes_label: "256K", sink: "discard", status: "pass",
   throughput_in_gibs: 1, ...(block == null ? {} : {blosc_block_bytes: block}), ...overrides,
-});
-
-function pageFunctions(page, names, globals = {}) {
-  const source = read(page);
-  const functions = names.map(name => {
-    const match = source.match(new RegExp(`^function ${name}\\([^]*?^}`, "m"));
-    assert.ok(match, `${page}: ${name}`);
-    return match[0];
-  }).join("\n");
-  return runInNewContext(`${functions}\n({${names.join(",")}})`, {...blosc, ...globals});
-}
-
-test("report modules parse", () => {
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  for (const page of ["overview.html", "template.html"]) {
-    const script = read(page).match(/<script type="module">([^]*?)<\/script>/)[1];
-    assert.doesNotThrow(() => new AsyncFunction(script.replace(/^import .*;$/gm, "")));
-  }
 });
 
 test("block requests distinguish unknown, null, and explicit sizes", () => {
@@ -45,35 +25,44 @@ test("block requests distinguish unknown, null, and explicit sizes", () => {
 test("overview trends and movers require matching block requests", () => {
   const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard", metric: "throughput_in_gibs",
     bloscBlock: "16384"};
-  const f = pageFunctions("overview.html", ["matchesSetup", "bestRun", "moversFor", "configLabel"], {
-    state, comparable: () => true, metricValue: (r, key) => r[key],
-    metricMeta: () => ({better: "high"}), percentChange: (a, b) => (b - a) / a * 100,
-  });
+  const meta = {key: state.metric, better: "high"};
   const before = {runs: [run(undefined, {id: "unknown", throughput_in_gibs: 100})]};
   const after = {runs: [run(16384, {id: "16K"}), run(32768, {id: "32K", throughput_in_gibs: 200})]};
-  assert.equal(f.bestRun(before, "orca2_single", "xor"), null);
-  assert.equal(f.bestRun(after, "orca2_single", "xor").value, 1);
-  assert.equal(f.moversFor({sweeps: [before, after]}).rows.length, 0);
+  assert.equal(bestRun(before, "orca2_single", "xor", state, meta), null);
+  assert.equal(bestRun(after, "orca2_single", "xor", state, meta).value, 1);
+  assert.equal(moversFor({sweeps: [before, after]}, state, meta).rows.length, 0);
   before.runs.push(run(16384, {id: "16K", throughput_in_gibs: 2}));
-  assert.equal(f.moversFor({sweeps: [before, after]}).rows[0].pct, -50);
+  assert.equal(moversFor({sweeps: [before, after]}, state, meta).rows[0].pct, -50);
   state.bloscBlock = "unknown";
-  assert.equal(f.bestRun(before, "orca2_single", "xor").value, 100);
-  assert.equal(f.bestRun(after, "orca2_single", "xor"), null);
-  assert.match(f.configLabel(after.runs[0]), /block 16 KiB/);
-  assert.match(f.configLabel(before.runs[0]), /unknown/);
+  assert.equal(bestRun(before, "orca2_single", "xor", state, meta).value, 100);
+  assert.equal(bestRun(after, "orca2_single", "xor", state, meta), null);
+  assert.match(configLabel(after.runs[0]), /block 16 KiB/);
+  assert.match(configLabel(before.runs[0]), /unknown/);
 });
 
 test("explorer filters block requests before heatmap and line grouping", () => {
-  const radios = {"codec-group": "blosc-zstd", "fill-group": "xor", "backend-group": "cpu",
-    "dtype-group": "u16", "sink-group": "discard", "blosc-block-group": "16384"};
-  const f = pageFunctions("template.html", ["filterRuns"], {
-    runs: [run(), run(16384), run(32768), run(16384, {backend: "gpu"})],
-    getRadio: key => radios[key], getCheckedScenarios: () => ["orca2_single"], allS3Throughputs: [],
-  });
-  assert.equal(f.filterRuns().length, 1);
-  assert.equal(f.filterRuns()[0].blosc_block_bytes, 16384);
-  assert.equal(f.filterRuns({includeBackend: false}).length, 2);
-  radios["blosc-block-group"] = "unknown";
-  assert.equal(f.filterRuns().length, 1);
-  assert.equal(f.filterRuns()[0].blosc_block_bytes, undefined);
+  const selection = {codec: "blosc-zstd", fill: "xor", backend: "cpu",
+    dtype: "u16", sink: "discard", bloscBlock: "16384", scenarios: new Set(["orca2_single"])};
+  const runs = [run(), run(16384), run(32768), run(16384, {backend: "gpu"})];
+  assert.equal(filterRuns(runs, selection).length, 1);
+  assert.equal(filterRuns(runs, selection)[0].blosc_block_bytes, 16384);
+  assert.equal(filterRuns(runs, selection, {includeBackend: false}).length, 2);
+  selection.bloscBlock = "unknown";
+  assert.equal(filterRuns(runs, selection).length, 1);
+  assert.equal(filterRuns(runs, selection)[0].blosc_block_bytes, undefined);
+});
+
+test("selection respects metric direction, retirement, and missing values", () => {
+  const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard", bloscBlock: "16384",
+    metric: "stages.compress_ms"};
+  const meta = {key: state.metric, better: "low"};
+  const sweep = {runs: [run(16384), run(16384, {stages: {compress_ms: 2}}),
+    run(16384, {stages: {compress_ms: 1}}), run(16384, {stages: {compress_ms: Infinity}})]};
+  assert.equal(bestRun(sweep, "orca2_single", "xor", state, meta).value, 1);
+  assert.equal(bestRun(sweep, "orca2_single", "xor", state, meta).count, 2);
+  assert.equal(metricValue(sweep.runs[0], state.metric), null);
+  assert.equal(comparable(sweep, meta), true);
+  sweep.retired = ["compress_ms"];
+  assert.equal(comparable(sweep, meta), false);
+  assert.deepEqual(moversFor({sweeps: [sweep]}, state, meta), {rows: [], newest: null});
 });

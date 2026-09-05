@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["click", "rich", "pydantic"]
+# ///
 import json
 import subprocess
 import tempfile

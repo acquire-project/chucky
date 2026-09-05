@@ -189,6 +189,7 @@
               tmux
               tokei
               awscli2
+              nodejs_22
               python3
               uv
             ]);

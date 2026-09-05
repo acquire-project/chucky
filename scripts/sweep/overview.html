@@ -212,7 +212,8 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices, matchesBloscBlock} from "./blosc.js";
+import {metricValue, matchesSetup, comparable, bestRun, percentChange, configLabel, moversFor} from "./selection.mjs";
+import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
 
 const DATA = await fetchJson("data/overview.json");
 DATA.sweeps.forEach(s => { s.runs = decodeRuns(s.runs, DATA.strings); });
@@ -310,16 +311,6 @@ function buildMachines(grouped) {
 
 let machineOrder = [];
 
-function metricValue(run, key) {
-  const parts = key.split(".");
-  let v = run;
-  for (const p of parts) {
-    if (v == null || typeof v !== "object") return null;
-    v = v[p];
-  }
-  return typeof v === "number" && isFinite(v) ? v : null;
-}
-
 function scenarioRank(name) {
   for (const g of SCENARIO_GROUPS) if (name.endsWith(g.suffix)) return g.rank;
   return 0; // only the multiscale variants carry a suffix
@@ -390,41 +381,11 @@ function pickDefaults() {
   state.bloscBlock = bloscBlock;
 }
 
-/** Everything the filters ask for except the input. */
-function matchesSetup(run) {
-  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink
-    && matchesBloscBlock(run, state.bloscBlock);
-}
-
-function comparable(sweep) {
-  const meta = metricMeta(state.metric);
-  const retiredKey = meta.retired || state.metric.split(".").pop();
-  return !(sweep.retired || []).includes(retiredKey);
-}
-
-/** Best run of a sweep for one scenario and input, under the other filters. */
-function bestRun(sweep, scenario, fill) {
-  const meta = metricMeta(state.metric);
-  const wantHigh = meta.better === "high";
-  let best = null, bestValue = null, count = 0;
-  for (const run of sweep.runs) {
-    if (run.scenario !== scenario || run.fill !== fill) continue;
-    if (run.status !== "pass" || !matchesSetup(run)) continue;
-    const value = metricValue(run, state.metric);
-    if (value == null) continue;
-    count++;
-    if (bestValue == null || (wantHigh ? value > bestValue : value < bestValue)) {
-      best = run; bestValue = value;
-    }
-  }
-  return best ? {run: best, value: bestValue, count} : null;
-}
-
 /** Configurations with at least one usable run. */
 function availableCombinations(scenario) {
   const found = new Set();
   for (const sweep of sweeps) {
-    if (!comparable(sweep)) continue;
+    if (!comparable(sweep, metricMeta(state.metric))) continue;
     for (const run of sweep.runs) {
       if (run.status !== "pass" || metricValue(run, state.metric) == null) continue;
       if (scenario && run.scenario !== scenario) continue;
@@ -496,8 +457,8 @@ function emptyState(message, scenario) {
 function series(machine, scenario, fill) {
   const points = [];
   for (const sweep of machine.sweeps) {
-    if (!comparable(sweep)) continue;
-    const hit = bestRun(sweep, scenario, fill);
+    if (!comparable(sweep, metricMeta(state.metric))) continue;
+    const hit = bestRun(sweep, scenario, fill, state, metricMeta(state.metric));
     if (hit) points.push({sweep, ...hit});
   }
   return points;
@@ -523,11 +484,6 @@ function fmtDay(day) { return day || "unknown date"; }
 // Axis labels trim harder than the numbers in the tables.
 function fmtTick(value) {
   return Math.abs(value) >= 1000 ? d3.format("~s")(value) : d3.format("~f")(value);
-}
-
-function percentChange(previous, latest) {
-  if (previous == null || latest == null || previous === 0) return null;
-  return (latest - previous) / Math.abs(previous) * 100;
 }
 
 /** Direction of a change, judged against what the metric wants. */
@@ -563,12 +519,6 @@ function keySwatch(color, className) {
   const node = el("span", className || "tile-key");
   node.style.background = color;
   return node;
-}
-
-function configLabel(run) {
-  const block = bloscBlockKey(run);
-  return [run.dtype, run.chunk_bytes_label, block ? `block ${bloscBlockLabel(block)}` : ""]
-    .filter(Boolean).join(" · ");
 }
 
 // =========================================================================
@@ -1060,35 +1010,6 @@ function renderMatrix() {
 
 const MOVERS_SHOWN = 12;
 
-// Movers require the same recorded configuration, including Blosc block size.
-function moversFor(machine) {
-  const history = new Map();
-  let newest = null;
-  for (const sweep of machine.sweeps) {
-    if (!comparable(sweep)) continue;
-    for (const run of sweep.runs) {
-      if (run.status !== "pass" || !matchesSetup(run)) continue;
-      const value = metricValue(run, state.metric);
-      if (value == null) continue;
-      if (!history.has(run.id)) history.set(run.id, []);
-      history.get(run.id).push({sweep, run, value});
-      newest = sweep;
-    }
-  }
-
-  const rows = [];
-  for (const seen of history.values()) {
-    const now = seen[seen.length - 1];
-    if (seen.length < 2 || now.sweep !== newest) continue;
-    const then = seen[seen.length - 2];
-    const pct = percentChange(then.value, now.value);
-    if (pct == null) continue;
-    rows.push({machine, run: now.run, previous: then.value, latest: now.value, pct,
-               latestSweep: now.sweep, previousSweep: then.sweep});
-  }
-  return {rows, newest};
-}
-
 function renderMovers() {
   const host = document.getElementById("movers");
   host.replaceChildren();
@@ -1097,7 +1018,7 @@ function renderMovers() {
   const all = [];
   const newest = [];
   for (const machine of machineOrder) {
-    const {rows, newest: sweep} = moversFor(machine);
+    const {rows, newest: sweep} = moversFor(machine, state, metricMeta(state.metric));
     if (rows.length) newest.push(`${machine.name} ${sweep.commit}`);
     all.push(...rows);
   }
@@ -1268,7 +1189,7 @@ function renderMatchCount() {
   for (const sweep of sweeps) {
     let here = 0;
     for (const run of sweep.runs) {
-      if (run.status === "pass" && matchesSetup(run) && run.fill === state.fill
+      if (run.status === "pass" && matchesSetup(run, state) && run.fill === state.fill
           && metricValue(run, state.metric) != null) here++;
     }
     runs += here;

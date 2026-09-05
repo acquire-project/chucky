@@ -83,50 +83,6 @@ bitshuffle_kernel(const unsigned char* src,
 }
 
 extern "C" int
-gpu_blosc_shuffle_async(const void* src,
-                        size_t src_stride,
-                        void* dst,
-                        size_t dst_stride,
-                        size_t chunk_bytes,
-                        size_t typesize,
-                        size_t batch_size,
-                        CUstream stream)
-{
-  return gpu_blosc_filter_blocks_async(CODEC_SHUFFLE_BYTE,
-                                       src,
-                                       src_stride,
-                                       dst,
-                                       dst_stride,
-                                       chunk_bytes,
-                                       chunk_bytes,
-                                       typesize,
-                                       batch_size,
-                                       stream);
-}
-
-extern "C" int
-gpu_blosc_bitshuffle_async(const void* src,
-                           size_t src_stride,
-                           void* dst,
-                           size_t dst_stride,
-                           size_t chunk_bytes,
-                           size_t typesize,
-                           size_t batch_size,
-                           CUstream stream)
-{
-  return gpu_blosc_filter_blocks_async(CODEC_SHUFFLE_BIT,
-                                       src,
-                                       src_stride,
-                                       dst,
-                                       dst_stride,
-                                       chunk_bytes,
-                                       chunk_bytes,
-                                       typesize,
-                                       batch_size,
-                                       stream);
-}
-
-extern "C" int
 gpu_blosc_filter_blocks_async(enum codec_shuffle shuffle,
                               const void* src,
                               size_t src_stride,

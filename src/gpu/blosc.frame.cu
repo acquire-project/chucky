@@ -133,58 +133,48 @@ pack_blocks_kernel(const uint8_t* original,
 }
 
 extern "C" int
-gpu_blosc_pack_async(enum compression_codec codec,
-                     enum codec_shuffle shuffle,
-                     size_t typesize,
-                     size_t chunk_bytes,
-                     size_t block_bytes,
-                     const void* original,
-                     size_t original_stride,
-                     const void* filtered,
-                     size_t filtered_stride,
-                     const void* block_data,
-                     size_t block_stride,
-                     const size_t* block_sizes,
-                     size_t* block_offsets,
-                     void* encoded,
-                     size_t encoded_stride,
-                     size_t* encoded_sizes,
+gpu_blosc_pack_async(struct gpu_blosc_frame_layout layout,
+                     struct gpu_blosc_input original,
+                     struct gpu_blosc_input filtered,
+                     struct gpu_blosc_blocks blocks,
+                     struct gpu_blosc_output encoded,
                      size_t batch_size,
                      int force_copy,
                      CUstream stream)
 {
-  if (block_bytes == 0 || block_bytes > chunk_bytes)
+  if (layout.block_bytes == 0 || layout.block_bytes > layout.chunk_bytes)
     return 1;
-  const size_t blocks_per_chunk = (chunk_bytes + block_bytes - 1) / block_bytes;
-  const uint8_t format = codec == CODEC_BLOSC_LZ4 ? 1 : 4;
+  const size_t blocks_per_chunk =
+    (layout.chunk_bytes + layout.block_bytes - 1) / layout.block_bytes;
+  const uint8_t format = layout.codec == CODEC_BLOSC_LZ4 ? 1 : 4;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
   if (CUDA_LAUNCH(block_offsets_kernel<<<batch_size, 256, 0, cuda_stream>>>(
-        block_sizes,
-        block_offsets,
-        (uint8_t*)encoded,
-        encoded_stride,
-        encoded_sizes,
-        chunk_bytes,
-        block_bytes,
+        blocks.sizes,
+        blocks.offsets,
+        (uint8_t*)encoded.data,
+        encoded.stride,
+        encoded.sizes,
+        layout.chunk_bytes,
+        layout.block_bytes,
         blocks_per_chunk,
-        typesize,
+        layout.typesize,
         format,
-        shuffle,
+        layout.shuffle,
         force_copy)))
     return 1;
   return CUDA_LAUNCH(
     pack_blocks_kernel<<<batch_size * blocks_per_chunk, 256, 0, cuda_stream>>>(
-      (const uint8_t*)original,
-      original_stride,
-      (const uint8_t*)filtered,
-      filtered_stride,
-      (const uint8_t*)block_data,
-      block_stride,
-      block_sizes,
-      block_offsets,
-      (uint8_t*)encoded,
-      encoded_stride,
-      chunk_bytes,
-      block_bytes,
+      (const uint8_t*)original.data,
+      original.stride,
+      (const uint8_t*)filtered.data,
+      filtered.stride,
+      (const uint8_t*)blocks.data,
+      blocks.stride,
+      blocks.sizes,
+      blocks.offsets,
+      (uint8_t*)encoded.data,
+      encoded.stride,
+      layout.chunk_bytes,
+      layout.block_bytes,
       blocks_per_chunk));
 }

@@ -30,7 +30,7 @@ when the open sweep leaves it nothing to choose.
 The runner and report regression tests do not require a GPU or benchmark build:
 
 ```sh
-uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
+uv run scripts/sweep/test_sweep.py
 node --test scripts/sweep/test_reports.mjs
 ```
 
@@ -102,6 +102,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `theme.js` | light or dark, applied before either page paints |
 | `decode.js` | unpacks the columns, imported by both pages |
 | `blosc.js` | Blosc block-request selections and labels for both pages |
+| `selection.mjs` | Pure run selection and comparison functions, shared with tests |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |

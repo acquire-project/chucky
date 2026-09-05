@@ -236,7 +236,8 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices, matchesBloscBlock} from "./blosc.js";
+import {filterRuns as selectRuns} from "./selection.mjs";
+import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
 async function ensureRuns(file) {
@@ -369,25 +370,17 @@ function rebuildData() {
   allStageNames = [...stageSet].sort(stageSort);
 }
 
-function filterRuns({includeBackend = true} = {}) {
-  const codec = getRadio("codec-group");
-  const fill = getRadio("fill-group");
-  const backend = getRadio("backend-group");
-  const dtype = getRadio("dtype-group");
-  const sink = getRadio("sink-group");
-  const s3tp = getRadio("s3-throughput-group");
-  const bloscBlock = getRadio("blosc-block-group");
-  const checkedScenarios = new Set(getCheckedScenarios());
-  return runs.filter(r => {
-    if (r.codec !== codec || r.fill !== fill || r.dtype !== dtype || r.sink !== sink) return false;
-    if (!matchesBloscBlock(r, bloscBlock)) return false;
-    if (includeBackend && r.backend !== backend) return false;
-    if (!checkedScenarios.has(r.scenario)) return false;
-    if (sink === "s3" && s3tp && allS3Throughputs.length > 0) {
-      if (String(r.s3_throughput_gbps) !== s3tp) return false;
-    }
-    return true;
-  });
+function filterRuns(options) {
+  return selectRuns(runs, {
+    codec: getRadio("codec-group"),
+    fill: getRadio("fill-group"),
+    backend: getRadio("backend-group"),
+    dtype: getRadio("dtype-group"),
+    sink: getRadio("sink-group"),
+    bloscBlock: getRadio("blosc-block-group"),
+    scenarios: new Set(getCheckedScenarios()),
+    s3Throughput: allS3Throughputs.length ? getRadio("s3-throughput-group") : null,
+  }, options);
 }
 
 function metricLabel(key) {

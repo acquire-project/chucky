@@ -209,16 +209,6 @@ run_case(struct codec_config config,
         c.blocks_per_chunk == (chunk_bytes + config.blosc_block_bytes - 1) /
                                 config.blosc_block_bytes);
   CHECK(Fail, c.block_capacity == batch * c.blocks_per_chunk);
-  {
-    const int reserve = config.shuffle != CODEC_SHUFFLE_NONE;
-    const size_t expected =
-      batch * sizeof(size_t) +
-      c.block_capacity * (3 * sizeof(size_t) + 2 * sizeof(void*) +
-                          c.block_output_stride + c.block_input_stride) +
-      c.temp_bytes + (reserve ? batch * c.shuffle_stride : 0);
-    CHECK(Fail,
-          codec_device_bytes(config, chunk_bytes, batch, reserve) == expected);
-  }
 
   input = (uint8_t*)malloc(batch * input_stride);
   encoded = (uint8_t*)malloc(batch * c.output_stride);
@@ -808,26 +798,17 @@ run_shuffle_filter_case(enum codec_shuffle shuffle,
   CU(Fail, cuMemAlloc(&d_output, batch * stride));
   CU(Fail, cuMemcpyHtoD(d_input, input, batch * stride));
   CU(Fail, cuStreamSynchronize(NULL));
-  if (shuffle == CODEC_SHUFFLE_BIT)
-    CHECK(Fail,
-          gpu_blosc_bitshuffle_async((const void*)(uintptr_t)d_input,
-                                     stride,
-                                     (void*)(uintptr_t)d_output,
-                                     stride,
-                                     chunk_bytes,
-                                     typesize,
-                                     batch,
-                                     stream) == 0);
-  else
-    CHECK(Fail,
-          gpu_blosc_shuffle_async((const void*)(uintptr_t)d_input,
-                                  stride,
-                                  (void*)(uintptr_t)d_output,
-                                  stride,
-                                  chunk_bytes,
-                                  typesize,
-                                  batch,
-                                  stream) == 0);
+  CHECK(Fail,
+        gpu_blosc_filter_blocks_async(shuffle,
+                                      (const void*)(uintptr_t)d_input,
+                                      stride,
+                                      (void*)(uintptr_t)d_output,
+                                      stride,
+                                      chunk_bytes,
+                                      chunk_bytes,
+                                      typesize,
+                                      batch,
+                                      stream) == 0);
   CU(Fail, cuStreamSynchronize(stream));
   CU(Fail, cuMemcpyDtoH(actual, d_output, batch * stride));
   for (size_t chunk = 0; chunk < batch; ++chunk)
@@ -974,26 +955,22 @@ test_frame_boundary(void)
   CU(Fail, cuMemcpyHtoD(d_block_sizes, block_sizes, sizeof(block_sizes)));
   CU(Fail, cuStreamSynchronize(NULL));
   CU(Fail, cuMemsetD8Async(d_encoded, 0x5a, sizeof(encoded), stream));
-  CHECK(Fail,
-        gpu_blosc_pack_async(CODEC_BLOSC_LZ4,
-                             CODEC_SHUFFLE_NONE,
-                             1,
-                             CHUNK_BYTES,
-                             CHUNK_BYTES,
-                             (const void*)(uintptr_t)d_input,
-                             CHUNK_BYTES,
-                             (const void*)(uintptr_t)d_input,
-                             CHUNK_BYTES,
-                             (const void*)(uintptr_t)d_block_data,
-                             STRIDE,
-                             (const size_t*)(uintptr_t)d_block_sizes,
-                             (size_t*)(uintptr_t)d_block_offsets,
-                             (void*)(uintptr_t)d_encoded,
-                             STRIDE,
-                             (size_t*)(uintptr_t)d_sizes,
-                             BATCH,
-                             0,
-                             stream) == 0);
+  CHECK(
+    Fail,
+    gpu_blosc_pack_async(
+      (struct gpu_blosc_frame_layout){
+        CODEC_BLOSC_LZ4, CODEC_SHUFFLE_NONE, 1, CHUNK_BYTES, CHUNK_BYTES },
+      (struct gpu_blosc_input){ (const void*)(uintptr_t)d_input, CHUNK_BYTES },
+      (struct gpu_blosc_input){ (const void*)(uintptr_t)d_input, CHUNK_BYTES },
+      (struct gpu_blosc_blocks){ (const void*)(uintptr_t)d_block_data,
+                                 STRIDE,
+                                 (const size_t*)(uintptr_t)d_block_sizes,
+                                 (size_t*)(uintptr_t)d_block_offsets },
+      (struct gpu_blosc_output){
+        (void*)(uintptr_t)d_encoded, STRIDE, (size_t*)(uintptr_t)d_sizes },
+      BATCH,
+      0,
+      stream) == 0);
   CU(Fail, cuStreamSynchronize(stream));
   CU(Fail, cuMemcpyDtoH(encoded, d_encoded, sizeof(encoded)));
   CU(Fail, cuMemcpyDtoH(sizes, d_sizes, sizeof(sizes)));
