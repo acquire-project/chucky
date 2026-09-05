@@ -5,9 +5,9 @@
 
 struct threadpool;
 
-// Check blosc codec availability. Returns 0 if blosc is available, non-zero
-// if not (stub build). Rejects non-blosc codec ids.
-// Level range is validated separately in validate_config.
+// Check Blosc availability and settings, including an explicit block size.
+// Returns 0 on success, non-zero for invalid config or an unavailable library.
+// Rejects non-Blosc codec ids.
 int
 compress_blosc_validate(struct codec_config codec);
 

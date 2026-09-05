@@ -46,12 +46,14 @@ class RunResult(BaseModel, extra="allow"):
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
+    blosc_block_bytes: int | None = None
     memory_estimate_total_bytes: int | None = None
     memory_estimate_pinned_bytes: int | None = None
     memory_host_baseline_bytes: int | None = None
     memory_host_peak_bytes: int | None = None
     memory_host_reading_failed: bool | None = None
     memory_device_used_bytes: int | None = None
+    memory_device_overhead_bytes: int | None = None
     memory_measured_bytes: int | None = None
     # Absent in archived results; missing means unknown, not zero.
     d2h_transfer: D2HTransfer | None = None

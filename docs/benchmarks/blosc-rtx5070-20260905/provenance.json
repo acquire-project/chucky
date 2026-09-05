@@ -1,0 +1,88 @@
+{
+  "start_utc": "2026-09-05T00:41:42.145369+00:00",
+  "finish_utc": "2026-09-05T01:10:21.491204+00:00",
+  "options": {
+    "frames": 100,
+    "repeats": 3,
+    "warmups": 1,
+    "memory_budget": "6G",
+    "batch_bytes": "64M",
+    "max_threads": 3,
+    "seed": 169,
+    "dtype": "u16"
+  },
+  "scenario": "orca2_single",
+  "codec_levels": { "lz4": 1, "zstd": 0, "blosc-lz4": 3, "blosc-zstd": 3 },
+  "variant_policy": "Only GPU_BLOSC_BLOCK_BYTES changed between the nine validated builds",
+  "gpu_before": "NVIDIA GeForce RTX 5070 Laptop GPU, 595.99.02, 49, 7 %, 2202 MiB, 12.33 W, 727 MHz, 810 MHz",
+  "complete": true,
+  "source_commit": "c519a05260cbda589bc323486170802a1c40c380",
+  "build": {
+    "CHUCKY_ENABLE_GPU": "ON",
+    "CMAKE_BUILD_TYPE": "Release",
+    "CMAKE_CUDA_ARCHITECTURES": "89;100",
+    "CMAKE_CUDA_COMPILER": "/nix/store/wsfjr42lfyqfpbx8icw8m101zyj2mjyx-cuda-merged-13.2/bin/nvcc",
+    "CMAKE_CXX_COMPILER": "/nix/store/mw4gasdvwgscgpxpzihjgchfhs3hhqhn-clang-wrapper-21.1.8/bin/clang++",
+    "NVCOMP_LIBRARY": "/nix/store/dvwfnfc2a1kswl0kcl74xawwppg1wgg7-cuda13.2-nvcomp-5.3.0.16-static/lib/libnvcomp_static.a",
+    "CMAKE_HOME_DIRECTORY": "/tmp/chucky-blosc-block-sweep",
+    "source_commit": "c519a05260cbda589bc323486170802a1c40c380",
+    "source_status": ""
+  },
+  "raw_results_sha256": "e15b724fddc94b7ea021ec82981717c6a738c360dfa346f4541642d8ad033275",
+  "original_summary_csv_sha256": "a9cf335c7324563d56994b9d283fc1b5b04e2085e312a1cbbd8608dff42ee994",
+  "archived_summary_csv_sha256": "673d7842ed94431b1c49e3599f3e3e68f2c37dcf5cc825192a30d8b85cabfd1d",
+  "variant_binaries": {
+    "4": {
+      "sha256": "af8764639e2c424c913c3cfeaf8ef3e3bded89a0792c1a2c6de629839ac33a73",
+      "block_constant_kib": 4,
+      "validation_passed": true
+    },
+    "8": {
+      "sha256": "0cdd793bfae9856ec7f7880d646d03df2be2fd3ebbfdc28a12c787976ad5594d",
+      "block_constant_kib": 8,
+      "validation_passed": true
+    },
+    "16": {
+      "sha256": "7f1a44fed8b0b9ac638ab3f33ce7fb79ee420a7cea835848f14f0b96402093c5",
+      "block_constant_kib": 16,
+      "validation_passed": true
+    },
+    "32": {
+      "sha256": "c619f888b3d06d41099e335d5c041a68c7d6e5b9363d6746f4ba4a0610c9d8f5",
+      "block_constant_kib": 32,
+      "validation_passed": true
+    },
+    "64": {
+      "sha256": "552f1deb9ed4226a2dc930cb96538a035cdf04b6285dedd1f141a56ad7c7c58f",
+      "block_constant_kib": 64,
+      "validation_passed": true
+    },
+    "128": {
+      "sha256": "5e45cd612db4f627bd428190dcd47d3adf8a9260ba4d345d9ae2431393113510",
+      "block_constant_kib": 128,
+      "validation_passed": true
+    },
+    "256": {
+      "sha256": "8f27aae3a3ce069d3e47a660378bcd9acf02d3960d889a55bc98207b3eda301f",
+      "block_constant_kib": 256,
+      "validation_passed": true
+    },
+    "512": {
+      "sha256": "edf43ef6819f20fd0141e434ec2ac759f0337d2966721b80f3930da944670382",
+      "block_constant_kib": 512,
+      "validation_passed": true
+    },
+    "1024": {
+      "sha256": "221f9883276e76dd92ea4b51856622bb691a6b7ef32168b83315ab0a608f18ad",
+      "block_constant_kib": 1024,
+      "validation_passed": true
+    }
+  },
+  "runs": 800,
+  "measured_runs": 600,
+  "capacity_failures": {},
+  "padded_batch_bytes": {
+    "256": 150994944,
+    "1024": 301989888
+  }
+}

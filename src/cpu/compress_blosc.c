@@ -5,14 +5,12 @@
 #include <blosc.h>
 #include <stdatomic.h>
 
-// Real impl always succeeds for blosc ids. The stub overrides this to
-// return 1 with an error, providing build-time unavailability detection.
 int
 compress_blosc_validate(struct codec_config codec)
 {
   if (!codec_is_blosc(codec.id))
     return 1;
-  return 0;
+  return codec_config_validate_blosc(codec);
 }
 
 size_t
@@ -33,6 +31,7 @@ struct blosc_ctx
   const char* compname;
   int clevel;
   int doshuffle;
+  size_t block_bytes;
   _Atomic int err;
 };
 
@@ -51,7 +50,7 @@ blosc_one(size_t i, int tid, void* vctx)
                               c->dst + i * c->max_output_size,
                               c->max_output_size,
                               c->compname,
-                              0,  // blocksize (auto)
+                              c->block_bytes,
                               1); // numinternalthreads
   if (rc <= 0)
     atomic_store_explicit(&c->err, 1, memory_order_relaxed);
@@ -71,6 +70,8 @@ compress_blosc(struct codec_config codec,
                size_t bytes_per_element,
                struct threadpool* pool)
 {
+  if (compress_blosc_validate(codec))
+    return 1;
   struct blosc_ctx c = {
     .src = (const char*)src,
     .input_stride = input_stride,
@@ -83,6 +84,7 @@ compress_blosc(struct codec_config codec,
       codec.id == CODEC_BLOSC_LZ4 ? BLOSC_LZ4_COMPNAME : BLOSC_ZSTD_COMPNAME,
     .clevel = codec.level,
     .doshuffle = codec.shuffle,
+    .block_bytes = codec.blosc_block_bytes,
     .err = 0,
   };
   threadpool_for_n_dynamic(pool, batch_size, blosc_one, &c);

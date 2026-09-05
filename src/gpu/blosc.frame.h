@@ -8,7 +8,6 @@ enum
 {
   GPU_BLOSC_HEADER_BYTES = 16,
   GPU_BLOSC_MIN_COMPRESS_BYTES = 128,
-  GPU_BLOSC_BLOCK_BYTES = 16 * 1024,
 };
 
 #ifdef __cplusplus
@@ -16,14 +15,12 @@ extern "C"
 {
 #endif
 
-  // Assemble one Blosc frame per existing chunk. Blocks are contiguous spans
-  // of the chunk layout; filtered has the same per-chunk stride contract.
-  // The sizes from nvCOMP remain immutable while offsets and final chunk sizes
-  // are computed, then payloads are packed on the same stream.
+  // Encode one Blosc chunk per input chunk. Returns 0 on success.
   int gpu_blosc_pack_async(enum compression_codec codec,
                            enum codec_shuffle shuffle,
                            size_t typesize,
                            size_t chunk_bytes,
+                           size_t block_bytes,
                            const void* original,
                            size_t original_stride,
                            const void* filtered,

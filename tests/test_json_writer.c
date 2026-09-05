@@ -437,6 +437,44 @@ Fail:
   return 1;
 }
 
+static int
+test_blosc_block_metadata(void)
+{
+  struct dimension dims[1] = {
+    { .size = 65536, .chunk_size = 32768, .chunks_per_shard = 2, .name = "x" },
+  };
+  const uint64_t cps[] = { 2 };
+  struct strbuf sb = { 0 };
+  struct codec_config codec = {
+    .id = CODEC_BLOSC_ZSTD,
+    .level = 5,
+    .shuffle = CODEC_SHUFFLE_BIT,
+    .blosc_block_bytes = 4097,
+  };
+  CHECK(Fail,
+        zarr_array_json(&sb, 1, dims, dtype_u16, 0, cps, codec, NULL) == 0);
+  CHECK(Fail, strstr(strbuf_cstr(&sb), "\"blocksize\":4097"));
+  CHECK(Fail, strstr(strbuf_cstr(&sb), "\"typesize\":2"));
+  strbuf_free(&sb);
+  codec.blosc_block_bytes = 0;
+  CHECK(Fail,
+        zarr_array_json(&sb, 1, dims, dtype_u16, 0, cps, codec, NULL) != 0);
+  CHECK(Fail, strbuf_len(&sb) == 0);
+  codec.id = CODEC_BLOSC_LZ4;
+  codec.level = 0;
+  CHECK(Fail,
+        zarr_array_json(&sb, 1, dims, dtype_u16, 0, cps, codec, NULL) != 0);
+  // Non-Blosc codecs do not require this field.
+  codec.id = CODEC_ZSTD;
+  CHECK(Fail,
+        zarr_array_json(&sb, 1, dims, dtype_u16, 0, cps, codec, NULL) == 0);
+  strbuf_free(&sb);
+  return 0;
+Fail:
+  strbuf_free(&sb);
+  return 1;
+}
+
 int
 main(void)
 {
@@ -459,6 +497,7 @@ main(void)
     { "scale_clamped_dim", test_scale_clamped_dim },
     { "zarr_array_json_lz4", test_zarr_array_json_lz4 },
     { "zarr_array_json_zstd", test_zarr_array_json_zstd },
+    { "blosc_block_metadata", test_blosc_block_metadata },
   };
   for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
     int r = tests[i].fn();

@@ -32,7 +32,14 @@ extern "C"
                                 // Blosc: 0 = store only; on GPU, 1..9 are
                                 // accepted hints for nvCOMP's single mode.
     enum codec_shuffle shuffle; // blosc only
+    // Requested Blosc block size in bytes (128..715827542).
+    // Required for Blosc, including level 0; zero is invalid.
+    // Ignored by other codecs.
+    uint32_t blosc_block_bytes;
   };
+
+  // Validate backend-independent Blosc settings. Non-Blosc codecs return 0.
+  int codec_config_validate_blosc(struct codec_config config);
 
   int codec_is_blosc(enum compression_codec c);
 

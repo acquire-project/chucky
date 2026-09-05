@@ -10,24 +10,24 @@ concurrently. Small objects (e.g. `zarr.json` metadata) use a simple PUT.
 Unlike a local filesystem, S3 objects are immutable — you cannot seek,
 append, or partially overwrite them. A shard must be written as a single
 upload from start to finish. If the upload fails or is interrupted the
-object is not created (see [Error Handling](#error-handling) and
-[Bucket Lifecycle Policy](#bucket-lifecycle-policy)).
+object is not created (see [Error Handling][error-handling] and
+[Bucket Lifecycle Policy][bucket-lifecycle-policy]).
 
 S3 also imposes hard limits on multipart uploads: at most **10,000 parts**
 and a maximum part size of 5 GiB per [upload][s3-limits]. The sink
 rejects configurations that could exceed the part-count limit (see
-[Limitations](#limitations)).
+[Limitations][limitations]).
 
 ## Configuration
 
 The S3 transport is configured via `store_s3_config`, defined in
-[`store.h`](../src/store.h). The transport-specific fields are:
+[`store.h`][store-h]. The transport-specific fields are:
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `region` | *required* | AWS region (e.g. `"us-east-1"`) |
 | `endpoint` | *required* | S3-compatible endpoint URL (e.g. `"https://s3.us-east-1.amazonaws.com"` or `"http://localhost:9000"`) |
-| `part_size` | 8 MiB | [Multipart upload][mpu] part size (see [Limitations](#limitations)) |
+| `part_size` | 8 MiB | [Multipart upload][mpu] part size (see [Limitations][limitations]) |
 | `throughput_gbps` | 100.0 | Target throughput in gigabits/s for the CRT |
 | `max_retries` | 10 | Retry count per part |
 | `backoff_scale_ms` | 500 | Exponential backoff scale in ms |
@@ -277,3 +277,8 @@ store_destroy(store);
 [minio]: https://min.io/docs/minio/container/index.html
 [cred-chain]: https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
 [aws-crt]: https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
+
+[error-handling]: #error-handling
+[bucket-lifecycle-policy]: #bucket-lifecycle-policy
+[limitations]: #limitations
+[store-h]: ../src/store.h

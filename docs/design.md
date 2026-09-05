@@ -32,8 +32,8 @@ outermost (slowest-varying) dimension, the **append dimension**. We call this
 set of simultaneously live chunks an **epoch**. The pipeline processes one epoch
 at a time, flushes the completed chunks, and reuses the memory. This bounds
 the working set regardless of how long the stream runs. (The formal analysis
-is in [streaming.md](streaming.md); the mathematical details appear in the
-[Approach](#approach) section below.)
+is in [streaming.md][streaming-md]; the mathematical details appear in the
+[Approach][approach] section below.)
 
 During acquisition, scientists need to visualize incoming data in real time —
 zooming and panning across a dataset that may already be hundreds of gigabytes.
@@ -212,7 +212,7 @@ shards to align to page boundaries to support efficient I/O downstream.
 The permutation is another instance of the unravel/ravel pattern. Each chunk
 coordinate $t_d$ is unraveled into a shard index $s_d$ and within-shard
 position $w_d$ (using radix $p_d$), then the full coordinate vector is raveled
-with shard-major strides. See [sharding.md](sharding.md) for the derivation.
+with shard-major strides. See [sharding.md][sharding-md] for the derivation.
 
 ### Multiscale
 
@@ -717,14 +717,14 @@ return 0 and skip all padding overhead.
 regenerates OME-NGFF group metadata. Metadata is written at a configurable
 interval rather than every epoch.
 
-For the zarr shard binary format, see [sharding.md](sharding.md) and the
+For the zarr shard binary format, see [sharding.md][sharding-md] and the
 [zarr sharding codec specification][zarr-shard].
 
 ## Related documents
 
-- [streaming.md](streaming.md) — chunk lifetime analysis, FIFO proof, epoch
+- [streaming.md][streaming-md] — chunk lifetime analysis, FIFO proof, epoch
   derivation
-- [sharding.md](sharding.md) — chunk-to-shard lifting, aggregation kernel, zarr
+- [sharding.md][sharding-md] — chunk-to-shard lifting, aggregation kernel, zarr
   shard binary format
 
 ## Glossary
@@ -775,3 +775,7 @@ which is a **shard**.
 
 **Chunk pool.** A contiguous GPU buffer holding $K \times M_{\text{total}}$
 chunk slots (across all LOD levels), double-buffered.
+
+[streaming-md]: streaming.md
+[approach]: #approach
+[sharding-md]: sharding.md

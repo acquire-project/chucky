@@ -1,12 +1,12 @@
 # Chucky
 
-[![CI](https://github.com/acquire-project/chucky/actions/workflows/ci.yml/badge.svg)](https://github.com/acquire-project/chucky/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/acquire-project/chucky/graph/badge.svg)](https://codecov.io/gh/acquire-project/chucky)
+[![CI][ci-badge]][ci]
+[![codecov][codecov-badge]][codecov]
 
 A high-performance streaming library for tiled transformation and compression of
 large multidimensional arrays (tensors) using CUDA.
 
-[Benchmarks](https://acquire-project.github.io/chucky/)
+[Benchmarks][benchmarks]
 
 ## Overview
 
@@ -20,7 +20,7 @@ The pipeline stages are:
 
 1. **Tiling** — partition the input tensor into fixed-size chunks
 2. **Transpose** — scatter data so each chunk is contiguous in memory
-3. **Compression** — batch-compress chunks on the GPU (zstd or lz4 via nvcomp)
+3. **Compression** — batch-compress chunks on the GPU (Zstd, LZ4, or Blosc via nvCOMP)
 4. **Aggregation** — pack compressed chunks into shards with an index
 5. **Delivery** — D2H transfer and write shards to a Zarr v3 store
 
@@ -177,7 +177,8 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
 | `--fill` | `xor`, `zeros`, `thirds` | `xor` | Synthetic fill pattern for input data |
-| `--codec` | `none`, `lz4`, `zstd` | `zstd` | Compression codec |
+| `--codec` | `none`, `lz4`, `zstd`, `blosc-lz4`, `blosc-zstd` | `zstd` | Compression codec |
+| `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
@@ -190,17 +191,20 @@ The pipeline uses a four-stream CUDA model with double-buffered staging to
 overlap H2D transfer, GPU compute (scatter, compress, aggregate), and D2H
 delivery. Input arrives as contiguous byte spans via a `struct writer` interface;
 the library handles all tiling, padding, and shard assembly internally. See
-[docs/design.md](docs/design.md) for a detailed walkthrough, or
-[docs/guide.md](docs/guide.md) for a quick orientation to the module structure.
+[docs/design.md][docs-design-md] for a detailed walkthrough, or
+[docs/guide.md][docs-guide-md] for a quick orientation to the module structure.
 
 For writing directly to S3 (or S3-compatible stores), see the
-[S3 storage guide](docs/s3-guide.md).
+[S3 storage guide][s3-storage-guide].
 
+For Blosc, see the [binary format specification][blosc-format] and the
+[performance and GPU memory guide][blosc-performance], including measured
+Pareto frontiers and the proposed benchmark-sweep coverage.
 
 ## API
 
-The main entry points live in [`src/stream.gpu.h`](src/stream.gpu.h) (GPU) and
-[`src/stream.cpu.h`](src/stream.cpu.h) (CPU). Both backends expose the same
+The main entry points live in [`src/stream.gpu.h`][src-stream-gpu-h] (GPU) and
+[`src/stream.cpu.h`][src-stream-cpu-h] (CPU). Both backends expose the same
 `struct writer` interface for feeding data.
 
 ```c
@@ -229,8 +233,58 @@ uses CUDA streams + nvcomp; the CPU backend uses OpenMP + zstd/lz4.
 
 Configure the pipeline via `struct tile_stream_configuration` (codec, chunk
 dimensions, shard layout, LOD reduction method, etc.). See
-[`src/stream.gpu.h`](src/stream.gpu.h) or
-[`src/stream.cpu.h`](src/stream.cpu.h) for the full API.
+[`src/stream.gpu.h`][src-stream-gpu-h] or
+[`src/stream.cpu.h`][src-stream-cpu-h] for the full API.
+
+### Blosc configuration
+
+The [format specification][blosc-format] describes the encoded bytes.
+The [performance guide][blosc-performance] covers block-size selection,
+shuffle, GPU memory estimates, and benchmarking.
+
+Blosc requires an explicit block size on both CPU and GPU:
+
+```c
+config.codec = (struct codec_config){
+    .id = CODEC_BLOSC_ZSTD,       // or CODEC_BLOSC_LZ4
+    .level = 3,                  // 0 = store-only
+    .shuffle = CODEC_SHUFFLE_BIT, // or CODEC_SHUFFLE_BYTE / CODEC_SHUFFLE_NONE
+    .blosc_block_bytes = 16 * 1024,
+};
+```
+
+`blosc_block_bytes` is the requested uncompressed size of an internal Blosc
+block, independent of the multidimensional Zarr chunk shape. It is required
+even at level 0: zero is invalid, not an automatic/default selection. Values
+below 128 or above `(INT32_MAX - 255 * 4) / 3` are rejected instead of silently
+clamped; the GPU backend additionally checks nvCOMP's per-input size limit.
+Other codecs ignore this field.
+
+On GPU the block size is capped by the chunk size, with a shorter final block
+when needed. The encoder handles device alignment internally; callers simply append
+their bytes, and block sizes need not be aligned or powers of two. Aligned block
+sizes use the existing chunk layout directly; other sizes may require extra
+device scratch and a copy. Memory estimates include that scratch.
+
+On CPU the value is passed explicitly to `blosc_compress_ctx`. C-Blosc's
+[block splitting and element-alignment rules][block-splitting-and-element-alignment-rules]
+can adjust the resulting frame block size; the encoder does not request automatic
+selection or change global Blosc settings. GPU levels 1 through 9 all use
+nvCOMP's single compression mode, while CPU Blosc honors the requested level.
+
+Use the same codec configuration for the stream and its Zarr/NGFF sink. Zarr
+metadata records the requested `blocksize`; each Blosc frame records its actual
+block size. A GPU multiarray stream requires the same codec id and
+`blosc_block_bytes` for all arrays sharing its codec instance.
+
+Benchmarks require `--blosc-block-bytes` when a Blosc codec is selected:
+
+```sh
+./build/bench/bench_stream_orca2_single --backend gpu --codec blosc-zstd --blosc-block-bytes 16K
+```
+
+The existing sweep suite explicitly selects 16 KiB for its Blosc cases; this is
+a benchmark choice, not a codec API default.
 
 ## Status
 
@@ -244,3 +298,17 @@ I plan to use this as a future backbone for [acquire-zarr][acquire-zarr].
 [vcpkg]: https://vcpkg.io/
 [nvidia-cdi]: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html
 [acquire-zarr]: https://github.com/acquire-project/acquire-zarr
+
+[ci-badge]: https://github.com/acquire-project/chucky/actions/workflows/ci.yml/badge.svg
+[ci]: https://github.com/acquire-project/chucky/actions/workflows/ci.yml
+[codecov-badge]: https://codecov.io/gh/acquire-project/chucky/graph/badge.svg
+[codecov]: https://codecov.io/gh/acquire-project/chucky
+[benchmarks]: https://acquire-project.github.io/chucky/
+[docs-design-md]: docs/design.md
+[docs-guide-md]: docs/guide.md
+[s3-storage-guide]: docs/s3-guide.md
+[blosc-format]: docs/blosc-format.md
+[blosc-performance]: docs/blosc-performance.md
+[src-stream-gpu-h]: src/stream.gpu.h
+[src-stream-cpu-h]: src/stream.cpu.h
+[block-splitting-and-element-alignment-rules]: https://github.com/Blosc/c-blosc/blob/v1.21.6/blosc/blosc.c#L905-L997

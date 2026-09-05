@@ -56,7 +56,7 @@ compress_agg_destroy(struct compress_agg_stage* stage);
 int
 compress_agg_memory_estimate(const struct engine_limits* lim,
                              const struct computed_stream_layouts* cl,
-                             enum compression_codec codec_id,
+                             struct codec_config codec,
                              size_t* compressed_pool_bytes,
                              size_t* codec_bytes,
                              size_t* aggregate_device_bytes,

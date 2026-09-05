@@ -64,13 +64,11 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   const uint64_t M = lim->codec_batch;
 
   // Codec
-  CHECK(Fail,
-        codec_init_config(&stage->codec,
-                          codec,
-                          typesize,
-                          lim->chunk_bytes,
-                          M,
-                          lim->any_shuffle) == 0);
+  CHECK(
+    Fail,
+    codec_init_config(
+      &stage->codec, codec, typesize, lim->chunk_bytes, M, lim->any_shuffle) ==
+      0);
 
   stage->pool_epochs_stride = K;
   stage->pool_epochs_scratch =
@@ -337,7 +335,7 @@ compress_agg_destroy(struct compress_agg_stage* stage)
 int
 compress_agg_memory_estimate(const struct engine_limits* lim,
                              const struct computed_stream_layouts* cl,
-                             enum compression_codec codec_id,
+                             struct codec_config codec,
                              size_t* compressed_pool_bytes,
                              size_t* codec_bytes,
                              size_t* aggregate_device_bytes,
@@ -346,8 +344,8 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
   (void)cl;
   // d_compressed[2]; skipped for CODEC_NONE (kick aggregates from the pool).
   *compressed_pool_bytes = 0;
-  if (codec_id != CODEC_NONE) {
-    const size_t stride = codec_output_stride(codec_id, lim->chunk_bytes);
+  if (codec.id != CODEC_NONE) {
+    const size_t stride = codec_output_stride(codec.id, lim->chunk_bytes);
     CHECK(Error, stride > 0);
     CHECK_MUL_OVERFLOW(Error, lim->codec_batch, stride, SIZE_MAX);
     const size_t one_pool = (size_t)lim->codec_batch * stride;
@@ -356,7 +354,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
   }
 
   *codec_bytes = codec_device_bytes(
-    codec_id, lim->chunk_bytes, lim->codec_batch, lim->any_shuffle);
+    codec, lim->chunk_bytes, lim->codec_batch, lim->any_shuffle);
   CHECK(Error, *codec_bytes > 0);
 
   size_t dev = 0;

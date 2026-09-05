@@ -1,5 +1,11 @@
 # Benchmark sweeps and reports
 
+For Blosc measurements, memory accounting, and the proposed split between
+routine coverage and an opt-in block-size tuning matrix, see the
+[Blosc performance guide][blosc-performance-guide].
+The current runner has not yet adopted that matrix; its Blosc entries still
+use CPU and an explicit 16 KiB block request.
+
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
 files and writes a site with two pages. CI publishes it to GitHub Pages on every
@@ -18,7 +24,7 @@ when the open sweep leaves it nothing to choose.
 ## Running S3 benchmarks
 
 The S3 tier measures against
-[`s3-blackhole`](https://github.com/nclack/s3-blackhole), which consumes uploads
+[`s3-blackhole`][s3-blackhole], which consumes uploads
 and discards them so the result is limited by the producer rather than object
 storage. Start the benchmark server and wait for its health check:
 
@@ -45,7 +51,7 @@ Use `--backend gpu` for a GPU-only sweep, or omit `--backend` to run both
 backends.
 
 Inspect the server-side counters at
-http://127.0.0.1:9000/_s3_blackhole/stats, then stop the server with:
+[the statistics endpoint][s3-blackhole-stats], then stop the server with:
 
 ```sh
 docker compose stop s3-blackhole
@@ -71,7 +77,7 @@ given up by fixing it at four. Change it in `Dockerfile.s3-blackhole`.
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
-That writes the site and serves it at http://127.0.0.1:8000/index.html. Pass a
+That writes the site and serves it at [the local report URL][local-report]. Pass a
 port to `--serve` to use another one, or drop the flag to only write the files.
 Run the command again after you add or change a results file.
 
@@ -253,7 +259,8 @@ Each run records memory as an estimate and a measurement:
 | `memory_host_baseline_bytes` | resident memory before the stream was created |
 | `memory_host_peak_bytes` | most resident memory the process held during the run |
 | `memory_host_reading_failed` | true when either host reading was unavailable, since 0 is also a valid reading |
-| `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
+| `memory_device_used_bytes` | nonnegative device-memory delta before stream creation versus after the run with the stream alive; 0 on CPU |
+| `memory_device_overhead_bytes` | signed device-memory delta minus estimated device allocations; null on CPU or when readings or the estimate are unavailable |
 | `memory_measured_bytes` | the figure to hold the estimate against: device memory on GPU, the host difference on CPU |
 
 Compare `memory_measured_bytes` against the estimate. On the CPU it also
@@ -261,6 +268,14 @@ carries the benchmark's own source block, which is allocated after the baseline
 is taken and reaches 64 MiB — more than a small stream's whole estimate — so
 subtract that before reading the two as a ratio. The device figure does not
 carry the block.
+
+The GPU overhead field is an observation, not a separate allocation estimate or
+a sampled peak. It includes runtime/library residency changes and allocation
+granularity, and can be affected by other GPU users. The CUDA context exists
+before the baseline, so its initial cost is excluded. Negative values are
+retained, not clamped: they can reveal overestimation or unrelated memory being
+freed. Archived results without this field remain unknown. The report shows it
+alongside the estimate and measurement; no separate memory benchmark is needed.
 
 ## Schema changes
 
@@ -310,3 +325,8 @@ bump it.
 - **2** — `kick_sync_ms` and `kick_sync_count` retired. Stage `lod_dim0_fold`
   renamed to `lod_append_fold`.
 - **1** — Predates this rule; not a single shape.
+
+[blosc-performance-guide]: ../../docs/blosc-performance.md#incorporating-blosc-into-the-regular-sweeps
+[s3-blackhole]: https://github.com/nclack/s3-blackhole
+[s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
+[local-report]: http://127.0.0.1:8000/index.html

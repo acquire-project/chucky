@@ -1,6 +1,6 @@
 # Formats guide
 
-Chucky writes zarr v3 sharded arrays with optional OME-NGFF and HCS metadata.
+The encoder writes zarr v3 sharded arrays with optional OME-NGFF and HCS metadata.
 The format layers compose — each builds on the one below it.
 
 ## Architecture
@@ -128,17 +128,27 @@ struct store* store = store_s3_create(&s3cfg);
 
 ### GPU Blosc
 
+The [Blosc binary specification][blosc-format] defines the serialized
+representation, flags, blocks, filters, and CPU/GPU compatibility boundary.
+The [performance guide][blosc-performance] covers tuning and memory sizing.
+
 `CODEC_BLOSC_LZ4` and `CODEC_BLOSC_ZSTD` produce C-Blosc 1.x compatible
 chunks with no shuffle, byte shuffle, or bitshuffle. The GPU encoder divides
-each Zarr chunk into 16 KiB Blosc blocks, with a shorter final block when
-needed. This internal block size is independent of Zarr chunk and shard sizes.
-Zarr metadata uses `blocksize: 0` (encoder chosen); each binary Blosc header
-records the actual block size.
+each Zarr chunk into blocks requested by `codec_config.blosc_block_bytes`,
+capped by the chunk size, with a shorter final block when needed. This field
+must be set explicitly (zero is invalid, including at level 0) and is
+independent of Zarr chunk and shard sizes. Zarr metadata records the requested
+`blocksize`; each binary Blosc header records the actual block size. See the
+[Blosc configuration API][blosc-configuration] for validation and
+CPU behavior.
 
 The existing multidimensional scatter and LOD layouts already place each
 chunk's contents contiguously. The codec addresses blocks as spans of those
 contents, applies filters within each block, and batches the spans through
-nvCOMP. A per-chunk CUB scan computes the block record offsets, then a gather
+nvCOMP. When block boundaries need device alignment, internal scratch pads
+the spans without changing their logical sizes. There is no alignment
+requirement on the caller's append buffer or block-size choice.
+A per-chunk CUB scan computes the block record offsets, then a gather
 packs the records into the existing fixed-stride output slots. Aggregation,
 shard ordering, and delivery continue to operate on complete encoded chunks.
 
@@ -153,8 +163,9 @@ Each chunk remains bounded by `nbytes + 16` encoded bytes and Blosc's signed
 32-bit frame limit. Raw nvCOMP block output uses a separate aligned scratch
 pool sized to nvCOMP's worst-case bound. The GPU memory estimate includes
 that pool, block size/offset/pointer arrays, compressor workspace, and any
-shuffle scratch. Array switches update active block counts and filter state
-within the reserved capacity.
+shuffle and input-alignment scratch. Array switches update active block counts
+and filter state within the reserved capacity; arrays sharing a GPU codec must
+use the same `blosc_block_bytes`.
 
 ### Store
 
@@ -232,3 +243,7 @@ plate.zarr/
 | `zarr.h` | Zarr v3 array + group write |
 | `ngff.h` | NGFF multiscale + axis types |
 | `hcs.h` | HCS plate/well/FOV hierarchy + metadata |
+
+[blosc-format]: blosc-format.md
+[blosc-performance]: blosc-performance.md
+[blosc-configuration]: ../README.md#blosc-configuration

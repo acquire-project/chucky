@@ -431,6 +431,10 @@ function memoryLine(r) {
   if (r.memory_measured_bytes) {
     parts.push(`${gib(r.memory_measured_bytes)} GiB measured`);
   }
+  if (r.memory_device_overhead_bytes != null) {
+    const mib = r.memory_device_overhead_bytes / (1024 ** 2);
+    parts.push(`${mib >= 0 ? "+" : ""}${mib.toFixed(1)} MiB observed overhead`);
+  }
   return parts.length ? "memory: " + parts.join(", ") : "";
 }
 

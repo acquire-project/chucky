@@ -64,6 +64,8 @@ zarr_array_json(struct strbuf* sb,
                 struct codec_config codec,
                 const struct attr_set* extras)
 {
+  if (codec_config_validate_blosc(codec))
+    return 1;
   struct json_writer jw;
   jw_init(&jw, sb);
 
@@ -164,7 +166,7 @@ zarr_array_json(struct strbuf* sb,
       jw_key(&jw, "typesize");
       jw_int(&jw, (int64_t)dtype_bpe(data_type));
       jw_key(&jw, "blocksize");
-      jw_int(&jw, 0);
+      jw_uint(&jw, codec.blosc_block_bytes);
     }
     jw_object_end(&jw);
     jw_object_end(&jw);

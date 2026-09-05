@@ -148,7 +148,12 @@ Both return a `struct writer*` via `_writer()` — downstream code is identical.
 
 ## Further reading
 
-- [docs/design.md](design.md) — full design walkthrough (problem, pipeline, memory model, API)
-- [docs/streaming.md](streaming.md) — chunk lifetime math and ring-buffer proof
-- [docs/sharding.md](sharding.md) — shard layout and index format
-- [docs/s3-guide.md](s3-guide.md) — S3 storage backend setup
+- [docs/design.md][docs-design-md] — full design walkthrough (problem, pipeline, memory model, API)
+- [docs/streaming.md][docs-streaming-md] — chunk lifetime math and ring-buffer proof
+- [docs/sharding.md][docs-sharding-md] — shard layout and index format
+- [docs/s3-guide.md][docs-s3-guide-md] — S3 storage backend setup
+
+[docs-design-md]: design.md
+[docs-streaming-md]: streaming.md
+[docs-sharding-md]: sharding.md
+[docs-s3-guide-md]: s3-guide.md

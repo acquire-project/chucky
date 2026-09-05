@@ -422,6 +422,13 @@ multiarray_tile_stream_gpu_create(
       log_error("GPU multiarray: all arrays must use the same codec");
       goto Fail;
     }
+    if (codec_is_blosc(configs[0].codec.id) &&
+        configs[a].codec.blosc_block_bytes !=
+          configs[0].codec.blosc_block_bytes) {
+      log_error(
+        "GPU multiarray: all arrays must use the same blosc_block_bytes");
+      goto Fail;
+    }
   }
 
   // Label scatter as "Copy" only when every array uses multiscale (matches

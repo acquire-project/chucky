@@ -150,6 +150,8 @@ class RunSpec(BaseModel):
         }
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
+        if self.codec.startswith("blosc-"):
+            d["blosc_block_bytes"] = 16 * 1024
         return d
 
 
@@ -385,6 +387,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--frames", str(spec.frames),
         "--json",
     ]
+    if spec.codec.startswith("blosc-"):
+        cmd.extend(["--blosc-block-bytes", "16K"])
 
     tmpdir = None
     if spec.sink == "fs":

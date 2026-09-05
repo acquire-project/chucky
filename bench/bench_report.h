@@ -28,9 +28,17 @@ struct bench_memory
   // A reading of 0 is valid, so it cannot signal failure.
   int host_reading_failed;
   uint64_t device_used_bytes; // GPU: free device memory the stream took
+  int device_overhead_valid;
+  int64_t device_overhead_bytes; // observed device delta minus estimate
   // Device memory on GPU, the host difference on CPU. 0 if unavailable.
   uint64_t measured_bytes;
 };
+
+// Zero free-memory readings are unavailable.
+void
+bench_memory_record_device(struct bench_memory* mem,
+                           uint64_t free_before,
+                           uint64_t free_after);
 
 void
 print_memory_report(const struct bench_memory* mem);
@@ -75,6 +83,7 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       const struct stream_metric* sink_metric,
                       const struct tile_stream_layout* layout,
                       enum dtype dtype,
+                      struct codec_config codec,
                       const struct sink_stats* ss,
                       size_t total_bytes,
                       size_t total_elements,
