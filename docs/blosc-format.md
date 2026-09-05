@@ -76,11 +76,11 @@ Octet     0          1          2          3
        +----------+----------+----------+----------+
        | version  |versionlz |  flags   | typesize |
        +----------+----------+----------+----------+
-       |               nbytes (i32le)             |  4..7
+       |               nbytes (i32le)              |  4..7
        +-------------------------------------------+
-       |              blocksize (i32le)           |  8..11
+       |              blocksize (i32le)            |  8..11
        +-------------------------------------------+
-       |               cbytes (i32le)             | 12..15
+       |               cbytes (i32le)              | 12..15
        +-------------------------------------------+
 ```
 
@@ -179,7 +179,7 @@ Each GPU block has exactly one stream:
 
 ```text
        +----------------+--------------------------------+
-       | csize: i32le   | payload: csize octets            |
+       | csize: i32le   | payload: csize octets          |
        +----------------+--------------------------------+
 ```
 
@@ -212,7 +212,7 @@ length prefix begins at an unaligned address.
 For LZ4, each compressed payload is an independent
 [LZ4 block][lz4-block-format], not an
 LZ4 frame. Its uncompressed length comes from `U[i]`; it MUST NOT require a
-dictionary or history from another block.
+A dictionary or a history from another block.
 
 For Zstandard, each compressed payload is an independent Zstandard frame as
 specified by [RFC 8878][rfc8878]. It MUST NOT
@@ -229,7 +229,7 @@ When `DONT_SPLIT` is clear, a full block is divided into `typesize` consecutive
 streams of equal uncompressed length, `blocksize / typesize`. A shorter final
 block remains one stream. Each stream has its own `csize` and payload; the
 equal-length raw marker applies to that stream's uncompressed length.
-The decoded streams are concatenated before inverse filtering of the block.
+The decoded streams are concatenated before the block is inverse-filtered.
 The offset table, rather than assumed physical ordering, identifies blocks.
 
 C-Blosc may adjust the requested block size for splitting or element alignment
@@ -293,7 +293,7 @@ honors the level. Neither reader needs a compression level to decode the bytes.
 
 ## 8. Decoder Validation and Security Considerations
 
-A reader SHOULD enforce application-specific uncompressed-size and resource
+A reader SHOULD enforce application-specific uncompressed size and resource
 limits before allocating memory. A small encoded object may describe a much
 larger uncompressed chunk.
 
