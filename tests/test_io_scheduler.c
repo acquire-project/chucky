@@ -352,7 +352,6 @@ test_file_barriers(void)
                           (struct io_request){
                             .op = IO_OP_OPEN,
                             .file = file,
-                            .path = "shard",
                           }) == 0);
   CHECK(Cleanup, wait_for_started(&fake, 1, WAIT_MS) == 0);
   CHECK(Cleanup,
@@ -422,7 +421,6 @@ test_file_opens_overlap(void)
                             (struct io_request){
                               .op = IO_OP_OPEN,
                               .file = file,
-                              .path = "shard",
                             }) == 0);
     CHECK(Cleanup, io_scheduler_post(scheduler, file_write(i + 1, i)) == 0);
   }

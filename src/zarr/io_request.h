@@ -29,9 +29,6 @@ struct io_request
 
   struct io_file_token file;
 
-  const char* path;
-  int open_flags;
-
   const void* payload;
   uint64_t nbytes;
   uint64_t offset;

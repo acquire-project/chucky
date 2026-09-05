@@ -10,6 +10,8 @@
 struct io_scheduler;
 struct io_scheduler_limits;
 
+// Handles belong to current slots or unfinished closes, bounding their count
+// by nslots plus the scheduler's max_requests (1024 by default).
 struct shard_pool*
 shard_pool_fs_create(const char* root, uint64_t nslots, int unbuffered);
 

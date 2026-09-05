@@ -210,6 +210,7 @@ static struct shard_writer*
 pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
   CHECK(Fail, slot < p->nslots);
 
   struct fs_slot* w = &p->slots[slot];
@@ -217,38 +218,25 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   if (w->token.generation != 0)
     CHECK(Fail, fs_slot_finalize(&w->base) == 0);
 
-  struct strbuf path = { 0 };
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
 
-  const size_t path_bytes = strbuf_len(&path) + 1;
-  char* owned_path = (char*)malloc(path_bytes);
-  CHECK(Fail, owned_path);
-  memcpy(owned_path, strbuf_cstr(&path), path_bytes);
-
-  const struct io_file_token token = io_backend_fs_reserve_file(p->backend);
-  CHECK(Fail_path, token.generation != 0);
+  const struct io_file_token token =
+    io_backend_fs_reserve_file(p->backend,
+                               strbuf_cstr(&path),
+                               p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0);
+  CHECK(Fail, token.generation != 0);
 
   if (io_scheduler_post(
-        p->queue,
-        (struct io_request){
-          .op = IO_OP_OPEN,
-          .file = token,
-          .path = owned_path,
-          .open_flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0,
-          .owned = owned_path,
-          .owned_free = free,
-        })) {
+        p->queue, (struct io_request){ .op = IO_OP_OPEN, .file = token })) {
     io_backend_fs_cancel_file(p->backend, token);
-    goto Fail_path;
+    goto Fail;
   }
 
   w->token = token;
   strbuf_free(&path);
   return &w->base;
 
-Fail_path:
-  free(owned_path);
 Fail:
   strbuf_free(&path);
   return NULL;
