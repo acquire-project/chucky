@@ -88,8 +88,7 @@ block_offsets_kernel(const size_t* block_sizes,
 __global__ static void
 pack_blocks_kernel(const uint8_t* original,
                    size_t original_stride,
-                   const uint8_t* filtered,
-                   size_t filtered_stride,
+                   const void* const* inputs,
                    const uint8_t* block_data,
                    size_t block_stride,
                    const size_t* block_sizes,
@@ -118,8 +117,7 @@ pack_blocks_kernel(const uint8_t* original,
     const size_t compressed = block_sizes[i];
     const bool raw = compressed == 0 || compressed >= nbytes;
     payload = raw ? nbytes : compressed;
-    src = raw ? filtered + chunk * filtered_stride + block_offset
-              : block_data + i * block_stride;
+    src = raw ? (const uint8_t*)inputs[i] : block_data + i * block_stride;
     const size_t offset = block_offsets[i];
     if (threadIdx.x == 0) {
       put_u32le(frame + GPU_BLOSC_HEADER_BYTES + block * sizeof(uint32_t),
@@ -135,7 +133,6 @@ pack_blocks_kernel(const uint8_t* original,
 extern "C" int
 gpu_blosc_pack_async(struct gpu_blosc_frame_layout layout,
                      struct gpu_blosc_input original,
-                     struct gpu_blosc_input filtered,
                      struct gpu_blosc_blocks blocks,
                      struct gpu_blosc_output encoded,
                      size_t batch_size,
@@ -166,8 +163,7 @@ gpu_blosc_pack_async(struct gpu_blosc_frame_layout layout,
     pack_blocks_kernel<<<batch_size * blocks_per_chunk, 256, 0, cuda_stream>>>(
       (const uint8_t*)original.data,
       original.stride,
-      (const uint8_t*)filtered.data,
-      filtered.stride,
+      blocks.inputs,
       (const uint8_t*)blocks.data,
       blocks.stride,
       blocks.sizes,

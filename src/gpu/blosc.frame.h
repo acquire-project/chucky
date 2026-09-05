@@ -32,6 +32,7 @@ extern "C"
 
   struct gpu_blosc_blocks
   {
+    const void* const* inputs; // same prepared block pointers used by nvCOMP
     const void* data;
     size_t stride;
     const size_t* sizes;
@@ -49,7 +50,6 @@ extern "C"
   // describes active geometry, independent of the buffers' allocation capacity.
   int gpu_blosc_pack_async(struct gpu_blosc_frame_layout layout,
                            struct gpu_blosc_input original,
-                           struct gpu_blosc_input filtered,
                            struct gpu_blosc_blocks blocks,
                            struct gpu_blosc_output encoded,
                            size_t batch_size,

@@ -163,7 +163,8 @@ Each chunk remains bounded by `nbytes + 16` encoded bytes and Blosc's signed
 32-bit frame limit. Raw nvCOMP block output uses a separate aligned scratch
 pool sized to nvCOMP's worst-case bound. The GPU memory estimate includes
 that pool, block size/offset/pointer arrays, compressor workspace, and any
-shuffle and input-alignment scratch. Array switches update active block counts
+prepared-input storage shared by shuffle and alignment. Compression and raw-block
+fallback read the same block pointers. Array switches update active block counts
 and filter state within the reserved capacity; arrays sharing a GPU codec must
 use the same `blosc_block_bytes`.
 

@@ -579,6 +579,18 @@ test_rebind_and_rejection(void)
   rebound.blosc_block_bytes = 65536;
   CHECK(Fail, codec_bind(&c, rebound, 8, 4096, stream) != 0);
   CHECK(Fail, run_rebound_case(&c, initial, 2, 65536, 3, stream) == 0);
+  codec_free(&c);
+  // Odd blocks reserve preparation storage for alignment alone. Reuse it for
+  // either filter, shrink to a single block, then return to the full batch.
+  initial.blosc_block_bytes = 4097;
+  CHECK(Fail, codec_init_config(&c, initial, 2, 32775, 3, 0) == 0);
+  CHECK(Fail, run_rebound_case(&c, initial, 2, 32775, 3, stream) == 0);
+  rebound = initial;
+  rebound.shuffle = CODEC_SHUFFLE_BYTE;
+  CHECK(Fail, run_rebound_case(&c, rebound, 3, 32775, 2, stream) == 0);
+  rebound.shuffle = CODEC_SHUFFLE_BIT;
+  CHECK(Fail, run_rebound_case(&c, rebound, 8, 4096, 1, stream) == 0);
+  CHECK(Fail, run_rebound_case(&c, initial, 2, 32775, 3, stream) == 0);
   result = 0;
 
 Fail:
@@ -618,9 +630,8 @@ test_codec_allocation_estimate(void)
                 codec_init_config(&c, config, 2, chunk_bytes, batch, reserve) ==
                   0);
           const void* allocations[] = {
-            c.d_comp_sizes,  c.d_uncomp_sizes, c.d_ptrs,
-            c.d_block_input, c.d_block_sizes,  c.d_block_offsets,
-            c.d_block_data,  c.d_temp,         c.d_shuffle,
+            c.d_comp_sizes,  c.d_uncomp_sizes,  c.d_ptrs,       c.d_block_input,
+            c.d_block_sizes, c.d_block_offsets, c.d_block_data, c.d_temp,
           };
           size_t allocated = 0;
           for (size_t i = 0; i < countof(allocations); ++i) {
@@ -760,12 +771,16 @@ bitshuffle_reference(const uint8_t* src,
 }
 
 static int
-run_shuffle_filter_case(enum codec_shuffle shuffle,
-                        size_t typesize,
-                        size_t chunk_bytes)
+run_prepare_case(enum codec_shuffle shuffle,
+                 size_t typesize,
+                 size_t chunk_bytes,
+                 size_t block_bytes)
 {
-  const size_t batch = 1;
-  const size_t stride = align_up(chunk_bytes, 64);
+  const size_t batch = 2;
+  const size_t input_stride = align_up(chunk_bytes, 64);
+  const size_t block_stride = align_up(block_bytes, 64) + 64;
+  const size_t blocks = (chunk_bytes + block_bytes - 1) / block_bytes;
+  const size_t output_bytes = batch * blocks * block_stride;
   uint8_t* input = NULL;
   uint8_t* expected = NULL;
   uint8_t* actual = NULL;
@@ -774,48 +789,50 @@ run_shuffle_filter_case(enum codec_shuffle shuffle,
   CUstream stream = 0;
   int result = 1;
 
-  input = (uint8_t*)calloc(batch, stride);
-  expected = (uint8_t*)calloc(batch, stride);
-  actual = (uint8_t*)calloc(batch, stride);
+  input = (uint8_t*)calloc(batch, input_stride);
+  expected = (uint8_t*)malloc(output_bytes);
+  actual = (uint8_t*)malloc(output_bytes);
   CHECK(Fail, input && expected && actual);
+  memset(expected, 0xa5, output_bytes);
   for (size_t chunk = 0; chunk < batch; ++chunk) {
     for (size_t i = 0; i < chunk_bytes; ++i)
-      input[chunk * stride + i] = (uint8_t)(i + 17 * chunk);
-    if (shuffle == CODEC_SHUFFLE_BIT)
-      bitshuffle_reference(input + chunk * stride,
-                           expected + chunk * stride,
-                           chunk_bytes,
-                           typesize);
-    else
-      byte_shuffle_reference(input + chunk * stride,
-                             expected + chunk * stride,
-                             chunk_bytes,
-                             typesize);
+      input[chunk * input_stride + i] = (uint8_t)(i + 17 * chunk);
+    for (size_t block = 0; block < blocks; ++block) {
+      const size_t offset = block * block_bytes;
+      const size_t bytes =
+        chunk_bytes - offset < block_bytes ? chunk_bytes - offset : block_bytes;
+      const uint8_t* src = input + chunk * input_stride + offset;
+      uint8_t* dst = expected + (chunk * blocks + block) * block_stride;
+      if (shuffle == CODEC_SHUFFLE_BIT)
+        bitshuffle_reference(src, dst, bytes, typesize);
+      else if (shuffle == CODEC_SHUFFLE_BYTE)
+        byte_shuffle_reference(src, dst, bytes, typesize);
+      else
+        memcpy(dst, src, bytes);
+    }
   }
 
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuMemAlloc(&d_input, batch * stride));
-  CU(Fail, cuMemAlloc(&d_output, batch * stride));
-  CU(Fail, cuMemcpyHtoD(d_input, input, batch * stride));
+  CU(Fail, cuMemAlloc(&d_input, batch * input_stride));
+  CU(Fail, cuMemAlloc(&d_output, output_bytes));
+  CU(Fail, cuMemcpyHtoD(d_input, input, batch * input_stride));
   CU(Fail, cuStreamSynchronize(NULL));
-  CHECK(Fail,
-        gpu_blosc_filter_blocks_async(shuffle,
-                                      (const void*)(uintptr_t)d_input,
-                                      stride,
-                                      (void*)(uintptr_t)d_output,
-                                      stride,
-                                      chunk_bytes,
-                                      chunk_bytes,
-                                      typesize,
-                                      batch,
-                                      stream) == 0);
+  CU(Fail, cuMemsetD8Async(d_output, 0xa5, output_bytes, stream));
+  CHECK(
+    Fail,
+    gpu_blosc_prepare_blocks_async(
+      (struct gpu_blosc_frame_layout){
+        CODEC_BLOSC_LZ4, shuffle, typesize, chunk_bytes, block_bytes },
+      (struct gpu_blosc_input){ (const void*)(uintptr_t)d_input, input_stride },
+      (void*)(uintptr_t)d_output,
+      block_stride,
+      batch,
+      stream) == 0);
   CU(Fail, cuStreamSynchronize(stream));
-  CU(Fail, cuMemcpyDtoH(actual, d_output, batch * stride));
-  for (size_t chunk = 0; chunk < batch; ++chunk)
-    CHECK(Fail,
-          memcmp(actual + chunk * stride,
-                 expected + chunk * stride,
-                 chunk_bytes) == 0);
+  CU(Fail, cuMemcpyDtoH(actual, d_output, output_bytes));
+  // Include padding and the partial final slot: preparation must only write
+  // each block's logical bytes, even when the retained stride is larger.
+  CHECK(Fail, memcmp(actual, expected, output_bytes) == 0);
   result = 0;
 
 Fail:
@@ -844,15 +861,24 @@ test_shuffle_filters(void)
   bitshuffle_reference(input, actual, sizeof(input), 2);
   CHECK(Fail, memcmp(actual, golden, sizeof(golden)) == 0);
 
-  const size_t typesizes[] = { 1, 2, 4, 8 };
-  for (size_t i = 0; i < countof(typesizes); ++i)
+  const size_t typesizes[] = { 1, 2, 3, 4, 8 };
+  const size_t block_sizes[] = { 128, 129, 4097 };
+  for (size_t i = 0; i < countof(typesizes); ++i) {
+    const size_t bytes = 16 * typesizes[i] + typesizes[i] - 1;
     CHECK(Fail,
-          run_shuffle_filter_case(CODEC_SHUFFLE_BIT,
-                                  typesizes[i],
-                                  16 * typesizes[i] + typesizes[i] - 1) == 0);
-  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BIT, 8, 65539) == 0);
-  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BIT, 4, 17 * 4 + 3) == 0);
-  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BYTE, 8, 65539) == 0);
+          run_prepare_case(CODEC_SHUFFLE_BIT, typesizes[i], bytes, bytes) == 0);
+    for (int shuffle = CODEC_SHUFFLE_NONE; shuffle <= CODEC_SHUFFLE_BIT;
+         ++shuffle)
+      for (size_t b = 0; b < countof(block_sizes); ++b)
+        CHECK(Fail,
+              run_prepare_case((enum codec_shuffle)shuffle,
+                               typesizes[i],
+                               3 * block_sizes[b] + 19,
+                               block_sizes[b]) == 0);
+  }
+  CHECK(Fail, run_prepare_case(CODEC_SHUFFLE_BIT, 8, 65539, 65539) == 0);
+  CHECK(Fail, run_prepare_case(CODEC_SHUFFLE_BIT, 4, 71, 71) == 0);
+  CHECK(Fail, run_prepare_case(CODEC_SHUFFLE_BYTE, 8, 65539, 65539) == 0);
   return 0;
 
 Fail:
@@ -933,6 +959,8 @@ test_frame_boundary(void)
   size_t actual_block_sizes[BATCH];
   size_t sizes[BATCH];
   CUdeviceptr d_input = 0;
+  CUdeviceptr d_inputs = 0;
+  const void* inputs[BATCH];
   CUdeviceptr d_block_data = 0;
   CUdeviceptr d_block_sizes = 0;
   CUdeviceptr d_block_offsets = 0;
@@ -945,6 +973,10 @@ test_frame_boundary(void)
   memset(block_data, 0xa5, sizeof(block_data));
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuMemAlloc(&d_input, sizeof(input)));
+  CU(Fail, cuMemAlloc(&d_inputs, sizeof(inputs)));
+  for (size_t i = 0; i < BATCH; ++i)
+    inputs[i] = (const void*)(uintptr_t)(d_input + i * CHUNK_BYTES);
+  CU(Fail, cuMemcpyHtoD(d_inputs, inputs, sizeof(inputs)));
   CU(Fail, cuMemAlloc(&d_block_data, sizeof(block_data)));
   CU(Fail, cuMemAlloc(&d_block_sizes, sizeof(block_sizes)));
   CU(Fail, cuMemAlloc(&d_block_offsets, sizeof(block_sizes)));
@@ -961,8 +993,8 @@ test_frame_boundary(void)
       (struct gpu_blosc_frame_layout){
         CODEC_BLOSC_LZ4, CODEC_SHUFFLE_NONE, 1, CHUNK_BYTES, CHUNK_BYTES },
       (struct gpu_blosc_input){ (const void*)(uintptr_t)d_input, CHUNK_BYTES },
-      (struct gpu_blosc_input){ (const void*)(uintptr_t)d_input, CHUNK_BYTES },
-      (struct gpu_blosc_blocks){ (const void*)(uintptr_t)d_block_data,
+      (struct gpu_blosc_blocks){ (const void* const*)(uintptr_t)d_inputs,
+                                 (const void*)(uintptr_t)d_block_data,
                                  STRIDE,
                                  (const size_t*)(uintptr_t)d_block_sizes,
                                  (size_t*)(uintptr_t)d_block_offsets },
@@ -999,6 +1031,7 @@ test_frame_boundary(void)
   result = 0;
 
 Fail:
+  cu_mem_free(d_inputs);
   cu_mem_free(d_input);
   cu_mem_free(d_block_data);
   cu_mem_free(d_block_sizes);

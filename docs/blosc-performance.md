@@ -143,8 +143,7 @@ slots. Its allocation accounting includes:
 | Raw compressed-block scratch | `P` aligned worst-case codec-output slots; includes capacity for the shorter final block |
 | Block sizes, offsets, and input/output pointers | Linear in `P`; on this 64-bit build, 40 bytes per block plus 8 bytes per chunk |
 | nvCOMP workspace | Queried for `P` inputs, maximum input `B`, and total uncompressed bytes `Q*C`; codec/version dependent |
-| Shuffle storage | One aligned input-sized batch when reserved; byte and bit shuffle reserve the same amount |
-| Input-alignment scratch | Present when internal block starts need padding; approximately another batch for ordinary multi-block layouts |
+| Prepared input blocks | `P * align_up(B, input_alignment)` when shuffle storage is reserved or internal block starts need alignment; one buffer serves both purposes |
 
 The estimator also includes the stream's staging, original chunk pools,
 aggregation, and LOD allocations. These are separate from the codec-owned
@@ -153,7 +152,12 @@ scratch. Pinned host memory is reported separately from device memory.
 The encoder owns alignment handling. Callers do not align append buffers or change
 their data layout. Odd block sizes are valid, but can require extra scratch:
 for 64 chunks of 1 MiB each, 4097-byte blocks require 64.0625 MiB of aligned
-input scratch with this nvCOMP build; 4096-byte blocks require none.
+input scratch with this nvCOMP build. Without shuffle reservation, 4096-byte
+blocks require none. With shuffle reservation, either size uses the prepared
+block buffer; odd blocks no longer need an additional chunk-shuffle buffer.
+Filtering writes directly to aligned block slots, and both nvCOMP and raw-block
+fallback read the same prepared pointers. Aligned, unfiltered input bypasses
+preparation. Whole-frame fallback always reads the original chunk.
 
 Allocation sizes are computable from the configuration. Only the vendor's
 workspace requirements and output bounds need nvCOMP sizing queries; these do
@@ -161,7 +165,8 @@ not require compression or allocating the codec buffers. There is no reason to
 benchmark compression to produce a memory-versus-block-size table.
 
 The [generated memory tables][memory-estimates]
-use the estimator results already recorded by the throughput sweep. The
+use the estimator results already recorded by the throughput sweep, before
+shuffle and alignment storage were unified. They remain historical results. The
 generator checks that estimates agree across the two fills. For 1 MiB chunks,
 288 MiB of padded input per batch, and bitshuffle:
 

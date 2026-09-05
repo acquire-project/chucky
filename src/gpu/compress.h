@@ -18,16 +18,14 @@ extern "C"
     size_t chunk_bytes;     // active uncompressed bytes per chunk
     size_t chunk_capacity;  // largest input size accepted by this instance
     size_t typesize;        // active Blosc element size
-    size_t shuffle_stride;  // aligned per-chunk scratch stride
-    int has_shuffle_scratch;
-    size_t batch_size; // number of chunks
+    size_t batch_size;      // number of chunks
 
     size_t block_bytes;
     size_t blocks_per_chunk;
     size_t block_capacity; // maximum flattened chunk/block count
     size_t block_output_stride;
     size_t block_input_stride;
-    void* d_block_input;
+    void* d_block_input;     // optional aligned, filtered block slots
     void* d_block_data;      // aligned raw nvCOMP block destinations
     size_t* d_block_sizes;   // raw nvCOMP output sizes
     size_t* d_block_offsets; // per-block record offsets within each frame
@@ -38,7 +36,6 @@ extern "C"
     void** d_ptrs;          // twice the nvCOMP input count
     void* d_temp;           // workspace
     size_t temp_bytes;      // workspace size
-    void* d_shuffle;        // Blosc byte/bit-shuffle batch scratch
   };
 
   // Alignment required of every uncompressed chunk handed to the codec.
