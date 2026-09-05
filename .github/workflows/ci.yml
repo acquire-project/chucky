@@ -13,6 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sweep-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test sweep identities, resume, and reports
+        run: |
+          uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
+          node --test scripts/sweep/test_reports.mjs
+
   cpu-tests:
     runs-on: ubuntu-latest
     steps:

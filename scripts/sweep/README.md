@@ -5,6 +5,10 @@ routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
 The current runner has not yet adopted that matrix; its Blosc entries still
 use CPU and an explicit 16 KiB block request.
+Blosc run identities include the requested block size. Resume checks and report
+comparisons distinguish each explicit size from historical runs with an
+unrecorded size; those remain **unknown**, not an assumed default. Both report
+pages offer a Blosc block-request selector.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
@@ -20,6 +24,15 @@ sweep in `explore.html`.
 The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
+
+## Tests
+
+The runner and report regression tests do not require a GPU or benchmark build:
+
+```sh
+uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
+node --test scripts/sweep/test_reports.mjs
+```
 
 ## Running S3 benchmarks
 
@@ -88,6 +101,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `site.css` | the palette and the title bar, linked by both pages |
 | `theme.js` | light or dark, applied before either page paints |
 | `decode.js` | unpacks the columns, imported by both pages |
+| `blosc.js` | Blosc block-request selections and labels for both pages |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |

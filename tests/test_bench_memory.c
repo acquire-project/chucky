@@ -1,4 +1,4 @@
-#include "bench_report.h"
+#include "bench_memory.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -22,6 +22,7 @@ main(void)
     { 1000, 700, 0, 300, 0, 0 },
     { 1000, 700, UINT64_MAX, 300, 0, 0 },
     { UINT64_MAX, 1, 200, UINT64_MAX - 1, 0, 0 },
+    { 1000, UINT64_MAX, 200, 0, 0, 0 },
     { 1, INT64_MAX, INT64_MAX, 0, 0, 0 },
   };
   struct bench_memory mem = { 0 };

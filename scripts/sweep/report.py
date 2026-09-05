@@ -53,6 +53,7 @@ OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
 SITE_FILES = {
     "explore.html": SOURCE_DIR / "template.html",
     "decode.js": SOURCE_DIR / "decode.js",
+    "blosc.js": SOURCE_DIR / "blosc.js",
     "theme.js": SOURCE_DIR / "theme.js",
     "site.css": SOURCE_DIR / "site.css",
 }

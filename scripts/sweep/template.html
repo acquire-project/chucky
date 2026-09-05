@@ -178,6 +178,10 @@ input { accent-color: var(--series-1); }
       <label>Codec</label>
       <div class="radio-group" id="codec-group"></div>
     </div>
+    <div id="blosc-block-wrap" style="display:none">
+      <label>Blosc block request</label>
+      <div class="radio-group" id="blosc-block-group"></div>
+    </div>
     <div id="fill-wrap">
       <label>Input</label>
       <div class="radio-group" id="fill-group"></div>
@@ -232,6 +236,7 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
+import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices, matchesBloscBlock} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
 async function ensureRuns(file) {
@@ -371,9 +376,11 @@ function filterRuns({includeBackend = true} = {}) {
   const dtype = getRadio("dtype-group");
   const sink = getRadio("sink-group");
   const s3tp = getRadio("s3-throughput-group");
+  const bloscBlock = getRadio("blosc-block-group");
   const checkedScenarios = new Set(getCheckedScenarios());
   return runs.filter(r => {
     if (r.codec !== codec || r.fill !== fill || r.dtype !== dtype || r.sink !== sink) return false;
+    if (!matchesBloscBlock(r, bloscBlock)) return false;
     if (includeBackend && r.backend !== backend) return false;
     if (!checkedScenarios.has(r.scenario)) return false;
     if (sink === "s3" && s3tp && allS3Throughputs.length > 0) {
@@ -390,6 +397,7 @@ function metricLabel(key) {
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
   t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  if (bloscBlockKey(r)) t += `Blosc block request: ${bloscBlockLabel(bloscBlockKey(r))}\n`;
   if (r.sink && r.sink !== "discard") {
     t += `sink: ${r.sink}`;
     if (r.s3_throughput_gbps) t += `  target: ${r.s3_throughput_gbps} Gb/s`;
@@ -458,7 +466,7 @@ function clearRadio(containerId) {
   document.getElementById(containerId).innerHTML = "";
 }
 
-function makeRadio(containerId, values, defaultVal) {
+function makeRadio(containerId, values, defaultVal, label = v => v) {
   const g = document.getElementById(containerId);
   const name = containerId;
   values.forEach((v,i) => {
@@ -467,7 +475,7 @@ function makeRadio(containerId, values, defaultVal) {
     inp.type = "radio"; inp.name = name; inp.value = v;
     if (v === defaultVal || (defaultVal === undefined && i === 0)) inp.checked = true;
     const sp = document.createElement("span");
-    sp.textContent = v;
+    sp.textContent = label(v);
     lbl.appendChild(inp);
     lbl.appendChild(sp);
     g.appendChild(lbl);
@@ -779,6 +787,12 @@ function updateControlVisibility(viewMode, useOverlay) {
 }
 
 function render() {
+  const blocks = bloscBlockChoices(runs, getRadio("codec-group"));
+  const selectedBlock = getRadio("blosc-block-group");
+  clearRadio("blosc-block-group");
+  makeRadio("blosc-block-group", blocks,
+    blocks.includes(selectedBlock) ? selectedBlock : undefined, bloscBlockLabel);
+  document.getElementById("blosc-block-wrap").style.display = blocks.length ? "" : "none";
   const viewMode = getRadio("view-group");
   const useOverlay = overlayBackends && allBackends.length > 1 && (viewMode === "lines" || viewMode === "stages");
   const filtered = filterRuns({includeBackend: !useOverlay});

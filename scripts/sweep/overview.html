@@ -155,6 +155,10 @@ code { font-size: 0.92em; color: var(--text-secondary); }
       <label for="codec-sel">Codec</label>
       <select id="codec-sel"></select>
     </div>
+    <div id="blosc-block-wrap" style="display:none">
+      <label for="blosc-block-sel">Blosc block request</label>
+      <select id="blosc-block-sel"></select>
+    </div>
     <div>
       <label for="fill-sel">Input</label>
       <select id="fill-sel"></select>
@@ -208,6 +212,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
+import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices, matchesBloscBlock} from "./blosc.js";
 
 const DATA = await fetchJson("data/overview.json");
 DATA.sweeps.forEach(s => { s.runs = decodeRuns(s.runs, DATA.strings); });
@@ -354,7 +359,7 @@ const ALL_SINKS = distinct("sink").sort();
 // =========================================================================
 
 const state = {metric: METRICS[0].key, scenario: null, codec: null, fill: null, backend: null,
-               sink: null, grouped: true};
+               sink: null, bloscBlock: null, grouped: true};
 
 function metricMeta(key) { return METRICS.find(m => m.key === key) || METRICS[0]; }
 /** " (GiB/s)" after a label, or nothing at all for a count, which has no unit. */
@@ -369,7 +374,7 @@ function pickDefaults() {
     const here = new Set();
     for (const r of s.runs) {
       if (r.status !== "pass" || metricValue(r, state.metric) == null) continue;
-      here.add([r.scenario, r.codec, r.backend, r.sink, r.fill].join("|"));
+      here.add([r.scenario, r.codec, r.backend, r.sink, r.fill, bloscBlockKey(r)].join("|"));
     }
     for (const combo of here) counts.set(combo, (counts.get(combo) || 0) + 1);
   }
@@ -377,16 +382,18 @@ function pickDefaults() {
   for (const [combo, count] of counts) {
     if (count > bestCount) { best = combo; bestCount = count; }
   }
-  const [scenario, codec, backend, sink, fill] = best
+  const [scenario, codec, backend, sink, fill, bloscBlock] = best
     ? best.split("|")
     : [ALL_SCENARIOS[0], ALL_CODECS[0], ALL_BACKENDS[0], ALL_SINKS[0], ALL_FILLS[0]];
   state.scenario = scenario; state.codec = codec; state.backend = backend;
   state.sink = sink; state.fill = fill;
+  state.bloscBlock = bloscBlock;
 }
 
 /** Everything the filters ask for except the input. */
 function matchesSetup(run) {
-  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink;
+  return run.codec === state.codec && run.backend === state.backend && run.sink === state.sink
+    && matchesBloscBlock(run, state.bloscBlock);
 }
 
 function comparable(sweep) {
@@ -413,7 +420,7 @@ function bestRun(sweep, scenario, fill) {
   return best ? {run: best, value: bestValue, count} : null;
 }
 
-/** Codec, backend, sink, and input combinations with at least one usable run. */
+/** Configurations with at least one usable run. */
 function availableCombinations(scenario) {
   const found = new Set();
   for (const sweep of sweeps) {
@@ -421,7 +428,7 @@ function availableCombinations(scenario) {
     for (const run of sweep.runs) {
       if (run.status !== "pass" || metricValue(run, state.metric) == null) continue;
       if (scenario && run.scenario !== scenario) continue;
-      found.add([run.codec, run.backend, run.sink, run.fill].join("|"));
+      found.add([run.codec, run.backend, run.sink, run.fill, bloscBlockKey(run)].join("|"));
     }
   }
   return found;
@@ -433,7 +440,7 @@ function availableCombinations(scenario) {
  */
 function nearestAlternatives(scenario, limit = 3) {
   const available = availableCombinations(scenario);
-  const current = [state.codec, state.backend, state.sink, state.fill];
+  const current = [state.codec, state.backend, state.sink, state.fill, state.bloscBlock || ""];
   // Backend and sink first: the codec is usually the deliberate choice, so
   // suggest keeping it and moving where it ran.
   const dimensions = [
@@ -441,20 +448,24 @@ function nearestAlternatives(scenario, limit = 3) {
     {index: 2, key: "sink", label: "sink"},
     {index: 3, key: "fill", label: "input"},
     {index: 0, key: "codec", label: "codec"},
+    {index: 4, key: "bloscBlock", label: "Blosc block request"},
   ];
   const out = [];
   for (const dimension of dimensions) {
     for (const combo of available) {
       const parts = combo.split("|");
       if (parts.every((p, i) => i === dimension.index || p === current[i]) && parts[dimension.index] !== current[dimension.index]) {
-        out.push({label: `${dimension.label} ${parts[dimension.index]}`, key: dimension.key, value: parts[dimension.index]});
+        const value = parts[dimension.index];
+        const label = dimension.key === "bloscBlock" ? bloscBlockLabel(value) : value;
+        out.push({label: `${dimension.label} ${label}`, key: dimension.key, value});
       }
     }
   }
   if (!out.length) {
     for (const combo of available) {
-      const [codec, backend, sink, fill] = combo.split("|");
-      out.push({label: `${codec} · ${backend} · ${sink} · ${fill}`, codec, backend, sink, fill});
+      const [codec, backend, sink, fill, bloscBlock] = combo.split("|");
+      const blockLabel = bloscBlock ? ` · block ${bloscBlockLabel(bloscBlock)}` : "";
+      out.push({label: `${codec} · ${backend} · ${sink} · ${fill}${blockLabel}`, codec, backend, sink, fill, bloscBlock});
       if (out.length >= limit) break;
     }
   }
@@ -474,7 +485,7 @@ function emptyState(message, scenario) {
     button.addEventListener("click", () => pick(alternative.key
       ? {[alternative.key]: alternative.value}
       : {codec: alternative.codec, backend: alternative.backend,
-         sink: alternative.sink, fill: alternative.fill}));
+         sink: alternative.sink, fill: alternative.fill, bloscBlock: alternative.bloscBlock}));
     node.appendChild(button);
   });
   node.appendChild(document.createTextNode("."));
@@ -555,7 +566,9 @@ function keySwatch(color, className) {
 }
 
 function configLabel(run) {
-  return [run.dtype, run.chunk_bytes_label].filter(Boolean).join(" · ");
+  const block = bloscBlockKey(run);
+  return [run.dtype, run.chunk_bytes_label, block ? `block ${bloscBlockLabel(block)}` : ""]
+    .filter(Boolean).join(" · ");
 }
 
 // =========================================================================
@@ -606,6 +619,7 @@ function fillSelect(select, values, labels) {
 const metricSel = document.getElementById("metric-sel");
 const scenarioSel = document.getElementById("scenario-sel");
 const codecSel = document.getElementById("codec-sel");
+const bloscBlockSel = document.getElementById("blosc-block-sel");
 const fillSel = document.getElementById("fill-sel");
 const backendSel = document.getElementById("backend-sel");
 const sinkSel = document.getElementById("sink-sel");
@@ -622,6 +636,11 @@ function syncControls() {
   metricSel.value = state.metric;
   scenarioSel.value = state.scenario;
   codecSel.value = state.codec;
+  const blocks = bloscBlockChoices(sweeps.flatMap(s => s.runs), state.codec);
+  if (!blocks.includes(state.bloscBlock)) state.bloscBlock = blocks[0] || null;
+  fillSelect(bloscBlockSel, blocks, blocks.map(bloscBlockLabel));
+  bloscBlockSel.value = state.bloscBlock;
+  document.getElementById("blosc-block-wrap").style.display = blocks.length ? "" : "none";
   fillSel.value = state.fill;
   backendSel.value = state.backend;
   sinkSel.value = state.sink;
@@ -642,7 +661,8 @@ sameScaleToggle.addEventListener("change", renderTrend);
 
 metricSel.addEventListener("change", () => { state.metric = metricSel.value; render(); });
 scenarioSel.addEventListener("change", () => { state.scenario = scenarioSel.value; render(); });
-codecSel.addEventListener("change", () => { state.codec = codecSel.value; render(); });
+codecSel.addEventListener("change", () => pick({codec: codecSel.value}));
+bloscBlockSel.addEventListener("change", () => pick({bloscBlock: bloscBlockSel.value}));
 fillSel.addEventListener("change", () => { state.fill = fillSel.value; render(); });
 backendSel.addEventListener("change", () => { state.backend = backendSel.value; render(); });
 sinkSel.addEventListener("change", () => { state.sink = sinkSel.value; render(); });
@@ -1040,9 +1060,7 @@ function renderMatrix() {
 
 const MOVERS_SHOWN = 12;
 
-// A run id names the whole configuration, input included, so pairing by id
-// compares like with like. Pairing by sweep drops every configuration the
-// sweep before skipped.
+// Movers require the same recorded configuration, including Blosc block size.
 function moversFor(machine) {
   const history = new Map();
   let newest = null;
@@ -1234,6 +1252,7 @@ function renderLede() {
     "Machines are grouped by bench/machines.toml, which is where a box running two systems, or a pool of cluster nodes, is declared to be one machine. Untick Group to see the sweep names underneath.",
     "Each plotted value is the best run of a sweep for the chosen scenario, input, and configuration; the remaining dimensions (data type, chunk size) are searched, not averaged.",
     "Only passing runs count. A missing point means that sweep ran nothing matching the filter.",
+    "Blosc block requests must match across comparisons. An unrecorded block size is unknown, not a default.",
   ];
   if (strangers.length) {
     notes.push(`Not described in bench/machines.toml: ${strangers.join(", ")}. Add an entry there to name and group them.`);

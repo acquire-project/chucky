@@ -6,6 +6,10 @@ function(add_bench TGT SOURCE_FILE)
     set_nix_rpath(${TGT})
 endfunction()
 
+add_library(bench_memory STATIC bench_memory.c bench_memory.h)
+target_include_directories(bench_memory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bench_memory PRIVATE warnings)
+
 # bench_util: static library with pipeline benchmark infrastructure
 add_library(
     bench_util
@@ -30,6 +34,7 @@ target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
     bench_util
     PUBLIC
+        bench_memory
         stream_cpu
         zarr_array
         ngff_multiscale

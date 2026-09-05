@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, model_validator
 
 # ---------------------------------------------------------------------------
@@ -14,6 +16,27 @@ VALID_BACKENDS = {"gpu", "cpu"}
 VALID_SINKS = {"discard", "fs", "s3"}
 VALID_DTYPES = {"u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f16", "f32", "f64"}
 VALID_STATUSES = {"pass", "error", "timeout", "missing", "unknown"}
+
+
+def run_id(run: dict) -> str:
+    """Configuration identity; unrecorded Blosc block sizes are unknown."""
+    identity = run.get("id")
+    if identity is None:
+        parts = [str(run[key]) for key in
+                 ("scenario", "codec", "fill", "backend", "dtype", "chunk_bytes_label")]
+        sink = run.get("sink", "discard")
+        if sink != "discard":
+            parts.append(sink)
+        throughput = run.get("s3_throughput_gbps") or 0
+        if throughput > 0:
+            parts.append(f"{int(throughput)}gbps")
+        identity = "__".join(parts)
+    if run["codec"].startswith("blosc-"):
+        identity = re.sub(r"__blosc-block-(?:[0-9]+|unknown)$", "", identity)
+        block_bytes = run.get("blosc_block_bytes")
+        identity += f"__blosc-block-{block_bytes if block_bytes is not None else 'unknown'}"
+    return identity
+
 
 # ---------------------------------------------------------------------------
 # Result models
