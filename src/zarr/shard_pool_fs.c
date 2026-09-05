@@ -210,6 +210,8 @@ static struct shard_writer*
 pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
+  char* owned_path = NULL;
   CHECK(Fail, slot < p->nslots);
 
   struct fs_slot* w = &p->slots[slot];
@@ -217,40 +219,33 @@ pool_fs_open(struct shard_pool* self, uint64_t slot, const char* key)
   if (w->token.generation != 0)
     CHECK(Fail, fs_slot_finalize(&w->base) == 0);
 
-  struct strbuf path = { 0 };
   if (strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key))
     goto Fail;
 
-  int flags = p->unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0;
-  platform_fd fd = platform_open_write(strbuf_cstr(&path), flags);
-  if (fd == PLATFORM_FD_INVALID) {
-    // Directory may not exist yet — create parent and retry.
-    const char* path_cstr = strbuf_cstr(&path);
-    const char* last_slash = strrchr(path_cstr, '/');
-    if (last_slash) {
-      struct strbuf dir = { 0 };
-      if (strbuf_append(&dir, path_cstr, (size_t)(last_slash - path_cstr)) ==
-            0 &&
-          platform_mkdirp(strbuf_cstr(&dir)) == 0)
-        fd = platform_open_write(strbuf_cstr(&path), flags);
-      strbuf_free(&dir);
-    }
-    if (fd == PLATFORM_FD_INVALID) {
-      log_error("shard_pool_fs: open(%s) failed", strbuf_cstr(&path));
-      goto Fail;
-    }
-  }
+  const size_t path_bytes = strbuf_len(&path) + 1;
+  owned_path = (char*)malloc(path_bytes);
+  CHECK(Fail, owned_path);
+  memcpy(owned_path, strbuf_cstr(&path), path_bytes);
 
-  w->token = io_backend_fs_add_file(p->backend, fd);
-  if (w->token.generation == 0) {
-    platform_close(fd);
+  const struct io_file_token token = io_backend_fs_reserve_file(p->backend);
+  CHECK(Fail, token.generation != 0);
+
+  if (io_scheduler_post(p->queue,
+                        (struct io_request){ .op = IO_OP_OPEN,
+                                             .file = token,
+                                             .path = owned_path,
+                                             .owned = owned_path,
+                                             .owned_free = free })) {
+    io_backend_fs_cancel_file(p->backend, token);
     goto Fail;
   }
 
+  w->token = token;
   strbuf_free(&path);
   return &w->base;
 
 Fail:
+  free(owned_path);
   strbuf_free(&path);
   return NULL;
 }
@@ -378,7 +373,8 @@ shard_pool_fs_create_wrapped(const char* root,
   p->unbuffered = unbuffered;
   CHECK(Fail_alloc, strbuf_set(&p->root, root) == 0);
 
-  p->backend = io_backend_fs_create(&p->io_error);
+  p->backend = io_backend_fs_create(&p->io_error,
+                                    unbuffered ? PLATFORM_OPEN_UNBUFFERED : 0);
   CHECK(Fail_alloc, p->backend);
 
   struct io_backend backend = io_backend_fs_as_backend(p->backend);

@@ -7,6 +7,7 @@
 enum io_op
 {
   IO_OP_NOOP = 0, // no file or payload; used by fault-injection tests
+  IO_OP_OPEN,     // barrier: create or truncate a file
   IO_OP_WRITE,    // payload to a file at an offset
   IO_OP_TRUNCATE, // barrier: set the file's size
   IO_OP_CLOSE,    // barrier: last request naming this token
@@ -28,13 +29,15 @@ struct io_request
 
   struct io_file_token file;
 
+  const char* path;
+
   const void* payload;
   uint64_t nbytes;
   uint64_t offset;
 
   uint64_t logical_size; // truncate only
 
-  // The owned buffer is released before the request is reported complete.
+  // The owned allocation is released before the request is reported complete.
   void* owned;
   void (*owned_free)(void*);
 
