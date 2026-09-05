@@ -1,6 +1,7 @@
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
 #include "util/prelude.h"
+#include <lz4.h>
 #include <nvcomp/lz4.h>
 #include <nvcomp/zstd.h>
 #include <stdio.h>
@@ -448,6 +449,111 @@ Fail:
   return 1;
 }
 
+// Refill pointer and size arrays for the active geometry on every batch.
+// CPU decoding checks both raw codecs independently of the GPU size arrays.
+static int
+test_raw_rebind_partial_batches(void)
+{
+  const enum compression_codec codecs[] = { CODEC_NONE,
+                                            CODEC_LZ4_NON_STANDARD,
+                                            CODEC_ZSTD };
+  const size_t capacity = 65536, batch = 5, input_stride = capacity + 256;
+  const size_t chunks[] = { 65536, 4099, 16384, 257, 65536 };
+  const size_t batches[] = { 0, 2, 4, 1, 0 };
+  struct codec c = { 0 };
+  CUstream stream = 0;
+  CUdeviceptr d_input = 0, d_output = 0;
+  uint8_t* input = NULL;
+  uint8_t* encoded = NULL;
+  uint8_t* recovered = NULL;
+  size_t sizes[5];
+  int result = 1;
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+  input = (uint8_t*)malloc(batch * input_stride);
+  recovered = (uint8_t*)malloc(capacity);
+  CHECK(Fail, input && recovered);
+  CU(Fail, cuMemAlloc(&d_input, batch * input_stride));
+  for (size_t k = 0; k < countof(codecs); ++k) {
+    CHECK(Fail, codec_init(&c, codecs[k], capacity, batch) == 0);
+    const size_t output_bytes = batch * c.output_stride;
+    encoded = (uint8_t*)malloc(output_bytes);
+    CHECK(Fail, encoded);
+    CU(Fail, cuMemAlloc(&d_output, output_bytes));
+    for (size_t round = 0; round < countof(chunks); ++round) {
+      const size_t bytes = chunks[round];
+      const size_t n = batches[round] ? batches[round] : batch;
+      const size_t active_input_stride =
+        round & 1 ? align_up(bytes, codec_alignment(codecs[k])) : input_stride;
+      // CODEC_NONE preserves its packed output behavior after a rebind.
+      const size_t stride = codecs[k] == CODEC_NONE ? bytes : c.output_stride;
+      for (size_t i = 0; i < batch * input_stride; ++i)
+        input[i] = (uint8_t)((i * (round + 1)) ^ (i >> 11));
+      CU(Fail, cuMemcpyHtoD(d_input, input, batch * input_stride));
+      CU(Fail, cuStreamSynchronize(NULL));
+      CHECK(Fail, codec_bind(&c, c.config, 1, bytes, stream) == 0);
+      // A rejected larger geometry must not affect this binding.
+      CHECK(Fail, codec_bind(&c, c.config, 1, capacity + 1, stream) != 0);
+      CU(Fail, cuMemsetD8Async(d_output, 0xa5, output_bytes, stream));
+      if (codecs[k] != CODEC_NONE)
+        CU(
+          Fail,
+          cuMemsetD8Async(
+            (CUdeviceptr)c.d_comp_sizes, 0xff, batch * sizeof(size_t), stream));
+      CHECK(Fail,
+            codec_compress(&c,
+                           (const void*)(uintptr_t)d_input,
+                           active_input_stride,
+                           (void*)(uintptr_t)d_output,
+                           batches[round],
+                           stream) == 0);
+      CU(Fail, cuStreamSynchronize(stream));
+      CU(Fail, cuMemcpyDtoH(encoded, d_output, output_bytes));
+      CU(Fail,
+         cuMemcpyDtoH(
+           sizes, (CUdeviceptr)c.d_comp_sizes, batch * sizeof(size_t)));
+      for (size_t i = 0; i < n; ++i) {
+        CHECK(Fail, sizes[i] > 0 && sizes[i] <= c.max_output_size);
+        const uint8_t* chunk = encoded + i * stride;
+        if (codecs[k] == CODEC_NONE) {
+          CHECK(Fail, sizes[i] == bytes);
+          memcpy(recovered, chunk, bytes);
+        } else if (codecs[k] == CODEC_LZ4_NON_STANDARD) {
+          CHECK(Fail,
+                LZ4_decompress_safe((const char*)chunk,
+                                    (char*)recovered,
+                                    (int)sizes[i],
+                                    (int)bytes) == (int)bytes);
+        } else {
+          CHECK(Fail,
+                ZSTD_decompress(recovered, bytes, chunk, sizes[i]) == bytes);
+        }
+        CHECK(Fail,
+              memcmp(recovered, input + i * active_input_stride, bytes) == 0);
+      }
+      for (size_t i = n; i < batch; ++i)
+        CHECK(Fail, sizes[i] == (codecs[k] == CODEC_NONE ? bytes : SIZE_MAX));
+      for (size_t i = n * stride; i < output_bytes; ++i)
+        CHECK(Fail, encoded[i] == 0xa5);
+    }
+    codec_free(&c);
+    cu_mem_free(d_output);
+    d_output = 0;
+    free(encoded);
+    encoded = NULL;
+  }
+  result = 0;
+Fail:
+  codec_free(&c);
+  cu_mem_free(d_input);
+  cu_mem_free(d_output);
+  cu_stream_destroy(stream);
+  free(input);
+  free(encoded);
+  free(recovered);
+  return result;
+}
+
 RUN_GPU_TESTS({ "max_output_size_alignment", test_max_output_size_alignment },
+              { "raw_rebind_partial_batches", test_raw_rebind_partial_batches },
               { "compress_roundtrip", test_compress_roundtrip },
               { "compress_lz4_roundtrip", test_compress_lz4_roundtrip }, )

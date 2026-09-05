@@ -11,7 +11,8 @@ extern "C"
 #endif
 
   // Copy or apply the exact C-Blosc filter into independent aligned block
-  // slots. Incomplete-element tails retain their original bytes.
+  // slots, using one CUDA thread block per Blosc block. Incomplete-element
+  // tails retain their original bytes.
   int gpu_blosc_prepare_blocks_async(struct gpu_blosc_frame_layout layout,
                                      struct gpu_blosc_input original,
                                      void* prepared,

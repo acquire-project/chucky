@@ -143,7 +143,7 @@ slots. Its allocation accounting includes:
 | Raw compressed-block scratch | `P` aligned worst-case codec-output slots; includes capacity for the shorter final block |
 | Block sizes, offsets, and input/output pointers | Linear in `P`; on this 64-bit build, 40 bytes per block plus 8 bytes per chunk |
 | nvCOMP workspace | Queried for `P` inputs, maximum input `B`, and total uncompressed bytes `Q*C`; codec/version dependent |
-| Prepared input blocks | `P * align_up(B, input_alignment)` when shuffle storage is reserved or internal block starts need alignment; one buffer serves both purposes |
+| Prepared input blocks | `P * align_up(B, input_alignment)` when the initial configuration enables shuffle, future shuffle storage is reserved, or internal block starts need alignment; one buffer serves all three purposes |
 
 The estimator also includes the stream's staging, original chunk pools,
 aggregation, and LOD allocations. These are separate from the codec-owned
@@ -152,12 +152,20 @@ scratch. Pinned host memory is reported separately from device memory.
 The encoder owns alignment handling. Callers do not align append buffers or change
 their data layout. Odd block sizes are valid, but can require extra scratch:
 for 64 chunks of 1 MiB each, 4097-byte blocks require 64.0625 MiB of aligned
-input scratch with this nvCOMP build. Without shuffle reservation, 4096-byte
-blocks require none. With shuffle reservation, either size uses the prepared
-block buffer; odd blocks no longer need an additional chunk-shuffle buffer.
-Filtering writes directly to aligned block slots, and both nvCOMP and raw-block
+input scratch with this nvCOMP build. With no shuffle configured or reserved,
+4096-byte blocks require none. Initial byte shuffle or bitshuffle always
+allocates preparation storage, including for one-byte elements, even when the
+reservation argument is disabled. The reservation argument adds capacity for
+future shuffled bindings. A binding that needs unavailable storage is rejected
+without changing the previous binding. Odd blocks use this same buffer for
+alignment and filtering.
+
+Copy, byte shuffle, and bitshuffle use one CUDA thread block per Blosc block,
+sharing block addressing and incomplete-element tail handling. Filtering
+writes directly to aligned block slots, and both nvCOMP and raw-block
 fallback read the same prepared pointers. Aligned, unfiltered input bypasses
-preparation. Whole-frame fallback always reads the original chunk.
+preparation, as does aligned byte shuffle of one-byte elements. Whole-frame
+fallback always reads the original chunk.
 
 Allocation sizes are computable from the configuration. Only the vendor's
 workspace requirements and output bounds need nvCOMP sizing queries; these do
@@ -192,15 +200,19 @@ memory total.
 ### Estimate accuracy and headroom
 
 `tile_stream_gpu_memory_estimate()` reports explicitly requested allocations.
-`codec_device_bytes()` includes every codec-owned allocation above; the stream
-adds its other pools. The current block-size-aware accounting required no
-additional block-dependent term during allocation validation.
+`codec_device_bytes()` and codec initialization use the same checked layout
+calculation for every codec-owned allocation above; the stream adds its other
+pools. Raw LZ4 and Zstd use the same batch setup with one block per chunk. Their
+existing aligned output bounds are preserved; Blosc retains a logical frame
+bound of `C + 16`, separate from the aligned output slot stride. Allocation
+validation required no additional block-dependent accounting term.
 
 `test_compress_blosc_gpu` now compares the codec estimate against the sum of
 CUDA's actual allocation-range sizes, rather than only another copy of the
 sizing formula. It covers both codecs, seven block sizes including an odd size
-and a size larger than the chunk, shuffle reservation on/off, and levels 0/3:
-84 configurations. The byte totals matched exactly on this GPU.
+and a size larger than the chunk, all three filters independently of shuffle
+reservation on/off, and levels 0/3: 168 configurations. The byte totals matched
+exactly on this GPU, including initial filters with reservation disabled.
 
 That does not make the estimate a prediction of all device memory consumed
 by a process. CUDA allocation granularity, context/runtime/library residency,

@@ -81,7 +81,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf
   // (see compress_agg_aggregate), so the d_compressed buffer is unused — skip
   // its M * chunk_bytes allocation per fc. Destroy is NULL-safe.
-  const int need_compressed = (stage->codec.type != CODEC_NONE);
+  const int need_compressed = (stage->codec.config.id != CODEC_NONE);
   for (int fc = 0; fc < 2; ++fc) {
     if (need_compressed)
       CU(Fail,
@@ -519,7 +519,7 @@ compress_agg_compress(struct compress_agg_stage* stage,
                       CUstream compress_stream)
 {
   const int fc = in->fc;
-  if (stage->codec.type == CODEC_NONE) {
+  if (stage->codec.config.id == CODEC_NONE) {
     // Timing events still bracket the skipped phase so metrics stay valid.
     CU(Error, cuEventRecord(stage->t_compress_start[fc], compress_stream));
     CU(Error, cuEventRecord(stage->t_compress_end[fc], compress_stream));
@@ -550,11 +550,11 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
 {
   CU(Error, cuEventRecord(stage->t_aggregate_start[fc], compress_stream));
   // CODEC_NONE aggregates straight from the pool buffer, skipping compress.
-  const CUdeviceptr d_aggregate_src = (stage->codec.type == CODEC_NONE)
+  const CUdeviceptr d_aggregate_src = (stage->codec.config.id == CODEC_NONE)
                                         ? gpu_pool_view_d(pool_buf)
                                         : stage->d_compressed[fc];
   if (plan->layout.total_batch_chunks > 0) {
-    const size_t aggregate_source_stride = stage->codec.type == CODEC_NONE
+    const size_t aggregate_source_stride = stage->codec.config.id == CODEC_NONE
                                              ? stage->codec.chunk_bytes
                                              : stage->codec.output_stride;
     CHECK(Error,
@@ -592,8 +592,8 @@ compress_agg_fill_handoff(struct compress_agg_stage* stage,
 
   out->batch = (struct aggregate_batch){
     .slot_index = fc,
-    .size_kind = stage->codec.type == CODEC_NONE ? AGGREGATE_FIXED_SIZE
-                                                 : AGGREGATE_VARIABLE_SIZE,
+    .size_kind = stage->codec.config.id == CODEC_NONE ? AGGREGATE_FIXED_SIZE
+                                                      : AGGREGATE_VARIABLE_SIZE,
     .epoch_count = in->n_epochs,
     .layout = plan->layout,
     .level_layouts = stage->ar.per_lod_agg_layouts,

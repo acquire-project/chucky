@@ -11,7 +11,6 @@ extern "C"
 
   struct codec
   {
-    enum compression_codec type;
     struct codec_config config;
     size_t max_output_size; // max valid encoded bytes per chunk
     size_t output_stride;   // fixed device slot stride (may be larger)
@@ -20,9 +19,9 @@ extern "C"
     size_t typesize;        // active Blosc element size
     size_t batch_size;      // number of chunks
 
+    // Raw codecs use one block per chunk.
     size_t block_bytes;
     size_t blocks_per_chunk;
-    size_t block_capacity; // maximum flattened chunk/block count
     size_t block_output_stride;
     size_t block_input_stride;
     void* d_block_input;     // optional aligned, filtered block slots
@@ -32,7 +31,7 @@ extern "C"
 
     // Owned device state
     size_t* d_comp_sizes;   // encoded sizes [batch_size]
-    size_t* d_uncomp_sizes; // [block_capacity for Blosc, else batch_size]
+    size_t* d_uncomp_sizes; // one size per nvCOMP input at capacity
     void** d_ptrs;          // twice the nvCOMP input count
     void* d_temp;           // workspace
     size_t temp_bytes;      // workspace size
@@ -51,14 +50,12 @@ extern "C"
   size_t codec_output_stride(enum compression_codec type, size_t chunk_bytes);
 
   // Required device bytes, excluding runtime overhead. Does not allocate.
+  // Includes preparation for configured shuffle or block alignment.
+  // reserve_shuffle adds storage for future shuffled bindings.
   size_t codec_device_bytes(struct codec_config config,
                             size_t chunk_bytes,
                             size_t batch_size,
                             int reserve_shuffle);
-
-  size_t codec_temp_bytes(struct codec_config config,
-                          size_t chunk_bytes,
-                          size_t batch_size);
 
   // Init raw codec context. Blosc requires codec_init_config with an explicit
   // block size. Allocates device memory. Returns 0 on success.
@@ -67,6 +64,8 @@ extern "C"
                  size_t chunk_bytes,
                  size_t batch_size);
 
+  // Initial shuffle/alignment always reserves preparation storage.
+  // reserve_shuffle additionally supports future shuffled bindings.
   int codec_init_config(struct codec* c,
                         struct codec_config config,
                         size_t typesize,
@@ -74,13 +73,9 @@ extern "C"
                         size_t batch_size,
                         int reserve_shuffle);
 
-  // Select the active input size, no larger than chunk_capacity.
-  int codec_set_chunk_bytes(struct codec* c,
-                            size_t chunk_bytes,
-                            CUstream stream);
-
   // Bind per-array state and geometry. Blosc block size must match the initial
-  // configuration.
+  // configuration; chunk_bytes must not exceed chunk_capacity. Required
+  // preparation must fit existing storage. Rejection preserves the binding.
   int codec_bind(struct codec* c,
                  struct codec_config config,
                  size_t typesize,
@@ -97,7 +92,7 @@ extern "C"
 
   // Compress batch_size chunks.
   //   Input:  d_input  + i * input_stride  (each chunk_bytes bytes)
-  //   Output: d_output + i * output_stride
+  //   Output: d_output + i * output_stride (CODEC_NONE packs at chunk_bytes)
   //   c->d_comp_sizes[i] filled with actual compressed size.
   // actual_batch_size: number of chunks to compress (0 = use c->batch_size).
   //   Must be <= c->batch_size.

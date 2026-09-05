@@ -74,21 +74,6 @@ handle_nvcomp(int level,
   } while (0)
 
 __global__ void
-fill_ptrs_kernel(void** d_ptrs,
-                 const char* uncomp_base,
-                 size_t uncomp_stride,
-                 char* comp_base,
-                 size_t comp_stride,
-                 size_t batch_size)
-{
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < batch_size) {
-    d_ptrs[i] = (void*)(uncomp_base + i * uncomp_stride);
-    d_ptrs[batch_size + i] = (void*)(comp_base + i * comp_stride);
-  }
-}
-
-__global__ void
 fill_sizes_kernel(size_t* d_sizes, size_t value, size_t count)
 {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -179,6 +164,39 @@ Fail:
   return 0;
 }
 
+// Return zero for invalid or overflowing allocation strides.
+static size_t
+aligned_size(size_t bytes, size_t alignment)
+{
+  if (!bytes || !alignment || bytes > SIZE_MAX - (alignment - 1))
+    return 0;
+  return align_up(bytes, alignment);
+}
+
+static size_t
+nvcomp_max_output_size(enum compression_codec type, size_t chunk_bytes)
+{
+  size_t max_comp = 0;
+  switch (nvcomp_codec(type)) {
+    case CODEC_NONE:
+      return chunk_bytes;
+    case CODEC_LZ4_NON_STANDARD:
+      NVCOMP(Fail,
+             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
+               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
+      return max_comp;
+    case CODEC_ZSTD:
+      NVCOMP(Fail,
+             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
+               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
+      return max_comp;
+    default:
+      return 0;
+  }
+Fail:
+  return 0;
+}
+
 extern "C" size_t
 codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
 {
@@ -188,77 +206,28 @@ codec_max_output_size(enum compression_codec type, size_t chunk_bytes)
       return 0;
     return chunk_bytes + GPU_BLOSC_HEADER_BYTES;
   }
-
-  size_t max_comp = 0;
-  const size_t alignment = codec_output_alignment(type);
-  CHECK(Fail, alignment > 0);
-
-  switch (type) {
-    case CODEC_NONE:
-      max_comp = chunk_bytes;
-      break;
-    case CODEC_LZ4_NON_STANDARD:
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      break;
-    case CODEC_ZSTD:
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      break;
-    default:
-      goto Fail;
-  }
-  return align_up(max_comp, alignment);
-Fail:
-  return 0;
-}
-
-static size_t
-nvcomp_max_output_size(enum compression_codec type, size_t chunk_bytes)
-{
-  size_t max_comp = 0;
-  switch (nvcomp_codec(type)) {
-    case CODEC_LZ4_NON_STANDARD:
-      NVCOMP(Fail,
-             nvcompBatchedLZ4CompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedLZ4CompressDefaultOpts, &max_comp));
-      return max_comp;
-    case CODEC_ZSTD:
-      NVCOMP(Fail,
-             nvcompBatchedZstdCompressGetMaxOutputChunkSize(
-               chunk_bytes, nvcompBatchedZstdCompressDefaultOpts, &max_comp));
-      return max_comp;
-    default:
-      return chunk_bytes;
-  }
-Fail:
-  return 0;
+  // Preserve the aligned raw-codec bound exposed by this interface.
+  return aligned_size(nvcomp_max_output_size(type, chunk_bytes),
+                      codec_output_alignment(type));
 }
 
 extern "C" size_t
 codec_output_stride(enum compression_codec type, size_t chunk_bytes)
 {
-  if (!codec_is_blosc(type))
-    return codec_max_output_size(type, chunk_bytes);
-
-  const size_t alignment = codec_output_alignment(type);
-  const size_t bound = codec_max_output_size(type, chunk_bytes);
-  if (alignment == 0 || bound == 0 || bound > SIZE_MAX - (alignment - 1))
-    return 0;
-  return align_up(bound, alignment);
+  return aligned_size(codec_max_output_size(type, chunk_bytes),
+                      codec_output_alignment(type));
 }
 
-static size_t
-blosc_output_stride(struct codec_config config, size_t chunk_bytes)
+// Storage follows configuration, independent of element width, so estimation
+// and allocation agree and later bindings can reuse the same block slots.
+static int
+blosc_needs_preparation(struct codec_config config, size_t chunk_bytes)
 {
-  const size_t alignment = codec_output_alignment(config.id);
-  const size_t bound =
-    nvcomp_max_output_size(config.id, blosc_block_bytes(config, chunk_bytes));
-  if (!alignment || !bound || bound > SIZE_MAX - (alignment - 1))
-    return 0;
-  return align_up(bound, alignment);
+  return codec_is_blosc(config.id) &&
+         (config.shuffle != CODEC_SHUFFLE_NONE ||
+          (blosc_block_count(config, chunk_bytes) > 1 &&
+           blosc_block_bytes(config, chunk_bytes) %
+             codec_alignment(config.id)));
 }
 
 // Allocation sizes and capacity geometry are calculated together. Allocation
@@ -296,23 +265,31 @@ codec_layout_compute(struct codec_layout* l,
   if (!batch_size || !chunk_bytes || batch_size > SIZE_MAX / chunk_bytes ||
       codec_validate_gpu(config, typesize, chunk_bytes))
     return 1;
+  const int is_blosc = codec_is_blosc(config.id);
   l->inputs = batch_size;
+  l->block_bytes = chunk_bytes;
+  l->blocks_per_chunk = 1;
   if (codec_is_blosc(config.id)) {
     l->block_bytes = blosc_block_bytes(config, chunk_bytes);
     l->blocks_per_chunk = blosc_block_count(config, chunk_bytes);
     if (batch_size > INT_MAX / l->blocks_per_chunk)
       return 1;
     l->inputs *= l->blocks_per_chunk;
-    l->block_output_stride = blosc_output_stride(config, chunk_bytes);
+    l->block_output_stride =
+      aligned_size(nvcomp_max_output_size(config.id, l->block_bytes),
+                   codec_output_alignment(config.id));
     if (!l->block_output_stride)
       return 1;
     const size_t alignment = codec_alignment(config.id);
-    if (reserve_shuffle ||
-        (l->blocks_per_chunk > 1 && l->block_bytes % alignment != 0))
-      l->block_input_stride = align_up(l->block_bytes, alignment);
+    if (reserve_shuffle || blosc_needs_preparation(config, chunk_bytes)) {
+      l->block_input_stride = aligned_size(l->block_bytes, alignment);
+      if (!l->block_input_stride)
+        return 1;
+    }
   }
   l->max_output_size = codec_max_output_size(config.id, chunk_bytes);
-  l->output_stride = codec_output_stride(config.id, chunk_bytes);
+  l->output_stride =
+    aligned_size(l->max_output_size, codec_output_alignment(config.id));
   if (!l->max_output_size || !l->output_stride)
     return 1;
 
@@ -323,7 +300,7 @@ codec_layout_compute(struct codec_layout* l,
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressGetTempSizeAsync(
                l->inputs,
-               l->block_bytes ? l->block_bytes : chunk_bytes,
+               l->block_bytes,
                nvcompBatchedLZ4CompressDefaultOpts,
                &l->temp,
                batch_size * chunk_bytes));
@@ -332,7 +309,7 @@ codec_layout_compute(struct codec_layout* l,
       NVCOMP(Fail,
              nvcompBatchedZstdCompressGetTempSizeAsync(
                l->inputs,
-               l->block_bytes ? l->block_bytes : chunk_bytes,
+               l->block_bytes,
                nvcompBatchedZstdCompressDefaultOpts,
                &l->temp,
                batch_size * chunk_bytes));
@@ -350,12 +327,10 @@ codec_layout_compute(struct codec_layout* l,
                       &l->total) ||
       allocation_size(
         &l->block_input, l->inputs, l->block_input_stride, &l->total) ||
-      allocation_size(&l->block_sizes,
-                      l->blocks_per_chunk ? l->inputs : 0,
-                      sizeof(size_t),
-                      &l->total) ||
+      allocation_size(
+        &l->block_sizes, is_blosc ? l->inputs : 0, sizeof(size_t), &l->total) ||
       allocation_size(&l->block_offsets,
-                      l->blocks_per_chunk ? l->inputs : 0,
+                      is_blosc ? l->inputs : 0,
                       sizeof(size_t),
                       &l->total) ||
       allocation_size(
@@ -377,17 +352,6 @@ codec_device_bytes(struct codec_config config,
            &layout, config, 1, chunk_bytes, batch_size, reserve_shuffle)
            ? 0
            : layout.total;
-}
-
-extern "C" size_t
-codec_temp_bytes(struct codec_config config,
-                 size_t chunk_bytes,
-                 size_t batch_size)
-{
-  struct codec_layout layout;
-  return codec_layout_compute(&layout, config, 1, chunk_bytes, batch_size, 0)
-           ? 0
-           : layout.temp;
 }
 
 extern "C" int
@@ -458,7 +422,6 @@ codec_init_config(struct codec* c,
     codec_layout_compute(
       &layout, config, typesize, chunk_bytes, batch_size, reserve_shuffle) ==
       0);
-  c->type = config.id;
   c->config = config;
   c->typesize = typesize;
   c->chunk_bytes = chunk_bytes;
@@ -466,7 +429,6 @@ codec_init_config(struct codec* c,
   c->batch_size = batch_size;
   c->block_bytes = layout.block_bytes;
   c->blocks_per_chunk = layout.blocks_per_chunk;
-  c->block_capacity = layout.blocks_per_chunk ? layout.inputs : 0;
   c->block_output_stride = layout.block_output_stride;
   c->block_input_stride = layout.block_input_stride;
   c->max_output_size = layout.max_output_size;
@@ -476,18 +438,6 @@ codec_init_config(struct codec* c,
   CU(Fail, cuMemAlloc((CUdeviceptr*)&c->d_comp_sizes, layout.comp_sizes));
   CU(Fail, cuMemAlloc((CUdeviceptr*)&c->d_uncomp_sizes, layout.uncomp_sizes));
 
-  if (!codec_is_blosc(config.id)) {
-    size_t* h = (size_t*)malloc(batch_size * sizeof(size_t));
-    if (!h)
-      goto Fail;
-    for (size_t i = 0; i < batch_size; ++i)
-      h[i] = chunk_bytes;
-    CUresult rc = cuMemcpyHtoD(
-      (CUdeviceptr)c->d_uncomp_sizes, h, batch_size * sizeof(size_t));
-    free(h);
-    CU(Fail, rc);
-  }
-
   if (config.id == CODEC_NONE) {
     size_t* h = (size_t*)malloc(batch_size * sizeof(size_t));
     if (!h)
@@ -496,6 +446,9 @@ codec_init_config(struct codec* c,
       h[i] = chunk_bytes;
     CUresult rc = cuMemcpyHtoD(
       (CUdeviceptr)c->d_comp_sizes, h, batch_size * sizeof(size_t));
+    if (rc == CUDA_SUCCESS)
+      rc = cuMemcpyHtoD(
+        (CUdeviceptr)c->d_uncomp_sizes, h, batch_size * sizeof(size_t));
     free(h);
     CU(Fail, rc);
   }
@@ -525,12 +478,6 @@ Fail:
 }
 
 extern "C" int
-codec_set_chunk_bytes(struct codec* c, size_t chunk_bytes, CUstream stream)
-{
-  return codec_bind(c, c->config, c->typesize, chunk_bytes, stream);
-}
-
-extern "C" int
 codec_bind(struct codec* c,
            struct codec_config config,
            size_t typesize,
@@ -541,16 +488,15 @@ codec_bind(struct codec* c,
   unsigned grid = 0;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
   CHECK(Fail,
-        c && config.id == c->type && chunk_bytes > 0 &&
+        c && config.id == c->config.id && chunk_bytes > 0 &&
           chunk_bytes <= c->chunk_capacity);
   CHECK(Fail, codec_validate_gpu(config, typesize, chunk_bytes) == 0);
-  if (codec_is_blosc(c->type) &&
+  if (codec_is_blosc(c->config.id) &&
       config.blosc_block_bytes != c->config.blosc_block_bytes) {
     log_error("GPU blosc_block_bytes cannot change on a shared codec instance");
     goto Fail;
   }
-  if (codec_is_blosc(c->type) && config.shuffle != CODEC_SHUFFLE_NONE &&
-      !c->d_block_input) {
+  if (blosc_needs_preparation(config, chunk_bytes) && !c->d_block_input) {
     log_error("GPU blosc block preparation scratch was not reserved");
     goto Fail;
   }
@@ -559,22 +505,23 @@ codec_bind(struct codec* c,
       config.shuffle == c->config.shuffle)
     return 0;
 
-  if (chunk_bytes != c->chunk_bytes && !codec_is_blosc(c->type)) {
+  if (chunk_bytes != c->chunk_bytes && c->config.id == CODEC_NONE) {
     grid = (unsigned)((c->batch_size + block - 1) / block);
     CUDA_LAUNCH_OR(Fail,
                    fill_sizes_kernel<<<grid, block, 0, cuda_stream>>>(
                      c->d_uncomp_sizes, chunk_bytes, c->batch_size));
-    if (c->type == CODEC_NONE)
-      CUDA_LAUNCH_OR(Fail,
-                     fill_sizes_kernel<<<grid, block, 0, cuda_stream>>>(
-                       c->d_comp_sizes, chunk_bytes, c->batch_size));
+    CUDA_LAUNCH_OR(Fail,
+                   fill_sizes_kernel<<<grid, block, 0, cuda_stream>>>(
+                     c->d_comp_sizes, chunk_bytes, c->batch_size));
   }
   c->config = config;
   c->typesize = typesize;
   c->chunk_bytes = chunk_bytes;
-  if (codec_is_blosc(c->type)) {
+  if (codec_is_blosc(c->config.id)) {
     c->block_bytes = blosc_block_bytes(config, chunk_bytes);
     c->blocks_per_chunk = blosc_block_count(config, chunk_bytes);
+  } else {
+    c->block_bytes = chunk_bytes;
   }
   return 0;
 
@@ -615,15 +562,15 @@ codec_compress(struct codec* c,
   const void* const* uncomp_ptrs = (const void* const*)c->d_ptrs;
   void* const* comp_ptrs = NULL;
   cudaStream_t cuda_stream = (cudaStream_t)stream;
-  const int is_blosc = codec_is_blosc(c->type);
+  const int is_blosc = codec_is_blosc(c->config.id);
   const int force_copy =
     is_blosc &&
     (c->config.level == 0 || c->chunk_bytes < GPU_BLOSC_MIN_COMPRESS_BYTES);
   size_t inputs = 0;
-  const size_t input_bytes = is_blosc ? c->block_bytes : c->chunk_bytes;
+  const size_t input_bytes = c->block_bytes;
   size_t* output_sizes = is_blosc ? c->d_block_sizes : c->d_comp_sizes;
   const struct gpu_blosc_frame_layout frame = {
-    c->type, c->config.shuffle, c->typesize, c->chunk_bytes, c->block_bytes
+    c->config.id, c->config.shuffle, c->typesize, c->chunk_bytes, c->block_bytes
   };
   const struct gpu_blosc_input original = { d_input, input_stride };
   const struct gpu_blosc_blocks blocks = { uncomp_ptrs,
@@ -635,12 +582,13 @@ codec_compress(struct codec* c,
                                             c->output_stride,
                                             c->d_comp_sizes };
   struct gpu_blosc_input input = original;
+  struct codec_config preparation = c->config;
   size_t input_block_stride = c->block_bytes;
 
   CHECK(Fail, n > 0 && n <= c->batch_size);
   CHECK(Fail, input_stride >= c->chunk_bytes);
 
-  if (c->type == CODEC_NONE) {
+  if (c->config.id == CODEC_NONE) {
     if (input_stride != c->chunk_bytes) {
       for (size_t i = 0; i < n; ++i) {
         CU(Fail,
@@ -669,11 +617,11 @@ codec_compress(struct codec* c,
 
   // Filtering and alignment share one prepared-block buffer. Already aligned,
   // unfiltered blocks can be handed directly to nvCOMP and the frame packer.
-  if (is_blosc &&
-      ((c->config.shuffle != CODEC_SHUFFLE_NONE &&
-        !(c->config.shuffle == CODEC_SHUFFLE_BYTE && c->typesize == 1)) ||
-       (c->blocks_per_chunk > 1 &&
-        c->block_bytes % codec_alignment(c->type)))) {
+  // Byte shuffle of one-byte elements is an identity filter. Keep its aligned
+  // direct path while retaining the configuration-based storage reservation.
+  if (preparation.shuffle == CODEC_SHUFFLE_BYTE && c->typesize == 1)
+    preparation.shuffle = CODEC_SHUFFLE_NONE;
+  if (blosc_needs_preparation(preparation, c->chunk_bytes)) {
     CHECK(Fail, c->d_block_input);
     CHECK(
       Fail,
@@ -686,36 +634,26 @@ codec_compress(struct codec* c,
                                 c->blocks_per_chunk * input_block_stride };
   }
 
-  inputs = is_blosc ? n * c->blocks_per_chunk : n;
+  inputs = n * c->blocks_per_chunk;
   comp_ptrs = (void* const*)(c->d_ptrs + inputs);
-  if (is_blosc) {
-    const unsigned blocks = (unsigned)((inputs + 255) / 256);
+  {
+    const unsigned grid = (unsigned)((inputs + 255) / 256);
     CUDA_LAUNCH_OR(Fail,
-                   fill_block_ptrs_kernel<<<blocks, 256, 0, cuda_stream>>>(
+                   fill_block_ptrs_kernel<<<grid, 256, 0, cuda_stream>>>(
                      c->d_ptrs,
                      c->d_uncomp_sizes,
                      (const char*)input.data,
                      input.stride,
                      input_block_stride,
-                     (char*)c->d_block_data,
-                     c->block_output_stride,
+                     (char*)(is_blosc ? c->d_block_data : d_output),
+                     is_blosc ? c->block_output_stride : c->output_stride,
                      c->chunk_bytes,
                      c->block_bytes,
                      c->blocks_per_chunk,
                      inputs));
-  } else {
-    unsigned blocks = (unsigned)((n + 255) / 256);
-    CUDA_LAUNCH_OR(
-      Fail,
-      fill_ptrs_kernel<<<blocks, 256, 0, cuda_stream>>>(c->d_ptrs,
-                                                        (const char*)d_input,
-                                                        input_stride,
-                                                        (char*)d_output,
-                                                        c->output_stride,
-                                                        n));
   }
 
-  switch (nvcomp_codec(c->type)) {
+  switch (nvcomp_codec(c->config.id)) {
     case CODEC_LZ4_NON_STANDARD:
       NVCOMP(Fail,
              nvcompBatchedLZ4CompressAsync(uncomp_ptrs,
