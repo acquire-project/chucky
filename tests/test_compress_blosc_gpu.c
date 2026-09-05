@@ -228,6 +228,9 @@ run_case(struct codec_config config,
   CU(Fail, cuMemAlloc(&d_input, batch * input_stride));
   CU(Fail, cuMemAlloc(&d_encoded, batch * c.output_stride));
   CU(Fail, cuMemcpyHtoD(d_input, input, batch * input_stride));
+  // Pageable H2D copies can return before the default-stream DMA finishes.
+  // The nonblocking test stream does not inherit that dependency.
+  CU(Fail, cuStreamSynchronize(NULL));
   CU(Fail, cuMemsetD8Async(d_encoded, 0xa5, batch * c.output_stride, stream));
   CHECK(Fail,
         codec_compress(&c,
@@ -439,6 +442,7 @@ run_rebound_case(struct codec* c,
   CU(Fail, cuMemAlloc(&d_input, c->batch_size * input_stride));
   CU(Fail, cuMemAlloc(&d_encoded, c->batch_size * c->output_stride));
   CU(Fail, cuMemcpyHtoD(d_input, input, c->batch_size * input_stride));
+  CU(Fail, cuStreamSynchronize(NULL));
   CU(
     Fail,
     cuMemsetD8Async(d_encoded, 0xa5, c->batch_size * c->output_stride, stream));
@@ -654,6 +658,7 @@ run_shuffle_filter_case(enum codec_shuffle shuffle,
   CU(Fail, cuMemAlloc(&d_input, batch * stride));
   CU(Fail, cuMemAlloc(&d_output, batch * stride));
   CU(Fail, cuMemcpyHtoD(d_input, input, batch * stride));
+  CU(Fail, cuStreamSynchronize(NULL));
   if (shuffle == CODEC_SHUFFLE_BIT)
     CHECK(Fail,
           gpu_blosc_bitshuffle_async((const void*)(uintptr_t)d_input,
@@ -762,6 +767,7 @@ test_frame_boundary(void)
   CU(Fail, cuMemcpyHtoD(d_input, input, sizeof(input)));
   CU(Fail, cuMemcpyHtoD(d_block_data, block_data, sizeof(block_data)));
   CU(Fail, cuMemcpyHtoD(d_block_sizes, block_sizes, sizeof(block_sizes)));
+  CU(Fail, cuStreamSynchronize(NULL));
   CU(Fail, cuMemsetD8Async(d_encoded, 0x5a, sizeof(encoded), stream));
   CHECK(Fail,
         gpu_blosc_pack_async(CODEC_BLOSC_LZ4,
