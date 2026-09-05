@@ -935,7 +935,7 @@ test_backend_open_failure_cleanup(void)
   char parent[4096];
   char path[4096];
   snprintf(parent, sizeof(parent), "%s/open-parent-is-file", tmpdir);
-  snprintf(path, sizeof(path), "%s/child.bin", parent);
+  snprintf(path, sizeof(path), "%s/open-parent-is-file/child.bin", tmpdir);
   FILE* parent_file = fopen(parent, "wb");
   CHECK(Fail, parent_file);
   fclose(parent_file);
