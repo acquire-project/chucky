@@ -35,7 +35,7 @@ config.codec = (struct codec_config){
 };
 ```
 
-On GPU, levels 1–9 have not effect so sweeping those levels adds no
+On GPU, levels 1–9 have no effect so sweeping those levels adds no
 compression-mode coverage. Level 0 is store-only. CPU C-Blosc does honor levels
 and may adjust the actual block size or split blocks. A CPU tuning search over
 64/128/256 KiB is a reasonable separate starting experiment, not a conclusion
@@ -282,31 +282,41 @@ shrinking the layout. Run settings sequentially on the GPU. After selecting
 speed-, ratio-, and memory-oriented candidates, validate those few against
 the real filesystem or S3 sink.
 
-### Runner and report prerequisites
+### Runner and report status
 
-The current runner still schedules Blosc only on CPU in several tiers and
-supplies a fixed 16 KiB request. `RunSpec` does not yet model shuffle, level,
-or block size as independent sweep dimensions, and this branch's benchmark
-parser does not yet expose shuffle/level CLI controls. Port/reuse the existing
-Blosc benchmark work when adding those controls.
+The current matrices still schedule Blosc only on CPU and request 16 KiB
+blocks. The following support is already available:
 
-Before expanding the matrices:
+- `RunSpec` requires explicit `blosc_block_bytes` for Blosc runs; zero is
+  invalid. The benchmark command and result metadata include the request,
+  including error and timeout results.
+- Run identities and resume checks distinguish block sizes. Archived
+  unrecorded sizes remain unknown, and existing raw-codec identities and
+  archived results are preserved.
+- Both report pages offer block-request selectors and distinguish unknown
+  settings from explicit sizes in comparisons.
+- GPU-independent regression tests cover block-size validation, run identities,
+  deduplication, resume, CLI propagation, matrix counts, report serialization,
+  and block-aware filtering.
 
-1. Make block bytes, shuffle, and level explicit fields of each Blosc run spec,
-   command, and result, including failures. Include them in the run identity,
-   resume key, and comparison labels; otherwise distinct settings collide or
-   silently overwrite each other. Validate returned settings against requests.
-2. Preserve raw-codec identities and archived data. Missing Blosc settings in
-   old results mean unknown, not today's chosen configuration. Keep repeated
-   measurements distinct from the configuration identity.
-3. Record actual chunk geometry, batch size, device budget, output bytes,
-   driver/nvCOMP/build provenance, and capacity failures. Report codec workspace
-   and allocation estimates alongside measured device deltas; label runtime
-   peak measurements separately when added.
-4. Add runner tests for unique IDs, deduplication, resume, CLI propagation,
-   failure metadata, and the intended matrix counts. Keep GPU-independent
-   dry-run tests runnable without a GPU.
-5. Add report filters for block size/shuffle/level and show median plus spread.
+Remaining work for the expanded matrices:
+
+1. Add explicit shuffle and level fields to Blosc run specs, commands, and
+   results, including failures. Extend identities, resume checks, and comparison
+   labels to include them. This branch's benchmark parser does not yet expose
+   shuffle/level CLI controls; port/reuse the existing Blosc benchmark work.
+   Validate returned settings against requests.
+2. Add the routine GPU Blosc cases and opt-in tuning tier described above, with
+   warmups, seeded run order, and measured repetitions. Keep each repetition
+   distinct from its configuration identity.
+3. Complete tuning metadata with actual chunk geometry, batch size, device
+   budget, output bytes, driver/nvCOMP/build provenance, and capacity failures.
+   Include codec workspace alongside the existing allocation estimates and
+   measured device deltas; label runtime peak measurements separately when added.
+4. Extend the regression tests to cover the new settings, failure metadata,
+   repetitions, and expanded matrix counts. Keep validation and dry-run tests
+   runnable without a GPU.
+5. Add shuffle/level report filters and summaries showing median plus spread.
    Compute frontiers only within matching input/geometry/backend/sink groups;
    never pool CPU/GPU, synthetic fills, or differently padded chunk layouts.
 
