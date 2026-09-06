@@ -11,7 +11,7 @@ export function bloscBlockLabel(key) {
 
 export function bloscBlockChoices(runs, codec) {
   if (!codec?.startsWith("blosc-")) return [];
-  return [...new Set(runs.filter(r => r.codec === codec).map(bloscBlockKey))]
+  return [...new Set(runs.filter(r => (r.codec_label ?? r.codec) === codec).map(bloscBlockKey))]
     .sort((a, b) => a === b ? 0 : a === "unknown" ? 1 : b === "unknown" ? -1 : Number(a) - Number(b));
 }
 

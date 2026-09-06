@@ -342,7 +342,7 @@ function distinct(key) {
 }
 
 const ALL_SCENARIOS = sortedScenarios(distinct("scenario"));
-const ALL_CODECS = distinct("codec").sort();
+const ALL_CODECS = distinct("codec_label").sort();
 const ALL_FILLS = sortedFills(distinct("fill"));
 const ALL_BACKENDS = distinct("backend").sort();
 const ALL_SINKS = distinct("sink").sort();
@@ -367,7 +367,7 @@ function pickDefaults() {
     const here = new Set();
     for (const r of s.runs) {
       if (r.status !== "pass" || metricValue(r, state.metric) == null) continue;
-      here.add([r.scenario, r.codec, r.backend, r.sink, r.fill, bloscBlockKey(r)].join("|"));
+      here.add([r.scenario, r.codec_label, r.backend, r.sink, r.fill, bloscBlockKey(r)].join("|"));
     }
     for (const combo of here) counts.set(combo, (counts.get(combo) || 0) + 1);
   }
@@ -391,7 +391,7 @@ function availableCombinations(scenario) {
     for (const run of sweep.runs) {
       if (run.status !== "pass" || metricValue(run, state.metric) == null) continue;
       if (scenario && run.scenario !== scenario) continue;
-      found.add([run.codec, run.backend, run.sink, run.fill, bloscBlockKey(run)].join("|"));
+      found.add([run.codec_label, run.backend, run.sink, run.fill, bloscBlockKey(run)].join("|"));
     }
   }
   return found;

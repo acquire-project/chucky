@@ -85,3 +85,13 @@ foreach(src IN LISTS BENCH_STREAM_SOURCES)
     string(REPLACE ".c" "" target ${src})
     add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
+    add_test(
+        NAME test-bench-cli
+        COMMAND
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
+            $<TARGET_FILE:bench_stream_smallepoch_single>
+    )
+endif()

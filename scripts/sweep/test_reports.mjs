@@ -66,3 +66,29 @@ test("selection respects metric direction, retirement, and missing values", () =
   assert.equal(comparable(sweep, meta), false);
   assert.deepEqual(moversFor({sweeps: [sweep]}, state, meta), {rows: [], newest: null});
 });
+
+test("codec variants and block requests stay distinct throughout report selection", () => {
+  const variant = (block, shuffle, level, throughput = 1) => run(block, {
+    blosc_shuffle: shuffle, blosc_level: level, codec_label: `blosc-zstd (${shuffle}, level ${level})`,
+    id: `${block}-${shuffle}-${level}`, throughput_in_gibs: throughput,
+  });
+  const selected = variant(16384, "bit", 0);
+  const runs = [selected, variant(32768, "bit", 0, 100),
+    variant(16384, "byte", 0, 200), variant(16384, "bit", 3, 300),
+    variant(4096, "byte", 0, 400), run(undefined, {codec_label: "blosc-zstd"})];
+  const state = {codec: selected.codec_label, backend: "cpu", sink: "discard",
+    bloscBlock: "16384", metric: "throughput_in_gibs"};
+  const meta = {key: state.metric, better: "high"};
+  assert.deepEqual(blosc.bloscBlockChoices(runs, state.codec), ["16384", "32768"]);
+  assert.deepEqual(filterRuns(runs, {...state, fill: "xor", dtype: "u16",
+    scenarios: new Set(["orca2_single"])}), [selected]);
+  assert.equal(bestRun({runs}, "orca2_single", "xor", state, meta).run, selected);
+  const before = {runs: runs.slice(1)};
+  const after = {runs};
+  assert.deepEqual(moversFor({sweeps: [before, after]}, state, meta).rows, []);
+  before.runs.push({...selected, throughput_in_gibs: 2});
+  const rows = moversFor({sweeps: [before, after]}, state, meta).rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].pct, -50);
+  assert.equal(rows[0].run, selected);
+});
