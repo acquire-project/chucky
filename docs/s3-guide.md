@@ -73,7 +73,9 @@ Blosc-LZ4 and Blosc-Zstd use the same S3 sink as the other codecs. Configure
 the stream and array with the same `struct codec_config`, including an explicit
 `blosc_block_bytes`; see the [Blosc configuration API][blosc-configuration].
 Internal Blosc blocks do not set S3 multipart boundaries or change the number
-of shard objects.
+of shard objects. The [Blosc Pareto analysis][blosc-pareto] compares
+discard-sink compression settings; its results do not include S3 latency or
+bandwidth.
 
 ### Credentials
 
@@ -289,3 +291,4 @@ store_destroy(store);
 [limitations]: #limitations
 [store-h]: ../src/store.h
 [blosc-configuration]: ../README.md#blosc-configuration
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

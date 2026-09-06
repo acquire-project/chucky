@@ -69,7 +69,8 @@ The matrix uses logarithmic horizontal axes matched across each input/chunk row.
 This gives the narrow random-data range useful resolution while keeping the wide
 XOR range readable. The full compression view begins at the meaningful 1× baseline,
 never zero; fitting is an explicit choice with a reset to the full extent. Focus
-a point to see its exact values and repetition min–max.
+a point to see three-significant-figure values and repetition min–max; download
+the filtered CSV for archived precision.
 Lines connect tested settings as a reading aid; they do not predict intermediate
 settings. The [retained frontier table][pareto-frontier] also records membership
 when both Blosc codecs compete.
@@ -432,8 +433,9 @@ backend supports both Blosc codecs. The following support is already available:
 - Run identities and resume checks distinguish block sizes. Archived
   unrecorded sizes remain unknown, and existing raw-codec identities and
   archived results are preserved.
-- Both report pages offer block-request selectors and distinguish unknown
-  settings from explicit sizes in comparisons.
+- The Over time and Benchmark explorer tabs offer block-request selectors and
+  distinguish unknown settings from explicit sizes in comparisons. The Blosc
+  Pareto analysis filters the explicit sizes in its retained tuning datasets.
 - GPU-independent regression tests cover block-size validation, run identities,
   deduplication, resume, CLI propagation, matrix counts, report serialization,
   and block-aware filtering.
@@ -456,7 +458,8 @@ Remaining work for the expanded matrices:
 4. Extend the regression tests to cover the new settings, failure metadata,
    repetitions, and expanded matrix counts. Keep validation and dry-run tests
    runnable without a GPU.
-5. Add shuffle/level report filters and summaries showing median plus spread.
+5. Add shuffle/level fields and filters to the regular sweep reports, with
+   summaries showing median plus spread.
    Compute frontiers only within matching input/geometry/backend/sink groups;
    never pool CPU/GPU, synthetic fills, or differently padded chunk layouts.
 

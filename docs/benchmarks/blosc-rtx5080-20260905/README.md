@@ -7,7 +7,8 @@ are September 6 UTC. Results characterize this machine, software, and desktop
 session. They are empirical frontiers over the tested matrix, not guaranteed
 hardware throughput limits.
 
-[Unified Blosc Pareto site and build instructions](../README.md) ·
+[Unified Blosc Pareto analysis][pareto-analysis] ·
+[Pipeline and build instructions](../README.md) ·
 [All measurements](summary.csv) · [Matching-configuration comparison](comparison.csv)
 
 ## Results and changes from the guide
@@ -240,3 +241,5 @@ executable path and refuses to overwrite existing raw results. It requires
 | [run.mjs](run.mjs) | Original dependency-free acquisition script |
 
 Historical measurements remain in their original directory.
+
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html

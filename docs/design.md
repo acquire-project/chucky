@@ -561,7 +561,9 @@ configuration and nvCOMP sizing queries without allocating codec buffers.
 Allow additional headroom for CUDA/runtime/library overhead and other GPU
 users; the estimate is not a measurement of peak process usage. The
 [Blosc memory guide][blosc-memory] details the block-dependent terms and
-compares allocation estimates with observed device usage.
+compares allocation estimates with observed device usage. The
+[Blosc Pareto analysis][blosc-pareto] shows estimated device allocation beside
+throughput and the reported compression fold for the retained systems.
 
 ### API
 
@@ -802,3 +804,4 @@ chunk slots (across all LOD levels), double-buffered.
 [blosc-format]: blosc-format.md
 [blosc-memory]: blosc-performance.md#how-block-size-affects-gpu-memory
 [blosc-configuration]: ../README.md#blosc-configuration
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

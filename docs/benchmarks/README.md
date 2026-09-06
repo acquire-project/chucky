@@ -1,8 +1,9 @@
 # Retained Blosc experiments
 
-The benchmark site's **Blosc Pareto** tab compares the RTX 5070 Laptop, RTX 5080,
-and L40 archives. The initial view includes all systems, with input/chunk groups
-in rows and matching scales across system columns. These are whole-system
+The benchmark site's [**Blosc Pareto** analysis][pareto-analysis] compares the
+RTX 5070 Laptop, RTX 5080, and L40 archives. The initial view includes all
+systems, with input/chunk groups in rows and matching scales across system
+columns. These are whole-system
 measurements, including host work and transfers; they do not isolate GPU speed.
 All three archives were measured using the
 [`orca2_single` scenario](../../bench/bench_stream_orca2_single.c).
@@ -142,3 +143,5 @@ The implementation follows the reviewed
 and [D3 guidance](https://github.com/benchflow-ai/skillsbench/blob/main/tasks/data-to-d3/environment/skills/d3-visualization/SKILL.md),
 adapting them to this engineering comparison and the existing site. D3 7.9.0
 and its ISC license are retained in `scripts/sweep/vendor`, shared by all tabs.
+
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html

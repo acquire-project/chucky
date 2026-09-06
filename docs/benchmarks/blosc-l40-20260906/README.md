@@ -96,11 +96,12 @@ preserved unchanged.
 
 ## Validate and build the shared site
 
-The **Blosc Pareto** tab replaces standalone figures and report pages. See the
-[dataset contract, build and test instructions](../README.md). The shared Python
-adapter checks raw/compact agreement, repetitions, medians/ranges, ratios,
-allocation estimates, residuals and fixed geometry. It verifies collection and
-measurement hashes without rerunning a benchmark.
+The [**Blosc Pareto** analysis][pareto-analysis] replaces standalone figures
+and report pages. See the
+[dataset contract, build and test instructions](../README.md). The shared
+Python adapter checks raw/compact agreement, repetitions, medians/ranges,
+ratios, allocation estimates, residuals and fixed geometry. It verifies
+collection and measurement hashes without rerunning a benchmark.
 
 `checksums.historical.sha256` preserves the original inventory, including retired
 figures and the original README hash. `checksums.sha256` inventories the files
@@ -135,3 +136,5 @@ build/bench/bench_stream_orca2_single \
 Retain each execution and its actual geometry. Increasing the frame count or
 changing the repeated append buffer changes this workload and its padding;
 save those experiments under a separate identity.
+
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html

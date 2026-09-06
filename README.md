@@ -201,9 +201,9 @@ the library handles all tiling, padding, and shard assembly internally. See
 For writing directly to S3 (or S3-compatible stores), see the
 [S3 storage guide][s3-storage-guide].
 
-For Blosc, see the [binary format specification][blosc-format] and the
-[performance and GPU memory guide][blosc-performance], including measured
-Pareto frontiers and the proposed benchmark-sweep coverage.
+For Blosc, see the [binary format specification][blosc-format], the
+[performance and GPU memory guide][blosc-performance], and the
+[interactive Pareto analysis][blosc-pareto].
 
 ## API
 
@@ -286,14 +286,15 @@ block size. A GPU multiarray stream requires the same codec id and
 Benchmarks require `--blosc-block-bytes` when a Blosc codec is selected:
 
 ```sh
-./build/bench/bench_stream_orca2_single --backend gpu --codec blosc-zstd --blosc-block-bytes 16K
+./build/bench/bench_stream_orca2_single --backend gpu --codec blosc-zstd \
+  --blosc-block-bytes 16K --blosc-shuffle bit
 ```
 
-The regular benchmark CLI selects level 3 and no shuffle for Blosc. It does
-not yet expose `--shuffle` or `--level`; the retained L40 tuning sweep used
-the [archived benchmark-controls patch][blosc-benchmark-controls] to select
-those settings. The command above therefore does not reproduce the bitshuffle
-API example.
+The benchmark executable exposes `--blosc-shuffle none|byte|bit` and records
+the selected shuffle and level in JSON. Blosc level remains fixed at 3 because
+the CLI does not expose `--level`. The retained L40 tuning sweep used the older
+[`--shuffle`/`--level` controls][blosc-benchmark-controls] preserved with that
+archive. The command above matches the bitshuffle API example at level 3.
 
 The existing sweep suite explicitly selects 16 KiB for its Blosc cases; this is
 a benchmark choice, not a codec API default.
@@ -321,6 +322,7 @@ I plan to use this as a future backbone for [acquire-zarr][acquire-zarr].
 [s3-storage-guide]: docs/s3-guide.md
 [blosc-format]: docs/blosc-format.md
 [blosc-performance]: docs/blosc-performance.md
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html
 [src-stream-gpu-h]: src/stream.gpu.h
 [src-stream-cpu-h]: src/stream.cpu.h
 [block-splitting-and-element-alignment-rules]: https://github.com/Blosc/c-blosc/blob/616f4b7343a8479f7e71dd3d7025bd92c9a6bbd0/blosc/blosc.c#L934-L1064

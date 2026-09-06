@@ -4,11 +4,13 @@ For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
 The current runner has not yet adopted that matrix; its Blosc entries still
-use CPU, level 3, no shuffle, and an explicit 16 KiB block request. The GPU
-backend supports both Blosc codecs; CPU-only scheduling is a limit of the
-current routine matrices. The regular benchmark CLI has no shuffle/level
-controls yet. The [retained L40 tuning sweep][l40-measurements] used a separate
-archived benchmark patch to select those settings.
+use CPU, level 3, the default no-shuffle setting, and an explicit 16 KiB block
+request. The GPU backend supports both Blosc codecs; CPU-only scheduling is a
+limit of the current routine matrices. The benchmark executable exposes
+`--blosc-shuffle` and reports shuffle/level metadata, but `RunSpec` does not yet
+carry either setting and the executable has no level option. The
+[retained L40 tuning sweep][l40-measurements] used an older archived patch with
+`--shuffle` and `--level` controls.
 Blosc run identities include the requested block size. Resume checks and report
 comparisons distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
@@ -360,10 +362,12 @@ bump it.
 
 ## Retained Blosc Pareto benchmarks
 
-The report also builds a **Blosc Pareto** tab alongside **Over time** and
+The report also builds an interactive [**Blosc Pareto** analysis][pareto-analysis]
+alongside **Over time** and
 **Benchmark explorer**. It opens with all retained systems in a comparison matrix.
-Filters, estimated-allocation budgets and frontiers, an overlay view, exact point details, a sortable
-table and filtered CSV downloads operate on the same eligible measurements. URL
+Filters, estimated-allocation budgets and frontiers, an overlay view,
+three-significant-figure point details, a sortable table and exact filtered CSV
+downloads operate on the same eligible measurements. URL
 state preserves the comparison and selection. All three tabs share a pinned local
 D3 7.9.0 bundle and the existing light/dark theme.
 
@@ -381,3 +385,5 @@ provide an unframed-codec reference and remain excluded from frontier membership
 See the [dataset contract, extension and test instructions](../../docs/benchmarks/README.md).
 Use `--pareto-manifest <path>` for another manifest. Serve through `--serve`, which
 sets JavaScript module MIME types correctly even with Windows registry overrides.
+
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html

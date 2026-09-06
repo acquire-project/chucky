@@ -163,6 +163,8 @@ and matching the stream and sink settings.
 - [docs/s3-guide.md][docs-s3-guide-md] — S3 storage backend setup
 - [docs/blosc-format.md][blosc-format] — C-Blosc format and CPU/GPU compatibility
 - [docs/blosc-performance.md][blosc-performance] — block/filter tuning, memory, and retained measurements
+- [Blosc Pareto analysis][blosc-pareto] — interactive comparison of the
+  retained RTX 5070 Laptop, RTX 5080, and L40 measurements
 
 [docs-design-md]: design.md
 [docs-streaming-md]: streaming.md
@@ -171,3 +173,4 @@ and matching the stream and sink settings.
 [blosc-configuration]: ../README.md#blosc-configuration
 [blosc-format]: blosc-format.md
 [blosc-performance]: blosc-performance.md
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

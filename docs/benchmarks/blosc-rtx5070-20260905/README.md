@@ -14,9 +14,10 @@ allocation sizes and observed device-memory use.
 | [memory-estimates.md][memory-estimates] | Memory-versus-block-size tables from the stream estimator results, with bitshuffle |
 | [memory-estimates.csv][memory-estimates-csv] | Exact estimated device bytes for all 96 Blosc geometry/codec/filter configurations |
 
-The unified **Blosc Pareto** tab replaces the standalone figures and reports.
-See the [shared pipeline and regeneration instructions](../README.md). The archive
-is summary-only; individual repetition records are not retained.
+The unified [**Blosc Pareto** analysis][pareto-analysis] replaces the standalone
+figures and reports. See the
+[shared pipeline and regeneration instructions](../README.md). The archive is
+summary-only; individual repetition records are not retained.
 
 `summary.csv` is the preserved aggregate from the completed 800-execution sweep;
 its old `pareto` column is **per shuffle**, not the frontier shown in the guide.
@@ -47,3 +48,4 @@ this historical result.
 [pareto-memory-frontier]: pareto-memory-frontier.csv
 [memory-estimates]: memory-estimates.md
 [memory-estimates-csv]: memory-estimates.csv
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html

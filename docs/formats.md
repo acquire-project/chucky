@@ -130,7 +130,9 @@ struct store* store = store_s3_create(&s3cfg);
 
 The [Blosc binary specification][blosc-format] defines the serialized
 representation, flags, blocks, filters, and CPU/GPU compatibility boundary.
-The [performance guide][blosc-performance] covers tuning and memory sizing.
+The [performance guide][blosc-performance] covers tuning and memory sizing;
+the [interactive Pareto analysis][blosc-pareto] compares the retained systems
+and tested configurations.
 
 `CODEC_BLOSC_LZ4` and `CODEC_BLOSC_ZSTD` produce C-Blosc 1.x compatible
 chunks with no shuffle, byte shuffle, or bitshuffle. The GPU encoder divides
@@ -247,4 +249,5 @@ plate.zarr/
 
 [blosc-format]: blosc-format.md
 [blosc-performance]: blosc-performance.md
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html
 [blosc-configuration]: ../README.md#blosc-configuration
