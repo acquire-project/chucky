@@ -3,16 +3,10 @@
 For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
-The current runner has not yet adopted that matrix; its Blosc entries still
-use CPU, level 3, the default no-shuffle setting, and an explicit 16 KiB block
-request. The GPU backend supports both Blosc codecs; CPU-only scheduling is a
-limit of the current routine matrices. The benchmark executable exposes
-`--blosc-shuffle` and reports shuffle/level metadata, but `RunSpec` does not yet
-carry either setting and the executable has no level option. The
-[retained L40 tuning sweep][l40-measurements] used an older archived patch with
-`--shuffle` and `--level` controls.
-Blosc run identities include the requested block size. Resume checks and report
-comparisons distinguish each explicit size from historical runs with an
+The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
+The full block-size tuning matrix and repetition controls remain proposed.
+Blosc run identities include block size, shuffle, and level. Resume checks and
+report comparisons distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
 pages offer a Blosc block-request selector.
 
@@ -32,14 +26,61 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
-## Tests
+## GPU Blosc comparisons
 
-The runner and report regression tests do not require a GPU or benchmark build:
+The focused `blosc` tier compares raw LZ4/Zstd with Blosc LZ4/Zstd on CPU and
+GPU, using `none`, `byte`, and `bit` shuffle on 16 KiB, 256 KiB, and 1 MiB
+chunks, with an explicit 16 KiB Blosc block request. It runs 48 cases on
+`orca2_single`, or 24 with a backend filter:
+
+```sh
+uv run scripts/sweep/sweep.py --tier blosc --dry-run
+uv run scripts/sweep/sweep.py --tier blosc --backend gpu
+```
+
+The other tiers also include GPU Blosc, using the historical defaults of no
+shuffle and level 3. Shuffle variants are confined to the focused tier to keep
+the I/O and LOD matrices manageable. `--blosc-shuffle byte` or `--level 0` overrides
+only the selected Blosc cases and deduplicates them; raw codec controls keep
+their defaults. All three shuffle modes can be selected this way in any tier.
+
+The benchmark executables accept the same settings directly:
+
+```sh
+./build/bench/bench_stream_orca2_single --codec blosc-lz4 --blosc-block-bytes 16K --blosc-shuffle bit --json
+```
+
+`--level 0` means store-only Blosc, regardless of its position before or after
+`--codec`. Blosc accepts levels 0 through 9. GPU levels 1 through 9 all use
+nvCOMP's single compression mode; CPU Blosc uses the level. The defaults
+remain level 3 for Blosc, 1 for raw LZ4, and 0 for Zstd. A nontrivial shuffle
+requires a Blosc codec.
+
+The block request is independent of the outer Zarr chunk size. With the current
+GPU backend, requesting a block at least as large as the chunk gives one block;
+smaller requests give multiple blocks. Use the executable's
+`--blosc-block-bytes` to compare those layouts at fixed chunk geometry. CPU
+Blosc may adjust the actual block size or split blocks.
+
+For comparisons across builds, use Release mode and the same explicit settings.
+Each result records the checkout's commit and build metadata. Use separate
+output files for two builds of the same commit; `--build-dir` selects the build
+to execute. Archived runs without recorded block sizes remain unknown and
+cannot establish parity of block settings. Compare compression ratio, input
+throughput, the compression stage (including filtering and framing), and
+device memory.
+
+Run the focused checks with:
 
 ```sh
 uv run scripts/sweep/test_sweep.py
 node --test scripts/sweep/test_reports.mjs
+ctest --test-dir build -R test-bench-cli --output-on-failure
 ```
+
+The runner and report checks require no GPU or benchmark build. The CLI check
+is registered when CMake finds Python and C-Blosc, and runs the
+`bench_stream_smallepoch_single` executable on CPU, including in GPU builds.
 
 ## Running S3 benchmarks
 
@@ -203,6 +244,16 @@ Each run records its `frames` and the `worker_threads` its pool ran on. The two
 backends count different pools. The GPU number is the staging-copy pool, which
 stops at three helpers. The CPU number is the pipeline pool, which takes one
 thread per allowed core, so it matches `cpu_count`.
+
+Blosc runs record `blosc_shuffle` and `blosc_level`, including failed and
+timed-out cases, using the benchmark executable's existing JSON fields.
+Raw-codec runs record `level`. The defaults preserve the block-aware run IDs;
+nondefault settings add
+`__shuffle-byte`/`__shuffle-bit` and/or `__level-N`. The report's codec selector
+shows each settings variant separately, so filter choices cannot overwrite one
+another in charts. Archived settings remain absent in the JSON schema; report
+labels use the historical CLI defaults when those fields were not recorded.
+These additive fields do not change the result schema version.
 
 GPU runs may also contain a `d2h_transfer` block.
 `payload_bytes_transferred` is the compact shard payload copied across PCIe.

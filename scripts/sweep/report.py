@@ -47,7 +47,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from columnar import pack
-from models import migrate_results, validate_results
+from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
 from pareto_data import DEFAULT_MANIFEST, write_datasets
 from site_server import ReportHandler
@@ -105,6 +105,8 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
                     loc = " -> ".join(str(x) for x in err["loc"])
                     print(f"Warning: {p.name}: {loc}: {err['msg']}", file=sys.stderr)
 
+        for run in data.get("runs", []):
+            run["codec_label"] = codec_label(run)
         loaded.append((p, data))
     return loaded
 

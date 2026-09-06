@@ -120,16 +120,57 @@ parse_codec(const char* s, struct codec_config* out)
   int i = match_option(s, names, 5);
   if (i < 5) {
     out->id = vals[i];
-    if (out->id == CODEC_LZ4_NON_STANDARD && out->level == 0)
-      out->level = 1;
-    if (codec_is_blosc(out->id) && out->level == 0)
-      out->level = 3;
     return 1;
   }
   fprintf(stderr,
           "Unknown codec: %s (expected none, lz4, zstd, blosc-lz4, "
           "blosc-zstd)\n",
           s);
+  return 0;
+}
+
+uint8_t
+bench_default_level(enum compression_codec codec)
+{
+  if (codec == CODEC_LZ4_NON_STANDARD)
+    return 1;
+  return codec_is_blosc(codec) ? 3 : 0;
+}
+
+static const char* const shuffle_names[] = { "none", "byte", "bit" };
+
+const char*
+bench_shuffle_name(enum codec_shuffle shuffle)
+{
+  return shuffle >= CODEC_SHUFFLE_NONE && shuffle <= CODEC_SHUFFLE_BIT
+           ? shuffle_names[shuffle]
+           : "unknown";
+}
+
+int
+parse_shuffle(const char* s, enum codec_shuffle* out)
+{
+  int i = match_option(s, shuffle_names, 3);
+  if (i < 3) {
+    *out = (enum codec_shuffle)i;
+    return 1;
+  }
+  fprintf(stderr, "Unknown shuffle: %s (expected none, byte, bit)\n", s);
+  return 0;
+}
+
+int
+parse_level(const char* s, uint8_t* out)
+{
+  char* end = NULL;
+  errno = 0;
+  long value = strtol(s, &end, 10);
+  if (end != s && *end == '\0' && errno != ERANGE && value >= 0 &&
+      value <= UINT8_MAX) {
+    *out = (uint8_t)value;
+    return 1;
+  }
+  fprintf(stderr, "Invalid level: %s (expected integer 0..255)\n", s);
   return 0;
 }
 

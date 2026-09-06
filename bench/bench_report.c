@@ -1,4 +1,5 @@
 #include "bench_report.h"
+#include "bench_parse.h"
 
 #include "util/format_bytes.h"
 #include "util/metric.h"
@@ -672,9 +673,11 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);
     jw_key(&jw, "blosc_shuffle");
-    jw_string(&jw, codec.shuffle == CODEC_SHUFFLE_BIT ? "bit" :
-                     codec.shuffle == CODEC_SHUFFLE_BYTE ? "byte" : "none");
+    jw_string(&jw, bench_shuffle_name(codec.shuffle));
     jw_key(&jw, "blosc_level");
+    jw_uint(&jw, codec.level);
+  } else {
+    jw_key(&jw, "level");
     jw_uint(&jw, codec.level);
   }
   jw_key(&jw, "throughput_in_gibs");

@@ -669,7 +669,7 @@ read_size(const char* flag, const char* text, uint64_t* out)
 //   --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads.
+//   --max-threads --blosc-shuffle --level --blosc-block-bytes.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
 static int
@@ -695,6 +695,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
+  int level_set = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -714,18 +715,12 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       out->codec.blosc_block_bytes = (uint32_t)block_bytes;
       ++i;
     } else if (strcmp(av[i], "--blosc-shuffle") == 0 && i + 1 < ac) {
-      const char* shuffle = av[++i];
-      if (strcmp(shuffle, "none") == 0)
-        out->codec.shuffle = CODEC_SHUFFLE_NONE;
-      else if (strcmp(shuffle, "byte") == 0)
-        out->codec.shuffle = CODEC_SHUFFLE_BYTE;
-      else if (strcmp(shuffle, "bit") == 0)
-        out->codec.shuffle = CODEC_SHUFFLE_BIT;
-      else {
-        fprintf(stderr, "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
-                shuffle);
+      if (!parse_shuffle(av[++i], &out->codec.shuffle))
         return 1;
-      }
+    } else if (strcmp(av[i], "--level") == 0 && i + 1 < ac) {
+      if (!parse_level(av[++i], &out->codec.level))
+        return 1;
+      level_set = 1;
     } else if (strcmp(av[i], "--reduce") == 0 && i + 1 < ac) {
       if (!parse_reduce(av[++i], &out->reduce))
         return 1;
@@ -781,7 +776,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "Usage: %s [--fill xor|zeros|rand] [--codec "
               "none|lz4|zstd|blosc-lz4|blosc-zstd] "
               "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
-              "[--blosc-shuffle none|byte|bit] "
+              "[--blosc-shuffle none|byte|bit (Blosc only)] [--level N] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
               "[--json] [--chunk-bytes N] [--batch-bytes N] "
@@ -794,6 +789,21 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               av[0]);
       return 1;
     }
+  }
+  if (!level_set)
+    out->codec.level = bench_default_level(out->codec.id);
+  if (!codec_is_blosc(out->codec.id) &&
+      out->codec.shuffle != CODEC_SHUFFLE_NONE) {
+    fprintf(stderr, "--blosc-shuffle byte/bit requires a Blosc codec\n");
+    return 1;
+  }
+  if (out->codec.id == CODEC_LZ4_NON_STANDARD && out->codec.level == 0) {
+    fprintf(stderr, "LZ4 --level must be at least 1\n");
+    return 1;
+  }
+  if (codec_is_blosc(out->codec.id) && out->codec.level > 9) {
+    fprintf(stderr, "Blosc --level must be 0..9\n");
+    return 1;
   }
   return codec_config_validate_blosc(out->codec);
 }
