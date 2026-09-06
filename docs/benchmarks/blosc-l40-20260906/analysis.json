@@ -1,0 +1,151 @@
+{
+  "configurations": 200,
+  "executions": 1200,
+  "measured_executions": 1000,
+  "repeats": [
+    5
+  ],
+  "median_span_pct": 5.7594874911771035,
+  "maximum_span_pct": 50.72427417034151,
+  "widest_span_configuration": [
+    "xor",
+    "256",
+    "16",
+    "blosc-zstd",
+    "bit"
+  ],
+  "identical_historical_folds": 200,
+  "changed_frontier_groups": 8,
+  "frontier_groups": [
+    {
+      "fill": "rand",
+      "chunk_kib": 256,
+      "codec": "blosc-lz4",
+      "changed": true,
+      "rtx5070": "4 bit, 8 bit, 16 bit, 32 bit, 256 bit",
+      "l40": "4 bit, 8 bit, 128 bit, 256 bit"
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 256,
+      "codec": "blosc-zstd",
+      "changed": true,
+      "rtx5070": "16 bit, 32 bit, 64 bit, 128 bit",
+      "l40": "256 bit"
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 1024,
+      "codec": "blosc-lz4",
+      "changed": true,
+      "rtx5070": "4 bit, 8 bit, 16 bit, 32 bit, 64 bit, 1024 bit",
+      "l40": "4 bit, 8 bit, 256 bit"
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 1024,
+      "codec": "blosc-zstd",
+      "changed": true,
+      "rtx5070": "16 bit, 32 bit, 64 bit, 128 bit, 1024 bit",
+      "l40": "1024 bit"
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 256,
+      "codec": "blosc-lz4",
+      "changed": true,
+      "rtx5070": "256 bit",
+      "l40": "16 byte, 32 byte, 64 byte, 128 byte, 256 bit"
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 256,
+      "codec": "blosc-zstd",
+      "changed": true,
+      "rtx5070": "64 bit, 128 bit, 256 bit",
+      "l40": "32 bit, 128 bit, 256 bit"
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "codec": "blosc-lz4",
+      "changed": true,
+      "rtx5070": "1024 bit",
+      "l40": "4 bit, 4 byte, 8 byte, 32 byte, 64 byte, 128 byte, 256 bit, 512 bit, 1024 bit"
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "codec": "blosc-zstd",
+      "changed": true,
+      "rtx5070": "64 bit, 128 bit, 256 bit, 512 bit, 1024 bit",
+      "l40": "32 bit, 64 bit, 128 bit, 256 bit, 512 bit, 1024 bit"
+    }
+  ],
+  "memory_residuals": [
+    {
+      "fill": "rand",
+      "chunk_kib": 256,
+      "codec": "blosc-lz4",
+      "minimum_mib": 9.684022903442383,
+      "median_mib": 11.160585403442383,
+      "maximum_mib": 11.345155715942383
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 256,
+      "codec": "blosc-zstd",
+      "minimum_mib": 442.5001173019409,
+      "median_mib": 444.4664258956909,
+      "maximum_mib": 444.5444288253784
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 1024,
+      "codec": "blosc-lz4",
+      "minimum_mib": 9.154237747192383,
+      "median_mib": 10.630800247192383,
+      "maximum_mib": 11.824159622192383
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 1024,
+      "codec": "blosc-zstd",
+      "minimum_mib": 444.1070508956909,
+      "median_mib": 446.1959180831909,
+      "maximum_mib": 446.39312267303467
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 256,
+      "codec": "blosc-lz4",
+      "minimum_mib": 9.684022903442383,
+      "median_mib": 11.160585403442383,
+      "maximum_mib": 11.345155715942383
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 256,
+      "codec": "blosc-zstd",
+      "minimum_mib": 442.5001173019409,
+      "median_mib": 444.4664258956909,
+      "maximum_mib": 444.5444288253784
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "codec": "blosc-lz4",
+      "minimum_mib": 9.154237747192383,
+      "median_mib": 10.630800247192383,
+      "maximum_mib": 11.824159622192383
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "codec": "blosc-zstd",
+      "minimum_mib": 444.1070508956909,
+      "median_mib": 446.1959180831909,
+      "maximum_mib": 446.39312267303467
+    }
+  ]
+}

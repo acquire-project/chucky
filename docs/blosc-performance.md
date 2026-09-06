@@ -6,23 +6,25 @@ the [README][blosc-configuration] describes configuration.
 
 ## Starting points
 
-Set the block size explicitly. `16 * 1024` is a useful initial GPU comparison
-point. A block is internal to a Zarr chunk. Changing it does not require
+Retune for the target GPU. The L40 measurements below have different frontiers
+from the archived RTX 5070 Laptop run. Set the block size explicitly;
+`16 * 1024` remains a useful fixed regression comparison. A block is internal
+to a Zarr chunk, so changing it does not require
 changing the chunk or shard shape.
 
-Our RTX 5070 Laptop measurements suggest these candidates:
+The full L40 sweep suggests these candidates:
 
-| Workload and priority | Codec/filter | First block sizes to compare |
+| Workload and priority | Codec/filter | First block sizes to compare on L40 |
 |---|---|---|
-| Low-compressibility input; throughput | Blosc-LZ4 | 4–8 KiB, with a memory check |
-| Low-compressibility input | Blosc-Zstd | 8–32 KiB; 16 KiB was fastest |
-| Highly repetitive input | Blosc-Zstd + bitshuffle | 32–64 KiB for speed; larger for ratio |
-| Highly repetitive input | Blosc-LZ4 + bitshuffle | 256 KiB–1 MiB, capped by chunk length |
+| Low-compressibility input; throughput | Blosc-LZ4 + bitshuffle | 4–8 KiB, with a memory check; also compare 128–256 KiB |
+| Low-compressibility input; Zstd speed/ratio | Blosc-Zstd + bitshuffle | Chunk-sized: 256 KiB or 1 MiB here; retain 16 KiB as a lower-memory comparison |
+| Highly repetitive input; throughput | Blosc-LZ4 + byte shuffle | 4/8/16/32 KiB, with a memory check |
+| Highly repetitive input; LZ4 ratio | Blosc-LZ4 + bitshuffle | Chunk-sized: 256 KiB or 1 MiB here |
+| Highly repetitive input; Zstd speed/ratio | Blosc-Zstd + bitshuffle | 16–64 KiB for speed; larger blocks for ratio |
 
-These are based on measurements using two synthetic fills, not actual microscopy
-images. Hold the input, element type, chunk shape, batch geometry, and sink
-fixed when comparing settings. Test representative images before adopting a
-production policy.
+These are two synthetic fills, not actual microscopy images. Hold input,
+element type, chunk shape, batch geometry, and sink fixed when comparing
+settings. Test representative images before adopting a production policy.
 
 For example, an explicit Zstd/bitshuffle comparison point is:
 
@@ -35,7 +37,7 @@ config.codec = (struct codec_config){
 };
 ```
 
-On GPU, levels 1–9 have no effect so sweeping those levels adds no
+For GPU Blosc, levels 1–9 have no effect so sweeping those levels adds no
 compression-mode coverage. Level 0 is store-only. CPU C-Blosc does honor levels
 and may adjust the actual block size or split blocks. A CPU tuning search over
 64/128/256 KiB is a reasonable separate starting experiment, not a conclusion
@@ -46,59 +48,105 @@ discusses the different cache/ratio tradeoff.
 
 A setting dominates another when its median throughput and compression fold
 are both at least as high and one is strictly higher. A frontier contains
-settings not dominated by another candidate in the comparison group. Here each
+settings not dominated by another candidate in the comparison group. Each
 group fixes GPU, input, chunk geometry, and codec, and searches all block sizes
-and all three shuffle choices. This is not the same as computing a separate
-frontier for each shuffle mode.
+and all three shuffle choices. Separate frontiers for each shuffle would keep
+settings that another filter dominates.
 
-![Blosc throughput and compression frontiers][pareto-plot]
+![L40 Blosc throughput and compression frontiers][pareto-plot]
 
 Blue is LZ4 and orange is Zstd. Higher and farther right is better. Labels are
-block sizes; all per-codec frontier points in this dataset use bitshuffle.
+block sizes with units (for example, 16 KiB or 1 MiB). The graphical legend
+identifies shuffle modes: squares for none, circles for byte, and triangles
+for bitshuffle. The L40 XOR frontiers include
+byte-shuffled LZ4 points; restricting the search to bitshuffle would miss them.
 Faint points are dominated candidates. Hollow diamonds are raw-codec controls,
-excluded from the Blosc frontier. The random-input panels zoom the ratio axis;
-the XOR panels use a logarithmic ratio axis. Lines only connect tested points;
+excluded from the Blosc frontier. Random-input panels zoom the ratio axis;
+XOR panels use a logarithmic ratio axis. Lines connect only tested points;
 they do not predict intermediate settings.
 
-[All candidates, without the random-input zoom][pareto-all-candidates]
-and the [frontier table][pareto-frontier]
-are available. The table also identifies nondominated points when both codecs
+[All candidates, without the random-input zoom][pareto-all-candidates], the
+[frontier table][pareto-frontier], and a [filterable local view][pareto-html]
+are available. The table also marks nondominated points when both Blosc codecs
 compete, rather than retaining a separate frontier for each codec.
 
-Representative 1 MiB-chunk results, with bitshuffle throughout:
+Representative L40 results with 1 MiB chunks:
 
-| Input | Codec | Block | Input GiB/s | Compression fold | Device GiB |
-|---|---|---:|---:|---:|---:|
-| Random | LZ4 | 4 KiB | 4.769 | 1.47469 | 4.766 |
-| Random | LZ4 | 16 KiB | 3.633 | 1.48181 | 3.076 |
-| Random | Zstd | 16 KiB | 1.107 | 1.48904 | 3.245 |
-| XOR | LZ4 | 1 MiB | 5.284 | 131.02 | 2.523 |
-| XOR | Zstd | 64 KiB | 5.167 | 125.30 | 3.349 |
-| XOR | Zstd | 1 MiB | 3.692 | 360.65 | 3.349 |
+| Input | Codec | Shuffle | Block | Input GiB/s | Compression fold | Observed device GiB |
+|---|---|---|---:|---:|---:|---:|
+| Random | LZ4 | bit | 4 KiB | 11.176 | 1.47469 | 4.764 |
+| Random | LZ4 | bit | 256 KiB | 7.175 | 1.48431 | 2.547 |
+| Random | Zstd | bit | 16 KiB | 2.181 | 1.48904 | 3.767 |
+| Random | Zstd | bit | 1 MiB | 2.979 | 1.49292 | 4.038 |
+| XOR | LZ4 | byte | 4 KiB | 10.785 | 2.44739 | 4.764 |
+| XOR | LZ4 | byte | 32 KiB | 10.458 | 3.98582 | 2.793 |
+| XOR | LZ4 | bit | 1 MiB | 7.876 | 131.02 | 2.521 |
+| XOR | Zstd | bit | 64 KiB | 6.334 | 125.30 | 4.038 |
+| XOR | Zstd | bit | 1 MiB | 4.718 | 360.65 | 4.038 |
 
-On random input, small-block LZ4 buys substantial throughput for little ratio
-loss but costs memory. On repetitive input, larger blocks can improve both
-speed and ratio; block-size effects are not monotonic across codecs or filters.
-The XOR example also shows why neither codec universally wins: LZ4 at 1 MiB
-beats Zstd at 64 KiB in both objectives, but larger-block Zstd reaches ratios
-LZ4 does not.
+On random input, small-block LZ4 buys throughput for little ratio loss but
+costs memory. Chunk-sized Zstd improves both speed and ratio over 16 KiB on
+this L40, while using more device memory. On XOR input, byte-shuffled LZ4 is
+worth comparing for speed, chunk-sized bitshuffled LZ4 offers much higher
+compression, and large-block bitshuffled Zstd reaches ratios LZ4 does not.
+Block-size effects are not monotonic across codecs or filters.
 
 For a storage-limited pipeline, also measure encoded bytes and sustained sink
 throughput. A faster discard-sink configuration can be slower end to end if
 its output is larger. This sweep did not measure decompression throughput.
 
+### Comparison with the RTX 5070 Laptop
+
+The exact-median frontiers changed in **all eight** input/chunk/codec
+groups. [Paired measurements and frontier identities][frontier-comparison]
+and the [comparison figure][comparison-plot] retain all 200 matched settings.
+Compression folds matched the archived values at the recorded precision for
+every configuration. XOR/Zstd timing ranges overlap substantially, so its
+precise block ranking remains uncertain despite different median frontiers.
+
+Two useful changes appear with 1 MiB chunks:
+
+| Input and setting | RTX 5070 Laptop GiB/s | L40 GiB/s | Compression fold |
+|---|---:|---:|---:|
+| Random, Zstd + bitshuffle, 16 KiB | 1.107 | 2.181 | 1.48904 |
+| Random, Zstd + bitshuffle, 1 MiB | 0.981 | 2.979 | 1.49292 |
+| XOR, LZ4 + byte shuffle, 4 KiB | 4.392 | 10.785 | 2.44739 |
+| XOR, LZ4 + bitshuffle, 1 MiB | 5.284 | 7.876 | 131.02 |
+
+The random-input Zstd ordering reverses: on L40, the 1 MiB block is
+37% faster than 16 KiB and compresses slightly better. For XOR, the laptop's
+chunk-sized bitshuffled LZ4 point dominates the smaller byte-shuffled setting;
+on L40 the smaller setting trades ratio for greater speed. Memory remains a
+separate objective: a two-objective winner can require more VRAM.
+
+The observed min–max throughput ranges for both reversals are disjoint
+within each setup. This is an observation about these repetitions, not a
+confidence interval.
+
+These runs compare different measured setups. The older run used source
+`c519a05`, internal block-size constants, CUDA 13.2.51, Clang 21.1.8, and driver
+595.99.02. The L40 run uses PR264's explicit API, CUDA 13.1.115, GCC 14.3.0, and
+driver 580.126.20; both use nvCOMP 5.3.0.16. Source, toolchain, driver, host, and
+GPU differ, so this does not isolate the effect of changing only the GPU.
+
 ### Measurement scope
 
-The retained run is `orca2_single` on an NVIDIA GeForce RTX 5070 Laptop GPU,
-driver 595.99.02, CUDA 13.2.51, nvCOMP 5.3.0.16, Release build. It used u16 XOR
-and deterministic uniform 12-bit random input, 100 frames, a discard sink,
-`max_threads = 3`, a 6 GiB device budget, and a 64 MiB target batch size.
+The retained L40 run is `orca2_single` at PR264 commit `2c13122`, measured on
+2026-09-06 in Release mode with native sm_89 code. An archived benchmark-only
+patch adds shuffle/level controls and metadata; the compression implementation
+is unchanged from that revision. It used u16 XOR and deterministic uniform
+12-bit random input, 100 frames, a discard sink, three worker threads, a 6 GiB
+device allocation budget, and a 64 MiB target batch size. A prefilled 64 MiB
+append buffer is reused, matching the earlier benchmark's default. This is a
+controlled repeated input, not 100 independent random frames.
 
 The nine block sizes were 4/8/16/32/64/128/256/512/1024 KiB, omitting requests
-larger than a chunk. Each configuration had one warmup and three measured
-runs; each pass randomized the matrix with seed 169. All 800 runs completed,
-including 600 measured runs. Each block-size build passed GPU Blosc correctness
-tests before measurement.
+larger than a chunk. The 192 Blosc configurations cover both codecs, all three
+shuffles, and level 3; eight raw LZ4/Zstd controls bring the total to 200.
+One complete warmup pass precedes five measured passes. Each pass is shuffled
+using RNG seed 169, and each execution uses a fresh process. All 1,200 runs
+completed, including 1,000 measurements. The two CPU checks, three GPU
+correctness tests, and four benchmark CLI checks passed before measurement.
 
 The actual minimum batch was one epoch, larger than the 64 MiB target:
 
@@ -107,16 +155,21 @@ The actual minimum batch was one epoch, larger than the 64 MiB target:
 | 256 KiB | `(8,1,128,128)` | 576 | 144 MiB |
 | 1 MiB | `(16,1,128,256)` | 288 | 288 MiB |
 
-Each run ingested 1.758 GiB. Compression fold is padded chunk input bytes
-divided by encoded bytes, not original ingested bytes divided by file size.
-Compare folds within a chunk geometry. Throughput is original input GiB per
-second through the pipeline, not an isolated nvCOMP kernel rate.
+Every execution was checked against these shapes and batch sizes. Each run
+ingested 1.758 GiB. Compression fold is padded chunk input bytes divided by
+encoded bytes, not original ingested bytes divided by file size. Compare folds
+within a chunk geometry. Throughput covers append-buffer allocation/prefill,
+appends, and flush; stream creation is timed separately. It is a pipeline rate,
+not an isolated nvCOMP kernel rate.
 
-Throughput bars show the minimum and maximum of three runs, not confidence
+Throughput bars show the minimum and maximum of five runs, not confidence
 intervals. The median relative span `(max-min)/median` across configurations
-was 2.1%, with a maximum of 19.1%. Exact-median frontier membership is therefore
-descriptive; very close rankings should not be treated as decisive. Compression
-fold was identical across repetitions.
+was 5.8%, with a maximum of 50.7%. Exact-median frontier membership is
+descriptive; close rankings should not be treated as decisive. Compression
+fold was identical across measured repetitions. The widest span was XOR with
+256 KiB chunks, Zstd, bitshuffle, and 16 KiB blocks; 16–64 KiB XOR/Zstd choices
+need further measurements to settle close rankings. The separate 5070 Laptop
+archive retains its original three-repeat method and results.
 
 ## How block size affects GPU memory
 
@@ -172,19 +225,18 @@ workspace requirements and output bounds need nvCOMP sizing queries; these do
 not require compression or allocating the codec buffers. There is no reason to
 benchmark compression to produce a memory-versus-block-size table.
 
-The [generated memory tables][memory-estimates]
-use the estimator results already recorded by the throughput sweep, before
-shuffle and alignment storage were unified. They remain historical results. The
-generator checks that estimates agree across the two fills. For 1 MiB chunks,
-288 MiB of padded input per batch, and bitshuffle:
+The [generated memory tables][memory-estimates] use the allocation estimates
+recorded by this L40 sweep. The generator checks that estimates agree across
+both fills before combining them; no additional compression run is needed.
+For 1 MiB chunks, 288 MiB of padded input per batch, and bitshuffle:
 
 | Block size | LZ4 device GiB | Zstd device GiB |
 |---|---:|---:|
-| 4 KiB | 4.754 | 3.082 |
-| 16 KiB | 3.064 | 3.100 |
-| 64 KiB | 2.642 | 3.202 |
-| 256 KiB | 2.536 | 3.202 |
-| 1 MiB | 2.510 | 3.202 |
+| 4 KiB | 4.754 | 3.270 |
+| 16 KiB | 3.064 | 3.331 |
+| 64 KiB | 2.642 | 3.603 |
+| 256 KiB | 2.536 | 3.603 |
+| 1 MiB | 2.510 | 3.602 |
 
 These are whole-stream allocation estimates, not measured usage or codec-only
 workspace. LZ4's workspace requirement falls with the block count; Zstd's grows
@@ -207,19 +259,21 @@ existing aligned output bounds are preserved; Blosc retains a logical frame
 bound of `C + 16`, separate from the aligned output slot stride. Allocation
 validation required no additional block-dependent accounting term.
 
-`test_compress_blosc_gpu` now compares the codec estimate against the sum of
+`test_compress_blosc_gpu` compares the codec estimate against the sum of
 CUDA's actual allocation-range sizes, rather than only another copy of the
 sizing formula. It covers both codecs, seven block sizes including an odd size
 and a size larger than the chunk, all three filters independently of shuffle
 reservation on/off, and levels 0/3: 168 configurations. The byte totals matched
-exactly on this GPU, including initial filters with reservation disabled.
+exactly on the L40 before the sweep, including initial filters with reservation
+disabled.
 
 That does not make the estimate a prediction of all device memory consumed
 by a process. CUDA allocation granularity, context/runtime/library residency,
-and unrelated GPU users affect free-memory readings. In the original 1 MiB
-chunk sweep, measured-minus-estimated stream usage was about 11–14 MiB for LZ4
-and 148–150 MiB for Zstd. These differences do not identify a particular CUDA
-module or prove that all overhead is retained throughout a run.
+and unrelated GPU users affect free-memory readings. Across the 1 MiB-chunk,
+bitshuffled configurations, median observed-minus-estimated usage on L40 was
+9–12 MiB for LZ4 and 444–446 MiB for Zstd. The archived laptop medians were
+11–14 MiB and 148–150 MiB respectively. These differences do not identify a
+particular CUDA module or prove that all overhead is retained throughout a run.
 
 The regular benchmark now records `memory_device_overhead_bytes`: signed
 device-memory delta minus the estimated device allocations, alongside the
@@ -227,9 +281,10 @@ existing estimate and measurement. It is null for CPU runs or unavailable
 readings/estimates. Negative values are preserved. The measurement compares
 `cuMemGetInfo` free bytes before stream creation with after the run, while the
 stream is still alive. It is not a sampled peak, and the initial CUDA context
-cost predates the baseline. The historical sweep used the same measurement
-boundary; its overhead can be compared from the two recorded quantities, but
-its results are not relabeled as containing the new field.
+cost predates the baseline. The L40 records include the residual field. The
+5070 Laptop archive used the same measurement boundary; its residual can be
+computed from the two recorded quantities, but its records are not relabeled
+as containing the newer field.
 
 For budgeting, use the estimate for capacity planning and leave measured
 headroom for runtime overhead and other users. Do not feed all currently free
@@ -285,7 +340,7 @@ the following tiers or repetition controls.
 Use `orca2_single`, u16, XOR and random, 256 KiB and 1 MiB chunks, all three
 shuffles, and blocks 4/8/16/32/64/128/256/512/1024 KiB, excluding sizes larger
 than the chunk. This reproduces 192 Blosc configurations plus eight raw-codec
-controls. One warmup and three measured repetitions yield 800 executions.
+controls. One warmup and five measured repetitions yield 1,200 executions.
 Use a fixed seed to randomize each pass and preserve every repetition.
 
 Keep this full matrix explicitly selected rather than silently adding it to
@@ -342,28 +397,35 @@ runner and report behavior.
 
 ## Retained data and plot reproduction
 
-The [artifact directory][benchmark-artifacts] includes
-all 200 configuration summaries, provenance, estimator-derived memory tables,
-and the plot generator. No new throughput sweep was needed to write this guide.
+The [L40 artifact directory][benchmark-artifacts] retains all 200 summaries,
+all 1,200 individual executions including warmups, compressed full JSON,
+source/build/GPU provenance, the benchmark-only CLI patch, validation logs,
+and the collection and plot scripts. The [5070 Laptop archive][historical-artifacts]
+is preserved separately.
 
 ```sh
-python3 docs/benchmarks/blosc-rtx5070-20260905/plot.py
+uv run --python 3.12 docs/benchmarks/blosc-l40-20260906/plot.py
 ```
 
-This regenerates the memory tables, SVGs, two- and three-objective frontier CSVs, and a
-self-contained HTML view using only Python's standard library. The standalone
-run predates the explicit block-size API and used validated binaries with
-different internal block-size constants; it must not be relabeled as a
-measurement of every subsequent implementation change.
+The script pins Matplotlib and requires Python 3.11 or later. It validates
+records and collection-input hashes, then regenerates memory tables, two- and
+three-objective frontiers, matched historical comparisons, SVG/PNG/PDF figures,
+and a self-contained HTML view. Add `--check` to validate without rewriting
+outputs. Neither operation needs a GPU or new throughput measurements. The
+artifact README gives the exact collection method and reproduction limits.
 
 [blosc-format]: blosc-format.md
 [blosc-configuration]: ../README.md#blosc-configuration
 [cpu-tuning-report]: https://blosc.org/posts/beast-release/
-[pareto-plot]: benchmarks/blosc-rtx5070-20260905/pareto.svg
-[pareto-all-candidates]: benchmarks/blosc-rtx5070-20260905/pareto-all-candidates.svg
-[pareto-frontier]: benchmarks/blosc-rtx5070-20260905/pareto-frontier.csv
-[memory-plot]: benchmarks/blosc-rtx5070-20260905/memory.svg
-[memory-estimates]: benchmarks/blosc-rtx5070-20260905/memory-estimates.md
-[pareto-memory-frontier]: benchmarks/blosc-rtx5070-20260905/pareto-memory-frontier.csv
+[pareto-plot]: benchmarks/blosc-l40-20260906/pareto.svg
+[pareto-all-candidates]: benchmarks/blosc-l40-20260906/pareto-all-candidates.svg
+[pareto-frontier]: benchmarks/blosc-l40-20260906/pareto-frontier.csv
+[memory-plot]: benchmarks/blosc-l40-20260906/memory.svg
+[memory-estimates]: benchmarks/blosc-l40-20260906/memory-estimates.md
+[pareto-memory-frontier]: benchmarks/blosc-l40-20260906/pareto-memory-frontier.csv
 [sweep-documentation]: ../scripts/sweep/README.md
-[benchmark-artifacts]: benchmarks/blosc-rtx5070-20260905/README.md
+[benchmark-artifacts]: benchmarks/blosc-l40-20260906/README.md
+[pareto-html]: benchmarks/blosc-l40-20260906/pareto.html
+[frontier-comparison]: benchmarks/blosc-l40-20260906/comparison.md
+[comparison-plot]: benchmarks/blosc-l40-20260906/comparison.svg
+[historical-artifacts]: benchmarks/blosc-rtx5070-20260905/README.md

@@ -1,0 +1,18 @@
+{
+  "source_commit": "2c131223a6d1a915df45b0d393bc20865bd74f92",
+  "cpu_tests_passed": [
+    "test_compress_cpu",
+    "test_bench_memory"
+  ],
+  "gpu_tests_passed": [
+    "test_multiarray_gpu",
+    "test_compress_blosc_gpu",
+    "test_zarr_readback_gpu"
+  ],
+  "cli_tests_passed": 4,
+  "benchmark_executions_passed": 1200,
+  "results_jsonl_sha256": "856c1b01e6437e8c02d55bbc13507638d2d16eb1586658e21d2d07db087b4bce",
+  "historical_summary_sha256": "673d7842ed94431b1c49e3599f3e3e68f2c37dcf5cc825192a30d8b85cabfd1d",
+  "historical_provenance_sha256": "9b501173dec6e584e78d73104618c2964b2a228b258f7ab447141aa77cb14acf",
+  "original_run_directory": "/mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full"
+}

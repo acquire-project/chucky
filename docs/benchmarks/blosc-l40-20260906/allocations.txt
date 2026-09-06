@@ -1,0 +1,16 @@
+CPU build job: 3559392
+CPU node: cpu-turin-gp-l-244-023
+CPU resources: partition=cpu, qos=dev, nodes=1, tasks=1, cpus=16, memory=64G, limit=00:20:00
+Command:
+srun --partition=cpu --qos=dev -N 1 -n 1 -c 16 --mem=64G -t 00:20:00 -J pr264-full-build bash /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/build.sh
+
+L40 sweep job: 3559405
+L40 node: cw-us-e4a2-l40-234-085
+L40 resources: partition=l40-reserved, qos=dev, gres=gpu:l40:1, nodes=1, tasks=1, cpus=8, memory=32G, limit=01:00:00
+Command:
+srun --partition=l40-reserved --qos=dev --gres=gpu:l40:1 -N 1 -n 1 -c 8 --mem=32G -t 01:00:00 -J pr264-full bash /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/gpu.sh
+
+Completion verified with sacct:
+3559392: COMPLETED, exit 0:0, elapsed 00:00:47
+3559405: COMPLETED, exit 0:0, elapsed 00:46:10
+Measurement interval: 2026-09-06 00:13:38–00:59:02 UTC

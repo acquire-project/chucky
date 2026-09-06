@@ -1,0 +1,41 @@
+{
+  "source_commit": "2c131223a6d1a915df45b0d393bc20865bd74f92",
+  "patch_sha256": "122fe677d0bee801f49dfe9f0d4e37d6f1b97c5bd7501419d65136149270a63d",
+  "built_utc": "2026-09-06T00:08:42.625712+00:00",
+  "node": "cpu-turin-gp-l-244-023",
+  "slurm_job_id": "3559392",
+  "binaries": {
+    "bench/bench_stream_orca2_single": "e33d7885e4fdd84530312e5032aee3aa6e725b0552573fd05cd3456a7647d38a",
+    "bench/bench_stream_smallepoch_single": "8b53121a0cc35db69feac5800483b52c6b5e1d2de1020acaca93c671ed927c63",
+    "tests/test_compress_cpu": "cefcb76143e30e412dfe9b262e707e578b288d9be472eb853d1963fb32de6839",
+    "tests/test_compress_blosc_gpu": "38bdc113aae9368f2cbcee79e50ef6bcb22a2809921c7bc0e818341d30e57709",
+    "tests/test_multiarray_gpu": "a627046ba0912ebda49f3a7abf3abc783530f639d74147e5a305ce3b622eb2b5",
+    "tests/test_zarr_readback_gpu": "7637bd2528e281303b73d5fe2cb879cf1cff31678a29999e87213f79682dfe92",
+    "tests/test_bench_memory": "0598c260a8e60f21073c13c8469acaf9646d16727ef2e112097eb5fa15ba890c"
+  },
+  "manifest_sha256": "596817a72c5c2be8c3dbedf1338ee024c8e85ce7e154037e99f86892d8c9bb82",
+  "harness_sha256": "2cbd2d5c8d463cac07a976b07ef902fca78c88dad3be9646e413c8c606ae6297",
+  "nvcomp_version": "5.3.0.16",
+  "nvcomp_library": "/mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/lib/libnvcomp_static.a",
+  "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_Dec_16_07:23:41_PM_PST_2025\nCuda compilation tools, release 13.1, V13.1.115\nBuild cuda_13.1.r13.1/compiler.37061995_0",
+  "cmake_cache": [
+    "CMAKE_BUILD_TYPE:STRING=Release",
+    "CMAKE_CUDA_ARCHITECTURES:UNINITIALIZED=89",
+    "CMAKE_CUDA_COMPILER:STRING=/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc",
+    "CMAKE_CUDA_FLAGS:STRING=",
+    "CMAKE_CUDA_FLAGS_DEBUG:STRING=-g",
+    "CMAKE_CUDA_FLAGS_MINSIZEREL:STRING=-O1 -DNDEBUG",
+    "CMAKE_CUDA_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+    "CMAKE_CUDA_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG",
+    "CMAKE_CXX_COMPILER:FILEPATH=/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/c++",
+    "CMAKE_C_COMPILER:FILEPATH=/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc",
+    "NVCOMP_INCLUDE_DIR:PATH=/mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/include",
+    "NVCOMP_LIBRARY:FILEPATH=/mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/lib/libnvcomp_static.a",
+    "CMAKE_CUDA_COMPILER-ADVANCED:INTERNAL=1",
+    "CMAKE_CUDA_FLAGS-ADVANCED:INTERNAL=1",
+    "CMAKE_CUDA_FLAGS_DEBUG-ADVANCED:INTERNAL=1",
+    "CMAKE_CUDA_FLAGS_MINSIZEREL-ADVANCED:INTERNAL=1",
+    "CMAKE_CUDA_FLAGS_RELEASE-ADVANCED:INTERNAL=1",
+    "CMAKE_CUDA_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1"
+  ]
+}
