@@ -14,10 +14,10 @@ struct tile_stream_memory_info
   // Breakdown (device)
   size_t staging_bytes;         // 2 x buffer_capacity_bytes
   size_t chunk_pool_bytes;      // 2 x total_chunks x chunk_stride x bpe
-  size_t compressed_pool_bytes; // 2 x total_chunks x max_output_size
+  size_t compressed_pool_bytes; // 2 x codec_batch x device output stride
   size_t aggregate_bytes;       // sum over levels: device aggregate buffers
   size_t lod_bytes;             // d_linear + d_morton + shape arrays
-  size_t codec_bytes;           // nvcomp workspace + pointer arrays
+  size_t codec_bytes; // nvCOMP workspace + pointer/size arrays + filter scratch
 
   // Breakdown (host heap, not pinned)
   size_t shard_bytes; // active_shard arrays + index buffers

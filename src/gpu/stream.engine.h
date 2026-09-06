@@ -297,6 +297,7 @@ struct engine_limits
   size_t lod_morton_bytes;
   size_t host_output_bytes;
   int any_multiscale;
+  int any_byte_shuffle;
   int max_threads; // max over arrays; 0 = platform default
 };
 
@@ -312,7 +313,8 @@ engine_limits_accumulate(struct engine_limits* lim,
 int
 stream_engine_init(struct stream_engine* e,
                    const struct engine_limits* lim,
-                   enum compression_codec codec_id,
+                   struct codec_config codec,
+                   size_t typesize,
                    int scatter_is_copy);
 
 // Free shared engine resources. Per-array state (engine_array_state) is

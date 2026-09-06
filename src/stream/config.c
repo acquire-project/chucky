@@ -176,6 +176,13 @@ validate_config(const struct tile_stream_configuration* config,
     goto Fail;
   }
 
+  if (codec_is_blosc(config->codec.id) &&
+      (config->codec.shuffle < CODEC_SHUFFLE_NONE ||
+       config->codec.shuffle > CODEC_SHUFFLE_BIT)) {
+    log_error("invalid blosc shuffle mode %d", (int)config->codec.shuffle);
+    goto Fail;
+  }
+
   if (config->max_nlod < 0) {
     log_error("max_nlod must be >= 0 (got %d)", config->max_nlod);
     goto Fail;

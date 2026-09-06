@@ -124,6 +124,10 @@ add_test_exe(test_multiarray_cpu test_multiarray_cpu.c multiarray_cpu stream_cpu
 
 # GPU multi-array stream test
 add_gpu_test_exe(test_multiarray_gpu test_multiarray_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer test_shard_sink)
+if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
+    target_compile_definitions(test_multiarray_gpu PRIVATE HAVE_BLOSC)
+    target_link_libraries(test_multiarray_gpu PRIVATE Blosc::Blosc)
+endif()
 # A cross-array ordering cycle would otherwise strand the GPU test runner.
 if(CHUCKY_ENABLE_GPU)
     set_tests_properties(test-test_multiarray_gpu PROPERTIES TIMEOUT 60)
@@ -158,6 +162,23 @@ target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
 add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
+if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
+    add_gpu_test_exe(test_compress_blosc_gpu test_compress_blosc_gpu.c
+        LINKS CUDA::cuda_driver CUDA::cudart_static stream Blosc::Blosc
+    )
+    add_gpu_test_exe(test_zarr_readback_gpu test_zarr_readback_gpu.c
+        LINKS CUDA::cuda_driver CUDA::cudart_static stream test_zarr_helpers
+              writer test_platform chucky_log
+    )
+    target_compile_definitions(
+        test_zarr_readback_gpu
+        PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(
+        test-test_zarr_readback_gpu
+        PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120
+    )
+endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)

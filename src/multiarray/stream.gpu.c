@@ -108,6 +108,11 @@ init_array_descriptor(struct array_descriptor_gpu* desc,
                              desc->ctx.shard_alignment,
                              &desc->cl))
     return 1;
+  if (codec_validate_gpu(config->codec,
+                         dtype_bpe(config->dtype),
+                         desc->cl.layouts[0].chunk_stride *
+                           dtype_bpe(config->dtype)))
+    return 1;
 
   // Fold this array into the shared-resource maxima before
   // engine_array_state_init moves cl->plan out.
@@ -433,7 +438,8 @@ multiarray_tile_stream_gpu_create(
   CHECK(Fail,
         stream_engine_init(&ms->engine,
                            &lim,
-                           ms->arrays[0].ctx.config.codec.id,
+                           ms->arrays[0].ctx.config.codec,
+                           dtype_bpe(ms->arrays[0].ctx.config.dtype),
                            all_multiscale) == 0);
 
   ms->output_pool = compress_agg_output_pool_create(lim.host_output_bytes);

@@ -43,7 +43,8 @@ Error:
 int
 compress_agg_init_shared(struct compress_agg_stage* stage,
                          const struct engine_limits* lim,
-                         enum compression_codec codec_id,
+                         struct codec_config codec,
+                         size_t typesize,
                          struct gpu_ordering* ord,
                          CUstream compute)
 {
@@ -63,7 +64,13 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
   const uint64_t M = lim->codec_batch;
 
   // Codec
-  CHECK(Fail, codec_init(&stage->codec, codec_id, lim->chunk_bytes, M) == 0);
+  CHECK(Fail,
+        codec_init_config(&stage->codec,
+                          codec,
+                          typesize,
+                          lim->chunk_bytes,
+                          M,
+                          lim->any_byte_shuffle) == 0);
 
   stage->pool_epochs_stride = K;
   stage->pool_epochs_scratch =
@@ -72,16 +79,15 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
     (uint32_t*)malloc((size_t)LOD_MAX_LEVELS * K * sizeof(uint32_t));
   CHECK(Fail, stage->pool_epochs_scratch && stage->cached_pool_epochs);
 
-  CHECK_MUL_OVERFLOW(Fail, M, stage->codec.max_output_size, SIZE_MAX);
+  CHECK_MUL_OVERFLOW(Fail, M, stage->codec.output_stride, SIZE_MAX);
   // Compressed buffers + events. CODEC_NONE aggregates directly from pool_buf
   // (see compress_agg_aggregate), so the d_compressed buffer is unused — skip
   // its M * chunk_bytes allocation per fc. Destroy is NULL-safe.
   const int need_compressed = (stage->codec.type != CODEC_NONE);
   for (int fc = 0; fc < 2; ++fc) {
     if (need_compressed)
-      CU(
-        Fail,
-        cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.max_output_size));
+      CU(Fail,
+         cuMemAlloc(&stage->d_compressed[fc], M * stage->codec.output_stride));
     CU(Fail, cuEventCreate(&stage->t_compress_start[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_compress_end[fc], CU_EVENT_DEFAULT));
     CU(Fail, cuEventCreate(&stage->t_aggregate_start[fc], CU_EVENT_DEFAULT));
@@ -300,7 +306,8 @@ compress_agg_init(struct compress_agg_stage* stage,
   memset(&lim, 0, sizeof(lim));
   CHECK(Fail, engine_limits_accumulate(&lim, cl, config) == 0);
   CHECK(Fail,
-        compress_agg_init_shared(stage, &lim, config->codec.id, ord, compute) ==
+        compress_agg_init_shared(
+          stage, &lim, config->codec, dtype_bpe(config->dtype), ord, compute) ==
           0);
   CHECK(Fail, compress_agg_array_init(&stage->ar, cl) == 0);
   size_t output_bytes = 0;
@@ -336,14 +343,21 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
                              size_t* aggregate_device_bytes,
                              size_t* aggregate_host_bytes)
 {
+  (void)cl;
   // d_compressed[2]; skipped for CODEC_NONE (kick aggregates from the pool).
-  *compressed_pool_bytes =
-    (codec_id == CODEC_NONE)
-      ? 0
-      : 2 * (size_t)lim->codec_batch * cl->max_output_size;
+  *compressed_pool_bytes = 0;
+  if (codec_id != CODEC_NONE) {
+    const size_t stride = codec_output_stride(codec_id, lim->chunk_bytes);
+    CHECK(Error, stride > 0);
+    CHECK_MUL_OVERFLOW(Error, lim->codec_batch, stride, SIZE_MAX);
+    const size_t one_pool = (size_t)lim->codec_batch * stride;
+    CHECK_MUL_OVERFLOW(Error, 2, one_pool, SIZE_MAX);
+    *compressed_pool_bytes = 2 * one_pool;
+  }
 
-  *codec_bytes =
-    codec_device_bytes(codec_id, lim->chunk_bytes, lim->codec_batch);
+  *codec_bytes = codec_device_bytes(
+    codec_id, lim->chunk_bytes, lim->codec_batch, lim->any_byte_shuffle);
+  CHECK(Error, *codec_bytes > 0);
 
   size_t dev = 0;
   size_t host = 0;
@@ -544,7 +558,7 @@ compress_agg_aggregate(struct compress_agg_stage* stage,
   if (plan->layout.total_batch_chunks > 0) {
     const size_t aggregate_source_stride = stage->codec.type == CODEC_NONE
                                              ? stage->codec.chunk_bytes
-                                             : stage->codec.max_output_size;
+                                             : stage->codec.output_stride;
     CHECK(Error,
           aggregate_batch_unified_async(
             (const void*)d_aggregate_src,
