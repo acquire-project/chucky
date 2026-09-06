@@ -6,7 +6,7 @@
 <title>Benchmarks over time</title>
 <script src="theme.js"></script>
 <link rel="stylesheet" href="site.css">
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="vendor/d3.v7.9.0.min.js"></script>
 <style>
 .lede { color: var(--text-secondary); font-size: 0.9em; margin: 0 0 var(--gap); }
 h1 { font-size: 1.35em; margin: 0 0 4px; }
@@ -133,6 +133,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
   <nav>
     <a href="index.html" aria-current="page">Over time</a>
     <a href="explore.html">Benchmark explorer</a>
+    <a href="pareto.html">Blosc Pareto</a>
   </nav>
   <a class="repo-link" href="https://github.com/acquire-project/chucky">Source</a>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
@@ -211,6 +212,7 @@ code { font-size: 0.92em; color: var(--text-secondary); }
 </main>
 
 <script type="module">
+import {fmt, fmtTick} from "./charts.js";
 import {decodeRuns, fetchJson} from "./decode.js";
 import {metricValue, matchesSetup, comparable, bestRun, percentChange, configLabel, moversFor} from "./selection.mjs";
 import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
@@ -468,23 +470,7 @@ function series(machine, scenario, fill) {
 // Formatting
 // =========================================================================
 
-function fmt(value) {
-  if (value == null) return "—";
-  const abs = Math.abs(value);
-  if (abs >= 1000) return d3.format(",.0f")(value);
-  if (abs >= 100) return d3.format(".0f")(value);
-  if (abs >= 10) return d3.format(".1f")(value);
-  if (abs >= 1) return d3.format(".2f")(value);
-  if (abs > 0) return d3.format(".3f")(value);
-  return "0";
-}
-
 function fmtDay(day) { return day || "unknown date"; }
-
-// Axis labels trim harder than the numbers in the tables.
-function fmtTick(value) {
-  return Math.abs(value) >= 1000 ? d3.format("~s")(value) : d3.format("~f")(value);
-}
 
 /** Direction of a change, judged against what the metric wants. */
 function changeClass(pct) {

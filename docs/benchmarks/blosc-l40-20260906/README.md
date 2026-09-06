@@ -62,19 +62,16 @@ Memory tables combine fills only after checking that their estimates agree.
 | [manifest.json](manifest.json) | All 200 commands and fixed measurement settings |
 | [provenance.json](provenance.json), [build.json](build.json) | Source, build inputs, binary hashes, Slurm jobs, GPU readings before/after, and completion record |
 | [validation.json](validation.json), [build.log](build.log), [gpu.log](gpu.log) | Passed correctness/CLI checks and the collection log |
-| [pareto.svg](pareto.svg), [all candidates](pareto-all-candidates.svg) | Per-codec throughput/ratio frontiers across all shuffles |
 | [pareto-frontier.csv](pareto-frontier.csv) | Per-codec frontier points with membership across both Blosc codecs |
 | [pareto-memory-frontier.csv](pareto-memory-frontier.csv) | Frontier across both codecs maximizing speed/ratio and minimizing observed device memory |
-| [memory.svg](memory.svg), [memory tables](memory-estimates.md), [memory CSV](memory-estimates.csv) | Observed deltas and 96 distinct allocation-estimate configurations |
-| [comparison.svg](comparison.svg), [comparison table](comparison.md), [paired CSV](comparison.csv) | The matched L40 and historical RTX 5070 Laptop configurations |
+| [memory tables](memory-estimates.md), [memory CSV](memory-estimates.csv) | Observed deltas and 96 distinct allocation-estimate configurations |
+| [comparison table](comparison.md), [paired CSV](comparison.csv) | The matched L40 and historical RTX 5070 Laptop configurations |
 | [analysis.json](analysis.json) | Timing spread, frontier changes, ratio agreement, and observed memory residuals |
-| [pareto.html](pareto.html) | Self-contained figures and a filterable measurements table |
-| [plot.py](plot.py) | Data validation, table generation, and Matplotlib figures; SVG, PNG, and PDF output |
 | [sweep.py](sweep.py), [build.sh](build.sh), [gpu.sh](gpu.sh), [CLI checks](cli_check.py) | Exact collection harness and job scripts |
 | [checksums.sha256](checksums.sha256) | SHA-256 for the retained files |
 
 Raw per-execution stderr and binaries remain in the original shared run directory
-recorded in `validation.json`; they are not required for plot generation. Full
+recorded in `validation.json`; they are not required for site generation. Full
 JSON and compact individual measurements are bundled here. Binary and collection
 input hashes are checked before measurement. The build and collection worktree
 is separate from the active checkout.
@@ -84,10 +81,11 @@ is separate from the active checkout.
 The [historical dataset](../blosc-rtx5070-20260905/README.md) has the same 200
 configuration identities, input geometry, append size, and target batch/budget,
 with one warmup and three measurements per configuration. Its old CSV `pareto`
-field groups candidates by shuffle; this generator recomputes frontiers across
+field groups candidates by shuffle; the shared JavaScript module recomputes frontiers across
 all three shuffles for both datasets. Raw controls are excluded from Blosc
-frontiers. The three-objective frontier uses exact observed memory values, so
-small memory-reading differences can create additional frontier points.
+frontiers. The retained three-objective CSV used exact observed memory values.
+The unified site keeps frontiers to throughput and compression fold; estimated
+device allocation is available through its memory view and budget filter.
 
 The earlier run used source `c519a05260cbda589bc323486170802a1c40c380`, nine
 builds with different internal block-size constants, CUDA 13.2.51, Clang 21.1.8,
@@ -96,32 +94,17 @@ driver, host, and GPU differ. This compares the two measured setups; it does
 not isolate the effect of changing only the GPU. The historical archive is
 preserved unchanged.
 
-The figures follow the historical Pareto plot conventions: blue LZ4, orange
-Zstd, squares for no shuffle, circles for byte shuffle, and triangles for
-bitshuffle. XOR panels come first. Graphical legends identify the encodings;
-point labels give block sizes with units, without repeating shuffle names.
-The comparison uses solid lines and filled markers for L40, and dashed lines
-and open markers for the RTX 5070 Laptop.
+## Validate and build the shared site
 
-## Regenerate tables and figures
+The **Blosc Pareto** tab replaces standalone figures and report pages. See the
+[dataset contract, build and test instructions](../README.md). The shared Python
+adapter checks raw/compact agreement, repetitions, medians/ranges, ratios,
+allocation estimates, residuals and fixed geometry. It verifies collection and
+measurement hashes without rerunning a benchmark.
 
-From the repository root, using Python 3.11 or later and the dependency pinned
-in the script:
-
-```sh
-uv run --python 3.12 docs/benchmarks/blosc-l40-20260906/plot.py
-```
-
-To validate retained measurements without regenerating the plots:
-
-```sh
-uv run --python 3.12 docs/benchmarks/blosc-l40-20260906/plot.py --check
-```
-
-This needs no GPU, build, Slurm allocation, or new throughput measurements. The
-generator checks raw/compact record agreement, all repetitions, medians/ranges,
-ratios, allocation estimates, memory residuals, and fixed chunk/batch geometry.
-It reads the preserved 5070 Laptop summary next to this directory.
+`checksums.historical.sha256` preserves the original inventory, including retired
+figures and the original README hash. `checksums.sha256` inventories the files
+retained now. Original provenance, source data and validation records are unchanged.
 
 ## Collect new measurements
 

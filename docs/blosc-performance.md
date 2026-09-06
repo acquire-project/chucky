@@ -24,6 +24,8 @@ The full L40 sweep suggests these candidates:
 
 The [RTX 5080 comparison](#rtx-5080-desktop-comparison) below also compares
 the archived laptop results with measurements on a Windows desktop.
+All three retained experiments use the
+[`orca2_single` scenario](../bench/bench_stream_orca2_single.c).
 
 These are two synthetic fills, not actual microscopy images. Hold input,
 element type, chunk shape, batch geometry, and sink fixed when comparing
@@ -56,22 +58,21 @@ group fixes GPU, input, chunk geometry, and codec, and searches all block sizes
 and all three shuffle choices. Separate frontiers for each shuffle would keep
 settings that another filter dominates.
 
-![L40 Blosc throughput and compression frontiers][pareto-plot]
+Explore the [unified Blosc Pareto tab][pareto-html], which opens with all three
+systems. Blue is LZ4 and orange is Zstd; squares, circles and triangles indicate
+none, byte and bit shuffle. Prominent points are the selected frontier and faint
+points are other candidates. Raw controls are always shown as hollow diamonds and never
+join a Blosc frontier. The L40 XOR frontier includes byte-shuffled LZ4 points;
+restricting the search to bitshuffle would miss them.
 
-Blue is LZ4 and orange is Zstd. Higher and farther right is better. Labels are
-block sizes with units (for example, 16 KiB or 1 MiB). The graphical legend
-identifies shuffle modes: squares for none, circles for byte, and triangles
-for bitshuffle. The L40 XOR frontiers include
-byte-shuffled LZ4 points; restricting the search to bitshuffle would miss them.
-Faint points are dominated candidates. Hollow diamonds are raw-codec controls,
-excluded from the Blosc frontier. Random-input panels zoom the ratio axis;
-XOR panels use a logarithmic ratio axis. Lines connect only tested points;
-they do not predict intermediate settings.
-
-[All candidates, without the random-input zoom][pareto-all-candidates], the
-[frontier table][pareto-frontier], and a [filterable local view][pareto-html]
-are available. The table also marks nondominated points when both Blosc codecs
-compete, rather than retaining a separate frontier for each codec.
+The matrix uses logarithmic horizontal axes matched across each input/chunk row.
+This gives the narrow random-data range useful resolution while keeping the wide
+XOR range readable. The full compression view begins at the meaningful 1× baseline,
+never zero; fitting is an explicit choice with a reset to the full extent. Focus
+a point to see its exact values and repetition min–max.
+Lines connect tested settings as a reading aid; they do not predict intermediate
+settings. The [retained frontier table][pareto-frontier] also records membership
+when both Blosc codecs compete.
 
 Representative L40 results with 1 MiB chunks:
 
@@ -102,7 +103,8 @@ its output is larger. This sweep did not measure decompression throughput.
 
 The exact-median frontiers changed in **all eight** input/chunk/codec
 groups. [Paired measurements and frontier identities][frontier-comparison]
-and the [comparison figure][comparison-plot] retain all 200 matched settings.
+retain all 200 matched settings. The [Blosc Pareto tab][pareto-html] provides
+the shared visual comparison.
 Compression folds matched the archived values at the recorded precision for
 every configuration. XOR/Zstd timing ranges overlap substantially, so its
 precise block ranking remains uncertain despite different median frontiers.
@@ -187,7 +189,7 @@ compression folds match the historical CSV; throughput and some allocation
 requirements differ. The comparison includes OS, compiler, driver, source,
 and hardware differences.
 
-![RTX 5080 versus RTX 5070 Laptop frontiers][rtx5080-plot]
+Compare these systems in the [unified Blosc Pareto tab][pareto-html].
 
 Solid lines are RTX 5080 per-codec frontiers across all shuffles; dashed lines
 are the retained laptop frontiers. Representative 1 MiB-chunk results, all
@@ -228,7 +230,7 @@ These results cover the fixed comparison geometry and 6 GiB budget; they
 do not establish a maximum after tuning larger batches for the 16 GiB GPU.
 
 The [full analysis][rtx5080-analysis] includes raw repetitions, provenance,
-memory-constrained frontiers, and an interactive plot. It also explains the
+memory-constrained frontiers, and links to the shared interactive site. It also explains the
 random-input entropy reference: 12-bit samples stored in u16 suggest 1.333×
 before padding; padding 100 frames to 112 raises the 1 MiB-chunk reference
 to 1.493×. Normalize the reported fold by 1.12 for storage planning in that
@@ -242,11 +244,12 @@ and batch size, reducing block size increases the number of independent
 compression inputs. Metadata and compressor workspace can grow even while
 each individual block shrinks.
 
-![Blosc block size and stream GPU memory][memory-plot]
+Use the Throughput × memory view in the [Blosc Pareto tab][pareto-html]. Its
+horizontal axis is estimated device allocation.
 
-This plot fixes the XOR input and bitshuffle. Solid lines are measured device
-memory deltas; dashed lines are the stream's explicit-allocation estimate.
-It shows the whole stream, not just compression scratch.
+Filter to the same input, chunk geometry and shuffle to compare block sizes.
+The estimate describes explicit allocations for the whole stream, not just
+compression scratch. Measured deltas remain in the table and selected-setting details.
 
 ### Memory terms
 
@@ -289,9 +292,9 @@ workspace requirements and output bounds need nvCOMP sizing queries; these do
 not require compression or allocating the codec buffers. There is no reason to
 benchmark compression to produce a memory-versus-block-size table.
 
-The [generated memory tables][memory-estimates] use the allocation estimates
-recorded by this L40 sweep. The generator checks that estimates agree across
-both fills before combining them; no additional compression run is needed.
+The [retained memory tables][memory-estimates] use the allocation estimates
+recorded by this L40 sweep. Their original derivation checked that estimates
+agreed across both fills before combining them; no additional compression run is needed.
 For 1 MiB chunks, 288 MiB of padded input per batch, and bitshuffle:
 
 | Block size | LZ4 device GiB | Zstd device GiB |
@@ -371,12 +374,11 @@ free-memory readings. No separate memory benchmark is needed.
 
 The throughput/ratio chart is only a two-objective frontier. Under a fixed
 VRAM budget, first discard settings that do not fit, then recompute the
-frontier. Alternatively, maximize throughput and compression while minimizing
-memory simultaneously. The retained
-[three-objective frontier][pareto-memory-frontier]
-does this across both codecs using measured device deltas, separately for each
-input and chunk geometry. It remains subject to the measurement limitations
-above; tiny memory differences can create additional nondominated points.
+frontier. The Blosc Pareto site keeps frontier membership two-dimensional and
+uses estimated device allocation in its memory chart and budget filter. The
+retained [historical memory-frontier table][pareto-memory-frontier] explored a
+third objective using measured device deltas and remains available as an analysis
+record; it does not drive current site membership.
 
 ## Incorporating Blosc into the regular sweeps
 
@@ -461,41 +463,35 @@ Remaining work for the expanded matrices:
 The [sweep documentation][sweep-documentation] describes the current
 runner and report behavior.
 
-## Retained data and plot reproduction
+## Retained data and site reproduction
 
 The [L40 artifact directory][benchmark-artifacts] retains all 200 summaries,
-all 1,200 individual executions including warmups, compressed full JSON,
-source/build/GPU provenance, the benchmark-only CLI patch, validation logs,
-and the collection and plot scripts. The [5070 Laptop archive][historical-artifacts]
-is preserved separately. The RTX 5080 comparison has separate measurements and
-provenance in its [own artifact directory][rtx5080-analysis].
+all 1,200 executions including warmups, compressed full JSON, source/build/GPU
+provenance, the benchmark-only CLI patch, validation logs, numeric analysis tables,
+and collection scripts. The [5070 Laptop archive][historical-artifacts] retains
+summaries only. The RTX 5080 has its own raw measurements and provenance in its
+[artifact directory][rtx5080-analysis].
 
 ```sh
-uv run --python 3.12 docs/benchmarks/blosc-l40-20260906/plot.py
+uv run scripts/sweep/report.py --results-dir bench/results -o _site --serve
 ```
 
-The script pins Matplotlib and requires Python 3.11 or later. It validates
-records and collection-input hashes, then regenerates memory tables, two- and
-three-objective frontiers, matched historical comparisons, SVG/PNG/PDF figures,
-and a self-contained HTML view. Add `--check` to validate without rewriting
-outputs. Neither operation needs a GPU or new throughput measurements. The
-artifact README gives the exact collection method and reproduction limits.
+Open `http://127.0.0.1:8000/pareto.html`. The [shared dataset pipeline](benchmarks/README.md)
+validates retained measurements and writes the unified site without changing the
+original summaries or rerunning benchmarks. Static figures and duplicate generators
+have been retired; numeric tables remain historical reference results. The
+artifact READMEs preserve collection methods and reproduction limits.
 
 [blosc-format]: blosc-format.md
 [blosc-configuration]: ../README.md#blosc-configuration
 [cpu-tuning-report]: https://blosc.org/posts/beast-release/
-[pareto-plot]: benchmarks/blosc-l40-20260906/pareto.svg
-[pareto-all-candidates]: benchmarks/blosc-l40-20260906/pareto-all-candidates.svg
 [pareto-frontier]: benchmarks/blosc-l40-20260906/pareto-frontier.csv
-[memory-plot]: benchmarks/blosc-l40-20260906/memory.svg
 [memory-estimates]: benchmarks/blosc-l40-20260906/memory-estimates.md
 [pareto-memory-frontier]: benchmarks/blosc-l40-20260906/pareto-memory-frontier.csv
 [sweep-documentation]: ../scripts/sweep/README.md
 [benchmark-artifacts]: benchmarks/blosc-l40-20260906/README.md
-[pareto-html]: benchmarks/blosc-l40-20260906/pareto.html
+[pareto-html]: https://acquire-project.github.io/chucky/pareto.html
 [frontier-comparison]: benchmarks/blosc-l40-20260906/comparison.md
-[comparison-plot]: benchmarks/blosc-l40-20260906/comparison.svg
 [historical-artifacts]: benchmarks/blosc-rtx5070-20260905/README.md
 [benchmark-controls]: benchmarks/blosc-l40-20260906/benchmark-controls.patch
 [rtx5080-analysis]: benchmarks/blosc-rtx5080-20260905/README.md
-[rtx5080-plot]: benchmarks/blosc-rtx5080-20260905/pareto-comparison.svg

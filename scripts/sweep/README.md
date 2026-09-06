@@ -11,16 +11,17 @@ controls yet. The [retained L40 tuning sweep][l40-measurements] used a separate
 archived benchmark patch to select those settings.
 Blosc run identities include the requested block size. Resume checks and report
 comparisons distinguish each explicit size from historical runs with an
-unrecorded size; those remain **unknown**, not an assumed default. Both report
+unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
 pages offer a Blosc block-request selector.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
-files and writes a site with two pages. CI publishes it to GitHub Pages on every
-push to `main` (`.github/workflows/pages.yml`).
+files and the retained Blosc dataset manifest to write a site with three pages.
+CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
 
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
+- `pareto.html` compares retained Blosc experiments across systems and workload groups.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
@@ -102,14 +103,18 @@ The pages are code only. Their data is written beside them and fetched at load:
 
 | file | holds |
 |---|---|
-| `site.css` | the palette and the title bar, linked by both pages |
-| `theme.js` | light or dark, applied before either page paints |
-| `decode.js` | unpacks the columns, imported by both pages |
-| `blosc.js` | Blosc block-request selections and labels for both pages |
+| `site.css` | the palette and the title bar, linked by all pages |
+| `theme.js` | light or dark, applied before any page paints |
+| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
+| `charts.js` | reusable axis and number-formatting utilities |
+| `decode.js` | unpacks sweep columns and fetches JSON |
+| `blosc.js` | Blosc block-request selections and labels for both sweep pages |
 | `selection.mjs` | Pure run selection and comparison functions, shared with tests |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
+| `data/pareto/index.json`, `data/pareto/<experiment>.json` | retained experiment index and exact normalized measurements |
+| `archives/<experiment>/` | unchanged copies of retained artifacts |
 
 So the explorer downloads one sweep instead of all of them, and adding a sweep
 leaves the other sweep files untouched for anything holding a cached copy. The
@@ -117,12 +122,14 @@ cost is that the pages have to be served over http — opening `_site/index.html
 from disk gets you an empty page, because the browser refuses the fetches. That
 is what `--serve` is for.
 
-Inside those files the runs are stored as columns rather than one object per
+Inside the sweep files the runs are stored as columns rather than one object per
 run, with the text in a shared table. `columnar.py` writes that and `decode.js`
 reads it. Floats are cut to four significant figures, which is finer than any
 page prints and about what the benchmarks resolve. `columnar.py` unpacks every
 sweep it packs and refuses to hand back one that does not match, so a broken
 encoding stops the build rather than reaching a page.
+The separate Pareto dataset JSON preserves full archived precision and does not
+use columnar rounding.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
@@ -350,3 +357,27 @@ bump it.
 [s3-blackhole]: https://github.com/nclack/s3-blackhole
 [s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
 [local-report]: http://127.0.0.1:8000/index.html
+
+## Retained Blosc Pareto benchmarks
+
+The report also builds a **Blosc Pareto** tab alongside **Over time** and
+**Benchmark explorer**. It opens with all retained systems in a comparison matrix.
+Filters, estimated-allocation budgets and frontiers, an overlay view, exact point details, a sortable
+table and filtered CSV downloads operate on the same eligible measurements. URL
+state preserves the comparison and selection. All three tabs share a pinned local
+D3 7.9.0 bundle and the existing light/dark theme.
+
+`docs/benchmarks/datasets.json` identifies the archived experiments. The report
+validates them and writes `data/pareto/index.json`, per-experiment JSON, and
+byte-preserving copies of retained artifacts under `archives/`. A validation failure
+stops the build. The archived 5070 data is explicitly summary-only. The memory
+view and allocation-budget filter use estimated device allocations; measured deltas
+remain available in the table and details. Routine acquisition/sweep behavior
+is unchanged.
+
+Raw LZ4 and Zstd controls are always visible in the Pareto charts and table. They
+provide an unframed-codec reference and remain excluded from frontier membership.
+
+See the [dataset contract, extension and test instructions](../../docs/benchmarks/README.md).
+Use `--pareto-manifest <path>` for another manifest. Serve through `--serve`, which
+sets JavaScript module MIME types correctly even with Windows registry overrides.

@@ -1,9 +1,0 @@
-{
-  "colors": {"blosc-lz4": "#1477ba", "blosc-zstd": "#c34d28"},
-  "ink": "#283747",
-  "muted": "#637281",
-  "grid": "#e3e8ec",
-  "legend_fill": "#f7f9fc",
-  "legend_border": "#dce3eb",
-  "css": "text{font:15px system-ui,-apple-system,Segoe UI,sans-serif;fill:#283747}.title,.heading{font-size:26px;font-weight:650}.subtitle{font-size:15px;fill:#637281}.panel-title,.sub{font-size:19px;font-weight:650}.axis{font-size:14px;font-weight:500}.muted,.note,.small{font-size:13px;fill:#637281}.legend-label{font-size:14px}.point-label{font-size:12px;font-weight:600;paint-order:stroke;stroke:white;stroke-width:4px;stroke-linejoin:round}.grid{stroke:#e3e8ec}.old{opacity:.65}.candidate{opacity:.23}"
-}

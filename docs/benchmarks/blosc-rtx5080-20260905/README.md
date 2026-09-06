@@ -7,7 +7,7 @@ are September 6 UTC. Results characterize this machine, software, and desktop
 session. They are empirical frontiers over the tested matrix, not guaranteed
 hardware throughput limits.
 
-[Interactive comparison](pareto.html) · [Standalone plot](pareto-comparison.svg) ·
+[Unified Blosc Pareto site and build instructions](../README.md) ·
 [All measurements](summary.csv) · [Matching-configuration comparison](comparison.csv)
 
 ## Results and changes from the guide
@@ -214,16 +214,10 @@ latency, contention, and decompression are outside this experiment.
 
 ## Reproduction and artifacts
 
-Regenerate summaries, frontiers, plots, and the interactive view without
-running the GPU:
-
-```powershell
-node docs/benchmarks/blosc-rtx5080-20260905/analyze.mjs
-```
-
-The historical and comparison generators share a [visual theme](../blosc-figure-style.json).
-All figures include graphical legends; colors, filter symbols, typography,
-and layout follow the same conventions. SVG and HTML exports embed their styling.
+The original summary and numeric analysis tables remain unchanged. The shared
+[Blosc Pareto pipeline](../README.md) validates the raw records against these
+summaries and supplies the interactive site. It replaces the standalone plots,
+report page, and duplicate derivation script.
 
 To collect new measurements, copy the runner into a new machine/date
 directory at the same depth under `docs/benchmarks`, build the Release
@@ -243,6 +237,6 @@ executable path and refuses to overwrite existing raw results. It requires
 | [pareto-memory-frontier.csv](pareto-memory-frontier.csv) | Three-objective membership using estimated or observed memory |
 | [pareto-by-allocation-budget.csv](pareto-by-allocation-budget.csv) | Recomputed cross-codec frontiers at 1.5/2/2.5/3/4/6 GiB explicit-allocation limits |
 | [analysis.json](analysis.json) | Aggregate checks, timing variability, cross-codec frontiers |
-| [run.mjs](run.mjs) / [analyze.mjs](analyze.mjs) | Dependency-free measurement and derivation scripts |
+| [run.mjs](run.mjs) | Original dependency-free acquisition script |
 
 Historical measurements remain in their original directory.
