@@ -13,7 +13,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from models import retired_metrics
+from models import retired_metrics, run_id
 
 # <machine>-<commit>-<yyyymmdd>.json, the name sweep.py writes. The machine part
 # is the name a person chose, so it survives a cluster handing out a new hostname
@@ -27,7 +27,7 @@ OVERVIEW_VERSION = 4
 
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
-    "chunk_bytes", "chunk_bytes_label", "sink", "status",
+    "chunk_bytes", "chunk_bytes_label", "blosc_block_bytes", "sink", "status",
 )
 
 RUN_METRICS = (
@@ -148,7 +148,7 @@ def sweep_day(machine: dict, path: Path) -> str:
 
 
 def trim_run(run: dict) -> dict:
-    out = {"id": run.get("id", "")}
+    out = {"id": run_id(run)}
     for key in CONFIG_KEYS:
         if key in run:
             out[key] = run[key]

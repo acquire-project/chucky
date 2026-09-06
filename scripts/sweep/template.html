@@ -6,7 +6,7 @@
 <title>Benchmark explorer</title>
 <script src="theme.js"></script>
 <link rel="stylesheet" href="site.css">
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="vendor/d3.v7.9.0.min.js"></script>
 <style>
 :root {
   --gap-sm: 4px;
@@ -151,6 +151,7 @@ input { accent-color: var(--series-1); }
   <nav>
     <a href="index.html">Over time</a>
     <a href="explore.html" aria-current="page">Benchmark explorer</a>
+    <a href="pareto.html">Blosc Pareto</a>
   </nav>
   <a class="repo-link" href="https://github.com/acquire-project/chucky">Source</a>
   <button class="theme-toggle" id="theme-toggle" type="button">Dark</button>
@@ -177,6 +178,10 @@ input { accent-color: var(--series-1); }
     <div id="codec-wrap">
       <label>Codec</label>
       <div class="radio-group" id="codec-group"></div>
+    </div>
+    <div id="blosc-block-wrap" style="display:none">
+      <label>Blosc block request</label>
+      <div class="radio-group" id="blosc-block-group"></div>
     </div>
     <div id="fill-wrap">
       <label>Input</label>
@@ -232,6 +237,8 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
+import {filterRuns as selectRuns} from "./selection.mjs";
+import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
 async function ensureRuns(file) {
@@ -364,23 +371,17 @@ function rebuildData() {
   allStageNames = [...stageSet].sort(stageSort);
 }
 
-function filterRuns({includeBackend = true} = {}) {
-  const codec = getRadio("codec-group");
-  const fill = getRadio("fill-group");
-  const backend = getRadio("backend-group");
-  const dtype = getRadio("dtype-group");
-  const sink = getRadio("sink-group");
-  const s3tp = getRadio("s3-throughput-group");
-  const checkedScenarios = new Set(getCheckedScenarios());
-  return runs.filter(r => {
-    if (r.codec !== codec || r.fill !== fill || r.dtype !== dtype || r.sink !== sink) return false;
-    if (includeBackend && r.backend !== backend) return false;
-    if (!checkedScenarios.has(r.scenario)) return false;
-    if (sink === "s3" && s3tp && allS3Throughputs.length > 0) {
-      if (String(r.s3_throughput_gbps) !== s3tp) return false;
-    }
-    return true;
-  });
+function filterRuns(options) {
+  return selectRuns(runs, {
+    codec: getRadio("codec-group"),
+    fill: getRadio("fill-group"),
+    backend: getRadio("backend-group"),
+    dtype: getRadio("dtype-group"),
+    sink: getRadio("sink-group"),
+    bloscBlock: getRadio("blosc-block-group"),
+    scenarios: new Set(getCheckedScenarios()),
+    s3Throughput: allS3Throughputs.length ? getRadio("s3-throughput-group") : null,
+  }, options);
 }
 
 function metricLabel(key) {
@@ -390,6 +391,7 @@ function metricLabel(key) {
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
   t += `codec: ${r.codec}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  if (bloscBlockKey(r)) t += `Blosc block request: ${bloscBlockLabel(bloscBlockKey(r))}\n`;
   if (r.sink && r.sink !== "discard") {
     t += `sink: ${r.sink}`;
     if (r.s3_throughput_gbps) t += `  target: ${r.s3_throughput_gbps} Gb/s`;
@@ -431,6 +433,10 @@ function memoryLine(r) {
   if (r.memory_measured_bytes) {
     parts.push(`${gib(r.memory_measured_bytes)} GiB measured`);
   }
+  if (r.memory_device_overhead_bytes != null) {
+    const mib = r.memory_device_overhead_bytes / (1024 ** 2);
+    parts.push(`${mib >= 0 ? "+" : ""}${mib.toFixed(1)} MiB observed overhead`);
+  }
   return parts.length ? "memory: " + parts.join(", ") : "";
 }
 
@@ -454,7 +460,7 @@ function clearRadio(containerId) {
   document.getElementById(containerId).innerHTML = "";
 }
 
-function makeRadio(containerId, values, defaultVal) {
+function makeRadio(containerId, values, defaultVal, label = v => v) {
   const g = document.getElementById(containerId);
   const name = containerId;
   values.forEach((v,i) => {
@@ -463,7 +469,7 @@ function makeRadio(containerId, values, defaultVal) {
     inp.type = "radio"; inp.name = name; inp.value = v;
     if (v === defaultVal || (defaultVal === undefined && i === 0)) inp.checked = true;
     const sp = document.createElement("span");
-    sp.textContent = v;
+    sp.textContent = label(v);
     lbl.appendChild(inp);
     lbl.appendChild(sp);
     g.appendChild(lbl);
@@ -775,6 +781,12 @@ function updateControlVisibility(viewMode, useOverlay) {
 }
 
 function render() {
+  const blocks = bloscBlockChoices(runs, getRadio("codec-group"));
+  const selectedBlock = getRadio("blosc-block-group");
+  clearRadio("blosc-block-group");
+  makeRadio("blosc-block-group", blocks,
+    blocks.includes(selectedBlock) ? selectedBlock : undefined, bloscBlockLabel);
+  document.getElementById("blosc-block-wrap").style.display = blocks.length ? "" : "none";
   const viewMode = getRadio("view-group");
   const useOverlay = overlayBackends && allBackends.length > 1 && (viewMode === "lines" || viewMode === "stages");
   const filtered = filterRuns({includeBackend: !useOverlay});

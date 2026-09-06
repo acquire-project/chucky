@@ -1,0 +1,117 @@
+/* A comparison worksheet: system columns align within workload rows. Codec
+   colors carry meaning; geometry and exact measurements remain close at hand.
+   Existing Segoe/system typography and theme tokens keep all three tabs one site. */
+.pareto-page { font-variant-numeric: tabular-nums; }
+.pareto-page main { max-width: 1680px; }
+.pareto-page h1 { font-size: 2.2rem; line-height: 1.12; letter-spacing: -.025em; margin: 6px 0 12px; font-weight: 650; }
+.pareto-page h2 { font-size: 1.25rem; margin: 0; font-weight: 650; }
+.pareto-page h3 { font-size: 1rem; margin: 0; font-weight: 600; }
+.pareto-page p { max-width: 80ch; }
+.pareto-intro { display: flex; justify-content: space-between; gap: 20px; align-items: end; }
+.pareto-intro p { margin: 0; color: var(--text-secondary); }
+.pareto-intro > a { font-size: .87rem; }
+.comparison-note { font-size: .88rem; color: var(--text-secondary); margin: 12px 0 22px; }
+.pareto-controls { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 16px 0; }
+.pareto-controls fieldset { padding: 0; border: 0; margin: 0 0 16px; }
+.pareto-controls legend { font-weight: 600; margin-bottom: 8px; }
+.pareto-controls details > summary { cursor: pointer; color: var(--text-secondary); font-size: .85rem; }
+.pareto-controls details[open] > summary { margin-bottom: 12px; }
+.system-choices { display: flex; flex-wrap: wrap; gap: 12px 32px; }
+.system-choice { display: flex; align-items: start; gap: 8px; cursor: pointer; }
+.system-choice strong { font-weight: 600; display: block; }
+.system-choice small { display: block; color: var(--text-secondary); font-size: .77rem; }
+.system-choice input { margin-top: 5px; }
+.filter-line, .view-line { display: flex; align-items: start; flex-wrap: wrap; gap: 12px 20px; }
+.filter-line { margin-bottom: 16px; }
+.pareto-controls label:not(.system-choice) { font-size: .8rem; color: var(--text-secondary); }
+.pareto-controls label > select, .pareto-controls label > input[type="number"] { display: block; margin-top: 4px; }
+.pareto-page select, .pareto-page input[type="number"] { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 5px; padding: 6px 8px; max-width: 100%; }
+.pareto-page select[multiple] { min-width: 130px; height: 91px; padding: 3px; }
+.pareto-page select[multiple] option { padding: 2px 6px; }
+.pareto-page input[type="checkbox"] { accent-color: var(--accent-text); min-width: 18px; height: 18px; }
+.pareto-page input[type="number"] { width: 170px; }
+.control-hint { display: block; font-size: .72rem; margin-top: 4px; }
+.pareto-controls .check-label { display: flex; align-items: center; padding: 22px 0 0; gap: 5px; }
+.filter-line > button { margin-top: 23px; }
+.pareto-page button:not(.theme-toggle) { background: var(--surface-1); color: var(--text-primary); font: inherit; font-size: .82rem; border: 1px solid var(--axis); border-radius: 5px; padding: 7px 10px; cursor: pointer; }
+.pareto-page button:hover { background: var(--accent-soft); }
+.pareto-page button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-text); }
+.pareto-page button:disabled { opacity: .55; cursor: default; }
+.chart-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 18px 0 12px; flex-wrap: wrap; }
+.chart-toolbar p { font-weight: 600; margin: 0; font-size: .9rem; }
+.plot-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: .8rem; color: var(--text-secondary); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-item svg { width: 22px; height: 22px; overflow: visible; }
+.chart-note { color: var(--text-secondary); font-size: .79rem; margin: 10px 0 14px; }
+.analysis-layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; align-items: start; gap: 24px; }
+.plots-and-table { min-width: 0; }
+.workload-row { margin-bottom: 25px; }
+.workload-row > h3 { border-top: 2px solid var(--axis); padding: 12px 0 9px; }
+.workload-row > h3 small { font-weight: 400; color: var(--text-secondary); font-size: .75rem; display: inline-block; margin-left: 12px; }
+.matrix-row { display: grid; grid-template-columns: repeat(var(--systems), minmax(280px, 1fr)); gap: 12px; overflow-x: auto; }
+.plot-cell { min-width: 0; background: var(--surface-1); border-radius: var(--radius-sm); padding-top: 10px; }
+.plot-cell h4 { font-size: .87rem; margin: 0 12px; font-weight: 600; }
+.plot-cell .plot-meta { font-size: .7rem; color: var(--text-secondary); margin: 2px 12px 0; }
+.plot-cell > svg { display: block; width: 100%; height: auto; }
+.plot-axis { color: var(--text-secondary); font-size: 11px; }
+.plot-axis .domain, .plot-axis line { stroke: var(--axis); }
+.plot-grid line { stroke: var(--grid); }
+.plot-grid .domain { display: none; }
+.axis-title { font-size: 11px; fill: var(--text-secondary); }
+.chart-point { cursor: pointer; }
+.chart-point.selected .mark { stroke: var(--text-primary); stroke-width: 2.5; opacity: 1; }
+.range { stroke: var(--text-primary); stroke-width: 1.25; pointer-events: none; }
+.plot-empty { fill: var(--text-secondary); font-size: 12px; }
+.table-heading { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.table-scroll { max-height: 600px; overflow: auto; margin-bottom: 20px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.pareto-page table { border-collapse: separate; border-spacing: 0; font-size: .79rem; width: 100%; white-space: nowrap; }
+.pareto-page th { position: sticky; top: 0; z-index: 1; background: var(--surface-1); }
+.pareto-page th, .pareto-page td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+.pareto-page th:nth-child(-n+4), .pareto-page td:nth-child(-n+4) { text-align: left; }
+.pareto-page th button { border: 0; padding: 3px 0; font-size: inherit; background: transparent; border-radius: 0; }
+.pareto-page .setting-button { border: 0; padding: 4px 0; background: transparent; color: var(--accent-text); font-size: inherit; text-align: left; }
+.pareto-page tr.selected { background: var(--accent-soft); }
+.frontier-label { display: inline-block; color: var(--accent-text); font-weight: 600; }
+#detail { position: sticky; top: 16px; padding: 16px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); max-height: calc(100vh - 32px); overflow: auto; font-size: .83rem; }
+#detail h2 { font-size: 1rem; margin-bottom: 12px; }
+#detail h3 { font-size: .94rem; overflow-wrap: anywhere; }
+#detail p { color: var(--text-secondary); margin: 8px 0 12px; }
+#detail dl { margin: 0; }
+#detail dt { color: var(--text-secondary); font-size: .74rem; margin-top: 10px; }
+#detail dd { margin: 1px 0 0; overflow-wrap: anywhere; }
+#detail pre { font: .74rem/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#detail details { margin-top: 16px; }
+#detail summary { cursor: pointer; }
+#detail ul { padding-left: 18px; }
+#methodology { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); }
+#definitions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; font-size: .84rem; }
+#definitions p { color: var(--text-secondary); }
+#definitions strong { display: block; color: var(--text-primary); margin-bottom: 4px; }
+#experiments > details { border-top: 1px solid var(--border); padding: 14px 0; }
+#experiments summary { cursor: pointer; font-weight: 600; }
+#experiments p, #experiments li { font-size: .84rem; color: var(--text-secondary); }
+.artifact-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.notice { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 20px; margin: 16px 0; }
+[hidden] { display: none !important; }
+@media (max-width: 1250px) {
+  .analysis-layout { grid-template-columns: minmax(0, 1fr); }
+  #detail { position: static; max-height: none; grid-row: 1; }
+  #detail dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 20px; }
+  #detail dl > div { min-width: 0; }
+}
+@media (max-width: 760px) {
+  .pareto-page main { padding: 18px 14px; }
+  .pareto-intro { display: block; }
+  .pareto-intro > a { display: inline-block; margin-top: 12px; }
+  .matrix-row { grid-template-columns: minmax(0, 1fr); }
+  .pareto-page h1 { font-size: 1.8rem; }
+  .pareto-controls select[multiple] { min-width: 90px; }
+  .filter-line, .view-line { gap: 12px; }
+  .view-line > label { flex: 1 1 155px; min-width: 0; }
+  .view-line select { width: 100%; }
+  .workload-row > h3 small { display: block; margin: 4px 0 0; }
+  #definitions { grid-template-columns: 1fr; }
+  #detail dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pareto-page button { min-height: 36px; }
+  .pareto-page:not(.has-selection) #detail { display: none; }
+}

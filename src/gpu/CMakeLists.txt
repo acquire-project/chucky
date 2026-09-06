@@ -4,7 +4,7 @@ add_src_lib(compress
         compress.cu compress.h
         blosc.frame.cu blosc.frame.h
         blosc.shuffle.cu blosc.shuffle.h
-    LINKS nvcomp::nvcomp CUDA::cudart_static chucky_log
+    LINKS nvcomp::nvcomp CUDA::cudart_static chucky_log codec_types
 )
 add_src_lib(aggregate SOURCES aggregate.cu aggregate.h LINKS CUDA::cudart_static CUDA::cuda_driver stream_config chucky_log)
 add_src_lib(lod       SOURCES lod.cu lod.h

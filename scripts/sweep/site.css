@@ -1,4 +1,4 @@
-/* The palette, the page frame and the title bar, shared by both pages. Anything
+/* The palette, the page frame and the title bar, shared by all report pages. Anything
    only one page draws stays in that page. theme.js picks light or dark before
    the page paints, so the dark values only need the one selector. */
 
@@ -27,6 +27,8 @@
   --series-7: #4a3aa7;
   --series-8: #e34948;
   --series-none: #898781;
+  --codec-lz4: #126da8;
+  --codec-zstd: #b34426;
   --radius: 8px;
   --radius-sm: 6px;
   --gap: 16px;
@@ -55,6 +57,8 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
+  --codec-lz4: #60b5ee;
+  --codec-zstd: #ff9975;
 }
 
 * { box-sizing: border-box; }
@@ -111,4 +115,13 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px; }
   font: inherit; font-size: 0.85em; padding: 5px 8px; width: auto;
   color: var(--text-primary); background: var(--plane);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.skip-link { position: absolute; top: -100px; left: 12px; padding: 10px; background: var(--surface-1); z-index: 10; }
+.skip-link:focus { top: 8px; }
+@media (max-width: 600px) {
+  .site-head { padding: 12px 14px; gap: 10px; }
+  .site-head nav { order: 3; flex-basis: 100%; flex-wrap: wrap; }
+  .site-head .brand { margin-right: auto; }
 }

@@ -1,0 +1,229 @@
+{
+  "start_utc": "2026-09-06T01:05:43.234Z",
+  "complete": true,
+  "scenario": "orca2_single",
+  "source_commit": "19cd6d30068cbd7aec88048e54817ccae1228c7c",
+  "tracked_source_diff": "diff --git a/bench/bench_report.c b/bench/bench_report.c\nindex e49e91c..48117e5 100644\n--- a/bench/bench_report.c\n+++ b/bench/bench_report.c\n@@ -671,6 +671,11 @@ print_bench_json_pass(const struct stream_metrics* m,\n   if (codec_is_blosc(codec.id)) {\n     jw_key(&jw, \"blosc_block_bytes\");\n     jw_uint(&jw, codec.blosc_block_bytes);\n+    jw_key(&jw, \"blosc_shuffle\");\n+    jw_string(&jw, codec.shuffle == CODEC_SHUFFLE_BIT ? \"bit\" :\n+                     codec.shuffle == CODEC_SHUFFLE_BYTE ? \"byte\" : \"none\");\n+    jw_key(&jw, \"blosc_level\");\n+    jw_uint(&jw, codec.level);\n   }\n   jw_key(&jw, \"throughput_in_gibs\");\n   jw_float(&jw, throughput_gib);\ndiff --git a/bench/bench_util.c b/bench/bench_util.c\nindex 02699eb..622ba63 100644\n--- a/bench/bench_util.c\n+++ b/bench/bench_util.c\n@@ -712,6 +712,19 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)\n       }\n       out->codec.blosc_block_bytes = (uint32_t)block_bytes;\n       ++i;\n+    } else if (strcmp(av[i], \"--blosc-shuffle\") == 0 && i + 1 < ac) {\n+      const char* shuffle = av[++i];\n+      if (strcmp(shuffle, \"none\") == 0)\n+        out->codec.shuffle = CODEC_SHUFFLE_NONE;\n+      else if (strcmp(shuffle, \"byte\") == 0)\n+        out->codec.shuffle = CODEC_SHUFFLE_BYTE;\n+      else if (strcmp(shuffle, \"bit\") == 0)\n+        out->codec.shuffle = CODEC_SHUFFLE_BIT;\n+      else {\n+        fprintf(stderr, \"Invalid --blosc-shuffle: %s (expected none|byte|bit)\\n\",\n+                shuffle);\n+        return 1;\n+      }\n     } else if (strcmp(av[i], \"--reduce\") == 0 && i + 1 < ac) {\n       if (!parse_reduce(av[++i], &out->reduce))\n         return 1;\n@@ -767,6 +780,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)\n               \"Usage: %s [--fill xor|zeros|rand] [--codec \"\n               \"none|lz4|zstd|blosc-lz4|blosc-zstd] \"\n               \"[--blosc-block-bytes N (required for Blosc, e.g. 16K)] \"\n+              \"[--blosc-shuffle none|byte|bit] \"\n               \"[--reduce mean|min|max|median|max_sup|min_sup] \"\n               \"[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] \"\n               \"[--json] [--chunk-bytes N] [--batch-bytes N] \"",
+  "build": {
+    "CMAKE_BUILD_TYPE": "Release",
+    "CMAKE_CUDA_ARCHITECTURES": "120",
+    "CMAKE_CUDA_COMPILER": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3/bin/nvcc.exe",
+    "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
+    "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
+    "NVCOMP_INCLUDE_DIR": "C:/Program Files/NVIDIA nvCOMP/v5.3/include",
+    "NVCOMP_LIBRARY": "C:/Program Files/NVIDIA nvCOMP/v5.3/lib/13/nvcomp_static.lib"
+  },
+  "executable_sha256": "0ab42e5d693dea5d58110c70cdac906af86fdedba641137d5545d6b6096115f9",
+  "source_sha256": {
+    "bench/bench_util.c": "0cd840913e4188be8b0a9a164cb0f1ded89a85e1c2e6798db5a202aadc1f3a91",
+    "bench/bench_report.c": "8eb0a4d48ef6ec1bc84a091610f58f467def226c9c49d15f7b3c19b7585b133d",
+    "tests/test_data.c": "bf5798c527427a0ffd4a06a0f197f5724d102e0a5bede30e50fc99084574e8e4"
+  },
+  "platform": "win32",
+  "cpu": "AMD Ryzen 5 7600X, 6 cores / 12 logical processors",
+  "cuda_compiler": "nvcc: NVIDIA (R) Cuda compiler driver\r\nCopyright (c) 2005-2026 NVIDIA Corporation\r\nBuilt on Tue_Jun__9_14:30:19_Pacific_Daylight_Time_2026\r\nCuda compilation tools, release 13.3, V13.3.73\r\nBuild cuda_13.3.r13.3/compiler.38244171_0",
+  "nvcomp": "5.3.0.16",
+  "gpu_before": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1265 MiB, 45, 4 %, 46.15 W, 2715 MHz, 15001 MHz",
+  "gpu_samples": [
+    {
+      "utc": "2026-09-06T01:06:14.960Z",
+      "after_run": 25,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1240 MiB, 57, 99 %, 73.02 W, 2887 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:06:46.624Z",
+      "after_run": 50,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1240 MiB, 50, 4 %, 56.41 W, 2887 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:07:19.468Z",
+      "after_run": 75,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1233 MiB, 53, 91 %, 119.30 W, 2880 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:07:50.826Z",
+      "after_run": 100,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1246 MiB, 54, 84 %, 107.90 W, 2887 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:08:24.739Z",
+      "after_run": 125,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1233 MiB, 54, 93 %, 104.25 W, 2880 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:08:57.146Z",
+      "after_run": 150,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 1232 MiB, 49, 4 %, 58.21 W, 2887 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:09:48.292Z",
+      "after_run": 175,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3541 MiB, 58, 82 %, 177.97 W, 2865 MHz, 15001 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:10:27.070Z",
+      "after_run": 200,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3542 MiB, 61, 91 %, 131.18 W, 2865 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:11:04.348Z",
+      "after_run": 225,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3543 MiB, 60, 63 %, 155.97 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:11:44.746Z",
+      "after_run": 250,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3506 MiB, 62, 93 %, 162.12 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:12:25.365Z",
+      "after_run": 275,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3560 MiB, 63, 70 %, 195.69 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:13:04.853Z",
+      "after_run": 300,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3464 MiB, 62, 55 %, 147.39 W, 2857 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:13:45.542Z",
+      "after_run": 325,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3441 MiB, 67, 93 %, 142.52 W, 2857 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:14:25.977Z",
+      "after_run": 350,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3422 MiB, 66, 99 %, 169.50 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:15:01.679Z",
+      "after_run": 375,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3455 MiB, 64, 88 %, 161.71 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:15:40.158Z",
+      "after_run": 400,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3422 MiB, 67, 95 %, 166.26 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:16:16.538Z",
+      "after_run": 425,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3404 MiB, 65, 83 %, 154.56 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:16:53.578Z",
+      "after_run": 450,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3424 MiB, 67, 98 %, 185.62 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:17:33.183Z",
+      "after_run": 475,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3422 MiB, 61, 58 %, 121.55 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:18:14.225Z",
+      "after_run": 500,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3389 MiB, 67, 99 %, 170.00 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:18:55.444Z",
+      "after_run": 525,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3386 MiB, 65, 88 %, 177.80 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:19:31.260Z",
+      "after_run": 550,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3395 MiB, 65, 99 %, 173.39 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:20:09.407Z",
+      "after_run": 575,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3390 MiB, 64, 56 %, 179.89 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:20:48.687Z",
+      "after_run": 600,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3408 MiB, 65, 99 %, 181.09 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:21:27.327Z",
+      "after_run": 625,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3395 MiB, 64, 28 %, 154.65 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:22:04.872Z",
+      "after_run": 650,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3342 MiB, 69, 96 %, 166.23 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:22:42.524Z",
+      "after_run": 675,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3423 MiB, 67, 93 %, 176.30 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:23:24.096Z",
+      "after_run": 700,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3399 MiB, 68, 98 %, 189.38 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:24:02.171Z",
+      "after_run": 725,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3370 MiB, 66, 80 %, 132.54 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:24:43.945Z",
+      "after_run": 750,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3448 MiB, 65, 88 %, 190.75 W, 2842 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:25:21.693Z",
+      "after_run": 775,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3398 MiB, 67, 94 %, 178.98 W, 2850 MHz, 14801 MHz"
+    },
+    {
+      "utc": "2026-09-06T01:26:01.620Z",
+      "after_run": 800,
+      "reading": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3386 MiB, 68, 99 %, 168.30 W, 2850 MHz, 14801 MHz"
+    }
+  ],
+  "options": {
+    "frames": 100,
+    "repeats": 3,
+    "warmups": 1,
+    "memory_budget": "6G",
+    "batch_bytes": "64M",
+    "max_threads": 3,
+    "dtype": "u16",
+    "seed": 169
+  },
+  "randomization": "Seed 169, Mulberry32 / Fisher-Yates; fresh shuffle of canonical matrix per pass. PRNG differs from historical runner.",
+  "geometry": {
+    "256": {
+      "shape": [
+        8,
+        1,
+        128,
+        128
+      ],
+      "chunks_per_epoch": 576,
+      "padded_batch_bytes": 150994944
+    },
+    "1024": {
+      "shape": [
+        16,
+        1,
+        128,
+        256
+      ],
+      "chunks_per_epoch": 288,
+      "padded_batch_bytes": 301989888
+    }
+  },
+  "validation": "test-test_compress_blosc_gpu passed before measurement; every run checks returned filter, level, block, shape, epoch count, batch, and bytes.",
+  "runs": 800,
+  "measured_runs": 600,
+  "failures": [],
+  "finish_utc": "2026-09-06T01:26:01.664Z",
+  "gpu_after": "NVIDIA GeForce RTX 5080, 591.86, 16303 MiB, 3386 MiB, 68, 99 %, 168.30 W, 2850 MHz, 14801 MHz",
+  "raw_results_sha256": "19e0b2bd4835a667fef627ee85b8dfd1dbb5f76b7852e63b7d5ad9071d57775c"
+}

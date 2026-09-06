@@ -10,24 +10,24 @@ concurrently. Small objects (e.g. `zarr.json` metadata) use a simple PUT.
 Unlike a local filesystem, S3 objects are immutable — you cannot seek,
 append, or partially overwrite them. A shard must be written as a single
 upload from start to finish. If the upload fails or is interrupted the
-object is not created (see [Error Handling](#error-handling) and
-[Bucket Lifecycle Policy](#bucket-lifecycle-policy)).
+object is not created (see [Error Handling][error-handling] and
+[Bucket Lifecycle Policy][bucket-lifecycle-policy]).
 
 S3 also imposes hard limits on multipart uploads: at most **10,000 parts**
 and a maximum part size of 5 GiB per [upload][s3-limits]. The sink
 rejects configurations that could exceed the part-count limit (see
-[Limitations](#limitations)).
+[Limitations][limitations]).
 
 ## Configuration
 
 The S3 transport is configured via `store_s3_config`, defined in
-[`store.h`](../src/store.h). The transport-specific fields are:
+[`store.h`][store-h]. The transport-specific fields are:
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `region` | *required* | AWS region (e.g. `"us-east-1"`) |
 | `endpoint` | *required* | S3-compatible endpoint URL (e.g. `"https://s3.us-east-1.amazonaws.com"` or `"http://localhost:9000"`) |
-| `part_size` | 8 MiB | [Multipart upload][mpu] part size (see [Limitations](#limitations)) |
+| `part_size` | 8 MiB | [Multipart upload][mpu] part size (see [Limitations][limitations]) |
 | `throughput_gbps` | 100.0 | Target throughput in gigabits/s for the CRT |
 | `max_retries` | 10 | Retry count per part |
 | `backoff_scale_ms` | 500 | Exponential backoff scale in ms |
@@ -68,6 +68,14 @@ store_destroy(store);
 ```
 
 See `docs/formats.md` for multiscale and HCS examples.
+
+Blosc-LZ4 and Blosc-Zstd use the same S3 sink as the other codecs. Configure
+the stream and array with the same `struct codec_config`, including an explicit
+`blosc_block_bytes`; see the [Blosc configuration API][blosc-configuration].
+Internal Blosc blocks do not set S3 multipart boundaries or change the number
+of shard objects. The [Blosc Pareto analysis][blosc-pareto] compares
+discard-sink compression settings; its results do not include S3 latency or
+bandwidth.
 
 ### Credentials
 
@@ -223,7 +231,7 @@ struct tile_stream_configuration stream_cfg = {
   .dtype      = dtype_u16,
   .rank       = 3,
   .dimensions = dims,
-  .codec      = CODEC_ZSTD,
+  .codec      = { .id = CODEC_ZSTD },
 };
 
 int ratios[] = { 0, 1, 1 };
@@ -244,7 +252,7 @@ struct zarr_group* root = zarr_group_create(store, "");
 zarr_group_destroy(root);
 struct zarr_array_config acfg = {
   .data_type = dtype_u16, .rank = 3, .dimensions = dims,
-  .codec = { .id = CODEC_ZSTD },
+  .codec = stream_cfg.codec,
 };
 struct zarr_array* arr = zarr_array_create(store, "0", &acfg);
 
@@ -277,3 +285,10 @@ store_destroy(store);
 [minio]: https://min.io/docs/minio/container/index.html
 [cred-chain]: https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
 [aws-crt]: https://docs.aws.amazon.com/sdkref/latest/guide/common-runtime.html
+
+[error-handling]: #error-handling
+[bucket-lifecycle-policy]: #bucket-lifecycle-policy
+[limitations]: #limitations
+[store-h]: ../src/store.h
+[blosc-configuration]: ../README.md#blosc-configuration
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

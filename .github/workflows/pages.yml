@@ -7,6 +7,8 @@ on:
       - 'bench/results/*.json'
       - 'bench/machines.toml'
       - 'scripts/sweep/**'
+      - 'docs/benchmarks/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -26,8 +28,18 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Validate report adapters
+        run: uv run --with click --with rich --with pydantic python -m unittest discover -s scripts/sweep -p 'test_*.py'
+
       - name: Generate report
         run: uv run scripts/sweep/report.py --results-dir bench/results/ -o _site
+
+      - name: Check report selection and retained frontiers
+        run: node --test scripts/sweep/test_reports.mjs scripts/sweep/test_pareto.mjs
 
       - uses: actions/upload-pages-artifact@v3
 

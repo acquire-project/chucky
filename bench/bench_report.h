@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bench_memory.h"
 #include "stream/layouts.h"
 #include "types.stream.h"
 
@@ -16,20 +17,6 @@ struct sink_stats
 {
   size_t total_bytes;
   uint64_t total_chunks; // all LOD levels, per epoch
-};
-
-// Both the estimated and the measured memory use are recorded here.
-struct bench_memory
-{
-  uint64_t estimate_total_bytes;  // device bytes on GPU, heap bytes on CPU
-  uint64_t estimate_pinned_bytes; // pinned host bytes on GPU, 0 on CPU
-  uint64_t host_baseline_bytes;   // resident before the stream was created
-  uint64_t host_peak_bytes;       // most resident memory held during the run
-  // A reading of 0 is valid, so it cannot signal failure.
-  int host_reading_failed;
-  uint64_t device_used_bytes; // GPU: free device memory the stream took
-  // Device memory on GPU, the host difference on CPU. 0 if unavailable.
-  uint64_t measured_bytes;
 };
 
 void
@@ -75,6 +62,7 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       const struct stream_metric* sink_metric,
                       const struct tile_stream_layout* layout,
                       enum dtype dtype,
+                      struct codec_config codec,
                       const struct sink_stats* ss,
                       size_t total_bytes,
                       size_t total_elements,

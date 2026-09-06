@@ -27,7 +27,7 @@ internal conventions, and key concepts.
 | `dtype.h` | `enum dtype` (11 types) + `dtype_bpe()` |
 | `dimension.h` | `struct dimension` + builder helpers (`dims_create`, `dims_set_chunk_sizes`, etc.) |
 | `types.stream.h` | `struct tile_stream_configuration`, `struct tile_stream_status`, `struct stream_metrics` |
-| `types.codec.h` | `enum compression_codec` (none / lz4 / zstd) |
+| `types.codec.h` | `struct codec_config`: codec (none / lz4 / zstd / blosc-lz4 / blosc-zstd), level, shuffle, explicit Blosc block size |
 | `types.lod.h` | `enum lod_reduce_method` (mean / min / max / median / max_suppressed / min_suppressed) |
 | `defs.limits.h` | Compile-time limits: `MAX_RANK=64`, `MAX_ZARR_RANK=32`, `LOD_MAX_LEVELS=32` |
 
@@ -43,7 +43,7 @@ internal conventions, and key concepts.
 | Target | Source | Purpose |
 |--------|--------|---------|
 | `transpose` | `src/gpu/transpose.cu` | CUDA scatter kernel (input -> chunk pool) |
-| `compress` | `src/gpu/compress.cu` | Batch compress via nvcomp (lz4 / zstd) |
+| `compress` | `src/gpu/compress.cu`, `src/gpu/blosc.*` | Raw LZ4/Zstd via nvCOMP; Blosc block preparation, compression, and framing |
 | `aggregate` | `src/gpu/aggregate.cu` | Pack compressed chunks into shard buffers |
 | `lod` | `src/gpu/lod.cu` | GPU LOD scatter + reduce (all 11 dtypes) |
 | `stream` | `src/gpu/stream.c` + helpers | GPU pipeline orchestrator |
@@ -53,7 +53,7 @@ internal conventions, and key concepts.
 | Target | Source | Purpose |
 |--------|--------|---------|
 | `transpose_cpu` | `src/cpu/transpose.cpp` | OpenMP scatter |
-| `compress_cpu` | `src/cpu/compress.c` | zstd / lz4 compression (CPU) |
+| `compress_cpu` | `src/cpu/compress.c`, `src/cpu/compress_blosc.c` | zstd / lz4 and optional c-blosc compression (CPU) |
 | `aggregate_cpu` | `src/cpu/aggregate.c` | Shard packing (CPU) |
 | `lod_cpu` | `src/cpu/lod.cpp` | CPU LOD scatter + reduce |
 | `stream_cpu` | `src/cpu/stream.c` | CPU pipeline orchestrator |
@@ -79,7 +79,7 @@ A library consumer needs:
 - **`dimension.h`** — `struct dimension` + builder/validation helpers
 - **`dtype.h`** — `enum dtype`, `dtype_bpe()`
 - **`types.stream.h`** — `struct tile_stream_configuration`, metrics, status
-- **`types.codec.h`** — `enum compression_codec`
+- **`types.codec.h`** — `enum compression_codec`, `enum codec_shuffle`, `struct codec_config`
 - **`types.lod.h`** — `enum lod_reduce_method`
 - **`defs.limits.h`** — compile-time limits
 - **`chucky_log.h`** — log level / callback control for routing chucky's log output
@@ -120,13 +120,20 @@ Both backends implement the same pipeline stages behind the same
 | Stage | GPU | CPU |
 |-------|-----|-----|
 | Scatter | CUDA kernel | OpenMP parallel loop |
-| Compress | nvcomp (lz4 / zstd) | libzstd / liblz4 |
+| Compress | nvCOMP LZ4/Zstd, raw or Blosc-framed | libzstd / liblz4 / optional c-blosc |
 | Aggregate | CUDA kernel | Sequential packing |
 | LOD | CUDA kernels (templated on dtype) | C++ templates + OpenMP |
 | Orchestration | 4 CUDA streams, double-buffered | Single-threaded pipeline |
 
 Create with `tile_stream_gpu_create()` or `tile_stream_cpu_create()`.
 Both return a `struct writer*` via `_writer()` — downstream code is identical.
+
+Both Blosc codecs support no shuffle, byte shuffle, and bitshuffle. Set
+`codec.blosc_block_bytes` explicitly on both backends, including at level 0;
+zero is invalid. GPU Blosc uses internal blocks capped by the Zarr chunk size,
+while CPU C-Blosc may adjust the requested size. See the
+[configuration examples][blosc-configuration] for limits, level semantics,
+and matching the stream and sink settings.
 
 ## Key concepts
 
@@ -136,6 +143,8 @@ Both return a `struct writer*` via `_writer()` — downstream code is identical.
   `epochs_per_batch`
 - **chunk** — Zarr's independently compressed unit; shaped by
   `dimension.chunk_size` per axis
+- **Blosc block** — an internal portion of a chunk, filtered and compressed
+  independently; changing its size does not change Zarr chunk or shard geometry
 - **shard** — a file containing multiple compressed chunks plus a binary index
 - **lifted shape** — the input tensor reshaped as
   `(t[D-1], n[D-1], ..., t[0], n[0])` to expose chunk structure
@@ -148,7 +157,20 @@ Both return a `struct writer*` via `_writer()` — downstream code is identical.
 
 ## Further reading
 
-- [docs/design.md](design.md) — full design walkthrough (problem, pipeline, memory model, API)
-- [docs/streaming.md](streaming.md) — chunk lifetime math and ring-buffer proof
-- [docs/sharding.md](sharding.md) — shard layout and index format
-- [docs/s3-guide.md](s3-guide.md) — S3 storage backend setup
+- [docs/design.md][docs-design-md] — full design walkthrough (problem, pipeline, memory model, API)
+- [docs/streaming.md][docs-streaming-md] — chunk lifetime math and ring-buffer proof
+- [docs/sharding.md][docs-sharding-md] — shard layout and index format
+- [docs/s3-guide.md][docs-s3-guide-md] — S3 storage backend setup
+- [docs/blosc-format.md][blosc-format] — C-Blosc format and CPU/GPU compatibility
+- [docs/blosc-performance.md][blosc-performance] — block/filter tuning, memory, and retained measurements
+- [Blosc Pareto analysis][blosc-pareto] — interactive comparison of the
+  retained RTX 5070 Laptop, RTX 5080, and L40 measurements
+
+[docs-design-md]: design.md
+[docs-streaming-md]: streaming.md
+[docs-sharding-md]: sharding.md
+[docs-s3-guide-md]: s3-guide.md
+[blosc-configuration]: ../README.md#blosc-configuration
+[blosc-format]: blosc-format.md
+[blosc-performance]: blosc-performance.md
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

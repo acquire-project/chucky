@@ -32,8 +32,8 @@ outermost (slowest-varying) dimension, the **append dimension**. We call this
 set of simultaneously live chunks an **epoch**. The pipeline processes one epoch
 at a time, flushes the completed chunks, and reuses the memory. This bounds
 the working set regardless of how long the stream runs. (The formal analysis
-is in [streaming.md](streaming.md); the mathematical details appear in the
-[Approach](#approach) section below.)
+is in [streaming.md][streaming-md]; the mathematical details appear in the
+[Approach][approach] section below.)
 
 During acquisition, scientists need to visualize incoming data in real time —
 zooming and panning across a dataset that may already be hundreds of gigabytes.
@@ -143,14 +143,19 @@ the storage order.
 
 ### Batching and compression
 
-Once chunks are assembled in GPU memory, they are compressed in a single batched
-call using NVIDIA's nvcomp library (zstd or lz4). nvcomp compresses all chunks
-simultaneously, but is most efficient when the batch contains many chunks
-(1000+). Depending on the configuration, a single epoch may produce relatively
-few chunks, so the pipeline accumulates $K$ consecutive epochs into a **batch**
-before triggering the compress → aggregate → transfer sequence. $K$ is chosen
-so the total chunk count ($K \times M$ times the number of LOD levels) is large
-enough for good GPU occupancy.
+Once chunks are assembled in GPU memory, the codec batches compression inputs
+through NVIDIA's nvCOMP library (Zstd or LZ4). Raw codecs use one input per
+chunk. Blosc-LZ4 and Blosc-Zstd divide each chunk into internal blocks, apply
+the configured filter within each block, compress those blocks, and pack one
+C-Blosc-compatible frame per chunk. Block preparation also handles device
+alignment without changing the caller's input layout. See the
+[Blosc format guide][blosc-format] for framing and fallback rules.
+
+The pipeline accumulates $K$ consecutive epochs into a **batch** before
+triggering the compress → aggregate → transfer sequence. Larger batches expose
+more independent compression inputs; for Blosc their count also depends on
+`codec.blosc_block_bytes`. Changing that request changes compression and memory
+costs without changing the Zarr chunk or shard geometry.
 
 The **chunk pool** is a contiguous GPU buffer holding all $K \times M$ chunk
 slots (plus LOD level slots). Two pools are allocated: while one receives
@@ -158,8 +163,11 @@ scatter writes from the current batch, the other drains through compression and
 transfer. This double-buffering ensures the scatter and compress stages overlap
 completely.
 
-Each chunk is compressed in place into a fixed-size slot bounded by the codec's
-worst-case output. Since compressed sizes vary, gaps appear between chunks:
+Each encoded chunk occupies a fixed-size slot in a separate output pool, sized
+to the codec's aligned worst-case output bound. Blosc packs its block records
+from scratch storage into that slot and bounds the logical frame by the
+uncompressed chunk size plus 16 bytes. Since encoded sizes vary, gaps appear
+between chunks:
 
 ```
    chunk 0          chunk 1          chunk 2          chunk 3
@@ -212,7 +220,7 @@ shards to align to page boundaries to support efficient I/O downstream.
 The permutation is another instance of the unravel/ravel pattern. Each chunk
 coordinate $t_d$ is unraveled into a shard index $s_d$ and within-shard
 position $w_d$ (using radix $p_d$), then the full coordinate vector is raveled
-with shard-major strides. See [sharding.md](sharding.md) for the derivation.
+with shard-major strides. See [sharding.md][sharding-md] for the derivation.
 
 ### Multiscale
 
@@ -421,7 +429,7 @@ synchronization overlap every stage.
                           │                 ▼                               │
               compress ┌► │  ┌──────────────────────────┐                   │
                stream  │  │  │ Batch compress           │                   │
-                       │  │  │ (nvcomp lz4/zstd)        │                   │
+                       │  │  │ (raw or Blosc-framed)    │                   │
                        │  │  └─────────────┬────────────┘                   │
                        │  │                │                                │
                        │  │                ▼                                │
@@ -476,7 +484,9 @@ Each LOD level produces its own set of chunks, interleaved in the same chunk poo
 as L0.
 
 **Compress (compress stream).** All chunks in the batch (across all levels) are
-compressed in a single nvcomp batch call.
+encoded together. Raw codecs send whole chunks to nvCOMP; Blosc sends internal
+blocks and then packs a complete frame for each chunk. Level 0 Blosc emits
+verbatim frames without invoking nvCOMP compression.
 
 **Aggregate (compress stream).** Compressed chunks are reordered from chunk-major
 to shard-major order using the three-pass algorithm described above.
@@ -534,19 +544,26 @@ growth during streaming. The six pools and how they scale:
 |---|---|---|
 | Staging (device) | $2 \times \text{buffer\_capacity}$ | Pinned host mirrors of equal size |
 | Chunk pool | $2 \times K \times M_{\text{total}} \times \text{chunk\_stride} \times \text{bpe}$ | $M_{\text{total}}$ = sum of chunks across all LOD levels |
-| Compressed pool | $2 \times K \times M_{\text{total}} \times \text{max\_output\_size}$ | Worst-case compressed chunk bound |
-| Codec workspace | batch pointer arrays + nvcomp temp buffer | Scales with $K \times M_{\text{total}}$ |
+| Compressed pool | $2 \times K \times M_{\text{total}} \times \text{output\_stride}$ | Aligned worst-case encoded-chunk slots |
+| Codec workspace | input/output pointers + size arrays + nvCOMP workspace; Blosc adds block output, offsets, and preparation storage | Raw codecs scale with chunk count; Blosc scales with internal block count and codec sizing queries |
 | Aggregate | per-level: 2 slots × (offset + size arrays + gather buffer) | Plus permutation LUTs when $K > 1$ |
 | LOD | `d_linear` + `d_morton` + per-level shape/stride/LUT arrays + dim0 accumulators | Only allocated when multiscale is enabled |
 
-The dominant terms are the chunk pool and compressed pool, both proportional to
-$K \times M_{\text{total}}$. Increasing the chunk size reduces $M$ (fewer chunks
-per epoch) at the cost of larger per-chunk buffers. Increasing $K$ improves GPU
+The chunk pool and compressed pool are both proportional to
+$K \times M_{\text{total}}$. Blosc's block scratch and nvCOMP workspace can also
+be substantial, especially with many small blocks. Increasing the chunk size
+reduces $M$ (fewer chunks per epoch) at the cost of larger per-chunk buffers.
+Increasing $K$ improves GPU
 occupancy during compression but increases memory proportionally.
 
-`tile_stream_gpu_memory_estimate` computes the exact budget from a
-configuration without allocating anything. Call it before committing to verify
-that the working set fits in available GPU memory.
+`tile_stream_gpu_memory_estimate` computes explicit allocation sizes from a
+configuration and nvCOMP sizing queries without allocating codec buffers.
+Allow additional headroom for CUDA/runtime/library overhead and other GPU
+users; the estimate is not a measurement of peak process usage. The
+[Blosc memory guide][blosc-memory] details the block-dependent terms and
+compares allocation estimates with observed device usage. The
+[Blosc Pareto analysis][blosc-pareto] shows estimated device allocation beside
+throughput and the reported compression fold for the retained systems.
 
 ### API
 
@@ -560,12 +577,17 @@ A stream is configured by filling a `tile_stream_configuration`:
 | `dimensions` | `struct dimension[]` | Per-dimension geometry (see below) |
 | `dtype` | `enum dtype` | Element type (11 types, 1–8 bytes; see `src/dtype.h`) |
 | `buffer_capacity_bytes` | > 0 | H2D staging buffer size, rounded up to a 4096-byte page and doubled internally. Also the dispatch size — see below |
-| `codec` | none / lz4 / zstd | Compression codec |
+| `codec` | `struct codec_config` | Codec (none / lz4 / zstd / blosc-lz4 / blosc-zstd), level, shuffle, and block request |
 | `epochs_per_batch` | ≥ 0 | Epochs per batch ($K$); 0 = auto (from `target_batch_bytes`) |
 | `target_batch_bytes` | > 0 | Target uncompressed bytes per batch for auto-$K$ (default 512 MiB) |
 | `reduce_method` | mean / median / min / max / max_suppressed / min_suppressed | Inner LOD reduction |
 | `dim0_reduce_method` | (same) | Dim0 LOD reduction |
 | `metadata_update_interval_s` | ≥ 0 | Seconds between metadata refreshes |
+
+Blosc requires `codec.blosc_block_bytes` on CPU and GPU, even for level 0.
+The request is independent of chunk dimensions; see the
+[Blosc configuration API][blosc-configuration] for valid sizes, CPU/GPU level
+behavior, and matching the sink configuration.
 
 `buffer_capacity_bytes` sets how much data is grouped into one transfer. Nothing
 reaches the device until the buffer fills or the caller flushes, so a larger
@@ -670,7 +692,7 @@ struct tile_stream_configuration config = {
   .dimensions         = dims,
   .dtype              = dtype_u16,
   .buffer_capacity_bytes = 4 * 1024 * 1024,
-  .codec              = CODEC_ZSTD,
+  .codec              = { .id = CODEC_ZSTD },
 };
 
 // 3. Create the stream and obtain a writer.
@@ -717,14 +739,14 @@ return 0 and skip all padding overhead.
 regenerates OME-NGFF group metadata. Metadata is written at a configurable
 interval rather than every epoch.
 
-For the zarr shard binary format, see [sharding.md](sharding.md) and the
+For the zarr shard binary format, see [sharding.md][sharding-md] and the
 [zarr sharding codec specification][zarr-shard].
 
 ## Related documents
 
-- [streaming.md](streaming.md) — chunk lifetime analysis, FIFO proof, epoch
+- [streaming.md][streaming-md] — chunk lifetime analysis, FIFO proof, epoch
   derivation
-- [sharding.md](sharding.md) — chunk-to-shard lifting, aggregation kernel, zarr
+- [sharding.md][sharding-md] — chunk-to-shard lifting, aggregation kernel, zarr
   shard binary format
 
 ## Glossary
@@ -775,3 +797,11 @@ which is a **shard**.
 
 **Chunk pool.** A contiguous GPU buffer holding $K \times M_{\text{total}}$
 chunk slots (across all LOD levels), double-buffered.
+
+[streaming-md]: streaming.md
+[approach]: #approach
+[sharding-md]: sharding.md
+[blosc-format]: blosc-format.md
+[blosc-memory]: blosc-performance.md#how-block-size-affects-gpu-memory
+[blosc-configuration]: ../README.md#blosc-configuration
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html

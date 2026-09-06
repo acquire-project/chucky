@@ -255,17 +255,28 @@ test_blosc_rebind(void)
       .dimensions = dims0,
       .codec = { .id = CODEC_BLOSC_ZSTD,
                  .level = 1,
-                 .shuffle = CODEC_SHUFFLE_NONE } },
+                 .shuffle = CODEC_SHUFFLE_NONE,
+                 .blosc_block_bytes = 16 * 1024 } },
     { .buffer_capacity_bytes = 4096,
       .dtype = dtype_u64,
       .rank = 2,
       .dimensions = dims1,
       .codec = { .id = CODEC_BLOSC_ZSTD,
                  .level = 8,
-                 .shuffle = CODEC_SHUFFLE_BIT } },
+                 .shuffle = CODEC_SHUFFLE_BIT,
+                 .blosc_block_bytes = 16 * 1024 } },
   };
   struct shard_sink* sinks[] = { &sink0.base, &sink1.base };
 
+  configs[1].codec.blosc_block_bytes = 4097;
+  ms = multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, !ms);
+  configs[0].codec.blosc_block_bytes = 0;
+  ms = multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
+  CHECK(Fail, !ms);
+  // Odd block sizes must support different array dtypes and shuffle modes.
+  configs[0].codec.blosc_block_bytes = 129;
+  configs[1].codec.blosc_block_bytes = 129;
   ms = multiarray_tile_stream_gpu_create(2, configs, sinks, 0);
   CHECK(Fail, ms);
   struct multiarray_writer* w = multiarray_tile_stream_gpu_writer(ms);

@@ -1,6 +1,6 @@
 # Formats guide
 
-Chucky writes zarr v3 sharded arrays with optional OME-NGFF and HCS metadata.
+The encoder writes zarr v3 sharded arrays with optional OME-NGFF and HCS metadata.
 The format layers compose — each builds on the one below it.
 
 ## Architecture
@@ -126,6 +126,50 @@ struct store* store = store_s3_create(&s3cfg);
 
 ## Key concepts
 
+### GPU Blosc
+
+The [Blosc binary specification][blosc-format] defines the serialized
+representation, flags, blocks, filters, and CPU/GPU compatibility boundary.
+The [performance guide][blosc-performance] covers tuning and memory sizing;
+the [interactive Pareto analysis][blosc-pareto] compares the retained systems
+and tested configurations.
+
+`CODEC_BLOSC_LZ4` and `CODEC_BLOSC_ZSTD` produce C-Blosc 1.x compatible
+chunks with no shuffle, byte shuffle, or bitshuffle. The GPU encoder divides
+each Zarr chunk into blocks requested by `codec_config.blosc_block_bytes`,
+capped by the chunk size, with a shorter final block when needed. This field
+must be set explicitly (zero is invalid, including at level 0) and is
+independent of Zarr chunk and shard sizes. Zarr metadata records the requested
+`blocksize`; each binary Blosc header records the actual block size. See the
+[Blosc configuration API][blosc-configuration] for validation and
+CPU behavior.
+
+The existing multidimensional scatter and LOD layouts already place each
+chunk's contents contiguously. The codec addresses blocks as spans of those
+contents, applies filters within each block, and batches the spans through
+nvCOMP. When block boundaries need device alignment, internal scratch pads
+the spans without changing their logical sizes. There is no alignment
+requirement on the caller's append buffer or block-size choice.
+A per-chunk CUB scan computes the block record offsets, then a gather
+packs the records into the existing fixed-stride output slots. Aggregation,
+shard ordering, and delivery continue to operate on complete encoded chunks.
+
+Blocks are unsplit (`DONT_SPLIT`). An incompressible block stores its filtered
+bytes in a raw block record. If the complete framed result would not be
+smaller than the original plus the 16-byte header, the whole chunk instead
+uses `MEMCPYED` with original, unfiltered bytes. Level 0 and inputs below 128
+bytes also use this form. Levels 1–9 all select nvCOMP's single compression
+mode; they do not reproduce CPU Blosc's level-dependent tuning.
+
+Each chunk remains bounded by `nbytes + 16` encoded bytes and Blosc's signed
+32-bit frame limit. Raw nvCOMP block output uses a separate aligned scratch
+pool sized to nvCOMP's worst-case bound. The GPU memory estimate includes
+that pool, block size/offset/pointer arrays, compressor workspace, and any
+prepared-input storage shared by shuffle and alignment. Compression and raw-block
+fallback read the same block pointers. Array switches update active block counts
+and filter state within the reserved capacity; arrays sharing a GPU codec must
+use the same `blosc_block_bytes`.
+
 ### Store
 
 `struct store` (`store.h`) is an opaque storage backend. Users create one
@@ -202,3 +246,8 @@ plate.zarr/
 | `zarr.h` | Zarr v3 array + group write |
 | `ngff.h` | NGFF multiscale + axis types |
 | `hcs.h` | HCS plate/well/FOV hierarchy + metadata |
+
+[blosc-format]: blosc-format.md
+[blosc-performance]: blosc-performance.md
+[blosc-pareto]: https://acquire-project.github.io/chucky/pareto.html
+[blosc-configuration]: ../README.md#blosc-configuration

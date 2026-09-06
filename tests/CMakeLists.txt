@@ -105,7 +105,8 @@ add_test_exe(test_compress_cpu test_compress_cpu.c compress_cpu threadpool chuck
 
 # CUDA-free coverage for the GPU host-copy stage's span and host-run contracts.
 add_test_exe(test_host_batch test_host_batch.c
-    shard_delivery stream_config test_shard_sink chucky_log)
+    shard_delivery stream_config test_shard_sink chucky_log
+)
 
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)
@@ -161,7 +162,7 @@ target_link_libraries(test_data PUBLIC stream_config writer chucky_log)
 
 # Tests with zstd
 add_gpu_test_exe(test_stream          test_stream.c          LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd index_ops_util test_shard_sink test_gpu_helpers test_shard_verify test_voxel_encode)
-add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd)
+add_gpu_test_exe(test_compress        test_compress.c        LINKS CUDA::cuda_driver CUDA::cudart_static stream Zstd::Zstd Lz4::Lz4)
 if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
     add_gpu_test_exe(test_compress_blosc_gpu test_compress_blosc_gpu.c
         LINKS CUDA::cuda_driver CUDA::cudart_static stream Blosc::Blosc
@@ -181,6 +182,7 @@ if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
 endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
+add_test_exe(test_bench_memory test_bench_memory.c bench_memory)
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
 add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
 add_test_exe(test_host_output_pool test_host_output_pool.c host_output_pool test_platform chucky_log)

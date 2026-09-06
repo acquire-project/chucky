@@ -10,6 +10,8 @@ struct stream_metrics;
 // shared across all arrays and sized to the maximum requirement, so memory
 // usage is constant with respect to n_arrays.  Only one array may be active
 // at a time; switching requires an epoch boundary.
+// All arrays must use the same codec id and, for Blosc, blosc_block_bytes.
+// Dtype, compression level, shuffle, and chunk geometry may differ.
 //
 // enable_metrics is currently ignored on the GPU path: metrics are always
 // collected (CUDA events are required for stream synchronization regardless).

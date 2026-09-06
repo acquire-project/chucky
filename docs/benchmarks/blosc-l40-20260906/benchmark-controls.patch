@@ -1,0 +1,159 @@
+diff --git a/bench/bench_parse.c b/bench/bench_parse.c
+index bcaa3a5..bd5b3e2 100644
+--- a/bench/bench_parse.c
++++ b/bench/bench_parse.c
+@@ -120,10 +120,6 @@ parse_codec(const char* s, struct codec_config* out)
+   int i = match_option(s, names, 5);
+   if (i < 5) {
+     out->id = vals[i];
+-    if (out->id == CODEC_LZ4_NON_STANDARD && out->level == 0)
+-      out->level = 1;
+-    if (codec_is_blosc(out->id) && out->level == 0)
+-      out->level = 3;
+     return 1;
+   }
+   fprintf(stderr,
+@@ -133,6 +129,51 @@ parse_codec(const char* s, struct codec_config* out)
+   return 0;
+ }
+ 
++uint8_t
++bench_default_level(enum compression_codec codec)
++{
++  if (codec == CODEC_LZ4_NON_STANDARD)
++    return 1;
++  return codec_is_blosc(codec) ? 3 : 0;
++}
++
++static const char* const shuffle_names[] = { "none", "byte", "bit" };
++
++const char*
++bench_shuffle_name(enum codec_shuffle shuffle)
++{
++  return shuffle >= CODEC_SHUFFLE_NONE && shuffle <= CODEC_SHUFFLE_BIT
++           ? shuffle_names[shuffle]
++           : "unknown";
++}
++
++int
++parse_shuffle(const char* s, enum codec_shuffle* out)
++{
++  int i = match_option(s, shuffle_names, 3);
++  if (i < 3) {
++    *out = (enum codec_shuffle)i;
++    return 1;
++  }
++  fprintf(stderr, "Unknown shuffle: %s (expected none, byte, bit)\n", s);
++  return 0;
++}
++
++int
++parse_level(const char* s, uint8_t* out)
++{
++  char* end = NULL;
++  errno = 0;
++  long value = strtol(s, &end, 10);
++  if (end != s && *end == '\0' && errno != ERANGE && value >= 0 &&
++      value <= UINT8_MAX) {
++    *out = (uint8_t)value;
++    return 1;
++  }
++  fprintf(stderr, "Invalid level: %s (expected integer 0..255)\n", s);
++  return 0;
++}
++
+ int
+ parse_reduce(const char* s, enum lod_reduce_method* out)
+ {
+diff --git a/bench/bench_parse.h b/bench/bench_parse.h
+index f3fb0e6..da67241 100644
+--- a/bench/bench_parse.h
++++ b/bench/bench_parse.h
+@@ -27,6 +27,18 @@ parse_fill(const char* s);
+ int
+ parse_codec(const char* s, struct codec_config* out);
+ 
++int
++parse_shuffle(const char* s, enum codec_shuffle* out);
++
++const char*
++bench_shuffle_name(enum codec_shuffle shuffle);
++
++int
++parse_level(const char* s, uint8_t* out);
++
++uint8_t
++bench_default_level(enum compression_codec codec);
++
+ int
+ parse_reduce(const char* s, enum lod_reduce_method* out);
+ 
+diff --git a/bench/bench_report.c b/bench/bench_report.c
+index e49e91c..b7d1c5b 100644
+--- a/bench/bench_report.c
++++ b/bench/bench_report.c
+@@ -1,4 +1,5 @@
+ #include "bench_report.h"
++#include "bench_parse.h"
+ 
+ #include "util/format_bytes.h"
+ #include "util/metric.h"
+@@ -713,6 +714,10 @@ print_bench_json_pass(const struct stream_metrics* m,
+   jw_uint(&jw, mem->measured_bytes);
+   jw_key(&jw, "worker_threads");
+   jw_uint(&jw, (uint64_t)worker_threads);
++  jw_key(&jw, "level");
++  jw_uint(&jw, codec.level);
++  jw_key(&jw, "shuffle");
++  jw_string(&jw, bench_shuffle_name(codec.shuffle));
+ 
+   if (m->d2h_payload_bytes_transferred || m->d2h_metadata_bytes_transferred ||
+       m->d2h_payload_copy_count) {
+diff --git a/bench/bench_util.c b/bench/bench_util.c
+index 02699eb..c3cc1a3 100644
+--- a/bench/bench_util.c
++++ b/bench/bench_util.c
+@@ -694,6 +694,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
+   out->io_latency_us = 0;
+   out->backpressure_bytes = 0;
+   out->max_threads = 0;
++  int level_set = 0;
+ 
+   for (int i = 1; i < ac; ++i) {
+     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
+@@ -703,6 +704,13 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
+     } else if (strcmp(av[i], "--codec") == 0 && i + 1 < ac) {
+       if (!parse_codec(av[++i], &out->codec))
+         return 1;
++    } else if (strcmp(av[i], "--shuffle") == 0 && i + 1 < ac) {
++      if (!parse_shuffle(av[++i], &out->codec.shuffle))
++        return 1;
++    } else if (strcmp(av[i], "--level") == 0 && i + 1 < ac) {
++      if (!parse_level(av[++i], &out->codec.level))
++        return 1;
++      level_set = 1;
+     } else if (strcmp(av[i], "--blosc-block-bytes") == 0 && i + 1 < ac) {
+       uint64_t block_bytes = 0;
+       if (!read_size(av[i], av[i + 1], &block_bytes) || block_bytes == 0 ||
+@@ -766,6 +774,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
+       fprintf(stderr,
+               "Usage: %s [--fill xor|zeros|rand] [--codec "
+               "none|lz4|zstd|blosc-lz4|blosc-zstd] "
++              "[--shuffle none|byte|bit (Blosc only)] [--level N] "
+               "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
+               "[--reduce mean|min|max|median|max_sup|min_sup] "
+               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
+@@ -780,6 +789,13 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
+       return 1;
+     }
+   }
++  if (!level_set)
++    out->codec.level = bench_default_level(out->codec.id);
++  if (!codec_is_blosc(out->codec.id) &&
++      out->codec.shuffle != CODEC_SHUFFLE_NONE) {
++    fprintf(stderr, "--shuffle byte/bit requires a Blosc codec\n");
++    return 1;
++  }
+   return codec_config_validate_blosc(out->codec);
+ }
+ 

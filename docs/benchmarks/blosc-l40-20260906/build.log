@@ -1,0 +1,187 @@
+-- The C compiler identification is GNU 14.3.0
+-- The CXX compiler identification is GNU 14.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Looking for a CUDA compiler
+-- Looking for a CUDA compiler - /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc
+-- The CUDA compiler identification is NVIDIA 13.1.115 with host compiler GNU 14.3.0
+-- Detecting CUDA compiler ABI info
+-- Detecting CUDA compiler ABI info - done
+-- Check for working CUDA compiler: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/bin/nvcc - skipped
+-- Detecting CUDA compile features
+-- Detecting CUDA compile features - done
+-- Found CUDAToolkit: /mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include;/mnt/main0/home/nclack/.pixi/envs/cuda-toolkit/targets/x86_64-linux/include/cccl (found suitable version "13.1.115", minimum required is "12.8")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Found Nvcomp: /mnt/main0/home/nclack/opt/nvcomp-5.3.0.16/lib/libnvcomp_static.a
+-- Found Lz4: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/liblz4.so
+-- Found OpenSSL: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so (found version "3.6.2")
+-- Found crypto: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so
+-- LibCrypto Include Dir: /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/include
+-- LibCrypto Shared Lib:  /mnt/main0/home/nclack/opt/chucky-deps/.pixi/envs/default/lib/libcrypto.so
+-- LibCrypto Static Lib:  crypto_STATIC_LIBRARY-NOTFOUND
+-- Configuring done (25.5s)
+-- Generating done (1.4s)
+-- Build files have been written to: /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build
+[1/143] Building C object src/CMakeFiles/dtype.dir/dtype.c.o
+[2/143] Building C object src/CMakeFiles/codec_types.dir/types.codec.c.o
+[3/143] Building C object src/zarr/CMakeFiles/json_writer.dir/json_writer.c.o
+[4/143] Building C object src/zarr/CMakeFiles/json_validate.dir/json_validate.c.o
+[5/143] Linking C static library src/libdtype.a
+[6/143] Building C object src/CMakeFiles/index_ops.dir/util/index.ops.c.o
+[7/143] Building C object src/CMakeFiles/chucky_log.dir/log/log.c.o
+[8/143] Building C object src/CMakeFiles/crc32c.dir/zarr/crc32c.c.o
+[9/143] Building C object src/CMakeFiles/lod_plan.dir/lod/reduce_csr.c.o
+[10/143] Linking C static library src/libindex_ops.a
+[11/143] Building C object src/CMakeFiles/strbuf.dir/util/strbuf.c.o
+[12/143] Building C object src/CMakeFiles/writer.dir/writer.c.o
+[13/143] Building C object src/CMakeFiles/stream_config.dir/stream/dim_info.c.o
+[14/143] Building C object src/CMakeFiles/threadpool.dir/threadpool/threadpool.c.o
+[15/143] Building C object src/CMakeFiles/platform.dir/platform/platform.posix.c.o
+[16/143] Linking C static library src/libchucky_log.a
+[17/143] Building C object src/CMakeFiles/io_scheduler.dir/zarr/io_scheduler.c.o
+[18/143] Building C object src/CMakeFiles/dimension.dir/dimension.c.o
+[19/143] Building C object src/CMakeFiles/host_output_pool.dir/stream/host_output_pool.c.o
+[20/143] Linking C static library src/zarr/libjson_validate.a
+[21/143] Building C object src/CMakeFiles/platform_io.dir/platform/platform_io.posix.c.o
+[22/143] Building C object src/CMakeFiles/stream_config.dir/stream/types.aggregate.c.o
+[23/143] Linking C static library src/libstrbuf.a
+[24/143] Building C object src/CMakeFiles/stream_config.dir/stream/config.c.o
+[25/143] Building C object src/cpu/CMakeFiles/compress_cpu.dir/compress.c.o
+[26/143] Linking C static library src/libplatform.a
+[27/143] Building C object src/CMakeFiles/lod_plan.dir/lod/lod_plan.c.o
+[28/143] Linking C static library src/libdimension.a
+[29/143] Linking C static library src/libcodec_types.a
+[30/143] Building C object src/zarr/CMakeFiles/attr_set.dir/attr_set.c.o
+[31/143] Linking C static library src/libplatform_io.a
+[32/143] Building C object src/cpu/CMakeFiles/compress_cpu.dir/compress_blosc.c.o
+[33/143] Linking C static library src/zarr/libjson_writer.a
+[34/143] Building C object src/cpu/CMakeFiles/aggregate_cpu.dir/aggregate.c.o
+[35/143] Linking C static library src/libthreadpool.a
+[36/143] Linking C static library src/libio_scheduler.a
+[37/143] Building C object src/zarr/CMakeFiles/zarr_metadata.dir/zarr_metadata.c.o
+[38/143] Linking C static library src/libcrc32c.a
+[39/143] Linking C static library src/libhost_output_pool.a
+[40/143] Building C object src/zarr/CMakeFiles/filesystem_write.dir/filesystem_write.c.o
+[41/143] Linking C static library src/zarr/libattr_set.a
+[42/143] Linking C static library src/liblod_plan.a
+[43/143] Linking C static library src/libwriter.a
+[44/143] Building C object src/zarr/CMakeFiles/io_backend_fs.dir/io_backend.fs.c.o
+[45/143] Building C object src/zarr/CMakeFiles/shard_delivery.dir/shard_delivery.c.o
+[46/143] Building C object src/zarr/CMakeFiles/shard_delivery.dir/host_batch.c.o
+[47/143] Building C object src/zarr/CMakeFiles/shard_delivery.dir/shard_write_plan.c.o
+[48/143] Linking C static library src/libstream_config.a
+[49/143] Linking C static library src/cpu/libcompress_cpu.a
+[50/143] Linking C static library src/cpu/libaggregate_cpu.a
+[51/143] Building CXX object src/cpu/CMakeFiles/transpose_cpu.dir/transpose.cpp.o
+[52/143] Linking C static library src/zarr/libzarr_metadata.a
+[53/143] Building C object src/gpu/CMakeFiles/lod.dir/reduce_csr_gpu.c.o
+[54/143] Linking C static library src/zarr/libfilesystem_write.a
+[55/143] Linking C static library src/zarr/libshard_delivery.a
+[56/143] Linking C static library src/zarr/libio_backend_fs.a
+[57/143] Building C object src/zarr/CMakeFiles/s3_client.dir/s3_client.c.o
+[58/143] Building C object src/CMakeFiles/store_api.dir/store.c.o
+[59/143] Linking C static library src/zarr/libs3_client.a
+[60/143] Building C object src/cpu/CMakeFiles/pipeline_cpu.dir/pipeline.c.o
+[61/143] Building C object src/CMakeFiles/format_bytes.dir/util/format_bytes.c.o
+[62/143] Building C object src/ngff/CMakeFiles/ngff_metadata.dir/ngff_metadata.c.o
+[63/143] Building C object src/zarr/CMakeFiles/zarr_array.dir/zarr_array.c.o
+[64/143] Building C object src/zarr/CMakeFiles/shard_pool_fs.dir/shard_pool_fs.c.o
+[65/143] Building C object src/zarr/CMakeFiles/zarr_group.dir/zarr_group.c.o
+[66/143] Building C object src/zarr/CMakeFiles/shard_pool_s3.dir/shard_pool_s3.c.o
+[67/143] Building C object src/gpu/CMakeFiles/stream.dir/pool.c.o
+[68/143] Building C object src/gpu/CMakeFiles/stream.dir/host_batch.copy.c.o
+[69/143] Building C object src/gpu/CMakeFiles/stream.dir/stream.init.c.o
+[70/143] Building C object src/gpu/CMakeFiles/stream.dir/ordering.c.o
+[71/143] Building C object src/gpu/CMakeFiles/stream.dir/stream.ingest.c.o
+[72/143] Building C object src/gpu/CMakeFiles/stream.dir/stream.c.o
+[73/143] Building CXX object src/cpu/CMakeFiles/lod_cpu.dir/lod.cpp.o
+[74/143] Building C object src/gpu/CMakeFiles/stream.dir/flush.compress_agg.c.o
+[75/143] Linking CXX static library src/cpu/libtranspose_cpu.a
+[76/143] Building C object src/gpu/CMakeFiles/stream.dir/schedule.c.o
+[77/143] Linking C static library src/zarr/libshard_pool_fs.a
+[78/143] Linking CXX static library src/cpu/liblod_cpu.a
+[79/143] Linking C static library src/zarr/libzarr_group.a
+[80/143] Building C object src/gpu/CMakeFiles/stream.dir/stream.lod.c.o
+[81/143] Linking C static library src/zarr/libzarr_array.a
+[82/143] Linking C static library src/zarr/libshard_pool_s3.a
+[83/143] Building C object src/zarr/CMakeFiles/store_fs.dir/store_fs.c.o
+[84/143] Building C object src/gpu/CMakeFiles/stream.dir/flush.d2h_deliver.c.o
+[85/143] Linking CXX static library src/cpu/libpipeline_cpu.a
+[86/143] Linking C static library src/ngff/libngff_metadata.a
+[87/143] Building C object src/cpu/CMakeFiles/stream_cpu.dir/stream.body.c.o
+[88/143] Building C object src/zarr/CMakeFiles/store_s3.dir/store_s3.c.o
+[89/143] Building C object bench/CMakeFiles/bench_memory.dir/bench_memory.c.o
+[90/143] Linking C static library src/libstore_api.a
+[91/143] Linking C static library src/libformat_bytes.a
+[92/143] Linking C static library src/zarr/libstore_fs.a
+[93/143] Building C object src/cpu/CMakeFiles/stream_cpu.dir/stream.c.o
+[94/143] Linking C static library src/zarr/libstore_s3.a
+[95/143] Building C object tests/CMakeFiles/test_data.dir/test_data.c.o
+[96/143] Building C object src/ngff/CMakeFiles/ngff_multiscale.dir/ngff_multiscale.c.o
+[97/143] Linking C static library bench/libbench_memory.a
+[98/143] Building C object tests/CMakeFiles/test_shard_sink.dir/test_shard_sink.c.o
+[99/143] Building C object tests/CMakeFiles/test_zarr_helpers.dir/test_zarr_helpers.c.o
+[100/143] Building C object tests/CMakeFiles/test_platform.dir/test_platform.common.c.o
+[101/143] Linking C static library tests/libtest_data.a
+[102/143] Linking CXX static library src/cpu/libstream_cpu.a
+[103/143] Linking C static library src/ngff/libngff_multiscale.a
+[104/143] Building C object tests/CMakeFiles/test_platform.dir/test_platform.posix.c.o
+[105/143] Building C object bench/CMakeFiles/bench_util.dir/sink_discard.c.o
+[106/143] Building C object src/multiarray/CMakeFiles/multiarray_gpu.dir/stream.gpu.c.o
+[107/143] Linking C static library tests/libtest_shard_sink.a
+[108/143] Linking C static library tests/libtest_zarr_helpers.a
+[109/143] Building C object bench/CMakeFiles/bench_util.dir/bench_zarr.c.o
+[110/143] Building C object bench/CMakeFiles/bench_util.dir/sink_throttled.c.o
+[111/143] Linking C static library tests/libtest_platform.a
+[112/143] Building C object bench/CMakeFiles/bench_util.dir/sink_metering.c.o
+[113/143] Building C object tests/CMakeFiles/test_compress_cpu.dir/test_compress_cpu.c.o
+[114/143] Building C object bench/CMakeFiles/bench_util.dir/bench_report.c.o
+[115/143] Building C object bench/CMakeFiles/bench_util.dir/bench_parse.c.o
+[116/143] Building C object bench/CMakeFiles/bench_util.dir/bench_gpu.cuda.c.o
+[117/143] Building C object tests/CMakeFiles/test_bench_memory.dir/test_bench_memory.c.o
+[118/143] Building C object bench/CMakeFiles/bench_util.dir/bench_util.c.o
+[119/143] Linking C executable tests/test_bench_memory
+[120/143] Linking C executable tests/test_compress_cpu
+[121/143] Building CUDA object src/gpu/CMakeFiles/compress.dir/blosc.shuffle.cu.o
+[122/143] Building C object tests/CMakeFiles/test_zarr_readback_gpu.dir/test_zarr_readback_gpu.c.o
+[123/143] Building CUDA object src/gpu/CMakeFiles/compress.dir/compress.cu.o
+[124/143] Building C object bench/CMakeFiles/bench_stream_orca2_single.dir/bench_stream_orca2_single.c.o
+[125/143] Building CUDA object src/gpu/CMakeFiles/transpose.dir/transpose.cu.o
+[126/143] Building C object bench/CMakeFiles/bench_stream_smallepoch_single.dir/bench_stream_smallepoch_single.c.o
+[127/143] Building C object tests/CMakeFiles/test_multiarray_gpu.dir/test_multiarray_gpu.c.o
+[128/143] Linking CUDA static library src/gpu/libtranspose.a
+[129/143] Building C object tests/CMakeFiles/test_compress_blosc_gpu.dir/test_compress_blosc_gpu.c.o
+[130/143] Building CUDA object src/gpu/CMakeFiles/compress.dir/blosc.frame.cu.o
+[131/143] Linking CUDA static library src/gpu/libcompress.a
+[132/143] Building CUDA object src/gpu/CMakeFiles/aggregate.dir/aggregate.cu.o
+[133/143] Linking CUDA static library src/gpu/libaggregate.a
+[134/143] Building CUDA object src/gpu/CMakeFiles/lod.dir/lod.cu.o
+[135/143] Linking CUDA static library src/gpu/liblod.a
+[136/143] Linking CUDA static library src/gpu/libstream.a
+[137/143] Linking CUDA static library src/multiarray/libmultiarray_gpu.a
+[138/143] Linking CXX static library bench/libbench_util.a
+[139/143] Linking CUDA executable tests/test_zarr_readback_gpu
+[140/143] Linking CUDA executable tests/test_compress_blosc_gpu
+[141/143] Linking CUDA executable tests/test_multiarray_gpu
+[142/143] Linking CXX executable bench/bench_stream_smallepoch_single
+[143/143] Linking CXX executable bench/bench_stream_orca2_single
+Test project /mnt/main0/home/nclack/tmp/2026-09-05-pr264-l40-full/repo/build
+    Start  5: test-test_compress_cpu
+1/2 Test  #5: test-test_compress_cpu ...........   Passed    0.09 sec
+    Start 22: test-test_bench_memory
+2/2 Test #22: test-test_bench_memory ...........   Passed    0.02 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   0.12 sec
+Recorded successful build and binary hashes

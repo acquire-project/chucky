@@ -549,11 +549,8 @@ run_bench(const struct bench_config* cfg)
   // A 0 baseline is the page counter not started yet, not an empty process.
   const int baseline_is_usable = mem_used.host_baseline_bytes > 0;
   if (cfg->backend == BENCH_GPU) {
-    // 0 means the reading failed, not that the device ran out.
-    const size_t device_free_now = bench_gpu_free_memory();
-    if (device_free_now > 0 && device_free_at_rest > device_free_now)
-      mem_used.device_used_bytes = device_free_at_rest - device_free_now;
-    mem_used.measured_bytes = mem_used.device_used_bytes;
+    bench_memory_record_device(
+      &mem_used, device_free_at_rest, bench_gpu_free_memory());
   } else if (baseline_is_usable &&
              mem_used.host_peak_bytes > mem_used.host_baseline_bytes) {
     mem_used.measured_bytes =
@@ -599,6 +596,7 @@ run_bench(const struct bench_config* cfg)
                             sink_metric,
                             layout,
                             config.dtype,
+                            config.codec,
                             &ss,
                             total_bytes,
                             total_elements,
@@ -667,7 +665,8 @@ read_size(const char* flag, const char* text, uint64_t* out)
 
 // Parse the shared bench CLI flags into out. Unknown options print a usage
 // string and return 1. Flags accepted:
-//   --fill --codec --reduce --backend --dtype --frames --json --chunk-bytes
+//   --fill --codec --blosc-block-bytes --reduce --backend --dtype --frames
+//   --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
 //   --max-threads.
@@ -705,6 +704,28 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--codec") == 0 && i + 1 < ac) {
       if (!parse_codec(av[++i], &out->codec))
         return 1;
+    } else if (strcmp(av[i], "--blosc-block-bytes") == 0 && i + 1 < ac) {
+      uint64_t block_bytes = 0;
+      if (!read_size(av[i], av[i + 1], &block_bytes) || block_bytes == 0 ||
+          block_bytes > UINT32_MAX) {
+        fprintf(stderr, "Invalid --blosc-block-bytes: %s\n", av[i + 1]);
+        return 1;
+      }
+      out->codec.blosc_block_bytes = (uint32_t)block_bytes;
+      ++i;
+    } else if (strcmp(av[i], "--blosc-shuffle") == 0 && i + 1 < ac) {
+      const char* shuffle = av[++i];
+      if (strcmp(shuffle, "none") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_NONE;
+      else if (strcmp(shuffle, "byte") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_BYTE;
+      else if (strcmp(shuffle, "bit") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_BIT;
+      else {
+        fprintf(stderr, "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
+                shuffle);
+        return 1;
+      }
     } else if (strcmp(av[i], "--reduce") == 0 && i + 1 < ac) {
       if (!parse_reduce(av[++i], &out->reduce))
         return 1;
@@ -757,7 +778,10 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
-              "Usage: %s [--fill xor|zeros|rand] [--codec none|lz4|zstd] "
+              "Usage: %s [--fill xor|zeros|rand] [--codec "
+              "none|lz4|zstd|blosc-lz4|blosc-zstd] "
+              "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
+              "[--blosc-shuffle none|byte|bit] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
               "[--json] [--chunk-bytes N] [--batch-bytes N] "
@@ -771,7 +795,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       return 1;
     }
   }
-  return 0;
+  return codec_config_validate_blosc(out->codec);
 }
 
 int

@@ -8,19 +8,19 @@ struct tile_stream_layout;
 
 struct tile_stream_memory_info
 {
-  size_t device_bytes;      // total GPU memory
+  size_t device_bytes;      // explicit GPU bytes; excludes runtime overhead
   size_t host_pinned_bytes; // total pinned host memory
 
   // Breakdown (device)
-  size_t staging_bytes;         // 2 x buffer_capacity_bytes
-  size_t chunk_pool_bytes;      // 2 x total_chunks x chunk_stride x bpe
-  size_t compressed_pool_bytes; // 2 x codec_batch x device output stride
-  size_t aggregate_bytes;       // sum over levels: device aggregate buffers
-  size_t lod_bytes;             // d_linear + d_morton + shape arrays
-  size_t codec_bytes; // nvCOMP workspace + pointer/size arrays + filter scratch
+  size_t staging_bytes;
+  size_t chunk_pool_bytes;
+  size_t compressed_pool_bytes;
+  size_t aggregate_bytes;
+  size_t lod_bytes;
+  size_t codec_bytes; // codec-owned device allocation bytes
 
   // Breakdown (host heap, not pinned)
-  size_t shard_bytes; // active_shard arrays + index buffers
+  size_t shard_bytes;
 
   size_t host_output_pool_bytes;
 
@@ -33,7 +33,8 @@ struct tile_stream_memory_info
   uint32_t epochs_per_batch; // K
 };
 
-// Estimate GPU memory requirements without allocating.
+// Estimate explicit GPU allocations; excludes CUDA runtime/driver overhead.
+// Does not allocate device memory.
 // shard_alignment: required write alignment for the I/O backend (e.g. page
 //   size for O_DIRECT). 0 = no alignment constraint.
 // Returns 0 on success, non-zero on invalid config.
@@ -44,17 +45,8 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
 
 // Solve chunk + shard layout for the GPU backend.
 //
-// Phase 1: starting from target_chunk_bytes, halves chunk bytes until the
-//   device memory estimate fits within budget_bytes or target falls below
-//   max(min_chunk_bytes, bpe). At each chunk size, if the auto-derived
-//   epochs_per_batch (K) overshoots the budget, K is halved (down to 1)
-//   before shrinking chunks further. A non-zero config->epochs_per_batch
-//   on entry is treated as user-authoritative and is not reduced.
-// Phase 2: with chunks set, computes shard geometry from min_shard_bytes and
-//   target_concurrent_shards (see dims_set_shard_geometry).
-// Cross-phase: checks that chunks_per_shard_total <= MAX_PARTS_PER_SHARD.
-//   If violated, halves the chunk target and retries. Bails when the target
-//   would drop below min_chunk_bytes.
+// A nonzero config->epochs_per_batch is fixed. Otherwise, the batch size is
+// chosen subject to budget_bytes.
 //
 // shard_alignment: 0 = no alignment constraint.
 // min_chunk_bytes: floor on per-chunk bytes; 0 = no floor (clamped to bpe).
@@ -104,7 +96,7 @@ tile_stream_gpu_cursor(const struct tile_stream_gpu* s);
 struct tile_stream_status
 tile_stream_gpu_status(const struct tile_stream_gpu* s);
 
-// Threads the staging-copy pool runs on, counting the caller. The pool caps
-// its helpers, so this can be below the requested thread count.
+// Active staging-copy threads, including the caller; at most the requested
+// count.
 int
 tile_stream_gpu_worker_threads(const struct tile_stream_gpu* s);

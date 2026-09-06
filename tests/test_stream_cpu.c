@@ -282,6 +282,34 @@ Fail:
 }
 
 static int
+test_blosc_requires_block_size(void)
+{
+  struct dimension dims[2];
+  dims_create(dims, "ty", (uint64_t[]){ 4, 64 });
+  dims_set_chunk_sizes(dims, 2, (uint64_t[]){ 1, 64 });
+  dims_set_shard_counts(dims, 2, (uint64_t[]){ 1, 1 });
+  struct tile_stream_configuration config = {
+    .buffer_capacity_bytes = 4096,
+    .dtype = dtype_u16,
+    .rank = 2,
+    .dimensions = dims,
+    .codec = { .id = CODEC_NONE },
+    .epochs_per_batch = 1,
+  };
+  struct tile_stream_cpu_memory_info info;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &info) == 0);
+  config.codec.id = CODEC_BLOSC_ZSTD;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &info) != 0);
+  config.codec.level = 5;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &info) != 0);
+  config.codec.id = CODEC_BLOSC_LZ4;
+  CHECK(Fail, tile_stream_cpu_memory_estimate(&config, 0, &info) != 0);
+  return 0;
+Fail:
+  return 1;
+}
+
+static int
 test_advise_invalid_config(void)
 {
   log_info("=== test_advise_invalid_config ===");
@@ -641,6 +669,7 @@ main(int ac, char* av[])
   rc |= test_no_append_after_flush();
   rc |= test_advise_basic_fit();
   rc |= test_advise_invalid_config();
+  rc |= test_blosc_requires_block_size();
   rc |= test_advise_chunk_budget_infeasible();
   rc |= test_advise_min_append_shards_overrides_floor();
   rc |= test_advise_min_shard_too_small();

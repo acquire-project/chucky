@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blosc Pareto — chucky benchmarks</title>
+<link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="pareto.css">
+<script src="theme.js"></script>
+<script src="vendor/d3.v7.9.0.min.js"></script>
+</head>
+<body class="pareto-page">
+<a class="skip-link" href="#measurements">Skip to measurements</a>
+<header class="site-head">
+  <span class="brand">chucky benchmarks</span>
+  <nav aria-label="Benchmark reports">
+    <a href="index.html">Over time</a>
+    <a href="explore.html">Benchmark explorer</a>
+    <a href="pareto.html" aria-current="page">Blosc Pareto</a>
+  </nav>
+  <a class="repo-link" href="https://github.com/acquire-project/chucky">GitHub</a>
+  <button id="theme-toggle" class="theme-toggle" type="button">Theme</button>
+</header>
+<main>
+  <div class="pareto-intro">
+    <div><h1>Blosc Analysis</h1><p>Compare throughput, compression, and memory across systems.</p></div>
+    <a href="#methodology">How to read these measurements</a>
+  </div>
+  <p id="scenario-note" class="comparison-note">Measurements were taken using the <a href="https://github.com/acquire-project/chucky/blob/main/bench/bench_stream_orca2_single.c"><code>orca2_single</code> scenario</a>.</p>
+  <p class="comparison-note">Throughput includes the host pipeline; compression fold includes padded chunk bytes.</p>
+  <div id="load-status" class="notice" role="status">Loading retained measurements…</div>
+  <button id="retry" type="button" hidden>Retry loading measurements</button>
+  <noscript><p>Enable JavaScript to compare measurements. Original CSVs are retained in the repository’s docs/benchmarks directory.</p></noscript>
+  <div id="workspace" hidden>
+    <form id="filters" class="pareto-controls" aria-label="Measurement filters">
+      <fieldset><legend>Systems</legend><div id="systems" class="system-choices"></div></fieldset>
+      <details id="settings" open><summary>Filters &amp; chart options</summary>
+      <div class="filter-line">
+        <label>Codec<select id="codecs" multiple size="3"><option value="all" selected>All codecs</option><option value="lz4">LZ4</option><option value="zstd">Zstd</option></select></label>
+        <label>Shuffle<select id="shuffles" multiple size="4"><option value="all" selected>All shuffles</option><option value="none">None</option><option value="byte">Byte</option><option value="bit">Bit</option></select></label>
+        <label>Block size<select id="blocks" multiple size="4"><option value="all" selected>All blocks</option></select></label>
+        <label>Allocation budget (GiB)<input id="budget" type="number" min="0" step="any" placeholder="No limit"><span class="control-hint">Estimated device allocations</span></label>
+        <button id="reset-filters" type="button">Reset filters</button>
+      </div>
+      <div class="view-line">
+        <label>Frontier<select id="mode"><option value="codec">Per codec</option><option value="cross">Cross codec</option></select></label>
+        <label>View<select id="view"><option value="compression">Throughput × compression</option><option value="memory">Throughput × memory</option></select></label>
+        <label>Layout<select id="layout"><option value="matrix">System matrix</option><option value="overlay">One workload overlay</option></select></label>
+        <label>Workload<select id="workload"><option value="all">All input / chunk groups</option></select></label>
+      </div>
+      </details>
+    </form>
+    <div class="chart-toolbar">
+      <p id="count" role="status"></p>
+      <div><button id="fit" type="button" aria-pressed="false">Fit to candidates</button> <button id="full" type="button">Reset to full extent</button></div>
+    </div>
+    <div id="legend" class="plot-legend" aria-label="Chart legend"></div>
+    <p id="chart-note" class="chart-note"></p>
+    <div class="analysis-layout"><div class="plots-and-table">
+    <div id="empty" class="notice" hidden>No measurements match these filters. Select a system, broaden the filters, or raise the allocation budget.</div>
+    <div id="charts" aria-label="Pareto comparison charts"></div>
+      <section id="measurements" tabindex="-1" aria-labelledby="measurements-heading">
+        <div class="table-heading"><h2 id="measurements-heading">Measurements</h2><button id="download" type="button">Download filtered CSV</button></div>
+        <p class="chart-note">Select a point or a setting to inspect it. Sort by any column. Values below are rounded for display only.</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Sortable measurements">
+          <table><thead><tr id="table-head"></tr></thead><tbody id="table-body"></tbody></table>
+        </div>
+      </section>
+      </div><aside id="detail" aria-labelledby="detail-heading"><h2 id="detail-heading">Selected setting</h2><div id="detail-content" aria-live="polite">Select a point or table setting to see exact measurements and provenance.</div></aside>
+    </div>
+    <section id="methodology" aria-labelledby="methodology-heading"><h2 id="methodology-heading">Methodology &amp; provenance</h2><div id="definitions"></div><div id="experiments"></div></section>
+  </div>
+</main>
+<script type="module" src="pareto-ui.js"></script>
+</body>
+</html>

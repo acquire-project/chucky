@@ -7,17 +7,21 @@
 """
 Generate the benchmark site from sweep result files.
 
-Two pages:
+Three pages:
     index.html    every sweep at once — per-machine trend, latest standings, movers
     explore.html  one sweep at a time, down to per-stage timing
+    pareto.html   retained Blosc experiments, compared by system and workload
 
 The pages are code only; their data sits beside them and is fetched at load:
-    site.css                    the palette and the title bar, used by both pages
-    theme.js                    light or dark, applied before either page paints
-    decode.js                   unpacks the columns, imported by both pages
+    site.css                    shared palette and title bar
+    theme.js                    light or dark, applied before any page paints
+    decode.js                   unpacks sweep columns and fetches JSON
     data/overview.json          every sweep, trimmed, for the overview
     data/sweeps.json            the sweep list the explorer offers
     data/sweeps/<result>.json   one sweep in full, fetched when it is opened
+    data/pareto/index.json      retained Blosc experiment index and definitions
+    data/pareto/<id>.json       exact normalized configuration measurements
+    archives/<id>/             byte-preserving copies of retained source files
 
 That keeps the explorer from downloading every sweep to show one, and lets an
 unchanged sweep revalidate instead of being re-sent. It also means the pages
@@ -37,7 +41,7 @@ import argparse
 import json
 import sys
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -45,6 +49,8 @@ from pydantic import ValidationError
 from columnar import pack
 from models import migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
+from pareto_data import DEFAULT_MANIFEST, write_datasets
+from site_server import ReportHandler
 
 SOURCE_DIR = Path(__file__).parent
 OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
@@ -53,8 +59,18 @@ OVERVIEW_PAGE = SOURCE_DIR / "overview.html"
 SITE_FILES = {
     "explore.html": SOURCE_DIR / "template.html",
     "decode.js": SOURCE_DIR / "decode.js",
+    "blosc.js": SOURCE_DIR / "blosc.js",
+    "selection.mjs": SOURCE_DIR / "selection.mjs",
     "theme.js": SOURCE_DIR / "theme.js",
     "site.css": SOURCE_DIR / "site.css",
+    "charts.js": SOURCE_DIR / "charts.js",
+    "pareto.html": SOURCE_DIR / "pareto.html",
+    "pareto.css": SOURCE_DIR / "pareto.css",
+    "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
+    "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
+    "pareto.mjs": SOURCE_DIR / "pareto.mjs",
+    "vendor/d3.v7.9.0.min.js": SOURCE_DIR / "vendor/d3.v7.9.0.min.js",
+    "vendor/D3-LICENSE": SOURCE_DIR / "vendor/D3-LICENSE",
 }
 
 # The explorer draws from the config fields and never reads the recorded id,
@@ -117,7 +133,7 @@ def write_json(payload: dict, output: Path) -> int:
 
 def copy_file(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(source.read_text())
+    output.write_bytes(source.read_bytes())
     print(f"Wrote {output} ({output.stat().st_size / 1024:.0f} KiB)", file=sys.stderr)
 
 
@@ -155,6 +171,8 @@ def main():
                     help="Output directory (a path ending in .html names the overview page)")
     ap.add_argument("--machines", type=Path, default=None,
                     help="Machine registry TOML (default: machines.toml beside the results)")
+    ap.add_argument("--pareto-manifest", type=Path, default=DEFAULT_MANIFEST,
+                    help="Versioned retained-experiment manifest (default: docs/benchmarks/datasets.json)")
     ap.add_argument("--serve", nargs="?", type=int, const=8000, default=None,
                     metavar="PORT",
                     help="Serve the site after writing it (default port 8000). The pages "
@@ -191,13 +209,18 @@ def main():
     for name, source in SITE_FILES.items():
         copy_file(source, out_dir / name)
     write_data(loaded, registry, out_dir / "data")
+    try:
+        datasets = write_datasets(out_dir, args.pareto_manifest)
+    except (ValueError, OSError) as error:
+        raise SystemExit(f"Blosc dataset validation failed: {error}") from error
+    print(f"Wrote {len(datasets)} validated Blosc dataset(s)", file=sys.stderr)
 
     if args.serve is not None:
         serve(out_dir, overview_name, args.serve)
 
 
 def serve(out_dir: Path, overview_name: str, port: int) -> None:
-    handler = partial(SimpleHTTPRequestHandler, directory=str(out_dir))
+    handler = partial(ReportHandler, directory=str(out_dir))
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     except OSError as e:

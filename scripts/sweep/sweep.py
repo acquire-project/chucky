@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 import click
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from models import (
     CURRENT_VERSION,
@@ -39,6 +39,7 @@ from models import (
     VALID_DTYPES,
     VALID_FILLS,
     VALID_SINKS,
+    run_id,
     validate_results,
 )
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
@@ -100,6 +101,7 @@ class RunSpec(BaseModel):
     chunk_label: str
     sink: str = "discard"
     s3_throughput_gbps: float = 0
+    blosc_block_bytes: int | None = Field(default=None, ge=128, le=715827542, strict=True)
 
     @model_validator(mode="after")
     def _validate_enums(self) -> RunSpec:
@@ -117,6 +119,11 @@ class RunSpec(BaseModel):
             raise ValueError(f"Unknown chunk_label: {self.chunk_label} (expected one of {set(CHUNK_BYTES)})")
         if self.sink not in VALID_SINKS:
             raise ValueError(f"Unknown sink: {self.sink} (expected one of {VALID_SINKS})")
+        if self.codec.startswith("blosc-"):
+            if self.blosc_block_bytes is None:
+                raise ValueError("Blosc runs require explicit blosc_block_bytes")
+        elif self.blosc_block_bytes is not None:
+            raise ValueError("blosc_block_bytes is only valid for Blosc runs")
         return self
 
     @property
@@ -129,10 +136,7 @@ class RunSpec(BaseModel):
 
     @property
     def id(self) -> str:
-        suffix = f"__{self.sink}" if self.sink != "discard" else ""
-        if self.s3_throughput_gbps > 0:
-            suffix += f"__{int(self.s3_throughput_gbps)}gbps"
-        return f"{self.scenario}__{self.codec}__{self.fill}__{self.backend}__{self.dtype}__{self.chunk_label}{suffix}"
+        return run_id({**self.model_dump(), "chunk_bytes_label": self.chunk_label})
 
     def base_result(self) -> dict:
         """Common fields shared by success, error, and timeout results."""
@@ -150,6 +154,8 @@ class RunSpec(BaseModel):
         }
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
+        if self.codec.startswith("blosc-"):
+            d["blosc_block_bytes"] = self.blosc_block_bytes
         return d
 
 
@@ -176,10 +182,10 @@ def backend_runs() -> list[RunSpec]:
             for cl in CHUNK_BYTES:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-        # blosc codecs are CPU-only
+        # Routine Blosc cases currently run on CPU; GPU codecs are supported.
         for codec in ["blosc-lz4", "blosc-zstd"]:
             for cl in CHUNK_BYTES:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl))
+                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
     return runs
 
 
@@ -194,9 +200,9 @@ def lod_runs() -> list[RunSpec]:
             for codec in ["none", "zstd"]:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl))
+                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
     return runs
 
 
@@ -217,9 +223,9 @@ def io_runs() -> list[RunSpec]:
             for codec in ["none", "zstd"]:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl, sink="fs"))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
-                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, sink="fs"))
+                runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, sink="fs", blosc_block_bytes=16 * 1024))
     return runs
 
 
@@ -253,13 +259,14 @@ def s3_runs() -> list[RunSpec]:
                                 sink=sink,
                                 s3_throughput_gbps=throughput if sink == "s3" else 0,
                             ))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
                 for throughput in [10, 100]:
                     for sink in ["discard", "fs", "s3"]:
                         runs.append(RunSpec(
                             scenario=sc, codec=codec, fill="xor",
                             backend="cpu", dtype="u16", chunk_label=cl,
+                            blosc_block_bytes=16 * 1024,
                             sink=sink,
                             s3_throughput_gbps=throughput if sink == "s3" else 0,
                         ))
@@ -385,6 +392,8 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--frames", str(spec.frames),
         "--json",
     ]
+    if spec.codec.startswith("blosc-"):
+        cmd.extend(["--blosc-block-bytes", str(spec.blosc_block_bytes)])
 
     tmpdir = None
     if spec.sink == "fs":
@@ -543,11 +552,13 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
         table.add_column("Backend")
         table.add_column("Dtype")
         table.add_column("Chunk")
+        table.add_column("Blosc block (bytes)", justify="right")
         table.add_column("Sink", justify="center")
         for i, r in enumerate(runs, 1):
             table.add_row(
                 str(i), r.scenario, r.codec, r.fill,
                 r.backend, r.dtype, r.chunk_label,
+                str(r.blosc_block_bytes) if r.blosc_block_bytes is not None else "",
                 r.sink if r.sink != "discard" else "",
             )
         console.print(table)
@@ -568,7 +579,7 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
             console.print("[yellow]Continuing with raw data.[/yellow]")
         data = raw_data
         for r in data.get("runs", []):
-            rid = r["id"]
+            rid = run_id(r)
             if retry and r.get("status") != "pass":
                 continue
             if rerun and any(pat in rid for pat in rerun):

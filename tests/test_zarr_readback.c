@@ -94,9 +94,15 @@ main(void)
     { "none", { .id = CODEC_NONE } },
     { "zstd", { .id = CODEC_ZSTD } },
     { "blosc_lz4",
-      { .id = CODEC_BLOSC_LZ4, .level = 5, .shuffle = CODEC_SHUFFLE_BYTE } },
+      { .id = CODEC_BLOSC_LZ4,
+        .level = 5,
+        .shuffle = CODEC_SHUFFLE_BYTE,
+        .blosc_block_bytes = 16 * 1024 } },
     { "blosc_zstd",
-      { .id = CODEC_BLOSC_ZSTD, .level = 5, .shuffle = CODEC_SHUFFLE_BYTE } },
+      { .id = CODEC_BLOSC_ZSTD,
+        .level = 5,
+        .shuffle = CODEC_SHUFFLE_BYTE,
+        .blosc_block_bytes = 16 * 1024 } },
   };
   int n_codecs = (int)(sizeof(codecs) / sizeof(codecs[0]));
 

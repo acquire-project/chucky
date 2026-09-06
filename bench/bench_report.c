@@ -133,6 +133,9 @@ print_memory_report(const struct bench_memory* mem)
     format_bytes(a, sizeof(a), mem->device_used_bytes);
     print_report("  Device memory: %s", a);
   }
+  if (mem->device_overhead_valid)
+    print_report("  Device overhead: %+.2f MiB (observed minus estimated)",
+                 (double)mem->device_overhead_bytes / (1024 * 1024));
   if (mem->measured_bytes && mem->estimate_total_bytes) {
     format_bytes(a, sizeof(a), mem->estimate_total_bytes);
     print_report("  Estimate:      %s (%.2fx measured)",
@@ -357,6 +360,9 @@ log_bench_header(const struct tile_stream_layout* layout,
     print_report(
       "  compress:    max_output=%zu comp_pool=%s", max_compressed_size, buf);
   }
+  if (codec_is_blosc(codec.id))
+    print_report("  Blosc block: %u bytes (requested)",
+                 codec.blosc_block_bytes);
 }
 
 void
@@ -629,6 +635,7 @@ print_bench_json_pass(const struct stream_metrics* m,
                       const struct stream_metric* sink_metric,
                       const struct tile_stream_layout* layout,
                       enum dtype dtype,
+                      struct codec_config codec,
                       const struct sink_stats* ss,
                       size_t total_bytes,
                       size_t total_elements,
@@ -661,6 +668,15 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "pass");
+  if (codec_is_blosc(codec.id)) {
+    jw_key(&jw, "blosc_block_bytes");
+    jw_uint(&jw, codec.blosc_block_bytes);
+    jw_key(&jw, "blosc_shuffle");
+    jw_string(&jw, codec.shuffle == CODEC_SHUFFLE_BIT ? "bit" :
+                     codec.shuffle == CODEC_SHUFFLE_BYTE ? "byte" : "none");
+    jw_key(&jw, "blosc_level");
+    jw_uint(&jw, codec.level);
+  }
   jw_key(&jw, "throughput_in_gibs");
   jw_float(&jw, throughput_gib);
   jw_key(&jw, "throughput_out_gibs");
@@ -693,6 +709,11 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_bool(&jw, mem->host_reading_failed);
   jw_key(&jw, "memory_device_used_bytes");
   jw_uint(&jw, mem->device_used_bytes);
+  jw_key(&jw, "memory_device_overhead_bytes");
+  if (mem->device_overhead_valid)
+    jw_int(&jw, mem->device_overhead_bytes);
+  else
+    jw_null(&jw);
   jw_key(&jw, "memory_measured_bytes");
   jw_uint(&jw, mem->measured_bytes);
   jw_key(&jw, "worker_threads");

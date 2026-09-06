@@ -1,55 +1,52 @@
 #include "gpu/blosc.shuffle.h"
 #include "gpu/prelude.cuda.h"
 
-__global__ static void
-shuffle_kernel(const unsigned char* src,
-               size_t src_stride,
-               unsigned char* dst,
-               size_t dst_stride,
-               size_t chunk_bytes,
-               size_t typesize,
-               size_t batch_size)
+__device__ static void
+copy_tail(const unsigned char* src,
+          unsigned char* dst,
+          size_t complete,
+          size_t nbytes)
 {
-  size_t p = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-  const size_t total = batch_size * chunk_bytes;
-  if (p >= total)
-    return;
-
-  const size_t chunk = p / chunk_bytes;
-  const size_t out = p - chunk * chunk_bytes;
-  const size_t nelem = chunk_bytes / typesize;
-  const size_t complete = nelem * typesize;
-  size_t in = out;
-  if (out < complete) {
-    const size_t byte = out / nelem;
-    const size_t elem = out - byte * nelem;
-    in = elem * typesize + byte;
-  }
-  dst[chunk * dst_stride + out] = src[chunk * src_stride + in];
+  for (size_t out = complete + threadIdx.x; out < nbytes; out += blockDim.x)
+    dst[out] = src[out];
 }
 
+template<bool byte_shuffle>
 __global__ static void
-bitshuffle_kernel(const unsigned char* src,
-                  size_t src_stride,
-                  unsigned char* dst,
-                  size_t dst_stride,
-                  size_t chunk_bytes,
-                  size_t typesize,
-                  size_t batch_size)
+prepare_block_kernel(const unsigned char* src,
+                     size_t src_stride,
+                     unsigned char* dst,
+                     size_t dst_stride,
+                     size_t chunk_bytes,
+                     size_t block_bytes,
+                     size_t blocks_per_chunk,
+                     size_t typesize,
+                     size_t batch_size,
+                     enum codec_shuffle shuffle)
 {
-  const size_t chunk = blockIdx.x;
+  const size_t chunk = blockIdx.x / blocks_per_chunk;
+  const size_t block_offset = (blockIdx.x % blocks_per_chunk) * block_bytes;
   if (chunk >= batch_size)
     return;
 
-  const size_t nelem = chunk_bytes / typesize;
+  const size_t remaining = chunk_bytes - block_offset;
+  const size_t nbytes = remaining < block_bytes ? remaining : block_bytes;
+  const size_t nelem = nbytes / typesize;
   const size_t complete = nelem * typesize;
-  const unsigned char* chunk_src = src + chunk * src_stride;
-  unsigned char* chunk_dst = dst + chunk * dst_stride;
+  const unsigned char* chunk_src = src + chunk * src_stride + block_offset;
+  unsigned char* chunk_dst = dst + (size_t)blockIdx.x * dst_stride;
 
-  // C-Blosc 1.x bitshuffle is all-or-nothing for complete elements: if their
-  // count is not divisible by eight it copies the whole block unchanged.
-  if ((nelem & 7) != 0) {
-    for (size_t out = threadIdx.x; out < chunk_bytes; out += blockDim.x)
+  if (byte_shuffle) {
+    for (size_t out = threadIdx.x; out < complete; out += blockDim.x) {
+      const size_t byte = out / nelem;
+      const size_t elem = out - byte * nelem;
+      chunk_dst[out] = chunk_src[elem * typesize + byte];
+    }
+    copy_tail(chunk_src, chunk_dst, complete, nbytes);
+  } else if (shuffle == CODEC_SHUFFLE_NONE || (nelem & 7) != 0) {
+    // C-Blosc 1.x bitshuffle copies a block if its complete-element count is
+    // not divisible by eight.
+    for (size_t out = threadIdx.x; out < nbytes; out += blockDim.x)
       chunk_dst[out] = chunk_src[out];
   } else {
     const size_t groups = nelem / 8;
@@ -66,52 +63,58 @@ bitshuffle_kernel(const unsigned char* src,
       }
       chunk_dst[out] = packed;
     }
-    for (size_t out = complete + threadIdx.x; out < chunk_bytes;
-         out += blockDim.x)
-      chunk_dst[out] = chunk_src[out];
+    copy_tail(chunk_src, chunk_dst, complete, nbytes);
   }
 }
 
-extern "C" int
-gpu_blosc_shuffle_async(const void* src,
-                        size_t src_stride,
-                        void* dst,
-                        size_t dst_stride,
-                        size_t chunk_bytes,
-                        size_t typesize,
-                        size_t batch_size,
-                        CUstream stream)
+// Compile byte shuffle separately to preserve the copy/bitshuffle kernel
+// without adding filter branches to its inner traversal.
+template<bool byte_shuffle>
+static int
+prepare_blocks_async(struct gpu_blosc_frame_layout layout,
+                     struct gpu_blosc_input original,
+                     void* prepared,
+                     size_t block_stride,
+                     size_t batch_size,
+                     CUstream stream)
 {
-  const size_t total = batch_size * chunk_bytes;
-  const unsigned blocks = (unsigned)((total + 255) / 256);
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
-  return CUDA_LAUNCH(
-    shuffle_kernel<<<blocks, 256, 0, cuda_stream>>>((const unsigned char*)src,
-                                                    src_stride,
-                                                    (unsigned char*)dst,
-                                                    dst_stride,
-                                                    chunk_bytes,
-                                                    typesize,
-                                                    batch_size));
+  const size_t blocks_per_chunk =
+    (layout.chunk_bytes + layout.block_bytes - 1) / layout.block_bytes;
+  const size_t blocks = batch_size * blocks_per_chunk;
+  // Large byte-shuffle blocks need more warps when the batch has few blocks.
+  const unsigned threads =
+    byte_shuffle && layout.block_bytes >= 256 * 1024 ? 1024 : 256;
+  return CUDA_LAUNCH(prepare_block_kernel<byte_shuffle>
+                     <<<blocks, threads, 0, (cudaStream_t)stream>>>(
+                       (const unsigned char*)original.data,
+                       original.stride,
+                       (unsigned char*)prepared,
+                       block_stride,
+                       layout.chunk_bytes,
+                       layout.block_bytes,
+                       blocks_per_chunk,
+                       layout.typesize,
+                       batch_size,
+                       layout.shuffle));
 }
 
 extern "C" int
-gpu_blosc_bitshuffle_async(const void* src,
-                           size_t src_stride,
-                           void* dst,
-                           size_t dst_stride,
-                           size_t chunk_bytes,
-                           size_t typesize,
-                           size_t batch_size,
-                           CUstream stream)
+gpu_blosc_prepare_blocks_async(struct gpu_blosc_frame_layout layout,
+                               struct gpu_blosc_input original,
+                               void* prepared,
+                               size_t block_stride,
+                               size_t batch_size,
+                               CUstream stream)
 {
-  cudaStream_t cuda_stream = (cudaStream_t)stream;
-  return CUDA_LAUNCH(bitshuffle_kernel<<<batch_size, 256, 0, cuda_stream>>>(
-    (const unsigned char*)src,
-    src_stride,
-    (unsigned char*)dst,
-    dst_stride,
-    chunk_bytes,
-    typesize,
-    batch_size));
+  if (!layout.chunk_bytes || !layout.block_bytes || !layout.typesize ||
+      !batch_size || block_stride < layout.block_bytes)
+    return 1;
+  if (layout.shuffle == CODEC_SHUFFLE_BYTE)
+    return prepare_blocks_async<true>(
+      layout, original, prepared, block_stride, batch_size, stream);
+  if (layout.shuffle != CODEC_SHUFFLE_NONE &&
+      layout.shuffle != CODEC_SHUFFLE_BIT)
+    return 1;
+  return prepare_blocks_async<false>(
+    layout, original, prepared, block_stride, batch_size, stream);
 }

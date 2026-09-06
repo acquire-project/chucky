@@ -528,7 +528,7 @@ tile_stream_gpu_memory_estimate(const struct tile_stream_configuration* config,
   size_t aggregate_host = 0;
   if (compress_agg_memory_estimate(&lim,
                                    &cl,
-                                   config->codec.id,
+                                   config->codec,
                                    &info->compressed_pool_bytes,
                                    &info->codec_bytes,
                                    &info->aggregate_bytes,

@@ -1,12 +1,29 @@
 # Benchmark sweeps and reports
 
+For Blosc measurements, memory accounting, and the proposed split between
+routine coverage and an opt-in block-size tuning matrix, see the
+[Blosc performance guide][blosc-performance-guide].
+The current runner has not yet adopted that matrix; its Blosc entries still
+use CPU, level 3, the default no-shuffle setting, and an explicit 16 KiB block
+request. The GPU backend supports both Blosc codecs; CPU-only scheduling is a
+limit of the current routine matrices. The benchmark executable exposes
+`--blosc-shuffle` and reports shuffle/level metadata, but `RunSpec` does not yet
+carry either setting and the executable has no level option. The
+[retained L40 tuning sweep][l40-measurements] used an older archived patch with
+`--shuffle` and `--level` controls.
+Blosc run identities include the requested block size. Resume checks and report
+comparisons distinguish each explicit size from historical runs with an
+unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
+pages offer a Blosc block-request selector.
+
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
-files and writes a site with two pages. CI publishes it to GitHub Pages on every
-push to `main` (`.github/workflows/pages.yml`).
+files and the retained Blosc dataset manifest to write a site with three pages.
+CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
 
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
+- `pareto.html` compares retained Blosc experiments across systems and workload groups.
 
 Clicking a point on a trend chart, or a commit on a machine card, opens that
 sweep in `explore.html`.
@@ -15,10 +32,19 @@ The explorer picks a machine first and then one of its sweeps, newest at the
 top, so it opens on the most recent sweep run anywhere. A control disappears
 when the open sweep leaves it nothing to choose.
 
+## Tests
+
+The runner and report regression tests do not require a GPU or benchmark build:
+
+```sh
+uv run scripts/sweep/test_sweep.py
+node --test scripts/sweep/test_reports.mjs
+```
+
 ## Running S3 benchmarks
 
 The S3 tier measures against
-[`s3-blackhole`](https://github.com/nclack/s3-blackhole), which consumes uploads
+[`s3-blackhole`][s3-blackhole], which consumes uploads
 and discards them so the result is limited by the producer rather than object
 storage. Start the benchmark server and wait for its health check:
 
@@ -45,7 +71,7 @@ Use `--backend gpu` for a GPU-only sweep, or omit `--backend` to run both
 backends.
 
 Inspect the server-side counters at
-http://127.0.0.1:9000/_s3_blackhole/stats, then stop the server with:
+[the statistics endpoint][s3-blackhole-stats], then stop the server with:
 
 ```sh
 docker compose stop s3-blackhole
@@ -71,7 +97,7 @@ given up by fixing it at four. Change it in `Dockerfile.s3-blackhole`.
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
-That writes the site and serves it at http://127.0.0.1:8000/index.html. Pass a
+That writes the site and serves it at [the local report URL][local-report]. Pass a
 port to `--serve` to use another one, or drop the flag to only write the files.
 Run the command again after you add or change a results file.
 
@@ -79,12 +105,20 @@ The pages are code only. Their data is written beside them and fetched at load:
 
 | file | holds |
 |---|---|
-| `site.css` | the palette and the title bar, linked by both pages |
-| `theme.js` | light or dark, applied before either page paints |
-| `decode.js` | unpacks the columns, imported by both pages |
+| `site.css` | the palette and the title bar, linked by all pages |
+| `theme.js` | light or dark, applied before any page paints |
+| `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
+| `charts.js` | reusable axis and number-formatting utilities |
+| `decode.js` | unpacks sweep columns and fetches JSON |
+| `blosc.js` | Blosc block-request selections and labels for both sweep pages |
+| `selection.mjs` | Pure run selection and comparison functions, shared with tests |
+| `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
+| `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
+| `data/pareto/index.json`, `data/pareto/<experiment>.json` | retained experiment index and exact normalized measurements |
+| `archives/<experiment>/` | unchanged copies of retained artifacts |
 
 So the explorer downloads one sweep instead of all of them, and adding a sweep
 leaves the other sweep files untouched for anything holding a cached copy. The
@@ -92,12 +126,14 @@ cost is that the pages have to be served over http — opening `_site/index.html
 from disk gets you an empty page, because the browser refuses the fetches. That
 is what `--serve` is for.
 
-Inside those files the runs are stored as columns rather than one object per
+Inside the sweep files the runs are stored as columns rather than one object per
 run, with the text in a shared table. `columnar.py` writes that and `decode.js`
 reads it. Floats are cut to four significant figures, which is finer than any
 page prints and about what the benchmarks resolve. `columnar.py` unpacks every
 sweep it packs and refuses to hand back one that does not match, so a broken
 encoding stops the build rather than reaching a page.
+The separate Pareto dataset JSON preserves full archived precision and does not
+use columnar rounding.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
@@ -253,7 +289,8 @@ Each run records memory as an estimate and a measurement:
 | `memory_host_baseline_bytes` | resident memory before the stream was created |
 | `memory_host_peak_bytes` | most resident memory the process held during the run |
 | `memory_host_reading_failed` | true when either host reading was unavailable, since 0 is also a valid reading |
-| `memory_device_used_bytes` | device memory the stream took, 0 on CPU |
+| `memory_device_used_bytes` | nonnegative device-memory delta before stream creation versus after the run with the stream alive; 0 on CPU |
+| `memory_device_overhead_bytes` | signed device-memory delta minus estimated device allocations; null on CPU or when readings or the estimate are unavailable |
 | `memory_measured_bytes` | the figure to hold the estimate against: device memory on GPU, the host difference on CPU |
 
 Compare `memory_measured_bytes` against the estimate. On the CPU it also
@@ -261,6 +298,14 @@ carries the benchmark's own source block, which is allocated after the baseline
 is taken and reaches 64 MiB — more than a small stream's whole estimate — so
 subtract that before reading the two as a ratio. The device figure does not
 carry the block.
+
+The GPU overhead field is an observation, not a separate allocation estimate or
+a sampled peak. It includes runtime/library residency changes and allocation
+granularity, and can be affected by other GPU users. The CUDA context exists
+before the baseline, so its initial cost is excluded. Negative values are
+retained, not clamped: they can reveal overestimation or unrelated memory being
+freed. Archived results without this field remain unknown. The report shows it
+alongside the estimate and measurement; no separate memory benchmark is needed.
 
 ## Schema changes
 
@@ -310,3 +355,37 @@ bump it.
 - **2** — `kick_sync_ms` and `kick_sync_count` retired. Stage `lod_dim0_fold`
   renamed to `lod_append_fold`.
 - **1** — Predates this rule; not a single shape.
+
+[blosc-performance-guide]: ../../docs/blosc-performance.md#incorporating-blosc-into-the-regular-sweeps
+[l40-measurements]: ../../docs/benchmarks/blosc-l40-20260906/README.md
+[s3-blackhole]: https://github.com/nclack/s3-blackhole
+[s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
+[local-report]: http://127.0.0.1:8000/index.html
+
+## Retained Blosc Pareto benchmarks
+
+The report also builds an interactive [**Blosc Pareto** analysis][pareto-analysis]
+alongside **Over time** and
+**Benchmark explorer**. It opens with all retained systems in a comparison matrix.
+Filters, estimated-allocation budgets and frontiers, an overlay view,
+three-significant-figure point details, a sortable table and exact filtered CSV
+downloads operate on the same eligible measurements. URL
+state preserves the comparison and selection. All three tabs share a pinned local
+D3 7.9.0 bundle and the existing light/dark theme.
+
+`docs/benchmarks/datasets.json` identifies the archived experiments. The report
+validates them and writes `data/pareto/index.json`, per-experiment JSON, and
+byte-preserving copies of retained artifacts under `archives/`. A validation failure
+stops the build. The archived 5070 data is explicitly summary-only. The memory
+view and allocation-budget filter use estimated device allocations; measured deltas
+remain available in the table and details. Routine acquisition/sweep behavior
+is unchanged.
+
+Raw LZ4 and Zstd controls are always visible in the Pareto charts and table. They
+provide an unframed-codec reference and remain excluded from frontier membership.
+
+See the [dataset contract, extension and test instructions](../../docs/benchmarks/README.md).
+Use `--pareto-manifest <path>` for another manifest. Serve through `--serve`, which
+sets JavaScript module MIME types correctly even with Windows registry overrides.
+
+[pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html
