@@ -67,6 +67,7 @@ SITE_FILES = {
     "pareto.html": SOURCE_DIR / "pareto.html",
     "pareto.css": SOURCE_DIR / "pareto.css",
     "pareto-ui.js": SOURCE_DIR / "pareto-ui.js",
+    "pareto-plots.js": SOURCE_DIR / "pareto-plots.js",
     "pareto.mjs": SOURCE_DIR / "pareto.mjs",
     "vendor/d3.v7.9.0.min.js": SOURCE_DIR / "vendor/d3.v7.9.0.min.js",
     "vendor/D3-LICENSE": SOURCE_DIR / "vendor/D3-LICENSE",

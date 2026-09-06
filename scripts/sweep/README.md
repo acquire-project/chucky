@@ -112,6 +112,8 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `decode.js` | unpacks sweep columns and fetches JSON |
 | `blosc.js` | Blosc block-request selections and labels for both sweep pages |
 | `selection.mjs` | Pure run selection and comparison functions, shared with tests |
+| `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
+| `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
 | `data/overview.json` | every sweep, trimmed, for `index.html` |
 | `data/sweeps.json` | the sweep list `explore.html` offers |
 | `data/sweeps/<result>.json` | one sweep in full, fetched when it is opened |
