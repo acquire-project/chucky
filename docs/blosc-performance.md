@@ -22,6 +22,9 @@ The full L40 sweep suggests these candidates:
 | Highly repetitive input; LZ4 ratio | Blosc-LZ4 + bitshuffle | Chunk-sized: 256 KiB or 1 MiB here |
 | Highly repetitive input; Zstd speed/ratio | Blosc-Zstd + bitshuffle | 16–64 KiB for speed; larger blocks for ratio |
 
+The [RTX 5080 comparison](#rtx-5080-desktop-comparison) below also compares
+the archived laptop results with measurements on a Windows desktop.
+
 These are two synthetic fills, not actual microscopy images. Hold input,
 element type, chunk shape, batch geometry, and sink fixed when comparing
 settings. Test representative images before adopting a production policy.
@@ -170,6 +173,67 @@ fold was identical across measured repetitions. The widest span was XOR with
 256 KiB chunks, Zstd, bitshuffle, and 16 KiB blocks; 16–64 KiB XOR/Zstd choices
 need further measurements to settle close rankings. The separate 5070 Laptop
 archive retains its original three-repeat method and results.
+
+### RTX 5080 desktop comparison
+
+A [matching sweep on an RTX 5080][rtx5080-analysis] completed all 800 runs
+on September 5, 2026 (local time), using this guide's inputs, chunk shapes,
+batch geometry, and budget. Each configuration had one warmup and three
+measured runs, matching the RTX 5070 Laptop archive; the L40 sweep used five
+measured runs. It used Windows 11 Pro, driver 591.86, CUDA 13.3.73,
+nvCOMP 5.3.0.16, and source `19cd6d3`
+with a small benchmark shuffle-selector/reporting patch. All 200 reported
+compression folds match the historical CSV; throughput and some allocation
+requirements differ. The comparison includes OS, compiler, driver, source,
+and hardware differences.
+
+![RTX 5080 versus RTX 5070 Laptop frontiers][rtx5080-plot]
+
+Solid lines are RTX 5080 per-codec frontiers across all shuffles; dashed lines
+are the retained laptop frontiers. Representative 1 MiB-chunk results, all
+with bitshuffle:
+
+| Input | Codec | Block | RTX 5080 GiB/s | Laptop GiB/s | Fold on both |
+|---|---|---:|---:|---:|---:|
+| Random | LZ4 | 4 KiB | 6.490 | 4.769 | 1.47469 |
+| Random | LZ4 | 16 KiB | 3.503 | 3.633 | 1.48181 |
+| Random | Zstd | 1 MiB | 1.792 | 0.981 | 1.49292 |
+| XOR | LZ4 | 1 MiB | 5.173 | 5.284 | 131.022 |
+| XOR | Zstd | 64 KiB | 6.181 | 5.167 | 125.296 |
+| XOR | Zstd | 256 KiB | 5.408 | 3.974 | 190.301 |
+| XOR | Zstd | 1 MiB | 4.331 | 3.692 | 360.654 |
+
+Small-block LZ4 remains the random-input throughput choice. Its cross-codec
+frontier for 1 MiB chunks contains 4/8/512 KiB bitshuffled LZ4 and 1 MiB
+bitshuffled Zstd. Zstd's chunk-sized block now wins both speed and ratio
+over its smaller blocks, changing the laptop's 16 KiB speed recommendation.
+
+For XOR with 1 MiB chunks, Zstd/bitshuffle at 32/64 KiB gives 6.490/6.181
+GiB/s and 106.65/125.30-fold compression. At 256 KiB it dominates chunk-sized
+LZ4 in median throughput and ratio. LZ4 still has a memory advantage:
+2.510 GiB of explicit allocations versus 3.529 GiB for that Zstd setting.
+Byte-shuffled LZ4 also enters the XOR frontiers on the desktop; the historical
+all-bitshuffle observation is specific to that dataset and machine.
+
+LZ4's tested allocation estimates match the historical table. With 1 MiB
+chunks and bitshuffle, Zstd at 64 KiB–1 MiB instead needs about 3.529 GiB
+of explicit device allocations, versus 3.202 GiB historically. Observed usage
+is about 3.791 GiB versus 3.349 GiB. The current installed-library estimator
+and runtime headroom should guide budgeting on this machine.
+
+The desktop remained active. Median relative throughput span is 7.15%,
+with a 26.0% maximum, versus 2.1% and 19.1% historically. Small apparent
+regressions and close frontier rankings have overlapping repetition ranges.
+These results cover the fixed comparison geometry and 6 GiB budget; they
+do not establish a maximum after tuning larger batches for the 16 GiB GPU.
+
+The [full analysis][rtx5080-analysis] includes raw repetitions, provenance,
+memory-constrained frontiers, and an interactive plot. It also explains the
+random-input entropy reference: 12-bit samples stored in u16 suggest 1.333×
+before padding; padding 100 frames to 112 raises the 1 MiB-chunk reference
+to 1.493×. Normalize the reported fold by 1.12 for storage planning in that
+geometry. The denominator counts bytes written to the discard sink, including
+aligned shard footer writes, and can exceed compressor payload bytes.
 
 ## How block size affects GPU memory
 
@@ -376,9 +440,9 @@ Remaining work for the expanded matrices:
 
 1. Add explicit shuffle and level fields to Blosc run specs, commands, and
    results, including failures. Extend identities, resume checks, and comparison
-   labels to include them. This branch's benchmark parser does not yet expose
-   shuffle/level CLI controls; port/reuse the existing Blosc benchmark work
-   retained in the [L40 collection patch][benchmark-controls].
+   labels to include them. The benchmark parser exposes `--blosc-shuffle` and
+   successful benchmark JSON records `blosc_shuffle` and `blosc_level`;
+   level CLI control and integration into the regular runner remain to be added.
    Validate returned settings against requests.
 2. Add the routine GPU Blosc cases and opt-in tuning tier described above, with
    warmups, seeded run order, and measured repetitions. Keep each repetition
@@ -403,7 +467,8 @@ The [L40 artifact directory][benchmark-artifacts] retains all 200 summaries,
 all 1,200 individual executions including warmups, compressed full JSON,
 source/build/GPU provenance, the benchmark-only CLI patch, validation logs,
 and the collection and plot scripts. The [5070 Laptop archive][historical-artifacts]
-is preserved separately.
+is preserved separately. The RTX 5080 comparison has separate measurements and
+provenance in its [own artifact directory][rtx5080-analysis].
 
 ```sh
 uv run --python 3.12 docs/benchmarks/blosc-l40-20260906/plot.py
@@ -432,3 +497,5 @@ artifact README gives the exact collection method and reproduction limits.
 [comparison-plot]: benchmarks/blosc-l40-20260906/comparison.svg
 [historical-artifacts]: benchmarks/blosc-rtx5070-20260905/README.md
 [benchmark-controls]: benchmarks/blosc-l40-20260906/benchmark-controls.patch
+[rtx5080-analysis]: benchmarks/blosc-rtx5080-20260905/README.md
+[rtx5080-plot]: benchmarks/blosc-rtx5080-20260905/pareto-comparison.svg

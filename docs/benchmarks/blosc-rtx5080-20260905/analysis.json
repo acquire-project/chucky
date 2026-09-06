@@ -1,0 +1,280 @@
+{
+  "configurations": 200,
+  "measured_runs": 600,
+  "median_span_pct": 7.146042835657713,
+  "max_span_pct": 26.042212889458504,
+  "all_folds_identical_to_5070": true,
+  "changed_folds": [],
+  "overall_frontiers": [
+    {
+      "fill": "xor",
+      "chunk_kib": 256,
+      "points": [
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 4,
+          "speed": 6.58012,
+          "lo": 6.1198,
+          "hi": 6.818,
+          "fold": 2.50416,
+          "estimate_gib": 2.502261696383357
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "byte",
+          "block_kib": 16,
+          "speed": 6.47715,
+          "lo": 6.47001,
+          "hi": 6.47869,
+          "fold": 3.63556,
+          "estimate_gib": 1.6572757344692945
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "byte",
+          "block_kib": 32,
+          "speed": 6.08904,
+          "lo": 5.85478,
+          "hi": 6.30852,
+          "fold": 3.92315,
+          "estimate_gib": 1.5164447408169508
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "byte",
+          "block_kib": 4,
+          "speed": 6.52212,
+          "lo": 6.43873,
+          "hi": 6.54834,
+          "fold": 2.77142,
+          "estimate_gib": 2.502261696383357
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 128,
+          "speed": 5.73927,
+          "lo": 5.37866,
+          "hi": 5.82044,
+          "fold": 121.386,
+          "estimate_gib": 2.175071601755917
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 16,
+          "speed": 5.80166,
+          "lo": 5.72565,
+          "hi": 5.94049,
+          "fold": 73.1094,
+          "estimate_gib": 1.9337607668712735
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 256,
+          "speed": 4.65748,
+          "lo": 4.53435,
+          "hi": 4.77374,
+          "fold": 138.707,
+          "estimate_gib": 2.175044779665768
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 8,
+          "speed": 5.8845,
+          "lo": 5.84795,
+          "hi": 5.88593,
+          "fold": 45.563,
+          "estimate_gib": 1.894570474512875
+        }
+      ]
+    },
+    {
+      "fill": "xor",
+      "chunk_kib": 1024,
+      "points": [
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "byte",
+          "block_kib": 4,
+          "speed": 6.51716,
+          "lo": 6.23146,
+          "hi": 6.53309,
+          "fold": 2.44739,
+          "estimate_gib": 4.754427013918757
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 1024,
+          "speed": 4.33053,
+          "lo": 4.26901,
+          "hi": 4.63147,
+          "fold": 360.654,
+          "estimate_gib": 3.5287081645801663
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 256,
+          "speed": 5.40829,
+          "lo": 5.28564,
+          "hi": 5.44528,
+          "fold": 190.301,
+          "estimate_gib": 3.5287483977153897
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 32,
+          "speed": 6.4902,
+          "lo": 6.30224,
+          "hi": 6.61698,
+          "fold": 106.653,
+          "estimate_gib": 3.367993955500424
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 512,
+          "speed": 4.39506,
+          "lo": 4.32022,
+          "hi": 4.46969,
+          "fold": 244.364,
+          "estimate_gib": 3.528721575625241
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 64,
+          "speed": 6.18115,
+          "lo": 6.12318,
+          "hi": 6.7486,
+          "fold": 125.296,
+          "estimate_gib": 3.5289007471874356
+        }
+      ]
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 256,
+      "points": [
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 128,
+          "speed": 4.25675,
+          "lo": 3.95473,
+          "hi": 4.33158,
+          "fold": 1.37811,
+          "estimate_gib": 1.410821495577693
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 256,
+          "speed": 4.15848,
+          "lo": 3.77208,
+          "hi": 4.16932,
+          "fold": 1.37832,
+          "estimate_gib": 1.39321762137115
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 4,
+          "speed": 6.71224,
+          "lo": 6.63157,
+          "hi": 6.9009,
+          "fold": 1.37021,
+          "estimate_gib": 2.502261696383357
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 8,
+          "speed": 6.62178,
+          "lo": 6.15349,
+          "hi": 6.70333,
+          "fold": 1.37389,
+          "estimate_gib": 1.938937721773982
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 256,
+          "speed": 1.68371,
+          "lo": 1.54379,
+          "hi": 1.75455,
+          "fold": 1.38553,
+          "estimate_gib": 2.175044779665768
+        }
+      ]
+    },
+    {
+      "fill": "rand",
+      "chunk_kib": 1024,
+      "points": [
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 4,
+          "speed": 6.48988,
+          "lo": 6.18357,
+          "hi": 6.49012,
+          "fold": 1.47469,
+          "estimate_gib": 4.754427013918757
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 512,
+          "speed": 3.75333,
+          "lo": 3.62708,
+          "hi": 3.82473,
+          "fold": 1.48431,
+          "estimate_gib": 2.5187392812222242
+        },
+        {
+          "codec": "blosc-lz4",
+          "shuffle": "bit",
+          "block_kib": 8,
+          "speed": 5.97845,
+          "lo": 5.80803,
+          "hi": 6.25847,
+          "fold": 1.47931,
+          "estimate_gib": 3.6277790647000074
+        },
+        {
+          "codec": "blosc-zstd",
+          "shuffle": "bit",
+          "block_kib": 1024,
+          "speed": 1.79217,
+          "lo": 1.79193,
+          "hi": 1.81825,
+          "fold": 1.49292,
+          "estimate_gib": 3.5287081645801663
+        }
+      ]
+    }
+  ],
+  "all_per_codec_frontiers_use_bitshuffle": false,
+  "measured_pass_speed_vs_warmup": [
+    {
+      "pass": 1,
+      "median_ratio": 0.7900921154447421
+    },
+    {
+      "pass": 2,
+      "median_ratio": 0.8153378048174917
+    },
+    {
+      "pass": 3,
+      "median_ratio": 0.8061961186487177
+    }
+  ],
+  "duration_minutes": 20.307166666666667
+}

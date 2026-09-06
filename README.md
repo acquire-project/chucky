@@ -182,6 +182,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--fill` | `xor`, `zeros`, `rand` | `xor` | Synthetic fill pattern for input data |
 | `--codec` | `none`, `lz4`, `zstd`, `blosc-lz4`, `blosc-zstd` | `zstd` | Compression codec |
 | `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
+| `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 

@@ -3,14 +3,16 @@
 
 import csv
 import html
+import json
 import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent
-COLORS = {"blosc-lz4": "#1477ba", "blosc-zstd": "#c34d28"}
+STYLE = json.loads((ROOT.parent / "blosc-figure-style.json").read_text(encoding="utf-8"))
+COLORS = STYLE["colors"]
 PANELS = [("xor", 256), ("xor", 1024), ("rand", 256), ("rand", 1024)]
-WIDTH, HEIGHT = 1500, 1130
+WIDTH, HEIGHT = 1500, 1220
 
 
 def dominates(a, b):
@@ -51,6 +53,34 @@ def marker(x, y, shape, color, radius=4, opacity=1, title=""):
             f'height="{radius*2}" {attrs}>{tip}</rect>')
 
 
+def legend(memory=False):
+    """Use actual line and marker samples for every visual encoding."""
+    neutral = STYLE["muted"]
+    out = ['<g role="group" aria-label="Figure legend">',
+           f'<rect x="48" y="96" width="1404" height="{60 if memory else 96}" rx="8" '
+           f'fill="{STYLE["legend_fill"]}" stroke="{STYLE["legend_border"]}"/>']
+    for x0, codec in [(72, "blosc-lz4"), (212, "blosc-zstd")]:
+        out += [line(x0, 126, x0 + 32, 126, COLORS[codec], 3),
+                text(x0 + 43, 131, codec.removeprefix("blosc-").upper(), "legend-label")]
+    if memory:
+        out += [line(390, 126, 430, 126, neutral, 2.5),
+                marker(410, 126, "byte", neutral, 4),
+                text(443, 131, "Observed device delta", "legend-label"),
+                line(730, 126, 770, 126, neutral, 2.5, 'stroke-dasharray="7 5"'),
+                text(783, 131, "Explicit allocation estimate", "legend-label")]
+    else:
+        for x0, shape, label in [(390, "none", "No shuffle"), (570, "byte", "Byte shuffle"),
+                                 (760, "bit", "Bitshuffle"), (940, "raw", "Raw codec control")]:
+            out += [marker(x0, 126, shape, neutral, 5), text(x0 + 17, 131, label, "legend-label")]
+        out += [line(72, 166, 112, 166, neutral, 2.5),
+                marker(92, 166, "bit", neutral, 5), text(125, 171, "Per-codec frontier", "legend-label"),
+                marker(390, 166, "bit", neutral, 5, .23), text(407, 171, "Dominated candidate", "legend-label"),
+                line(760, 155, 760, 177, neutral, 1.4),
+                line(755, 155, 765, 155, neutral, 1.4), line(755, 177, 765, 177, neutral, 1.4),
+                text(777, 171, "Min–max of 3 runs", "legend-label")]
+    return "\n".join(out + ['</g>'])
+
+
 def tooltip(row):
     block = f'{row["block_kib"]} KiB / {row["shuffle"]}' if row["block_kib"] else "raw control"
     return (f'{row["codec"]} / {block}: {row["speed"]:.5f} GiB/s '
@@ -71,7 +101,7 @@ def separated_labels(points, top, bottom):
 
 
 def panel(rows, fill, chunk, index, zoom):
-    ox, oy = 30 + (index % 2) * 745, 190 + (index // 2) * 414
+    ox, oy = 30 + (index % 2) * 745, 250 + (index // 2) * 430
     left, right, top, bottom = ox + 62, ox + 677, oy + 48, oy + 353
     group = [r for r in rows if r["fill"] == fill and r["chunk_kib"] == chunk]
     fronts = {codec: frontier([r for r in group if r["codec"] == codec]) for codec in COLORS}
@@ -104,7 +134,7 @@ def panel(rows, fill, chunk, index, zoom):
         out += [line(left, y(tick), right, y(tick), "#e3e8ec"),
                 text(left - 12, y(tick) + 4, tick, anchor="end")]
     for tick in ticks:
-        out += [line(x(tick), top, x(tick), bottom, "#edf0f3"),
+        out += [line(x(tick), top, x(tick), bottom, STYLE["grid"]),
                 text(x(tick), bottom + 24, f'{tick:g}×', anchor="middle")]
     out += [line(left, bottom, right, bottom, "#a3adb7"),
             text((left + right) / 2, bottom + 52, "Compression fold →", "axis", "middle"),
@@ -147,29 +177,18 @@ def figure(rows, zoom):
            '<title id="title">GPU Blosc throughput and compression Pareto frontiers</title>',
            '<desc id="desc">Four panels compare LZ4 and Zstd for two input patterns and two Zarr chunk sizes. '
            'Both axes are maximized. Frontiers are calculated separately per codec across block sizes and shuffle modes.</desc>',
-           '<style>text{font:14px Arial,sans-serif;fill:#283747}.title{font-size:28px;font-weight:700}'
-           '.subtitle{font-size:15px;fill:#506273}.panel-title{font-size:19px;font-weight:700}'
-           '.axis{font-size:14px;font-weight:600}.muted{fill:#637281;font-size:13px}'
-           '.point-label{font-size:13px;font-weight:700;paint-order:stroke;stroke:white;stroke-width:4px;stroke-linejoin:round}'
-           '.note{font-size:13px;fill:#526373}</style>',
+           f'<style>{STYLE["css"]}</style>',
            f'<rect width="{WIDTH}" height="{HEIGHT}" fill="white"/>',
            text(48, 43, "GPU Blosc: throughput / compression Pareto frontiers", "title"),
            text(48, 72, "RTX 5070 Laptop GPU · nvCOMP 5.3 · driver 595.99.02 · sweep 2026-09-05 UTC", "subtitle"),
-           text(48, 98, "Per-codec frontier across block sizes + all shuffle modes. Higher and farther right is better.", "subtitle")]
-    for x0, codec in [(52, "blosc-lz4"), (182, "blosc-zstd")]:
-        out += [line(x0, 126, x0 + 28, 126, COLORS[codec], 3),
-                text(x0 + 37, 131, codec.removeprefix("blosc-").upper(), color=COLORS[codec])]
-    for x0, shape, label in [(330, "none", "no shuffle"), (460, "byte", "byte shuffle"),
-                             (600, "bit", "bitshuffle"), (730, "raw", "raw codec control")]:
-        out += [marker(x0, 126, shape, "#526373", 5), text(x0 + 14, 131, label)]
-    out += [text(950, 131, "Faint = dominated candidates", "muted"),
-            text(48, 158, "Labels: Blosc block size · all highlighted points use bitshuffle · bars: min–max of 3 runs", "muted")]
+           legend(),
+           text(48, 217, "Labels: block KiB · per-codec frontier across all filters · higher and farther right is better", "muted")]
     for index, (fill, chunk) in enumerate(PANELS):
         out.append(panel(rows, fill, chunk, index, zoom))
-    out += [text(48, 1042, "Frontier = no other tested Blosc setting of the same codec improves either median objective without worsening the other.", "note"),
-            text(48, 1064, "Fold = padded chunk bytes / encoded bytes; compare within each panel. Discard sink + synthetic inputs, not a storage benchmark.", "note"),
-            text(48, 1086, "GPU memory is not an objective here (see hover values / CSV). Lines guide the eye; intermediate settings were not measured.", "note"),
-            text(48, 1108, "Random panels zoom to the frontiers; off-scale candidates / raw controls are omitted. Timing ranges are not confidence intervals."
+    out += [text(48, 1140, "Frontier = no other tested Blosc setting of the same codec improves either median objective without worsening the other.", "note"),
+            text(48, 1162, "Fold = padded chunk bytes / encoded bytes; compare within each panel. Discard sink + synthetic inputs, not a storage benchmark.", "note"),
+            text(48, 1184, "GPU memory is not an objective here (see hover values / CSV). Lines guide the eye; intermediate settings were not measured.", "note"),
+            text(48, 1206, "Random panels zoom to the frontiers; off-scale candidates / raw controls are omitted. Timing ranges are not confidence intervals."
                  if zoom else "All measured candidates shown. Exact-median frontier membership can be sensitive to small timing or compression differences.", "note"),
             '</svg>']
     return "\n".join(out)
@@ -219,10 +238,10 @@ def main():
     for name, zoom in [("pareto", True), ("pareto-all-candidates", False)]:
         svg = figure(rows, zoom)
         ET.fromstring(svg)
-        (ROOT / f"{name}.svg").write_text(svg)
+        (ROOT / f"{name}.svg").write_text(svg, encoding="utf-8", newline="\n")
     svg = memory_figure(rows)
     ET.fromstring(svg)
-    (ROOT / "memory.svg").write_text(svg)
+    (ROOT / "memory.svg").write_text(svg, encoding="utf-8", newline="\n")
     write_memory_estimates(rows)
     with (ROOT / "pareto-memory-frontier.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
@@ -235,7 +254,7 @@ def main():
     document = ('<!doctype html><html lang="en"><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<title>GPU Blosc Pareto frontiers</title><style>'
-                'body{margin:0;background:white;font:15px Arial,sans-serif;color:#283747}'
+                'body{margin:0;background:white;font:15px system-ui,sans-serif;color:#283747}'
                 'svg{display:block;width:100%;height:auto}main{max-width:1500px;margin:auto}'
                 'section{padding:0 48px 40px}a{color:#1477ba}table{border-collapse:collapse;width:100%;margin:20px 0}'
                 'th,td{text-align:right;padding:8px;border-bottom:1px solid #e3e8ec}'
@@ -249,7 +268,7 @@ def main():
                 'The last column also checks dominance across both Blosc codecs. '
                 'Only measured medians determine membership; no statistical significance or interpolation is implied.</p>'
                 + "\n".join(tables) + '</section></main></html>')
-    (ROOT / "pareto.html").write_text(document)
+    (ROOT / "pareto.html").write_text(document, encoding="utf-8", newline="\n")
     print(f'Validated {len(rows)} configurations; exported {len(exported)} per-codec frontier settings.')
     print(ROOT / "pareto.html")
 
@@ -298,20 +317,20 @@ def write_memory_estimates(rows):
               "[provenance-json]: provenance.json",
               "[memory-estimates-csv]: memory-estimates.csv",
               "[blosc-performance]: ../../blosc-performance.md", ""]
-    (ROOT / "memory-estimates.md").write_text("\n".join(lines))
+    (ROOT / "memory-estimates.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def memory_figure(rows):
-    out = ['<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="540" viewBox="0 0 1500 540" role="img">',
+    out = ['<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="620" viewBox="0 0 1500 620" role="img">',
            '<title>Blosc block size and stream GPU memory</title>',
-           '<style>text{font:14px Arial,sans-serif;fill:#283747}.title{font-size:26px;font-weight:700}'
-           '.panel-title{font-size:19px;font-weight:700}.muted{font-size:13px;fill:#526373}</style>',
-           '<rect width="1500" height="540" fill="white"/>',
-           text(48, 40, "Block size and GPU memory", "title"),
-           text(48, 68, "Same RTX 5070 sweep · XOR input · bitshuffle · solid: measured device delta · dashed: explicit-allocation estimate", "muted")]
+           f'<style>{STYLE["css"]}</style>',
+           '<rect width="1500" height="620" fill="white"/>',
+           text(48, 43, "Block size and GPU memory", "title"),
+           text(48, 72, "RTX 5070 Laptop GPU · nvCOMP 5.3 · XOR input · bitshuffle · whole-stream device memory", "subtitle"),
+           legend(memory=True)]
     for p, chunk in enumerate((256, 1024)):
-        left, right, top, bottom = 92 + 745*p, 707 + 745*p, 140, 430
-        out.append(text(left, 115, f'{chunk} KiB chunks · {144 if chunk == 256 else 288} MiB padded batch', "panel-title"))
+        left, right, top, bottom = 92 + 745*p, 707 + 745*p, 224, 505
+        out.append(text(left - 44, 198, f'{chunk} KiB chunks · {144 if chunk == 256 else 288} MiB padded batch', "panel-title"))
         def x(block):
             return left + (math.log2(block) - 2) / (math.log2(chunk) - 2) * (right - left)
         def y(value):
@@ -326,14 +345,14 @@ def memory_figure(rows):
         for codec, color in COLORS.items():
             group = sorted((r for r in rows if r["fill"] == "xor" and r["chunk_kib"] == chunk
                             and r["shuffle"] == "bit" and r["codec"] == codec), key=lambda r: r["block_kib"])
-            for field, dash in (("device_gib", ""), ("estimate_gib", 'stroke-dasharray="6 4"')):
+            for field, dash in (("device_gib", ""), ("estimate_gib", 'stroke-dasharray="7 5"')):
                 points = " ".join(f'{x(r["block_kib"]):.2f},{y(r[field]):.2f}' for r in group)
-                out.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2" {dash}/>')
+                out.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2.5" {dash}/>')
             for row in group:
                 out.append(marker(x(row["block_kib"]), y(row["device_gib"]), "byte", color, title=tooltip(row)))
             last = group[-1]
             out.append(text(right - 8, y(last["device_gib"]) - 12, codec.removeprefix("blosc-").upper(), anchor="end", color=color))
-    out += [text(48, 525, "Device delta is measured before creation versus after the run with the stream alive; it is not a sampled peak. Runtime overhead is not estimated.", "muted"), '</svg>']
+    out += [text(48, 600, "Device delta is measured before creation versus after the run with the stream alive; it is not a sampled peak. Runtime overhead is not estimated.", "note"), '</svg>']
     return "\n".join(out)
 
 

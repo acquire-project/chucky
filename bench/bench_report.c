@@ -671,6 +671,11 @@ print_bench_json_pass(const struct stream_metrics* m,
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);
+    jw_key(&jw, "blosc_shuffle");
+    jw_string(&jw, codec.shuffle == CODEC_SHUFFLE_BIT ? "bit" :
+                     codec.shuffle == CODEC_SHUFFLE_BYTE ? "byte" : "none");
+    jw_key(&jw, "blosc_level");
+    jw_uint(&jw, codec.level);
   }
   jw_key(&jw, "throughput_in_gibs");
   jw_float(&jw, throughput_gib);

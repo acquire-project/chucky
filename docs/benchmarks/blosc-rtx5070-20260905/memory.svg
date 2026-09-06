@@ -1,98 +1,110 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="540" viewBox="0 0 1500 540" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="620" viewBox="0 0 1500 620" role="img">
 <title>Blosc block size and stream GPU memory</title>
-<style>text{font:14px Arial,sans-serif;fill:#283747}.title{font-size:26px;font-weight:700}.panel-title{font-size:19px;font-weight:700}.muted{font-size:13px;fill:#526373}</style>
-<rect width="1500" height="540" fill="white"/>
-<text x="48.00" y="40.00" class="title" text-anchor="start">Block size and GPU memory</text>
-<text x="48.00" y="68.00" class="muted" text-anchor="start">Same RTX 5070 sweep · XOR input · bitshuffle · solid: measured device delta · dashed: explicit-allocation estimate</text>
-<text x="92.00" y="115.00" class="panel-title" text-anchor="start">256 KiB chunks · 144 MiB padded batch</text>
-<line x1="92.00" y1="430.00" x2="707.00" y2="430.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="434.00" class="" text-anchor="end">0</text>
-<line x1="92.00" y1="372.00" x2="707.00" y2="372.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="376.00" class="" text-anchor="end">1</text>
-<line x1="92.00" y1="314.00" x2="707.00" y2="314.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="318.00" class="" text-anchor="end">2</text>
-<line x1="92.00" y1="256.00" x2="707.00" y2="256.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="260.00" class="" text-anchor="end">3</text>
-<line x1="92.00" y1="198.00" x2="707.00" y2="198.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="202.00" class="" text-anchor="end">4</text>
-<line x1="92.00" y1="140.00" x2="707.00" y2="140.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="80.00" y="144.00" class="" text-anchor="end">5</text>
-<text x="92.00" y="455.00" class="" text-anchor="middle">4</text>
-<text x="194.50" y="455.00" class="" text-anchor="middle">8</text>
-<text x="297.00" y="455.00" class="" text-anchor="middle">16</text>
-<text x="399.50" y="455.00" class="" text-anchor="middle">32</text>
-<text x="502.00" y="455.00" class="" text-anchor="middle">64</text>
-<text x="604.50" y="455.00" class="" text-anchor="middle">128</text>
-<text x="707.00" y="455.00" class="" text-anchor="middle">256</text>
-<text x="399.50" y="482.00" class="" text-anchor="middle">Blosc block size (KiB, log₂)</text>
-<text transform="translate(39,285.0) rotate(-90)" text-anchor="middle">Device GiB</text>
-<polyline points="92.00,284.21 194.50,316.83 297.00,333.14 399.50,341.30 502.00,345.38 604.50,347.42 707.00,348.44" fill="none" stroke="#1477ba" stroke-width="2" />
-<polyline points="92.00,284.87 194.50,317.54 297.00,333.88 399.50,342.05 502.00,346.13 604.50,348.17 707.00,349.19" fill="none" stroke="#1477ba" stroke-width="2" stroke-dasharray="6 4"/>
-<circle cx="92.0" cy="284.20703125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 4 KiB / bit: 4.10720 GiB/s (min–max 4.07153–4.14290); 2.50416×; device allocation delta 2.514 GiB</title></circle>
-<circle cx="194.5" cy="316.83203125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 8 KiB / bit: 3.92227 GiB/s (min–max 3.89711–3.96323); 2.42760×; device allocation delta 1.951 GiB</title></circle>
-<circle cx="297.0" cy="333.14453125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 16 KiB / bit: 3.87563 GiB/s (min–max 3.86160–3.90772); 2.40546×; device allocation delta 1.670 GiB</title></circle>
-<circle cx="399.5" cy="341.30078125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 32 KiB / bit: 3.91618 GiB/s (min–max 3.88550–3.92509); 2.48679×; device allocation delta 1.529 GiB</title></circle>
-<circle cx="502.0" cy="345.3753662109375" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 64 KiB / bit: 3.84851 GiB/s (min–max 3.80758–3.91928); 2.53693×; device allocation delta 1.459 GiB</title></circle>
-<circle cx="604.5" cy="347.41796875" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 128 KiB / bit: 3.98725 GiB/s (min–max 3.91411–4.00464); 3.79758×; device allocation delta 1.424 GiB</title></circle>
-<circle cx="707.0" cy="348.4410400390625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 256 KiB / bit: 4.86156 GiB/s (min–max 4.81298–4.87660); 9.01880×; device allocation delta 1.406 GiB</title></circle>
-<text x="699.00" y="336.44" class="" text-anchor="end" style="fill:#1477ba">LZ4</text>
-<polyline points="92.00,321.75 194.50,321.30 297.00,320.39 399.50,318.35 502.00,314.39 604.50,314.39 707.00,314.39" fill="none" stroke="#c34d28" stroke-width="2" />
-<polyline points="92.00,330.05 194.50,329.68 297.00,328.75 399.50,326.77 502.00,322.78 604.50,322.78 707.00,322.78" fill="none" stroke="#c34d28" stroke-width="2" stroke-dasharray="6 4"/>
-<circle cx="92.0" cy="321.752685546875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 4 KiB / bit: 3.33210 GiB/s (min–max 3.31633–3.37102); 32.10500×; device allocation delta 1.866 GiB</title></circle>
-<circle cx="194.5" cy="321.299560546875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 8 KiB / bit: 4.37448 GiB/s (min–max 4.32708–4.46613); 45.56300×; device allocation delta 1.874 GiB</title></circle>
-<circle cx="297.0" cy="320.393310546875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 16 KiB / bit: 4.99561 GiB/s (min–max 4.96345–5.02408); 73.10940×; device allocation delta 1.890 GiB</title></circle>
-<circle cx="399.5" cy="318.354248046875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 32 KiB / bit: 5.31145 GiB/s (min–max 5.18898–5.33309); 95.46450×; device allocation delta 1.925 GiB</title></circle>
-<circle cx="502.0" cy="314.389404296875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 64 KiB / bit: 5.35589 GiB/s (min–max 5.22934–5.60301); 112.23200×; device allocation delta 1.993 GiB</title></circle>
-<circle cx="604.5" cy="314.389404296875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 128 KiB / bit: 4.65615 GiB/s (min–max 4.49962–4.73391); 121.38600×; device allocation delta 1.993 GiB</title></circle>
-<circle cx="707.0" cy="314.389404296875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 256 KiB / bit: 4.19523 GiB/s (min–max 4.10254–4.19575); 138.70700×; device allocation delta 1.993 GiB</title></circle>
-<text x="699.00" y="302.39" class="" text-anchor="end" style="fill:#c34d28">ZSTD</text>
-<text x="837.00" y="115.00" class="panel-title" text-anchor="start">1024 KiB chunks · 288 MiB padded batch</text>
-<line x1="837.00" y1="430.00" x2="1452.00" y2="430.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="434.00" class="" text-anchor="end">0</text>
-<line x1="837.00" y1="372.00" x2="1452.00" y2="372.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="376.00" class="" text-anchor="end">1</text>
-<line x1="837.00" y1="314.00" x2="1452.00" y2="314.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="318.00" class="" text-anchor="end">2</text>
-<line x1="837.00" y1="256.00" x2="1452.00" y2="256.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="260.00" class="" text-anchor="end">3</text>
-<line x1="837.00" y1="198.00" x2="1452.00" y2="198.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="202.00" class="" text-anchor="end">4</text>
-<line x1="837.00" y1="140.00" x2="1452.00" y2="140.00" stroke="#e3e8ec" stroke-width="1" />
-<text x="825.00" y="144.00" class="" text-anchor="end">5</text>
-<text x="837.00" y="455.00" class="" text-anchor="middle">4</text>
-<text x="913.88" y="455.00" class="" text-anchor="middle">8</text>
-<text x="990.75" y="455.00" class="" text-anchor="middle">16</text>
-<text x="1067.62" y="455.00" class="" text-anchor="middle">32</text>
-<text x="1144.50" y="455.00" class="" text-anchor="middle">64</text>
-<text x="1221.38" y="455.00" class="" text-anchor="middle">128</text>
-<text x="1298.25" y="455.00" class="" text-anchor="middle">256</text>
-<text x="1375.12" y="455.00" class="" text-anchor="middle">512</text>
-<text x="1452.00" y="455.00" class="" text-anchor="middle">1024</text>
-<text x="1144.50" y="482.00" class="" text-anchor="middle">Blosc block size (KiB, log₂)</text>
-<text transform="translate(784,285.0) rotate(-90)" text-anchor="middle">Device GiB</text>
-<polyline points="837.00,153.59 913.88,218.96 990.75,251.58 1067.62,267.89 1144.50,276.05 1221.38,280.13 1298.25,282.17 1375.12,283.19 1452.00,283.64" fill="none" stroke="#1477ba" stroke-width="2" />
-<polyline points="837.00,154.24 913.88,219.59 990.75,252.26 1067.62,268.60 1144.50,276.77 1221.38,280.85 1298.25,282.89 1375.12,283.91 1452.00,284.42" fill="none" stroke="#1477ba" stroke-width="2" stroke-dasharray="6 4"/>
-<circle cx="837.0" cy="153.59375" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 4 KiB / bit: 4.04676 GiB/s (min–max 3.97823–4.07437); 2.91099×; device allocation delta 4.766 GiB</title></circle>
-<circle cx="913.875" cy="218.95703125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 8 KiB / bit: 3.84953 GiB/s (min–max 3.84515–3.90878); 2.79932×; device allocation delta 3.639 GiB</title></circle>
-<circle cx="990.75" cy="251.58203125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 16 KiB / bit: 3.82008 GiB/s (min–max 3.79836–3.82130); 2.69040×; device allocation delta 3.076 GiB</title></circle>
-<circle cx="1067.625" cy="267.89453125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 32 KiB / bit: 3.73438 GiB/s (min–max 3.61025–3.74400); 2.64591×; device allocation delta 2.795 GiB</title></circle>
-<circle cx="1144.5" cy="276.05078125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 64 KiB / bit: 3.63777 GiB/s (min–max 3.59458–3.65691); 2.73165×; device allocation delta 2.654 GiB</title></circle>
-<circle cx="1221.375" cy="280.12890625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 128 KiB / bit: 4.16552 GiB/s (min–max 4.12647–4.17243); 4.14385×; device allocation delta 2.584 GiB</title></circle>
-<circle cx="1298.25" cy="282.16796875" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 256 KiB / bit: 4.61425 GiB/s (min–max 4.58824–4.74192); 10.09010×; device allocation delta 2.549 GiB</title></circle>
-<circle cx="1375.125" cy="283.1875" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 512 KiB / bit: 5.24564 GiB/s (min–max 5.14948–5.30894); 21.65830×; device allocation delta 2.531 GiB</title></circle>
-<circle cx="1452.0" cy="283.640625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 1024 KiB / bit: 5.28430 GiB/s (min–max 5.26476–5.38007); 131.02200×; device allocation delta 2.523 GiB</title></circle>
-<text x="1444.00" y="271.64" class="" text-anchor="end" style="fill:#1477ba">LZ4</text>
-<polyline points="837.00,242.91 913.88,242.68 990.75,241.78 1067.62,239.74 1144.50,235.77 1221.38,235.77 1298.25,235.77 1375.12,235.77 1452.00,235.77" fill="none" stroke="#c34d28" stroke-width="2" />
-<polyline points="837.00,251.27 913.88,251.04 990.75,250.17 1067.62,248.24 1144.50,244.26 1221.38,244.26 1298.25,244.27 1375.12,244.27 1452.00,244.27" fill="none" stroke="#c34d28" stroke-width="2" stroke-dasharray="6 4"/>
-<circle cx="837.0" cy="242.9053955078125" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 4 KiB / bit: 3.22607 GiB/s (min–max 3.18712–3.24071); 36.21220×; device allocation delta 3.226 GiB</title></circle>
-<circle cx="913.875" cy="242.682373046875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 8 KiB / bit: 4.24978 GiB/s (min–max 4.21220–4.29530); 52.03630×; device allocation delta 3.230 GiB</title></circle>
-<circle cx="990.75" cy="241.776123046875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 16 KiB / bit: 4.82737 GiB/s (min–max 4.75166–4.83264); 78.17270×; device allocation delta 3.245 GiB</title></circle>
-<circle cx="1067.625" cy="239.737060546875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 32 KiB / bit: 5.04662 GiB/s (min–max 4.99920–5.18259); 106.65300×; device allocation delta 3.280 GiB</title></circle>
-<circle cx="1144.5" cy="235.772216796875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 64 KiB / bit: 5.16688 GiB/s (min–max 5.09593–5.20070); 125.29600×; device allocation delta 3.349 GiB</title></circle>
-<circle cx="1221.375" cy="235.772216796875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 128 KiB / bit: 4.68247 GiB/s (min–max 4.59406–4.69011); 136.85900×; device allocation delta 3.349 GiB</title></circle>
-<circle cx="1298.25" cy="235.772216796875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 256 KiB / bit: 3.97375 GiB/s (min–max 3.90697–3.98723); 190.30100×; device allocation delta 3.349 GiB</title></circle>
-<circle cx="1375.125" cy="235.772216796875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 512 KiB / bit: 3.93098 GiB/s (min–max 3.85861–3.93519); 244.36400×; device allocation delta 3.349 GiB</title></circle>
-<circle cx="1452.0" cy="235.772216796875" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 1024 KiB / bit: 3.69206 GiB/s (min–max 3.65695–3.73029); 360.65400×; device allocation delta 3.349 GiB</title></circle>
-<text x="1444.00" y="223.77" class="" text-anchor="end" style="fill:#c34d28">ZSTD</text>
-<text x="48.00" y="525.00" class="muted" text-anchor="start">Device delta is measured before creation versus after the run with the stream alive; it is not a sampled peak. Runtime overhead is not estimated.</text>
+<style>text{font:15px system-ui,-apple-system,Segoe UI,sans-serif;fill:#283747}.title,.heading{font-size:26px;font-weight:650}.subtitle{font-size:15px;fill:#637281}.panel-title,.sub{font-size:19px;font-weight:650}.axis{font-size:14px;font-weight:500}.muted,.note,.small{font-size:13px;fill:#637281}.legend-label{font-size:14px}.point-label{font-size:12px;font-weight:600;paint-order:stroke;stroke:white;stroke-width:4px;stroke-linejoin:round}.grid{stroke:#e3e8ec}.old{opacity:.65}.candidate{opacity:.23}</style>
+<rect width="1500" height="620" fill="white"/>
+<text x="48.00" y="43.00" class="title" text-anchor="start">Block size and GPU memory</text>
+<text x="48.00" y="72.00" class="subtitle" text-anchor="start">RTX 5070 Laptop GPU · nvCOMP 5.3 · XOR input · bitshuffle · whole-stream device memory</text>
+<g role="group" aria-label="Figure legend">
+<rect x="48" y="96" width="1404" height="60" rx="8" fill="#f7f9fc" stroke="#dce3eb"/>
+<line x1="72.00" y1="126.00" x2="104.00" y2="126.00" stroke="#1477ba" stroke-width="3" />
+<text x="115.00" y="131.00" class="legend-label" text-anchor="start">LZ4</text>
+<line x1="212.00" y1="126.00" x2="244.00" y2="126.00" stroke="#c34d28" stroke-width="3" />
+<text x="255.00" y="131.00" class="legend-label" text-anchor="start">ZSTD</text>
+<line x1="390.00" y1="126.00" x2="430.00" y2="126.00" stroke="#637281" stroke-width="2.5" />
+<circle cx="410" cy="126" r="4" fill="#637281" stroke="#637281" opacity="1" stroke-width="1.4"><title></title></circle>
+<text x="443.00" y="131.00" class="legend-label" text-anchor="start">Observed device delta</text>
+<line x1="730.00" y1="126.00" x2="770.00" y2="126.00" stroke="#637281" stroke-width="2.5" stroke-dasharray="7 5"/>
+<text x="783.00" y="131.00" class="legend-label" text-anchor="start">Explicit allocation estimate</text>
+</g>
+<text x="48.00" y="198.00" class="panel-title" text-anchor="start">256 KiB chunks · 144 MiB padded batch</text>
+<line x1="92.00" y1="505.00" x2="707.00" y2="505.00" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="509.00" class="" text-anchor="end">0</text>
+<line x1="92.00" y1="448.80" x2="707.00" y2="448.80" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="452.80" class="" text-anchor="end">1</text>
+<line x1="92.00" y1="392.60" x2="707.00" y2="392.60" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="396.60" class="" text-anchor="end">2</text>
+<line x1="92.00" y1="336.40" x2="707.00" y2="336.40" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="340.40" class="" text-anchor="end">3</text>
+<line x1="92.00" y1="280.20" x2="707.00" y2="280.20" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="284.20" class="" text-anchor="end">4</text>
+<line x1="92.00" y1="224.00" x2="707.00" y2="224.00" stroke="#e3e8ec" stroke-width="1" />
+<text x="80.00" y="228.00" class="" text-anchor="end">5</text>
+<text x="92.00" y="530.00" class="" text-anchor="middle">4</text>
+<text x="194.50" y="530.00" class="" text-anchor="middle">8</text>
+<text x="297.00" y="530.00" class="" text-anchor="middle">16</text>
+<text x="399.50" y="530.00" class="" text-anchor="middle">32</text>
+<text x="502.00" y="530.00" class="" text-anchor="middle">64</text>
+<text x="604.50" y="530.00" class="" text-anchor="middle">128</text>
+<text x="707.00" y="530.00" class="" text-anchor="middle">256</text>
+<text x="399.50" y="557.00" class="" text-anchor="middle">Blosc block size (KiB, log₂)</text>
+<text transform="translate(39,364.5) rotate(-90)" text-anchor="middle">Device GiB</text>
+<polyline points="92.00,363.73 194.50,395.34 297.00,411.15 399.50,419.05 502.00,423.00 604.50,424.98 707.00,425.97" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<polyline points="92.00,364.37 194.50,396.03 297.00,411.86 399.50,419.78 502.00,423.73 604.50,425.71 707.00,426.70" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<circle cx="92.0" cy="363.731640625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 4 KiB / bit: 4.10720 GiB/s (min–max 4.07153–4.14290); 2.50416×; device allocation delta 2.514 GiB</title></circle>
+<circle cx="194.5" cy="395.344140625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 8 KiB / bit: 3.92227 GiB/s (min–max 3.89711–3.96323); 2.42760×; device allocation delta 1.951 GiB</title></circle>
+<circle cx="297.0" cy="411.150390625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 16 KiB / bit: 3.87563 GiB/s (min–max 3.86160–3.90772); 2.40546×; device allocation delta 1.670 GiB</title></circle>
+<circle cx="399.5" cy="419.053515625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 32 KiB / bit: 3.91618 GiB/s (min–max 3.88550–3.92509); 2.48679×; device allocation delta 1.529 GiB</title></circle>
+<circle cx="502.0" cy="423.00164794921875" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 64 KiB / bit: 3.84851 GiB/s (min–max 3.80758–3.91928); 2.53693×; device allocation delta 1.459 GiB</title></circle>
+<circle cx="604.5" cy="424.980859375" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 128 KiB / bit: 3.98725 GiB/s (min–max 3.91411–4.00464); 3.79758×; device allocation delta 1.424 GiB</title></circle>
+<circle cx="707.0" cy="425.97218017578126" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 256 KiB / bit: 4.86156 GiB/s (min–max 4.81298–4.87660); 9.01880×; device allocation delta 1.406 GiB</title></circle>
+<text x="699.00" y="413.97" class="" text-anchor="end" style="fill:#1477ba">LZ4</text>
+<polyline points="92.00,400.11 194.50,399.67 297.00,398.79 399.50,396.82 502.00,392.98 604.50,392.98 707.00,392.98" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<polyline points="92.00,408.15 194.50,407.79 297.00,406.89 399.50,404.98 502.00,401.10 604.50,401.11 707.00,401.11" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<circle cx="92.0" cy="400.1120849609375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 4 KiB / bit: 3.33210 GiB/s (min–max 3.31633–3.37102); 32.10500×; device allocation delta 1.866 GiB</title></circle>
+<circle cx="194.5" cy="399.6730224609375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 8 KiB / bit: 4.37448 GiB/s (min–max 4.32708–4.46613); 45.56300×; device allocation delta 1.874 GiB</title></circle>
+<circle cx="297.0" cy="398.7948974609375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 16 KiB / bit: 4.99561 GiB/s (min–max 4.96345–5.02408); 73.10940×; device allocation delta 1.890 GiB</title></circle>
+<circle cx="399.5" cy="396.8191162109375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 32 KiB / bit: 5.31145 GiB/s (min–max 5.18898–5.33309); 95.46450×; device allocation delta 1.925 GiB</title></circle>
+<circle cx="502.0" cy="392.9773193359375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 64 KiB / bit: 5.35589 GiB/s (min–max 5.22934–5.60301); 112.23200×; device allocation delta 1.993 GiB</title></circle>
+<circle cx="604.5" cy="392.9773193359375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 128 KiB / bit: 4.65615 GiB/s (min–max 4.49962–4.73391); 121.38600×; device allocation delta 1.993 GiB</title></circle>
+<circle cx="707.0" cy="392.9773193359375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 256 KiB / bit: 4.19523 GiB/s (min–max 4.10254–4.19575); 138.70700×; device allocation delta 1.993 GiB</title></circle>
+<text x="699.00" y="380.98" class="" text-anchor="end" style="fill:#c34d28">ZSTD</text>
+<text x="793.00" y="198.00" class="panel-title" text-anchor="start">1024 KiB chunks · 288 MiB padded batch</text>
+<line x1="837.00" y1="505.00" x2="1452.00" y2="505.00" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="509.00" class="" text-anchor="end">0</text>
+<line x1="837.00" y1="448.80" x2="1452.00" y2="448.80" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="452.80" class="" text-anchor="end">1</text>
+<line x1="837.00" y1="392.60" x2="1452.00" y2="392.60" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="396.60" class="" text-anchor="end">2</text>
+<line x1="837.00" y1="336.40" x2="1452.00" y2="336.40" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="340.40" class="" text-anchor="end">3</text>
+<line x1="837.00" y1="280.20" x2="1452.00" y2="280.20" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="284.20" class="" text-anchor="end">4</text>
+<line x1="837.00" y1="224.00" x2="1452.00" y2="224.00" stroke="#e3e8ec" stroke-width="1" />
+<text x="825.00" y="228.00" class="" text-anchor="end">5</text>
+<text x="837.00" y="530.00" class="" text-anchor="middle">4</text>
+<text x="913.88" y="530.00" class="" text-anchor="middle">8</text>
+<text x="990.75" y="530.00" class="" text-anchor="middle">16</text>
+<text x="1067.62" y="530.00" class="" text-anchor="middle">32</text>
+<text x="1144.50" y="530.00" class="" text-anchor="middle">64</text>
+<text x="1221.38" y="530.00" class="" text-anchor="middle">128</text>
+<text x="1298.25" y="530.00" class="" text-anchor="middle">256</text>
+<text x="1375.12" y="530.00" class="" text-anchor="middle">512</text>
+<text x="1452.00" y="530.00" class="" text-anchor="middle">1024</text>
+<text x="1144.50" y="557.00" class="" text-anchor="middle">Blosc block size (KiB, log₂)</text>
+<text transform="translate(784,364.5) rotate(-90)" text-anchor="middle">Device GiB</text>
+<polyline points="837.00,237.17 913.88,300.51 990.75,332.12 1067.62,347.93 1144.50,355.83 1221.38,359.78 1298.25,361.76 1375.12,362.74 1452.00,363.18" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<polyline points="837.00,237.80 913.88,301.12 990.75,332.78 1067.62,348.61 1144.50,356.52 1221.38,360.48 1298.25,362.46 1375.12,363.45 1452.00,363.94" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<circle cx="837.0" cy="237.171875" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 4 KiB / bit: 4.04676 GiB/s (min–max 3.97823–4.07437); 2.91099×; device allocation delta 4.766 GiB</title></circle>
+<circle cx="913.875" cy="300.506640625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 8 KiB / bit: 3.84953 GiB/s (min–max 3.84515–3.90878); 2.79932×; device allocation delta 3.639 GiB</title></circle>
+<circle cx="990.75" cy="332.119140625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 16 KiB / bit: 3.82008 GiB/s (min–max 3.79836–3.82130); 2.69040×; device allocation delta 3.076 GiB</title></circle>
+<circle cx="1067.625" cy="347.925390625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 32 KiB / bit: 3.73438 GiB/s (min–max 3.61025–3.74400); 2.64591×; device allocation delta 2.795 GiB</title></circle>
+<circle cx="1144.5" cy="355.828515625" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 64 KiB / bit: 3.63777 GiB/s (min–max 3.59458–3.65691); 2.73165×; device allocation delta 2.654 GiB</title></circle>
+<circle cx="1221.375" cy="359.780078125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 128 KiB / bit: 4.16552 GiB/s (min–max 4.12647–4.17243); 4.14385×; device allocation delta 2.584 GiB</title></circle>
+<circle cx="1298.25" cy="361.755859375" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 256 KiB / bit: 4.61425 GiB/s (min–max 4.58824–4.74192); 10.09010×; device allocation delta 2.549 GiB</title></circle>
+<circle cx="1375.125" cy="362.74375" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 512 KiB / bit: 5.24564 GiB/s (min–max 5.14948–5.30894); 21.65830×; device allocation delta 2.531 GiB</title></circle>
+<circle cx="1452.0" cy="363.1828125" r="4" fill="#1477ba" stroke="#1477ba" opacity="1" stroke-width="1.4"><title>blosc-lz4 / 1024 KiB / bit: 5.28430 GiB/s (min–max 5.26476–5.38007); 131.02200×; device allocation delta 2.523 GiB</title></circle>
+<text x="1444.00" y="351.18" class="" text-anchor="end" style="fill:#1477ba">LZ4</text>
+<polyline points="837.00,323.71 913.88,323.50 990.75,322.62 1067.62,320.64 1144.50,316.80 1221.38,316.80 1298.25,316.80 1375.12,316.80 1452.00,316.80" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<polyline points="837.00,331.82 913.88,331.60 990.75,330.76 1067.62,328.88 1144.50,325.02 1221.38,325.03 1298.25,325.03 1375.12,325.03 1452.00,325.03" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<circle cx="837.0" cy="323.71177978515624" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 4 KiB / bit: 3.22607 GiB/s (min–max 3.18712–3.24071); 36.21220×; device allocation delta 3.226 GiB</title></circle>
+<circle cx="913.875" cy="323.4956787109375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 8 KiB / bit: 4.24978 GiB/s (min–max 4.21220–4.29530); 52.03630×; device allocation delta 3.230 GiB</title></circle>
+<circle cx="990.75" cy="322.6175537109375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 16 KiB / bit: 4.82737 GiB/s (min–max 4.75166–4.83264); 78.17270×; device allocation delta 3.245 GiB</title></circle>
+<circle cx="1067.625" cy="320.6417724609375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 32 KiB / bit: 5.04662 GiB/s (min–max 4.99920–5.18259); 106.65300×; device allocation delta 3.280 GiB</title></circle>
+<circle cx="1144.5" cy="316.7999755859375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 64 KiB / bit: 5.16688 GiB/s (min–max 5.09593–5.20070); 125.29600×; device allocation delta 3.349 GiB</title></circle>
+<circle cx="1221.375" cy="316.7999755859375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 128 KiB / bit: 4.68247 GiB/s (min–max 4.59406–4.69011); 136.85900×; device allocation delta 3.349 GiB</title></circle>
+<circle cx="1298.25" cy="316.7999755859375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 256 KiB / bit: 3.97375 GiB/s (min–max 3.90697–3.98723); 190.30100×; device allocation delta 3.349 GiB</title></circle>
+<circle cx="1375.125" cy="316.7999755859375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 512 KiB / bit: 3.93098 GiB/s (min–max 3.85861–3.93519); 244.36400×; device allocation delta 3.349 GiB</title></circle>
+<circle cx="1452.0" cy="316.7999755859375" r="4" fill="#c34d28" stroke="#c34d28" opacity="1" stroke-width="1.4"><title>blosc-zstd / 1024 KiB / bit: 3.69206 GiB/s (min–max 3.65695–3.73029); 360.65400×; device allocation delta 3.349 GiB</title></circle>
+<text x="1444.00" y="304.80" class="" text-anchor="end" style="fill:#c34d28">ZSTD</text>
+<text x="48.00" y="600.00" class="note" text-anchor="start">Device delta is measured before creation versus after the run with the stream alive; it is not a sampled peak. Runtime overhead is not estimated.</text>
 </svg>

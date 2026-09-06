@@ -1,0 +1,598 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>RTX 5080 Blosc comparison</title><style>body{font:16px system-ui;margin:24px;color:#293744}svg{width:100%;height:auto}label{margin-right:25px}table{border-collapse:collapse}th,td{text-align:right;padding:7px 12px;border-bottom:1px solid #ddd}h1{font-size:25px}.hide-old .old,.hide-candidates .candidate{display:none}</style><h1>RTX 5080 Blosc frontier and historical comparison</h1><p>Hover over points for settings, throughput ranges, ratios, and memory. <a href="README.md">Analysis and methodology</a> · <a href="summary.csv">All results</a> · <a href="pareto-all-candidates.svg">Unzoomed chart</a></p><label><input id="old" type="checkbox" checked> Historical 5070 Laptop</label><label><input id="candidates" type="checkbox" checked> Dominated candidates</label><svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1220" viewBox="0 0 1500 1220" role="img" aria-labelledby="title desc">
+<title id="title">RTX 5080 and RTX 5070 Laptop Blosc Pareto frontiers</title>
+<desc id="desc">Four panels compare throughput and compression fold across codecs, filters, and block sizes. Graphical legends identify codec colors, filter shapes, machine line styles, dominated points, and timing ranges.</desc>
+<style>text{font:15px system-ui,-apple-system,Segoe UI,sans-serif;fill:#283747}.title,.heading{font-size:26px;font-weight:650}.subtitle{font-size:15px;fill:#637281}.panel-title,.sub{font-size:19px;font-weight:650}.axis{font-size:14px;font-weight:500}.muted,.note,.small{font-size:13px;fill:#637281}.legend-label{font-size:14px}.point-label{font-size:12px;font-weight:600;paint-order:stroke;stroke:white;stroke-width:4px;stroke-linejoin:round}.grid{stroke:#e3e8ec}.old{opacity:.65}.candidate{opacity:.23}</style>
+<rect width="1500" height="1220" fill="white"/>
+<text x="48" y="43" class="title">Blosc throughput–compression frontier: RTX 5080 vs RTX 5070 Laptop</text>
+<text x="48" y="72" class="subtitle">Same 200 configurations · u16 · 100 frames · discard sink · 1 warmup + 3 measured runs</text>
+<g role="group" aria-label="Figure legend">
+<rect x="48" y="96" width="1404" height="96" rx="8" fill="#f7f9fc" stroke="#dce3eb"/>
+<line x1="72" y1="126" x2="104" y2="126" stroke="#1477ba" stroke-width="3"/>
+<text x="115" y="131" class="legend-label">LZ4</text>
+<line x1="212" y1="126" x2="244" y2="126" stroke="#c34d28" stroke-width="3"/>
+<text x="255" y="131" class="legend-label">ZSTD</text>
+<rect x="385" y="121" width="10" height="10" fill="#637281" stroke="#637281" stroke-width="1.4" ></rect>
+<text x="407" y="131" class="legend-label">No shuffle</text>
+<circle cx="570" cy="126" r="5" fill="#637281" stroke="#637281" stroke-width="1.4" ></circle>
+<text x="587" y="131" class="legend-label">Byte shuffle</text>
+<polygon points="760,121 755,131 765,131" fill="#637281" stroke="#637281" stroke-width="1.4" ></polygon>
+<text x="777" y="131" class="legend-label">Bitshuffle</text>
+<polygon points="940,121 935,126 940,131 945,126" fill="white" stroke="#637281" stroke-width="1.4" ></polygon>
+<text x="957" y="131" class="legend-label">Raw codec control</text>
+<line x1="72" y1="166" x2="112" y2="166" stroke="#637281" stroke-width="2.5"/>
+<polygon points="92,161 87,171 97,171" fill="#637281" stroke="#637281" stroke-width="1.4" ></polygon>
+<text x="125" y="171" class="legend-label">RTX 5080 frontier</text>
+<line x1="390" y1="166" x2="430" y2="166" stroke="#637281" stroke-width="2.5" stroke-dasharray="7 5" opacity=".65"/>
+<polygon points="410,161 405,171 415,171" fill="white" stroke="#637281" stroke-width="1.4" opacity=".65"></polygon>
+<text x="443" y="171" class="legend-label">5070 Laptop frontier</text>
+<polygon points="760,161 755,171 765,171" fill="#637281" stroke="#637281" stroke-width="1.4" opacity=".23"></polygon>
+<text x="777" y="171" class="legend-label">Dominated candidate</text>
+<line x1="1100" y1="155" x2="1100" y2="177" stroke="#637281" stroke-width="1.4"/>
+<line x1="1095" y1="155" x2="1105" y2="155" stroke="#637281" stroke-width="1.4"/>
+<line x1="1095" y1="177" x2="1105" y2="177" stroke="#637281" stroke-width="1.4"/>
+<text x="1117" y="171" class="legend-label">Min–max of 3 runs</text>
+</g>
+<text x="48" y="217" class="muted">Labels: block KiB · per-codec frontier across all filters · higher and farther right is better</text>
+<text x="48" y="257" class="panel-title">Repetitive XOR · 256 KiB Zarr chunks</text>
+<text x="48" y="278" class="muted">log ratio axis</text>
+<line x1="92" y1="603" x2="707" y2="603" class="grid"/>
+<text x="82" y="608" text-anchor="end">0</text>
+<line x1="92" y1="526.75" x2="707" y2="526.75" class="grid"/>
+<text x="82" y="531.75" text-anchor="end">2</text>
+<line x1="92" y1="450.5" x2="707" y2="450.5" class="grid"/>
+<text x="82" y="455.5" text-anchor="end">4</text>
+<line x1="92" y1="374.25" x2="707" y2="374.25" class="grid"/>
+<text x="82" y="379.25" text-anchor="end">6</text>
+<line x1="92" y1="298" x2="707" y2="298" class="grid"/>
+<text x="82" y="303" text-anchor="end">8</text>
+<line x1="92" y1="298" x2="92" y2="603" class="grid"/>
+<text x="92" y="627" text-anchor="middle">1×</text>
+<line x1="160.59411072962024" y1="298" x2="160.59411072962024" y2="603" class="grid"/>
+<text x="160.59411072962024" y="627" text-anchor="middle">2×</text>
+<line x1="251.27059284691987" y1="298" x2="251.27059284691987" y2="603" class="grid"/>
+<text x="251.27059284691987" y="627" text-anchor="middle">5×</text>
+<line x1="319.8647035765401" y1="298" x2="319.8647035765401" y2="603" class="grid"/>
+<text x="319.8647035765401" y="627" text-anchor="middle">10×</text>
+<line x1="388.4588143061603" y1="298" x2="388.4588143061603" y2="603" class="grid"/>
+<text x="388.4588143061603" y="627" text-anchor="middle">20×</text>
+<line x1="479.1352964234599" y1="298" x2="479.1352964234599" y2="603" class="grid"/>
+<text x="479.1352964234599" y="627" text-anchor="middle">50×</text>
+<line x1="547.7294071530802" y1="298" x2="547.7294071530802" y2="603" class="grid"/>
+<text x="547.7294071530802" y="627" text-anchor="middle">100×</text>
+<line x1="616.3235178827003" y1="298" x2="616.3235178827003" y2="603" class="grid"/>
+<text x="616.3235178827003" y="627" text-anchor="middle">200×</text>
+<line x1="707" y1="298" x2="707" y2="603" class="grid"/>
+<text x="707" y="627" text-anchor="middle">500×</text>
+<text x="399.5" y="655" class="axis" text-anchor="middle">Compression fold →</text>
+<text transform="translate(43,450.5) rotate(-90)" class="axis" text-anchor="middle">Input throughput (GiB/s) →</text>
+<g class="old">
+<polyline points="309.6446881943348,417.653025" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="224.04917516663815,446.98609375 220.04917516663815,454.98609375 228.04917516663815,454.98609375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB bit: 3.987 GiB/s [3.914, 4.005], 3.79758×, 1.424 GiB observed, 1.411 GiB allocated</title></polygon>
+<circle cx="241.4797743479444" cy="454.83290624999995" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB byte: 3.886 GiB/s [3.859, 3.892], 4.52900×, 1.424 GiB observed, 1.411 GiB allocated</title></circle>
+<rect x="164.15521159797734" y="504.16749375" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB none: 2.487 GiB/s [2.469, 2.516], 2.15880×, 1.283 GiB observed, 1.270 GiB allocated</title></rect>
+<polygon points="178.86160105810742,451.24160625 174.86160105810742,459.24160625 182.86160105810742,459.24160625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB bit: 3.876 GiB/s [3.862, 3.908], 2.40546×, 1.670 GiB observed, 1.657 GiB allocated</title></polygon>
+<circle cx="219.73441686367846" cy="444.35844375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB byte: 4.161 GiB/s [4.133, 4.257], 3.63556×, 1.670 GiB observed, 1.657 GiB allocated</title></circle>
+<rect x="158.1176922220472" y="480.9962625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB none: 3.095 GiB/s [3.084, 3.137], 2.03103×, 1.529 GiB observed, 1.517 GiB allocated</title></rect>
+<polygon points="309.6446881943348,411.653025 303.6446881943348,423.653025 315.6446881943348,423.653025" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 256 KiB bit: 4.862 GiB/s [4.813, 4.877], 9.01880×, 1.406 GiB observed, 1.393 GiB allocated</title></polygon>
+<circle cx="242.87853633576583" cy="450.91022499999997" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB byte: 3.989 GiB/s [3.956, 4.041], 4.59347×, 1.406 GiB observed, 1.393 GiB allocated</title></circle>
+<rect x="164.67368185375614" y="503.67720625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB none: 2.500 GiB/s [2.493, 2.539], 2.17014×, 1.266 GiB observed, 1.253 GiB allocated</title></rect>
+<polygon points="182.1521890460878,449.6956375 178.1521890460878,457.6956375 186.1521890460878,457.6956375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB bit: 3.916 GiB/s [3.885, 3.925], 2.48679×, 1.529 GiB observed, 1.516 GiB allocated</title></polygon>
+<circle cx="227.26844360076385" cy="441.5757" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB byte: 4.234 GiB/s [4.179, 4.236], 3.92315×, 1.529 GiB observed, 1.516 GiB allocated</title></circle>
+<rect x="160.05440743473866" y="484.29369375" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB none: 3.009 GiB/s [2.964, 3.042], 2.07117×, 1.389 GiB observed, 1.376 GiB allocated</title></rect>
+<polygon points="182.8410153415408,442.413 178.8410153415408,450.413 186.8410153415408,450.413" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB bit: 4.107 GiB/s [4.072, 4.143], 2.50416×, 2.514 GiB observed, 2.502 GiB allocated</title></polygon>
+<circle cx="192.87623901142814" cy="438.55734375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB byte: 4.313 GiB/s [4.312, 4.326], 2.77142×, 2.514 GiB observed, 2.502 GiB allocated</title></circle>
+<rect x="138.95640764652313" y="472.7429625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB none: 3.312 GiB/s [3.310, 3.330], 1.67350×, 2.373 GiB observed, 2.362 GiB allocated</title></rect>
+<polygon points="184.12763289610183,452.27555625 180.12763289610183,460.27555625 188.12763289610183,460.27555625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB bit: 3.849 GiB/s [3.808, 3.919], 2.53693×, 1.459 GiB observed, 1.446 GiB allocated</title></polygon>
+<circle cx="233.8976910422174" cy="442.53301875" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB byte: 4.209 GiB/s [4.164, 4.237], 4.19496×, 1.459 GiB observed, 1.446 GiB allocated</title></circle>
+<rect x="163.6547456404795" y="486.07984999999996" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB none: 2.962 GiB/s [2.960, 2.977], 2.14791×, 1.318 GiB observed, 1.305 GiB allocated</title></rect>
+<polygon points="179.76827228267422,449.46345625000004 175.76827228267422,457.46345625000004 183.76827228267422,457.46345625000004" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB bit: 3.922 GiB/s [3.897, 3.963], 2.42760×, 1.951 GiB observed, 1.939 GiB allocated</title></polygon>
+<circle cx="209.53827663659297" cy="439.4460375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB byte: 4.290 GiB/s [4.173, 4.357], 3.27963×, 1.951 GiB observed, 1.939 GiB allocated</title></circle>
+<rect x="152.27201411895868" y="477.9005125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB none: 3.176 GiB/s [3.164, 3.226], 1.91453×, 1.811 GiB observed, 1.798 GiB allocated</title></rect>
+<polyline points="559.1492346473467,398.80669375 566.908460349119,425.48428125 580.1086121104229,443.05685625" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="566.908460349119,419.48428125 560.908460349119,431.48428125 572.908460349119,431.48428125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 128 KiB bit: 4.656 GiB/s [4.500, 4.734], 121.38600×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<circle cx="360.7009581078813" cy="522.87688125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 128 KiB byte: 2.102 GiB/s [2.094, 2.103], 15.10820×, 1.993 GiB observed, 1.849 GiB allocated</title></circle>
+<rect x="280.22416654687663" y="553.86190625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 128 KiB none: 1.184 GiB/s [1.161, 1.189], 6.97572×, 1.853 GiB observed, 1.708 GiB allocated</title></rect>
+<polygon points="516.7337051853654,408.54236875000004 512.7337051853654,416.54236875000004 520.7337051853654,416.54236875000004" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB bit: 4.996 GiB/s [4.963, 5.024], 73.10940×, 1.890 GiB observed, 1.746 GiB allocated</title></polygon>
+<circle cx="313.89518019876436" cy="535.34833125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB byte: 1.774 GiB/s [1.752, 1.781], 9.41461×, 1.890 GiB observed, 1.746 GiB allocated</title></circle>
+<rect x="255.34688065025443" y="557.3362375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB none: 1.093 GiB/s [1.089, 1.097], 5.42517×, 1.749 GiB observed, 1.605 GiB allocated</title></rect>
+<polygon points="580.1086121104229,437.05685625 574.1086121104229,449.05685625 586.1086121104229,449.05685625" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 256 KiB bit: 4.195 GiB/s [4.103, 4.196], 138.70700×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<circle cx="367.4963746908202" cy="510.321175" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB byte: 2.431 GiB/s [2.406, 2.461], 16.18210×, 1.993 GiB observed, 1.849 GiB allocated</title></circle>
+<rect x="283.2844555005199" y="548.0215375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB none: 1.337 GiB/s [1.336, 1.346], 7.19481×, 1.853 GiB observed, 1.708 GiB allocated</title></rect>
+<polygon points="543.1360881870125,396.50096874999997 539.1360881870125,404.50096874999997 547.1360881870125,404.50096874999997" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB bit: 5.311 GiB/s [5.189, 5.333], 95.46450×, 1.925 GiB observed, 1.780 GiB allocated</title></polygon>
+<circle cx="331.14599965869337" cy="530.3024875" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB byte: 1.907 GiB/s [1.887, 1.923], 11.20750×, 1.925 GiB observed, 1.780 GiB allocated</title></circle>
+<rect x="265.6868976645826" y="556.3205875" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB none: 1.119 GiB/s [1.119, 1.137], 6.02270×, 1.784 GiB observed, 1.639 GiB allocated</title></rect>
+<polygon points="435.2947358350642,471.9636875 431.2947358350642,479.9636875 439.2947358350642,479.9636875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB bit: 3.332 GiB/s [3.316, 3.371], 32.10500×, 1.866 GiB observed, 1.723 GiB allocated</title></polygon>
+<circle cx="251.55953078622932" cy="553.12754375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB byte: 1.308 GiB/s [1.305, 1.318], 5.01462×, 1.866 GiB observed, 1.723 GiB allocated</title></circle>
+<rect x="218.87058084385816" y="565.350074375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB none: 0.883 GiB/s [0.879, 0.886], 3.75262×, 1.726 GiB observed, 1.583 GiB allocated</title></rect>
+<polygon points="559.1492346473467,392.80669375 553.1492346473467,404.80669375 565.1492346473467,404.80669375" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 64 KiB bit: 5.356 GiB/s [5.229, 5.603], 112.23200×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<circle cx="350.38224083971573" cy="522.23866875" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 64 KiB byte: 2.118 GiB/s [2.087, 2.152], 13.61220×, 1.993 GiB observed, 1.849 GiB allocated</title></circle>
+<rect x="274.8241227762303" y="555.15205625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 64 KiB none: 1.150 GiB/s [1.145, 1.158], 6.60527×, 1.853 GiB observed, 1.708 GiB allocated</title></rect>
+<polygon points="469.93920272113974,432.22294999999997 465.93920272113974,440.22294999999997 473.93920272113974,440.22294999999997" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB bit: 4.374 GiB/s [4.327, 4.466], 45.56300×, 1.874 GiB observed, 1.730 GiB allocated</title></polygon>
+<circle cx="287.43907178961115" cy="543.38584375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB byte: 1.564 GiB/s [1.558, 1.578], 7.20606×, 1.874 GiB observed, 1.730 GiB allocated</title></circle>
+<rect x="238.98856350297748" y="560.376325" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB none: 1.013 GiB/s [1.001, 1.014], 4.59858×, 1.734 GiB observed, 1.589 GiB allocated</title></rect>
+<polygon points="168.69602378298254,502.34590000000003 163.69602378298254,507.34590000000003 168.69602378298254,512.3459 173.69602378298254,507.34590000000003" fill="white" stroke="#1477ba" stroke-width="1.4" ><title>old raw lz4: 2.509 GiB/s, 2.17063×</title></polygon>
+<polygon points="287.35141682884307,547.136675 282.35141682884307,552.136675 287.35141682884307,557.136675 292.35141682884307,552.136675" fill="white" stroke="#c34d28" stroke-width="1.4" ><title>old raw zstd: 1.334 GiB/s, 7.19968×</title></polygon>
+</g>
+<g class="current">
+<polyline points="182.8410153415408,352.132925 192.87623901142814,354.344175 219.73441686367846,356.05865625 227.26844360076385,370.85535000000004 233.8976910422174,405.52851250000003 241.4797743479444,413.2312875 309.6446881943348,414.0929125" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<polygon points="224.04917516663815,408.87558125 220.04917516663815,416.87558125 228.04917516663815,416.87558125" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB bit: 4.987 GiB/s [4.840, 5.173], 3.79758×, 1.422 GiB observed, 1.411 GiB allocated</title></polygon>
+<polygon points="178.86160105810742,379.51704374999997 174.86160105810742,387.51704374999997 182.86160105810742,387.51704374999997" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB bit: 5.757 GiB/s [5.679, 6.177], 2.40546×, 1.668 GiB observed, 1.657 GiB allocated</title></polygon>
+<line x1="309.6446881943348" y1="417.13948125" x2="309.6446881943348" y2="409.61970625000004" stroke="#1477ba"/>
+<line x1="305.6446881943348" y1="417.13948125" x2="313.6446881943348" y2="417.13948125" stroke="#1477ba"/>
+<line x1="305.6446881943348" y1="409.61970625000004" x2="313.6446881943348" y2="409.61970625000004" stroke="#1477ba"/>
+<polygon points="309.6446881943348,408.0929125 303.6446881943348,420.0929125 315.6446881943348,420.0929125" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 256 KiB bit: 4.955 GiB/s [4.875, 5.072], 9.01880×, 1.404 GiB observed, 1.393 GiB allocated</title></polygon>
+<polygon points="182.1521890460878,400.63753125 178.1521890460878,408.63753125 186.1521890460878,408.63753125" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB bit: 5.203 GiB/s [4.959, 5.801], 2.48679×, 1.527 GiB observed, 1.516 GiB allocated</title></polygon>
+<line x1="182.8410153415408" y1="369.68262500000003" x2="182.8410153415408" y2="343.06375" stroke="#1477ba"/>
+<line x1="178.8410153415408" y1="369.68262500000003" x2="186.8410153415408" y2="369.68262500000003" stroke="#1477ba"/>
+<line x1="178.8410153415408" y1="343.06375" x2="186.8410153415408" y2="343.06375" stroke="#1477ba"/>
+<polygon points="182.8410153415408,346.132925 176.8410153415408,358.132925 188.8410153415408,358.132925" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 4 KiB bit: 6.580 GiB/s [6.120, 6.818], 2.50416×, 2.512 GiB observed, 2.502 GiB allocated</title></polygon>
+<polygon points="184.12763289610183,413.4204625 180.12763289610183,421.4204625 188.12763289610183,421.4204625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB bit: 4.868 GiB/s [4.418, 4.944], 2.53693×, 1.457 GiB observed, 1.446 GiB allocated</title></polygon>
+<polygon points="179.76827228267422,352.9862375 175.76827228267422,360.9862375 183.76827228267422,360.9862375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 8 KiB bit: 6.453 GiB/s [6.360, 6.521], 2.42760×, 1.949 GiB observed, 1.939 GiB allocated</title></polygon>
+<line x1="241.4797743479444" y1="422.76673125" x2="241.4797743479444" y2="393.35863125000003" stroke="#1477ba"/>
+<line x1="237.4797743479444" y1="422.76673125" x2="245.4797743479444" y2="422.76673125" stroke="#1477ba"/>
+<line x1="237.4797743479444" y1="393.35863125000003" x2="245.4797743479444" y2="393.35863125000003" stroke="#1477ba"/>
+<circle cx="241.4797743479444" cy="413.2312875" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 128 KiB byte: 4.978 GiB/s [4.727, 5.499], 4.52900×, 1.422 GiB observed, 1.411 GiB allocated</title></circle>
+<line x1="219.73441686367846" y1="356.33086875" x2="219.73441686367846" y2="355.99994375" stroke="#1477ba"/>
+<line x1="215.73441686367846" y1="356.33086875" x2="223.73441686367846" y2="356.33086875" stroke="#1477ba"/>
+<line x1="215.73441686367846" y1="355.99994375" x2="223.73441686367846" y2="355.99994375" stroke="#1477ba"/>
+<circle cx="219.73441686367846" cy="356.05865625" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 16 KiB byte: 6.477 GiB/s [6.470, 6.479], 3.63556×, 1.668 GiB observed, 1.657 GiB allocated</title></circle>
+<circle cx="242.87853633576583" cy="454.5160875" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 256 KiB byte: 3.895 GiB/s [3.887, 3.966], 4.59347×, 1.404 GiB observed, 1.393 GiB allocated</title></circle>
+<line x1="227.26844360076385" y1="379.7865125" x2="227.26844360076385" y2="362.487675" stroke="#1477ba"/>
+<line x1="223.26844360076385" y1="379.7865125" x2="231.26844360076385" y2="379.7865125" stroke="#1477ba"/>
+<line x1="223.26844360076385" y1="362.487675" x2="231.26844360076385" y2="362.487675" stroke="#1477ba"/>
+<circle cx="227.26844360076385" cy="370.85535000000004" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 32 KiB byte: 6.089 GiB/s [5.855, 6.309], 3.92315×, 1.527 GiB observed, 1.516 GiB allocated</title></circle>
+<line x1="192.87623901142814" y1="357.52341875" x2="192.87623901142814" y2="353.3445375" stroke="#1477ba"/>
+<line x1="188.87623901142814" y1="357.52341875" x2="196.87623901142814" y2="357.52341875" stroke="#1477ba"/>
+<line x1="188.87623901142814" y1="353.3445375" x2="196.87623901142814" y2="353.3445375" stroke="#1477ba"/>
+<circle cx="192.87623901142814" cy="354.344175" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 4 KiB byte: 6.522 GiB/s [6.439, 6.548], 2.77142×, 2.512 GiB observed, 2.502 GiB allocated</title></circle>
+<line x1="233.8976910422174" y1="407.3371625" x2="233.8976910422174" y2="397.5947" stroke="#1477ba"/>
+<line x1="229.8976910422174" y1="407.3371625" x2="237.8976910422174" y2="407.3371625" stroke="#1477ba"/>
+<line x1="229.8976910422174" y1="397.5947" x2="237.8976910422174" y2="397.5947" stroke="#1477ba"/>
+<circle cx="233.8976910422174" cy="405.52851250000003" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 64 KiB byte: 5.180 GiB/s [5.132, 5.388], 4.19496×, 1.457 GiB observed, 1.446 GiB allocated</title></circle>
+<circle cx="209.53827663659297" cy="362.34394375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 8 KiB byte: 6.312 GiB/s [4.997, 6.641], 3.27963×, 1.949 GiB observed, 1.939 GiB allocated</title></circle>
+<rect x="164.15521159797734" y="467.08178125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB none: 3.460 GiB/s [3.236, 3.545], 2.15880×, 1.281 GiB observed, 1.270 GiB allocated</title></rect>
+<rect x="158.1176922220472" y="425.383325" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB none: 4.554 GiB/s [4.295, 4.771], 2.03103×, 1.527 GiB observed, 1.517 GiB allocated</title></rect>
+<rect x="164.67368185375614" y="517.7777375000001" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 256 KiB none: 2.130 GiB/s [2.092, 2.300], 2.17014×, 1.264 GiB observed, 1.253 GiB allocated</title></rect>
+<rect x="160.05440743473866" y="439.21659999999997" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB none: 4.191 GiB/s [4.120, 4.385], 2.07117×, 1.387 GiB observed, 1.376 GiB allocated</title></rect>
+<rect x="138.95640764652313" y="403.73328125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 4 KiB none: 5.122 GiB/s [4.971, 5.273], 1.67350×, 2.371 GiB observed, 2.362 GiB allocated</title></rect>
+<rect x="163.6547456404795" y="465.07183125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB none: 3.513 GiB/s [3.104, 3.863], 2.14791×, 1.316 GiB observed, 1.305 GiB allocated</title></rect>
+<rect x="152.27201411895868" y="411.60075625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 8 KiB none: 4.915 GiB/s [4.861, 5.248], 1.91453×, 1.809 GiB observed, 1.798 GiB allocated</title></rect>
+<line x1="182.8410153415408" y1="352.132925" x2="104" y2="336.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="340.132925" class="point-label" text-anchor="start" style="fill:#1477ba">4 KiB</text>
+<line x1="192.87623901142814" y1="354.344175" x2="104" y2="357.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="361.132925" class="point-label" text-anchor="start" style="fill:#1477ba">4 KiB</text>
+<line x1="219.73441686367846" y1="356.05865625" x2="104" y2="378.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="382.132925" class="point-label" text-anchor="start" style="fill:#1477ba">16 KiB</text>
+<line x1="227.26844360076385" y1="370.85535000000004" x2="104" y2="399.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="403.132925" class="point-label" text-anchor="start" style="fill:#1477ba">32 KiB</text>
+<line x1="233.8976910422174" y1="405.52851250000003" x2="104" y2="420.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="424.132925" class="point-label" text-anchor="start" style="fill:#1477ba">64 KiB</text>
+<line x1="241.4797743479444" y1="413.2312875" x2="104" y2="441.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="445.132925" class="point-label" text-anchor="start" style="fill:#1477ba">128 KiB</text>
+<line x1="309.6446881943348" y1="414.0929125" x2="104" y2="462.132925" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="466.132925" class="point-label" text-anchor="start" style="fill:#1477ba">256 KiB</text>
+<polyline points="469.93920272113974,378.6534375 516.7337051853654,381.8117125 566.908460349119,384.19033125 580.1086121104229,425.433575" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<line x1="566.908460349119" y1="397.93858750000004" x2="566.908460349119" y2="381.095725" stroke="#c34d28"/>
+<line x1="562.908460349119" y1="397.93858750000004" x2="570.908460349119" y2="397.93858750000004" stroke="#c34d28"/>
+<line x1="562.908460349119" y1="381.095725" x2="570.908460349119" y2="381.095725" stroke="#c34d28"/>
+<polygon points="566.908460349119,378.19033125 560.908460349119,390.19033125 572.908460349119,390.19033125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 128 KiB bit: 5.739 GiB/s [5.379, 5.820], 121.38600×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<line x1="516.7337051853654" y1="384.70959375" x2="516.7337051853654" y2="376.51881875000004" stroke="#c34d28"/>
+<line x1="512.7337051853654" y1="384.70959375" x2="520.7337051853654" y2="384.70959375" stroke="#c34d28"/>
+<line x1="512.7337051853654" y1="376.51881875000004" x2="520.7337051853654" y2="376.51881875000004" stroke="#c34d28"/>
+<polygon points="516.7337051853654,375.8117125 510.73370518536535,387.8117125 522.7337051853654,387.8117125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 16 KiB bit: 5.802 GiB/s [5.726, 5.940], 73.10940×, 2.195 GiB observed, 1.934 GiB allocated</title></polygon>
+<line x1="580.1086121104229" y1="430.12790625" x2="580.1086121104229" y2="421.00116249999996" stroke="#c34d28"/>
+<line x1="576.1086121104229" y1="430.12790625" x2="584.1086121104229" y2="430.12790625" stroke="#c34d28"/>
+<line x1="576.1086121104229" y1="421.00116249999996" x2="584.1086121104229" y2="421.00116249999996" stroke="#c34d28"/>
+<polygon points="580.1086121104229,419.433575 574.1086121104229,431.433575 586.1086121104229,431.433575" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 256 KiB bit: 4.657 GiB/s [4.534, 4.774], 138.70700×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<polygon points="543.1360881870125,381.042425 539.1360881870125,389.042425 547.1360881870125,389.042425" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB bit: 5.717 GiB/s [5.669, 5.915], 95.46450×, 2.275 GiB observed, 2.014 GiB allocated</title></polygon>
+<polygon points="435.2947358350642,422.91778124999996 431.2947358350642,430.91778124999996 439.2947358350642,430.91778124999996" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB bit: 4.619 GiB/s [4.047, 4.726], 32.10500×, 2.137 GiB observed, 1.877 GiB allocated</title></polygon>
+<polygon points="559.1492346473467,382.7450875 555.1492346473467,390.7450875 563.1492346473467,390.7450875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB bit: 5.672 GiB/s [5.646, 5.695], 112.23200×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<line x1="469.93920272113974" y1="380.04690625" x2="469.93920272113974" y2="378.59891875" stroke="#c34d28"/>
+<line x1="465.93920272113974" y1="380.04690625" x2="473.93920272113974" y2="380.04690625" stroke="#c34d28"/>
+<line x1="465.93920272113974" y1="378.59891875" x2="473.93920272113974" y2="378.59891875" stroke="#c34d28"/>
+<polygon points="469.93920272113974,372.6534375 463.93920272113974,384.6534375 475.93920272113974,384.6534375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 8 KiB bit: 5.885 GiB/s [5.848, 5.886], 45.56300×, 2.156 GiB observed, 1.895 GiB allocated</title></polygon>
+<circle cx="360.7009581078813" cy="469.46909374999996" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB byte: 3.502 GiB/s [3.160, 3.524], 15.10820×, 2.438 GiB observed, 2.175 GiB allocated</title></circle>
+<circle cx="313.89518019876436" cy="500.98093125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB byte: 2.676 GiB/s [2.668, 2.697], 9.41461×, 2.195 GiB observed, 1.934 GiB allocated</title></circle>
+<circle cx="367.4963746908202" cy="463.76940625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 256 KiB byte: 3.652 GiB/s [3.607, 3.723], 16.18210×, 2.438 GiB observed, 2.175 GiB allocated</title></circle>
+<circle cx="331.14599965869337" cy="499.19515624999997" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB byte: 2.723 GiB/s [2.529, 2.748], 11.20750×, 2.275 GiB observed, 2.014 GiB allocated</title></circle>
+<circle cx="251.55953078622932" cy="524.90741875" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB byte: 2.048 GiB/s [1.974, 2.051], 5.01462×, 2.137 GiB observed, 1.877 GiB allocated</title></circle>
+<circle cx="350.38224083971573" cy="502.89480625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB byte: 2.626 GiB/s [2.479, 2.687], 13.61220×, 2.438 GiB observed, 2.175 GiB allocated</title></circle>
+<circle cx="287.43907178961115" cy="514.70974375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB byte: 2.316 GiB/s [2.259, 2.344], 7.20606×, 2.156 GiB observed, 1.895 GiB allocated</title></circle>
+<rect x="280.22416654687663" y="512.52601875" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB none: 2.268 GiB/s [2.055, 2.307], 6.97572×, 2.297 GiB observed, 2.034 GiB allocated</title></rect>
+<rect x="255.34688065025443" y="535.12423125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB none: 1.675 GiB/s [1.531, 1.689], 5.42517×, 2.055 GiB observed, 1.793 GiB allocated</title></rect>
+<rect x="283.2844555005199" y="510.45697500000006" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 256 KiB none: 2.322 GiB/s [2.314, 2.400], 7.19481×, 2.297 GiB observed, 2.034 GiB allocated</title></rect>
+<rect x="265.6868976645826" y="535.16083125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB none: 1.674 GiB/s [1.663, 1.683], 6.02270×, 2.135 GiB observed, 1.873 GiB allocated</title></rect>
+<rect x="218.87058084385816" y="546.45421875" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB none: 1.378 GiB/s [1.374, 1.407], 3.75262×, 1.996 GiB observed, 1.736 GiB allocated</title></rect>
+<rect x="274.8241227762303" y="537.92870625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB none: 1.602 GiB/s [1.556, 1.644], 6.60527×, 2.297 GiB observed, 2.034 GiB allocated</title></rect>
+<rect x="238.98856350297748" y="542.4293625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB none: 1.484 GiB/s [1.463, 1.554], 4.59858×, 2.016 GiB observed, 1.754 GiB allocated</title></rect>
+<line x1="469.93920272113974" y1="378.6534375" x2="699" y2="362.6534375" stroke="#c34d28" opacity=".45"/>
+<text x="699" y="366.6534375" class="point-label" text-anchor="end" style="fill:#c34d28">8 KiB</text>
+<line x1="516.7337051853654" y1="381.8117125" x2="699" y2="383.6534375" stroke="#c34d28" opacity=".45"/>
+<text x="699" y="387.6534375" class="point-label" text-anchor="end" style="fill:#c34d28">16 KiB</text>
+<line x1="566.908460349119" y1="384.19033125" x2="699" y2="404.6534375" stroke="#c34d28" opacity=".45"/>
+<text x="699" y="408.6534375" class="point-label" text-anchor="end" style="fill:#c34d28">128 KiB</text>
+<line x1="580.1086121104229" y1="425.433575" x2="699" y2="425.6534375" stroke="#c34d28" opacity=".45"/>
+<text x="699" y="429.6534375" class="point-label" text-anchor="end" style="fill:#c34d28">256 KiB</text>
+<polygon points="168.69602378298254,512.70484375 163.69602378298254,517.70484375 168.69602378298254,522.70484375 173.69602378298254,517.70484375" fill="white" stroke="#1477ba" stroke-width="1.4" ><title>current raw lz4: 2.237 GiB/s, 2.17063×</title></polygon>
+<polygon points="287.35141682884307,508.75128125000003 282.35141682884307,513.75128125 287.35141682884307,518.75128125 292.35141682884307,513.75128125" fill="white" stroke="#c34d28" stroke-width="1.4" ><title>current raw zstd: 2.341 GiB/s, 7.19968×</title></polygon>
+</g>
+<text x="793" y="257" class="panel-title">Repetitive XOR · 1 MiB Zarr chunks</text>
+<text x="793" y="278" class="muted">log ratio axis</text>
+<line x1="837" y1="603" x2="1452" y2="603" class="grid"/>
+<text x="827" y="608" text-anchor="end">0</text>
+<line x1="837" y1="526.75" x2="1452" y2="526.75" class="grid"/>
+<text x="827" y="531.75" text-anchor="end">2</text>
+<line x1="837" y1="450.5" x2="1452" y2="450.5" class="grid"/>
+<text x="827" y="455.5" text-anchor="end">4</text>
+<line x1="837" y1="374.25" x2="1452" y2="374.25" class="grid"/>
+<text x="827" y="379.25" text-anchor="end">6</text>
+<line x1="837" y1="298" x2="1452" y2="298" class="grid"/>
+<text x="827" y="303" text-anchor="end">8</text>
+<line x1="837" y1="298" x2="837" y2="603" class="grid"/>
+<text x="837" y="627" text-anchor="middle">1×</text>
+<line x1="905.5941107296202" y1="298" x2="905.5941107296202" y2="603" class="grid"/>
+<text x="905.5941107296202" y="627" text-anchor="middle">2×</text>
+<line x1="996.2705928469198" y1="298" x2="996.2705928469198" y2="603" class="grid"/>
+<text x="996.2705928469198" y="627" text-anchor="middle">5×</text>
+<line x1="1064.86470357654" y1="298" x2="1064.86470357654" y2="603" class="grid"/>
+<text x="1064.86470357654" y="627" text-anchor="middle">10×</text>
+<line x1="1133.4588143061603" y1="298" x2="1133.4588143061603" y2="603" class="grid"/>
+<text x="1133.4588143061603" y="627" text-anchor="middle">20×</text>
+<line x1="1224.13529642346" y1="298" x2="1224.13529642346" y2="603" class="grid"/>
+<text x="1224.13529642346" y="627" text-anchor="middle">50×</text>
+<line x1="1292.72940715308" y1="298" x2="1292.72940715308" y2="603" class="grid"/>
+<text x="1292.72940715308" y="627" text-anchor="middle">100×</text>
+<line x1="1361.3235178827003" y1="298" x2="1361.3235178827003" y2="603" class="grid"/>
+<text x="1361.3235178827003" y="627" text-anchor="middle">200×</text>
+<line x1="1452" y1="298" x2="1452" y2="603" class="grid"/>
+<text x="1452" y="627" text-anchor="middle">500×</text>
+<text x="1144.5" y="655" class="axis" text-anchor="middle">Compression fold →</text>
+<text transform="translate(788,450.5) rotate(-90)" class="axis" text-anchor="middle">Input throughput (GiB/s) →</text>
+<g class="old">
+<polyline points="1319.4680140813864,401.5360625" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="1319.4680140813864,395.5360625 1313.4680140813864,407.5360625 1325.4680140813864,407.5360625" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 1024 KiB bit: 5.284 GiB/s [5.265, 5.380], 131.02200×, 2.523 GiB observed, 2.510 GiB allocated</title></polygon>
+<circle cx="992.8373702422522" cy="508.08209375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 1024 KiB byte: 2.490 GiB/s [2.453, 2.506], 4.82951×, 2.523 GiB observed, 2.510 GiB allocated</title></circle>
+<rect x="937.12698369298" y="535.241275" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 1024 KiB none: 1.672 GiB/s [1.668, 1.706], 2.86397×, 2.242 GiB observed, 2.229 GiB allocated</title></rect>
+<polygon points="977.6845854475285,440.18955 973.6845854475285,448.18955 981.6845854475285,448.18955" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB bit: 4.166 GiB/s [4.126, 4.172], 4.14385×, 2.584 GiB observed, 2.572 GiB allocated</title></polygon>
+<circle cx="984.3598100815866" cy="459.00301875" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB byte: 3.777 GiB/s [3.669, 3.851], 4.43301×, 2.584 GiB observed, 2.572 GiB allocated</title></circle>
+<rect x="924.2137612938743" y="489.60603125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB none: 2.869 GiB/s [2.851, 2.925], 2.51361×, 2.303 GiB observed, 2.290 GiB allocated</title></rect>
+<polygon points="934.9400900987696,453.35945000000004 930.9400900987696,461.35945000000004 938.9400900987696,461.35945000000004" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB bit: 3.820 GiB/s [3.798, 3.821], 2.69040×, 3.076 GiB observed, 3.064 GiB allocated</title></polygon>
+<circle cx="963.5065528001147" cy="457.4944125" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB byte: 3.817 GiB/s [3.757, 3.889], 3.59073×, 3.076 GiB observed, 3.064 GiB allocated</title></circle>
+<rect x="905.053451831276" y="487.072625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 16 KiB none: 2.936 GiB/s [2.927, 2.972], 2.07115×, 2.795 GiB observed, 2.783 GiB allocated</title></rect>
+<polygon points="1065.752343789663,423.08171875 1061.752343789663,431.08171875 1069.752343789663,431.08171875" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB bit: 4.614 GiB/s [4.588, 4.742], 10.09010×, 2.549 GiB observed, 2.536 GiB allocated</title></polygon>
+<circle cx="985.7001487877228" cy="477.365925" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB byte: 3.295 GiB/s [3.246, 3.342], 4.49346×, 2.549 GiB observed, 2.536 GiB allocated</title></circle>
+<rect x="931.4269977350232" y="500.9547" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB none: 2.572 GiB/s [2.570, 2.573], 2.70367×, 2.268 GiB observed, 2.255 GiB allocated</title></rect>
+<polygon points="933.2899425355346,456.62676250000004 929.2899425355346,464.62676250000004 937.2899425355346,464.62676250000004" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB bit: 3.734 GiB/s [3.610, 3.744], 2.64591×, 2.795 GiB observed, 2.783 GiB allocated</title></polygon>
+<circle cx="973.8367836078554" cy="452.70324374999996" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB byte: 3.942 GiB/s [3.856, 3.969], 3.98582×, 2.795 GiB observed, 2.783 GiB allocated</title></circle>
+<rect x="913.2279714541493" y="485.73558125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 32 KiB none: 2.971 GiB/s [2.948, 2.973], 2.24950×, 2.514 GiB observed, 2.502 GiB allocated</title></rect>
+<polygon points="942.7384996355111,444.717275 938.7384996355111,452.717275 946.7384996355111,452.717275" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB bit: 4.047 GiB/s [3.978, 4.074], 2.91099×, 4.766 GiB observed, 4.754 GiB allocated</title></polygon>
+<circle cx="925.5717351596174" cy="435.5633875" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB byte: 4.392 GiB/s [4.381, 4.469], 2.44739×, 4.766 GiB observed, 4.754 GiB allocated</title></circle>
+<rect x="871.0287265896559" y="475.8844625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 4 KiB none: 3.229 GiB/s [3.206, 3.276], 1.46856×, 4.484 GiB observed, 4.473 GiB allocated</title></rect>
+<polygon points="1141.3416500318228,399.009975 1137.3416500318228,407.009975 1145.3416500318228,407.009975" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 512 KiB bit: 5.246 GiB/s [5.149, 5.309], 21.65830×, 2.531 GiB observed, 2.519 GiB allocated</title></polygon>
+<circle cx="988.6303494305937" cy="469.50340625" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 512 KiB byte: 3.502 GiB/s [3.479, 3.513], 4.62850×, 2.531 GiB observed, 2.519 GiB allocated</title></circle>
+<rect x="935.3245952780932" y="499.214675" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 512 KiB none: 2.617 GiB/s [2.552, 2.638], 2.81228×, 2.250 GiB observed, 2.237 GiB allocated</title></rect>
+<polygon points="936.4458654322875,460.31001875 932.4458654322875,468.31001875 940.4458654322875,468.31001875" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB bit: 3.638 GiB/s [3.595, 3.657], 2.73165×, 2.654 GiB observed, 2.642 GiB allocated</title></polygon>
+<circle cx="980.2760999686402" cy="457.8543125" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB byte: 3.807 GiB/s [3.781, 3.892], 4.25380×, 2.654 GiB observed, 2.642 GiB allocated</title></circle>
+<rect x="916.8890626030202" y="487.85456875" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB none: 2.915 GiB/s [2.860, 2.970], 2.33428×, 2.373 GiB observed, 2.361 GiB allocated</title></rect>
+<polygon points="938.8674961089052,452.23666875000004 934.8674961089052,460.23666875000004 942.8674961089052,460.23666875000004" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB bit: 3.850 GiB/s [3.845, 3.909], 2.79932×, 3.639 GiB observed, 3.628 GiB allocated</title></polygon>
+<circle cx="945.9454534710974" cy="452.5976375" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB byte: 3.945 GiB/s [3.924, 3.993], 3.00687×, 3.639 GiB observed, 3.628 GiB allocated</title></circle>
+<rect x="889.3151989750731" y="487.56100625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 8 KiB none: 2.923 GiB/s [2.912, 2.928], 1.76662×, 3.357 GiB observed, 3.347 GiB allocated</title></rect>
+<polyline points="1315.0458397094328,406.0127 1323.7812964756326,424.48083125 1356.4041638355575,451.50078125000005 1381.1493945170776,453.1313875 1419.6707265182463,462.2402125" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="1419.6707265182463,456.2402125 1413.6707265182463,468.2402125 1425.6707265182463,468.2402125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 1024 KiB bit: 3.692 GiB/s [3.657, 3.730], 360.65400×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<circle cx="1111.7172686542356" cy="514.80810625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 1024 KiB byte: 2.313 GiB/s [2.290, 2.357], 16.05520×, 3.349 GiB observed, 3.202 GiB allocated</title></circle>
+<rect x="1035.1084861514823" y="549.93121875" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 1024 KiB none: 1.287 GiB/s [1.286, 1.302], 7.70845×, 3.068 GiB observed, 2.921 GiB allocated</title></rect>
+<polygon points="1323.7812964756326,418.48083125 1317.7812964756326,430.48083125 1329.7812964756326,430.48083125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 128 KiB bit: 4.682 GiB/s [4.594, 4.690], 136.85900×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<circle cx="1100.2374640612752" cy="536.2560875" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 128 KiB byte: 1.751 GiB/s [1.746, 1.756], 14.29670×, 3.349 GiB observed, 3.202 GiB allocated</title></circle>
+<rect x="1027.2792845049917" y="555.447525" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 128 KiB none: 1.142 GiB/s [1.133, 1.158], 7.12210×, 3.068 GiB observed, 2.921 GiB allocated</title></rect>
+<polygon points="1268.3604420126026,414.95651875 1264.3604420126026,422.95651875 1272.3604420126026,422.95651875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB bit: 4.827 GiB/s [4.752, 4.833], 78.17270×, 3.245 GiB observed, 3.100 GiB allocated</title></polygon>
+<circle cx="1041.7720021498333" cy="542.14449375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB byte: 1.596 GiB/s [1.591, 1.597], 7.91874×, 3.245 GiB observed, 3.100 GiB allocated</title></circle>
+<rect x="989.5958928461172" y="558.65574375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 16 KiB none: 1.058 GiB/s [1.049, 1.059], 4.86667×, 2.964 GiB observed, 2.819 GiB allocated</title></rect>
+<polygon points="1356.4041638355575,445.50078125000005 1350.4041638355575,457.50078125000005 1362.4041638355575,457.50078125000005" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 256 KiB bit: 3.974 GiB/s [3.907, 3.987], 190.30100×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<circle cx="1106.2906725316643" cy="535.4829125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB byte: 1.771 GiB/s [1.752, 1.789], 15.19850×, 3.349 GiB observed, 3.202 GiB allocated</title></circle>
+<rect x="1031.6602797179658" y="554.8764125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB none: 1.157 GiB/s [1.153, 1.159], 7.44448×, 3.068 GiB observed, 2.921 GiB allocated</title></rect>
+<polygon points="1299.1034838364203,406.59761249999997 1295.1034838364203,414.59761249999997 1303.1034838364203,414.59761249999997" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB bit: 5.047 GiB/s [4.999, 5.183], 106.65300×, 3.280 GiB observed, 3.134 GiB allocated</title></polygon>
+<circle cx="1070.3599053626424" cy="537.93015625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB byte: 1.707 GiB/s [1.695, 1.710], 10.57100×, 3.280 GiB observed, 3.134 GiB allocated</title></circle>
+<rect x="1007.2055558726818" y="557.19555625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 32 KiB none: 1.097 GiB/s [1.094, 1.103], 5.81451×, 2.999 GiB observed, 2.853 GiB allocated</title></rect>
+<polygon points="1192.2080120574738,476.00608124999997 1188.2080120574738,484.00608124999997 1196.2080120574738,484.00608124999997" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB bit: 3.226 GiB/s [3.187, 3.241], 36.21220×, 3.226 GiB observed, 3.082 GiB allocated</title></polygon>
+<circle cx="962.3873767448932" cy="555.738725" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB byte: 1.240 GiB/s [1.237, 1.242], 3.55035×, 3.226 GiB observed, 3.082 GiB allocated</title></circle>
+<rect x="952.121757973061" y="566.57583125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB none: 0.850 GiB/s [0.846, 0.851], 3.33253×, 2.944 GiB observed, 2.800 GiB allocated</title></rect>
+<polygon points="1381.1493945170776,447.1313875 1375.1493945170776,459.1313875 1387.1493945170776,459.1313875" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 512 KiB bit: 3.931 GiB/s [3.859, 3.935], 244.36400×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<circle cx="1110.0689888257627" cy="530.65285625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 512 KiB byte: 1.898 GiB/s [1.870, 1.906], 15.79000×, 3.349 GiB observed, 3.202 GiB allocated</title></circle>
+<rect x="1034.3750410810321" y="548.93005625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 512 KiB none: 1.313 GiB/s [1.307, 1.323], 7.65153×, 3.068 GiB observed, 2.921 GiB allocated</title></rect>
+<polygon points="1315.0458397094328,400.0127 1309.0458397094328,412.0127 1321.0458397094328,412.0127" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 64 KiB bit: 5.167 GiB/s [5.096, 5.201], 125.29600×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<circle cx="1090.0281332291975" cy="536.34568125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 64 KiB byte: 1.748 GiB/s [1.745, 1.781], 12.89530×, 3.349 GiB observed, 3.202 GiB allocated</title></circle>
+<rect x="1019.1688914780382" y="556.6118625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 64 KiB none: 1.112 GiB/s [1.108, 1.122], 6.56168×, 3.068 GiB observed, 2.921 GiB allocated</title></rect>
+<polygon points="1228.085651092589,436.9771375 1224.085651092589,444.9771375 1232.085651092589,444.9771375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB bit: 4.250 GiB/s [4.212, 4.295], 52.03630×, 3.230 GiB observed, 3.085 GiB allocated</title></polygon>
+<circle cx="1002.9441044418929" cy="547.76564375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB byte: 1.449 GiB/s [1.446, 1.453], 5.34881×, 3.230 GiB observed, 3.085 GiB allocated</title></circle>
+<rect x="969.2273671151451" y="561.805364375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB none: 0.976 GiB/s [0.968, 0.976], 3.96135×, 2.948 GiB observed, 2.804 GiB allocated</title></rect>
+<polygon points="941.1325121095041,532.9755250000001 936.1325121095041,537.9755250000001 941.1325121095041,542.9755250000001 946.1325121095041,537.9755250000001" fill="white" stroke="#1477ba" stroke-width="1.4" ><title>old raw lz4: 1.706 GiB/s, 2.86413×</title></polygon>
+<polygon points="1039.1173439125955,547.27354375 1034.1173439125955,552.27354375 1039.1173439125955,557.27354375 1044.1173439125955,552.27354375" fill="white" stroke="#c34d28" stroke-width="1.4" ><title>old raw zstd: 1.331 GiB/s, 7.70914×</title></polygon>
+</g>
+<g class="current">
+<polyline points="925.5717351596174,354.533275 945.9454534710974,359.64316875 1065.752343789663,376.18065 1141.3416500318228,378.16200625 1319.4680140813864,405.77175" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<line x1="1319.4680140813864" y1="417.2450875" x2="1319.4680140813864" y2="400.6203" stroke="#1477ba"/>
+<line x1="1315.4680140813864" y1="417.2450875" x2="1323.4680140813864" y2="417.2450875" stroke="#1477ba"/>
+<line x1="1315.4680140813864" y1="400.6203" x2="1323.4680140813864" y2="400.6203" stroke="#1477ba"/>
+<polygon points="1319.4680140813864,399.77175 1313.4680140813864,411.77175 1325.4680140813864,411.77175" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 1024 KiB bit: 5.173 GiB/s [4.872, 5.308], 131.02200×, 2.521 GiB observed, 2.510 GiB allocated</title></polygon>
+<polygon points="977.6845854475285,423.28530625 973.6845854475285,431.28530625 981.6845854475285,431.28530625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB bit: 4.609 GiB/s [4.204, 4.695], 4.14385×, 2.582 GiB observed, 2.572 GiB allocated</title></polygon>
+<polygon points="934.9400900987696,398.52540625 930.9400900987696,406.52540625 938.9400900987696,406.52540625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB bit: 5.258 GiB/s [5.040, 5.460], 2.69040×, 3.074 GiB observed, 3.064 GiB allocated</title></polygon>
+<line x1="1065.752343789663" y1="391.22439375" x2="1065.752343789663" y2="366.3726125" stroke="#1477ba"/>
+<line x1="1061.752343789663" y1="391.22439375" x2="1069.752343789663" y2="391.22439375" stroke="#1477ba"/>
+<line x1="1061.752343789663" y1="366.3726125" x2="1069.752343789663" y2="366.3726125" stroke="#1477ba"/>
+<polygon points="1065.752343789663,370.18065 1059.752343789663,382.18065 1071.752343789663,382.18065" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 256 KiB bit: 5.949 GiB/s [5.555, 6.207], 10.09010×, 2.547 GiB observed, 2.536 GiB allocated</title></polygon>
+<polygon points="933.2899425355346,411.75554375 929.2899425355346,419.75554375 937.2899425355346,419.75554375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB bit: 4.911 GiB/s [4.847, 5.575], 2.64591×, 2.793 GiB observed, 2.783 GiB allocated</title></polygon>
+<polygon points="942.7384996355111,380.08320000000003 938.7384996355111,388.08320000000003 946.7384996355111,388.08320000000003" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 4 KiB bit: 5.742 GiB/s [5.274, 5.763], 2.91099×, 4.764 GiB observed, 4.754 GiB allocated</title></polygon>
+<line x1="1141.3416500318228" y1="416.05063125" x2="1141.3416500318228" y2="376.4620125" stroke="#1477ba"/>
+<line x1="1137.3416500318228" y1="416.05063125" x2="1145.3416500318228" y2="416.05063125" stroke="#1477ba"/>
+<line x1="1137.3416500318228" y1="376.4620125" x2="1145.3416500318228" y2="376.4620125" stroke="#1477ba"/>
+<polygon points="1141.3416500318228,372.16200625 1135.3416500318228,384.16200625 1147.3416500318228,384.16200625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 512 KiB bit: 5.897 GiB/s [4.904, 5.942], 21.65830×, 2.529 GiB observed, 2.519 GiB allocated</title></polygon>
+<polygon points="936.4458654322875,419.05686249999997 932.4458654322875,427.05686249999997 940.4458654322875,427.05686249999997" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB bit: 4.720 GiB/s [4.686, 4.733], 2.73165×, 2.652 GiB observed, 2.642 GiB allocated</title></polygon>
+<polygon points="938.8674961089052,390.53288124999995 934.8674961089052,398.53288124999995 942.8674961089052,398.53288124999995" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 8 KiB bit: 5.468 GiB/s [5.404, 6.448], 2.79932×, 3.637 GiB observed, 3.628 GiB allocated</title></polygon>
+<circle cx="992.8373702422522" cy="524.24023125" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 1024 KiB byte: 2.066 GiB/s [2.000, 2.145], 4.82951×, 2.521 GiB observed, 2.510 GiB allocated</title></circle>
+<circle cx="984.3598100815866" cy="430.78213125" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB byte: 4.517 GiB/s [4.269, 4.550], 4.43301×, 2.582 GiB observed, 2.572 GiB allocated</title></circle>
+<circle cx="963.5065528001147" cy="388.92698125000004" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB byte: 5.615 GiB/s [5.370, 6.009], 3.59073×, 3.074 GiB observed, 3.064 GiB allocated</title></circle>
+<circle cx="985.7001487877228" cy="435.6015125" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 256 KiB byte: 4.391 GiB/s [4.379, 4.472], 4.49346×, 2.547 GiB observed, 2.536 GiB allocated</title></circle>
+<circle cx="973.8367836078554" cy="393.85311249999995" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB byte: 5.486 GiB/s [5.485, 5.832], 3.98582×, 2.793 GiB observed, 2.783 GiB allocated</title></circle>
+<line x1="925.5717351596174" y1="365.4255875" x2="925.5717351596174" y2="353.92594375" stroke="#1477ba"/>
+<line x1="921.5717351596174" y1="365.4255875" x2="929.5717351596174" y2="365.4255875" stroke="#1477ba"/>
+<line x1="921.5717351596174" y1="353.92594375" x2="929.5717351596174" y2="353.92594375" stroke="#1477ba"/>
+<circle cx="925.5717351596174" cy="354.533275" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 4 KiB byte: 6.517 GiB/s [6.231, 6.533], 2.44739×, 4.764 GiB observed, 4.754 GiB allocated</title></circle>
+<circle cx="988.6303494305937" cy="477.01555625000003" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 512 KiB byte: 3.305 GiB/s [2.990, 3.537], 4.62850×, 2.529 GiB observed, 2.519 GiB allocated</title></circle>
+<circle cx="980.2760999686402" cy="407.88730625000005" r="4" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB byte: 5.118 GiB/s [4.880, 5.441], 4.25380×, 2.652 GiB observed, 2.642 GiB allocated</title></circle>
+<line x1="945.9454534710974" y1="365.809125" x2="945.9454534710974" y2="355.2294375" stroke="#1477ba"/>
+<line x1="941.9454534710974" y1="365.809125" x2="949.9454534710974" y2="365.809125" stroke="#1477ba"/>
+<line x1="941.9454534710974" y1="355.2294375" x2="949.9454534710974" y2="355.2294375" stroke="#1477ba"/>
+<circle cx="945.9454534710974" cy="359.64316875" r="6" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 8 KiB byte: 6.383 GiB/s [6.221, 6.499], 3.00687×, 3.637 GiB observed, 3.628 GiB allocated</title></circle>
+<rect x="937.12698369298" y="541.24939375" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 1024 KiB none: 1.515 GiB/s [1.378, 1.517], 2.86397×, 2.240 GiB observed, 2.229 GiB allocated</title></rect>
+<rect x="924.2137612938743" y="458.9013" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB none: 3.675 GiB/s [3.630, 3.730], 2.51361×, 2.301 GiB observed, 2.290 GiB allocated</title></rect>
+<rect x="905.053451831276" y="429.38225624999995" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB none: 4.449 GiB/s [4.148, 4.451], 2.07115×, 2.793 GiB observed, 2.783 GiB allocated</title></rect>
+<rect x="931.4269977350232" y="472.777275" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 256 KiB none: 3.311 GiB/s [3.229, 3.453], 2.70367×, 2.266 GiB observed, 2.255 GiB allocated</title></rect>
+<rect x="913.2279714541493" y="433.41816874999995" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB none: 4.343 GiB/s [4.091, 4.386], 2.24950×, 2.512 GiB observed, 2.502 GiB allocated</title></rect>
+<rect x="871.0287265896559" y="425.21900625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 4 KiB none: 4.558 GiB/s [4.553, 4.960], 1.46856×, 4.482 GiB observed, 4.473 GiB allocated</title></rect>
+<rect x="935.3245952780932" y="512.3068" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 512 KiB none: 2.274 GiB/s [2.133, 2.278], 2.81228×, 2.248 GiB observed, 2.237 GiB allocated</title></rect>
+<rect x="916.8890626030202" y="453.26528125" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB none: 3.823 GiB/s [3.753, 3.946], 2.33428×, 2.371 GiB observed, 2.361 GiB allocated</title></rect>
+<rect x="889.3151989750731" y="433.31370625" width="8" height="8" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 8 KiB none: 4.346 GiB/s [4.103, 4.414], 1.76662×, 3.355 GiB observed, 3.347 GiB allocated</title></rect>
+<line x1="925.5717351596174" y1="354.533275" x2="849" y2="338.533275" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="342.533275" class="point-label" text-anchor="start" style="fill:#1477ba">4 KiB</text>
+<line x1="945.9454534710974" y1="359.64316875" x2="849" y2="359.533275" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="363.533275" class="point-label" text-anchor="start" style="fill:#1477ba">8 KiB</text>
+<line x1="1065.752343789663" y1="376.18065" x2="849" y2="380.533275" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="384.533275" class="point-label" text-anchor="start" style="fill:#1477ba">256 KiB</text>
+<line x1="1141.3416500318228" y1="378.16200625" x2="849" y2="401.533275" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="405.533275" class="point-label" text-anchor="start" style="fill:#1477ba">512 KiB</text>
+<line x1="1319.4680140813864" y1="405.77175" x2="849" y2="422.533275" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="426.533275" class="point-label" text-anchor="start" style="fill:#1477ba">1024 KiB</text>
+<polyline points="1299.1034838364203,355.561125 1315.0458397094328,367.34365625 1356.4041638355575,396.80894375 1381.1493945170776,435.4383375 1419.6707265182463,437.89854375" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<line x1="1419.6707265182463" y1="440.24399375" x2="1419.6707265182463" y2="426.42520625" stroke="#c34d28"/>
+<line x1="1415.6707265182463" y1="440.24399375" x2="1423.6707265182463" y2="440.24399375" stroke="#c34d28"/>
+<line x1="1415.6707265182463" y1="426.42520625" x2="1423.6707265182463" y2="426.42520625" stroke="#c34d28"/>
+<polygon points="1419.6707265182463,431.89854375 1413.6707265182463,443.89854375 1425.6707265182463,443.89854375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 1024 KiB bit: 4.331 GiB/s [4.269, 4.631], 360.65400×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1323.7812964756326,393.80629375 1319.7812964756326,401.80629375 1327.7812964756326,401.80629375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB bit: 5.382 GiB/s [5.300, 5.393], 136.85900×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1268.3604420126026,362.3573625 1264.3604420126026,370.3573625 1272.3604420126026,370.3573625" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB bit: 6.207 GiB/s [5.721, 6.406], 78.17270×, 3.551 GiB observed, 3.288 GiB allocated</title></polygon>
+<line x1="1356.4041638355575" y1="401.48497499999996" x2="1356.4041638355575" y2="395.39869999999996" stroke="#c34d28"/>
+<line x1="1352.4041638355575" y1="401.48497499999996" x2="1360.4041638355575" y2="401.48497499999996" stroke="#c34d28"/>
+<line x1="1352.4041638355575" y1="395.39869999999996" x2="1360.4041638355575" y2="395.39869999999996" stroke="#c34d28"/>
+<polygon points="1356.4041638355575,390.80894375 1350.4041638355575,402.80894375 1362.4041638355575,402.80894375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 256 KiB bit: 5.408 GiB/s [5.286, 5.445], 190.30100×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<line x1="1299.1034838364203" y1="362.72709999999995" x2="1299.1034838364203" y2="350.7276375" stroke="#c34d28"/>
+<line x1="1295.1034838364203" y1="362.72709999999995" x2="1303.1034838364203" y2="362.72709999999995" stroke="#c34d28"/>
+<line x1="1295.1034838364203" y1="350.7276375" x2="1303.1034838364203" y2="350.7276375" stroke="#c34d28"/>
+<polygon points="1299.1034838364203,349.561125 1293.1034838364203,361.561125 1305.1034838364203,361.561125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 32 KiB bit: 6.490 GiB/s [6.302, 6.617], 106.65300×, 3.631 GiB observed, 3.368 GiB allocated</title></polygon>
+<polygon points="1192.2080120574738,436.99429375 1188.2080120574738,444.99429375 1196.2080120574738,444.99429375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB bit: 4.249 GiB/s [4.167, 4.354], 36.21220×, 3.496 GiB observed, 3.235 GiB allocated</title></polygon>
+<line x1="1381.1493945170776" y1="438.29161250000004" x2="1381.1493945170776" y2="432.59306875000004" stroke="#c34d28"/>
+<line x1="1377.1493945170776" y1="438.29161250000004" x2="1385.1493945170776" y2="438.29161250000004" stroke="#c34d28"/>
+<line x1="1377.1493945170776" y1="432.59306875000004" x2="1385.1493945170776" y2="432.59306875000004" stroke="#c34d28"/>
+<polygon points="1381.1493945170776,429.4383375 1375.1493945170776,441.4383375 1387.1493945170776,441.4383375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 512 KiB bit: 4.395 GiB/s [4.320, 4.470], 244.36400×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<line x1="1315.0458397094328" y1="369.5537625" x2="1315.0458397094328" y2="345.709625" stroke="#c34d28"/>
+<line x1="1311.0458397094328" y1="369.5537625" x2="1319.0458397094328" y2="369.5537625" stroke="#c34d28"/>
+<line x1="1311.0458397094328" y1="345.709625" x2="1319.0458397094328" y2="345.709625" stroke="#c34d28"/>
+<polygon points="1315.0458397094328,361.34365625 1309.0458397094328,373.34365625 1321.0458397094328,373.34365625" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 64 KiB bit: 6.181 GiB/s [6.123, 6.749], 125.29600×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1228.085651092589,381.127825 1224.085651092589,389.127825 1232.085651092589,389.127825" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB bit: 5.715 GiB/s [5.670, 5.890], 52.03630×, 3.512 GiB observed, 3.250 GiB allocated</title></polygon>
+<circle cx="1111.7172686542356" cy="505.0317125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 1024 KiB byte: 2.570 GiB/s [2.433, 2.586], 16.05520×, 3.791 GiB observed, 3.529 GiB allocated</title></circle>
+<circle cx="1100.2374640612752" cy="513.7547125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB byte: 2.341 GiB/s [2.086, 2.503], 14.29670×, 3.791 GiB observed, 3.529 GiB allocated</title></circle>
+<circle cx="1041.7720021498333" cy="514.3296375" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB byte: 2.326 GiB/s [2.203, 2.368], 7.91874×, 3.551 GiB observed, 3.288 GiB allocated</title></circle>
+<circle cx="1106.2906725316643" cy="498.24813125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 256 KiB byte: 2.748 GiB/s [2.635, 2.855], 15.19850×, 3.791 GiB observed, 3.529 GiB allocated</title></circle>
+<circle cx="1070.3599053626424" cy="511.32005" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB byte: 2.405 GiB/s [2.104, 2.668], 10.57100×, 3.631 GiB observed, 3.368 GiB allocated</title></circle>
+<circle cx="962.3873767448932" cy="534.39215625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB byte: 1.800 GiB/s [1.742, 1.809], 3.55035×, 3.496 GiB observed, 3.235 GiB allocated</title></circle>
+<circle cx="1110.0689888257627" cy="476.7094125" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 512 KiB byte: 3.313 GiB/s [2.914, 3.528], 15.79000×, 3.791 GiB observed, 3.529 GiB allocated</title></circle>
+<circle cx="1090.0281332291975" cy="501.8505625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB byte: 2.653 GiB/s [2.571, 2.665], 12.89530×, 3.791 GiB observed, 3.529 GiB allocated</title></circle>
+<circle cx="1002.9441044418929" cy="524.28140625" r="4" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB byte: 2.065 GiB/s [2.064, 2.241], 5.34881×, 3.512 GiB observed, 3.250 GiB allocated</title></circle>
+<rect x="1035.1084861514823" y="512.81615" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 1024 KiB none: 2.261 GiB/s [2.096, 2.318], 7.70845×, 3.510 GiB observed, 3.247 GiB allocated</title></rect>
+<rect x="1027.2792845049917" y="540.71183125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB none: 1.529 GiB/s [1.425, 1.565], 7.12210×, 3.510 GiB observed, 3.248 GiB allocated</title></rect>
+<rect x="989.5958928461172" y="549.4443625" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB none: 1.300 GiB/s [1.289, 1.539], 4.86667×, 3.270 GiB observed, 3.007 GiB allocated</title></rect>
+<rect x="1031.6602797179658" y="521.8677875" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 256 KiB none: 2.023 GiB/s [1.984, 2.102], 7.44448×, 3.510 GiB observed, 3.247 GiB allocated</title></rect>
+<rect x="1007.2055558726818" y="536.1616125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB none: 1.648 GiB/s [1.617, 1.670], 5.81451×, 3.350 GiB observed, 3.087 GiB allocated</title></rect>
+<rect x="952.121757973061" y="551.5477187500001" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB none: 1.245 GiB/s [1.234, 1.302], 3.33253×, 3.215 GiB observed, 2.954 GiB allocated</title></rect>
+<rect x="1034.3750410810321" y="517.9592125" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 512 KiB none: 2.126 GiB/s [2.097, 2.294], 7.65153×, 3.510 GiB observed, 3.247 GiB allocated</title></rect>
+<rect x="1019.1688914780382" y="537.52839375" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB none: 1.612 GiB/s [1.513, 1.670], 6.56168×, 3.510 GiB observed, 3.248 GiB allocated</title></rect>
+<rect x="969.2273671151451" y="544.918925" width="8" height="8" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB none: 1.419 GiB/s [1.413, 1.465], 3.96135×, 3.230 GiB observed, 2.969 GiB allocated</title></rect>
+<line x1="1299.1034838364203" y1="355.561125" x2="1444" y2="339.561125" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="343.561125" class="point-label" text-anchor="end" style="fill:#c34d28">32 KiB</text>
+<line x1="1315.0458397094328" y1="367.34365625" x2="1444" y2="360.561125" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="364.561125" class="point-label" text-anchor="end" style="fill:#c34d28">64 KiB</text>
+<line x1="1356.4041638355575" y1="396.80894375" x2="1444" y2="381.561125" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="385.561125" class="point-label" text-anchor="end" style="fill:#c34d28">256 KiB</text>
+<line x1="1381.1493945170776" y1="435.4383375" x2="1444" y2="419.4383375" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="423.4383375" class="point-label" text-anchor="end" style="fill:#c34d28">512 KiB</text>
+<line x1="1419.6707265182463" y1="437.89854375" x2="1444" y2="440.4383375" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="444.4383375" class="point-label" text-anchor="end" style="fill:#c34d28">1024 KiB</text>
+<polygon points="941.1325121095041,540.2200375 936.1325121095041,545.2200375 941.1325121095041,550.2200375 946.1325121095041,545.2200375" fill="white" stroke="#1477ba" stroke-width="1.4" ><title>current raw lz4: 1.516 GiB/s, 2.86413×</title></polygon>
+<polygon points="1039.1173439125955,511.29650625 1034.1173439125955,516.29650625 1039.1173439125955,521.29650625 1044.1173439125955,516.29650625" fill="white" stroke="#c34d28" stroke-width="1.4" ><title>current raw zstd: 2.274 GiB/s, 7.70914×</title></polygon>
+</g>
+<text x="48" y="687" class="panel-title">12-bit random · 256 KiB Zarr chunks</text>
+<text x="48" y="708" class="muted">zoomed ratio axis</text>
+<line x1="92" y1="1033" x2="707" y2="1033" class="grid"/>
+<text x="82" y="1038" text-anchor="end">0</text>
+<line x1="92" y1="956.75" x2="707" y2="956.75" class="grid"/>
+<text x="82" y="961.75" text-anchor="end">2</text>
+<line x1="92" y1="880.5" x2="707" y2="880.5" class="grid"/>
+<text x="82" y="885.5" text-anchor="end">4</text>
+<line x1="92" y1="804.25" x2="707" y2="804.25" class="grid"/>
+<text x="82" y="809.25" text-anchor="end">6</text>
+<line x1="92" y1="728" x2="707" y2="728" class="grid"/>
+<text x="82" y="733" text-anchor="end">8</text>
+<line x1="172.21739130435117" y1="728" x2="172.21739130435117" y2="1033" class="grid"/>
+<text x="172.21739130435117" y="1057" text-anchor="middle">1.37×</text>
+<line x1="305.9130434782619" y1="728" x2="305.9130434782619" y2="1033" class="grid"/>
+<text x="305.9130434782619" y="1057" text-anchor="middle">1.375×</text>
+<line x1="439.60869565217257" y1="728" x2="439.60869565217257" y2="1033" class="grid"/>
+<text x="439.60869565217257" y="1057" text-anchor="middle">1.38×</text>
+<line x1="573.3043478260893" y1="728" x2="573.3043478260893" y2="1033" class="grid"/>
+<text x="573.3043478260893" y="1057" text-anchor="middle">1.385×</text>
+<line x1="707" y1="728" x2="707" y2="1033" class="grid"/>
+<text x="707" y="1057" text-anchor="middle">1.39×</text>
+<text x="399.5" y="1085" class="axis" text-anchor="middle">Compression fold →</text>
+<text transform="translate(43,880.5) rotate(-90)" class="axis" text-anchor="middle">Input throughput (GiB/s) →</text>
+<g class="old">
+<polyline points="177.83260869565078,827.6816249999999 276.23260869565456,859.05201875 336.1282608695684,887.1558625 368.48260869565365,916.8918375000001 394.6869565217402,926.6320125" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="389.0717391304347,943.57216875 385.0717391304347,951.57216875 393.0717391304347,951.57216875" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB bit: 2.241 GiB/s [2.037, 2.250], 1.37811×, 1.424 GiB observed, 1.411 GiB allocated</title></polygon>
+<polygon points="336.1282608695684,881.1558625 330.1282608695684,893.1558625 342.1282608695684,893.1558625" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 16 KiB bit: 3.825 GiB/s [3.685, 3.839], 1.37613×, 1.670 GiB observed, 1.657 GiB allocated</title></polygon>
+<polygon points="394.6869565217402,920.6320125 388.6869565217402,932.6320125 400.6869565217402,932.6320125" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 256 KiB bit: 2.790 GiB/s [2.613, 2.845], 1.37832×, 1.406 GiB observed, 1.393 GiB allocated</title></polygon>
+<polygon points="368.48260869565365,910.8918375000001 362.48260869565365,922.8918375000001 374.48260869565365,922.8918375000001" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 32 KiB bit: 3.045 GiB/s [2.807, 3.076], 1.37734×, 1.529 GiB observed, 1.516 GiB allocated</title></polygon>
+<polygon points="177.83260869565078,821.6816249999999 171.83260869565078,833.6816249999999 183.83260869565078,833.6816249999999" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 4 KiB bit: 5.385 GiB/s [5.352, 5.457], 1.37021×, 2.514 GiB observed, 2.502 GiB allocated</title></polygon>
+<polygon points="389.0717391304347,923.88518125 385.0717391304347,931.88518125 393.0717391304347,931.88518125" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 64 KiB bit: 2.757 GiB/s [2.721, 2.838], 1.37811×, 1.459 GiB observed, 1.446 GiB allocated</title></polygon>
+<polygon points="276.23260869565456,853.05201875 270.23260869565456,865.05201875 282.23260869565456,865.05201875" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 8 KiB bit: 4.563 GiB/s [4.555, 4.620], 1.37389×, 1.951 GiB observed, 1.939 GiB allocated</title></polygon>
+<polyline points="500.8413043478284,990.59546875 548.4369565217387,991.1379875 575.443478260874,992.00533125 587.4760869565221,993.10790625" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="587.4760869565221,987.10790625 581.4760869565221,999.10790625 593.4760869565221,999.10790625" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 128 KiB bit: 1.046 GiB/s [1.043, 1.051], 1.38553×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<polygon points="500.8413043478284,984.59546875 494.8413043478284,996.59546875 506.8413043478284,996.59546875" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 16 KiB bit: 1.112 GiB/s [1.106, 1.125], 1.38229×, 1.890 GiB observed, 1.746 GiB allocated</title></polygon>
+<polygon points="587.4760869565221,992.10300625 583.4760869565221,1000.10300625 591.4760869565221,1000.10300625" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB bit: 0.968 GiB/s [0.946, 0.977], 1.38553×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<polygon points="548.4369565217387,985.1379875 542.4369565217387,997.1379875 554.4369565217387,997.1379875" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 32 KiB bit: 1.098 GiB/s [1.098, 1.106], 1.38407×, 1.925 GiB observed, 1.780 GiB allocated</title></polygon>
+<polygon points="238.79782608695695,992.550860625 234.79782608695695,1000.550860625 242.79782608695695,1000.550860625" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB bit: 0.956 GiB/s [0.946, 0.976], 1.37249×, 1.866 GiB observed, 1.723 GiB allocated</title></polygon>
+<polygon points="575.443478260874,986.00533125 569.443478260874,998.00533125 581.443478260874,998.00533125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 64 KiB bit: 1.075 GiB/s [1.055, 1.079], 1.38508×, 1.993 GiB observed, 1.849 GiB allocated</title></polygon>
+<polygon points="411.26521739130726,986.99654375 407.26521739130726,994.99654375 415.26521739130726,994.99654375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB bit: 1.102 GiB/s [1.073, 1.103], 1.37894×, 1.874 GiB observed, 1.730 GiB allocated</title></polygon>
+</g>
+<g class="current">
+<polyline points="177.83260869565078,777.0958499999999 276.23260869565456,780.5446375 389.0717391304347,870.71140625 394.6869565217402,874.45795" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<line x1="389.0717391304347" y1="882.22591875" x2="389.0717391304347" y2="867.8585125" stroke="#1477ba"/>
+<line x1="385.0717391304347" y1="882.22591875" x2="393.0717391304347" y2="882.22591875" stroke="#1477ba"/>
+<line x1="385.0717391304347" y1="867.8585125" x2="393.0717391304347" y2="867.8585125" stroke="#1477ba"/>
+<polygon points="389.0717391304347,864.71140625 383.0717391304347,876.71140625 395.0717391304347,876.71140625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 128 KiB bit: 4.257 GiB/s [3.955, 4.332], 1.37811×, 1.422 GiB observed, 1.411 GiB allocated</title></polygon>
+<polygon points="336.1282608695684,881.1089312500001 332.1282608695684,889.1089312500001 340.1282608695684,889.1089312500001" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB bit: 3.879 GiB/s [3.685, 3.961], 1.37613×, 1.668 GiB observed, 1.657 GiB allocated</title></polygon>
+<line x1="394.6869565217402" y1="889.18945" x2="394.6869565217402" y2="874.044675" stroke="#1477ba"/>
+<line x1="390.6869565217402" y1="889.18945" x2="398.6869565217402" y2="889.18945" stroke="#1477ba"/>
+<line x1="390.6869565217402" y1="874.044675" x2="398.6869565217402" y2="874.044675" stroke="#1477ba"/>
+<polygon points="394.6869565217402,868.45795 388.6869565217402,880.45795 400.6869565217402,880.45795" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 256 KiB bit: 4.158 GiB/s [3.772, 4.169], 1.37832×, 1.404 GiB observed, 1.393 GiB allocated</title></polygon>
+<polygon points="368.48260869565365,905.7060375 364.48260869565365,913.7060375 372.48260869565365,913.7060375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB bit: 3.234 GiB/s [3.117, 3.318], 1.37734×, 1.527 GiB observed, 1.516 GiB allocated</title></polygon>
+<line x1="177.83260869565078" y1="780.17139375" x2="177.83260869565078" y2="769.9031875000001" stroke="#1477ba"/>
+<line x1="173.83260869565078" y1="780.17139375" x2="181.83260869565078" y2="780.17139375" stroke="#1477ba"/>
+<line x1="173.83260869565078" y1="769.9031875000001" x2="181.83260869565078" y2="769.9031875000001" stroke="#1477ba"/>
+<polygon points="177.83260869565078,771.0958499999999 171.83260869565078,783.0958499999999 183.83260869565078,783.0958499999999" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 4 KiB bit: 6.712 GiB/s [6.632, 6.901], 1.37021×, 2.512 GiB observed, 2.502 GiB allocated</title></polygon>
+<polygon points="389.0717391304347,920.054 385.0717391304347,928.054 393.0717391304347,928.054" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB bit: 2.858 GiB/s [2.457, 3.085], 1.37811×, 1.457 GiB observed, 1.446 GiB allocated</title></polygon>
+<line x1="276.23260869565456" y1="798.39819375" x2="276.23260869565456" y2="777.43554375" stroke="#1477ba"/>
+<line x1="272.23260869565456" y1="798.39819375" x2="280.23260869565456" y2="798.39819375" stroke="#1477ba"/>
+<line x1="272.23260869565456" y1="777.43554375" x2="280.23260869565456" y2="777.43554375" stroke="#1477ba"/>
+<polygon points="276.23260869565456,774.5446375 270.23260869565456,786.5446375 282.23260869565456,786.5446375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 8 KiB bit: 6.622 GiB/s [6.153, 6.703], 1.37389×, 1.949 GiB observed, 1.939 GiB allocated</title></polygon>
+<line x1="177.83260869565078" y1="777.0958499999999" x2="104" y2="761.0958499999999" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="765.0958499999999" class="point-label" text-anchor="start" style="fill:#1477ba">4 KiB</text>
+<line x1="276.23260869565456" y1="780.5446375" x2="104" y2="782.0958499999999" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="786.0958499999999" class="point-label" text-anchor="start" style="fill:#1477ba">8 KiB</text>
+<line x1="389.0717391304347" y1="870.71140625" x2="104" y2="854.71140625" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="858.71140625" class="point-label" text-anchor="start" style="fill:#1477ba">128 KiB</text>
+<line x1="394.6869565217402" y1="874.45795" x2="104" y2="875.71140625" stroke="#1477ba" opacity=".45"/>
+<text x="104" y="879.71140625" class="point-label" text-anchor="start" style="fill:#1477ba">256 KiB</text>
+<polyline points="587.4760869565221,968.80855625" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<polygon points="587.4760869565221,973.2330375 583.4760869565221,981.2330375 591.4760869565221,981.2330375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB bit: 1.463 GiB/s [1.438, 1.515], 1.38553×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<polygon points="500.8413043478284,966.92296875 496.8413043478284,974.92296875 504.8413043478284,974.92296875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB bit: 1.628 GiB/s [1.616, 1.664], 1.38229×, 2.195 GiB observed, 1.934 GiB allocated</title></polygon>
+<line x1="587.4760869565221" y1="974.14300625" x2="587.4760869565221" y2="966.10778125" stroke="#c34d28"/>
+<line x1="583.4760869565221" y1="974.14300625" x2="591.4760869565221" y2="974.14300625" stroke="#c34d28"/>
+<line x1="583.4760869565221" y1="966.10778125" x2="591.4760869565221" y2="966.10778125" stroke="#c34d28"/>
+<polygon points="587.4760869565221,962.80855625 581.4760869565221,974.80855625 593.4760869565221,974.80855625" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 256 KiB bit: 1.684 GiB/s [1.544, 1.755], 1.38553×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<polygon points="548.4369565217387,968.44034375 544.4369565217387,976.44034375 552.4369565217387,976.44034375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB bit: 1.588 GiB/s [1.584, 1.626], 1.38407×, 2.275 GiB observed, 2.014 GiB allocated</title></polygon>
+<polygon points="238.79782608695695,975.4595375 234.79782608695695,983.4595375 242.79782608695695,983.4595375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB bit: 1.404 GiB/s [1.343, 1.535], 1.37249×, 2.137 GiB observed, 1.877 GiB allocated</title></polygon>
+<polygon points="575.443478260874,968.879925 571.443478260874,976.879925 579.443478260874,976.879925" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB bit: 1.577 GiB/s [1.284, 1.623], 1.38508×, 2.438 GiB observed, 2.175 GiB allocated</title></polygon>
+<polygon points="411.26521739130726,968.98324375 407.26521739130726,976.98324375 415.26521739130726,976.98324375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB bit: 1.574 GiB/s [1.521, 1.583], 1.37894×, 2.156 GiB observed, 1.895 GiB allocated</title></polygon>
+<line x1="587.4760869565221" y1="968.80855625" x2="699" y2="952.80855625" stroke="#c34d28" opacity=".45"/>
+<text x="699" y="956.80855625" class="point-label" text-anchor="end" style="fill:#c34d28">256 KiB</text>
+</g>
+<text x="793" y="687" class="panel-title">12-bit random · 1 MiB Zarr chunks</text>
+<text x="793" y="708" class="muted">zoomed ratio axis</text>
+<line x1="837" y1="1033" x2="1452" y2="1033" class="grid"/>
+<text x="827" y="1038" text-anchor="end">0</text>
+<line x1="837" y1="956.75" x2="1452" y2="956.75" class="grid"/>
+<text x="827" y="961.75" text-anchor="end">2</text>
+<line x1="837" y1="880.5" x2="1452" y2="880.5" class="grid"/>
+<text x="827" y="885.5" text-anchor="end">4</text>
+<line x1="837" y1="804.25" x2="1452" y2="804.25" class="grid"/>
+<text x="827" y="809.25" text-anchor="end">6</text>
+<line x1="837" y1="728" x2="1452" y2="728" class="grid"/>
+<text x="827" y="733" text-anchor="end">8</text>
+<line x1="950.888888888891" y1="728" x2="950.888888888891" y2="1033" class="grid"/>
+<text x="950.888888888891" y="1057" text-anchor="middle">1.475×</text>
+<line x1="1064.777777777777" y1="728" x2="1064.777777777777" y2="1033" class="grid"/>
+<text x="1064.777777777777" y="1057" text-anchor="middle">1.48×</text>
+<line x1="1178.6666666666679" y1="728" x2="1178.6666666666679" y2="1033" class="grid"/>
+<text x="1178.6666666666679" y="1057" text-anchor="middle">1.485×</text>
+<line x1="1292.5555555555536" y1="728" x2="1292.5555555555536" y2="1033" class="grid"/>
+<text x="1292.5555555555536" y="1057" text-anchor="middle">1.49×</text>
+<line x1="1406.4444444444448" y1="728" x2="1406.4444444444448" y2="1033" class="grid"/>
+<text x="1406.4444444444448" y="1057" text-anchor="middle">1.495×</text>
+<text x="1144.5" y="1085" class="axis" text-anchor="middle">Compression fold →</text>
+<text transform="translate(788,880.5) rotate(-90)" class="axis" text-anchor="middle">Input throughput (GiB/s) →</text>
+<g class="old">
+<polyline points="943.8277777777791,851.1834 1049.0611111111084,852.929525 1106.0055555555564,894.49378125 1138.5777777777744,926.102075 1147.9166666666638,937.1956875 1162.9499999999994,939.695925" fill="none" stroke="#1477ba" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="1162.9499999999994,933.695925 1156.9499999999994,945.695925 1168.9499999999994,945.695925" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 1024 KiB bit: 2.447 GiB/s [2.397, 2.528], 1.48431×, 2.523 GiB observed, 2.510 GiB allocated</title></polygon>
+<polygon points="1154.9777777777756,947.8036625 1150.9777777777756,955.8036625 1158.9777777777756,955.8036625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 128 KiB bit: 2.130 GiB/s [1.894, 2.290], 1.48396×, 2.584 GiB observed, 2.572 GiB allocated</title></polygon>
+<polygon points="1106.0055555555564,888.49378125 1100.0055555555564,900.49378125 1112.0055555555564,900.49378125" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 16 KiB bit: 3.633 GiB/s [3.575, 3.647], 1.48181×, 3.076 GiB observed, 3.064 GiB allocated</title></polygon>
+<polygon points="1162.9499999999994,954.2262000000001 1158.9499999999994,962.2262000000001 1166.9499999999994,962.2262000000001" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 256 KiB bit: 1.961 GiB/s [1.755, 2.008], 1.48431×, 2.549 GiB observed, 2.536 GiB allocated</title></polygon>
+<polygon points="1138.5777777777744,920.102075 1132.5777777777744,932.102075 1144.5777777777744,932.102075" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 32 KiB bit: 2.804 GiB/s [2.780, 3.038], 1.48324×, 2.795 GiB observed, 2.783 GiB allocated</title></polygon>
+<polygon points="943.8277777777791,845.1834 937.8277777777791,857.1834 949.8277777777791,857.1834" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 4 KiB bit: 4.769 GiB/s [4.499, 4.933], 1.47469×, 4.766 GiB observed, 4.754 GiB allocated</title></polygon>
+<polygon points="1162.9499999999994,939.44246875 1158.9499999999994,947.44246875 1166.9499999999994,947.44246875" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-lz4, 512 KiB bit: 2.349 GiB/s [2.328, 2.641], 1.48431×, 2.531 GiB observed, 2.519 GiB allocated</title></polygon>
+<polygon points="1147.9166666666638,931.1956875 1141.9166666666638,943.1956875 1153.9166666666638,943.1956875" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 64 KiB bit: 2.513 GiB/s [2.265, 2.598], 1.48365×, 2.654 GiB observed, 2.642 GiB allocated</title></polygon>
+<polygon points="1049.0611111111084,846.929525 1043.0611111111084,858.929525 1055.0611111111084,858.929525" fill="white" stroke="#1477ba" stroke-width="1.4" class="front"><title>5070 Laptop blosc-lz4, 8 KiB bit: 4.723 GiB/s [4.289, 4.919], 1.47931×, 3.639 GiB observed, 3.628 GiB allocated</title></polygon>
+<polyline points="1270.6888888888855,990.8101125000001 1311.9166666666652,990.83413125 1336.5166666666642,992.9222375 1350.8666666666672,994.83649375 1359.0666666666652,995.58969125" fill="none" stroke="#c34d28" stroke-width="2.5" stroke-dasharray="7 5"/>
+<polygon points="1359.0666666666652,989.58969125 1353.0666666666652,1001.58969125 1365.0666666666652,1001.58969125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 1024 KiB bit: 0.981 GiB/s [0.971, 0.984], 1.49292×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<polygon points="1350.8666666666672,988.83649375 1344.8666666666672,1000.83649375 1356.8666666666672,1000.83649375" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 128 KiB bit: 1.001 GiB/s [0.999, 1.007], 1.49256×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<polygon points="1270.6888888888855,984.8101125000001 1264.6888888888855,996.8101125000001 1276.6888888888855,996.8101125000001" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 16 KiB bit: 1.107 GiB/s [1.102, 1.145], 1.48904×, 3.245 GiB observed, 3.100 GiB allocated</title></polygon>
+<polygon points="1352.0055555555534,993.201235 1348.0055555555534,1001.201235 1356.0055555555534,1001.201235" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 256 KiB bit: 0.939 GiB/s [0.930, 0.940], 1.49261×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<polygon points="1311.9166666666652,984.83413125 1305.9166666666652,996.83413125 1317.9166666666652,996.83413125" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 32 KiB bit: 1.106 GiB/s [1.104, 1.122], 1.49085×, 3.280 GiB observed, 3.134 GiB allocated</title></polygon>
+<polygon points="1010.7944444444441,993.3776775 1006.7944444444441,1001.3776775 1014.7944444444441,1001.3776775" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 4 KiB bit: 0.934 GiB/s [0.932, 0.953], 1.47763×, 3.226 GiB observed, 3.082 GiB allocated</title></polygon>
+<polygon points="1359.0666666666652,994.538011875 1355.0666666666652,1002.538011875 1363.0666666666652,1002.538011875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 512 KiB bit: 0.904 GiB/s [0.898, 0.923], 1.49292×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<polygon points="1336.5166666666642,986.9222375 1330.5166666666642,998.9222375 1342.5166666666642,998.9222375" fill="white" stroke="#c34d28" stroke-width="1.4" class="front"><title>5070 Laptop blosc-zstd, 64 KiB bit: 1.051 GiB/s [1.031, 1.075], 1.49193×, 3.349 GiB observed, 3.202 GiB allocated</title></polygon>
+<polygon points="1180.4888888888868,987.320225 1176.4888888888868,995.320225 1184.4888888888868,995.320225" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5070 Laptop blosc-zstd, 8 KiB bit: 1.093 GiB/s [1.084, 1.094], 1.48508×, 3.230 GiB observed, 3.085 GiB allocated</title></polygon>
+</g>
+<g class="current">
+<polyline points="943.8277777777791,785.573325 1049.0611111111084,805.07159375 1162.9499999999994,889.90429375" fill="none" stroke="#1477ba" stroke-width="2.5" />
+<polygon points="1162.9499999999994,928.1182 1158.9499999999994,936.1182 1166.9499999999994,936.1182" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 1024 KiB bit: 2.646 GiB/s [2.511, 2.694], 1.48431×, 2.521 GiB observed, 2.510 GiB allocated</title></polygon>
+<polygon points="1154.9777777777756,934.73708125 1150.9777777777756,942.73708125 1158.9777777777756,942.73708125" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 128 KiB bit: 2.472 GiB/s [2.407, 2.531], 1.48396×, 2.582 GiB observed, 2.572 GiB allocated</title></polygon>
+<polygon points="1106.0055555555564,895.463375 1102.0055555555564,903.463375 1110.0055555555564,903.463375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 16 KiB bit: 3.503 GiB/s [3.333, 3.619], 1.48181×, 3.074 GiB observed, 3.064 GiB allocated</title></polygon>
+<polygon points="1162.9499999999994,889.50786875 1158.9499999999994,897.50786875 1166.9499999999994,897.50786875" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 256 KiB bit: 3.659 GiB/s [3.649, 3.806], 1.48431×, 2.547 GiB observed, 2.536 GiB allocated</title></polygon>
+<polygon points="1138.5777777777744,905.48300625 1134.5777777777744,913.48300625 1142.5777777777744,913.48300625" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 32 KiB bit: 3.240 GiB/s [3.069, 3.300], 1.48324×, 2.793 GiB observed, 2.783 GiB allocated</title></polygon>
+<line x1="943.8277777777791" y1="797.25139375" x2="943.8277777777791" y2="785.564175" stroke="#1477ba"/>
+<line x1="939.8277777777791" y1="797.25139375" x2="947.8277777777791" y2="797.25139375" stroke="#1477ba"/>
+<line x1="939.8277777777791" y1="785.564175" x2="947.8277777777791" y2="785.564175" stroke="#1477ba"/>
+<polygon points="943.8277777777791,779.573325 937.8277777777791,791.573325 949.8277777777791,791.573325" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 4 KiB bit: 6.490 GiB/s [6.184, 6.490], 1.47469×, 4.764 GiB observed, 4.754 GiB allocated</title></polygon>
+<line x1="1162.9499999999994" y1="894.717575" x2="1162.9499999999994" y2="887.18216875" stroke="#1477ba"/>
+<line x1="1158.9499999999994" y1="894.717575" x2="1166.9499999999994" y2="894.717575" stroke="#1477ba"/>
+<line x1="1158.9499999999994" y1="887.18216875" x2="1166.9499999999994" y2="887.18216875" stroke="#1477ba"/>
+<polygon points="1162.9499999999994,883.90429375 1156.9499999999994,895.90429375 1168.9499999999994,895.90429375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 512 KiB bit: 3.753 GiB/s [3.627, 3.825], 1.48431×, 2.529 GiB observed, 2.519 GiB allocated</title></polygon>
+<polygon points="1147.9166666666638,920.33269375 1143.9166666666638,928.33269375 1151.9166666666638,928.33269375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="candidate"><title>5080 blosc-lz4, 64 KiB bit: 2.850 GiB/s [2.846, 3.061], 1.48365×, 2.652 GiB observed, 2.642 GiB allocated</title></polygon>
+<line x1="1049.0611111111084" y1="811.56885625" x2="1049.0611111111084" y2="794.39583125" stroke="#1477ba"/>
+<line x1="1045.0611111111084" y1="811.56885625" x2="1053.0611111111084" y2="811.56885625" stroke="#1477ba"/>
+<line x1="1045.0611111111084" y1="794.39583125" x2="1053.0611111111084" y2="794.39583125" stroke="#1477ba"/>
+<polygon points="1049.0611111111084,799.07159375 1043.0611111111084,811.07159375 1055.0611111111084,811.07159375" fill="#1477ba" stroke="#1477ba" stroke-width="1.4" class="front"><title>5080 blosc-lz4, 8 KiB bit: 5.978 GiB/s [5.808, 6.258], 1.47931×, 3.637 GiB observed, 3.628 GiB allocated</title></polygon>
+<line x1="943.8277777777791" y1="785.573325" x2="849" y2="769.573325" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="773.573325" class="point-label" text-anchor="start" style="fill:#1477ba">4 KiB</text>
+<line x1="1049.0611111111084" y1="805.07159375" x2="849" y2="790.573325" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="794.573325" class="point-label" text-anchor="start" style="fill:#1477ba">8 KiB</text>
+<line x1="1162.9499999999994" y1="889.90429375" x2="849" y2="873.90429375" stroke="#1477ba" opacity=".45"/>
+<text x="849" y="877.90429375" class="point-label" text-anchor="start" style="fill:#1477ba">512 KiB</text>
+<polyline points="1359.0666666666652,964.67351875" fill="none" stroke="#c34d28" stroke-width="2.5" />
+<line x1="1359.0666666666652" y1="964.68266875" x2="1359.0666666666652" y2="963.67921875" stroke="#c34d28"/>
+<line x1="1355.0666666666652" y1="964.68266875" x2="1363.0666666666652" y2="964.68266875" stroke="#c34d28"/>
+<line x1="1355.0666666666652" y1="963.67921875" x2="1363.0666666666652" y2="963.67921875" stroke="#c34d28"/>
+<polygon points="1359.0666666666652,958.67351875 1353.0666666666652,970.67351875 1365.0666666666652,970.67351875" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="front"><title>5080 blosc-zstd, 1024 KiB bit: 1.792 GiB/s [1.792, 1.818], 1.49292×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1350.8666666666672,973.98143125 1346.8666666666672,981.98143125 1354.8666666666672,981.98143125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 128 KiB bit: 1.443 GiB/s [1.373, 1.475], 1.49256×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1270.6888888888855,969.68665 1266.6888888888855,977.68665 1274.6888888888855,977.68665" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 16 KiB bit: 1.556 GiB/s [1.336, 1.595], 1.48904×, 3.551 GiB observed, 3.288 GiB allocated</title></polygon>
+<polygon points="1352.0055555555534,975.88768125 1348.0055555555534,983.88768125 1356.0055555555534,983.88768125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 256 KiB bit: 1.393 GiB/s [1.314, 1.486], 1.49261×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1311.9166666666652,972.8106125 1307.9166666666652,980.8106125 1315.9166666666652,980.8106125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 32 KiB bit: 1.474 GiB/s [1.384, 1.595], 1.49085×, 3.631 GiB observed, 3.368 GiB allocated</title></polygon>
+<polygon points="1010.7944444444441,976.00739375 1006.7944444444441,984.00739375 1014.7944444444441,984.00739375" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 4 KiB bit: 1.390 GiB/s [1.386, 1.412], 1.47763×, 3.496 GiB observed, 3.235 GiB allocated</title></polygon>
+<polygon points="1359.0666666666652,967.5280125 1355.0666666666652,975.5280125 1363.0666666666652,975.5280125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 512 KiB bit: 1.612 GiB/s [1.586, 1.664], 1.49292×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1336.5166666666642,973.01153125 1332.5166666666642,981.01153125 1340.5166666666642,981.01153125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 64 KiB bit: 1.469 GiB/s [1.427, 1.590], 1.49193×, 3.791 GiB observed, 3.529 GiB allocated</title></polygon>
+<polygon points="1180.4888888888868,970.77283125 1176.4888888888868,978.77283125 1184.4888888888868,978.77283125" fill="#c34d28" stroke="#c34d28" stroke-width="1.4" class="candidate"><title>5080 blosc-zstd, 8 KiB bit: 1.527 GiB/s [1.401, 1.554], 1.48508×, 3.512 GiB observed, 3.250 GiB allocated</title></polygon>
+<line x1="1359.0666666666652" y1="964.67351875" x2="1444" y2="948.67351875" stroke="#c34d28" opacity=".45"/>
+<text x="1444" y="952.67351875" class="point-label" text-anchor="end" style="fill:#c34d28">1024 KiB</text>
+</g>
+<text x="48" y="1140" class="note">Empirical frontiers over tested settings. Different OS, driver, compiler, and source revision; speedups are whole-system comparisons.</text>
+<text x="48" y="1162" class="note">Fold = padded chunk bytes / sink bytes; compare within each panel. Memory is not an objective here.</text>
+<text x="48" y="1184" class="note">Lines connect tested settings only. Current timing ranges are not confidence intervals.</text>
+<text x="48" y="1206" class="note">Random panels zoom to the frontiers; off-scale candidates and raw controls are omitted.</text>
+</svg><h2>Cross-codec frontier on this machine</h2><table><thead><tr><th>Input</th><th>Chunk KiB</th><th>Codec</th><th>Shuffle</th><th>Block KiB</th><th>GiB/s</th><th>Min–max</th><th>Fold</th><th>Allocated GiB</th></tr></thead><tbody><tr><td>rand</td><td>1024</td><td>blosc-lz4</td><td>bit</td><td>4</td><td>6.490</td><td>6.184–6.490</td><td>1.47469</td><td>4.754</td></tr><tr><td>rand</td><td>1024</td><td>blosc-lz4</td><td>bit</td><td>512</td><td>3.753</td><td>3.627–3.825</td><td>1.48431</td><td>2.519</td></tr><tr><td>rand</td><td>1024</td><td>blosc-lz4</td><td>bit</td><td>8</td><td>5.978</td><td>5.808–6.258</td><td>1.47931</td><td>3.628</td></tr><tr><td>rand</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>1024</td><td>1.792</td><td>1.792–1.818</td><td>1.49292</td><td>3.529</td></tr><tr><td>rand</td><td>256</td><td>blosc-lz4</td><td>bit</td><td>128</td><td>4.257</td><td>3.955–4.332</td><td>1.37811</td><td>1.411</td></tr><tr><td>rand</td><td>256</td><td>blosc-lz4</td><td>bit</td><td>256</td><td>4.158</td><td>3.772–4.169</td><td>1.37832</td><td>1.393</td></tr><tr><td>rand</td><td>256</td><td>blosc-lz4</td><td>bit</td><td>4</td><td>6.712</td><td>6.632–6.901</td><td>1.37021</td><td>2.502</td></tr><tr><td>rand</td><td>256</td><td>blosc-lz4</td><td>bit</td><td>8</td><td>6.622</td><td>6.153–6.703</td><td>1.37389</td><td>1.939</td></tr><tr><td>rand</td><td>256</td><td>blosc-zstd</td><td>bit</td><td>256</td><td>1.684</td><td>1.544–1.755</td><td>1.38553</td><td>2.175</td></tr><tr><td>xor</td><td>1024</td><td>blosc-lz4</td><td>byte</td><td>4</td><td>6.517</td><td>6.231–6.533</td><td>2.44739</td><td>4.754</td></tr><tr><td>xor</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>1024</td><td>4.331</td><td>4.269–4.631</td><td>360.65400</td><td>3.529</td></tr><tr><td>xor</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>256</td><td>5.408</td><td>5.286–5.445</td><td>190.30100</td><td>3.529</td></tr><tr><td>xor</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>32</td><td>6.490</td><td>6.302–6.617</td><td>106.65300</td><td>3.368</td></tr><tr><td>xor</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>512</td><td>4.395</td><td>4.320–4.470</td><td>244.36400</td><td>3.529</td></tr><tr><td>xor</td><td>1024</td><td>blosc-zstd</td><td>bit</td><td>64</td><td>6.181</td><td>6.123–6.749</td><td>125.29600</td><td>3.529</td></tr><tr><td>xor</td><td>256</td><td>blosc-lz4</td><td>bit</td><td>4</td><td>6.580</td><td>6.120–6.818</td><td>2.50416</td><td>2.502</td></tr><tr><td>xor</td><td>256</td><td>blosc-lz4</td><td>byte</td><td>16</td><td>6.477</td><td>6.470–6.479</td><td>3.63556</td><td>1.657</td></tr><tr><td>xor</td><td>256</td><td>blosc-lz4</td><td>byte</td><td>32</td><td>6.089</td><td>5.855–6.309</td><td>3.92315</td><td>1.516</td></tr><tr><td>xor</td><td>256</td><td>blosc-lz4</td><td>byte</td><td>4</td><td>6.522</td><td>6.439–6.548</td><td>2.77142</td><td>2.502</td></tr><tr><td>xor</td><td>256</td><td>blosc-zstd</td><td>bit</td><td>128</td><td>5.739</td><td>5.379–5.820</td><td>121.38600</td><td>2.175</td></tr><tr><td>xor</td><td>256</td><td>blosc-zstd</td><td>bit</td><td>16</td><td>5.802</td><td>5.726–5.940</td><td>73.10940</td><td>1.934</td></tr><tr><td>xor</td><td>256</td><td>blosc-zstd</td><td>bit</td><td>256</td><td>4.657</td><td>4.534–4.774</td><td>138.70700</td><td>2.175</td></tr><tr><td>xor</td><td>256</td><td>blosc-zstd</td><td>bit</td><td>8</td><td>5.885</td><td>5.848–5.886</td><td>45.56300</td><td>1.895</td></tr></tbody></table><p>Memory excludes runtime headroom. Bars are repetition ranges, not confidence intervals.</p><script>for(const id of ['old','candidates'])document.getElementById(id).addEventListener('change',e=>document.body.classList.toggle('hide-'+id,!e.target.checked));</script></html>

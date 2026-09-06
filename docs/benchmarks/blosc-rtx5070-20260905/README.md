@@ -25,6 +25,10 @@ Regenerate the derived artifacts from the repository root:
 python3 docs/benchmarks/blosc-rtx5070-20260905/plot.py
 ```
 
+The historical and RTX 5080 figures use the same [visual theme](../blosc-figure-style.json)
+for codec colors, typography, grids, and graphical legends. Generated SVGs and
+HTML embed their styling and remain self-contained.
+
 `summary.csv` is the preserved aggregate from the completed 800-execution sweep;
 its old `pareto` column is **per shuffle**, not the frontier shown in the guide.
 The generator recomputes membership from throughput and fold. It validates

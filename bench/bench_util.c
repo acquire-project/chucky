@@ -713,6 +713,19 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       }
       out->codec.blosc_block_bytes = (uint32_t)block_bytes;
       ++i;
+    } else if (strcmp(av[i], "--blosc-shuffle") == 0 && i + 1 < ac) {
+      const char* shuffle = av[++i];
+      if (strcmp(shuffle, "none") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_NONE;
+      else if (strcmp(shuffle, "byte") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_BYTE;
+      else if (strcmp(shuffle, "bit") == 0)
+        out->codec.shuffle = CODEC_SHUFFLE_BIT;
+      else {
+        fprintf(stderr, "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
+                shuffle);
+        return 1;
+      }
     } else if (strcmp(av[i], "--reduce") == 0 && i + 1 < ac) {
       if (!parse_reduce(av[++i], &out->reduce))
         return 1;
@@ -768,6 +781,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "Usage: %s [--fill xor|zeros|rand] [--codec "
               "none|lz4|zstd|blosc-lz4|blosc-zstd] "
               "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
+              "[--blosc-shuffle none|byte|bit] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
               "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
               "[--json] [--chunk-bytes N] [--batch-bytes N] "
