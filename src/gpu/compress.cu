@@ -361,10 +361,10 @@ codec_init(struct codec* c,
            size_t batch_size)
 {
   struct codec_config config = {
-    .id = type,
-    .level = (uint8_t)(type == CODEC_LZ4_NON_STANDARD ? 1 : 0),
-    .shuffle = CODEC_SHUFFLE_NONE,
-    .blosc_block_bytes = 0,
+    type,
+    (uint8_t)(type == CODEC_LZ4_NON_STANDARD ? 1 : 0),
+    CODEC_SHUFFLE_NONE,
+    0,
   };
   return codec_init_config(c, config, 1, chunk_bytes, batch_size, 0);
 }
@@ -629,9 +629,7 @@ codec_compress(struct codec* c,
         frame, original, c->d_block_input, c->block_input_stride, n, stream) ==
         0);
     input_block_stride = c->block_input_stride;
-    input =
-      (struct gpu_blosc_input){ c->d_block_input,
-                                c->blocks_per_chunk * input_block_stride };
+    input = { c->d_block_input, c->blocks_per_chunk * input_block_stride };
   }
 
   inputs = n * c->blocks_per_chunk;
