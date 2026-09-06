@@ -69,6 +69,12 @@ store_destroy(store);
 
 See `docs/formats.md` for multiscale and HCS examples.
 
+Blosc-LZ4 and Blosc-Zstd use the same S3 sink as the other codecs. Configure
+the stream and array with the same `struct codec_config`, including an explicit
+`blosc_block_bytes`; see the [Blosc configuration API][blosc-configuration].
+Internal Blosc blocks do not set S3 multipart boundaries or change the number
+of shard objects.
+
 ### Credentials
 
 The CRT uses the [standard credential provider chain][cred-chain]:
@@ -223,7 +229,7 @@ struct tile_stream_configuration stream_cfg = {
   .dtype      = dtype_u16,
   .rank       = 3,
   .dimensions = dims,
-  .codec      = CODEC_ZSTD,
+  .codec      = { .id = CODEC_ZSTD },
 };
 
 int ratios[] = { 0, 1, 1 };
@@ -244,7 +250,7 @@ struct zarr_group* root = zarr_group_create(store, "");
 zarr_group_destroy(root);
 struct zarr_array_config acfg = {
   .data_type = dtype_u16, .rank = 3, .dimensions = dims,
-  .codec = { .id = CODEC_ZSTD },
+  .codec = stream_cfg.codec,
 };
 struct zarr_array* arr = zarr_array_create(store, "0", &acfg);
 
@@ -282,3 +288,4 @@ store_destroy(store);
 [bucket-lifecycle-policy]: #bucket-lifecycle-policy
 [limitations]: #limitations
 [store-h]: ../src/store.h
+[blosc-configuration]: ../README.md#blosc-configuration

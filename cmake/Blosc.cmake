@@ -2,7 +2,8 @@
 #
 # Tries CONFIG mode first (covers vcpkg, Conan, system CMake configs),
 # then falls back to the bundled FindBlosc.cmake module.
-# If neither finds blosc, HAVE_BLOSC is OFF and blosc codecs are unavailable.
+# If neither finds blosc, HAVE_BLOSC is OFF and CPU Blosc is unavailable.
+# GPU Blosc uses nvCOMP and remains available in GPU builds.
 
 find_package(blosc CONFIG QUIET)
 if(blosc_FOUND)
@@ -36,5 +37,5 @@ if(TARGET Blosc::Blosc)
     set(HAVE_BLOSC ON)
 else()
     set(HAVE_BLOSC OFF)
-    message(STATUS "Blosc not found — blosc codecs disabled")
+    message(STATUS "Blosc not found — CPU blosc codecs disabled")
 endif()

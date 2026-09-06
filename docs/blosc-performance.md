@@ -356,8 +356,9 @@ the real filesystem or S3 sink.
 
 ### Runner and report status
 
-The current matrices still schedule Blosc only on CPU and request 16 KiB
-blocks. The following support is already available:
+The current matrices still schedule Blosc only on CPU, with level 3, no shuffle,
+and an explicit 16 KiB block request. This is a scheduling limitation; the GPU
+backend supports both Blosc codecs. The following support is already available:
 
 - `RunSpec` requires explicit `blosc_block_bytes` for Blosc runs; zero is
   invalid. The benchmark command and result metadata include the request,
@@ -376,7 +377,8 @@ Remaining work for the expanded matrices:
 1. Add explicit shuffle and level fields to Blosc run specs, commands, and
    results, including failures. Extend identities, resume checks, and comparison
    labels to include them. This branch's benchmark parser does not yet expose
-   shuffle/level CLI controls; port/reuse the existing Blosc benchmark work.
+   shuffle/level CLI controls; port/reuse the existing Blosc benchmark work
+   retained in the [L40 collection patch][benchmark-controls].
    Validate returned settings against requests.
 2. Add the routine GPU Blosc cases and opt-in tuning tier described above, with
    warmups, seeded run order, and measured repetitions. Keep each repetition
@@ -429,3 +431,4 @@ artifact README gives the exact collection method and reproduction limits.
 [frontier-comparison]: benchmarks/blosc-l40-20260906/comparison.md
 [comparison-plot]: benchmarks/blosc-l40-20260906/comparison.svg
 [historical-artifacts]: benchmarks/blosc-rtx5070-20260905/README.md
+[benchmark-controls]: benchmarks/blosc-l40-20260906/benchmark-controls.patch

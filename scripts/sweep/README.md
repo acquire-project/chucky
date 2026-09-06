@@ -4,7 +4,11 @@ For Blosc measurements, memory accounting, and the proposed split between
 routine coverage and an opt-in block-size tuning matrix, see the
 [Blosc performance guide][blosc-performance-guide].
 The current runner has not yet adopted that matrix; its Blosc entries still
-use CPU and an explicit 16 KiB block request.
+use CPU, level 3, no shuffle, and an explicit 16 KiB block request. The GPU
+backend supports both Blosc codecs; CPU-only scheduling is a limit of the
+current routine matrices. The regular benchmark CLI has no shuffle/level
+controls yet. The [retained L40 tuning sweep][l40-measurements] used a separate
+archived benchmark patch to select those settings.
 Blosc run identities include the requested block size. Resume checks and report
 comparisons distinguish each explicit size from historical runs with an
 unrecorded size; those remain **unknown**, not an assumed default. Both report
@@ -342,6 +346,7 @@ bump it.
 - **1** — Predates this rule; not a single shape.
 
 [blosc-performance-guide]: ../../docs/blosc-performance.md#incorporating-blosc-into-the-regular-sweeps
+[l40-measurements]: ../../docs/benchmarks/blosc-l40-20260906/README.md
 [s3-blackhole]: https://github.com/nclack/s3-blackhole
 [s3-blackhole-stats]: http://127.0.0.1:9000/_s3_blackhole/stats
 [local-report]: http://127.0.0.1:8000/index.html

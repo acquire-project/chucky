@@ -212,7 +212,7 @@ length prefix begins at an unaligned address.
 For LZ4, each compressed payload is an independent
 [LZ4 block][lz4-block-format], not an
 LZ4 frame. Its uncompressed length comes from `U[i]`; it MUST NOT require a
-A dictionary or a history from another block.
+dictionary or a history from another block.
 
 For Zstandard, each compressed payload is an independent Zstandard frame as
 specified by [RFC 8878][rfc8878]. It MUST NOT

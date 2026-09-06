@@ -182,7 +182,7 @@ def backend_runs() -> list[RunSpec]:
             for cl in CHUNK_BYTES:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-        # blosc codecs are CPU-only
+        # Routine Blosc cases currently run on CPU; GPU codecs are supported.
         for codec in ["blosc-lz4", "blosc-zstd"]:
             for cl in CHUNK_BYTES:
                 runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
@@ -200,7 +200,7 @@ def lod_runs() -> list[RunSpec]:
             for codec in ["none", "zstd"]:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
                 runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, blosc_block_bytes=16 * 1024))
     return runs
@@ -223,7 +223,7 @@ def io_runs() -> list[RunSpec]:
             for codec in ["none", "zstd"]:
                 for backend in ["gpu", "cpu"]:
                     runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend=backend, dtype="u16", chunk_label=cl, sink="fs"))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
                 runs.append(RunSpec(scenario=sc, codec=codec, fill="xor", backend="cpu", dtype="u16", chunk_label=cl, sink="fs", blosc_block_bytes=16 * 1024))
     return runs
@@ -259,7 +259,7 @@ def s3_runs() -> list[RunSpec]:
                                 sink=sink,
                                 s3_throughput_gbps=throughput if sink == "s3" else 0,
                             ))
-            # blosc codecs are CPU-only
+            # Routine Blosc cases currently run on CPU; GPU codecs are supported.
             for codec in ["blosc-lz4", "blosc-zstd"]:
                 for throughput in [10, 100]:
                     for sink in ["discard", "fs", "s3"]:

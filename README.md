@@ -52,6 +52,9 @@ up to 32 LOD levels. Internal layout supports up to 64 dimensions.
 
 - **aws-c-s3** — Amazon S3 client library for S3 storage backend
 - **lz4**, **zstd** — compression libraries
+- **c-blosc** (optional) — enables CPU Blosc-LZ4/Blosc-Zstd and the GPU
+  Blosc interoperability tests. GPU Blosc encoding uses nvCOMP and does not
+  require c-blosc.
 - **CMake** (3.18+) + **Ninja** — build system
 
 The default build targets SM 100 (Blackwell). For other GPUs, set
@@ -74,7 +77,7 @@ cmake --preset cpu-only
 cmake --build build
 ```
 
-The easiest way to get the non-CUDA dependencies (lz4, zstd, aws-c-s3) is via
+The easiest way to get the non-CUDA dependencies (lz4, zstd, c-blosc, aws-c-s3) is via
 [vcpkg][vcpkg]. A `vcpkg.json` manifest is included in the repo:
 
 ```
@@ -176,7 +179,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
-| `--fill` | `xor`, `zeros`, `thirds` | `xor` | Synthetic fill pattern for input data |
+| `--fill` | `xor`, `zeros`, `rand` | `xor` | Synthetic fill pattern for input data |
 | `--codec` | `none`, `lz4`, `zstd`, `blosc-lz4`, `blosc-zstd` | `zstd` | Compression codec |
 | `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
@@ -229,7 +232,8 @@ tile_stream_gpu_destroy(s);
 
 The CPU backend (`tile_stream_cpu_create` / `tile_stream_cpu_writer`) follows
 the same pattern — swap `gpu` for `cpu` in the function names. The GPU backend
-uses CUDA streams + nvcomp; the CPU backend uses OpenMP + zstd/lz4.
+uses CUDA streams + nvcomp; the CPU backend uses OpenMP + zstd/lz4 and optional
+c-blosc.
 
 Configure the pipeline via `struct tile_stream_configuration` (codec, chunk
 dimensions, shard layout, LOD reduction method, etc.). See
@@ -263,8 +267,9 @@ Other codecs ignore this field.
 On GPU the block size is capped by the chunk size, with a shorter final block
 when needed. The encoder handles device alignment internally; callers simply append
 their bytes, and block sizes need not be aligned or powers of two. Aligned block
-sizes use the existing chunk layout directly; other sizes may require extra
-device scratch and a copy. Memory estimates include that scratch.
+sizes with no filter use the existing chunk layout directly. Shuffle and
+misaligned block boundaries share an internal preparation buffer; memory
+estimates include that scratch.
 
 On CPU the value is passed explicitly to `blosc_compress_ctx`. C-Blosc's
 [block splitting and element-alignment rules][block-splitting-and-element-alignment-rules]
@@ -282,6 +287,12 @@ Benchmarks require `--blosc-block-bytes` when a Blosc codec is selected:
 ```sh
 ./build/bench/bench_stream_orca2_single --backend gpu --codec blosc-zstd --blosc-block-bytes 16K
 ```
+
+The regular benchmark CLI selects level 3 and no shuffle for Blosc. It does
+not yet expose `--shuffle` or `--level`; the retained L40 tuning sweep used
+the [archived benchmark-controls patch][blosc-benchmark-controls] to select
+those settings. The command above therefore does not reproduce the bitshuffle
+API example.
 
 The existing sweep suite explicitly selects 16 KiB for its Blosc cases; this is
 a benchmark choice, not a codec API default.
@@ -311,4 +322,5 @@ I plan to use this as a future backbone for [acquire-zarr][acquire-zarr].
 [blosc-performance]: docs/blosc-performance.md
 [src-stream-gpu-h]: src/stream.gpu.h
 [src-stream-cpu-h]: src/stream.cpu.h
-[block-splitting-and-element-alignment-rules]: https://github.com/Blosc/c-blosc/blob/v1.21.6/blosc/blosc.c#L905-L997
+[block-splitting-and-element-alignment-rules]: https://github.com/Blosc/c-blosc/blob/616f4b7343a8479f7e71dd3d7025bd92c9a6bbd0/blosc/blosc.c#L934-L1064
+[blosc-benchmark-controls]: docs/benchmarks/blosc-l40-20260906/benchmark-controls.patch
