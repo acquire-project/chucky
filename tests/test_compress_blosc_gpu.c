@@ -1,10 +1,12 @@
 #include "gpu/blosc.frame.h"
+#include "gpu/blosc.shuffle.h"
 #include "gpu/compress.h"
 #include "gpu/prelude.cuda.h"
 #include "stream.gpu.h"
 #include "util/prelude.h"
 
 #include <blosc.h>
+#include <nvcomp/lz4.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +73,9 @@ verify_chunk(const struct codec* c,
   CHECK(Fail,
         ((encoded[2] & BLOSC_DOSHUFFLE) != 0) ==
           (c->config.shuffle == CODEC_SHUFFLE_BYTE));
+  CHECK(Fail,
+        ((encoded[2] & BLOSC_DOBITSHUFFLE) != 0) ==
+          (c->config.shuffle == CODEC_SHUFFLE_BIT));
   CHECK(Fail, ((encoded[2] & BLOSC_MEMCPYED) != 0) == expect_memcpy);
   if (expect_memcpy) {
     CHECK(Fail, encoded_bytes == c->chunk_bytes + BLOSC_MAX_OVERHEAD);
@@ -129,11 +134,11 @@ run_case(struct codec_config config,
                           typesize,
                           chunk_bytes,
                           batch,
-                          config.shuffle == CODEC_SHUFFLE_BYTE) == 0);
+                          config.shuffle != CODEC_SHUFFLE_NONE) == 0);
   CHECK(Fail, c.max_output_size == chunk_bytes + BLOSC_MAX_OVERHEAD);
   CHECK(Fail, c.output_stride >= c.max_output_size);
   {
-    const int reserve = config.shuffle == CODEC_SHUFFLE_BYTE;
+    const int reserve = config.shuffle != CODEC_SHUFFLE_NONE;
     const size_t expected = 2 * batch * sizeof(size_t) +
                             2 * batch * sizeof(void*) + c.temp_bytes +
                             (reserve ? batch * c.shuffle_stride : 0);
@@ -193,8 +198,11 @@ static int
 test_compressed_matrix(void)
 {
   const enum compression_codec codecs[] = { CODEC_BLOSC_LZ4, CODEC_BLOSC_ZSTD };
-  const enum codec_shuffle shuffles[] = { CODEC_SHUFFLE_NONE,
-                                          CODEC_SHUFFLE_BYTE };
+  const enum codec_shuffle shuffles[] = {
+    CODEC_SHUFFLE_NONE,
+    CODEC_SHUFFLE_BYTE,
+    CODEC_SHUFFLE_BIT,
+  };
   const size_t typesizes[] = { 1, 2, 4, 8 };
   for (size_t c = 0; c < countof(codecs); ++c)
     for (size_t s = 0; s < countof(shuffles); ++s)
@@ -207,10 +215,18 @@ test_compressed_matrix(void)
                 0);
       }
   {
-    struct codec_config tail = { .id = CODEC_BLOSC_ZSTD,
-                                 .level = 5,
-                                 .shuffle = CODEC_SHUFFLE_BYTE };
-    CHECK(Fail, run_case(tail, 8, 65539, PATTERN_RAMP, 0, 2) == 0);
+    // C-Blosc 1.x leaves the complete block unchanged when its element count
+    // is not divisible by eight, while retaining the bitshuffle frame flag.
+    struct codec_config nonmultiple = { .id = CODEC_BLOSC_LZ4,
+                                        .level = 5,
+                                        .shuffle = CODEC_SHUFFLE_BIT };
+    CHECK(Fail, run_case(nonmultiple, 4, 65540, PATTERN_RAMP, 0, 1) == 0);
+  }
+  {
+    struct codec_config transformed = { .id = CODEC_BLOSC_ZSTD,
+                                        .level = 5,
+                                        .shuffle = CODEC_SHUFFLE_BIT };
+    CHECK(Fail, run_case(transformed, 8, 4096, PATTERN_RAMP, 0, 2) == 0);
   }
   return 0;
 Fail:
@@ -222,16 +238,20 @@ test_memcpy_fallbacks(void)
 {
   const enum compression_codec codecs[] = { CODEC_BLOSC_LZ4, CODEC_BLOSC_ZSTD };
   for (size_t i = 0; i < countof(codecs); ++i) {
-    struct codec_config level_zero = { .id = codecs[i],
-                                       .level = 0,
-                                       .shuffle = CODEC_SHUFFLE_BYTE };
-    struct codec_config enabled = { .id = codecs[i],
-                                    .level = 5,
-                                    .shuffle = CODEC_SHUFFLE_BYTE };
-    struct codec_config incompressible = enabled;
+    struct codec_config level_zero_byte = { .id = codecs[i],
+                                            .level = 0,
+                                            .shuffle = CODEC_SHUFFLE_BYTE };
+    struct codec_config level_zero_bit = { .id = codecs[i],
+                                           .level = 0,
+                                           .shuffle = CODEC_SHUFFLE_BIT };
+    struct codec_config enabled_bit = { .id = codecs[i],
+                                        .level = 5,
+                                        .shuffle = CODEC_SHUFFLE_BIT };
+    struct codec_config incompressible = enabled_bit;
     incompressible.shuffle = CODEC_SHUFFLE_NONE;
-    CHECK(Fail, run_case(level_zero, 8, 4096, PATTERN_ZERO, 1, 3) == 0);
-    CHECK(Fail, run_case(enabled, 4, 127, PATTERN_ZERO, 1, 3) == 0);
+    CHECK(Fail, run_case(level_zero_byte, 8, 4096, PATTERN_ZERO, 1, 3) == 0);
+    CHECK(Fail, run_case(level_zero_bit, 8, 4096, PATTERN_ZERO, 1, 3) == 0);
+    CHECK(Fail, run_case(enabled_bit, 4, 127, PATTERN_ZERO, 1, 3) == 0);
     CHECK(Fail,
           run_case(incompressible, 4, 64 * 1024, PATTERN_RANDOM, 1, 3) == 0);
   }
@@ -250,19 +270,29 @@ test_rebind_and_rejection(void)
                                   .shuffle = CODEC_SHUFFLE_NONE };
   struct codec_config rebound = { .id = CODEC_BLOSC_ZSTD,
                                   .level = 8,
-                                  .shuffle = CODEC_SHUFFLE_BYTE };
-  struct codec_config bitshuffle = { .id = CODEC_BLOSC_ZSTD,
-                                     .level = 5,
-                                     .shuffle = CODEC_SHUFFLE_BIT };
+                                  .shuffle = CODEC_SHUFFLE_BIT };
+  struct codec_config invalid = { .id = CODEC_BLOSC_ZSTD,
+                                  .level = 5,
+                                  .shuffle = (enum codec_shuffle)99 };
   int result = 1;
 
-  CHECK(Fail, codec_validate_gpu(bitshuffle, 4, 4096) != 0);
+  CHECK(Fail, codec_validate_gpu(invalid, 4, 4096) != 0);
+  {
+    struct codec_config lz4 = initial;
+    lz4.id = CODEC_BLOSC_LZ4;
+    CHECK(Fail,
+          codec_validate_gpu(lz4, 4, nvcompLZ4CompressionMaxAllowedChunkSize) ==
+            0);
+    CHECK(Fail,
+          codec_validate_gpu(
+            lz4, 4, nvcompLZ4CompressionMaxAllowedChunkSize + 1) != 0);
+  }
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CHECK(Fail, codec_init_config(&c, initial, 2, 65536, 3, 1) == 0);
   CHECK(Fail, codec_bind(&c, rebound, 8, 4096, stream) == 0);
   CHECK(Fail, c.chunk_bytes == 4096 && c.typesize == 8);
-  CHECK(Fail, c.config.level == 8 && c.config.shuffle == CODEC_SHUFFLE_BYTE);
-  CHECK(Fail, codec_bind(&c, bitshuffle, 8, 4096, stream) != 0);
+  CHECK(Fail, c.config.level == 8 && c.config.shuffle == CODEC_SHUFFLE_BIT);
+  CHECK(Fail, codec_bind(&c, invalid, 8, 4096, stream) != 0);
   result = 0;
 
 Fail:
@@ -291,8 +321,14 @@ test_memory_estimate(void)
     .epochs_per_batch = 2,
   };
 
-  for (int shuffled = 0; shuffled < 2; ++shuffled) {
-    config.codec.shuffle = shuffled ? CODEC_SHUFFLE_BYTE : CODEC_SHUFFLE_NONE;
+  const enum codec_shuffle shuffles[] = {
+    CODEC_SHUFFLE_NONE,
+    CODEC_SHUFFLE_BYTE,
+    CODEC_SHUFFLE_BIT,
+  };
+  for (size_t s = 0; s < countof(shuffles); ++s) {
+    config.codec.shuffle = shuffles[s];
+    const int reserve = shuffles[s] != CODEC_SHUFFLE_NONE;
     struct tile_stream_memory_info info = { 0 };
     CHECK(Fail, tile_stream_gpu_memory_estimate(&config, 0, &info) == 0);
     CHECK(Fail, info.max_output_size > 16);
@@ -300,11 +336,161 @@ test_memory_estimate(void)
     const size_t batch = info.epochs_per_batch * info.total_chunks;
     CHECK(Fail,
           info.codec_bytes ==
-            codec_device_bytes(config.codec.id, chunk_bytes, batch, shuffled));
+            codec_device_bytes(config.codec.id, chunk_bytes, batch, reserve));
     CHECK(Fail,
           info.compressed_pool_bytes ==
             2 * batch * codec_output_stride(config.codec.id, chunk_bytes));
   }
+  return 0;
+
+Fail:
+  return 1;
+}
+
+static void
+byte_shuffle_reference(const uint8_t* src,
+                       uint8_t* dst,
+                       size_t chunk_bytes,
+                       size_t typesize)
+{
+  const size_t nelem = chunk_bytes / typesize;
+  const size_t complete = nelem * typesize;
+  for (size_t byte = 0; byte < typesize; ++byte)
+    for (size_t elem = 0; elem < nelem; ++elem)
+      dst[byte * nelem + elem] = src[elem * typesize + byte];
+  memcpy(dst + complete, src + complete, chunk_bytes - complete);
+}
+
+static void
+bitshuffle_reference(const uint8_t* src,
+                     uint8_t* dst,
+                     size_t chunk_bytes,
+                     size_t typesize)
+{
+  const size_t nelem = chunk_bytes / typesize;
+  const size_t complete = nelem * typesize;
+  if ((nelem & 7) != 0) {
+    memcpy(dst, src, chunk_bytes);
+    return;
+  }
+
+  const size_t groups = nelem / 8;
+  for (size_t byte = 0; byte < typesize; ++byte)
+    for (unsigned bit = 0; bit < 8; ++bit)
+      for (size_t group = 0; group < groups; ++group) {
+        uint8_t packed = 0;
+        for (unsigned elem = 0; elem < 8; ++elem) {
+          const uint8_t value = src[(group * 8 + elem) * typesize + byte];
+          packed |= (uint8_t)(((value >> bit) & 1u) << elem);
+        }
+        dst[(byte * 8 + bit) * groups + group] = packed;
+      }
+  memcpy(dst + complete, src + complete, chunk_bytes - complete);
+}
+
+static int
+run_shuffle_filter_case(enum codec_shuffle shuffle,
+                        size_t typesize,
+                        size_t chunk_bytes)
+{
+  const size_t batch = 1;
+  const size_t stride = align_up(chunk_bytes, 64);
+  uint8_t* input = NULL;
+  uint8_t* expected = NULL;
+  uint8_t* actual = NULL;
+  CUdeviceptr d_input = 0;
+  CUdeviceptr d_output = 0;
+  CUstream stream = 0;
+  int result = 1;
+
+  input = (uint8_t*)calloc(batch, stride);
+  expected = (uint8_t*)calloc(batch, stride);
+  actual = (uint8_t*)calloc(batch, stride);
+  CHECK(Fail, input && expected && actual);
+  for (size_t chunk = 0; chunk < batch; ++chunk) {
+    for (size_t i = 0; i < chunk_bytes; ++i)
+      input[chunk * stride + i] = (uint8_t)(i + 17 * chunk);
+    if (shuffle == CODEC_SHUFFLE_BIT)
+      bitshuffle_reference(input + chunk * stride,
+                           expected + chunk * stride,
+                           chunk_bytes,
+                           typesize);
+    else
+      byte_shuffle_reference(input + chunk * stride,
+                             expected + chunk * stride,
+                             chunk_bytes,
+                             typesize);
+  }
+
+  CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuMemAlloc(&d_input, batch * stride));
+  CU(Fail, cuMemAlloc(&d_output, batch * stride));
+  CU(Fail, cuMemcpyHtoD(d_input, input, batch * stride));
+  CU(Fail, cuStreamSynchronize(NULL));
+  if (shuffle == CODEC_SHUFFLE_BIT)
+    CHECK(Fail,
+          gpu_blosc_bitshuffle_async((const void*)(uintptr_t)d_input,
+                                     stride,
+                                     (void*)(uintptr_t)d_output,
+                                     stride,
+                                     chunk_bytes,
+                                     typesize,
+                                     batch,
+                                     stream) == 0);
+  else
+    CHECK(Fail,
+          gpu_blosc_shuffle_async((const void*)(uintptr_t)d_input,
+                                  stride,
+                                  (void*)(uintptr_t)d_output,
+                                  stride,
+                                  chunk_bytes,
+                                  typesize,
+                                  batch,
+                                  stream) == 0);
+  CU(Fail, cuStreamSynchronize(stream));
+  CU(Fail, cuMemcpyDtoH(actual, d_output, batch * stride));
+  for (size_t chunk = 0; chunk < batch; ++chunk)
+    CHECK(Fail,
+          memcmp(actual + chunk * stride,
+                 expected + chunk * stride,
+                 chunk_bytes) == 0);
+  result = 0;
+
+Fail:
+  cu_mem_free(d_input);
+  cu_mem_free(d_output);
+  cu_stream_destroy(stream);
+  free(input);
+  free(expected);
+  free(actual);
+  return result;
+}
+
+static int
+test_shuffle_filters(void)
+{
+  // Pinned C-Blosc 1.21.6 scalar-format vector: sixteen 2-byte elements whose
+  // input bytes are 0..31.
+  const uint8_t golden[] = { 0x00, 0x00, 0xaa, 0xaa, 0xcc, 0xcc, 0xf0, 0xf0,
+                             0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                             0xff, 0xff, 0xaa, 0xaa, 0xcc, 0xcc, 0xf0, 0xf0,
+                             0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  uint8_t input[countof(golden)];
+  uint8_t actual[countof(golden)];
+  for (size_t i = 0; i < countof(input); ++i)
+    input[i] = (uint8_t)i;
+  bitshuffle_reference(input, actual, sizeof(input), 2);
+  CHECK(Fail, memcmp(actual, golden, sizeof(golden)) == 0);
+
+  const size_t typesizes[] = { 1, 2, 4, 8 };
+  for (size_t i = 0; i < countof(typesizes); ++i)
+    CHECK(Fail,
+          run_shuffle_filter_case(CODEC_SHUFFLE_BIT,
+                                  typesizes[i],
+                                  16 * typesizes[i] + typesizes[i] - 1) == 0);
+  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BIT, 8, 65539) == 0);
+  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BIT, 4, 17 * 4 + 3) == 0);
+  CHECK(Fail, run_shuffle_filter_case(CODEC_SHUFFLE_BYTE, 8, 65539) == 0);
   return 0;
 
 Fail:
@@ -330,11 +516,13 @@ test_frame_boundary(void)
   int result = 1;
 
   fill_input(input, sizeof(input), PATTERN_RAMP);
+  memset(encoded, 0xa5, sizeof(encoded));
   CU(Fail, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuMemAlloc(&d_input, sizeof(input)));
   CU(Fail, cuMemAlloc(&d_encoded, sizeof(encoded)));
   CU(Fail, cuMemAlloc(&d_sizes, sizeof(sizes)));
   CU(Fail, cuMemcpyHtoD(d_input, input, sizeof(input)));
+  CU(Fail, cuMemcpyHtoD(d_encoded, encoded, sizeof(encoded)));
   CU(Fail, cuMemcpyHtoD(d_sizes, sizes, sizeof(sizes)));
   CU(Fail, cuStreamSynchronize(NULL));
   CHECK(Fail,
@@ -358,6 +546,11 @@ test_frame_boundary(void)
   CHECK(Fail, (encoded[2] & BLOSC_MEMCPYED) == 0);
   CHECK(Fail, get_u32le(encoded + 16) == 20);
   CHECK(Fail, get_u32le(encoded + 20) == CHUNK_BYTES - 9);
+  // The compressed payload must survive finalization even when its length is
+  // just below the fallback threshold. Header-only assertions miss overwrites
+  // by other warps that observed the newly published frame size.
+  for (size_t i = 24; i < CHUNK_BYTES + 15; ++i)
+    CHECK(Fail, encoded[i] == 0xa5);
   for (size_t i = 1; i < BATCH; ++i) {
     const uint8_t* chunk = encoded + i * STRIDE;
     CHECK(Fail, sizes[i] == CHUNK_BYTES + BLOSC_MAX_OVERHEAD);
@@ -381,4 +574,5 @@ RUN_GPU_TESTS({ "blosc_compressed_matrix", test_compressed_matrix },
               { "blosc_memcpy_fallbacks", test_memcpy_fallbacks },
               { "blosc_rebind_and_rejection", test_rebind_and_rejection },
               { "blosc_memory_estimate", test_memory_estimate },
+              { "blosc_shuffle_filters", test_shuffle_filters },
               { "blosc_frame_boundary", test_frame_boundary }, )

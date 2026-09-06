@@ -90,10 +90,14 @@ main(void)
       { .id = CODEC_BLOSC_LZ4, .level = 5, .shuffle = CODEC_SHUFFLE_NONE } },
     { "blosc_lz4_shuffle",
       { .id = CODEC_BLOSC_LZ4, .level = 5, .shuffle = CODEC_SHUFFLE_BYTE } },
+    { "blosc_lz4_bitshuffle",
+      { .id = CODEC_BLOSC_LZ4, .level = 5, .shuffle = CODEC_SHUFFLE_BIT } },
     { "blosc_zstd_noshuffle",
       { .id = CODEC_BLOSC_ZSTD, .level = 5, .shuffle = CODEC_SHUFFLE_NONE } },
     { "blosc_zstd_shuffle",
       { .id = CODEC_BLOSC_ZSTD, .level = 5, .shuffle = CODEC_SHUFFLE_BYTE } },
+    { "blosc_zstd_bitshuffle",
+      { .id = CODEC_BLOSC_ZSTD, .level = 5, .shuffle = CODEC_SHUFFLE_BIT } },
   };
 
   int error = 0;

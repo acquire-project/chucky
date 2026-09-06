@@ -53,8 +53,9 @@ engine_limits_accumulate(struct engine_limits* lim,
     max_sz(lim->pool_bytes, (size_t)K * total_chunks * chunk_stride * bpe);
   lim->chunk_bytes = max_sz(lim->chunk_bytes, chunk_stride * bpe);
   lim->codec_batch = max_u64(lim->codec_batch, (uint64_t)K * total_chunks);
-  if (config->codec.shuffle == CODEC_SHUFFLE_BYTE)
-    lim->any_byte_shuffle = 1;
+  if (codec_is_blosc(config->codec.id) &&
+      config->codec.shuffle != CODEC_SHUFFLE_NONE)
+    lim->any_shuffle = 1;
   if (K > lim->epochs_per_batch)
     lim->epochs_per_batch = K;
   if (cl->levels.nlod > lim->max_nlod)

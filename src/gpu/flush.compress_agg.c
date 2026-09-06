@@ -70,7 +70,7 @@ compress_agg_init_shared(struct compress_agg_stage* stage,
                           typesize,
                           lim->chunk_bytes,
                           M,
-                          lim->any_byte_shuffle) == 0);
+                          lim->any_shuffle) == 0);
 
   stage->pool_epochs_stride = K;
   stage->pool_epochs_scratch =
@@ -356,7 +356,7 @@ compress_agg_memory_estimate(const struct engine_limits* lim,
   }
 
   *codec_bytes = codec_device_bytes(
-    codec_id, lim->chunk_bytes, lim->codec_batch, lim->any_byte_shuffle);
+    codec_id, lim->chunk_bytes, lim->codec_batch, lim->any_shuffle);
   CHECK(Error, *codec_bytes > 0);
 
   size_t dev = 0;
