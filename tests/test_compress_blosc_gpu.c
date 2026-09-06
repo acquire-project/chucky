@@ -153,6 +153,9 @@ run_case(struct codec_config config,
   CU(Fail, cuMemAlloc(&d_input, batch * input_stride));
   CU(Fail, cuMemAlloc(&d_encoded, batch * c.output_stride));
   CU(Fail, cuMemcpyHtoD(d_input, input, batch * input_stride));
+  // Pageable H2D copies can return before the default-stream DMA finishes.
+  // The nonblocking test stream does not inherit that dependency.
+  CU(Fail, cuStreamSynchronize(NULL));
   CHECK(Fail,
         codec_compress(&c,
                        (const void*)(uintptr_t)d_input,
@@ -333,6 +336,7 @@ test_frame_boundary(void)
   CU(Fail, cuMemAlloc(&d_sizes, sizeof(sizes)));
   CU(Fail, cuMemcpyHtoD(d_input, input, sizeof(input)));
   CU(Fail, cuMemcpyHtoD(d_sizes, sizes, sizeof(sizes)));
+  CU(Fail, cuStreamSynchronize(NULL));
   CHECK(Fail,
         gpu_blosc_finalize_async(CODEC_BLOSC_LZ4,
                                  CODEC_SHUFFLE_NONE,
