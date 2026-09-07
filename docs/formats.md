@@ -31,6 +31,10 @@ failures are sticky pool errors, including failures reported by synchronous
 calls. Stores without queued metadata support use synchronous `put`; metadata
 completion does not finalize active S3 uploads.
 
+Filesystem metadata writes create missing parent directories. They do not
+create Zarr group metadata for those directories; use the group API where
+the hierarchy requires groups.
+
 ## Quick start
 
 ### Single array on filesystem

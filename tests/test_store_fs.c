@@ -1041,6 +1041,91 @@ metadata_file_matches(const char* path, const char* expected)
 }
 
 static int
+test_metadata_creates_parents(int queued)
+{
+  log_info("=== test_metadata_creates_parents (queued=%d) ===", queued);
+  char root[4096];
+  snprintf(root, sizeof(root), "%s/metadata-parents-%d", tmpdir, queued);
+  struct store* store = store_fs_create(root, 1);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  if (queued) {
+    pool = store->create_pool(store, 1);
+    CHECK(Cleanup, pool && pool->queue_metadata);
+  }
+  CHECK(Cleanup, platform_path_exists(root) == 0);
+
+  // Short unaligned data and empty metadata both create missing parents,
+  // including the store root. Empty replacement must also remove old bytes.
+  const char* keys[] = {
+    "short/nested/zarr.json",
+    "empty/nested/zarr.json",
+    "short/nested/zarr.json",
+  };
+  const char* data[] = { "abc", NULL, NULL };
+  for (size_t i = 0; i < countof(keys); ++i) {
+    size_t len = data[i] ? strlen(data[i]) : 0;
+    int rc = pool ? pool->queue_metadata(pool, keys[i], data[i], len)
+                  : store->put(store, keys[i], data[i], len);
+    if (pool)
+      rc |= pool->flush(pool);
+    CHECK(Cleanup, rc == 0);
+    char path[4200];
+    snprintf(path, sizeof(path), "%s/%s", root, keys[i]);
+    CHECK(Cleanup, metadata_file_matches(path, data[i] ? data[i] : ""));
+  }
+
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_store_replace_failure_cleanup(void)
+{
+  log_info("=== test_store_replace_failure_cleanup ===");
+  struct store* store = store_fs_create(tmpdir, 0);
+  CHECK(Cleanup, store);
+  const char* key = "direct-failed-replace/zarr.json";
+  CHECK(Cleanup, store->mkdirs(store, key) == 0);
+  CHECK(Cleanup,
+        store->put(store, "direct-failed-replace/zarr.json/keep", "old", 3) ==
+          0);
+
+  // Rename cannot replace the directory. Its contents must survive and the
+  // completed temporary write must be removed.
+  CHECK(Cleanup, store->put(store, key, "{}", 2) != 0);
+  char path[4200];
+  snprintf(path, sizeof(path), "%s/%s/keep", tmpdir, key);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  snprintf(path,
+           sizeof(path),
+           "%s/%s.tmp.%llu",
+           tmpdir,
+           key,
+           (unsigned long long)platform_process_id());
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+
+  // Direct store calls report their own errors; pool errors remain the queued
+  // executor's responsibility.
+  CHECK(Cleanup,
+        store->put(store, "direct-failed-replace/next.json", "ok", 2) == 0);
+  snprintf(path, sizeof(path), "%s/direct-failed-replace/next.json", tmpdir);
+  CHECK(Cleanup, metadata_file_matches(path, "ok"));
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  store_destroy(store);
+  return 1;
+}
+
+static int
 wait_for_fault_taken(struct io_faults* faults)
 {
   for (int i = 0; i < 2000; ++i) {
@@ -1348,6 +1433,9 @@ main(void)
 
   int err = 0;
   err |= test_store_put();
+  err |= test_metadata_creates_parents(0);
+  err |= test_metadata_creates_parents(1);
+  err |= test_store_replace_failure_cleanup();
   err |= test_put_is_atomic_for_readers(0);
   err |= test_put_is_atomic_for_readers(1);
   err |= test_store_mkdirs();

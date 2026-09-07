@@ -31,7 +31,7 @@ add_src_lib(shard_pool_fs SOURCES shard_pool_fs.c shard_pool_fs.h shard_pool.h
 )
 
 add_src_lib(store_fs SOURCES store_fs.c store_fs.h store.h
-    LINKS shard_pool_fs platform platform_io strbuf chucky_log
+    LINKS shard_pool_fs io_backend_fs platform platform_io strbuf chucky_log
 )
 
 add_src_lib(zarr_group SOURCES zarr_group.c zarr_group.h

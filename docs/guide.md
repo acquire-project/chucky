@@ -71,6 +71,7 @@ internal conventions, and key concepts.
 | `ngff_multiscale` | `src/ngff/ngff_multiscale.c` | Compose Zarr arrays and group metadata |
 | `shard_delivery` | `src/zarr/shard_delivery.c` | Write shard index + CRC, deliver to shard_writer |
 | `shard_pool_fs` | `src/zarr/shard_pool_fs.c` | Queue filesystem shard writes and metadata publication |
+| `io_backend_fs` | `src/zarr/io_backend.fs.c` | Execute filesystem IO and own atomic metadata replacement |
 | `store_fs` | `src/zarr/store_fs.c` | Filesystem store keys and pool creation |
 | `s3_client` | `src/zarr/s3_client.c` | AWS S3 multipart upload client |
 | `shard_pool_s3` | `src/zarr/shard_pool_s3.c` | S3 shard upload slots |

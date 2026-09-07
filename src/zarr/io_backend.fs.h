@@ -3,9 +3,18 @@
 #include "zarr/io_backend.h"
 
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 
 struct io_backend_fs;
+
+// Replace path atomically for readers, creating missing parent directories.
+// Writes a buffered sibling temporary file and renames it without fsync.
+// Inputs are borrowed until return; data may be NULL only when len is zero.
+// Callers must serialize replacements of the same path within a process.
+// Returns 0 on success, non-zero on error.
+int
+io_backend_fs_replace(const char* path, const void* data, size_t len);
 
 // io_error is the pool's flag; it is raised on any failure.
 struct io_backend_fs*

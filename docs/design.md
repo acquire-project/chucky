@@ -749,14 +749,22 @@ closed shards. Zarr builds the array and group metadata envelopes; NGFF
 supplies OME attributes. A private Zarr API constructs each `zarr.json` key
 and submits the immutable bytes through the injected store and pool.
 
-Filesystem metadata uses one ordered submission path. `queue_append` returns
-after submission; `update_append` submits through the same path and then waits,
-even when an unchanged extent refers to a snapshot still in flight. A queued
-replacement becomes runnable after every earlier queue entry completes, while
-later independent file operations can continue. Failures suppress publication
-and become sticky pool errors. S3 metadata uses synchronous `put` without
-flushing active uploads. The publication interval is configurable through
-`metadata_update_interval_s`.
+Filesystem streaming metadata uses one ordered submission path. `queue_append`
+returns after submission; `update_append` submits through the same path and
+then waits, even when an unchanged extent refers to a snapshot still in flight.
+A queued replacement becomes runnable after every earlier queue entry
+completes, while later independent file operations can continue. Failures on
+this path suppress publication and become sticky pool errors. S3 metadata uses
+synchronous `put` without flushing active uploads. The publication interval is
+configurable through `metadata_update_interval_s`.
+
+**Atomic metadata replacement.** The filesystem backend owns the complete
+temporary-file write and rename operation. Direct store writes and queued
+replacements both call it; neither higher layer implements that protocol.
+It creates missing parent directories and uses buffered IO for metadata,
+even when shard writes are unbuffered. Readers see the old or new complete
+file. Replacement does not add an `fsync` durability guarantee, and callers
+must serialize replacements of the same path.
 
 For the zarr shard binary format, see [sharding.md][sharding-md] and the
 [zarr sharding codec specification][zarr-shard].
