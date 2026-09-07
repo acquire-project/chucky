@@ -303,52 +303,6 @@ test_offset(void)
 }
 
 static int
-test_contiguous_layouts(void)
-{
-  log_info("=== cpu_transpose_contiguous_layouts ===");
-
-  struct tile_stream_layout layout;
-  uint64_t dim[] = { 4, 128, 128 };
-  uint64_t one_chunk[] = { 4, 128, 128 };
-  uint64_t many_chunks[] = { 4, 32, 64 };
-  uint8_t reordered[] = { 0, 2, 1 };
-
-  CHECK(Fail,
-        test_level_layout(
-          &layout, 3, 1, dim, one_chunk, NULL, 2, TEST_CHUNK_ALIGNMENT) == 0);
-  CHECK(Fail, layout.epoch_contiguous);
-
-  CHECK(Fail,
-        test_level_layout(
-          &layout, 3, 1, dim, one_chunk, reordered, 2, TEST_CHUNK_ALIGNMENT) ==
-          0);
-  CHECK(Fail, !layout.epoch_contiguous);
-
-  CHECK(Fail,
-        test_level_layout(
-          &layout, 3, 1, dim, many_chunks, NULL, 2, TEST_CHUNK_ALIGNMENT) == 0);
-  CHECK(Fail, !layout.epoch_contiguous);
-
-  // Degenerate chunk dimensions can leave a multi-chunk epoch contiguous.
-  uint64_t narrow_chunk[] = { 1, 1, 128 };
-  CHECK(Fail,
-        test_level_layout(&layout, 3, 1, dim, narrow_chunk, NULL, 2, 1) == 0);
-  CHECK(Fail, layout.chunks_per_epoch > 1);
-  CHECK(Fail, layout.epoch_contiguous);
-
-  // Padding between those chunks breaks the contiguous span.
-  CHECK(Fail,
-        test_level_layout(
-          &layout, 3, 1, dim, narrow_chunk, NULL, 2, TEST_CHUNK_ALIGNMENT) ==
-          0);
-  CHECK(Fail, !layout.epoch_contiguous);
-
-  return 0;
-Fail:
-  return 1;
-}
-
-static int
 test_contiguous_offset(void)
 {
   // A 128 KiB contiguous epoch exercises memcpy for both a small prefix and
@@ -406,7 +360,6 @@ main(int ac, char* av[])
     { "3d_storage_order", test_3d_storage_order },
     { "4d_storage_order", test_4d_storage_order },
     { "offset", test_offset },
-    { "contiguous_layouts", test_contiguous_layouts },
     { "contiguous_offset", test_contiguous_offset },
     { "large_storage_order", test_large_storage_order },
     { "mixed_append_sizes", test_mixed_append_sizes },

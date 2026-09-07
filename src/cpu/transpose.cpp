@@ -45,8 +45,29 @@ struct transpose_ctx
   const int64_t* strides;
   const int64_t* correction;
   int64_t inner_stride;
+  uint64_t epoch_elements;
   uint8_t bpe;
 };
+
+// The append chunk coordinates have zero strides: the caller selects their
+// destination epoch. All remaining coordinates describe one epoch. If their
+// strides are row-major, every range within the epoch can be copied directly.
+static bool
+range_is_contiguous(const struct transpose_ctx* c, uint64_t base, uint64_t n)
+{
+  uint64_t expected_stride = 1;
+  for (int d = c->rank - 1; d >= 0; --d) {
+    if (c->strides[d] == 0)
+      continue;
+    if (c->shape[d] > 1 &&
+        (c->strides[d] < 0 || (uint64_t)c->strides[d] != expected_stride))
+      return false;
+    expected_stride *= c->shape[d];
+  }
+  const uint64_t epoch_offset = base % c->epoch_elements;
+  return expected_stride == c->epoch_elements &&
+         n <= c->epoch_elements - epoch_offset;
+}
 
 static void
 transpose_range(size_t beg, size_t end, int tid, void* vctx)
@@ -61,6 +82,11 @@ transpose_range(size_t beg, size_t end, int tid, void* vctx)
   int64_t o =
     (int64_t)transposed_offset(c->rank, c->shape, c->strides, base, coords);
   const void* my_src = c->src + beg * c->bpe;
+
+  if (range_is_contiguous(c, base, my_n)) {
+    memcpy((char*)c->dst + o * c->bpe, my_src, my_n * c->bpe);
+    return;
+  }
 
 #define CASE(b, T)                                                             \
   case b:                                                                      \
@@ -98,12 +124,6 @@ transpose_cpu(void* dst,
   if (n == 0)
     return 0;
 
-  const uint64_t epoch_offset = i_offset % layout->epoch_elements;
-  if (layout->epoch_contiguous && n <= layout->epoch_elements - epoch_offset) {
-    memcpy((char*)dst + epoch_offset * bpe, src, n * bpe);
-    return 0;
-  }
-
   const int rank = layout->lifted_rank;
   const uint64_t* shape = layout->lifted_shape;
   const int64_t* strides = layout->lifted_strides;
@@ -115,8 +135,16 @@ transpose_cpu(void* dst,
   const int64_t inner_stride = strides[rank - 1];
 
   struct transpose_ctx c = {
-    dst,     (const char*)src, i_offset,     rank, shape,
-    strides, correction,       inner_stride, bpe,
+    dst,
+    (const char*)src,
+    i_offset,
+    rank,
+    shape,
+    strides,
+    correction,
+    inner_stride,
+    layout->epoch_elements,
+    bpe,
   };
   // For small appends, dispatching and joining the pool costs more than the
   // scatter. Keep this choice independent of compression parallelism.
