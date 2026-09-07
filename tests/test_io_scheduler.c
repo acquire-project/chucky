@@ -487,6 +487,160 @@ Fail:
   return 1;
 }
 
+struct dependency_backend
+{
+  _Atomic int gates[4];
+  _Atomic int started[4];
+  _Atomic int completed[4];
+  _Atomic int ran_early;
+};
+
+static void
+dependency_execute(void* ctx, const struct io_request* req)
+{
+  struct dependency_backend* backend = (struct dependency_backend*)ctx;
+  const uint64_t index = req->offset;
+  if (index == 2 && (!atomic_load(&backend->completed[0]) ||
+                     !atomic_load(&backend->completed[1])))
+    atomic_store(&backend->ran_early, 1);
+  atomic_store(&backend->started[index], 1);
+  while (!atomic_load(&backend->gates[index]))
+    platform_sleep_ns(1000000LL);
+}
+
+static void
+dependency_finished(void* ctx)
+{
+  atomic_store((_Atomic int*)ctx, 1);
+}
+
+static int
+test_dependency_workers(uint64_t workers, int dependent_has_file)
+{
+  struct dependency_backend backend = { 0 };
+  atomic_store(&backend.gates[2], 1);
+  atomic_store(&backend.gates[3], 1);
+  struct io_scheduler* scheduler = io_scheduler_create(
+    (struct io_backend){ .ctx = &backend, .execute = dependency_execute },
+    (struct io_scheduler_limits){ .workers = workers });
+  CHECK(Fail, scheduler);
+
+  struct io_request requests[4] = {
+    { .op = IO_OP_NOOP },
+    file_write(1, 0),
+    dependent_has_file ? file_write(2, 1)
+                       : (struct io_request){ .op = IO_OP_REPLACE },
+    file_write(3, 2),
+  };
+  for (uint64_t i = 0; i < 4; ++i) {
+    requests[i].offset = i;
+    requests[i].finished_ctx = &backend.completed[i];
+    requests[i].finished = dependency_finished;
+  }
+
+  // Hold the first worker so the dependent job is already queued when the
+  // prerequisite file becomes runnable. With one worker, executing the
+  // dependent job before the file would deadlock an executor-side wait.
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[0]) == 0);
+  CHECK(Cleanup, test_wait_flag(&backend.started[0], WAIT_MS) == 0);
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[1]) == 0);
+  requests[2].after_seq = io_scheduler_record(scheduler).seq;
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[2]) == 0);
+  CHECK(Cleanup, io_scheduler_post(scheduler, requests[3]) == 0);
+  if (workers > 1) {
+    // Two workers hold the prerequisites. The remaining worker must skip
+    // the dependency and run a later, unrelated file request.
+    CHECK(Cleanup, test_wait_flag(&backend.started[1], WAIT_MS) == 0);
+    CHECK(Cleanup, test_wait_flag(&backend.completed[3], WAIT_MS) == 0);
+    CHECK(Cleanup, atomic_load(&backend.started[2]) == 0);
+  }
+
+  atomic_store(&backend.gates[1], 1);
+  atomic_store(&backend.gates[0], 1);
+  io_event_wait(scheduler, io_scheduler_record(scheduler));
+  CHECK(Cleanup, atomic_load(&backend.ran_early) == 0);
+  for (uint64_t i = 0; i < 4; ++i)
+    CHECK(Cleanup, atomic_load(&backend.completed[i]) == 1);
+  io_scheduler_destroy(scheduler);
+  return 0;
+
+Cleanup:
+  for (uint64_t i = 0; i < 4; ++i)
+    atomic_store(&backend.gates[i], 1);
+  io_scheduler_destroy(scheduler);
+Fail:
+  return 1;
+}
+
+static int
+test_dependencies(void)
+{
+  int err = 0;
+  for (int with_file = 0; with_file <= 1; ++with_file) {
+    err |= test_dependency_workers(1, with_file);
+    err |= test_dependency_workers(3, with_file);
+  }
+  return err;
+}
+
+static int
+test_invalid_dependencies(void)
+{
+  struct io_backend_fake fake;
+  io_backend_fake_init(&fake);
+  _Atomic int gate = 0;
+  _Atomic int released = 0;
+  io_backend_fake_hold(&fake, &gate);
+  test_thread* poster = NULL;
+  struct owned_payload* payload = NULL;
+  struct io_scheduler* scheduler = io_scheduler_create(
+    io_backend_fake_as_backend(&fake),
+    (struct io_scheduler_limits){ .max_requests = 1, .workers = 1 });
+  CHECK(Fail, scheduler);
+
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler, (struct io_request){ .after_seq = 1 }) !=
+          0);
+  CHECK(Cleanup,
+        io_scheduler_post(scheduler,
+                          (struct io_request){ .after_seq = UINT64_MAX }) != 0);
+  CHECK(Cleanup, io_scheduler_record(scheduler).seq == 0);
+
+  CHECK(Cleanup, io_scheduler_post(scheduler, (struct io_request){ 0 }) == 0);
+  CHECK(Cleanup, wait_for_started(&fake, 1, WAIT_MS) == 0);
+  payload = (struct owned_payload*)calloc(1, sizeof(*payload));
+  CHECK(Cleanup, payload);
+  payload->released = &released;
+  struct post_call call = {
+    .scheduler = scheduler,
+    .request = { .after_seq = 2,
+                 .owned = payload,
+                 .owned_free = release_owned },
+  };
+  CHECK(Cleanup, test_thread_start(&poster, post_main, &call) == 0);
+  // An invalid dependency is refused even while the request ring is full.
+  CHECK(Cleanup, test_wait_flag(&call.done, WAIT_MS) == 0);
+  CHECK(Cleanup, call.result != 0);
+  CHECK(Cleanup, atomic_load(&released) == 0);
+  CHECK(Cleanup, io_scheduler_record(scheduler).seq == 1);
+  test_thread_join(poster);
+  poster = NULL;
+  atomic_store(&gate, 1);
+  io_scheduler_destroy(scheduler);
+  free(payload);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  if (poster)
+    test_thread_join(poster);
+  io_scheduler_destroy(scheduler);
+  if (!atomic_load(&released))
+    free(payload);
+Fail:
+  return 1;
+}
+
 struct wait_call
 {
   struct io_scheduler* scheduler;
@@ -604,6 +758,8 @@ main(void)
     { "file_barriers", test_file_barriers },
     { "file_opens_overlap", test_file_opens_overlap },
     { "file_generation_reuse", test_file_generation_reuse },
+    { "dependencies", test_dependencies },
+    { "invalid_dependencies", test_invalid_dependencies },
     { "destroy_releases_waiters_and_drains",
       test_destroy_releases_waiters_and_drains },
   };

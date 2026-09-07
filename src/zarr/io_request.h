@@ -11,6 +11,7 @@ enum io_op
   IO_OP_WRITE,    // payload to a file at an offset
   IO_OP_TRUNCATE, // barrier: set the file's size
   IO_OP_CLOSE,    // barrier: last request naming this token
+  IO_OP_REPLACE,  // buffered atomic replacement of path; no file token
 };
 
 // A token names one open of one shard file. A generation is never reused, so
@@ -36,6 +37,10 @@ struct io_request
   uint64_t offset;
 
   uint64_t logical_size; // truncate only
+
+  // Wait for completion of the posted prefix through this sequence. Zero
+  // means no dependency. The scheduler leaves workers free while it waits.
+  uint64_t after_seq;
 
   // The owned allocation is released before the request is reported complete.
   void* owned;

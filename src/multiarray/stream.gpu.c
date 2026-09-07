@@ -406,6 +406,12 @@ multiarray_tile_stream_gpu_create(
   ms->arrays = (struct array_descriptor_gpu*)calloc(
     n_arrays, sizeof(struct array_descriptor_gpu));
   CHECK(Fail, ms->arrays);
+  // Failed construction must not flush or republish partially initialized
+  // arrays.
+  for (int a = 0; a < n_arrays; ++a) {
+    ms->arrays[a].flushed = 1;
+    ms->arrays[a].closed = 1;
+  }
 
   struct engine_limits lim;
   memset(&lim, 0, sizeof(lim));
@@ -454,6 +460,16 @@ multiarray_tile_stream_gpu_create(
   for (int a = 0; a < n_arrays; ++a)
     ms->arrays[a].st.agg.output_pool = ms->output_pool;
 
+  // Publish every empty extent before enabling input on any array.
+  for (int a = 0; a < n_arrays; ++a) {
+    const struct stream_context* ctx = &ms->arrays[a].ctx;
+    CHECK(Fail,
+          shard_sink_init_append(ctx->sink, &ctx->dims, ctx->levels.nlod) == 0);
+  }
+  for (int a = 0; a < n_arrays; ++a) {
+    ms->arrays[a].flushed = 0;
+    ms->arrays[a].closed = 0;
+  }
   return ms;
 
 Fail:

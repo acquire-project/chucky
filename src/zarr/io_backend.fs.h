@@ -25,7 +25,8 @@ io_backend_fs_reserve_file(struct io_backend_fs* b);
 void
 io_backend_fs_cancel_file(struct io_backend_fs* b, struct io_file_token file);
 
-// Counts include open calls that have not returned yet.
+// Shard handle counts include open calls that have not returned yet.
+// Metadata replacement uses a separate short-lived buffered handle.
 uint32_t
 io_backend_fs_handle_count(const struct io_backend_fs* b);
 

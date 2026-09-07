@@ -602,16 +602,18 @@ put_reader_fn(void* arg)
 }
 
 static int
-test_put_is_atomic_for_readers(void)
+test_put_is_atomic_for_readers(int queued)
 {
-  log_info("=== test_put_is_atomic_for_readers ===");
+  log_info("=== test_put_is_atomic_for_readers (queued=%d) ===", queued);
 
   char root[4096];
-  snprintf(root, sizeof(root), "%s/atomic_put", tmpdir);
+  snprintf(root, sizeof(root), "%s/atomic_put_%d", tmpdir, queued);
   CHECK(Fail, test_mkdir(root) == 0);
 
   struct store* s = store_fs_create(root, 0);
   CHECK(Fail, s);
+  struct shard_pool* pool = queued ? s->create_pool(s, 1) : NULL;
+  CHECK(Fail2, !queued || pool);
 
   char* longdoc = (char*)malloc(PUT_LONG_BYTES);
   CHECK(Fail2, longdoc);
@@ -631,9 +633,15 @@ test_put_is_atomic_for_readers(void)
 
   int put_err = 0;
   for (int i = 0; i < PUT_ROUNDS && !put_err; ++i) {
-    put_err = (i % 2) ? s->put(s, "zarr.json", shortdoc, strlen(shortdoc))
-                      : s->put(s, "zarr.json", longdoc, PUT_LONG_BYTES);
+    const char* doc = i % 2 ? shortdoc : longdoc;
+    const size_t len = i % 2 ? strlen(shortdoc) : PUT_LONG_BYTES;
+    put_err =
+      pool
+        ? pool->put_after(pool, "zarr.json", doc, len, (struct io_event){ 0 })
+        : s->put(s, "zarr.json", doc, len);
   }
+  if (pool)
+    put_err |= pool->flush(pool);
 
   atomic_store(&reader.stop, 1);
   CHECK(Fail3, test_thread_join(t) == 0);
@@ -653,6 +661,7 @@ test_put_is_atomic_for_readers(void)
   CHECK(Fail3, memcmp(final_doc, shortdoc, final_len) == 0);
 
   free(longdoc);
+  shard_pool_destroy(pool);
   store_destroy(s);
   log_info("  PASS");
   return 0;
@@ -660,6 +669,7 @@ test_put_is_atomic_for_readers(void)
 Fail3:
   free(longdoc);
 Fail2:
+  shard_pool_destroy(pool);
   store_destroy(s);
 Fail:
   log_error("  FAIL");
@@ -1018,6 +1028,234 @@ Fail:
   return 1;
 }
 
+static int
+metadata_file_matches(const char* path, const char* expected)
+{
+  FILE* file = fopen(path, "rb");
+  if (!file)
+    return 0;
+  char actual[256];
+  const size_t nread = fread(actual, 1, sizeof(actual), file);
+  const int end = fgetc(file);
+  fclose(file);
+  return nread == strlen(expected) && end == EOF &&
+         memcmp(actual, expected, nread) == 0;
+}
+
+static int
+wait_for_fault_taken(struct io_faults* faults)
+{
+  for (int i = 0; i < 2000; ++i) {
+    if (!atomic_load(&faults->armed))
+      return 0;
+    platform_sleep_ns(1000000LL);
+  }
+  return 1;
+}
+
+static void
+metadata_probe_finished(void* ctx)
+{
+  atomic_store((_Atomic int*)ctx, 1);
+}
+
+static int
+test_put_after_owns_data_and_progresses(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  char key[] = "owned-metadata.json";
+  char data[] = "{\"shape\":[16]}";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "{}", 2) == 0);
+
+  // An unbuffered shard pool must still accept this unaligned metadata.
+  const struct io_scheduler_limits limits = { .workers = 4 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 1, &limits);
+  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup,
+        pool->put_after(
+          pool, key, data, strlen(data), pool->record_fence(pool)) == 0);
+  memset(key, 'x', sizeof(key) - 1);
+  memset(data, 'x', sizeof(data) - 1);
+  CHECK(Cleanup, metadata_file_matches(path, "{}"));
+
+  atomic_store(&gate, 1);
+  int published = 0;
+  for (int i = 0; i < 2000 && !published; ++i) {
+    published = metadata_file_matches(path, "{\"shape\":[16]}");
+    if (!published)
+      platform_sleep_ns(1000000LL);
+  }
+  // Publication must advance even if the producer makes no further calls.
+  CHECK(Cleanup, published);
+  CHECK(Cleanup, pool->flush(pool) == 0);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_put_after_preserves_order(void)
+{
+  _Atomic int gate = 0;
+  _Atomic int probe_done = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  const char* key = "ordered-metadata.json";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
+  const struct io_scheduler_limits limits = { .workers = 2 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->put_after);
+
+  // Hold the first replacement itself; a second free worker must not let a
+  // later extent overtake it, even when the caller passes an empty fence.
+  faults.block_gate = &gate;
+  atomic_store(&faults.armed,
+               (uint16_t)((IO_OP_REPLACE << 8) | IO_FAULT_BLOCK));
+  CHECK(Cleanup,
+        pool->put_after(pool, key, "first", 5, (struct io_event){ 0 }) == 0);
+  CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
+  CHECK(Cleanup,
+        pool->put_after(pool, key, "second", 6, (struct io_event){ 0 }) == 0);
+  CHECK(Cleanup,
+        io_scheduler_post(faults.queue,
+                          (struct io_request){
+                            .op = IO_OP_NOOP,
+                            .finished = metadata_probe_finished,
+                            .finished_ctx = &probe_done,
+                          }) == 0);
+  CHECK(Cleanup, test_wait_flag(&probe_done, 2000) == 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+
+  atomic_store(&gate, 1);
+  // Destruction itself must drain the dependent replacements in order.
+  shard_pool_destroy(pool);
+  pool = NULL;
+  CHECK(Cleanup, metadata_file_matches(path, "second"));
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_put_after_failed_write_keeps_extent(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  const char* key = "failed-write-metadata.json";
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/%s", tmpdir, key);
+  CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
+  const struct io_scheduler_limits limits = { .workers = 1 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
+
+  io_faults_fail_next_write(&faults);
+  struct shard_writer* writer =
+    pool->open(pool, 0, "failed-metadata-prerequisite.bin");
+  CHECK(Cleanup, writer);
+  const char byte = 'x';
+  CHECK(Cleanup, writer->write(writer, 0, &byte, &byte + 1) == 0);
+  CHECK(Cleanup, writer->finalize(writer) == 0);
+  CHECK(Cleanup,
+        pool->put_after(pool, key, "new", 3, pool->record_fence(pool)) == 0);
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, pool->has_error(pool) != 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  CHECK(Cleanup,
+        pool->put_after(pool, key, "later", 5, (struct io_event){ 0 }) != 0);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, metadata_file_matches(path, "old"));
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
+static int
+test_put_after_replace_failure_is_sticky(void)
+{
+  _Atomic int gate = 0;
+  struct io_faults faults;
+  struct store* store = store_fs_create(tmpdir, 0);
+  struct shard_pool* pool = NULL;
+  CHECK(Cleanup, store);
+  // Renaming a file over a directory fails on every supported filesystem.
+  const char* key = "failed-replace/zarr.json";
+  CHECK(Cleanup, store->mkdirs(store, key) == 0);
+  const struct io_scheduler_limits limits = { .workers = 1 };
+  pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
+  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup,
+        pool->put_after(pool, key, "{}", 2, (struct io_event){ 0 }) == 0);
+  CHECK(Cleanup,
+        pool->put_after(
+          pool, "failed-replace/next.json", "new", 3, (struct io_event){ 0 }) ==
+          0);
+  atomic_store(&gate, 1);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  CHECK(Cleanup, pool->has_error(pool) != 0);
+
+  char path[4096];
+  snprintf(path, sizeof(path), "%s/failed-replace/next.json", tmpdir);
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+  snprintf(path,
+           sizeof(path),
+           "%s/%s.tmp.%llu",
+           tmpdir,
+           key,
+           (unsigned long long)platform_process_id());
+  CHECK(Cleanup, platform_path_exists(path) == 0);
+  CHECK(
+    Cleanup,
+    pool->put_after(
+      pool, "failed-replace/later.json", "new", 3, (struct io_event){ 0 }) !=
+      0);
+  CHECK(Cleanup, pool->flush(pool) != 0);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  shard_pool_destroy(pool);
+  store_destroy(store);
+  return 1;
+}
+
 // --- stale file token ---
 
 // A pool slot's token is private and is cleared on finalize, so a retired
@@ -1124,7 +1362,8 @@ main(void)
 
   int err = 0;
   err |= test_store_put();
-  err |= test_put_is_atomic_for_readers();
+  err |= test_put_is_atomic_for_readers(0);
+  err |= test_put_is_atomic_for_readers(1);
   err |= test_store_mkdirs();
   err |= test_shard_pool_write();
   err |= test_shard_pool_fence();
@@ -1140,6 +1379,10 @@ main(void)
   err |= test_shard_pool_handle_bound(3, 16);
   err |= test_backend_open_failure_cleanup();
   err |= test_shard_pool_owns_open_paths();
+  err |= test_put_after_owns_data_and_progresses();
+  err |= test_put_after_preserves_order();
+  err |= test_put_after_failed_write_keeps_extent();
+  err |= test_put_after_replace_failure_is_sticky();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

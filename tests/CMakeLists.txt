@@ -196,6 +196,7 @@ add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs 
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
+add_test_exe(test_metadata_publication test_metadata_publication.c ngff_multiscale zarr_array shard_delivery store_fs store_api test_platform chucky_log)
 add_test_exe(test_hcs test_hcs.c hcs store_fs store_api test_platform chucky_log)
 
 # OME-NGFF validation via ome-zarr-models (requires uv)
@@ -232,6 +233,14 @@ set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
+add_test_exe(test_stream_initial_shape_cpu test_stream_initial_shape.c
+    stream_cpu multiarray_cpu test_zarr_helpers test_shard_sink test_platform writer chucky_log)
+add_gpu_test_exe(test_stream_initial_shape_gpu test_stream_initial_shape.c
+    LINKS CUDA::cuda_driver CUDA::cudart_static stream multiarray_gpu
+          test_zarr_helpers test_shard_sink test_platform writer chucky_log)
+if(CHUCKY_ENABLE_GPU)
+    target_compile_definitions(test_stream_initial_shape_gpu PRIVATE TEST_INITIAL_SHAPE_GPU)
+endif()
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   test_zarr_helpers store_s3 platform_cmd)
 add_test_exe(test_store_s3       test_store_s3.c       store_s3 store_api platform_cmd chucky_log)

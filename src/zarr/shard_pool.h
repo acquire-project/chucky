@@ -22,6 +22,16 @@ struct shard_pool
   // Block until all I/O up to ev has completed.
   void (*wait_fence)(struct shard_pool* self, struct io_event ev);
 
+  // Optional metadata publication. Copies key/data before returning and
+  // atomically replaces the key after the dependency completes successfully.
+  // Updates are ordered within the pool. Errors are sticky and flush waits
+  // for these jobs as well as shard writes. NULL means synchronous-only.
+  int (*put_after)(struct shard_pool* self,
+                   const char* key,
+                   const void* data,
+                   size_t len,
+                   struct io_event after);
+
   // Wait for all pending I/O to complete. Returns non-zero on error.
   int (*flush)(struct shard_pool* self);
 

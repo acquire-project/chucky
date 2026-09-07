@@ -152,6 +152,25 @@ metering_update_append(struct shard_sink* self,
   return ms->inner->update_append(ms->inner, level, n_append, append_sizes);
 }
 
+static int
+metering_update_append_after(struct shard_sink* self,
+                             uint8_t level,
+                             uint8_t n_append,
+                             const uint64_t* append_sizes,
+                             struct io_event after)
+{
+  struct metering_sink* s = (struct metering_sink*)self;
+  return s->inner->update_append_after(
+    s->inner, level, n_append, append_sizes, after);
+}
+
+static int
+metering_flush(struct shard_sink* self)
+{
+  struct metering_sink* s = (struct metering_sink*)self;
+  return s->inner->flush(s->inner);
+}
+
 void
 metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
 {
@@ -159,6 +178,8 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
     .base = {
       .open = metering_open,
       .update_append = inner->update_append ? metering_update_append : NULL,
+      .update_append_after = inner->update_append_after ? metering_update_append_after : NULL,
+      .flush = inner->flush ? metering_flush : NULL,
       .record_fence = inner->record_fence ? metering_record_fence : NULL,
       .wait_fence = inner->wait_fence ? metering_wait_fence : NULL,
       .has_error = inner->has_error ? metering_has_error : NULL,

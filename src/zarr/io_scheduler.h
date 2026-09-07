@@ -32,7 +32,7 @@ uint64_t
 io_scheduler_parked_threads(const struct io_scheduler* q);
 
 // Zero is returned on success; on failure nothing is posted and the payload
-// is still yours.
+// is still yours. after_seq must name an already posted sequence (or zero).
 int
 io_scheduler_post(struct io_scheduler* q, struct io_request req);
 

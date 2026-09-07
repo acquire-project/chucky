@@ -427,6 +427,9 @@ tile_stream_gpu_create(const struct tile_stream_configuration* config,
           0);
   CHECK(FailPhase2,
         stream_engine_bind_array(&out->engine, &out->ar, &out->ctx) == 0);
+  CHECK(FailPhase2,
+        shard_sink_init_append(sink, &out->ctx.dims, out->ctx.levels.nlod) ==
+          0);
 
   out->flushed = 0;
   out->closed = 0;

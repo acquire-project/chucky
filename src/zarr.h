@@ -51,7 +51,8 @@ zarr_array_has_error(const struct zarr_array* a);
 uint64_t
 zarr_array_pending_bytes(const struct zarr_array* a);
 
-// Access live dimensions (reflects append-dimension updates).
+// Access live dimensions (reflects accepted append-dimension updates).
+// With queued publication these may lead the visible metadata until flush.
 const struct dimension*
 zarr_array_dimensions(const struct zarr_array* a);
 

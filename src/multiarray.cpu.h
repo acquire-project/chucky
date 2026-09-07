@@ -7,6 +7,8 @@ struct multiarray_tile_stream_cpu;
 struct stream_metrics;
 
 // Create a multiarray stream.  Pass enable_metrics != 0 to collect timing.
+// Initializes every sink's supported append metadata to an empty extent;
+// configured dimension sizes still bound each array's input capacity.
 struct multiarray_tile_stream_cpu*
 multiarray_tile_stream_cpu_create(
   int n_arrays,

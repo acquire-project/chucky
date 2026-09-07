@@ -21,6 +21,7 @@ struct shard_pool_fs
   struct shard_pool base;
   struct io_backend_fs* backend;
   struct io_scheduler* queue;
+  struct platform_mutex* metadata_mutex;
   struct fs_slot* slots;
   uint64_t nslots;
   int unbuffered;
@@ -265,6 +266,57 @@ pool_fs_wait_fence(struct shard_pool* self, struct io_event ev)
 }
 
 static int
+pool_fs_put_after(struct shard_pool* self,
+                  const char* key,
+                  const void* data,
+                  size_t len,
+                  struct io_event after)
+{
+  struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
+  struct strbuf path = { 0 };
+  char* owned = NULL;
+  CHECK(Fail, key && (data || len == 0));
+  CHECK(Fail, !atomic_load(&p->io_error));
+  CHECK(Fail, strbuf_appendf(&path, "%s/%s", strbuf_cstr(&p->root), key) == 0);
+  const size_t path_bytes = strbuf_len(&path) + 1;
+  CHECK(Fail, len <= SIZE_MAX - path_bytes);
+  owned = (char*)malloc(path_bytes + len);
+  CHECK(Fail, owned);
+  memcpy(owned, strbuf_cstr(&path), path_bytes);
+  if (len)
+    memcpy(owned + path_bytes, data, len);
+
+  // Taking the current prefix under the posting lock also orders this update
+  // after earlier metadata updates. Later shard writes can still run while
+  // this request waits, and no worker parks on a prerequisite.
+  platform_mutex_lock(p->metadata_mutex);
+  const struct io_event prefix = io_scheduler_record(p->queue);
+  CHECK(Unlock, after.seq <= prefix.seq);
+  CHECK(Unlock,
+        io_scheduler_post(p->queue,
+                          (struct io_request){
+                            .op = IO_OP_REPLACE,
+                            .path = owned,
+                            .payload = owned + path_bytes,
+                            .nbytes = len,
+                            .after_seq = prefix.seq,
+                            .owned = owned,
+                            .owned_free = free,
+                          }) == 0);
+  platform_mutex_unlock(p->metadata_mutex);
+  strbuf_free(&path);
+  return 0;
+
+Unlock:
+  platform_mutex_unlock(p->metadata_mutex);
+Fail:
+  atomic_store(&p->io_error, 1);
+  free(owned);
+  strbuf_free(&path);
+  return 1;
+}
+
+static int
 pool_fs_flush(struct shard_pool* self)
 {
   struct shard_pool_fs* p = container_of(self, struct shard_pool_fs, base);
@@ -311,6 +363,7 @@ pool_fs_destroy(struct shard_pool* self)
   // The worker has to be gone before the backend holding its descriptors is.
   io_scheduler_destroy(p->queue);
   io_backend_fs_destroy(p->backend);
+  platform_mutex_free(p->metadata_mutex);
 
   free(p->slots);
   strbuf_free(&p->root);
@@ -364,6 +417,7 @@ shard_pool_fs_create_wrapped(const char* root,
   p->base.open = pool_fs_open;
   p->base.record_fence = pool_fs_record_fence;
   p->base.wait_fence = pool_fs_wait_fence;
+  p->base.put_after = pool_fs_put_after;
   p->base.flush = pool_fs_flush;
   p->base.has_error = pool_fs_has_error;
   p->base.pending_bytes = pool_fs_pending_bytes;
@@ -371,6 +425,8 @@ shard_pool_fs_create_wrapped(const char* root,
   p->base.destroy = pool_fs_destroy;
   p->nslots = nslots;
   p->unbuffered = unbuffered;
+  p->metadata_mutex = platform_mutex_new();
+  CHECK(Fail_alloc, p->metadata_mutex);
   CHECK(Fail_alloc, strbuf_set(&p->root, root) == 0);
 
   p->backend = io_backend_fs_create(&p->io_error,
@@ -412,6 +468,7 @@ Fail_queue:
 Fail_backend:
   io_backend_fs_destroy(p->backend);
 Fail_alloc:
+  platform_mutex_free(p->metadata_mutex);
   strbuf_free(&p->root);
   free(p);
 Fail:

@@ -531,6 +531,9 @@ run_bench(const struct bench_config* cfg)
                                   dtype_bpe(dtype),
                                   cfg->append_elements) == 0);
 
+  // Final metadata publication belongs to the measured operation too.
+  CHECK(Fail, writer_close(bench_writer(&h)).error == 0);
+
   uint64_t pending_bytes = bench_zarr_pending_bytes(&zarr);
 
   struct platform_clock flush_clock = { 0 };

@@ -290,6 +290,8 @@ tile_stream_cpu_create(const struct tile_stream_configuration* config,
     }
   }
 
+  CHECK(Fail, shard_sink_init_append(sink, &s->cl.dims, s->levels.nlod) == 0);
+
   s->writer.append = cpu_append;
   s->writer.flush = cpu_flush_final;
   s->writer.close = cpu_close_final;

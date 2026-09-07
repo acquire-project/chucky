@@ -36,11 +36,16 @@ struct zarr_array
 // --- Metadata writing ---
 
 static int
-write_array_metadata(struct zarr_array* a)
+write_array_metadata(struct zarr_array* a, const struct io_event* after)
 {
   struct strbuf key = { 0 };
   struct strbuf json = { 0 };
   int rc = 1;
+
+  // A synchronous rewrite must not be overwritten by an older queued
+  // snapshot. A failed dependency must not expose the newer shape either.
+  if (!after && a->pool->put_after && a->pool->flush(a->pool))
+    goto done;
 
   if (strbuf_len(&a->prefix) > 0) {
     if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&a->prefix)))
@@ -60,8 +65,15 @@ write_array_metadata(struct zarr_array* a)
                       &a->attrs))
     goto done;
 
-  rc = a->store->put(
-    a->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
+  if (after)
+    rc = a->pool->put_after(a->pool,
+                            strbuf_cstr(&key),
+                            strbuf_cstr(&json),
+                            strbuf_len(&json),
+                            *after);
+  else
+    rc = a->store->put(
+      a->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
   if (rc == 0)
     a->attrs.dirty = 0;
 
@@ -103,14 +115,12 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
 }
 
 static int
-zarr_array_update_append(struct shard_sink* self,
-                         uint8_t level,
-                         uint8_t n_append,
-                         const uint64_t* append_sizes)
+update_append(struct zarr_array* a,
+              uint8_t n_append,
+              const uint64_t* append_sizes,
+              const struct io_event* after)
 {
-  (void)level;
-  struct zarr_array* a = container_of(self, struct zarr_array, base);
-  if (n_append == 0 || n_append > a->rank)
+  if (n_append == 0 || n_append > a->rank || !append_sizes)
     return 1;
 
   int changed = 0;
@@ -120,18 +130,51 @@ zarr_array_update_append(struct shard_sink* self,
       break;
     }
   }
-  if (!changed)
-    return 0;
+  if (!changed) {
+    // dimensions includes accepted snapshots that may still be queued.
+    // Keep update_append's synchronous visibility contract on this path.
+    return !after && a->pool->put_after ? a->pool->flush(a->pool) : 0;
+  }
 
-  for (uint8_t d = 0; d < n_append; ++d)
+  uint64_t old_sizes[MAX_ZARR_RANK];
+  for (uint8_t d = 0; d < n_append; ++d) {
+    old_sizes[d] = a->dimensions[d].size;
     a->dimensions[d].size = append_sizes[d];
+  }
 
-  if (write_array_metadata(a)) {
+  if (write_array_metadata(a, after)) {
+    for (uint8_t d = 0; d < n_append; ++d)
+      a->dimensions[d].size = old_sizes[d];
     log_error("zarr_array: failed to rewrite zarr.json for %s",
               strbuf_cstr(&a->prefix));
     return 1;
   }
   return 0;
+}
+
+static int
+zarr_array_update_append(struct shard_sink* self,
+                         uint8_t level,
+                         uint8_t n_append,
+                         const uint64_t* append_sizes)
+{
+  (void)level;
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  return update_append(a, n_append, append_sizes, NULL);
+}
+
+static int
+zarr_array_update_append_after(struct shard_sink* self,
+                               uint8_t level,
+                               uint8_t n_append,
+                               const uint64_t* append_sizes,
+                               struct io_event after)
+{
+  (void)level;
+  struct zarr_array* a = container_of(self, struct zarr_array, base);
+  // Serialize while dimensions, attributes and prefix are stable. The pool
+  // copies the resulting key and bytes; workers never borrow array state.
+  return update_append(a, n_append, append_sizes, &after);
 }
 
 static struct io_event
@@ -173,9 +216,7 @@ static int
 zarr_array_flush_fn(struct shard_sink* self)
 {
   struct zarr_array* a = container_of(self, struct zarr_array, base);
-  if (!a->attrs.dirty)
-    return 0;
-  return write_array_metadata(a);
+  return zarr_array_flush_metadata(a);
 }
 
 // --- Core init (geometry already computed) ---
@@ -215,6 +256,8 @@ zarr_array_init(struct store* store,
 
   a->base.open = zarr_array_open;
   a->base.update_append = zarr_array_update_append;
+  a->base.update_append_after =
+    pool->put_after ? zarr_array_update_append_after : NULL;
   a->base.record_fence = zarr_array_record_fence_fn;
   a->base.wait_fence = zarr_array_wait_fence_fn;
   a->base.flush = zarr_array_flush_fn;
@@ -223,7 +266,7 @@ zarr_array_init(struct store* store,
   a->base.required_shard_alignment = zarr_array_required_shard_alignment_fn;
 
   // Write array zarr.json
-  CHECK(Fail_alloc, write_array_metadata(a) == 0);
+  CHECK(Fail_alloc, write_array_metadata(a, NULL) == 0);
 
   return a;
 
@@ -301,7 +344,7 @@ zarr_array_destroy(struct zarr_array* a)
     return;
   // Fallback for callers that didn't flush via the writer/sink — same shape
   // as the auto-flush log in stream destroys.
-  if (a->attrs.dirty && write_array_metadata(a))
+  if (zarr_array_flush_metadata(a))
     log_error("zarr_array: metadata flush failed during destroy");
   attr_set_destroy(&a->attrs);
   dims_free_names(a->dimensions, a->rank);
@@ -361,8 +404,8 @@ zarr_array_flush_metadata(struct zarr_array* a)
 {
   CHECK(Fail, a);
   if (!a->attrs.dirty)
-    return 0;
-  return write_array_metadata(a);
+    return a->pool->put_after ? a->pool->flush(a->pool) : 0;
+  return write_array_metadata(a, NULL);
 Fail:
   return 1;
 }

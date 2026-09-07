@@ -204,6 +204,42 @@ execute_open(struct io_backend_fs* b, const struct io_request* req)
 }
 
 static void
+execute_replace(struct io_backend_fs* b, const struct io_request* req)
+{
+  // A completed dependency may contain a failed write. Never advertise its
+  // extent, even though the scheduler still retires failed jobs to drain.
+  if (atomic_load(b->io_error))
+    return;
+
+  struct strbuf tmp_path = { 0 };
+  CHECK(Fail, req->path && (req->payload || req->nbytes == 0));
+  CHECK(Fail, req->nbytes <= SIZE_MAX);
+  CHECK(Fail,
+        strbuf_appendf(&tmp_path,
+                       "%s.tmp.%llu",
+                       req->path,
+                       (unsigned long long)platform_process_id()) == 0);
+
+  // Metadata remains buffered even when shard data uses direct I/O. As with
+  // store_fs.put, replacement is atomic for readers but does not add fsync.
+  const platform_fd fd = open_write(strbuf_cstr(&tmp_path), 0);
+  CHECK(Fail, fd != PLATFORM_FD_INVALID);
+  const int written =
+    platform_write(fd, req->payload, (size_t)req->nbytes) == 0;
+  platform_close(fd);
+  if (!written || platform_rename_replace(strbuf_cstr(&tmp_path), req->path)) {
+    platform_remove_file(strbuf_cstr(&tmp_path));
+    goto Fail;
+  }
+  strbuf_free(&tmp_path);
+  return;
+
+Fail:
+  strbuf_free(&tmp_path);
+  record_failure(b, "io_backend_fs: atomic replacement failed");
+}
+
+static void
 fs_execute(void* ctx, const struct io_request* req)
 {
   struct io_backend_fs* b = (struct io_backend_fs*)ctx;
@@ -211,6 +247,10 @@ fs_execute(void* ctx, const struct io_request* req)
     return;
   if (req->op == IO_OP_OPEN) {
     execute_open(b, req);
+    return;
+  }
+  if (req->op == IO_OP_REPLACE) {
+    execute_replace(b, req);
     return;
   }
 
