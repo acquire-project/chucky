@@ -635,10 +635,8 @@ test_put_is_atomic_for_readers(int queued)
   for (int i = 0; i < PUT_ROUNDS && !put_err; ++i) {
     const char* doc = i % 2 ? shortdoc : longdoc;
     const size_t len = i % 2 ? strlen(shortdoc) : PUT_LONG_BYTES;
-    put_err =
-      pool
-        ? pool->put_after(pool, "zarr.json", doc, len, (struct io_event){ 0 })
-        : s->put(s, "zarr.json", doc, len);
+    put_err = pool ? pool->queue_metadata(pool, "zarr.json", doc, len)
+                   : s->put(s, "zarr.json", doc, len);
   }
   if (pool)
     put_err |= pool->flush(pool);
@@ -1060,7 +1058,7 @@ metadata_probe_finished(void* ctx)
 }
 
 static int
-test_put_after_owns_data_and_progresses(void)
+test_queued_metadata_owns_data_and_progresses(void)
 {
   _Atomic int gate = 0;
   struct io_faults faults;
@@ -1076,11 +1074,9 @@ test_put_after_owns_data_and_progresses(void)
   // An unbuffered shard pool must still accept this unaligned metadata.
   const struct io_scheduler_limits limits = { .workers = 4 };
   pool = io_faults_pool_create(&faults, tmpdir, 1, 1, &limits);
-  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, pool && pool->queue_metadata);
   CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
-  CHECK(Cleanup,
-        pool->put_after(
-          pool, key, data, strlen(data), pool->record_fence(pool)) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, data, strlen(data)) == 0);
   memset(key, 'x', sizeof(key) - 1);
   memset(data, 'x', sizeof(data) - 1);
   CHECK(Cleanup, metadata_file_matches(path, "{}"));
@@ -1107,7 +1103,7 @@ Cleanup:
 }
 
 static int
-test_put_after_preserves_order(void)
+test_queued_metadata_preserves_order(void)
 {
   _Atomic int gate = 0;
   _Atomic int probe_done = 0;
@@ -1121,18 +1117,16 @@ test_put_after_preserves_order(void)
   CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
   const struct io_scheduler_limits limits = { .workers = 2 };
   pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
-  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, pool && pool->queue_metadata);
 
   // Hold the first replacement itself; a second free worker must not let a
-  // later extent overtake it, even when the caller passes an empty fence.
+  // later extent overtake it. Later independent work must still progress.
   faults.block_gate = &gate;
   atomic_store(&faults.armed,
                (uint16_t)((IO_OP_REPLACE << 8) | IO_FAULT_BLOCK));
-  CHECK(Cleanup,
-        pool->put_after(pool, key, "first", 5, (struct io_event){ 0 }) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "first", 5) == 0);
   CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
-  CHECK(Cleanup,
-        pool->put_after(pool, key, "second", 6, (struct io_event){ 0 }) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "second", 6) == 0);
   CHECK(Cleanup,
         io_scheduler_post(faults.queue,
                           (struct io_request){
@@ -1159,7 +1153,7 @@ Cleanup:
 }
 
 static int
-test_put_after_failed_write_keeps_extent(void)
+test_queued_metadata_failed_write_keeps_extent(void)
 {
   _Atomic int gate = 0;
   struct io_faults faults;
@@ -1172,7 +1166,7 @@ test_put_after_failed_write_keeps_extent(void)
   CHECK(Cleanup, store->put(store, key, "old", 3) == 0);
   const struct io_scheduler_limits limits = { .workers = 1 };
   pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
-  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, pool && pool->queue_metadata);
   CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
   CHECK(Cleanup, wait_for_fault_taken(&faults) == 0);
 
@@ -1183,14 +1177,12 @@ test_put_after_failed_write_keeps_extent(void)
   const char byte = 'x';
   CHECK(Cleanup, writer->write(writer, 0, &byte, &byte + 1) == 0);
   CHECK(Cleanup, writer->finalize(writer) == 0);
-  CHECK(Cleanup,
-        pool->put_after(pool, key, "new", 3, pool->record_fence(pool)) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "new", 3) == 0);
   atomic_store(&gate, 1);
   CHECK(Cleanup, pool->flush(pool) != 0);
   CHECK(Cleanup, pool->has_error(pool) != 0);
   CHECK(Cleanup, metadata_file_matches(path, "old"));
-  CHECK(Cleanup,
-        pool->put_after(pool, key, "later", 5, (struct io_event){ 0 }) != 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "later", 5) != 0);
   CHECK(Cleanup, pool->flush(pool) != 0);
   CHECK(Cleanup, metadata_file_matches(path, "old"));
   shard_pool_destroy(pool);
@@ -1205,7 +1197,7 @@ Cleanup:
 }
 
 static int
-test_put_after_replace_failure_is_sticky(void)
+test_queued_metadata_replace_failure_is_sticky(void)
 {
   _Atomic int gate = 0;
   struct io_faults faults;
@@ -1217,14 +1209,11 @@ test_put_after_replace_failure_is_sticky(void)
   CHECK(Cleanup, store->mkdirs(store, key) == 0);
   const struct io_scheduler_limits limits = { .workers = 1 };
   pool = io_faults_pool_create(&faults, tmpdir, 1, 0, &limits);
-  CHECK(Cleanup, pool && pool->put_after);
+  CHECK(Cleanup, pool && pool->queue_metadata);
   CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  CHECK(Cleanup, pool->queue_metadata(pool, key, "{}", 2) == 0);
   CHECK(Cleanup,
-        pool->put_after(pool, key, "{}", 2, (struct io_event){ 0 }) == 0);
-  CHECK(Cleanup,
-        pool->put_after(
-          pool, "failed-replace/next.json", "new", 3, (struct io_event){ 0 }) ==
-          0);
+        pool->queue_metadata(pool, "failed-replace/next.json", "new", 3) == 0);
   atomic_store(&gate, 1);
   CHECK(Cleanup, pool->flush(pool) != 0);
   CHECK(Cleanup, pool->has_error(pool) != 0);
@@ -1239,11 +1228,8 @@ test_put_after_replace_failure_is_sticky(void)
            key,
            (unsigned long long)platform_process_id());
   CHECK(Cleanup, platform_path_exists(path) == 0);
-  CHECK(
-    Cleanup,
-    pool->put_after(
-      pool, "failed-replace/later.json", "new", 3, (struct io_event){ 0 }) !=
-      0);
+  CHECK(Cleanup,
+        pool->queue_metadata(pool, "failed-replace/later.json", "new", 3) != 0);
   CHECK(Cleanup, pool->flush(pool) != 0);
   shard_pool_destroy(pool);
   store_destroy(store);
@@ -1379,10 +1365,10 @@ main(void)
   err |= test_shard_pool_handle_bound(3, 16);
   err |= test_backend_open_failure_cleanup();
   err |= test_shard_pool_owns_open_paths();
-  err |= test_put_after_owns_data_and_progresses();
-  err |= test_put_after_preserves_order();
-  err |= test_put_after_failed_write_keeps_extent();
-  err |= test_put_after_replace_failure_is_sticky();
+  err |= test_queued_metadata_owns_data_and_progresses();
+  err |= test_queued_metadata_preserves_order();
+  err |= test_queued_metadata_failed_write_keeps_extent();
+  err |= test_queued_metadata_replace_failure_is_sticky();
   err |= test_stale_file_token_refused();
   err |= test_has_existing_data();
   err |= test_has_existing_data_unrelated_files();

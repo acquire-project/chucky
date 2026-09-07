@@ -248,8 +248,6 @@ file_next_ready(struct io_scheduler* q, const struct file_pending* file)
   for (uint64_t seq = file->oldest_seq; seq != NO_SEQ;) {
     const struct io_job* job = job_at(q, seq);
     if (job->state == IO_JOB_WAITING) {
-      if (job->req.after_seq >= q->tail)
-        return NO_SEQ;
       if (is_barrier(&job->req))
         return file->oldest_seq == seq ? seq : NO_SEQ;
       return file->barrier_running ? NO_SEQ : seq;
@@ -264,7 +262,8 @@ next_ready_seq(struct io_scheduler* q)
 {
   for (uint64_t seq = q->nofile_oldest; seq != NO_SEQ;) {
     const struct io_job* job = job_at(q, seq);
-    if (job->state == IO_JOB_WAITING && job->req.after_seq < q->tail)
+    if (job->state == IO_JOB_WAITING &&
+        (job->req.op != IO_OP_REPLACE || seq == q->tail))
       return seq;
     seq = job->newer_on_file;
   }
@@ -482,11 +481,10 @@ int
 io_scheduler_post(struct io_scheduler* q, struct io_request req)
 {
   platform_mutex_lock(q->mutex);
-  // Refuse forward dependencies before queue backpressure can park a caller.
-  // Every accepted dependency then points strictly backwards, so draining the
-  // queue cannot leave its workers waiting on an unpostable request.
-  if (req.after_seq >= q->head) {
-    log_error("io_scheduler: refused a dependency on an unposted sequence");
+  // Replacements use the no-file queue, where readiness requires the entire
+  // earlier prefix to have retired. Refuse a token before parking the caller.
+  if (req.op == IO_OP_REPLACE && req.file.generation != 0) {
+    log_error("io_scheduler: a replacement cannot carry a file token");
     platform_mutex_unlock(q->mutex);
     return 1;
   }

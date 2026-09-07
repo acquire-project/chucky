@@ -64,8 +64,7 @@ struct ngff_multiscale
 // --- Group metadata ---
 
 static int
-write_ngff_group_metadata(struct ngff_multiscale* ms,
-                          const struct io_event* after)
+write_ngff_group_metadata(struct ngff_multiscale* ms, int queued)
 {
   const struct dimension* level_ptrs[LOD_MAX_LEVELS];
   for (int lv = 0; lv < ms->nlod; ++lv)
@@ -76,7 +75,7 @@ write_ngff_group_metadata(struct ngff_multiscale* ms,
   int rc = 1;
 
   // Older queued group snapshots must land before a synchronous rewrite.
-  if (!after && ms->pool->put_after && ms->pool->flush(ms->pool))
+  if (!queued && ms->pool->queue_metadata && ms->pool->flush(ms->pool))
     goto done;
 
   if (ngff_multiscale_group_json(
@@ -91,12 +90,9 @@ write_ngff_group_metadata(struct ngff_multiscale* ms,
       goto done;
   }
 
-  if (after)
-    rc = ms->pool->put_after(ms->pool,
-                             strbuf_cstr(&key),
-                             strbuf_cstr(&json),
-                             strbuf_len(&json),
-                             *after);
+  if (queued)
+    rc = ms->pool->queue_metadata(
+      ms->pool, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
   else
     rc = ms->store->put(
       ms->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
@@ -129,7 +125,7 @@ update_append(struct ngff_multiscale* ms,
               uint8_t level,
               uint8_t n_append,
               const uint64_t* append_sizes,
-              const struct io_event* after)
+              int queued)
 {
   if (level >= ms->nlod || n_append == 0 || n_append > ms->rank ||
       !append_sizes)
@@ -141,10 +137,8 @@ update_append(struct ngff_multiscale* ms,
   for (uint8_t d = 0; d < n_append; ++d)
     changed |= dims[d].size != append_sizes[d];
 
-  int rc =
-    after
-      ? child->update_append_after(child, level, n_append, append_sizes, *after)
-      : child->update_append(child, level, n_append, append_sizes);
+  int rc = queued ? child->queue_append(child, level, n_append, append_sizes)
+                  : child->update_append(child, level, n_append, append_sizes);
   if (rc)
     return 1;
 
@@ -153,7 +147,7 @@ update_append(struct ngff_multiscale* ms,
 
   // The shared pool orders publications, so the child snapshot is visible
   // before its group snapshot and earlier groups cannot replace later ones.
-  if (write_ngff_group_metadata(ms, after)) {
+  if (write_ngff_group_metadata(ms, queued)) {
     log_error("ngff_multiscale: failed to rewrite group zarr.json for %s",
               strbuf_cstr(&ms->prefix));
     return 1;
@@ -168,18 +162,17 @@ ngff_multiscale_update_append(struct shard_sink* self,
                               const uint64_t* append_sizes)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
-  return update_append(ms, level, n_append, append_sizes, NULL);
+  return update_append(ms, level, n_append, append_sizes, 0);
 }
 
 static int
-ngff_multiscale_update_append_after(struct shard_sink* self,
-                                    uint8_t level,
-                                    uint8_t n_append,
-                                    const uint64_t* append_sizes,
-                                    struct io_event after)
+ngff_multiscale_queue_append(struct shard_sink* self,
+                             uint8_t level,
+                             uint8_t n_append,
+                             const uint64_t* append_sizes)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
-  return update_append(ms, level, n_append, append_sizes, &after);
+  return update_append(ms, level, n_append, append_sizes, 1);
 }
 
 static struct io_event
@@ -261,8 +254,8 @@ ngff_multiscale_init(struct store* store,
 
   ms->base.open = ngff_multiscale_open;
   ms->base.update_append = ngff_multiscale_update_append;
-  ms->base.update_append_after =
-    pool->put_after ? ngff_multiscale_update_append_after : NULL;
+  ms->base.queue_append =
+    pool->queue_metadata ? ngff_multiscale_queue_append : NULL;
   ms->base.record_fence = ngff_multiscale_record_fence_fn;
   ms->base.wait_fence = ngff_multiscale_wait_fence_fn;
   ms->base.flush = ngff_multiscale_flush_fn;
@@ -324,7 +317,7 @@ ngff_multiscale_init(struct store* store,
     slot_base += dims_compute_shard_geometry(lv_dims, cfg->rank, sc, cps);
   }
 
-  CHECK(Fail_levels, write_ngff_group_metadata(ms, NULL) == 0);
+  CHECK(Fail_levels, write_ngff_group_metadata(ms, 0) == 0);
 
   lod_plan_free(plan);
   return ms;
@@ -476,8 +469,8 @@ ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
 {
   CHECK(Fail, ms);
   if (!ms->attrs.dirty)
-    return ms->pool->put_after ? ms->pool->flush(ms->pool) : 0;
-  return write_ngff_group_metadata(ms, NULL);
+    return ms->pool->queue_metadata ? ms->pool->flush(ms->pool) : 0;
+  return write_ngff_group_metadata(ms, 0);
 Fail:
   return 1;
 }

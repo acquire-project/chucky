@@ -18,7 +18,6 @@ struct pending_metadata
 {
   struct strbuf key;
   struct strbuf json;
-  struct io_event after;
   uint64_t seq;
 };
 
@@ -44,7 +43,7 @@ progress(struct deferred_pool* p)
 {
   while (p->head < p->count) {
     struct pending_metadata* job = &p->jobs[p->head];
-    if (job->after.seq > p->ready)
+    if (job->seq - 1 > p->ready)
       break;
     if (p->fail_completion)
       p->error = 1;
@@ -62,11 +61,10 @@ progress(struct deferred_pool* p)
 }
 
 static int
-deferred_put(struct shard_pool* self,
-             const char* key,
-             const void* data,
-             size_t len,
-             struct io_event after)
+deferred_queue_metadata(struct shard_pool* self,
+                        const char* key,
+                        const void* data,
+                        size_t len)
 {
   struct deferred_pool* p = container_of(self, struct deferred_pool, base);
   if (p->reject || p->error || p->count == countof(p->jobs)) {
@@ -80,7 +78,8 @@ deferred_put(struct shard_pool* self,
     p->error = 1;
     return 1;
   }
-  job->after = after;
+  // The pool orders metadata after its current prefix; no caller supplies
+  // or owns the dependency.
   job->seq = ++p->submitted;
   ++p->count;
   return 0;
@@ -123,7 +122,7 @@ static void
 deferred_init(struct deferred_pool* p, struct store* store)
 {
   *p = (struct deferred_pool){
-    .base = { .put_after = deferred_put,
+    .base = { .queue_metadata = deferred_queue_metadata,
               .record_fence = deferred_record,
               .wait_fence = deferred_wait,
               .flush = deferred_flush,
@@ -180,25 +179,25 @@ test_array_snapshots(void)
   struct zarr_array* a = create_array(store, &pool, "array");
   CHECK(Fail_store, a);
   struct shard_sink* sink = zarr_array_as_shard_sink(a);
-  CHECK(Fail_array, sink->update_append_after);
+  CHECK(Fail_array, sink->queue_append);
   unsigned initial_flushes = pool.flushes;
 
   CHECK(Fail_array, zarr_array_set_attribute(a, "tag", "\"first\"") == 0);
   uint64_t size = 4;
   struct io_event first = data_fence(&pool);
-  CHECK(Fail_array, sink->update_append_after(sink, 0, 1, &size, first) == 0);
+  CHECK(Fail_array, sink->queue_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_array, pool.flushes == initial_flushes);
   CHECK(Fail_array, metadata_contains("array/zarr.json", "\"shape\":[0,64]"));
 
   CHECK(Fail_array, zarr_array_set_attribute(a, "tag", "\"second\"") == 0);
   size = 8;
   struct io_event second = data_fence(&pool);
-  CHECK(Fail_array, sink->update_append_after(sink, 0, 1, &size, second) == 0);
+  CHECK(Fail_array, sink->queue_append(sink, 0, 1, &size) == 0);
   size = 999; // Neither the caller's extent nor mutable attrs are borrowed.
   CHECK(Fail_array, zarr_array_set_attribute(a, "tag", "\"latest\"") == 0);
   CHECK(Fail_array, pool.count == 2 && pool.head == 0);
-  CHECK(Fail_array, pool.jobs[0].after.seq == first.seq);
-  CHECK(Fail_array, pool.jobs[1].after.seq == second.seq);
+  CHECK(Fail_array, pool.jobs[0].seq == first.seq + 1);
+  CHECK(Fail_array, pool.jobs[1].seq == second.seq + 1);
   CHECK(Fail_array,
         strstr(strbuf_cstr(&pool.jobs[0].json), "\"shape\":[4,64]"));
   CHECK(Fail_array,
@@ -222,22 +221,22 @@ test_array_snapshots(void)
   CHECK(Fail_array, metadata_contains("array/zarr.json", "\"tag\":\"latest\""));
 
   size = 12;
-  CHECK(Fail_array,
-        sink->update_append_after(sink, 0, 1, &size, data_fence(&pool)) == 0);
+  data_fence(&pool);
+  CHECK(Fail_array, sink->queue_append(sink, 0, 1, &size) == 0);
   // Even an unchanged synchronous update must wait for its queued shape.
   CHECK(Fail_array, sink->update_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_array, pool.head == pool.count);
   CHECK(Fail_array, metadata_contains("array/zarr.json", "\"shape\":[12,64]"));
 
   size = 16;
-  CHECK(Fail_array,
-        sink->update_append_after(sink, 0, 1, &size, data_fence(&pool)) == 0);
+  data_fence(&pool);
+  CHECK(Fail_array, sink->queue_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_array, sink->flush(sink) == 0); // No dirty attributes.
   CHECK(Fail_array, metadata_contains("array/zarr.json", "\"shape\":[16,64]"));
 
   size = 20;
-  CHECK(Fail_array,
-        sink->update_append_after(sink, 0, 1, &size, data_fence(&pool)) == 0);
+  data_fence(&pool);
+  CHECK(Fail_array, sink->queue_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_array, zarr_array_set_attribute(a, "tag", "\"destroyed\"") == 0);
   zarr_array_destroy(a);
   a = NULL;
@@ -270,7 +269,8 @@ test_array_failure(int reject)
   pool.reject = reject;
   pool.fail_completion = !reject;
   uint64_t size = 4;
-  int rc = sink->update_append_after(sink, 0, 1, &size, data_fence(&pool));
+  data_fence(&pool);
+  int rc = sink->queue_append(sink, 0, 1, &size);
   CHECK(Fail_array, reject ? rc != 0 : rc == 0);
   if (reject)
     CHECK(Fail_array, zarr_array_dimensions(a)[0].size == 0);
@@ -301,11 +301,11 @@ test_synchronous_pool(void)
   CHECK(Fail, store);
   struct deferred_pool pool;
   deferred_init(&pool, store);
-  pool.base.put_after = NULL;
+  pool.base.queue_metadata = NULL;
   struct zarr_array* a = create_array(store, &pool, "synchronous");
   CHECK(Fail_store, a);
   struct shard_sink* sink = zarr_array_as_shard_sink(a);
-  CHECK(Fail_array, !sink->update_append_after);
+  CHECK(Fail_array, !sink->queue_append);
   uint64_t size = 4;
   CHECK(Fail_array, sink->update_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_array,
@@ -332,7 +332,7 @@ test_async_hook_without_flush(void)
   struct zarr_array* a = create_array(store, &pool, "no-flush");
   CHECK(Fail_store, a);
   struct shard_sink* sink = zarr_array_as_shard_sink(a);
-  CHECK(Fail_array, sink->update_append_after);
+  CHECK(Fail_array, sink->queue_append);
   sink->flush = NULL;
 
   const struct dimension dim = { .size = 0,
@@ -395,17 +395,19 @@ test_ngff_snapshots(void)
     ngff_multiscale_create_with_pool(store, &pool.base, "ms", &cfg);
   CHECK(Fail_store, ms);
   struct shard_sink* sink = ngff_multiscale_as_shard_sink(ms);
-  CHECK(Fail_ms, sink->update_append_after);
+  CHECK(Fail_ms, sink->queue_append);
   unsigned initial_flushes = pool.flushes;
 
   CHECK(Fail_ms, ngff_multiscale_set_attribute(ms, "tag", "\"first\"") == 0);
   uint64_t size = 4;
   struct io_event first = data_fence(&pool);
-  CHECK(Fail_ms, sink->update_append_after(sink, 0, 1, &size, first) == 0);
+  CHECK(Fail_ms, sink->queue_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_ms, ngff_multiscale_set_attribute(ms, "tag", "\"second\"") == 0);
   struct io_event second = data_fence(&pool);
-  CHECK(Fail_ms, sink->update_append_after(sink, 1, 1, &size, second) == 0);
+  CHECK(Fail_ms, sink->queue_append(sink, 1, 1, &size) == 0);
   CHECK(Fail_ms, pool.flushes == initial_flushes && pool.count == 4);
+  CHECK(Fail_ms, pool.jobs[0].seq == first.seq + 1);
+  CHECK(Fail_ms, pool.jobs[2].seq == second.seq + 1);
   CHECK(Fail_ms, strcmp(strbuf_cstr(&pool.jobs[0].key), "ms/0/zarr.json") == 0);
   CHECK(Fail_ms, strcmp(strbuf_cstr(&pool.jobs[1].key), "ms/zarr.json") == 0);
   CHECK(Fail_ms, strcmp(strbuf_cstr(&pool.jobs[2].key), "ms/1/zarr.json") == 0);
@@ -427,8 +429,8 @@ test_ngff_snapshots(void)
   CHECK(Fail_ms, metadata_contains("ms/zarr.json", "\"tag\":\"latest\""));
 
   size = 8;
-  CHECK(Fail_ms,
-        sink->update_append_after(sink, 0, 1, &size, data_fence(&pool)) == 0);
+  data_fence(&pool);
+  CHECK(Fail_ms, sink->queue_append(sink, 0, 1, &size) == 0);
   CHECK(Fail_ms,
         ngff_multiscale_set_attribute(ms, "tag", "\"destroyed\"") == 0);
   CHECK(Fail_ms,

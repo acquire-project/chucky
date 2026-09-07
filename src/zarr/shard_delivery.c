@@ -284,10 +284,10 @@ shard_state_publish_append(struct shard_state* ss,
                            const uint64_t* cursor_elements,
                            struct stream_metrics* metrics)
 {
-  // An asynchronous sink owns the publication dependency. The producer only
-  // snapshots the finalized extent; workers publish it after its writes land.
+  // An asynchronous sink queues metadata behind prior writes. The producer
+  // snapshots only the finalized extent; workers publish it when IO succeeds.
   // Keep fence_pending truthful for any later synchronous readable query.
-  const int queued = sink->update_append_after && sink->flush;
+  const int queued = sink->queue_append && sink->flush;
   const uint64_t readable =
     queued ? ss->finalized_append_chunks
            : shard_state_readable_append_chunks(ss, sink, metrics);
@@ -298,12 +298,8 @@ shard_state_publish_append(struct shard_state* ss,
   else
     dim_info_decompose_append_sizes(dims, readable, append_sizes);
   if (queued)
-    return sink->update_append_after(
-      sink,
-      level,
-      dim_info_n_append(dims),
-      append_sizes,
-      ss->fence_pending ? ss->finalized_fence : (struct io_event){ 0 });
+    return sink->queue_append(
+      sink, level, dim_info_n_append(dims), append_sizes);
   return sink->update_append(
     sink, level, dim_info_n_append(dims), append_sizes);
 }

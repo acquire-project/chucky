@@ -135,15 +135,13 @@ counting_required_shard_alignment(const struct shard_sink* self)
 }
 
 static int
-counting_update_append_after(struct shard_sink* self,
-                             uint8_t level,
-                             uint8_t n_append,
-                             const uint64_t* append_sizes,
-                             struct io_event after)
+counting_queue_append(struct shard_sink* self,
+                      uint8_t level,
+                      uint8_t n_append,
+                      const uint64_t* append_sizes)
 {
   struct counting_sink* s = (struct counting_sink*)self;
-  return s->inner->update_append_after(
-    s->inner, level, n_append, append_sizes, after);
+  return s->inner->queue_append(s->inner, level, n_append, append_sizes);
 }
 
 static int
@@ -160,7 +158,7 @@ counting_sink_init(struct counting_sink* cs, struct shard_sink* inner)
     .base = {
       .open = counting_open,
       .update_append = inner->update_append ? counting_update_append : NULL,
-      .update_append_after = inner->update_append_after ? counting_update_append_after : NULL,
+      .queue_append = inner->queue_append ? counting_queue_append : NULL,
       .flush = inner->flush ? counting_flush : NULL,
       .record_fence = inner->record_fence ? counting_record_fence : NULL,
       .wait_fence = inner->wait_fence ? counting_wait_fence : NULL,

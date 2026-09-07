@@ -94,11 +94,11 @@ shard_state_readable_append_chunks(struct shard_state* ss,
                                    struct stream_metrics* metrics);
 
 // Publish one level's append extent through the sink. Sinks supporting queued
-// publication snapshot the metadata now and publish only after the finalized
-// fence succeeds; other sinks wait here. Final close drains queued metadata.
-// Pass cursor_elements to
-// hold the extent down to what the caller appended, or NULL where the cursor
-// belongs to another thread. Returns non-zero if the sink rejected the update.
+// publication snapshot the metadata now and publish after prior writes finish
+// successfully; other sinks wait here. Final close drains queued metadata.
+// Pass cursor_elements to hold the extent down to what the caller appended,
+// or NULL where the cursor belongs to another thread. Returns non-zero if the
+// sink rejected the update.
 //
 // The extent names only closed-out shards, so it stays truthful after a failed
 // flush, and is the only way a reader learns of shards written since the last

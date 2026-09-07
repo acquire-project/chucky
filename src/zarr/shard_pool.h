@@ -23,14 +23,13 @@ struct shard_pool
   void (*wait_fence)(struct shard_pool* self, struct io_event ev);
 
   // Optional metadata publication. Copies key/data before returning and
-  // atomically replaces the key after the dependency completes successfully.
-  // Updates are ordered within the pool. Errors are sticky and flush waits
-  // for these jobs as well as shard writes. NULL means synchronous-only.
-  int (*put_after)(struct shard_pool* self,
-                   const char* key,
-                   const void* data,
-                   size_t len,
-                   struct io_event after);
+  // atomically replaces the key after all previously accepted IO succeeds.
+  // Queue insertion after backpressure defines the order. Errors are sticky
+  // and flush waits for metadata as well as shard writes. NULL = synchronous.
+  int (*queue_metadata)(struct shard_pool* self,
+                        const char* key,
+                        const void* data,
+                        size_t len);
 
   // Wait for all pending I/O to complete. Returns non-zero on error.
   int (*flush)(struct shard_pool* self);

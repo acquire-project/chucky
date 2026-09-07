@@ -101,16 +101,15 @@ struct shard_sink
                        uint8_t n_append,
                        const uint64_t* append_sizes);
 
-  // Optional: queue a snapshot of the append metadata after all IO through
-  // after has completed successfully. Returning zero accepts the update;
-  // flush must report any later failure and wait for publication.
+  // Optional: queue a snapshot of append metadata behind prior sink IO.
+  // Publish only after those writes complete successfully. Returning zero
+  // accepts the update; flush waits for publication and reports later errors.
   // Does not borrow append_sizes. Writers use synchronous publication if
   // either this hook or flush is NULL.
-  int (*update_append_after)(struct shard_sink* self,
-                             uint8_t level,
-                             uint8_t n_append,
-                             const uint64_t* append_sizes,
-                             struct io_event after);
+  int (*queue_append)(struct shard_sink* self,
+                      uint8_t level,
+                      uint8_t n_append,
+                      const uint64_t* append_sizes);
 
   // IO fence for backpressure. NULL = no async IO.
   struct io_event (*record_fence)(struct shard_sink* self);
