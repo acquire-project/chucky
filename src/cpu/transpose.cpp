@@ -111,7 +111,13 @@ transpose_cpu(void* dst,
     dst,     (const char*)src, i_offset,     rank, shape,
     strides, correction,       inner_stride, bpe,
   };
-  threadpool_for_n(pool, n, transpose_range, &c);
+  // For small appends, dispatching and joining the pool costs more than the
+  // scatter. Keep this choice independent of compression parallelism.
+  constexpr uint64_t min_parallel_bytes = 64u << 10;
+  if (src_bytes < min_parallel_bytes)
+    transpose_range(0, n, 0, &c);
+  else
+    threadpool_for_n(pool, n, transpose_range, &c);
 
   return 0;
 }
