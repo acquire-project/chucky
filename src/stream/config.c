@@ -74,26 +74,6 @@ resolve_storage_order(uint8_t rank,
   return 0;
 }
 
-// The append chunk coordinates have zero strides: the caller selects their
-// destination epoch. All remaining coordinates describe one epoch. If their
-// strides are row-major, that epoch (and every subrange within it) can be
-// copied directly instead of scattered element by element.
-static int
-epoch_is_contiguous(const struct tile_stream_layout* layout)
-{
-  uint64_t expected_stride = 1;
-  for (int d = layout->lifted_rank - 1; d >= 0; --d) {
-    if (layout->lifted_strides[d] == 0)
-      continue;
-    if (layout->lifted_shape[d] > 1 &&
-        (layout->lifted_strides[d] < 0 ||
-         (uint64_t)layout->lifted_strides[d] != expected_stride))
-      return 0;
-    expected_stride *= layout->lifted_shape[d];
-  }
-  return expected_stride == layout->epoch_elements;
-}
-
 int
 compute_level_layout(struct tile_stream_layout* layout,
                      uint8_t rank,
@@ -147,7 +127,6 @@ compute_level_layout(struct tile_stream_layout* layout,
   // Collapse all append dims
   for (int d = 0; d < n_append; ++d)
     layout->lifted_strides[2 * d] = 0;
-  layout->epoch_contiguous = (uint8_t)epoch_is_contiguous(layout);
   layout->chunk_pool_bytes =
     layout->chunks_per_epoch * layout->chunk_stride * bytes_per_element;
   return 0;
