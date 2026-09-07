@@ -233,13 +233,21 @@ set_tests_properties(test-test_pending_bytes_fs PROPERTIES TIMEOUT 60)
 add_test_exe(test_shape_after_flush_cpu test_shape_after_flush_cpu.c stream_cpu test_shard_sink writer chucky_log)
 add_test_exe(test_stall_metrics_cpu test_stall_metrics_cpu.c stream_cpu test_shard_sink writer platform chucky_log)
 add_gpu_test_exe(test_shape_after_flush_gpu test_shape_after_flush_gpu.c LINKS CUDA::cuda_driver CUDA::cudart_static stream test_shard_sink writer chucky_log)
-add_test_exe(test_stream_initial_shape_cpu test_stream_initial_shape.c
-    stream_cpu multiarray_cpu test_zarr_helpers test_shard_sink test_platform writer chucky_log)
-add_gpu_test_exe(test_stream_initial_shape_gpu test_stream_initial_shape.c
+add_test_exe(test_stream_publication_cpu test_stream_publication.c
+    stream_cpu multiarray_cpu test_zarr_helpers test_shard_sink test_io_faults
+    test_platform writer chucky_log
+)
+set_tests_properties(test-test_stream_publication_cpu PROPERTIES TIMEOUT 60)
+add_gpu_test_exe(test_stream_publication_gpu test_stream_publication.c
     LINKS CUDA::cuda_driver CUDA::cudart_static stream multiarray_gpu
-          test_zarr_helpers test_shard_sink test_platform writer chucky_log)
+          test_zarr_helpers test_shard_sink test_io_faults test_platform writer chucky_log
+)
 if(CHUCKY_ENABLE_GPU)
-    target_compile_definitions(test_stream_initial_shape_gpu PRIVATE TEST_INITIAL_SHAPE_GPU)
+    target_compile_definitions(
+        test_stream_publication_gpu
+        PRIVATE TEST_STREAM_PUBLICATION_GPU
+    )
+    set_tests_properties(test-test_stream_publication_gpu PROPERTIES TIMEOUT 60)
 endif()
 add_gpu_test_exe(test_multiarray_flush_mock  test_multiarray_flush_mock.c  LINKS CUDA::cuda_driver CUDA::cudart_static multiarray_gpu stream writer chucky_log)
 add_test_exe(test_zarr_s3_sink   test_zarr_s3_sink.c   test_zarr_helpers store_s3 platform_cmd)

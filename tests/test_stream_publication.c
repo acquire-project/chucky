@@ -1,15 +1,19 @@
 // A stream starts empty even when its configured capacity is finite. Array
 // creation by itself retains its fixed shape; attaching a stream publishes the
-// empty readable extent synchronously without changing that capacity.
+// empty readable extent synchronously without changing that capacity. Later
+// publication follows completed IO without blocking append or requiring input.
 
 #include "defs.limits.h"
 #include "ngff/ngff_multiscale.h"
+#include "platform/platform.h"
+#include "test_io_faults.h"
 #include "test_platform.h"
 #include "test_shard_sink.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
 
-#ifdef TEST_INITIAL_SHAPE_GPU
+#ifdef TEST_STREAM_PUBLICATION_GPU
+#include "gpu/stream.internal.h"
 #include "multiarray.gpu.h"
 #include "stream.gpu.h"
 #include "test_runner.h"
@@ -34,6 +38,7 @@ typedef struct multiarray_tile_stream_cpu test_multiarray;
 #define get_multiarray_writer multiarray_tile_stream_cpu_writer
 #endif
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -285,17 +290,159 @@ Cleanup:
   return rc;
 }
 
-#ifdef TEST_INITIAL_SHAPE_GPU
+#define PUBLICATION_TIMEOUT_MS 5000
+
+struct append_args
+{
+  struct writer* w;
+  struct slice input;
+  _Atomic int done;
+  int error;
+};
+
+static void
+append_thread_fn(void* arg)
+{
+  struct append_args* a = (struct append_args*)arg;
+  a->error = writer_append_wait(a->w, a->input).error;
+  atomic_store(&a->done, 1);
+}
+
+// A closed generation queues its metadata behind a filesystem fence, without
+// parking append. Releasing that fence must publish even if input stops.
+static int
+check_publication_follows_io(int fail_truncate)
+{
+  char tmpdir[512] = { 0 };
+  struct dimension dims[] = {
+    { .size = 8,
+      .chunk_size = 1,
+      .chunks_per_shard = 2,
+      .name = "t",
+      .storage_position = 0 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "y",
+      .storage_position = 1 },
+    { .size = 8,
+      .chunk_size = 8,
+      .chunks_per_shard = 1,
+      .name = "x",
+      .storage_position = 2 },
+  };
+  struct io_faults faults;
+  struct test_zarr_sink z = { 0 };
+  test_stream* s = NULL;
+  test_thread* thr = NULL;
+  uint16_t data[2 * 8 * 8] = { 0 };
+  _Atomic int gate = 0;
+  struct append_args a = { 0 };
+  int rc = 1;
+
+  CHECK(Cleanup, test_tmpdir_create(tmpdir, sizeof(tmpdir)) == 0);
+  CHECK(Cleanup,
+        test_zarr_sink_open_with_pool(
+          &z,
+          io_faults_store_create(&faults, tmpdir, 1, NULL),
+          "0",
+          dims,
+          3,
+          dtype_u16,
+          (struct codec_config){ .id = CODEC_NONE }) == 0);
+  struct tile_stream_configuration cfg = finite_config(dims, 3);
+  cfg.metadata_update_interval_s = 0;
+  s = stream_create(&cfg, test_zarr_sink_as_shard_sink(&z));
+  CHECK(Cleanup,
+        s && metadata_has_shape(tmpdir, "0/zarr.json", "\"shape\":[0,8,8]"));
+  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
+  for (int i = 0; i < PUBLICATION_TIMEOUT_MS && atomic_load(&faults.armed); ++i)
+    platform_sleep_ns(1000000LL);
+  CHECK(Cleanup, atomic_load(&faults.armed) == 0);
+  if (fail_truncate)
+    io_faults_fail_next_truncate(&faults);
+
+  a.w = stream_writer(s);
+  a.input = (struct slice){ .beg = data, .end = data + 2 * 8 * 8 };
+  CHECK(Cleanup, test_thread_start(&thr, append_thread_fn, &a) == 0);
+  CHECK(Cleanup, test_wait_flag(&a.done, PUBLICATION_TIMEOUT_MS) == 0);
+  test_thread_join(thr);
+  thr = NULL;
+  CHECK(Cleanup, fail_truncate || a.error == 0);
+#ifdef TEST_STREAM_PUBLICATION_GPU
+  if (!fail_truncate && s->engine.delivery.thread) {
+    for (int i = 0; i < PUBLICATION_TIMEOUT_MS &&
+                    gpu_delivery_job_state(&s->engine.delivery, 0, NULL) !=
+                      DELIVERY_JOB_DONE;
+         ++i)
+      platform_sleep_ns(1000000LL);
+    CHECK(Cleanup,
+          gpu_delivery_job_state(&s->engine.delivery, 0, NULL) ==
+            DELIVERY_JOB_DONE);
+  }
+#endif
+  CHECK(Cleanup, atomic_load(&gate) == 0);
+  CHECK(Cleanup,
+        metadata_has_shape(tmpdir, "0/zarr.json", "\"shape\":[0,8,8]"));
+
+  atomic_store(&gate, 1);
+  if (!fail_truncate) {
+    for (int i = 0;
+         i < PUBLICATION_TIMEOUT_MS &&
+         !metadata_has_shape(tmpdir, "0/zarr.json", "\"shape\":[2,8,8]");
+         ++i)
+      platform_sleep_ns(1000000LL);
+    CHECK(Cleanup,
+          metadata_has_shape(tmpdir, "0/zarr.json", "\"shape\":[2,8,8]"));
+  }
+  struct writer_result fr = writer_flush(a.w);
+  struct writer_result cr = writer_close(a.w);
+  CHECK(Cleanup, (fr.error != 0) == fail_truncate);
+  CHECK(Cleanup, (cr.error != 0) == fail_truncate);
+  CHECK(Cleanup,
+        metadata_has_shape(tmpdir,
+                           "0/zarr.json",
+                           fail_truncate ? "\"shape\":[0,8,8]"
+                                         : "\"shape\":[2,8,8]"));
+  rc = 0;
+
+Cleanup:
+  atomic_store(&gate, 1);
+  test_thread_join(thr);
+  stream_destroy(s);
+  test_zarr_sink_close(&z);
+  if (tmpdir[0])
+    test_tmpdir_remove(tmpdir);
+  return rc;
+}
+
+static int
+test_publication_follows_io(void)
+{
+  return check_publication_follows_io(0);
+}
+
+static int
+test_publication_withholds_failed_io(void)
+{
+  return check_publication_follows_io(1);
+}
+
+#ifdef TEST_STREAM_PUBLICATION_GPU
 RUN_GPU_TESTS({ "finite_shape_and_capacity", test_finite_shape_and_capacity },
               { "multiscale_initial_shape", test_multiscale_initial_shape },
               { "multiarray_initial_shape", test_multiarray_initial_shape },
               { "initial_publication_failure",
-                test_initial_publication_failure }, )
+                test_initial_publication_failure },
+              { "publication_follows_io", test_publication_follows_io },
+              { "publication_withholds_failed_io",
+                test_publication_withholds_failed_io }, )
 #else
 int
 main(void)
 {
   return test_finite_shape_and_capacity() | test_multiscale_initial_shape() |
-         test_multiarray_initial_shape() | test_initial_publication_failure();
+         test_multiarray_initial_shape() | test_initial_publication_failure() |
+         test_publication_follows_io() | test_publication_withholds_failed_io();
 }
 #endif

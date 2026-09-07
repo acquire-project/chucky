@@ -15,7 +15,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define DRAIN_OBSERVE_MS 200
 #define POST_RELEASE_TIMEOUT_MS 5000
@@ -26,133 +25,6 @@ struct flush_args
   _Atomic int done;
   int error;
 };
-
-struct append_args
-{
-  struct writer* w;
-  struct slice input;
-  _Atomic int done;
-  int error;
-};
-
-static void
-append_thread_fn(void* arg)
-{
-  struct append_args* a = (struct append_args*)arg;
-  a->error = writer_append_wait(a->w, a->input).error;
-  atomic_store(&a->done, 1);
-}
-
-static int
-metadata_shape_is(const char* tmpdir, uint64_t frames)
-{
-  char path[4608], expected[96], json[16384];
-  snprintf(path, sizeof(path), "%s/0/zarr.json", tmpdir);
-  snprintf(expected,
-           sizeof(expected),
-           "\"shape\":[%llu,8,8]",
-           (unsigned long long)frames);
-  FILE* f = fopen(path, "rb");
-  if (!f)
-    return 0;
-  size_t n = fread(json, 1, sizeof(json) - 1, f);
-  int ok = !ferror(f) && feof(f);
-  fclose(f);
-  json[n] = '\0';
-  return ok && strstr(json, expected) != NULL;
-}
-
-// A closed generation queues its metadata behind a filesystem fence, without
-// parking append. Releasing that fence must publish even if input stops.
-static int
-test_publication_follows_io(const char* tmpdir, int fail_truncate)
-{
-  struct dimension dims[] = {
-    { .size = 8,
-      .chunk_size = 1,
-      .chunks_per_shard = 2,
-      .name = "t",
-      .storage_position = 0 },
-    { .size = 8,
-      .chunk_size = 8,
-      .chunks_per_shard = 1,
-      .name = "y",
-      .storage_position = 1 },
-    { .size = 8,
-      .chunk_size = 8,
-      .chunks_per_shard = 1,
-      .name = "x",
-      .storage_position = 2 },
-  };
-  struct io_faults faults;
-  struct test_zarr_sink z = { 0 };
-  struct tile_stream_cpu* s = NULL;
-  test_thread* thr = NULL;
-  uint16_t data[2 * 8 * 8] = { 0 };
-  _Atomic int gate = 0;
-  struct append_args a = { 0 };
-  int rc = 1;
-
-  CHECK(Cleanup,
-        test_zarr_sink_open_with_pool(
-          &z,
-          io_faults_store_create(&faults, tmpdir, 1, NULL),
-          "0",
-          dims,
-          3,
-          dtype_u16,
-          (struct codec_config){ .id = CODEC_NONE }) == 0);
-  const struct tile_stream_configuration cfg = {
-    .buffer_capacity_bytes = 4096,
-    .epochs_per_batch = 2,
-    .dtype = dtype_u16,
-    .rank = 3,
-    .dimensions = dims,
-    .codec = { .id = CODEC_NONE },
-    .metadata_update_interval_s = 0,
-    .max_threads = 2,
-  };
-  s = tile_stream_cpu_create(&cfg, test_zarr_sink_as_shard_sink(&z));
-  CHECK(Cleanup, s && metadata_shape_is(tmpdir, 0));
-  CHECK(Cleanup, io_faults_inject_blocking_job(&faults, &gate) == 0);
-  for (int i = 0; i < POST_RELEASE_TIMEOUT_MS && atomic_load(&faults.armed);
-       ++i)
-    platform_sleep_ns(1000000LL);
-  CHECK(Cleanup, atomic_load(&faults.armed) == 0);
-  if (fail_truncate)
-    io_faults_fail_next_truncate(&faults);
-
-  a.w = tile_stream_cpu_writer(s);
-  a.input = (struct slice){ .beg = data, .end = data + 2 * 8 * 8 };
-  CHECK(Cleanup, test_thread_start(&thr, append_thread_fn, &a) == 0);
-  CHECK(Cleanup, test_wait_flag(&a.done, POST_RELEASE_TIMEOUT_MS) == 0);
-  test_thread_join(thr);
-  thr = NULL;
-  CHECK(Cleanup, fail_truncate || a.error == 0);
-  CHECK(Cleanup, atomic_load(&gate) == 0 && metadata_shape_is(tmpdir, 0));
-
-  atomic_store(&gate, 1);
-  if (!fail_truncate) {
-    for (int i = 0;
-         i < POST_RELEASE_TIMEOUT_MS && !metadata_shape_is(tmpdir, 2);
-         ++i)
-      platform_sleep_ns(1000000LL);
-    CHECK(Cleanup, metadata_shape_is(tmpdir, 2));
-  }
-  struct writer_result fr = writer_flush(a.w);
-  struct writer_result cr = writer_close(a.w);
-  CHECK(Cleanup, (fr.error != 0) == fail_truncate);
-  CHECK(Cleanup, (cr.error != 0) == fail_truncate);
-  CHECK(Cleanup, metadata_shape_is(tmpdir, fail_truncate ? 0 : 2));
-  rc = 0;
-
-Cleanup:
-  atomic_store(&gate, 1);
-  test_thread_join(thr);
-  tile_stream_cpu_destroy(s);
-  test_zarr_sink_close(&z);
-  return rc;
-}
 
 static void
 flush_thread_fn(void* arg)
@@ -297,12 +169,6 @@ main(int ac, char* av[])
     snprintf(sub, sizeof(sub), "%s/flush_drain_cpu", tmpdir);
     test_mkdir(sub);
     ecode |= test_flush_waits_for_sink_io(sub);
-  }
-  for (int fail = 0; fail < 2; ++fail) {
-    char sub[4200];
-    snprintf(sub, sizeof(sub), "%s/publication_%d", tmpdir, fail);
-    test_mkdir(sub);
-    ecode |= test_publication_follows_io(sub, fail);
   }
 
   test_tmpdir_remove(tmpdir);
