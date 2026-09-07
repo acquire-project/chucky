@@ -12,6 +12,7 @@
 struct tile_stream_layout
 {
   uint8_t lifted_rank;
+  uint8_t epoch_contiguous; // nonzero when an epoch is one contiguous span
   uint64_t lifted_shape[MAX_RANK];
   int64_t lifted_strides[MAX_RANK];
 

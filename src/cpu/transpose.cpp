@@ -1,8 +1,11 @@
 #include "cpu/transpose.h"
 
 #include "defs.limits.h"
+#include "stream/layouts.h"
 #include "threadpool/threadpool.h"
 #include "util/index.ops.h"
+
+#include <string.h>
 
 template<typename T>
 static void
@@ -86,9 +89,7 @@ transpose_cpu(void* dst,
               uint64_t src_bytes,
               uint8_t bpe,
               uint64_t i_offset,
-              uint8_t lifted_rank,
-              const uint64_t* lifted_shape,
-              const int64_t* lifted_strides,
+              const struct tile_stream_layout* layout,
               struct threadpool* pool)
 {
   if (bpe != 1 && bpe != 2 && bpe != 4 && bpe != 8)
@@ -97,9 +98,15 @@ transpose_cpu(void* dst,
   if (n == 0)
     return 0;
 
-  const int rank = lifted_rank;
-  const uint64_t* shape = lifted_shape;
-  const int64_t* strides = lifted_strides;
+  const uint64_t epoch_offset = i_offset % layout->epoch_elements;
+  if (layout->epoch_contiguous && n <= layout->epoch_elements - epoch_offset) {
+    memcpy((char*)dst + epoch_offset * bpe, src, n * bpe);
+    return 0;
+  }
+
+  const int rank = layout->lifted_rank;
+  const uint64_t* shape = layout->lifted_shape;
+  const int64_t* strides = layout->lifted_strides;
 
   int64_t correction[MAX_RANK];
   for (int d = 0; d < rank - 1; ++d)
