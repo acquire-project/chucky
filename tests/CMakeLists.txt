@@ -181,7 +181,7 @@ if(CHUCKY_ENABLE_GPU AND HAVE_BLOSC)
     )
 endif()
 
-add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
+add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata attr_set json_validate strbuf chucky_log)
 add_test_exe(test_bench_memory test_bench_memory.c bench_memory)
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
 add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
@@ -196,7 +196,7 @@ add_test_exe(test_ngff_attribute test_ngff_attribute.c ngff_multiscale store_fs 
 add_test_exe(test_hcs_attribute test_hcs_attribute.c hcs store_fs store_api test_platform chucky_log)
 add_test_exe(test_zarr_array  test_zarr_array.c  zarr_array zarr_group store_fs store_api test_platform chucky_log)
 add_test_exe(test_ngff_multiscale test_ngff_multiscale.c ngff_multiscale zarr_group store_fs store_api test_platform chucky_log)
-add_test_exe(test_metadata_publication test_metadata_publication.c ngff_multiscale zarr_array shard_delivery store_fs store_api test_platform chucky_log)
+add_test_exe(test_metadata_publication test_metadata_publication.c ngff_multiscale zarr_array shard_delivery store_fs store_api json_validate test_platform chucky_log)
 add_test_exe(test_hcs test_hcs.c hcs store_fs store_api test_platform chucky_log)
 
 # OME-NGFF validation via ome-zarr-models (requires uv)

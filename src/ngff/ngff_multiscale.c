@@ -6,7 +6,9 @@
 #include "ngff/ngff_metadata.h"
 #include "util/prelude.h"
 #include "zarr/attr_set.h"
+#include "zarr/metadata_io.h"
 #include "zarr/zarr_array.h"
+#include "zarr/zarr_group.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,44 +66,26 @@ struct ngff_multiscale
 // --- Group metadata ---
 
 static int
-write_ngff_group_metadata(struct ngff_multiscale* ms, int queued)
+submit_ngff_group_metadata(struct ngff_multiscale* ms)
 {
   const struct dimension* level_ptrs[LOD_MAX_LEVELS];
   for (int lv = 0; lv < ms->nlod; ++lv)
     level_ptrs[lv] = zarr_array_dimensions(ms->levels[lv]);
 
-  struct strbuf key = { 0 };
-  struct strbuf json = { 0 };
+  struct strbuf attrs = { 0 };
   int rc = 1;
 
-  // Older queued group snapshots must land before a synchronous rewrite.
-  if (!queued && ms->pool->queue_metadata && ms->pool->flush(ms->pool))
+  if (ngff_multiscale_attributes_json(
+        &attrs, ms->rank, ms->nlod, level_ptrs, ms->axes, &ms->attrs))
     goto done;
 
-  if (ngff_multiscale_group_json(
-        &json, ms->rank, ms->nlod, level_ptrs, ms->axes, &ms->attrs))
-    goto done;
-
-  if (strbuf_len(&ms->prefix) > 0) {
-    if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&ms->prefix)))
-      goto done;
-  } else {
-    if (strbuf_append_cstr(&key, "zarr.json"))
-      goto done;
-  }
-
-  if (queued)
-    rc = ms->pool->queue_metadata(
-      ms->pool, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
-  else
-    rc = ms->store->put(
-      ms->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
+  rc = zarr_group_submit(
+    ms->store, ms->pool, strbuf_cstr(&ms->prefix), strbuf_cstr(&attrs));
   if (rc == 0)
     ms->attrs.dirty = 0;
 
 done:
-  strbuf_free(&key);
-  strbuf_free(&json);
+  strbuf_free(&attrs);
   return rc;
 }
 
@@ -121,25 +105,21 @@ Fail:
 }
 
 static int
-update_append(struct ngff_multiscale* ms,
+submit_append(struct ngff_multiscale* ms,
               uint8_t level,
               uint8_t n_append,
-              const uint64_t* append_sizes,
-              int queued)
+              const uint64_t* append_sizes)
 {
   if (level >= ms->nlod || n_append == 0 || n_append > ms->rank ||
       !append_sizes)
     return 1;
 
-  struct shard_sink* child = zarr_array_as_shard_sink(ms->levels[level]);
   const struct dimension* dims = zarr_array_dimensions(ms->levels[level]);
   int changed = 0;
   for (uint8_t d = 0; d < n_append; ++d)
     changed |= dims[d].size != append_sizes[d];
 
-  int rc = queued ? child->queue_append(child, level, n_append, append_sizes)
-                  : child->update_append(child, level, n_append, append_sizes);
-  if (rc)
+  if (zarr_array_submit_append(ms->levels[level], n_append, append_sizes))
     return 1;
 
   if (!changed)
@@ -147,7 +127,7 @@ update_append(struct ngff_multiscale* ms,
 
   // The shared pool orders publications, so the child snapshot is visible
   // before its group snapshot and earlier groups cannot replace later ones.
-  if (write_ngff_group_metadata(ms, queued)) {
+  if (submit_ngff_group_metadata(ms)) {
     log_error("ngff_multiscale: failed to rewrite group zarr.json for %s",
               strbuf_cstr(&ms->prefix));
     return 1;
@@ -162,7 +142,9 @@ ngff_multiscale_update_append(struct shard_sink* self,
                               const uint64_t* append_sizes)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
-  return update_append(ms, level, n_append, append_sizes, 0);
+  int rc = submit_append(ms, level, n_append, append_sizes);
+  rc |= zarr_metadata_wait(ms->pool);
+  return rc;
 }
 
 static int
@@ -172,7 +154,7 @@ ngff_multiscale_queue_append(struct shard_sink* self,
                              const uint64_t* append_sizes)
 {
   struct ngff_multiscale* ms = container_of(self, struct ngff_multiscale, base);
-  return update_append(ms, level, n_append, append_sizes, 1);
+  return submit_append(ms, level, n_append, append_sizes);
 }
 
 static struct io_event
@@ -317,7 +299,9 @@ ngff_multiscale_init(struct store* store,
     slot_base += dims_compute_shard_geometry(lv_dims, cfg->rank, sc, cps);
   }
 
-  CHECK(Fail_levels, write_ngff_group_metadata(ms, 0) == 0);
+  int rc = submit_ngff_group_metadata(ms);
+  rc |= zarr_metadata_wait(pool);
+  CHECK(Fail_levels, rc == 0);
 
   lod_plan_free(plan);
   return ms;
@@ -468,9 +452,9 @@ int
 ngff_multiscale_flush_metadata(struct ngff_multiscale* ms)
 {
   CHECK(Fail, ms);
-  if (!ms->attrs.dirty)
-    return ms->pool->queue_metadata ? ms->pool->flush(ms->pool) : 0;
-  return write_ngff_group_metadata(ms, 0);
+  int rc = ms->attrs.dirty ? submit_ngff_group_metadata(ms) : 0;
+  rc |= zarr_metadata_wait(ms->pool);
+  return rc;
 Fail:
   return 1;
 }

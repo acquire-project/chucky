@@ -623,10 +623,10 @@ The caller interacts with the pipeline through a `struct writer` vtable:
   Returns once those writes have landed, so a write that failed is reported
   here.
 
-- **`close(self)`** — publishes the append extent and lets the sink write its
-  own metadata. This is where the array becomes readable. Idempotent, and
-  destroy runs it if the caller did not — so the sink has to outlive the
-  stream.
+- **`close(self)`** — publishes the final append extent and waits for metadata
+  completion. Closed shards can already be readable through periodic metadata
+  publication. Idempotent, and destroy runs it if the caller did not — so the
+  sink has to outlive the stream.
 
   Finalizing is what makes that last partial chunk readable — it is padded out
   and its shard is closed. Taking more input afterwards would have to start past
@@ -635,21 +635,31 @@ The caller interacts with the pipeline through a `struct writer` vtable:
 
 #### Shard sink interface
 
-`struct shard_sink` is the extension point for storage backends. Any
-implementation that provides these four operations can receive output:
+`struct shard_sink` is the extension point for storage backends. It provides
+`open` and optional metadata, fencing, and completion hooks:
 
 - **`open(self, level, shard_index) → shard_writer*`** — return a writer for
   the given shard. The library calls this once per shard per batch.
 
-- **`update_dim0(self, level, dim0_size)`** — called periodically as the
-  append dimension grows, allowing the backend to update metadata.
+- **`update_append(self, level, n_append, append_sizes)`** — synchronously
+  publish append extents, including the empty extent at stream creation.
 
-- **`record_fence(self, level) → io_event`** — snapshot the current I/O
+- **`queue_append(self, level, n_append, append_sizes)`** — snapshot append
+  metadata and publish it after earlier sink IO succeeds. The sink owns the
+  snapshot before returning. Writers use this hook only when `flush` is also
+  provided; otherwise they use synchronous publication.
+
+- **`record_fence(self) → io_event`** — snapshot the current I/O
   position for backpressure.
 
-- **`wait_fence(self, level, event)`** — block until the I/O subsystem has
+- **`wait_fence(self, event)`** — block until the I/O subsystem has
   retired past the given fence, preventing the pipeline from outrunning
   storage.
+
+- **`flush(self)`** — publish dirty sink metadata and wait for accepted
+  publication work. The writer calls it after publishing the final extent.
+
+- **`has_error(self)`** — report an asynchronous IO failure.
 
 Each `struct shard_writer` returned by `open` provides:
 
@@ -716,9 +726,9 @@ tile_stream_gpu_destroy(s);
 The library ships a concrete `shard_sink` targeting Zarr v3 stores with the
 sharding codec.
 
-**`zarr_sink`** implements `shard_sink` for a single zarr array.
-**`zarr_multiscale_sink`** wraps an array of `zarr_sink` instances — one per
-LOD level — and manages OME-NGFF group metadata.
+**`zarr_array`** implements `shard_sink` for a single Zarr array.
+**`ngff_multiscale`** wraps an array of `zarr_array` instances — one per
+LOD level — and manages OME-NGFF attributes and level relationships.
 
 **Writer pool.** Each sink maintains a pool of `shard_writer` objects (one per
 inner shard index), reused across epochs. This bounds open file
@@ -734,10 +744,19 @@ read-side data. The alignment requirement is queried from the sink via
 `required_shard_alignment`; sinks that don't need alignment (S3, in-memory)
 return 0 and skip all padding overhead.
 
-**Dynamic metadata.** `update_dim0` regenerates the zarr array metadata
-(`zarr.json`) as the append dimension grows, and for multiscale sinks also
-regenerates OME-NGFF group metadata. Metadata is written at a configurable
-interval rather than every epoch.
+**Dynamic metadata.** Periodic publication snapshots the append extent of
+closed shards. Zarr builds the array and group metadata envelopes; NGFF
+supplies OME attributes. A private Zarr API constructs each `zarr.json` key
+and submits the immutable bytes through the injected store and pool.
+
+Filesystem metadata uses one ordered submission path. `queue_append` returns
+after submission; `update_append` submits through the same path and then waits,
+even when an unchanged extent refers to a snapshot still in flight. A queued
+replacement becomes runnable after every earlier queue entry completes, while
+later independent file operations can continue. Failures suppress publication
+and become sticky pool errors. S3 metadata uses synchronous `put` without
+flushing active uploads. The publication interval is configurable through
+`metadata_update_interval_s`.
 
 For the zarr shard binary format, see [sharding.md][sharding-md] and the
 [zarr sharding codec specification][zarr-shard].

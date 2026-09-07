@@ -5,6 +5,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/attr_set.h"
+#include "zarr/metadata_io.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdlib.h>
@@ -36,24 +37,10 @@ struct zarr_array
 // --- Metadata writing ---
 
 static int
-write_array_metadata(struct zarr_array* a, int queued)
+submit_array_metadata(struct zarr_array* a)
 {
-  struct strbuf key = { 0 };
   struct strbuf json = { 0 };
   int rc = 1;
-
-  // A synchronous rewrite must not be overwritten by an older queued
-  // snapshot. Failed IO must not expose the newer shape either.
-  if (!queued && a->pool->queue_metadata && a->pool->flush(a->pool))
-    goto done;
-
-  if (strbuf_len(&a->prefix) > 0) {
-    if (strbuf_appendf(&key, "%s/zarr.json", strbuf_cstr(&a->prefix)))
-      goto done;
-  } else {
-    if (strbuf_append_cstr(&key, "zarr.json"))
-      goto done;
-  }
 
   if (zarr_array_json(&json,
                       a->rank,
@@ -65,17 +52,11 @@ write_array_metadata(struct zarr_array* a, int queued)
                       &a->attrs))
     goto done;
 
-  if (queued)
-    rc = a->pool->queue_metadata(
-      a->pool, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
-  else
-    rc = a->store->put(
-      a->store, strbuf_cstr(&key), strbuf_cstr(&json), strbuf_len(&json));
+  rc = zarr_metadata_submit(a->store, a->pool, strbuf_cstr(&a->prefix), &json);
   if (rc == 0)
     a->attrs.dirty = 0;
 
 done:
-  strbuf_free(&key);
   strbuf_free(&json);
   return rc;
 }
@@ -111,11 +92,10 @@ zarr_array_open(struct shard_sink* self, uint8_t level, uint64_t shard_index)
   return w;
 }
 
-static int
-update_append(struct zarr_array* a,
-              uint8_t n_append,
-              const uint64_t* append_sizes,
-              int queued)
+int
+zarr_array_submit_append(struct zarr_array* a,
+                         uint8_t n_append,
+                         const uint64_t* append_sizes)
 {
   if (n_append == 0 || n_append > a->rank || !append_sizes)
     return 1;
@@ -127,11 +107,8 @@ update_append(struct zarr_array* a,
       break;
     }
   }
-  if (!changed) {
-    // dimensions includes accepted snapshots that may still be queued.
-    // Keep update_append's synchronous visibility contract on this path.
-    return !queued && a->pool->queue_metadata ? a->pool->flush(a->pool) : 0;
-  }
+  if (!changed)
+    return 0;
 
   uint64_t old_sizes[MAX_ZARR_RANK];
   for (uint8_t d = 0; d < n_append; ++d) {
@@ -139,7 +116,7 @@ update_append(struct zarr_array* a,
     a->dimensions[d].size = append_sizes[d];
   }
 
-  if (write_array_metadata(a, queued)) {
+  if (submit_array_metadata(a)) {
     for (uint8_t d = 0; d < n_append; ++d)
       a->dimensions[d].size = old_sizes[d];
     log_error("zarr_array: failed to rewrite zarr.json for %s",
@@ -157,7 +134,10 @@ zarr_array_update_append(struct shard_sink* self,
 {
   (void)level;
   struct zarr_array* a = container_of(self, struct zarr_array, base);
-  return update_append(a, n_append, append_sizes, 0);
+  int rc = zarr_array_submit_append(a, n_append, append_sizes);
+  // Even an unchanged shape may refer to a snapshot still in the queue.
+  rc |= zarr_metadata_wait(a->pool);
+  return rc;
 }
 
 static int
@@ -170,7 +150,7 @@ zarr_array_queue_append(struct shard_sink* self,
   struct zarr_array* a = container_of(self, struct zarr_array, base);
   // Serialize while dimensions, attributes and prefix are stable. The pool
   // copies the resulting key and bytes; workers never borrow array state.
-  return update_append(a, n_append, append_sizes, 1);
+  return zarr_array_submit_append(a, n_append, append_sizes);
 }
 
 static struct io_event
@@ -260,8 +240,10 @@ zarr_array_init(struct store* store,
   a->base.pending_bytes = zarr_array_pending_bytes_fn;
   a->base.required_shard_alignment = zarr_array_required_shard_alignment_fn;
 
-  // Write array zarr.json
-  CHECK(Fail_alloc, write_array_metadata(a, 0) == 0);
+  // Creation returns only after the initial metadata is visible.
+  int rc = submit_array_metadata(a);
+  rc |= zarr_metadata_wait(pool);
+  CHECK(Fail_alloc, rc == 0);
 
   return a;
 
@@ -398,9 +380,9 @@ int
 zarr_array_flush_metadata(struct zarr_array* a)
 {
   CHECK(Fail, a);
-  if (!a->attrs.dirty)
-    return a->pool->queue_metadata ? a->pool->flush(a->pool) : 0;
-  return write_array_metadata(a, 0);
+  int rc = a->attrs.dirty ? submit_array_metadata(a) : 0;
+  rc |= zarr_metadata_wait(a->pool);
+  return rc;
 Fail:
   return 1;
 }

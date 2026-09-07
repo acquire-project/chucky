@@ -63,11 +63,18 @@ internal conventions, and key concepts.
 | Target | Source | Purpose |
 |--------|--------|---------|
 | `json_writer` | `src/zarr/json_writer.c` | JSON serialization for zarr metadata |
-| `zarr_metadata` | `src/zarr/zarr_metadata.c` | Write zarr.json / .zarray / OME-NGFF metadata |
+| `zarr_metadata` | `src/zarr/zarr_metadata.c` | Serialize Zarr v3 array and group metadata |
+| `zarr_metadata_io` | `src/zarr/metadata_io.c` | Construct metadata keys, submit snapshots, and wait for publication |
+| `zarr_array` | `src/zarr/zarr_array.c` | Zarr array geometry, metadata, and shard sink |
+| `zarr_group` | `src/zarr/zarr_group.c` | Zarr group envelopes and attributes |
+| `ngff_metadata` | `src/ngff/ngff_metadata.c` | Serialize OME-NGFF multiscale attributes |
+| `ngff_multiscale` | `src/ngff/ngff_multiscale.c` | Compose Zarr arrays and group metadata |
 | `shard_delivery` | `src/zarr/shard_delivery.c` | Write shard index + CRC, deliver to shard_writer |
-| `zarr_fs_sink` | `src/zarr/zarr_fs_sink.c` | `shard_sink` for local filesystem Zarr stores |
+| `shard_pool_fs` | `src/zarr/shard_pool_fs.c` | Queue filesystem shard writes and metadata publication |
+| `store_fs` | `src/zarr/store_fs.c` | Filesystem store keys and pool creation |
 | `s3_client` | `src/zarr/s3_client.c` | AWS S3 multipart upload client |
-| `zarr_s3_sink` | `src/zarr/zarr_s3_sink.c` | `shard_sink` for S3-backed Zarr stores |
+| `shard_pool_s3` | `src/zarr/shard_pool_s3.c` | S3 shard upload slots |
+| `store_s3` | `src/zarr/store_s3.c` | S3 metadata keys and pool creation |
 
 ## Public API headers
 
