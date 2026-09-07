@@ -1,5 +1,23 @@
 import {bloscBlockKey, bloscBlockLabel, matchesBloscBlock} from "./blosc.js";
 
+export function inputKey(run) {
+  return run.input_id || run.fill;
+}
+
+export function inputLabel(run) {
+  return run.input_label || run.fill;
+}
+
+export function inputLabels(runs) {
+  const labels = new Map(runs.map(run => [inputKey(run), inputLabel(run)]));
+  const counts = new Map();
+  for (const label of labels.values()) counts.set(label, (counts.get(label) || 0) + 1);
+  for (const [key, label] of labels) {
+    if (counts.get(label) > 1) labels.set(key, label + " [" + key.slice(-8) + "]");
+  }
+  return labels;
+}
+
 export function metricValue(run, key) {
   const parts = key.split(".");
   let v = run;
@@ -24,7 +42,7 @@ export function bestRun(sweep, scenario, fill, state, meta) {
   const wantHigh = meta.better === "high";
   let best = null, bestValue = null, count = 0;
   for (const run of sweep.runs) {
-    if (run.scenario !== scenario || run.fill !== fill) continue;
+    if (run.scenario !== scenario || inputKey(run) !== fill) continue;
     if (run.status !== "pass" || !matchesSetup(run, state)) continue;
     const value = metricValue(run, state.metric);
     if (value == null) continue;
@@ -79,7 +97,7 @@ export function moversFor(machine, state, meta) {
 export function filterRuns(runs, selection, {includeBackend = true} = {}) {
   const {codec, fill, backend, dtype, sink, bloscBlock, scenarios, s3Throughput} = selection;
   return runs.filter(run => {
-    if ((run.codec_label ?? run.codec) !== codec || run.fill !== fill || run.dtype !== dtype || run.sink !== sink) return false;
+    if ((run.codec_label ?? run.codec) !== codec || inputKey(run) !== fill || run.dtype !== dtype || run.sink !== sink) return false;
     if (!matchesBloscBlock(run, bloscBlock)) return false;
     if (includeBackend && run.backend !== backend) return false;
     if (!scenarios.has(run.scenario)) return false;

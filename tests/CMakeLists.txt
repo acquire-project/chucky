@@ -183,6 +183,15 @@ endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_bench_memory test_bench_memory.c bench_memory)
+add_test_exe(test_bench_input test_bench_input.c bench_input)
+find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME test-bench_manifest
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${PROJECT_SOURCE_DIR}/scripts/datasets" -p test_manifest.py
+    )
+endif()
 add_test_exe(test_io_scheduler test_io_scheduler.c io_scheduler test_io_backend_fake test_platform chucky_log)
 add_test_exe(test_filesystem_write test_filesystem_write.c filesystem_write chucky_log)
 add_test_exe(test_host_output_pool test_host_output_pool.c host_output_pool test_platform chucky_log)

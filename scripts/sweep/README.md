@@ -74,6 +74,7 @@ Run the focused checks with:
 
 ```sh
 uv run scripts/sweep/test_sweep.py
+uv run scripts/sweep/test_image_results.py
 node --test scripts/sweep/test_reports.mjs
 ctest --test-dir build -R test-bench-cli --output-on-failure
 ```
@@ -440,3 +441,40 @@ Use `--pareto-manifest <path>` for another manifest. Serve through `--serve`, wh
 sets JavaScript module MIME types correctly even with Windows registry overrides.
 
 [pareto-analysis]: https://acquire-project.github.io/chucky/pareto.html
+
+## Microscopy image inputs
+
+The image collection tools live in [scripts/datasets](../datasets/README.md).
+To replay a saved `cellstate-poc-v1` corpus, run from the chucky checkout:
+
+```sh
+python scripts/datasets/run.py run \
+  --corpus /path/to/cellstate-poc-v1 \
+  --lock bench/datasets/cellstate-poc.lock.json --allow-provisional \
+  --executable build-gpu/bench/bench_stream_images \
+  --machine reef-l40 --backends cpu gpu \
+  --output bench/results/images/reef-l40-cellstate-poc
+uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
+```
+
+The report discovers both top-level sweep JSON and `images/**/results.json`.
+It also accepts an image result file as an explicit argument. Backend views such
+as `results-cpu.json` are not discovered automatically, so the original executions
+appear once. Saved image results can be reported without rerunning a benchmark.
+
+Each image case becomes one report row. Throughput is the median of measured
+repetitions; compression uses their combined native input and output byte counts.
+Warmups are excluded. Stage timings and other detailed counters come from the
+measured execution closest to the median throughput. The explorer tooltip gives
+the repeat count, throughput range, and selected execution. The original result
+file retains every measurement.
+
+The Input control identifies a corpus release and pack, including provisional
+status. Its comparison identity includes the full manifest hash, pack hash,
+plane order, replay protocol, and actual layout. Different data or replay settings
+remain separate inputs even if their display names match. The report can compare
+code revisions while retaining input identity; the stricter dataset `compare`
+command also requires identical chucky source hashes for machine comparisons.
+
+Image result schema 1 uses sweep metric version 10. Incomplete image collections
+are skipped with a warning. A smoke check is labeled and has its own input identity.

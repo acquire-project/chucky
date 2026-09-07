@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "release": "cellstate-poc-v1",
+  "kind": "provisional",
+  "revision": "893f1bf99517f97cd3e108806fa99d6962ae39dc",
+  "manifest_sha256": "164b94fd1fe5f0fcdac853f707abcd3ed4d45356aa588f860b6464de332cacbf",
+  "decoded_bytes": 67108864
+}

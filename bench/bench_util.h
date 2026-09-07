@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bench_input.h"
 #include "bench_parse.h"
 #include "bench_report.h"
 #include "bench_zarr.h"
@@ -22,6 +23,8 @@ struct bench_config
   struct dimension* dims;
   uint8_t rank;
   fill_fn fill;
+  const struct bench_input* input;
+  float context_init_s;
   const char* output_path;
   const char* array_name;
   const char* s3_bucket;     // NULL = no S3 output
@@ -64,6 +67,7 @@ run_bench(const struct bench_config* cfg);
 struct bench_spec
 {
   const char* label;
+  int image_input;
   struct dimension* dims;
   uint8_t rank;
   const int* chunk_ratios;

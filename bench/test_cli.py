@@ -49,6 +49,15 @@ class CodecOptionsTest(unittest.TestCase):
                     self.assertEqual(data["blosc_block_bytes"], 16384)
                     self.assertLessEqual(data["compression_fold"], 1)
 
+    def test_image_runner_option_aliases(self):
+        for options in (("--codec-level", "0", "--shuffle", "bit", "--codec", "blosc-zstd"),
+                        ("--codec", "blosc-zstd", "--shuffle", "bit", "--codec-level", "0")):
+            with self.subTest(options=options):
+                data = self.passed(*options, "--blosc-block-bytes", "16K")
+                self.assertEqual(data["blosc_level"], 0)
+                self.assertEqual(data["blosc_shuffle"], "bit")
+                self.assertEqual(data["blosc_block_bytes"], 16384)
+
     def test_final_codec_supplies_default(self):
         for options, key, expected in (
             (("--codec", "blosc-lz4", "--codec", "zstd"), "level", 0),

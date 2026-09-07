@@ -237,7 +237,7 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {filterRuns as selectRuns} from "./selection.mjs";
+import {filterRuns as selectRuns, inputLabel, inputLabels} from "./selection.mjs";
 import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
@@ -351,7 +351,7 @@ function rebuildData() {
 
   function uniq(key) { return [...new Set(runs.map(r => r[key]))].sort(); }
   allCodecs = uniq("codec_label");
-  allFills = uniq("fill");
+  allFills = [...inputLabels(runs).keys()].sort();
   allBackends = uniq("backend");
   allDtypes = uniq("dtype");
   allSinks = [...new Set(runs.map(r => r.sink))].sort();
@@ -390,7 +390,14 @@ function metricLabel(key) {
 
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
-  t += `codec: ${r.codec_label}  fill: ${r.fill}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  t += `codec: ${r.codec_label}  input: ${inputLabel(r)}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  if (r.repetitions) {
+    const repeat = r.repetitions;
+    t += "median throughput of " + repeat.count + " runs; range " +
+      repeat.throughput_min_gibs.toFixed(3) + "–" + repeat.throughput_max_gibs.toFixed(3) +
+      " GiB/s (" + repeat.throughput_spread_percent.toFixed(2) + "%)\n";
+    t += "stage details from measured run " + repeat.detail_repeat + "\n";
+  }
   if (bloscBlockKey(r)) t += `Blosc block request: ${bloscBlockLabel(bloscBlockKey(r))}\n`;
   if (r.sink && r.sink !== "discard") {
     t += `sink: ${r.sink}`;
@@ -657,7 +664,8 @@ function rebuildControls() {
   clearRadio("s3-throughput-group");
 
   makeRadio("codec-group", allCodecs, allCodecs.includes(prevCodec) ? prevCodec : undefined);
-  makeRadio("fill-group", allFills, allFills.includes(prevFill) ? prevFill : undefined);
+  const labels = inputLabels(runs);
+  makeRadio("fill-group", allFills, allFills.includes(prevFill) ? prevFill : undefined, v => labels.get(v));
   makeRadio("backend-group", allBackends, allBackends.includes(prevBackend) ? prevBackend : undefined);
   makeRadio("dtype-group", allDtypes, allDtypes.includes(prevDtype) ? prevDtype : undefined);
   makeRadio("sink-group", allSinks, allSinks.includes(prevSink) ? prevSink : undefined);
@@ -820,6 +828,10 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
   const {margin, heatmap: {cellW, cellH}} = LAYOUT;
   const W = Math.max(500, presentChunks.length * cellW + margin.left + margin.right);
   const H = presentScenarios.length * cellH + margin.top + margin.bottom;
+  const heading = `${metricLabel(metricKey)} — ${getRadio("codec-group")} / ${inputLabels(runs).get(getRadio("fill-group"))} / ${getRadio("backend-group")}`;
+  if (filtered[0].image_input) {
+    d3.select("#chart").append("p").style("align-self", "stretch").text(heading);
+  }
 
   const svg = d3.select("#chart").append("svg").attr("width", W).attr("height", H);
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
@@ -883,9 +895,10 @@ function renderHeatmap(filtered, presentChunks, presentScenarios, metricKey) {
   g.append("g").attr("class","axis").call(d3.axisLeft(y))
     .selectAll("text").attr("font-size","12px");
 
-  svg.append("text").attr("x", margin.left).attr("y", 20)
-    .attr("font-size","14px").attr("font-weight",700)
-    .text(`${metricLabel(metricKey)} — ${getRadio("codec-group")} / ${getRadio("fill-group")} / ${getRadio("backend-group")}`);
+  if (!filtered[0].image_input) {
+    svg.append("text").attr("x", margin.left).attr("y", 20)
+      .attr("font-size","14px").attr("font-weight",700).text(heading);
+  }
 
   // Colorbar
   const cbW = 16, cbH = innerH;
@@ -1362,6 +1375,7 @@ function sweepLabel(file, showMachine) {
   const parts = [file.day];
   if (showMachine) parts.push(file.machine);
   parts.push(file.commit);
+  if (file.input_release) parts.push(file.input_release);
   if (file.member !== file.machine) parts.push(`(${file.member})`);
   return parts.filter(Boolean).join(" ");
 }

@@ -10,6 +10,10 @@ add_library(bench_memory STATIC bench_memory.c bench_memory.h)
 target_include_directories(bench_memory PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(bench_memory PRIVATE warnings)
 
+add_library(bench_input STATIC bench_input.c bench_input.h)
+target_include_directories(bench_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bench_input PUBLIC writer platform PRIVATE warnings)
+
 # bench_util: static library with pipeline benchmark infrastructure
 add_library(
     bench_util
@@ -35,6 +39,7 @@ target_link_libraries(
     bench_util
     PUBLIC
         bench_memory
+        bench_input
         stream_cpu
         zarr_array
         ngff_multiscale
@@ -62,6 +67,7 @@ endif()
 
 # bench_stream: per-scenario, per-mode executables
 set(BENCH_STREAM_SOURCES
+    bench_stream_images.c
     bench_stream_256cube_single.c
     bench_stream_256cube_multiscale.c
     bench_stream_256cube_multiscale_dim0.c

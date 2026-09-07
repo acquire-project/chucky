@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bench_input.h"
 #include "bench_memory.h"
 #include "stream/layouts.h"
 #include "types.stream.h"
@@ -17,6 +18,19 @@ struct sink_stats
 {
   size_t total_bytes;
   uint64_t total_chunks; // all LOD levels, per epoch
+};
+
+struct bench_image_report
+{
+  const struct dimension* dims;
+  uint8_t rank;
+  uint32_t epochs_per_batch;
+  uint64_t target_batch_bytes;
+  size_t append_elements;
+  const struct bench_input* input;
+  float drain_s;
+  float context_init_s;
+  const char* backend;
 };
 
 void
@@ -70,7 +84,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads);
+                      int worker_threads,
+                      const struct bench_image_report* images);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

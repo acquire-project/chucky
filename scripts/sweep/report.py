@@ -38,6 +38,7 @@ Re-run after changing any results file.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from functools import partial
@@ -47,6 +48,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from columnar import pack
+from image_results import image_sweep
 from models import codec_label, migrate_results, validate_results
 from summary import build_summary, find_registry, load_registry
 from pareto_data import DEFAULT_MANIFEST, write_datasets
@@ -81,19 +83,34 @@ EXPLORER_VERSION = 7
 
 # These are the fields kept in the explorer's sweep list for each summarized sweep.
 EXPLORER_INDEX_KEYS = ("filename", "machine", "member", "commit", "day", "date", "host", "gpu",
-                       "driver", "cpus", "build")
+                       "driver", "cpus", "build", "input_release")
 
 
 def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict]]:
     """Read, migrate, and validate result files, skipping ones that will not parse."""
     loaded: list[tuple[Path, dict]] = []
-    for p in paths:
+    names = {}
+    for p in dict.fromkeys(path.resolve() for path in paths):
         with open(p) as f:
             try:
                 data = json.load(f)
             except json.JSONDecodeError as e:
                 print(f"Warning: skipping corrupt JSON file {p}: {e}", file=sys.stderr)
                 continue
+
+        checksum = hashlib.sha256(p.read_bytes()).hexdigest()
+        if data.get("benchmark") == "microscopy-images":
+            try:
+                data = image_sweep(data)
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"Warning: skipping image benchmark {p}: {e}", file=sys.stderr)
+                continue
+            p = p.with_name(f"{p.parent.name}-{p.stem}-{checksum[:12]}.json")
+        if p.name in names:
+            if names[p.name] == checksum:
+                continue
+            raise ValueError(f"Result files have the same report filename: {p.name}")
+        names[p.name] = checksum
 
         migrate_results(data)
 
@@ -111,13 +128,17 @@ def load_files(paths: list[Path], *, warn: bool = True) -> list[tuple[Path, dict
     return loaded
 
 
+def find_results(directory: Path) -> list[Path]:
+    return sorted(directory.glob("*.json")) + sorted((directory / "images").rglob("results.json"))
+
+
 def explorer_index(sweeps: list[dict]) -> dict:
     """The sweep list the explorer shows before anything is opened.
 
     The summary already names each machine and orders the sweeps oldest first,
     so the last entry is the newest one and that is what the explorer opens on.
     """
-    files = [{key: sweep[key] for key in EXPLORER_INDEX_KEYS} for sweep in sweeps]
+    files = [{key: sweep[key] for key in EXPLORER_INDEX_KEYS if key in sweep} for sweep in sweeps]
     return {"version": EXPLORER_VERSION, "files": files}
 
 
@@ -168,7 +189,7 @@ def main():
     ap = argparse.ArgumentParser(description="Generate the benchmark site from sweep results")
     ap.add_argument("input", type=Path, nargs="*", help="Result JSON file(s) from sweep.py")
     ap.add_argument("--results-dir", type=Path, default=None,
-                    help="Directory to glob for *.json result files")
+                    help="Directory with *.json sweeps and images/**/results.json replays")
     ap.add_argument("-o", "--output", type=Path, default=Path("build/html"),
                     help="Output directory (a path ending in .html names the overview page)")
     ap.add_argument("--machines", type=Path, default=None,
@@ -183,7 +204,7 @@ def main():
 
     paths: list[Path] = list(args.input or [])
     if args.results_dir:
-        paths.extend(sorted(args.results_dir.glob("*.json")))
+        paths.extend(find_results(args.results_dir))
     if not paths:
         ap.error("No input files. Provide paths or use --results-dir.")
 

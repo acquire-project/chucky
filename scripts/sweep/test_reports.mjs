@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import * as blosc from "./blosc.js";
-import {bestRun, moversFor, configLabel, filterRuns, comparable, metricValue} from "./selection.mjs";
+import {bestRun, moversFor, configLabel, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels} from "./selection.mjs";
 
 const run = (block, overrides = {}) => ({
   scenario: "orca2_single", codec: "blosc-zstd", fill: "xor", backend: "cpu",
@@ -91,4 +91,34 @@ test("codec variants and block requests stay distinct throughout report selectio
   assert.equal(rows.length, 1);
   assert.equal(rows[0].pct, -50);
   assert.equal(rows[0].run, selected);
+});
+
+const imageRun = (input, overrides = {}) => run(16384, {
+  scenario: "images", fill: "images", input_id: input, input_label: "Cellstate / fluorescence",
+  id: "images__" + input, ...overrides,
+});
+
+test("overview separates image inputs before selecting the best run", () => {
+  const state = {codec: "blosc-zstd", backend: "cpu", sink: "discard", bloscBlock: "16384",
+    metric: "throughput_in_gibs"};
+  const meta = {key: state.metric, better: "high"};
+  const sweep = {runs: [imageRun("pack-a", {throughput_in_gibs: 7}),
+    imageRun("pack-b", {throughput_in_gibs: 1000})]};
+  assert.equal(bestRun(sweep, "images", "pack-a", state, meta).value, 7);
+  assert.equal(bestRun(sweep, "images", "images", state, meta), null);
+  const previous = {runs: [imageRun("another-protocol", {throughput_in_gibs: 700})]};
+  assert.equal(moversFor({sweeps: [previous, sweep]}, state, meta).rows.length, 0);
+});
+
+test("explorer filters image identities and retains backend overlays", () => {
+  const selection = {codec: "blosc-zstd", fill: "pack-a", backend: "cpu",
+    dtype: "u16", sink: "discard", bloscBlock: "16384", scenarios: new Set(["images"])};
+  const rows = [imageRun("pack-a"), imageRun("pack-b"), imageRun("pack-a", {backend: "gpu"})];
+  assert.equal(filterRuns(rows, selection).length, 1);
+  assert.equal(filterRuns(rows, selection, {includeBackend: false}).length, 2);
+  assert.equal(inputKey(run(16384)), "xor");
+  assert.equal(inputLabel(imageRun("pack-a")), "Cellstate / fluorescence");
+  const labels = inputLabels(rows);
+  assert.equal(labels.size, 2);
+  assert.notEqual(labels.get("pack-a"), labels.get("pack-b"));
 });

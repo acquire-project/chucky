@@ -5,6 +5,8 @@
 #include "util/metric.h"
 #include "zarr/json_writer.h"
 
+#include <string.h>
+
 enum diagnostic_section
 {
   DIAGNOSTIC_HOST_BLOCK,
@@ -343,7 +345,7 @@ log_bench_header(const struct tile_stream_layout* layout,
   format_bytes(buf, sizeof(buf), (uint64_t)total_bytes);
   print_report("  total:       %s (%zu elements, %zu epochs)",
                buf,
-               total_elements,
+               total_bytes / dtype_bpe(dtype),
                num_epochs);
   format_bytes(
     buf, sizeof(buf), (uint64_t)(layout->chunk_stride * dtype_bpe(dtype)));
@@ -394,7 +396,8 @@ print_bench_report(const struct stream_metrics* metrics,
   print_report("  --- Benchmark Results ---");
   char fbuf[32];
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)total_bytes);
-  print_report("  Input:        %s (%zu elements)", fbuf, total_elements);
+  print_report(
+    "  Input:        %s (%zu elements)", fbuf, total_bytes / dtype_bpe(dtype));
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)ss->total_bytes);
   print_report("  Compressed:   %s (ratio: %.3f)", fbuf, comp_ratio);
   print_report("  Chunks:       %zu (%llu/epoch x %zu epochs)",
@@ -644,7 +647,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads)
+                      int worker_threads,
+                      const struct bench_image_report* images)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -669,6 +673,72 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "pass");
+  if (images) {
+    static const char* const codecs[] = {
+      "none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"
+    };
+    static const char* const shuffles[] = { "none", "byte", "bit" };
+    jw_key(&jw, "input_bytes");
+    jw_uint(&jw, total_bytes);
+    jw_key(&jw, "output_bytes");
+    jw_uint(&jw, ss->total_bytes);
+    jw_key(&jw, "padded_input_bytes");
+    jw_uint(&jw, total_decompressed);
+    jw_key(&jw, "logical_compression_fold");
+    jw_float(&jw, ss->total_bytes ? (double)total_bytes / ss->total_bytes : 0);
+    jw_key(&jw, "image_replay");
+    jw_object_begin(&jw);
+    jw_key(&jw, "backend");
+    jw_string(&jw, images->backend);
+    jw_key(&jw, "dtype");
+    jw_string(&jw, "u16le");
+    jw_key(&jw, "codec");
+    jw_string(&jw, codecs[codec.id]);
+    jw_key(&jw, "codec_level");
+    jw_uint(&jw, codec.level);
+    jw_key(&jw, "codec_level_is_hint");
+    jw_bool(&jw,
+            strcmp(images->backend, "gpu") == 0 && codec.id != CODEC_NONE &&
+              codec.level > 0);
+    jw_key(&jw, "shuffle");
+    jw_string(&jw, shuffles[codec.shuffle]);
+    jw_key(&jw, "shape");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < images->rank; ++i)
+      jw_uint(&jw, images->dims[i].size);
+    jw_array_end(&jw);
+    jw_key(&jw, "chunk_shape");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < images->rank; ++i)
+      jw_uint(&jw, images->dims[i].chunk_size);
+    jw_array_end(&jw);
+    jw_key(&jw, "chunks_per_shard");
+    jw_array_begin(&jw);
+    for (uint8_t i = 0; i < images->rank; ++i)
+      jw_uint(&jw, images->dims[i].chunks_per_shard);
+    jw_array_end(&jw);
+    jw_key(&jw, "epochs_per_batch");
+    jw_uint(&jw, images->epochs_per_batch);
+    jw_key(&jw, "target_batch_bytes");
+    jw_uint(&jw, images->target_batch_bytes);
+    jw_key(&jw, "actual_batch_bytes");
+    jw_uint(&jw, images->epochs_per_batch * chunks_per_epoch * chunk_bytes);
+    jw_key(&jw, "append_elements");
+    jw_uint(&jw, images->append_elements);
+    jw_key(&jw, "source_bytes");
+    jw_uint(&jw, images->input->source_bytes);
+    jw_key(&jw, "source_padded_bytes");
+    jw_uint(&jw, images->input->elements * sizeof(uint16_t));
+    jw_key(&jw, "order");
+    jw_string(&jw, "cyclic");
+    jw_key(&jw, "load_s");
+    jw_float(&jw, images->input->load_s);
+    jw_key(&jw, "drain_s");
+    jw_float(&jw, images->drain_s);
+    jw_key(&jw, "context_init_s");
+    jw_float(&jw, images->context_init_s);
+    jw_object_end(&jw);
+  }
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);

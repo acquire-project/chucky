@@ -29,6 +29,7 @@ CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
     "chunk_bytes", "chunk_bytes_label", "blosc_block_bytes", "sink", "status",
     "blosc_shuffle", "blosc_level", "level",
+    "input_id", "input_label", "repetitions",
 )
 
 RUN_METRICS = (
@@ -213,6 +214,7 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "retired": list(retired_metrics(data)),
         "counts": status_counts(runs),
         "runs": [trim_run(r) for r in runs],
+        **({"input_release": data["corpus"]["release"]} if "corpus" in data else {}),
     }
 
 
