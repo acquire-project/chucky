@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Schema enums (single source of truth)
 # ---------------------------------------------------------------------------
 
 VALID_CODECS = {"none", "lz4", "zstd", "blosc-lz4", "blosc-zstd"}
+VALID_SHUFFLES = {"none", "byte", "bit"}
 VALID_FILLS = {"xor", "zeros", "rand"}
 VALID_BACKENDS = {"gpu", "cpu"}
 VALID_SINKS = {"discard", "fs", "s3"}
@@ -31,11 +32,40 @@ def run_id(run: dict) -> str:
         if throughput > 0:
             parts.append(f"{int(throughput)}gbps")
         identity = "__".join(parts)
+    identity = re.sub(r"__blosc-block-(?:[0-9]+|unknown)(?=__|$)", "", identity)
+    shuffle = run.get("blosc_shuffle")
+    if shuffle is not None:
+        identity = re.sub(r"__shuffle-(?:none|byte|bit)(?=__|$)", "", identity)
+    level = run_level(run)
+    if level is not None:
+        identity = re.sub(r"__level-[0-9]+(?=__|$)", "", identity)
+    if shuffle is not None and shuffle != "none":
+        identity += f"__shuffle-{shuffle}"
+    if level is not None and level != default_level(run["codec"]):
+        identity += f"__level-{level}"
     if run["codec"].startswith("blosc-"):
-        identity = re.sub(r"__blosc-block-(?:[0-9]+|unknown)$", "", identity)
         block_bytes = run.get("blosc_block_bytes")
         identity += f"__blosc-block-{block_bytes if block_bytes is not None else 'unknown'}"
     return identity
+
+
+def default_level(codec: str) -> int:
+    return 3 if codec.startswith("blosc-") else 1 if codec == "lz4" else 0
+
+
+def run_level(run: dict) -> int | None:
+    return run.get("blosc_level" if run.get("codec", "").startswith("blosc-") else "level")
+
+
+def codec_label(run: dict) -> str:
+    codec = run.get("codec", "")
+    shuffle = run.get("blosc_shuffle") or "none"
+    level = run_level(run)
+    if level is None:
+        level = default_level(codec)
+    if shuffle == "none" and level == default_level(codec):
+        return codec
+    return f"{codec} ({shuffle}, level {level})"
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +96,9 @@ class RunResult(BaseModel, extra="allow"):
     chunk_bytes: int
     chunk_bytes_label: str
     sink: str = "discard"
+    blosc_shuffle: str | None = None
+    blosc_level: int | None = Field(default=None, ge=0, le=9)
+    level: int | None = Field(default=None, ge=0, le=255)
     # Absent in files written before the runner recorded them.
     frames: int | None = None
     worker_threads: int | None = None
@@ -91,6 +124,8 @@ class RunResult(BaseModel, extra="allow"):
     def _validate_enums(self) -> RunResult:
         if self.status not in VALID_STATUSES:
             raise ValueError(f"Unknown status: {self.status}")
+        if self.blosc_shuffle is not None and self.blosc_shuffle not in VALID_SHUFFLES:
+            raise ValueError(f"Unknown shuffle: {self.blosc_shuffle}")
         return self
 
 
