@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'bench/results/*.json'
+      - 'bench/results/images/**/results.json'
       - 'bench/machines.toml'
       - 'scripts/sweep/**'
       - 'docs/benchmarks/**'
