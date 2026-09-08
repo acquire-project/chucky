@@ -184,11 +184,48 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
 | `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
+| `--duration` | seconds, > 0 | off | Sustained measurement window; single-stream, single-scale discard only |
+| `--warmup` | seconds, >= 0 | 0 | Unmeasured streaming before `--duration` |
+| `--no-boundary-timing` | flag | off | Disable full-API samples to check their observer overhead |
+| `--append-elements` | element count | bulk | In sustained mode, append bytes must divide the fixed 64 MiB source ring |
 | `--full-memcpy-timing` | flag | off | GPU profiling: time every host copy instead of sampling small copies |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
 Benchmarks report per-stage throughput and latency, compression ratio, memory
 breakdown, and overall pipeline GiB/s.
+
+For sustained append comparisons, hold the reference frame count, chunk size,
+memory budget, and source pattern fixed. For example:
+
+```sh
+./build/bench/bench_stream_smallepoch_single --backend gpu --codec none \
+  --fill xor --dtype u16 --frames 65536 --chunk-bytes 1M --memory-budget 5G \
+  --append-elements 256 --warmup 5 --duration 20 --json
+```
+
+Here `--frames` fits the layout; streaming then continues without a frame limit.
+Preparation and stream creation precede warmup. The measurement window does not
+flush at either endpoint. Its completed-output rate counts physical discard
+bytes (including padding and footers), not accepted input or queued writes.
+Final flush and close are timed separately as drain. Top-level JSON throughput
+and pipeline metrics cover the whole run; the optional `sustained` object holds
+window-only throughput and full-API latency samples.
+
+Latency samples cover calls crossing input batch/generation boundaries, a
+possible staging-boundary grid, and the next 16 calls after each. The grid is
+the greatest common divisor of input batch bytes and staging capacity. These
+are overlapping input-position groups, not internal flush event timestamps;
+they do not establish a maximum for unsampled calls. The GPU's existing
+whole-run append histogram is also retained.
+Use a paired `--no-boundary-timing` run to check sampling's throughput cost;
+this does not disable the library's existing timers.
+
+Compare 256, 1024, 4096, and 33554432 elements for 512 B, 2 KiB, 8 KiB, and
+64 MiB offers at `u16`; use 30 seconds for bulk. Repeat in reverse order and
+include `orca2_single --frames 200` and `--backend cpu` controls. Check actual
+elapsed time and delivered batch counts: short windows can have substantial
+endpoint/backlog error. The fixed-frame sweep runner is unchanged; do not mix
+these window rates into historical fixed-frame throughput comparisons.
 
 ## Architecture
 

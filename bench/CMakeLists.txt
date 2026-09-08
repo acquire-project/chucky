@@ -96,4 +96,17 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
             $<TARGET_FILE:test_bench_report>
     )
+    set(SUSTAINED_BACKENDS cpu)
+    if(CHUCKY_ENABLE_GPU)
+        list(APPEND SUSTAINED_BACKENDS gpu)
+    endif()
+    foreach(backend IN LISTS SUSTAINED_BACKENDS)
+        add_test(
+            NAME test-bench_sustained_${backend}
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_sustained.py
+                $<TARGET_FILE:bench_stream_smallepoch_single> ${backend}
+        )
+    endforeach()
 endif()

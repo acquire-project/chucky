@@ -30,6 +30,17 @@ for mode in ("sampled", "full", "copy", "large", "empty"):
     assert "GB/s" not in p.stderr
     assert "backend_internal_name" not in p.stderr
     assert stage_header in lines
+    if mode in ("large", "empty"):
+        window = report["sustained"]
+        assert window["throughput_in_gibs"] == window["throughput_out_gibs"] == 0
+        samples = window["boundaries"]["batch"]["crossing"]
+        assert samples["calls"] == samples["over_100ms"] == (2**64 - 1 if mode == "large" else 0)
+        rows = [line for line in lines
+                if line[2:17].rstrip() in ("Batch", "Generation", "Staging grid")]
+        assert len(rows) == 6 and all(len(row) == 71 for row in rows), rows
+        assert rows[-1].split()[-4:] == ["0", "-", "-", "0"]
+    else:
+        assert "sustained" not in report
     if mode == "empty":
         assert "Host memory:      unavailable" in p.stderr
         assert "Append latency" not in p.stderr

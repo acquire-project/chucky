@@ -680,6 +680,123 @@ json_duration_stats(struct json_writer* jw,
   jw_object_end(jw);
 }
 
+static const char* const boundary_names[] = { "Batch",
+                                              "Generation",
+                                              "Staging grid" };
+static const char* const boundary_keys[] = { "batch",
+                                             "generation",
+                                             "staging_grid" };
+
+void
+print_sustained_report(const struct bench_sustained* run)
+{
+  char source[32], append[32];
+  format_bytes(source, sizeof(source), run->source_bytes);
+  format_bytes(append, sizeof(append), run->append_bytes);
+  print_report("\n--- Sustained window ---");
+  print_report("  Source: %s    Append: %s", source, append);
+  print_report(
+    "  Source prep: %8.3f s    Warmup: %8.3f s", run->prep_s, run->warmup_s);
+  print_report(
+    "  Measurement: %8.3f s    Drain:  %8.3f s", run->elapsed_s, run->drain_s);
+  print_report("  Accepted:    %8.3f GiB/s",
+               gb_per_s(run->input_bytes, run->elapsed_s * 1000));
+  print_report("  Completed:   %8.3f GiB/s (physical discard bytes)",
+               gb_per_s(run->output_bytes, run->elapsed_s * 1000));
+  if (!run->boundary_timing) {
+    print_report("  Full API boundary sampling: disabled");
+    return;
+  }
+  print_report(
+    "\n  Full API samples at input boundaries and the next 16 calls:");
+  print_report("  %-15s %-9s %10s %10s %10s %10s",
+               "Boundary",
+               "Calls",
+               "Samples",
+               "avg ms",
+               "max ms",
+               ">=100 ms");
+  for (int i = 0; i < 3; ++i) {
+    for (int after = 0; after < 2; ++after) {
+      const struct bench_append_sample* sample =
+        after ? &run->following[i] : &run->boundary[i];
+      char count[32], avg[32] = "-", max[32] = "-", over[32];
+      format_count(count, sample->calls);
+      format_count(over, sample->over_100ms);
+      if (sample->calls) {
+        format_measurement(avg, sample->total_ms / sample->calls, 3);
+        format_measurement(max, sample->max_ms, 3);
+      }
+      print_report("  %-15s %-9s %10s %10s %10s %10s",
+                   boundary_names[i],
+                   after ? "+1..16" : "Crossing",
+                   count,
+                   avg,
+                   max,
+                   over);
+    }
+  }
+  print_report(
+    "  Groups may overlap; these are not internal flush event timestamps.");
+}
+
+static void
+json_sustained(struct json_writer* jw, const struct bench_sustained* run)
+{
+  jw_key(jw, "sustained");
+  jw_object_begin(jw);
+  jw_key(jw, "boundary_timing");
+  jw_bool(jw, run->boundary_timing);
+  jw_key(jw, "reference_frames");
+  jw_uint(jw, run->reference_frames);
+  jw_key(jw, "source_bytes");
+  jw_uint(jw, run->source_bytes);
+  jw_key(jw, "append_bytes");
+  jw_uint(jw, run->append_bytes);
+  jw_key(jw, "prep_s");
+  jw_float(jw, run->prep_s);
+  jw_key(jw, "warmup_s");
+  jw_float(jw, run->warmup_s);
+  jw_key(jw, "elapsed_s");
+  jw_float(jw, run->elapsed_s);
+  jw_key(jw, "drain_s");
+  jw_float(jw, run->drain_s);
+  jw_key(jw, "input_bytes");
+  jw_uint(jw, run->input_bytes);
+  jw_key(jw, "output_bytes");
+  jw_uint(jw, run->output_bytes);
+  jw_key(jw, "throughput_in_gibs");
+  jw_float(jw, gb_per_s(run->input_bytes, run->elapsed_s * 1000));
+  jw_key(jw, "throughput_out_gibs");
+  jw_float(jw, gb_per_s(run->output_bytes, run->elapsed_s * 1000));
+  jw_key(jw, "boundaries");
+  jw_object_begin(jw);
+  for (int i = 0; i < 3; ++i) {
+    jw_key(jw, boundary_keys[i]);
+    jw_object_begin(jw);
+    jw_key(jw, "bytes");
+    jw_uint(jw, run->boundary_bytes[i]);
+    for (int after = 0; after < 2; ++after) {
+      const struct bench_append_sample* sample =
+        after ? &run->following[i] : &run->boundary[i];
+      jw_key(jw, after ? "following" : "crossing");
+      jw_object_begin(jw);
+      jw_key(jw, "calls");
+      jw_uint(jw, sample->calls);
+      jw_key(jw, "over_100ms");
+      jw_uint(jw, sample->over_100ms);
+      jw_key(jw, "total_ms");
+      jw_float(jw, sample->total_ms);
+      jw_key(jw, "max_ms");
+      jw_float(jw, sample->max_ms);
+      jw_object_end(jw);
+    }
+    jw_object_end(jw);
+  }
+  jw_object_end(jw);
+  jw_object_end(jw);
+}
+
 static void
 json_delivery_timing(struct json_writer* jw,
                      const struct delivery_timing* timing)
@@ -720,7 +837,8 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads)
+                      int worker_threads,
+                      const struct bench_sustained* sustained)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -745,6 +863,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "pass");
+  if (sustained)
+    json_sustained(&jw, sustained);
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);

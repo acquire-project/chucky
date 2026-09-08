@@ -19,6 +19,27 @@ struct sink_stats
   uint64_t total_chunks; // all LOD levels, per epoch
 };
 
+struct bench_append_sample
+{
+  uint64_t calls;
+  uint64_t over_100ms;
+  double total_ms;
+  double max_ms;
+};
+
+struct bench_sustained
+{
+  int boundary_timing;
+  double prep_s, warmup_s, elapsed_s, drain_s;
+  uint64_t reference_frames, source_bytes, append_bytes;
+  uint64_t input_bytes, output_bytes;
+  uint64_t boundary_bytes[3];
+  struct bench_append_sample boundary[3], following[3];
+};
+
+void
+print_sustained_report(const struct bench_sustained* run);
+
 void
 print_memory_report(const struct bench_memory* mem);
 
@@ -70,7 +91,8 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float init_s,
                       float flush_s,
                       const struct bench_memory* mem,
-                      int worker_threads);
+                      int worker_threads,
+                      const struct bench_sustained* sustained);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

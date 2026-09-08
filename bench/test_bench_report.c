@@ -118,6 +118,22 @@ main(int argc, char** argv)
                      empty ? 0 : 0.2f,
                      empty ? 0 : 65536);
   print_memory_report(&mem);
+  struct bench_sustained window = {
+    .boundary_timing = 1,
+    .elapsed_s = 1,
+    .source_bytes = 64u << 20,
+    .append_bytes = 512,
+  };
+  if (large) {
+    window.boundary[0] = (struct bench_append_sample){
+      .calls = UINT64_MAX,
+      .over_100ms = UINT64_MAX,
+      .total_ms = 1e20,
+      .max_ms = 1e20,
+    };
+  }
+  if (large || empty)
+    print_sustained_report(&window);
   print_bench_json_pass(&m,
                         &m.sink,
                         &layout,
@@ -130,6 +146,7 @@ main(int argc, char** argv)
                         0.1f,
                         empty ? 0 : 0.2f,
                         &mem,
-                        1);
+                        1,
+                        large || empty ? &window : NULL);
   return 0;
 }

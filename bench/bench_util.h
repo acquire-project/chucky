@@ -56,6 +56,9 @@ struct bench_config
   uint64_t backpressure_bytes; // 0 = disabled; >0 = stall when pending > N
   int max_threads;             // 0 = OpenMP default (omp_get_max_threads)
   int full_memcpy_timing;
+  double warmup_s;
+  double duration_s;
+  int no_boundary_timing;
 };
 
 int
