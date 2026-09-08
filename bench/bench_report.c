@@ -103,8 +103,7 @@ gb_per_s(double bytes, double ms)
 
 // --- Report + pipeline helpers ---
 
-// Keep table cells bounded without rounding a nonzero measurement to zero.
-// Units stay in the headers, including when scientific notation is needed.
+// Tiny timings must remain distinguishable from zero.
 static void
 format_measurement(char buf[32], double value, int decimals)
 {
@@ -116,8 +115,6 @@ format_measurement(char buf[32], double value, int decimals)
 static void
 format_count(char buf[32], uint64_t count)
 {
-  // Only diagnostic table counts are compacted; copy-work and append totals
-  // retain exact decimal counts in their own, wider summaries.
   int n = snprintf(buf, 32, "%llu", (unsigned long long)count);
   if (n > 10)
     snprintf(buf, 32, "%.3e", (double)count);
@@ -199,8 +196,7 @@ print_metric_row(const char* name, const struct stream_metric* m)
   format_measurement(avg_time, avg_ms, 3);
 
   if (has_best) {
-    // Use the bytes recorded for that exact call so partial-batch tails
-    // don't inflate "best" via an average-bytes / min-time fudge.
+    // Average bytes would inflate the best rate for partial batches.
     double best_gbs = gb_per_s(m->best_input_bytes, (double)m->best_ms);
     format_measurement(best_rate, best_gbs, 2);
     format_measurement(best_time, m->best_ms, 3);
@@ -273,8 +269,6 @@ print_diagnostic_row(const struct diagnostic_entry* d, float wall_s)
     format_measurement(avg_ms, (double)m->ms / m->count, 3);
     format_measurement(max_ms, m->max_ms, 3);
   }
-  // Long conditions get a continuation row, never truncated labels or shifted
-  // numeric columns. Owners are grouped above the rows to leave room for data.
   const char* label = d->label;
   if (strlen(label) > 26) {
     print_report("  %s", label);
@@ -848,8 +842,7 @@ print_bench_json_pass(const struct stream_metrics* m,
 
   jw_key(&jw, "stages");
   jw_object_begin(&jw);
-  // A separate key prevents existing consumers from treating a sampled time
-  // sum as the full stage duration. All fields in this row refer to samples.
+  // Existing consumers must not mistake sampled time for a full-stage total.
   json_stage_metric(
     &jw,
     m->memcpy_calls > (uint64_t)m->memcpy.count ? "memcpy_sample" : "memcpy",

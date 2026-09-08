@@ -1,4 +1,3 @@
-"""Check the benchmark's text layout and sampled/full JSON metric contract."""
 import json
 import math
 import subprocess
@@ -69,7 +68,6 @@ for mode in ("sampled", "full", "copy", "large", "empty"):
             name = "Copy"
         assert row[2:16].rstrip() == name, row
         assert len(row) == len(stage_header), row
-        # Every row uses the same four right-aligned numeric fields.
         cells = [row[17:27], row[28:38], row[39:48], row[49:58]]
         assert all(cell == cell.strip().rjust(len(cell)) for cell in cells), row
     assert rows[0].split()[-2:] == ["4.00e-05", "3.00e-05"]
@@ -104,7 +102,6 @@ for mode in ("sampled", "full", "copy", "large", "empty"):
     assert all(float(cell) > 0 for cell in latency[2].split())
     assert "-1.00 KiB (observed minus estimated)" in p.stderr
 
-    # All key/value summaries share the same value column.
     for label in ("Input:", "Output:", "Chunks:", "Host memory:", "Device memory:",
                   "Device overhead:", "Estimate:", "Init time:", "Flush time:",
                   "Wall time:", "Throughput:", "Payload:", "Metadata:",

@@ -22,7 +22,6 @@ struct sink_stats
 void
 print_memory_report(const struct bench_memory* mem);
 
-// Shared single-/two-stream stage table and exact GPU copy coverage.
 void
 print_stage_report(const struct stream_metrics* m);
 

@@ -50,8 +50,6 @@ run_copies(int full, int mixed, int finite)
     if (offer > total - accepted)
       offer = total - accepted;
     size_t remaining = offer;
-    // Independent model of copy fragmentation, including staging and batch
-    // boundaries. Timing policy applies to fragments, not the offered size.
     while (remaining) {
       const size_t batch_offset = accepted % BATCH;
       size_t n = STAGING - batch_offset % STAGING;
@@ -96,7 +94,6 @@ run_copies(int full, int mixed, int finite)
   CHECK(Fail, refused.rest.beg == input);
   CHECK(Fail, tile_stream_gpu_get_metrics(stream).memcpy_calls == copies);
 
-  // Check every output byte, final partial-chunk padding, and index CRC.
   for (size_t sh = 0; sh < 33; ++sh) {
     const struct test_shard_writer* sw = &sink.writers[0][sh];
     uint64_t offsets[CPS], sizes[CPS];
@@ -173,9 +170,7 @@ test_per_array_phase(void)
   const struct stream_metrics m =
     multiarray_tile_stream_gpu_get_metrics(stream);
   CHECK(Fail, m.memcpy_calls == 48 && m.memcpy_bytes == 48 * 512);
-  // First copy of each sampled array, all 16 copies of the profiling array.
   CHECK(Fail, m.memcpy.count == 18 && m.memcpy.input_bytes == 18 * 512);
-  // Multiarray update has no outer append timer today; do not add one here.
   CHECK(Fail, m.append_count == 0);
   result = 0;
 Fail:

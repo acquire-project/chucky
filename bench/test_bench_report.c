@@ -3,7 +3,6 @@
 #include <limits.h>
 #include <string.h>
 
-// Exercise report branches independently of which waits a real run encounters.
 int
 main(int argc, char** argv)
 {
@@ -15,7 +14,6 @@ main(int argc, char** argv)
   struct stream_metrics m = { 0 };
   if (!empty) {
     struct stream_metric stage = {
-      // Normalize backend names without losing Copy versus Scatter semantics.
       .name = "backend_internal_name",
       .count = 2,
       .ms = 0.00008f,
@@ -37,10 +35,10 @@ main(int argc, char** argv)
       m.memcpy.ms *= 64;
       m.memcpy.input_bytes = m.memcpy.output_bytes = 65536;
     }
-    m.compress.best_ms = 1e30f; // No best observation, not a zero duration.
+    m.compress.best_ms = 1e30f;
     m.sink.ms = 2000;
     m.sink.best_ms = 1000;
-    m.sink.input_bytes = 2147483648.0; // Exactly 1 GiB/s, not 1 GB/s.
+    m.sink.input_bytes = 2147483648.0;
     m.sink.best_input_bytes = 1073741824.0;
 
     struct stream_metric wait = {
@@ -54,7 +52,7 @@ main(int argc, char** argv)
       m.flush_writes_stall = m.backpressure = wait;
     m.flush_stall.wait_calls = 0;
     m.edge_stall[0].owner = METRIC_OWNER_PRODUCER;
-    m.edge_stall[0].wait_calls = 1; // Checked, but no blocking sample.
+    m.edge_stall[0].wait_calls = 1;
     wait.owner = METRIC_OWNER_DELIVERY;
     m.edge_stall[1] = m.edge_stall[2] = m.indexed_aggregate_wait =
       m.chunk_metadata_wait = m.delivery_dispatch = wait;

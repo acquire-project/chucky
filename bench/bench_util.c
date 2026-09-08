@@ -671,15 +671,6 @@ read_size(const char* flag, const char* text, uint64_t* out)
   return 0;
 }
 
-// Parse the shared bench CLI flags into out. Unknown options print a usage
-// string and return 1. Flags accepted:
-//   --fill --codec --blosc-block-bytes --reduce --backend --dtype --frames
-//   --json --chunk-bytes
-//   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
-//   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads --full-memcpy-timing.
-// Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
-// just don't read the corresponding field afterward.
 static int
 parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
 {

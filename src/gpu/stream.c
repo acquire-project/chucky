@@ -275,8 +275,7 @@ stream_append_body(struct stream_engine* e,
     {
       int timed = ctx->config.full_memcpy_timing || payload >= (8u << 10);
       if (!timed) {
-        // Sample one of 64 small copies, rotating the offset each block.
-        // The first copy is timed; the 8 KiB cutoff is a profiling policy.
+        // Avoid correlating samples with periodic buffer boundaries.
         const uint64_t n = ctx->memcpy_small_copies++;
         timed = ((n ^ (n >> 6)) & 63u) == 0;
       }
