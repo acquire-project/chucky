@@ -108,6 +108,14 @@ add_test_exe(test_host_batch test_host_batch.c
     shard_delivery stream_config test_shard_sink chucky_log
 )
 
+add_gpu_test_exe(test_memcpy_sampling_gpu test_memcpy_sampling_gpu.c
+    LINKS multiarray_gpu stream test_shard_sink test_shard_verify
+          CUDA::cuda_driver CUDA::cudart_static
+)
+if(CHUCKY_ENABLE_GPU)
+    set_tests_properties(test-test_memcpy_sampling_gpu PROPERTIES TIMEOUT 60)
+endif()
+
 # CPU LOD test (no CUDA)
 add_test_exe(test_lod_cpu test_lod_cpu.c lod_cpu compress_cpu morton_util threadpool platform chucky_log)
 

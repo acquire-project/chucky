@@ -304,7 +304,8 @@ print_shard_summary(const struct dimension* dims,
   const uint64_t shard_bytes = chunk_bytes * cps_total;
   char buf[32];
   format_bytes(buf, sizeof(buf), shard_bytes);
-  print_report("  shard:       %s uncompressed (%llu chunks), %llu total",
+  print_report("  %-17s %s uncompressed (%llu chunks), %llu total",
+               "Shard:",
                buf,
                (unsigned long long)cps_total,
                (unsigned long long)total_shards);
@@ -434,6 +435,7 @@ run_bench(const struct bench_config* cfg)
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
+    .full_memcpy_timing = cfg->full_memcpy_timing,
   };
 
   uint64_t est_total_chunks = 0;
@@ -451,20 +453,22 @@ run_bench(const struct bench_config* cfg)
       est_total_bytes = mem.heap_bytes;
       char a[32], b[32];
       format_bytes(a, sizeof(a), mem.heap_bytes);
-      print_report("  CPU memory:  %s heap", a);
+      print_report("  %-17s %s heap", "CPU memory:", a);
       format_bytes(a, sizeof(a), mem.chunk_pool_bytes);
       format_bytes(b, sizeof(b), mem.compressed_pool_bytes);
-      print_report("    chunk_pool: %s   comp_pool: %s", a, b);
+      print_report(
+        "    %-12s %12s   %-12s %12s", "Chunk pool:", a, "Compressed:", b);
       format_bytes(a, sizeof(a), mem.comp_sizes_bytes);
       format_bytes(b, sizeof(b), mem.aggregate_bytes);
-      print_report("    comp_sizes: %s   aggregate: %s", a, b);
+      print_report(
+        "    %-12s %12s   %-12s %12s", "Comp. sizes:", a, "Aggregate:", b);
       format_bytes(a, sizeof(a), mem.host_output_pool_bytes);
-      print_report("    host output: %s", a);
+      print_report("    %-12s %12s", "Host output:", a);
       format_bytes(a, sizeof(a), mem.lod_bytes);
       format_bytes(b, sizeof(b), mem.shard_bytes);
-      print_report("    lod:       %s   shards:    %s", a, b);
+      print_report("    %-12s %12s   %-12s %12s", "LOD:", a, "Shards:", b);
       print_report(
-        "    chunks:    %llu/epoch, %llu total (%d LOD levels, batch=%u)",
+        "    Chunks:      %llu/epoch, %llu total (%d LOD levels, batch=%u)",
         (unsigned long long)mem.chunks_per_epoch,
         (unsigned long long)mem.total_chunks,
         mem.nlod,
@@ -512,14 +516,14 @@ run_bench(const struct bench_config* cfg)
                    total_bytes,
                    total_elements);
   if (is_multiscale && nlod > 0)
-    print_report("  LOD levels:  %d", nlod);
+    print_report("  %-17s %d", "LOD levels:", nlod);
 
   if (cfg->append_elements > 0) {
     char abuf[32];
     format_bytes(
       abuf, sizeof(abuf), (uint64_t)(cfg->append_elements * dtype_bpe(dtype)));
     print_report(
-      "  append size: %zu elements = %s", cfg->append_elements, abuf);
+      "  %-17s %zu elements = %s", "Append size:", cfg->append_elements, abuf);
   }
 
   struct platform_clock clock = { 0 };
@@ -655,6 +659,7 @@ struct bench_cli_args
   uint64_t io_latency_us;
   uint64_t backpressure_bytes;
   int max_threads;
+  int full_memcpy_timing;
 };
 
 static int
@@ -666,15 +671,6 @@ read_size(const char* flag, const char* text, uint64_t* out)
   return 0;
 }
 
-// Parse the shared bench CLI flags into out. Unknown options print a usage
-// string and return 1. Flags accepted:
-//   --fill --codec --blosc-block-bytes --reduce --backend --dtype --frames
-//   --json --chunk-bytes
-//   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
-//   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads.
-// Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
-// just don't read the corresponding field afterward.
 static int
 parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
 {
@@ -698,6 +694,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
+  out->full_memcpy_timing = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -725,7 +722,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       else if (strcmp(shuffle, "bit") == 0)
         out->codec.shuffle = CODEC_SHUFFLE_BIT;
       else {
-        fprintf(stderr, "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
+        fprintf(stderr,
+                "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
                 shuffle);
         return 1;
       }
@@ -778,6 +776,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       ++i;
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--full-memcpy-timing") == 0) {
+      out->full_memcpy_timing = 1;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -793,7 +793,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
-              "[--max-threads N (0 = OpenMP default)]\n",
+              "[--max-threads N (0 = OpenMP default)] "
+              "[--full-memcpy-timing (GPU profiling)]\n",
               av[0]);
       return 1;
     }
@@ -848,6 +849,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .full_memcpy_timing = a.full_memcpy_timing,
   };
   int ecode = run_bench(&cfg);
 
@@ -1015,6 +1017,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
+    .full_memcpy_timing = cfg->full_memcpy_timing,
   };
 
   bench_gpu_report_memory_pair(&config);
@@ -1081,44 +1084,30 @@ run_bench_two_streams(const struct bench_config* cfg)
     char buf[32];
     format_bytes(buf, sizeof(buf), 2 * (uint64_t)total_bytes);
     print_report(
-      "  Input:        %s (%zu elements x 2 streams)", buf, total_elements);
+      "  %-17s %s (%zu elements x 2 streams)", "Input:", buf, total_elements);
     format_bytes(buf, sizeof(buf), (uint64_t)(sink_bytes[0] + sink_bytes[1]));
-    print_report("  Compressed:   %s", buf);
+    print_report("  %-17s %s", "Output:", buf);
   }
-  print_report("  Init time:     %.3f s", (double)init_s);
+  print_report("  %-17s %.3f s", "Init time:", (double)init_s);
   if (flush_s > 0)
-    print_report("  Flush time:    %.3f s", (double)flush_s);
-  print_report("  Wall time:     %.3f s", (double)wall_s);
-  print_report("  Throughput:    %.2f GiB/s (combined)",
+    print_report("  %-17s %.3f s", "Flush time:", (double)flush_s);
+  print_report("  %-17s %.3f s", "Wall time:", (double)wall_s);
+  print_report("  %-17s %.2f GiB/s (combined)",
+               "Throughput:",
                wall_s > 0 ? combined_gib / wall_s : 0.0);
 
   // --- Per-stream reports ---
   for (int k = 0; k < 2; ++k) {
     fputc('\n', stderr);
-    print_report("  --- stream-%d ---", k);
-    print_report("  Throughput:    %.2f GiB/s",
+    print_report("  --- Stream %d ---", k);
+    print_report("  %-17s %.2f GiB/s",
+                 "Throughput:",
                  wall_s > 0 ? per_stream_gib / wall_s : 0.0);
     char cbuf[32];
     format_bytes(cbuf, sizeof(cbuf), (uint64_t)sink_bytes[k]);
-    print_report("  Compressed:    %s", cbuf);
+    print_report("  %-17s %s", "Output:", cbuf);
     fputc('\n', stderr);
-    print_report("  %-12s %8s %8s %10s %10s",
-                 "Stage",
-                 "avg GB/s",
-                 "best GB/s",
-                 "avg ms",
-                 "best ms");
-    print_metric_row(&m[k].memcpy);
-    print_metric_row(&m[k].h2d);
-    print_metric_row(&m[k].scatter);
-    print_metric_row(&m[k].lod_gather);
-    print_metric_row(&m[k].lod_reduce);
-    print_metric_row(&m[k].lod_append_fold);
-    print_metric_row(&m[k].lod_morton_chunk);
-    print_metric_row(&m[k].compress);
-    print_metric_row(&m[k].aggregate);
-    print_metric_row(&m[k].d2h);
-    print_metric_row(&m[k].sink);
+    print_stage_report(&m[k]);
 
     print_diagnostics_report(&m[k], wall_s);
   }
@@ -1201,6 +1190,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .full_memcpy_timing = a.full_memcpy_timing,
   };
   int ecode = run_bench_two_streams(&cfg);
 
