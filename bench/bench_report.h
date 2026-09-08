@@ -22,12 +22,9 @@ struct sink_stats
 void
 print_memory_report(const struct bench_memory* mem);
 
+// Shared single-/two-stream stage table and exact GPU copy coverage.
 void
-print_metric_row(const struct stream_metric* m);
-
-// Label partial copy observations separately from exact GPU copy work.
-void
-print_memcpy_metric(const struct stream_metrics* m);
+print_stage_report(const struct stream_metrics* m);
 
 // Print diagnostic intervals grouped by where the work or wait happened.
 // Unlike stage rows, these intervals do not claim a byte rate.

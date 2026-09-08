@@ -4,6 +4,9 @@
 #include "util/metric.h"
 #include "zarr/json_writer.h"
 
+#include <math.h>
+#include <string.h>
+
 enum diagnostic_section
 {
   DIAGNOSTIC_HOST_BLOCK,
@@ -100,21 +103,49 @@ gb_per_s(double bytes, double ms)
 
 // --- Report + pipeline helpers ---
 
+// Keep table cells bounded without rounding a nonzero measurement to zero.
+// Units stay in the headers, including when scientific notation is needed.
+static void
+format_measurement(char buf[32], double value, int decimals)
+{
+  int n = snprintf(buf, 32, "%.*f", decimals, value);
+  if (n > 8 || (value != 0 && fabs(value) < (decimals == 3 ? 0.001 : 0.01)))
+    snprintf(buf, 32, "%.2e", value);
+}
+
+static void
+format_count(char buf[32], uint64_t count)
+{
+  // Only diagnostic table counts are compacted; copy-work and append totals
+  // retain exact decimal counts in their own, wider summaries.
+  int n = snprintf(buf, 32, "%llu", (unsigned long long)count);
+  if (n > 10)
+    snprintf(buf, 32, "%.3e", (double)count);
+}
+
 void
 print_append_latency(const struct stream_metrics* m)
 {
   if (m->append_count == 0) {
-    print_report("  max append ms:   %.2f", (double)m->max_append_ms);
+    char max_ms[32];
+    format_measurement(max_ms, m->max_append_ms, 3);
+    print_report("  %-17s %s ms", "Max append:", max_ms);
     return;
   }
-  print_report("  append ms:       p50 %.3f  p90 %.3f  p99 %.3f  p99.9 %.3f"
-               "  max %.3f  (%llu appends)",
-               (double)append_ms_at(m, 0.50),
-               (double)append_ms_at(m, 0.90),
-               (double)append_ms_at(m, 0.99),
-               (double)append_ms_at(m, 0.999),
-               (double)m->max_append_ms,
-               (unsigned long long)m->append_count);
+  char p50[32], p90[32], p99[32], p999[32], max_ms[32];
+  format_measurement(p50, append_ms_at(m, 0.50), 3);
+  format_measurement(p90, append_ms_at(m, 0.90), 3);
+  format_measurement(p99, append_ms_at(m, 0.99), 3);
+  format_measurement(p999, append_ms_at(m, 0.999), 3);
+  format_measurement(max_ms, m->max_append_ms, 3);
+  print_report("  %-17s %llu", "Appends:", (unsigned long long)m->append_count);
+  print_report("  %9s %9s %9s %9s %9s",
+               "p50 ms",
+               "p90 ms",
+               "p99 ms",
+               "p99.9 ms",
+               "max ms");
+  print_report("  %9s %9s %9s %9s %9s", p50, p90, p99, p999, max_ms);
 }
 
 void
@@ -125,28 +156,37 @@ print_memory_report(const struct bench_memory* mem)
   if (!mem->host_reading_failed) {
     format_bytes(a, sizeof(a), mem->host_baseline_bytes);
     format_bytes(b, sizeof(b), mem->host_peak_bytes);
-    print_report("  Host memory:   %s at rest, %s peak", a, b);
+    print_report("  %-17s %s at rest, %s peak", "Host memory:", a, b);
   } else {
-    print_report("  Host memory:   unavailable");
+    print_report("  %-17s unavailable", "Host memory:");
   }
   if (mem->device_used_bytes) {
     format_bytes(a, sizeof(a), mem->device_used_bytes);
-    print_report("  Device memory: %s", a);
+    print_report("  %-17s %s", "Device memory:", a);
   }
-  if (mem->device_overhead_valid)
-    print_report("  Device overhead: %+.2f MiB (observed minus estimated)",
-                 (double)mem->device_overhead_bytes / (1024 * 1024));
+  if (mem->device_overhead_valid) {
+    const int negative = mem->device_overhead_bytes < 0;
+    const uint64_t magnitude = negative
+                                 ? 0 - (uint64_t)mem->device_overhead_bytes
+                                 : (uint64_t)mem->device_overhead_bytes;
+    format_bytes(a, sizeof(a), magnitude);
+    print_report("  %-17s %c%s (observed minus estimated)",
+                 "Device overhead:",
+                 negative ? '-' : '+',
+                 a);
+  }
   if (mem->measured_bytes && mem->estimate_total_bytes) {
     format_bytes(a, sizeof(a), mem->estimate_total_bytes);
-    print_report("  Estimate:      %s (%.2fx measured)",
+    print_report("  %-17s %s (%.2fx measured)",
+                 "Estimate:",
                  a,
                  (double)mem->estimate_total_bytes /
                    (double)mem->measured_bytes);
   }
 }
 
-void
-print_metric_row(const struct stream_metric* m)
+static void
+print_metric_row(const char* name, const struct stream_metric* m)
 {
   if (m->count <= 0)
     return;
@@ -154,41 +194,60 @@ print_metric_row(const struct stream_metric* m)
   double avg_ms = (double)m->ms / N;
   double avg_gbs = gb_per_s(m->input_bytes, (double)m->ms);
   int has_best = m->best_ms < 1e29f;
+  char avg_rate[32], best_rate[32] = "-", avg_time[32], best_time[32] = "-";
+  format_measurement(avg_rate, avg_gbs, 2);
+  format_measurement(avg_time, avg_ms, 3);
 
   if (has_best) {
     // Use the bytes recorded for that exact call so partial-batch tails
     // don't inflate "best" via an average-bytes / min-time fudge.
     double best_gbs = gb_per_s(m->best_input_bytes, (double)m->best_ms);
-    print_report("  %-12s %8.2f %8.2f %10.2f %10.2f",
-                 m->name,
-                 avg_gbs,
-                 best_gbs,
-                 avg_ms,
-                 (double)m->best_ms);
-  } else {
-    print_report(
-      "  %-12s %8.2f %8s %10.2f %10s", m->name, avg_gbs, "-", avg_ms, "-");
+    format_measurement(best_rate, best_gbs, 2);
+    format_measurement(best_time, m->best_ms, 3);
   }
+  print_report("  %-14s %10s %10s %9s %9s",
+               name,
+               avg_rate,
+               best_rate,
+               avg_time,
+               best_time);
 }
 
 void
-print_memcpy_metric(const struct stream_metrics* m)
+print_stage_report(const struct stream_metrics* m)
 {
-  struct stream_metric observed = m->memcpy;
   const int sampled = m->memcpy_calls > (uint64_t)m->memcpy.count;
-  if (sampled)
-    observed.name = "Memcpy[smp]";
-  print_metric_row(&observed);
+  print_report("  %-14s %10s %10s %9s %9s",
+               "Stage",
+               "avg GiB/s",
+               "best GiB/s",
+               "avg ms",
+               "best ms");
+  print_metric_row(sampled ? "Memcpy[smp]" : "Memcpy", &m->memcpy);
+  print_metric_row("H2D", &m->h2d);
+  print_metric_row("Scatter", &m->scatter);
+  print_metric_row("LOD gather", &m->lod_gather);
+  print_metric_row("LOD reduce", &m->lod_reduce);
+  print_metric_row("Append fold", &m->lod_append_fold);
+  print_metric_row("LOD to chunks", &m->lod_morton_chunk);
+  print_metric_row("Compress", &m->compress);
+  print_metric_row("Aggregate", &m->aggregate);
+  print_metric_row("D2H", &m->d2h);
+  print_metric_row("Sink", &m->sink);
+
   if (m->memcpy_calls) {
-    print_report("  Memcpy work: %llu copies, %llu bytes; timed %d copies, "
-                 "%.0f bytes%s",
+    fputc('\n', stderr);
+    print_report("  Memcpy work:");
+    print_report("  %-14s %20s %20s", "Coverage", "copies", "bytes");
+    print_report("  %-14s %20llu %20llu",
+                 "Total",
                  (unsigned long long)m->memcpy_calls,
-                 (unsigned long long)m->memcpy_bytes,
-                 m->memcpy.count,
-                 m->memcpy.input_bytes,
-                 sampled
-                   ? " (sample times/rates/extrema only; not extrapolated)"
-                   : " (all copies timed)");
+                 (unsigned long long)m->memcpy_bytes);
+    print_report(
+      "  %-14s %20d %20.0f", "Timed", m->memcpy.count, m->memcpy.input_bytes);
+    print_report("  %s",
+                 sampled ? "Sample times/rates/extrema only; not extrapolated."
+                         : "All copies timed.");
   }
 }
 
@@ -203,34 +262,28 @@ print_diagnostic_row(const struct diagnostic_entry* d, float wall_s)
 {
   const struct stream_metric* m = d->metric;
   const double wall_pct = wall_s > 0 ? (double)m->ms / (wall_s * 10.0) : 0.0;
-  char wait_calls[24];
+  char wait_calls[32] = "-", avg_ms[32] = "-", max_ms[32] = "-", pct[32];
   if (m->wait_calls > 0)
-    snprintf(wait_calls,
-             sizeof(wait_calls),
-             "%llu",
-             (unsigned long long)m->wait_calls);
-  else
-    snprintf(wait_calls, sizeof(wait_calls), "-");
-
+    format_count(wait_calls, m->wait_calls);
+  format_measurement(pct, wall_pct, 2);
   if (m->count > 0) {
-    print_report("  %-10s %-25s %8d %10s %9.3f %9.3f %7.2f",
-                 metric_owner_name(m->owner),
-                 d->label,
-                 m->count,
-                 wait_calls,
-                 (double)m->ms / m->count,
-                 (double)m->max_ms,
-                 wall_pct);
-  } else {
-    print_report("  %-10s %-25s %8d %10s %9s %9s %7.2f",
-                 metric_owner_name(m->owner),
-                 d->label,
-                 0,
-                 wait_calls,
-                 "-",
-                 "-",
-                 wall_pct);
+    format_measurement(avg_ms, (double)m->ms / m->count, 3);
+    format_measurement(max_ms, m->max_ms, 3);
   }
+  // Long conditions get a continuation row, never truncated labels or shifted
+  // numeric columns. Owners are grouped above the rows to leave room for data.
+  const char* label = d->label;
+  if (strlen(label) > 26) {
+    print_report("  %s", label);
+    label = "";
+  }
+  print_report("  %-26s %10d %10s %9s %9s %8s",
+               label,
+               m->count,
+               wait_calls,
+               avg_ms,
+               max_ms,
+               pct);
 }
 
 static void
@@ -249,17 +302,27 @@ print_diagnostic_section(const struct diagnostic_entry entries[],
 
   fputc('\n', stderr);
   print_report("  --- %s ---", title);
-  print_report("  %-10s %-25s %8s %10s %9s %9s %7s",
-               "Timeline",
+  print_report("  %-26s %10s %10s %9s %9s %8s",
                interval_label,
                "samples",
                "waits",
                "avg ms",
                "max ms",
                "% wall");
-  for (size_t i = 0; i < DIAGNOSTIC_COUNT; ++i)
-    if (entries[i].section == section && diagnostic_measured(entries[i].metric))
+  for (enum metric_owner owner = METRIC_OWNER_NONE; owner <= METRIC_OWNER_D2H;
+       ++owner) {
+    int have_owner = 0;
+    for (size_t i = 0; i < DIAGNOSTIC_COUNT; ++i) {
+      if (entries[i].section != section || entries[i].metric->owner != owner ||
+          !diagnostic_measured(entries[i].metric))
+        continue;
+      if (!have_owner) {
+        print_report("  [%s timeline]", metric_owner_name(owner));
+        have_owner = 1;
+      }
       print_diagnostic_row(&entries[i], wall_s);
+    }
+  }
 }
 
 static int
@@ -276,12 +339,13 @@ print_duration_row(const char* label, const struct duration_stats* stats)
 {
   if (stats->count == 0)
     return;
-  print_report("  %-34s %8llu %9.3f %9.3f %9.3f",
-               label,
-               (unsigned long long)stats->count,
-               (double)stats->total_ms / stats->count,
-               (double)stats->min_ms,
-               (double)stats->max_ms);
+  char count[32], avg_ms[32], min_ms[32], max_ms[32];
+  format_count(count, stats->count);
+  format_measurement(avg_ms, (double)stats->total_ms / stats->count, 3);
+  format_measurement(min_ms, stats->min_ms, 3);
+  format_measurement(max_ms, stats->max_ms, 3);
+  print_report(
+    "  %-34s %10s %9s %9s %9s", label, count, avg_ms, min_ms, max_ms);
 }
 
 static void
@@ -292,7 +356,7 @@ print_delivery_timing(const struct delivery_timing* timing)
 
   fputc('\n', stderr);
   print_report("  --- Delivery latency ---");
-  print_report("  %-34s %8s %9s %9s %9s",
+  print_report("  %-34s %10s %9s %9s %9s",
                "Interval",
                "samples",
                "avg ms",
@@ -315,7 +379,7 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
   print_diagnostic_section(entries,
                            DIAGNOSTIC_HOST_BLOCK,
                            "Host blocking",
-                           "Reason / awaited condition",
+                           "Awaited condition",
                            wall_s);
   print_diagnostic_section(entries,
                            DIAGNOSTIC_HOST_OVERHEAD,
@@ -328,10 +392,11 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
 
   if (m->scatter_samples_lost || m->lod_samples_lost) {
     fputc('\n', stderr);
-    print_report("  TIMING SAMPLES LOST: scatter=%llu lod=%llu "
-                 "(stage totals under-report)",
-                 (unsigned long long)m->scatter_samples_lost,
-                 (unsigned long long)m->lod_samples_lost);
+    print_report("  TIMING SAMPLES LOST (stage totals under-report)");
+    print_report(
+      "  %-17s %llu", "Scatter:", (unsigned long long)m->scatter_samples_lost);
+    print_report(
+      "  %-17s %llu", "LOD:", (unsigned long long)m->lod_samples_lost);
   }
   if (m->append_count > 0 || m->max_append_ms > 0) {
     fputc('\n', stderr);
@@ -343,7 +408,7 @@ print_diagnostics_report(const struct stream_metrics* m, float wall_s)
     print_report("  --- Queue pressure ---");
     char pbuf[32];
     format_bytes(pbuf, sizeof(pbuf), m->peak_pending_bytes);
-    print_report("  peak pending:    %s", pbuf);
+    print_report("  %-17s %s", "Peak pending:", pbuf);
   }
 }
 
@@ -361,29 +426,34 @@ log_bench_header(const struct tile_stream_layout* layout,
 
   char buf[32];
   format_bytes(buf, sizeof(buf), (uint64_t)total_bytes);
-  print_report("  total:       %s (%zu elements, %zu epochs)",
+  print_report("  %-17s %s (%zu elements, %zu epochs)",
+               "Total:",
                buf,
                total_elements,
                num_epochs);
   format_bytes(
     buf, sizeof(buf), (uint64_t)(layout->chunk_stride * dtype_bpe(dtype)));
-  print_report("  chunk:       %lu elements = %s  (stride=%lu)",
+  print_report("  %-17s %lu elements = %s (stride=%lu)",
+               "Chunk:",
                (unsigned long)layout->chunk_elements,
                buf,
                (unsigned long)layout->chunk_stride);
   format_bytes(buf, sizeof(buf), (uint64_t)layout->chunk_pool_bytes);
-  print_report("  epoch:       %lu slots, %s pool",
+  print_report("  %-17s %lu slots, %s pool",
+               "Epoch:",
                (unsigned long)layout->chunks_per_epoch,
                buf);
   if (codec.id != CODEC_NONE && max_compressed_size > 0) {
     format_bytes(
       buf, sizeof(buf), (uint64_t)(codec_batch_size * max_compressed_size));
-    print_report(
-      "  compress:    max_output=%zu comp_pool=%s", max_compressed_size, buf);
+    print_report("  %-17s %zu bytes/chunk max, %s pool",
+                 "Compression:",
+                 max_compressed_size,
+                 buf);
   }
   if (codec_is_blosc(codec.id))
-    print_report("  Blosc block: %u bytes (requested)",
-                 codec.blosc_block_bytes);
+    print_report(
+      "  %-17s %u bytes (requested)", "Blosc block:", codec.blosc_block_bytes);
 }
 
 void
@@ -411,36 +481,20 @@ print_bench_report(const struct stream_metrics* metrics,
       : 0.0;
 
   fputc('\n', stderr);
-  print_report("  --- Benchmark Results ---");
+  print_report("  --- Benchmark results ---");
   char fbuf[32];
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)total_bytes);
-  print_report("  Input:        %s (%zu elements)", fbuf, total_elements);
+  print_report("  %-17s %s (%zu elements)", "Input:", fbuf, total_elements);
   format_bytes(fbuf, sizeof(fbuf), (uint64_t)ss->total_bytes);
-  print_report("  Compressed:   %s (ratio: %.3f)", fbuf, comp_ratio);
-  print_report("  Chunks:       %zu (%llu/epoch x %zu epochs)",
+  print_report("  %-17s %s (ratio: %.3f)", "Output:", fbuf, comp_ratio);
+  print_report("  %-17s %zu (%llu/epoch x %zu epochs)",
+               "Chunks:",
                total_chunks,
                (unsigned long long)chunks_per_epoch,
                num_epochs);
 
   fputc('\n', stderr);
-  print_report("  %-12s %8s %8s %10s %10s",
-               "Stage",
-               "avg GB/s",
-               "best GB/s",
-               "avg ms",
-               "best ms");
-
-  print_memcpy_metric(metrics);
-  print_metric_row(&metrics->h2d);
-  print_metric_row(&metrics->scatter);
-  print_metric_row(&metrics->lod_gather);
-  print_metric_row(&metrics->lod_reduce);
-  print_metric_row(&metrics->lod_append_fold);
-  print_metric_row(&metrics->lod_morton_chunk);
-  print_metric_row(&metrics->compress);
-  print_metric_row(&metrics->aggregate);
-  print_metric_row(&metrics->d2h);
-  print_metric_row(&metrics->sink);
+  print_stage_report(metrics);
 
   if (metrics->d2h_payload_bytes_transferred ||
       metrics->d2h_metadata_bytes_transferred ||
@@ -450,9 +504,12 @@ print_bench_report(const struct stream_metrics* metrics,
       payload, sizeof(payload), metrics->d2h_payload_bytes_transferred);
     format_bytes(
       metadata, sizeof(metadata), metrics->d2h_metadata_bytes_transferred);
-    print_report("  D2H transfer: payload %s, metadata %s, %llu copies",
-                 payload,
-                 metadata,
+    fputc('\n', stderr);
+    print_report("  --- D2H transfer ---");
+    print_report("  %-17s %s", "Payload:", payload);
+    print_report("  %-17s %s", "Metadata:", metadata);
+    print_report("  %-17s %llu",
+                 "Payload copies:",
                  (unsigned long long)metrics->d2h_payload_copy_count);
   }
   if (metrics->shard_padding_logical_payload_bytes ||
@@ -470,13 +527,15 @@ print_bench_report(const struct stream_metrics* metrics,
     format_bytes(
       padding, sizeof(padding), metrics->shard_padding_internal_bytes);
     format_bytes(physical_buf, sizeof(physical_buf), physical);
+    fputc('\n', stderr);
+    print_report("  --- Shard layout ---");
+    print_report("  %-17s %s", "Logical payload:", logical);
     print_report(
-      "  Shard layout: logical %s, padding %s, physical %s "
-      "(%.2f%%), %llu/%llu padded updates",
-      logical,
-      padding,
-      physical_buf,
-      ratio * 100.0,
+      "  %-17s %s (%.2f%% of physical)", "Padding:", padding, ratio * 100.0);
+    print_report("  %-17s %s", "Physical payload:", physical_buf);
+    print_report(
+      "  %-17s %llu / %llu",
+      "Padded updates:",
       (unsigned long long)metrics->shard_padding_padded_update_count,
       (unsigned long long)metrics->shard_padding_physical_update_count);
   }
@@ -487,18 +546,18 @@ print_bench_report(const struct stream_metrics* metrics,
     wall_s > 0 ? ((double)total_bytes / (1024.0 * 1024.0 * 1024.0)) / wall_s
                : 0.0;
   fputc('\n', stderr);
-  print_report("  Init time:     %.3f s", (double)init_s);
+  print_report("  %-17s %.3f s", "Init time:", (double)init_s);
   if (flush_pending_bytes > 0 && flush_s > 0) {
     double flush_gib =
       ((double)flush_pending_bytes / (1024.0 * 1024.0 * 1024.0)) /
       (double)flush_s;
     print_report(
-      "  Flush time:    %.3f s (%.2f GiB/s)", (double)flush_s, flush_gib);
+      "  %-17s %.3f s (%.2f GiB/s)", "Flush time:", (double)flush_s, flush_gib);
   } else {
-    print_report("  Flush time:    %.3f s", (double)flush_s);
+    print_report("  %-17s %.3f s", "Flush time:", (double)flush_s);
   }
-  print_report("  Wall time:     %.3f s", wall_s);
-  print_report("  Throughput:    %.2f GiB/s", throughput_gib);
+  print_report("  %-17s %.3f s", "Wall time:", wall_s);
+  print_report("  %-17s %.2f GiB/s", "Throughput:", throughput_gib);
 }
 
 static void

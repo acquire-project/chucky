@@ -96,4 +96,12 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/test_memcpy_report.py
             $<TARGET_FILE:test_memcpy_report>
     )
+    add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
+    add_test(
+        NAME test-bench_report
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
+            $<TARGET_FILE:test_bench_report>
+    )
 endif()

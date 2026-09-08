@@ -33,7 +33,7 @@ main(int argc, char** argv)
   };
   const struct bench_memory mem = { 0 };
   const struct sink_stats sink = { 0 };
-  print_memcpy_metric(&m);
+  print_stage_report(&m);
   print_bench_json_pass(&m,
                         NULL,
                         &layout,
