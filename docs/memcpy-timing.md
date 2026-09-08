@@ -52,6 +52,3 @@ Empty streams and CPU streams do not fabricate GPU work totals.
 Consumers that need exact work should read `memcpy_work`. Consumers that need
 whole-stage copy time must run with full timing. Do not sum `memcpy_sample` time
 into producer utilization or compare its maximum as if it covered all appends.
-
-See the [implementation acceptance results](benchmarks/sampled-memcpy-20260908/README.md)
-for the size-dependent throughput result and boundary-latency caveats.

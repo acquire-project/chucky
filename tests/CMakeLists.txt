@@ -109,6 +109,7 @@ add_test_exe(test_host_batch test_host_batch.c
 )
 
 add_test_exe(test_memcpy_sampling test_memcpy_sampling.c stream_config)
+target_sources(test_memcpy_sampling PRIVATE ../src/gpu/memcpy_sampling.c)
 add_gpu_test_exe(test_memcpy_sampling_gpu test_memcpy_sampling_gpu.c
     LINKS multiarray_gpu stream test_shard_sink test_shard_verify
           CUDA::cuda_driver CUDA::cudart_static
