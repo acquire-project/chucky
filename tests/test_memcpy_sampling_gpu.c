@@ -44,7 +44,7 @@ run_copies(int full, int mixed, int finite)
   struct writer* w = tile_stream_gpu_writer(stream);
   const size_t offers[] = { 511, 8191, 8192, 8193, 131072 };
   uint64_t copies = 0, small = 0, timed = 0, timed_bytes = 0, appends = 0;
-  size_t accepted = 0, staged = 0, target = 0;
+  size_t accepted = 0;
   while (accepted < total) {
     size_t offer = mixed ? offers[appends % countof(offers)] : 512;
     if (offer > total - accepted)
@@ -53,12 +53,12 @@ run_copies(int full, int mixed, int finite)
     // Independent model of copy fragmentation, including staging and batch
     // boundaries. Timing policy applies to fragments, not the offered size.
     while (remaining) {
-      if (!staged) {
-        target = BATCH - accepted % BATCH;
-        if (target > STAGING)
-          target = STAGING;
-      }
-      size_t n = remaining < target - staged ? remaining : target - staged;
+      const size_t batch_offset = accepted % BATCH;
+      size_t n = STAGING - batch_offset % STAGING;
+      if (n > BATCH - batch_offset)
+        n = BATCH - batch_offset;
+      if (n > remaining)
+        n = remaining;
       copies++;
       int measure = full || n >= 8192;
       if (!measure) {
@@ -70,10 +70,7 @@ run_copies(int full, int mixed, int finite)
         timed_bytes += n;
       }
       accepted += n;
-      staged += n;
       remaining -= n;
-      if (staged == target)
-        staged = 0;
     }
     struct writer_result r = writer_append(
       w, (struct slice){ input + accepted - offer, input + accepted });

@@ -323,10 +323,6 @@ bump it.
 
 ### Version history
 
-- **11** — Small GPU host-copy timing is sampled by default. Partial timing
-  rows use `stages.memcpy_sample`; `stages.memcpy` still means all copies were
-  timed. `memcpy_work` records exact copy calls/bytes and actual timing scope.
-  Migration preserves old full-timing rows without inventing new work totals.
 - **10** — Write-scheduler tuning and measurements, host-output occupancy and
   lifetime measurements, the output-slot wait, and the former tail-gap fields
   were removed.

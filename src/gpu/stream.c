@@ -1,4 +1,3 @@
-#include "gpu/memcpy_sampling.h"
 #include "gpu/schedule.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
@@ -274,9 +273,13 @@ stream_append_body(struct stream_engine* e,
     }
 
     {
-      const int timed = ctx->config.full_memcpy_timing ||
-                        payload >= MEMCPY_TIMING_FULL_BYTES ||
-                        memcpy_timing_sample(&ctx->memcpy_small_copies);
+      int timed = ctx->config.full_memcpy_timing || payload >= (8u << 10);
+      if (!timed) {
+        // Sample one of 64 small copies, rotating the offset each block.
+        // The first copy is timed; the 8 KiB cutoff is a profiling policy.
+        const uint64_t n = ctx->memcpy_small_copies++;
+        timed = ((n ^ (n >> 6)) & 63u) == 0;
+      }
       struct platform_clock mc = { 0 };
       if (timed)
         platform_toc(&mc);
