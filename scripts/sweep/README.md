@@ -327,7 +327,6 @@ bump it.
   rows use `stages.memcpy_sample`; `stages.memcpy` still means all copies were
   timed. `memcpy_work` records exact copy calls/bytes and actual timing scope.
   Migration preserves old full-timing rows without inventing new work totals.
-  See [GPU host-copy timing](../../docs/memcpy-timing.md) for profiling controls.
 - **10** — Write-scheduler tuning and measurements, host-output occupancy and
   lifetime measurements, the output-slot wait, and the former tail-gap fields
   were removed.

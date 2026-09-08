@@ -188,8 +188,7 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
 Benchmarks report per-stage throughput and latency, compression ratio, memory
-breakdown, and overall pipeline GB/s. See [GPU host-copy timing](docs/memcpy-timing.md)
-for the distinction between sampled timing observations and exact copy work.
+breakdown, and overall pipeline GiB/s.
 
 ## Architecture
 
