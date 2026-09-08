@@ -9,25 +9,34 @@ main(int argc, char** argv)
 {
   if (argc != 2)
     return 1;
+  const int full = strcmp(argv[1], "full") == 0;
   const int large = strcmp(argv[1], "large") == 0;
   const int empty = strcmp(argv[1], "empty") == 0;
   struct stream_metrics m = { 0 };
   if (!empty) {
     struct stream_metric stage = {
-      // Text labels must not depend on backend-specific metric names.
+      // Normalize backend names without losing Copy versus Scatter semantics.
       .name = "backend_internal_name",
       .count = 2,
       .ms = 0.00008f,
       .best_ms = 0.00003f,
       .max_ms = 0.00005f,
       .best_input_bytes = 512,
+      .best_output_bytes = 512,
       .input_bytes = 1024,
+      .output_bytes = 1024,
     };
     m.memcpy = m.h2d = m.scatter = m.lod_gather = m.lod_reduce =
       m.lod_append_fold = m.lod_morton_chunk = m.compress = m.aggregate =
         m.d2h = m.sink = stage;
+    m.scatter.name = strcmp(argv[1], "copy") == 0 ? "Copy" : "scatter";
     m.memcpy_calls = large ? UINT64_MAX : 128;
     m.memcpy_bytes = large ? UINT64_MAX : 65536;
+    if (full) {
+      m.memcpy.count = 128;
+      m.memcpy.ms *= 64;
+      m.memcpy.input_bytes = m.memcpy.output_bytes = 65536;
+    }
     m.compress.best_ms = 1e30f; // No best observation, not a zero duration.
     m.sink.ms = 2000;
     m.sink.best_ms = 1000;
@@ -111,5 +120,18 @@ main(int argc, char** argv)
                      empty ? 0 : 0.2f,
                      empty ? 0 : 65536);
   print_memory_report(&mem);
+  print_bench_json_pass(&m,
+                        &m.sink,
+                        &layout,
+                        dtype_u8,
+                        (struct codec_config){ .id = CODEC_NONE },
+                        &sink,
+                        65536,
+                        65536,
+                        1,
+                        0.1f,
+                        empty ? 0 : 0.2f,
+                        &mem,
+                        1);
   return 0;
 }

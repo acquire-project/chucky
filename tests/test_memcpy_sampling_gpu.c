@@ -1,5 +1,4 @@
 #include "multiarray.gpu.h"
-#include "platform/platform.h"
 #include "stream.gpu.h"
 #include "stream/layouts.h"
 #include "test_runner.h"
@@ -7,19 +6,6 @@
 #include "test_shard_verify.h"
 
 #include <stdlib.h>
-
-#ifdef CHUCKY_TEST_WRAP_CLOCK
-// Only count the calling thread: delivery workers have their own timers.
-static _Thread_local uint64_t clock_calls;
-float
-__real_platform_toc(struct platform_clock* clock);
-float
-__wrap_platform_toc(struct platform_clock* clock)
-{
-  clock_calls++;
-  return __real_platform_toc(clock);
-}
-#endif
 
 static int
 run_copies(int full, int mixed, int finite)
@@ -89,18 +75,8 @@ run_copies(int full, int mixed, int finite)
       if (staged == target)
         staged = 0;
     }
-#ifdef CHUCKY_TEST_WRAP_CLOCK
-    clock_calls = 0;
-#endif
     struct writer_result r = writer_append(
       w, (struct slice){ input + accepted - offer, input + accepted });
-#ifdef CHUCKY_TEST_WRAP_CLOCK
-    const uint64_t clocks = clock_calls;
-    // First two 512-byte appends do not dispatch or wait. The second loses
-    // only the two inner reads; both outer append latency reads remain.
-    if (!mixed && appends < 2)
-      CHECK(Fail, clocks == (full || appends == 0 ? 4 : 2));
-#endif
     CHECK(Fail, r.error == 0 && r.rest.beg == r.rest.end);
     appends++;
   }

@@ -88,14 +88,6 @@ endforeach()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
-    add_bench(test_memcpy_report test_memcpy_report.c bench_util Zstd::Zstd)
-    add_test(
-        NAME test-memcpy_report
-        COMMAND
-            ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/test_memcpy_report.py
-            $<TARGET_FILE:test_memcpy_report>
-    )
     add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
     add_test(
         NAME test-bench_report

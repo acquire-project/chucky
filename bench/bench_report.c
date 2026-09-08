@@ -225,7 +225,10 @@ print_stage_report(const struct stream_metrics* m)
                "best ms");
   print_metric_row(sampled ? "Memcpy[smp]" : "Memcpy", &m->memcpy);
   print_metric_row("H2D", &m->h2d);
-  print_metric_row("Scatter", &m->scatter);
+  print_metric_row(m->scatter.name && strcmp(m->scatter.name, "Copy") == 0
+                     ? "Copy"
+                     : "Scatter",
+                   &m->scatter);
   print_metric_row("LOD gather", &m->lod_gather);
   print_metric_row("LOD reduce", &m->lod_reduce);
   print_metric_row("Append fold", &m->lod_append_fold);

@@ -1,4 +1,6 @@
-"""Regression checks for the plain-text, 80-column benchmark report."""
+"""Check the benchmark's text layout and sampled/full JSON metric contract."""
+import json
+import math
 import subprocess
 import sys
 
@@ -10,7 +12,7 @@ def section(lines, title):
 
 
 stage_names = [
-    "Memcpy[smp]", "H2D", "Scatter", "LOD gather", "LOD reduce", "Append fold",
+    "Memcpy", "H2D", "Scatter", "LOD gather", "LOD reduce", "Append fold",
     "LOD to chunks", "Compress", "Aggregate", "D2H", "Sink",
 ]
 stage_header = (
@@ -18,9 +20,10 @@ stage_header = (
     f" {'avg ms':>9} {'best ms':>9}"
 )
 
-for mode in ("regular", "large", "empty"):
+for mode in ("sampled", "full", "copy", "large", "empty"):
     p = subprocess.run([sys.argv[1], mode], capture_output=True, text=True, check=True)
-    assert not p.stdout, "The text report belongs on stderr"
+    report = json.loads(p.stdout)
+    stages = report["stages"]
     lines = p.stderr.splitlines()
     for line in lines:
         assert len(line) <= 80, (mode, len(line), line)
@@ -33,11 +36,37 @@ for mode in ("regular", "large", "empty"):
         assert "Append latency" not in p.stderr
         assert "Host blocking" not in p.stderr
         assert "Memcpy work" not in p.stderr
+        assert "memcpy_work" not in report
+        assert not {"memcpy", "memcpy_sample"} & stages.keys()
         continue
+
+    sampled = mode != "full"
+    observations = 2 if sampled else 128
+    observed_bytes = observations * 512
+    total_copies = 2**64 - 1 if mode == "large" else 128
+    total_bytes = 2**64 - 1 if mode == "large" else 65536
+    assert report["memcpy_work"] == {
+        "calls": total_copies, "bytes": total_bytes,
+        "timing_scope": "sampled" if sampled else "full",
+    }
+    key = "memcpy_sample" if sampled else "memcpy"
+    assert ("memcpy" if sampled else "memcpy_sample") not in stages
+    row = stages[key]
+    assert row["count"] == observations
+    assert row["in_bytes"] == row["out_bytes"] == observed_bytes
+    assert math.isclose(row["total_ms"], observations * 0.00004, rel_tol=1e-6)
+    expected_rate = observed_bytes / 2**30 / (row["total_ms"] / 1000)
+    assert math.isclose(row["in_gibs"], expected_rate, rel_tol=1e-5)
+    assert ("Memcpy[smp]" in p.stderr) == sampled
+    assert ("not extrapolated" in p.stderr) == sampled
 
     start = lines.index(stage_header) + 1
     rows = lines[start:start + len(stage_names)]
     for name, row in zip(stage_names, rows):
+        if name == "Memcpy" and sampled:
+            name = "Memcpy[smp]"
+        if name == "Scatter" and mode == "copy":
+            name = "Copy"
         assert row[2:16].rstrip() == name, row
         assert len(row) == len(stage_header), row
         # Every row uses the same four right-aligned numeric fields.
@@ -49,10 +78,8 @@ for mode in ("regular", "large", "empty"):
     assert lines[start + len(stage_names)] == "", "Coverage must not split stage rows"
 
     coverage = section(lines, "Memcpy work:")
-    assert "not extrapolated" in coverage[-1]
-    totals = [str(2**64 - 1)] * 2 if mode == "large" else ["128", "65536"]
-    assert coverage[1].split() == ["Total", *totals]
-    assert coverage[2].split() == ["Timed", "2", "1024"]
+    assert coverage[1].split() == ["Total", str(total_copies), str(total_bytes)]
+    assert coverage[2].split() == ["Timed", str(observations), str(observed_bytes)]
 
     blocking = section(lines, "--- Host blocking ---")
     assert len(blocking[0]) == 79
