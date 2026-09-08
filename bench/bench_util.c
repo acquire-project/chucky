@@ -434,6 +434,7 @@ run_bench(const struct bench_config* cfg)
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
+    .full_memcpy_timing = cfg->full_memcpy_timing,
   };
 
   uint64_t est_total_chunks = 0;
@@ -655,6 +656,7 @@ struct bench_cli_args
   uint64_t io_latency_us;
   uint64_t backpressure_bytes;
   int max_threads;
+  int full_memcpy_timing;
 };
 
 static int
@@ -672,7 +674,7 @@ read_size(const char* flag, const char* text, uint64_t* out)
 //   --json --chunk-bytes
 //   --memory-budget -o --s3-bucket --s3-prefix --s3-region --s3-endpoint
 //   --s3-throughput-gbps --io-bw-mbps --io-latency-us --backpressure
-//   --max-threads.
+//   --max-threads --full-memcpy-timing.
 // Drivers that don't honor a given flag (e.g. two-streams ignores --backend)
 // just don't read the corresponding field afterward.
 static int
@@ -698,6 +700,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
   out->io_latency_us = 0;
   out->backpressure_bytes = 0;
   out->max_threads = 0;
+  out->full_memcpy_timing = 0;
 
   for (int i = 1; i < ac; ++i) {
     if (strcmp(av[i], "--fill") == 0 && i + 1 < ac) {
@@ -725,7 +728,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       else if (strcmp(shuffle, "bit") == 0)
         out->codec.shuffle = CODEC_SHUFFLE_BIT;
       else {
-        fprintf(stderr, "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
+        fprintf(stderr,
+                "Invalid --blosc-shuffle: %s (expected none|byte|bit)\n",
                 shuffle);
         return 1;
       }
@@ -778,6 +782,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       ++i;
     } else if (strcmp(av[i], "--max-threads") == 0 && i + 1 < ac) {
       out->max_threads = (int)strtol(av[++i], NULL, 10);
+    } else if (strcmp(av[i], "--full-memcpy-timing") == 0) {
+      out->full_memcpy_timing = 1;
     } else {
       fprintf(stderr, "Unknown option: %s\n", av[i]);
       fprintf(stderr,
@@ -793,7 +799,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--s3-throughput-gbps N]] "
               "[--io-bw-mbps N (MiB/s)] [--io-latency-us N] "
               "[--backpressure N (bytes, e.g. 256M)] "
-              "[--max-threads N (0 = OpenMP default)]\n",
+              "[--max-threads N (0 = OpenMP default)] "
+              "[--full-memcpy-timing (GPU profiling)]\n",
               av[0]);
       return 1;
     }
@@ -848,6 +855,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .full_memcpy_timing = a.full_memcpy_timing,
   };
   int ecode = run_bench(&cfg);
 
@@ -1015,6 +1023,7 @@ run_bench_two_streams(const struct bench_config* cfg)
     .target_batch_bytes = resolved_batch_bytes(cfg),
     .backpressure_bytes = cfg->backpressure_bytes,
     .max_threads = cfg->max_threads,
+    .full_memcpy_timing = cfg->full_memcpy_timing,
   };
 
   bench_gpu_report_memory_pair(&config);
@@ -1108,7 +1117,7 @@ run_bench_two_streams(const struct bench_config* cfg)
                  "best GB/s",
                  "avg ms",
                  "best ms");
-    print_metric_row(&m[k].memcpy);
+    print_memcpy_metric(&m[k]);
     print_metric_row(&m[k].h2d);
     print_metric_row(&m[k].scatter);
     print_metric_row(&m[k].lod_gather);
@@ -1201,6 +1210,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .io_latency_us = a.io_latency_us,
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
+    .full_memcpy_timing = a.full_memcpy_timing,
   };
   int ecode = run_bench_two_streams(&cfg);
 

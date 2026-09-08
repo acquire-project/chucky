@@ -171,6 +171,27 @@ print_metric_row(const struct stream_metric* m)
   }
 }
 
+void
+print_memcpy_metric(const struct stream_metrics* m)
+{
+  struct stream_metric observed = m->memcpy;
+  const int sampled = m->memcpy_calls > (uint64_t)m->memcpy.count;
+  if (sampled)
+    observed.name = "Memcpy[smp]";
+  print_metric_row(&observed);
+  if (m->memcpy_calls) {
+    print_report("  Memcpy work: %llu copies, %llu bytes; timed %d copies, "
+                 "%.0f bytes%s",
+                 (unsigned long long)m->memcpy_calls,
+                 (unsigned long long)m->memcpy_bytes,
+                 m->memcpy.count,
+                 m->memcpy.input_bytes,
+                 sampled
+                   ? " (sample times/rates/extrema only; not extrapolated)"
+                   : " (all copies timed)");
+  }
+}
+
 static int
 diagnostic_measured(const struct stream_metric* m)
 {
@@ -409,7 +430,7 @@ print_bench_report(const struct stream_metrics* metrics,
                "avg ms",
                "best ms");
 
-  print_metric_row(&metrics->memcpy);
+  print_memcpy_metric(metrics);
   print_metric_row(&metrics->h2d);
   print_metric_row(&metrics->scatter);
   print_metric_row(&metrics->lod_gather);
@@ -672,8 +693,10 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);
     jw_key(&jw, "blosc_shuffle");
-    jw_string(&jw, codec.shuffle == CODEC_SHUFFLE_BIT ? "bit" :
-                     codec.shuffle == CODEC_SHUFFLE_BYTE ? "byte" : "none");
+    jw_string(&jw,
+              codec.shuffle == CODEC_SHUFFLE_BIT    ? "bit"
+              : codec.shuffle == CODEC_SHUFFLE_BYTE ? "byte"
+                                                    : "none");
     jw_key(&jw, "blosc_level");
     jw_uint(&jw, codec.level);
   }
@@ -748,9 +771,27 @@ print_bench_json_pass(const struct stream_metrics* m,
     jw_object_end(&jw);
   }
 
+  if (m->memcpy_calls) {
+    jw_key(&jw, "memcpy_work");
+    jw_object_begin(&jw);
+    jw_key(&jw, "calls");
+    jw_uint(&jw, m->memcpy_calls);
+    jw_key(&jw, "bytes");
+    jw_uint(&jw, m->memcpy_bytes);
+    jw_key(&jw, "timing_scope");
+    jw_string(&jw,
+              m->memcpy_calls > (uint64_t)m->memcpy.count ? "sampled" : "full");
+    jw_object_end(&jw);
+  }
+
   jw_key(&jw, "stages");
   jw_object_begin(&jw);
-  json_stage_metric(&jw, "memcpy", &m->memcpy);
+  // A separate key prevents existing consumers from treating a sampled time
+  // sum as the full stage duration. All fields in this row refer to samples.
+  json_stage_metric(
+    &jw,
+    m->memcpy_calls > (uint64_t)m->memcpy.count ? "memcpy_sample" : "memcpy",
+    &m->memcpy);
   json_stage_metric(&jw, "h2d", &m->h2d);
   json_stage_metric(&jw, "scatter", &m->scatter);
   json_stage_metric(&jw, "lod_gather", &m->lod_gather);

@@ -1,3 +1,4 @@
+#include "gpu/memcpy_sampling.h"
 #include "gpu/schedule.h"
 #include "gpu/stream.ingest.h"
 #include "gpu/stream.lod.h"
@@ -273,18 +274,25 @@ stream_append_body(struct stream_engine* e,
     }
 
     {
+      const int timed = ctx->config.full_memcpy_timing ||
+                        payload >= MEMCPY_TIMING_FULL_BYTES ||
+                        memcpy_timing_sample(&ctx->memcpy_small_copies);
       struct platform_clock mc = { 0 };
-      platform_toc(&mc);
+      if (timed)
+        platform_toc(&mc);
       ingest_copy(
         e->copy_pool,
         gpu_pool_at(&e->stage.h_pool, e->stage.current, e->stage.bytes_written)
           .p,
         src,
         payload);
-      accumulate_metric_ms(&e->metrics.memcpy,
-                           (float)(platform_toc(&mc) * 1000.0),
-                           payload,
-                           payload);
+      if (timed)
+        accumulate_metric_ms(&e->metrics.memcpy,
+                             (float)(platform_toc(&mc) * 1000.0),
+                             payload,
+                             payload);
+      e->metrics.memcpy_calls++;
+      e->metrics.memcpy_bytes += payload;
     }
     e->stage.bytes_written += payload;
     ctx->cursor_elements += elements;

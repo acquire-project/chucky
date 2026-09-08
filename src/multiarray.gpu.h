@@ -17,6 +17,8 @@ struct stream_metrics;
 //
 // enable_metrics is currently ignored on the GPU path: metrics are always
 // collected (CUDA events are required for stream synchronization regardless).
+// Small host-copy timings are sampled unless that array's configuration sets
+// full_memcpy_timing. Other metric collection is unchanged.
 // Accepted for API symmetry with the CPU multiarray constructor.
 struct multiarray_tile_stream_gpu*
 multiarray_tile_stream_gpu_create(

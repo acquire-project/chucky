@@ -114,7 +114,7 @@ def validate_results(data: dict) -> ResultsFile:
 # need a bump. Version 1 predates the rule and is not a single shape, so
 # migrating from it cannot assume which keys are present. A bump also needs a
 # line in README.md, the only record of what a stored version number means.
-CURRENT_VERSION = 10
+CURRENT_VERSION = 11
 
 # Renames of an unchanged quantity, safe to carry forward.
 _RENAMED_STAGES_1_TO_2 = {"lod_dim0_fold": "lod_append_fold"}
@@ -252,6 +252,13 @@ def _migrate_9_to_10(data: dict) -> None:
                 owners.pop("tail_gate", None)
 
 
+def _migrate_10_to_11(data: dict) -> None:
+    # Small GPU host-copy timings are now sampled. Old memcpy rows still
+    # describe full observations: do not relabel them or invent exact work
+    # counters for archived runs. New partial rows use memcpy_sample.
+    pass
+
+
 _MIGRATIONS = {
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
@@ -262,6 +269,7 @@ _MIGRATIONS = {
     7: _migrate_7_to_8,
     8: _migrate_8_to_9,
     9: _migrate_9_to_10,
+    10: _migrate_10_to_11,
 }
 
 

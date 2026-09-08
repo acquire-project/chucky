@@ -63,6 +63,9 @@ struct stream_metrics
 {
   // Work done. Bytes may be summed across stages; times may not, since the
   // stages run at the same time on separate streams.
+  // GPU: observations of host copies, sampled below 8 KiB by default. Count,
+  // bytes, time and extrema all describe ONLY the measured copies; no time
+  // extrapolation is performed. Use memcpy_calls/bytes for exact work totals.
   struct stream_metric memcpy;
   struct stream_metric h2d;
   struct stream_metric lod_gather;
@@ -127,6 +130,12 @@ struct stream_metrics
   // totals above are under-reported.
   uint64_t scatter_samples_lost;
   uint64_t lod_samples_lost;
+
+  // Exact GPU host-copy work, including copies omitted from memcpy timing.
+  // These count ingest_copy calls, not append calls (one append can split).
+  // Remain zero on the CPU backend.
+  uint64_t memcpy_calls;
+  uint64_t memcpy_bytes;
 };
 
 struct tile_stream_configuration
@@ -149,6 +158,9 @@ struct tile_stream_configuration
                                // staging buffer to the device when the sink
                                // reports more pending than this
   int max_threads;             // 0 = OpenMP default
+  // GPU only: nonzero times every host copy for profiling. Zero samples small
+  // copies; append latency and pipeline wait timing are always retained.
+  int full_memcpy_timing;
 };
 
 struct tile_stream_status
