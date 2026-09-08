@@ -294,7 +294,7 @@ class RunnerAndReportTest(unittest.TestCase):
                 self.assertEqual(saved[0], previous)
                 self.assertEqual(len(saved), 1 + calls)
 
-    def test_archives_and_variants_remain_distinct_in_reports(self):
+    def test_archives_and_variants_share_short_report_labels(self):
         archived = {**filter_spec().base_result(), "status": "pass"}
         del archived["blosc_shuffle"], archived["blosc_level"]
         variant = {**filter_spec(blosc_shuffle="bit", level=0).base_result(), "status": "pass"}
@@ -304,13 +304,12 @@ class RunnerAndReportTest(unittest.TestCase):
         self.assertIsNone(validated.runs[0].blosc_level)
         self.assertEqual(codec_label(archived), "blosc-lz4")
         self.assertEqual(codec_label(filter_spec().base_result()), "blosc-lz4")
-        self.assertEqual(codec_label(variant), "blosc-lz4 (bit, level 0)")
+        self.assertEqual(codec_label(variant), "blosc-lz4")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test-abcdef0-20260904.json"
             path.write_text(json.dumps(data))
             loaded = load_files([path])[0][1]["runs"]
-        self.assertEqual({r["codec_label"] for r in loaded},
-                         {"blosc-lz4", "blosc-lz4 (bit, level 0)"})
+        self.assertEqual({r["codec_label"] for r in loaded}, {"blosc-lz4"})
         trimmed = trim_run(variant)
         self.assertEqual((trimmed["blosc_shuffle"], trimmed["blosc_level"]), ("bit", 0))
         self.assertEqual(trimmed["codec_label"], codec_label(variant))

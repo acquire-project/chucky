@@ -179,10 +179,6 @@ input { accent-color: var(--series-1); }
       <label>Codec</label>
       <div class="radio-group" id="codec-group"></div>
     </div>
-    <div id="blosc-block-wrap" style="display:none">
-      <label>Blosc block request</label>
-      <div class="radio-group" id="blosc-block-group"></div>
-    </div>
     <div id="fill-wrap">
       <label>Input</label>
       <div class="radio-group" id="fill-group"></div>
@@ -237,8 +233,8 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {filterRuns as selectRuns, inputLabel, inputLabels, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
-import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
+import {filterRuns as selectRuns, inputLabel, inputLabels, codecSettings, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
+import {bloscBlockKey, bloscBlockLabel} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
 async function ensureRuns(file) {
@@ -380,7 +376,6 @@ function filterRuns(options) {
     backend: getRadio("backend-group"),
     dtype: getRadio("dtype-group"),
     sink: getRadio("sink-group"),
-    bloscBlock: getRadio("blosc-block-group"),
     scenarios: new Set(getCheckedScenarios()),
     s3Throughput: allS3Throughputs.length ? getRadio("s3-throughput-group") : null,
   }, options);
@@ -393,6 +388,8 @@ function metricLabel(key) {
 function tooltipText(r) {
   let t = `${r.scenario} | ${r.chunk_bytes_label}\n`;
   t += `codec: ${r.codec_label}  input: ${inputLabel(r)}  backend: ${r.backend}  data type: ${r.dtype}\n`;
+  const settings = codecSettings(r);
+  if (settings) t += `codec settings: ${settings}\n`;
   if (r.repetitions) {
     const repeat = r.repetitions;
     t += "median throughput of " + repeat.count + " runs; range " +
@@ -452,6 +449,8 @@ function memoryLine(r) {
 function stageTooltipText(r, stageName) {
   const stage = r.stages[stageName];
   let t = `${r.scenario} | ${r.chunk_bytes_label} | ${r.backend}\n`;
+  const settings = codecSettings(r);
+  t += `codec: ${r.codec_label}${settings ? ` (${settings})` : ""}\n`;
   t += `stage: ${stageName}\n`;
   if (stage.avg_ms != null) t += `avg: ${stage.avg_ms.toFixed(2)} ms\n`;
   if (stage.best_ms != null) t += `best: ${stage.best_ms.toFixed(2)} ms\n`;
@@ -848,12 +847,6 @@ function updateControlVisibility(viewMode, useOverlay) {
 }
 
 function render() {
-  const blocks = bloscBlockChoices(runs, getRadio("codec-group"));
-  const selectedBlock = getRadio("blosc-block-group");
-  clearRadio("blosc-block-group");
-  makeRadio("blosc-block-group", blocks,
-    blocks.includes(selectedBlock) ? selectedBlock : undefined, bloscBlockLabel);
-  document.getElementById("blosc-block-wrap").style.display = blocks.length ? "" : "none";
   const viewMode = getRadio("view-group");
   const useOverlay = overlayBackends && allBackends.length > 1 && (viewMode === "lines" || viewMode === "stages");
   const filtered = filterRuns({includeBackend: !useOverlay});

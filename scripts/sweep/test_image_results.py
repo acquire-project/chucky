@@ -148,7 +148,7 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(run["chunk_bytes"], 128 << 10)
         self.assertEqual(run["blosc_shuffle"], "bit")
         self.assertEqual(run["blosc_level"], 3)
-        self.assertEqual(codec_label(run), "blosc-zstd (bit, level 3)")
+        self.assertEqual(codec_label(run), "blosc-zstd")
         self.assertEqual(run["id"], run_id(run))
         self.assertEqual(run["input_id"], "cellstate")
         self.assertEqual(run["input_label"], "Cellstate (provisional)")
@@ -186,7 +186,7 @@ class ImageResultTests(unittest.TestCase):
             record["measurement"]["image_replay"]["shuffle"] = "none"
         first = image_sweep(document)["runs"][0]
         self.assertEqual(first["level"], 3)
-        self.assertEqual(codec_label(first), "zstd (none, level 3)")
+        self.assertEqual(codec_label(first), "zstd")
         for record in document["runs"]:
             record["measurement"]["image_replay"]["codec_level"] = 0
         other = image_sweep(document)["runs"][0]

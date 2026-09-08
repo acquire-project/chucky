@@ -1,4 +1,4 @@
-import {bloscBlockKey, bloscBlockLabel, matchesBloscBlock} from "./blosc.js";
+import {bloscBlockKey, bloscBlockLabel} from "./blosc.js";
 
 export function performanceSweeps(sweeps) {
   return sweeps.filter(sweep => !sweep.smoke);
@@ -20,6 +20,15 @@ export function inputLabels(runs) {
     if (counts.get(label) > 1) labels.set(key, label + " [" + key.slice(-8) + "]");
   }
   return labels;
+}
+
+/** Recorded codec settings for point tooltips, without changing its selector key. */
+export function codecSettings(run) {
+  const settings = [];
+  if (run.blosc_shuffle != null) settings.push(`${run.blosc_shuffle} shuffle`);
+  const level = run.codec?.startsWith("blosc-") ? run.blosc_level : run.level;
+  if (level != null) settings.push(`level ${level}`);
+  return settings.join(", ");
 }
 
 /** Keep registry order, but expose only IDs observed in this report scope. */
@@ -124,8 +133,7 @@ export function metricValue(run, key) {
 }
 
 export function matchesSetup(run, state) {
-  return (run.codec_label ?? run.codec) === state.codec && run.backend === state.backend && run.sink === state.sink
-    && matchesBloscBlock(run, state.bloscBlock);
+  return (run.codec_label ?? run.codec) === state.codec && run.backend === state.backend && run.sink === state.sink;
 }
 
 export function comparable(sweep, meta) {
@@ -190,10 +198,9 @@ export function moversFor(machine, state, meta) {
 
 /** Explorer selection is independent of DOM controls and chart grouping. */
 export function filterRuns(runs, selection, {includeBackend = true} = {}) {
-  const {codec, fill, backend, dtype, sink, bloscBlock, scenarios, s3Throughput} = selection;
+  const {codec, fill, backend, dtype, sink, scenarios, s3Throughput} = selection;
   return runs.filter(run => {
     if ((run.codec_label ?? run.codec) !== codec || inputKey(run) !== fill || run.dtype !== dtype || run.sink !== sink) return false;
-    if (!matchesBloscBlock(run, bloscBlock)) return false;
     if (includeBackend && run.backend !== backend) return false;
     if (!scenarios.has(run.scenario)) return false;
     if (sink === "s3" && s3Throughput && String(run.s3_throughput_gbps) !== s3Throughput) return false;

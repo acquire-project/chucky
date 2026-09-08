@@ -6,9 +6,10 @@ routine coverage and an opt-in block-size tuning matrix, see the
 The runner includes CPU and GPU Blosc with an explicit 16 KiB block request.
 The full block-size tuning matrix and repetition controls remain proposed.
 Blosc run identities include block size, shuffle, and level. Resume checks and
-report comparisons distinguish each explicit size from historical runs with an
-unrecorded size; those remain **unknown**, not an assumed default. Both sweep report
-pages offer a Blosc block-request selector.
+stored metadata distinguish each explicit size from historical runs with an
+unrecorded size; those remain **unknown**, not an assumed default. The two main
+report pages group by codec and retain the block request in configuration details.
+Use the Blosc Pareto page to filter and compare block sizes.
 
 `sweep.py` runs the benchmarks and writes one JSON file per sweep to
 `bench/results/`, named `<machine>-<commit>-<date>.json`. `report.py` reads those
@@ -153,7 +154,7 @@ The pages are code only. Their data is written beside them and fetched at load:
 | `vendor/d3.v7.9.0.min.js` | pinned D3 bundle shared by all three tabs |
 | `charts.js` | reusable axis and number-formatting utilities |
 | `decode.js` | unpacks sweep columns and fetches JSON |
-| `blosc.js` | Blosc block-request selections and labels for both sweep pages |
+| `blosc.js` | Blosc block-request formatting for report details |
 | `selection.mjs` | Pure run selection and comparison functions, shared with tests |
 | `pareto.mjs` | Pure Pareto filtering, frontier, URL-state, and CSV functions |
 | `pareto-ui.js`, `pareto-plots.js` | Pareto page controller and D3 plot component |
@@ -294,9 +295,9 @@ timed-out cases, using the benchmark executable's existing JSON fields.
 Raw-codec runs record `level`. The defaults preserve the block-aware run IDs;
 nondefault settings add
 `__shuffle-byte`/`__shuffle-bit` and/or `__level-N`. The report's codec selector
-shows each settings variant separately, so filter choices cannot overwrite one
-another in charts. Archived settings remain absent in the JSON schema; report
-labels use the historical CLI defaults when those fields were not recorded.
+groups settings variants under the base codec name; point tooltips show recorded
+shuffle and level details. Run identities and stored metadata remain distinct.
+Archived settings remain absent in the JSON schema.
 These additive fields do not change the result schema version.
 
 GPU runs may also contain a `d2h_transfer` block.

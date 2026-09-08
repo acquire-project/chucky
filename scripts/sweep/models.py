@@ -58,14 +58,8 @@ def run_level(run: dict) -> int | None:
 
 
 def codec_label(run: dict) -> str:
-    codec = run.get("codec", "")
-    shuffle = run.get("blosc_shuffle") or "none"
-    level = run_level(run)
-    if level is None:
-        level = default_level(codec)
-    if shuffle == "none" and level == default_level(codec):
-        return codec
-    return f"{codec} ({shuffle}, level {level})"
+    """Short report label; settings remain separate run metadata."""
+    return run.get("codec", "")
 
 
 # ---------------------------------------------------------------------------
