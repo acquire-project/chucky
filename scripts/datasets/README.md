@@ -8,11 +8,47 @@ pipeline drain and sink flush. The buffer stays alive until the stream is destro
 Image packs live separately, conventionally at `~/data/chucky-benchmarks/`.
 The corpus is limited to 256 MiB decoded, including heldout fields. Git contains
 provenance and manifests; git-annex holds binary packs with SHA256 keys.
-No qualified raw `v1` exists yet.
+`opencell-v1` is the first verified raw fluorescence release. It has its own lock;
+a combined fluorescence/brightfield `v1` has not been released.
 
 The Cellstate proof of concept uses a separate frozen corpus. Its lock is
 included here; replay requires a saved copy of `cellstate-poc-v1`. Its images
 are not part of the public corpus repository.
+
+
+## OpenCell fluorescence
+
+`opencell-v1` contains 16 full 600×600 uint16 planes (10.99 MiB): 12 core and
+4 heldout, split evenly between DNA and tagged-protein fluorescence. The survey
+covers 32 distinct proteins, both channels, and four relative Z depths in original
+OpenCell stacks. Whole fields and proteins are separated before selection.
+This is one live-cell confocal source; broader fluorescence coverage remains open.
+
+```sh
+python scripts/datasets/run.py verify --corpus ~/data/chucky-benchmarks \
+  --lock bench/datasets/opencell.lock.json
+python scripts/datasets/run.py run --corpus ~/data/chucky-benchmarks \
+  --lock bench/datasets/opencell.lock.json \
+  --executable build-gpu/bench/bench_stream_images --backends cpu gpu \
+  --split all --machine reef-l40 --output bench/results/images/reef-l40-opencell-v1
+```
+
+Use `--backends cpu` for a CPU-only build. The same explicit lock works with
+`export.py`; exports include the OpenCell attribution and CC BY-SA 4.0 notice.
+Image loading, padding, timing, profiles, and sweep reporting use the normal
+image replay workflow below.
+
+`opencell.py catalog` creates a deterministic source download plan; `fetch`
+downloads only original stacks and records independent full-file SHA256 values.
+`plan` checks the TIFF axes and writes explicit channel/Z/page coordinates for
+both channels. The corpus repository contains the frozen source and download
+plans, provenance, and reproduction commands. Source TIFFs stay in a separate
+cache; only selected image packs enter git-annex.
+
+Raw source plans can name their release and declare one or both `modalities`.
+Plans without a declaration keep the original requirement for both modalities.
+The verifier rejects missing or unexpected modalities. Optional `notices` entries
+carry a relative path and SHA256; extraction, verification, and ZIP export preserve them.
 
 ## Cellstate proof of concept
 

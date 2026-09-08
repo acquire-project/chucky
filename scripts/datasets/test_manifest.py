@@ -123,6 +123,40 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing raw evidence"):
             verify_corpus(self.root, allow_provisional=True)
 
+    def test_single_modality_must_be_declared_and_match_the_packs(self):
+        self.document["packs"] = self.document["packs"][:1]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "declared modalities"):
+            self.verify()
+        self.document["modalities"] = ["fluorescence"]
+        self.save()
+        self.assertEqual(self.verify().record()["decoded_bytes"], 12)
+        for modalities in [
+            [],
+            ["fluorescence", "fluorescence"],
+            ["phase"],
+            ["brightfield"],
+        ]:
+            with self.subTest(modalities=modalities):
+                self.document["modalities"] = modalities
+                self.save()
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_changed_or_missing_attribution_fails_verification(self):
+        notice = self.root / "NOTICE.md"
+        content = b"Test attribution and license notice.\n"
+        notice.write_bytes(content)
+        self.document["notices"] = [{"path": "NOTICE.md", "sha256": sha(content)}]
+        self.save()
+        self.verify()
+        notice.write_bytes(b"Changed attribution")
+        with self.assertRaisesRegex(ValueError, "Notice checksum"):
+            self.verify()
+        notice.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.verify()
+
     def test_changed_pixel_is_rejected(self):
         (self.root / "pack-0.raw").write_bytes(b"\xff" + bytes(range(1, 12)))
         with self.assertRaisesRegex(ValueError, "Plane checksum mismatch"):

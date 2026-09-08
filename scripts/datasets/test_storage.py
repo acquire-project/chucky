@@ -32,6 +32,9 @@ class StorageTests(unittest.TestCase):
             source = root / "source"
             source.mkdir()
             document = fixture(source)
+            notice = b"Fixture creator. Share under the fixture license.\n"
+            (source / "NOTICE.md").write_bytes(notice)
+            document["notices"] = [{"path": "NOTICE.md", "sha256": sha(notice)}]
             survey_data = b'{"kind": "synthetic-test", "status": "complete"}\n'
             (source / "survey.json").write_bytes(survey_data)
             document["selection"] = {
@@ -56,6 +59,7 @@ class StorageTests(unittest.TestCase):
                 "manifest.json",
                 "evidence.txt",
                 "survey.json",
+                "NOTICE.md",
             )
             git(source, "commit", "-m", "bench: storage test")
             lock = root / "lock.json"
@@ -105,6 +109,8 @@ class StorageTests(unittest.TestCase):
             materialized = verify_corpus(plain, lock, True)
             self.assertEqual(original.sha256, copied.sha256)
             self.assertEqual(original.sha256, materialized.sha256)
+            self.assertEqual((clone / "NOTICE.md").read_bytes(), notice)
+            self.assertEqual((plain / "NOTICE.md").read_bytes(), notice)
             for pack in packs:
                 self.assertFalse((plain / pack).is_symlink())
                 self.assertEqual(

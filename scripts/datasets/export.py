@@ -28,6 +28,7 @@ def main():
         p["path"]: corpus.pack_files[p["id"]] for p in corpus.manifest["packs"]
     }
     files = {"manifest.json"}
+    files.update(n["path"] for n in corpus.manifest.get("notices", []))
     selection = corpus.manifest.get("selection")
     if selection is not None:
         files.add(selection["survey_path"])

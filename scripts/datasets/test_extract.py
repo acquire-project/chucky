@@ -78,7 +78,9 @@ class ExtractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside"):
             read_plane(self.candidate)
 
-    def make_survey(self, kind="synthetic-test"):
+    def make_survey(
+        self, kind="synthetic-test", modalities=("brightfield", "fluorescence")
+    ):
         corpus = self.root / "corpus"
         corpus.mkdir()
         evidence = b"Synthetic extraction fixture, not microscope data.\n"
@@ -90,20 +92,38 @@ class ExtractTests(unittest.TestCase):
                     "missing_evidence": "Test fixture emulating unverified acquisition provenance",
                 }
             ).encode()
+        if kind == "raw":
+            evidence = json.dumps(
+                {
+                    "raw_status": "verified",
+                    "allowed_for_raw_release": True,
+                    "verification": {
+                        "method": "original-acquisition",
+                        "references": [
+                            "Synthetic fixture for verified-source validation"
+                        ],
+                    },
+                }
+            ).encode()
         (corpus / "evidence.txt").write_bytes(evidence)
         source = {
-            "raw_status": "unverified" if kind == "provisional" else "synthetic-test",
+            "raw_status": {
+                "provisional": "unverified",
+                "raw": "verified",
+                "synthetic-test": "synthetic-test",
+            }[kind],
             "evidence": "evidence.txt",
             "evidence_sha256": hashlib.sha256(evidence).hexdigest(),
         }
         plan = {
             "kind": kind,
+            "modalities": list(modalities),
             "release": "poc-fixture",
             "selection_reason": "Use every planned test plane",
             "sources": {"fixture": source},
             "candidates": [],
         }
-        for modality in ("brightfield", "fluorescence"):
+        for modality in modalities:
             for index in range(8):
                 plan["candidates"].append(
                     self.candidate
@@ -163,6 +183,26 @@ class ExtractTests(unittest.TestCase):
         saved_survey.write_text("changed selection evidence")
         with self.assertRaisesRegex(ValueError, "Selection survey checksum"):
             verify_corpus(args.corpus, allow_test_data=True)
+
+    def test_named_fluorescence_release_keeps_pixels_and_holdout(self):
+        args = self.make_survey("raw", ("fluorescence",))
+        build(args)
+        result = verify_corpus(args.corpus)
+        self.assertEqual(result.manifest["release"], "poc-fixture")
+        self.assertEqual(result.manifest["modalities"], ["fluorescence"])
+        self.assertEqual(len(result.manifest["packs"]), 2)
+        fields = {"core": set(), "heldout": set()}
+        for pack in result.manifest["packs"]:
+            self.assertEqual(len(pack["planes"]), 2 if pack["split"] == "core" else 1)
+            pixels = np.fromfile(args.corpus / pack["path"], dtype="<u2").reshape(
+                -1, 3, 5
+            )
+            for plane, actual in zip(pack["planes"], pixels, strict=True):
+                np.testing.assert_array_equal(
+                    actual, self.image[0, 0, plane["coordinates"]["z"]]
+                )
+                fields[pack["split"]].add(plane["field_id"])
+        self.assertFalse(fields["core"] & fields["heldout"])
 
     def test_provisional_keeps_all_planned_planes_and_requires_opt_in(self):
         args = self.make_survey("provisional")

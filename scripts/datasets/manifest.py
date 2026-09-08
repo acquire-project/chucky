@@ -98,6 +98,39 @@ def check_kind(kind: str, allow_test_data=False, allow_provisional=False) -> Non
     )
 
 
+def corpus_modalities(document: dict) -> list[str]:
+    modalities = document.get("modalities", ["fluorescence", "brightfield"])
+    if (
+        not isinstance(modalities, list)
+        or not modalities
+        or any(
+            not isinstance(m, str) or m not in {"fluorescence", "brightfield"}
+            for m in modalities
+        )
+        or len(modalities) != len(set(modalities))
+    ):
+        raise ValueError("Declare distinct fluorescence or brightfield modalities")
+    return modalities
+
+
+def corpus_notices(root: Path, document: dict) -> list[str]:
+    notices = document.get("notices", [])
+    if not isinstance(notices, list):
+        raise ValueError("Corpus notices must be a list")
+    paths = []
+    for notice in notices:
+        if not isinstance(notice, dict):
+            raise ValueError("Each corpus notice needs a path and SHA256")
+        path = relative_file(root, notice.get("path"))
+        checksum = notice.get("sha256", "")
+        if not isinstance(checksum, str) or not SHA256.fullmatch(checksum):
+            raise ValueError("Invalid notice checksum")
+        if digest_file(path) != checksum:
+            raise ValueError(f"Notice checksum mismatch: {path}")
+        paths.append(notice["path"])
+    return paths
+
+
 def verify_source(root: Path, name: str, source: dict, kind: str) -> dict:
     expected_status = {
         "raw": "verified",
@@ -157,6 +190,8 @@ def verify_corpus(
         survey = relative_file(root, selection["survey_path"])
         if digest_file(survey) != selection["survey_sha256"]:
             raise ValueError("Selection survey checksum mismatch")
+    expected_modalities = set(corpus_modalities(document))
+    corpus_notices(root, document)
     manifest_sha = digest_file(path)
     revision = (
         git_output(root, "rev-parse", "HEAD") if (root / ".git").exists() else None
@@ -270,8 +305,8 @@ def verify_corpus(
             raise ValueError(
                 f"Missing image pack: {file}; run git annex get data/"
             ) from error
-    if modalities != {"fluorescence", "brightfield"}:
-        raise ValueError("Corpus must contain fluorescence and brightfield")
+    if modalities != expected_modalities:
+        raise ValueError("Image packs differ from the declared modalities")
     return Corpus(
         root, document, manifest_sha, revision, time.perf_counter() - start, pack_files
     )

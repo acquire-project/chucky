@@ -14,6 +14,7 @@ from manifest import (
     IDENTIFIER,
     MAX_BYTES,
     check_kind,
+    corpus_modalities,
     digest_file,
     read_json,
     relative_file,
@@ -180,11 +181,9 @@ def survey(args):
     if kind == "provisional" and not plan.get("selection_reason"):
         raise ValueError("Provisional selection needs a reason in the source plan")
     candidates = plan["candidates"]
+    modalities = corpus_modalities(plan)
     counts = Counter(c["modality"] for c in candidates)
-    if counts != {
-        "fluorescence": args.candidates_per_modality,
-        "brightfield": args.candidates_per_modality,
-    }:
+    if counts != {m: args.candidates_per_modality for m in modalities}:
         raise ValueError(
             f"Expected {args.candidates_per_modality} candidates per modality, got {counts}"
         )
@@ -201,6 +200,8 @@ def survey(args):
     document = {
         "schema_version": 1,
         "kind": kind,
+        "modalities": modalities,
+        "notices": plan.get("notices", []),
         "release": plan.get("release"),
         "selection_reason": plan.get("selection_reason"),
         "codec_profiles": PROFILES,
@@ -325,11 +326,10 @@ def build(args):
         raise ValueError("A completed survey is required")
     kind = document.get("kind", "raw")
     check_kind(kind, args.allow_test_data, args.allow_provisional)
-    release = (
-        document.get("release")
-        if kind == "provisional"
-        else ("test" if kind == "synthetic-test" else "v1")
-    )
+    release = "test" if kind == "synthetic-test" else document.get("release")
+    if release is None and kind == "raw":
+        release = "v1"
+    modalities = corpus_modalities(document)
     if not isinstance(release, str) or not IDENTIFIER.fullmatch(release):
         raise ValueError("A valid release name is required")
     if kind == "provisional" and release in {"v1", "test"}:
@@ -355,7 +355,7 @@ def build(args):
         )
         groups[key].append(candidate)
     selected_counts = {}
-    for modality in () if kind == "provisional" else ("fluorescence", "brightfield"):
+    for modality in () if kind == "provisional" else modalities:
         for split, target in (
             ("core", args.core_per_modality),
             ("heldout", args.heldout_per_modality),
@@ -394,6 +394,8 @@ def build(args):
     manifest = {
         "schema_version": 1,
         "kind": kind,
+        "modalities": modalities,
+        "notices": document.get("notices", []),
         "release": release,
         "sources": sources,
         "selection": {
