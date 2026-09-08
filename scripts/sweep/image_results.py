@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import math
+import re
 import statistics
 
 from models import run_id
 
 
-def content_hash(value: dict) -> str:
-    text = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(text.encode()).hexdigest()
+_DISPLAY_TOKENS = {
+    "dna": "DNA",
+    "hcs": "HCS",
+    "ome": "OME",
+    "opencell": "OpenCell",
+    "rna": "RNA",
+}
+
+
+def input_label(source_group: str) -> str:
+    """Turn a stable provenance/content slug into a short display name."""
+    tokens = re.split(r"[-_\s]+", source_group.strip())
+    return " ".join(
+        _DISPLAY_TOKENS.get(token.lower(), token.capitalize()) for token in tokens
+    )
 
 
 def image_sweep(document: dict) -> dict:
@@ -26,13 +37,23 @@ def image_sweep(document: dict) -> dict:
         if record["status"] != "pass":
             raise ValueError("Image benchmark contains a failed execution")
         if not record["warmup"]:
-            key = (record["pack_id"], record["backend"], record["profile"])
+            # Schema-1 results written before scenarios were recorded all used
+            # the images executable.
+            scenario = record.get("scenario", "images")
+            if not isinstance(scenario, str) or not scenario:
+                raise ValueError("Image scenario must be a non-empty string")
+            key = (
+                scenario,
+                record["pack_id"],
+                record["backend"],
+                record["profile"],
+            )
             groups.setdefault(key, []).append(record)
     if not groups:
         raise ValueError("Image benchmark has no measured executions")
 
     runs = []
-    for (pack_id, backend, profile), records in sorted(groups.items()):
+    for (scenario, pack_id, backend, profile), records in sorted(groups.items()):
         if len(records) != protocol["repeats"]:
             raise ValueError(f"Incomplete repetitions: {pack_id}/{backend}/{profile}")
         iterations = [r["iteration"] for r in records]
@@ -64,17 +85,8 @@ def image_sweep(document: dict) -> dict:
         replay = result["image_replay"]
         layout = selected["layout"]
         chunk_bytes = math.prod(layout["chunk_shape"]) * 2
-        input_id = "images-" + content_hash(
-            {
-                "corpus": corpus["manifest_sha256"],
-                "pack": selected["pack_sha256"],
-                "pack_id": pack_id,
-                "plane_order": selected["plane_order"],
-                "protocol": protocol,
-                "layout": layout,
-            }
-        )
-        label = f"{corpus['release']} / {pack_id}"
+        input_id = selected["source_group"]
+        label = input_label(input_id)
         if corpus["kind"] != "raw":
             label += f" ({corpus['kind']})"
         if protocol["smoke"]:
@@ -85,7 +97,7 @@ def image_sweep(document: dict) -> dict:
             raise ValueError("Image byte counts must be positive")
         result.update(
             {
-                "scenario": "images",
+                "scenario": scenario,
                 "codec": profile,
                 "fill": "images",
                 "input_id": input_id,
@@ -136,8 +148,10 @@ def image_sweep(document: dict) -> dict:
         result["id"] = run_id(
             {
                 **result,
-                "id": f"images__{profile}__{input_id}__{backend}__u16__{result['chunk_bytes_label']}"
-                f"__settings-{content_hash({key: replay[key] for key in ('codec_level', 'shuffle')})}",
+                # Split keeps core and heldout rows distinct without making their
+                # shared provenance/content appear as separate explorer inputs.
+                "id": f"{scenario}__{profile}__{input_id}__{selected['split']}__{backend}"
+                f"__u16__{result['chunk_bytes_label']}",
             }
         )
         runs.append(result)

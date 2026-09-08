@@ -16,6 +16,7 @@ from columnar import decode_runs, pack
 from models import CURRENT_VERSION, codec_label, run_id, validate_results
 from report import load_files
 from summary import trim_run
+from workloads import DEFAULT_WORKLOADS, load_workloads
 from sweep import (
     RunSpec, TIERS, backend_runs, blosc_runs, compress_runs, deduplicate,
     main, run_one,
@@ -193,6 +194,21 @@ class RunSpecTest(unittest.TestCase):
 
 
 class MatrixTest(unittest.TestCase):
+    def test_workload_registry_covers_the_generated_matrix(self):
+        registry = load_workloads(DEFAULT_WORKLOADS)
+        registered = {
+            (scenario["id"], input_id)
+            for scenario in registry["scenarios"]
+            if scenario["id"] != "images"
+            for input_id in scenario["inputs"]
+        }
+        generated = {
+            (run.scenario, run.fill)
+            for matrix in TIERS.values()
+            for run in matrix()
+        }
+        self.assertEqual(registered, generated)
+
     def test_compress_is_subset_of_backend(self):
         self.assertLessEqual({r.id for r in compress_runs()}, {r.id for r in backend_runs()})
 

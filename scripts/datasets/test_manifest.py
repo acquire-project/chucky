@@ -326,6 +326,31 @@ class ResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "chunk_shape"):
             check_result(result, pack, 8, "cpu", "none")
 
+    def test_clock_disagreement_is_rejected(self):
+        pack = {"width": 64, "height": 64, "bytes": 32768}
+        result = {
+            "status": "pass",
+            "image_replay": {
+                "backend": "cpu",
+                "codec": "none",
+                "dtype": "u16le",
+                "shape": [4, 64, 64],
+                "chunk_shape": [4, 64, 64],
+                "target_batch_bytes": 64 * 1024**2,
+                "source_bytes": 32768,
+                "order": "cyclic",
+                "codec_level": 0,
+                "shuffle": "none",
+            },
+            "worker_threads": 4,
+            "input_bytes": 32768,
+            "wall_s": 883.0,
+            "throughput_in_gibs": 0.001,
+            "logical_compression_fold": 1.0,
+        }
+        with self.assertRaisesRegex(ValueError, "clock disagrees"):
+            check_result(result, pack, 4, "cpu", "none", process_wall_s=19.0)
+
 
 if __name__ == "__main__":
     unittest.main()

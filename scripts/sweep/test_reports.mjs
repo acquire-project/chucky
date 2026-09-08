@@ -1,12 +1,112 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import * as blosc from "./blosc.js";
-import {bestRun, moversFor, configLabel, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels} from "./selection.mjs";
+import {bestRun, moversFor, configLabel, filterRuns, comparable, metricValue, inputKey, inputLabel, inputLabels, performanceSweeps, scopeWorkloads, workloadsCompatible, preferredScenario, preferredInput, reconcileInput, reconcileScenario, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 
 const run = (block, overrides = {}) => ({
   scenario: "orca2_single", codec: "blosc-zstd", fill: "xor", backend: "cpu",
   dtype: "u16", chunk_bytes_label: "256K", sink: "discard", status: "pass",
   throughput_in_gibs: 1, ...(block == null ? {} : {blosc_block_bytes: block}), ...overrides,
+});
+
+const imageWorkloadRun = input => run(null, {
+  scenario: "images", fill: "images", input_id: input,
+});
+
+const WORKLOADS = {
+  version: 1,
+  inputs: [
+    {id: "xor", scenarios: ["orca2_single", "256cube_single"], default_scenario: "orca2_single"},
+    {id: "rand", scenarios: ["orca2_single", "256cube_single"], default_scenario: "orca2_single"},
+    {id: "opencell-dna", scenarios: ["images"], default_scenario: "images"},
+    {id: "opencell-protein", scenarios: ["images"], default_scenario: "images"},
+  ],
+  scenarios: [
+    {id: "orca2_single", inputs: ["xor", "rand"], default_input: "xor"},
+    {id: "256cube_single", inputs: ["xor", "rand"], default_input: "xor"},
+    {id: "images", inputs: ["opencell-dna", "opencell-protein"], default_input: "opencell-dna"},
+  ],
+};
+
+test("workload scope keeps only observed registry entries", () => {
+  const scope = scopeWorkloads(WORKLOADS, [
+    run(null, {scenario: "orca2_single", fill: "xor"}),
+    imageWorkloadRun("opencell-protein"),
+  ]);
+  assert.deepEqual(scope.inputs.map(input => input.id), ["xor", "opencell-protein"]);
+  assert.deepEqual(scope.scenarios.map(scenario => scenario.id), ["orca2_single", "images"]);
+  assert.deepEqual(scope.scenarios[1].inputs, ["opencell-protein"]);
+});
+
+test("single scenario and input selections reconcile in both directions", () => {
+  assert.equal(workloadsCompatible(WORKLOADS, "images", "opencell-protein"), true);
+  assert.equal(workloadsCompatible(WORKLOADS, "orca2_single", "xor"), true);
+  assert.deepEqual(
+    reconcileInput(WORKLOADS, {scenario: "images", input: "opencell-dna"}, "opencell-protein"),
+    {scenario: "images", input: "opencell-protein"},
+  );
+  assert.deepEqual(
+    reconcileScenario(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "256cube_single"),
+    {scenario: "256cube_single", input: "xor"},
+  );
+  assert.deepEqual(
+    reconcileInput(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "opencell-protein"),
+    {scenario: "images", input: "opencell-protein"},
+  );
+  assert.deepEqual(
+    reconcileScenario(WORKLOADS, {scenario: "orca2_single", input: "xor"}, "images"),
+    {scenario: "images", input: "opencell-dna"},
+  );
+});
+
+test("multi-scenario reconciliation prunes incompatible checks", () => {
+  assert.deepEqual(
+    reconcileScenarioSet(
+      WORKLOADS,
+      new Set(["orca2_single", "images"]),
+      "opencell-protein",
+    ),
+    new Set(["images"]),
+  );
+  assert.deepEqual(
+    reconcileScenarioSet(
+      WORKLOADS,
+      new Set(["orca2_single", "256cube_single"]),
+      "opencell-protein",
+    ),
+    new Set(["images"]),
+  );
+  const checked = reconcileScenarioToggle(
+    WORKLOADS,
+    {input: "xor", scenarios: new Set(["orca2_single"])},
+    "images",
+    true,
+  );
+  assert.equal(checked.input, "opencell-dna");
+  assert.deepEqual(checked.scenarios, new Set(["images"]));
+  assert.deepEqual(
+    selectScenarioGroup(
+      WORKLOADS,
+      new Set(["orca2_single"]),
+      ["orca2_single", "256cube_single", "images"],
+      "xor",
+    ),
+    new Set(["orca2_single", "256cube_single"]),
+  );
+});
+
+test("unavailable registered defaults fall back in registry order", () => {
+  const imageScope = scopeWorkloads(WORKLOADS, [imageWorkloadRun("opencell-protein")]);
+  assert.equal(preferredInput(imageScope, "images"), "opencell-protein");
+  const randScope = scopeWorkloads(WORKLOADS, [
+    run(null, {scenario: "256cube_single", fill: "rand"}),
+  ]);
+  assert.equal(preferredScenario(randScope, "rand"), "256cube_single");
+});
+
+test("performance overview excludes smoke sweeps", () => {
+  const sustained = {smoke: false};
+  assert.deepEqual(performanceSweeps([{smoke: true}, sustained, {}]), [sustained, {}]);
 });
 
 test("block requests distinguish unknown, null, and explicit sizes", () => {

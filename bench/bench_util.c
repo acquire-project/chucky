@@ -124,24 +124,43 @@ resolve_chunk_sizing(const struct bench_config* cfg,
 {
   *out_epb = 0;
   if (cfg->input) {
-    const uint64_t chunks[] = { 1, 256, 256 };
-    dims_set_chunk_sizes(cfg->dims, cfg->rank, chunks);
-    uint64_t rows = (cfg->dims[1].size + 255) / 256;
-    uint64_t cols = (cfg->dims[2].size + 255) / 256;
-    if (rows > SIZE_MAX / cols / (128 << 10))
+    const size_t bytes_per_element = dtype_bpe(dtype);
+    uint64_t chunk_bytes = bytes_per_element;
+    for (uint8_t d = 0; d < cfg->rank; ++d) {
+      if (!cfg->dims[d].chunk_size ||
+          chunk_bytes > UINT64_MAX / cfg->dims[d].chunk_size)
+        return 1;
+      chunk_bytes *= cfg->dims[d].chunk_size;
+    }
+    const uint64_t chunk_height = cfg->dims[1].chunk_size;
+    const uint64_t chunk_width = cfg->dims[2].chunk_size;
+    uint64_t rows = ceildiv(cfg->dims[1].size, chunk_height);
+    uint64_t cols = ceildiv(cfg->dims[2].size, chunk_width);
+    if (!rows || !cols || rows > UINT64_MAX / cols ||
+        rows * cols > UINT64_MAX / chunk_bytes)
       return 1;
-    uint64_t epoch_bytes = rows * cols * (128 << 10);
+    uint64_t epoch_bytes = rows * cols * chunk_bytes;
     uint64_t target = resolved_batch_bytes(cfg);
     uint64_t batches = target / epoch_bytes + (target % epoch_bytes != 0);
     if (!batches || batches > UINT32_MAX)
       return 1;
     *out_epb = (uint32_t)batches;
+    if (cfg->max_shard_bytes) {
+      uint64_t max_chunks_per_shard = cfg->max_shard_bytes / chunk_bytes;
+      return dims_set_shard_geometry_limited(cfg->dims,
+                                             cfg->rank,
+                                             cfg->min_shard_bytes,
+                                             cfg->target_concurrent_shards,
+                                             cfg->min_append_shards,
+                                             max_chunks_per_shard,
+                                             bytes_per_element);
+    }
     return dims_set_shard_geometry(cfg->dims,
                                    cfg->rank,
                                    cfg->min_shard_bytes,
                                    cfg->target_concurrent_shards,
                                    cfg->min_append_shards,
-                                   dtype_bpe(dtype));
+                                   bytes_per_element);
   }
   if (!cfg->chunk_ratios)
     return 0;
@@ -918,24 +937,38 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
   struct dimension* dims = spec.dims;
   struct bench_input input = { 0 };
   if (spec.image_input) {
+    uint64_t chunk_elements = 1;
+    if (spec.rank != 3)
+      return bench_failed(a.json_output);
+    for (uint8_t d = 0; d < spec.rank; ++d) {
+      if (!dims[d].chunk_size ||
+          chunk_elements > UINT64_MAX / dims[d].chunk_size)
+        return bench_failed(a.json_output);
+      chunk_elements *= dims[d].chunk_size;
+    }
+    const uint64_t chunk_bytes = chunk_elements * sizeof(uint16_t);
     if (!a.input_path || !a.width || !a.height || a.dtype != dtype_u16 ||
         a.fill_set || a.width > INT_MAX || a.height > INT_MAX ||
         a.width > SIZE_MAX / sizeof(uint16_t) / a.height ||
-        (a.target_chunk_bytes && a.target_chunk_bytes != (128 << 10))) {
+        (a.target_chunk_bytes && a.target_chunk_bytes != chunk_bytes)) {
       fprintf(stderr,
               "Images require --input, --width, --height, u16, "
-              "and fixed 1x256x256 chunks\n");
+              "and fixed 4x64x64 chunks\n");
       return bench_failed(a.json_output);
     }
+    const size_t chunk_height = (size_t)dims[1].chunk_size;
+    const size_t chunk_width = (size_t)dims[2].chunk_size;
     size_t frame_elements = (size_t)(a.width * a.height);
     size_t frame_bytes = frame_elements * sizeof(uint16_t);
-    size_t padded_width = (size_t)((a.width + 255) / 256 * 256);
-    size_t padded_height = (size_t)((a.height + 255) / 256 * 256);
+    size_t padded_width =
+      (size_t)((a.width + chunk_width - 1) / chunk_width * chunk_width);
+    size_t padded_height =
+      (size_t)((a.height + chunk_height - 1) / chunk_height * chunk_height);
     if (padded_width > SIZE_MAX / sizeof(uint16_t) / padded_height)
       return bench_failed(a.json_output);
     size_t padded_frame = padded_width * padded_height;
     if (!a.frames) {
-      const uint64_t minimum_bytes = (uint64_t)8 << 30;
+      const uint64_t minimum_bytes = (uint64_t)32 << 30;
       a.frames =
         minimum_bytes / frame_bytes + (minimum_bytes % frame_bytes != 0);
     }
@@ -953,8 +986,12 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
       a.max_threads = 4;
     if (!a.append_elements)
       a.append_elements = padded_frame;
-    if (bench_input_load(
-          &input, a.input_path, (size_t)a.width, (size_t)a.height))
+    if (bench_input_load(&input,
+                         a.input_path,
+                         (size_t)a.width,
+                         (size_t)a.height,
+                         chunk_width,
+                         chunk_height))
       return bench_failed(a.json_output);
   } else if (a.input_path || a.width || a.height) {
     fprintf(stderr, "Image options require bench_stream_images\n");
@@ -998,6 +1035,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
+    .max_shard_bytes = spec.max_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .append_elements = a.append_elements,
@@ -1358,6 +1396,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
     .target_batch_bytes = a.target_batch_bytes,
     .memory_budget = a.memory_budget,
     .min_shard_bytes = spec.min_shard_bytes,
+    .max_shard_bytes = spec.max_shard_bytes,
     .target_concurrent_shards = spec.target_concurrent_shards,
     .min_append_shards = spec.min_append_shards,
     .io_bw_mbps = a.io_bw_mbps,

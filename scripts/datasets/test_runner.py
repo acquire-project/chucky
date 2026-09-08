@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import run as runner
 from test_manifest import fixture, sha
 
 
@@ -18,6 +19,15 @@ def command(*args):
         timeout=300,
         check=False,
     )
+
+
+class RunnerDefaultsTests(unittest.TestCase):
+    def test_opencell_throughput_defaults(self):
+        self.assertEqual(runner.DEFAULT_LOCK.name, "opencell.lock.json")
+        self.assertTrue(runner.DEFAULT_LOCK.is_file())
+        self.assertEqual(runner.DEFAULT_SPLIT, "core")
+        self.assertEqual(runner.DEFAULT_MIN_GIB, 32)
+        self.assertEqual(runner.DEFAULT_REPEATS, 5)
 
 
 @unittest.skipUnless(
@@ -85,6 +95,9 @@ class RunnerTests(unittest.TestCase):
                 report = json.loads((output / "results.json").read_text())
                 self.assertEqual(report["status"], "complete")
                 self.assertEqual(report["corpus"]["kind"], "synthetic-test")
+                self.assertTrue(
+                    all(row["scenario"] == "images" for row in report["runs"])
+                )
                 self.assertTrue((output / "summary.csv").is_file())
                 self.assertTrue(all(row["status"] == "pass" for row in report["runs"]))
                 self.assertTrue(

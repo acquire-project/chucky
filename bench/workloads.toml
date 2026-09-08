@@ -1,0 +1,98 @@
+version = 1
+
+[[input]]
+id = "xor"
+scenarios = [
+  "orca2_single",
+  "256cube_single",
+  "medfmt_single",
+  "smallepoch_single",
+  "smallepoch_4shards",
+  "orca2_multiscale",
+  "256cube_multiscale",
+  "medfmt_multiscale",
+  "orca2_multiscale_dim0",
+  "256cube_multiscale_dim0",
+  "medfmt_multiscale_dim0",
+]
+default_scenario = "orca2_single"
+
+[[input]]
+id = "zeros"
+scenarios = ["orca2_single", "256cube_single"]
+default_scenario = "orca2_single"
+
+[[input]]
+id = "rand"
+scenarios = ["orca2_single", "256cube_single"]
+default_scenario = "orca2_single"
+
+[[input]]
+id = "opencell-dna"
+scenarios = ["images"]
+default_scenario = "images"
+
+[[input]]
+id = "opencell-protein"
+scenarios = ["images"]
+default_scenario = "images"
+
+[[scenario]]
+id = "orca2_single"
+inputs = ["xor", "zeros", "rand"]
+default_input = "xor"
+
+[[scenario]]
+id = "256cube_single"
+inputs = ["xor", "zeros", "rand"]
+default_input = "xor"
+
+[[scenario]]
+id = "medfmt_single"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "smallepoch_single"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "smallepoch_4shards"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "orca2_multiscale"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "256cube_multiscale"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "medfmt_multiscale"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "orca2_multiscale_dim0"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "256cube_multiscale_dim0"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "medfmt_multiscale_dim0"
+inputs = ["xor"]
+default_input = "xor"
+
+[[scenario]]
+id = "images"
+inputs = ["opencell-dna", "opencell-protein"]
+default_input = "opencell-dna"

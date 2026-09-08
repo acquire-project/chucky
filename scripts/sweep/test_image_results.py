@@ -12,7 +12,27 @@ from columnar import decode_runs, pack
 from image_results import image_sweep
 from models import codec_label, run_id, validate_results
 from report import find_results, load_files, write_data
-from summary import trim_run
+from summary import build_summary, trim_run
+
+
+def image_workloads():
+    return {
+        "version": 1,
+        "inputs": [
+            {
+                "id": "cellstate",
+                "scenarios": ["images"],
+                "default_scenario": "images",
+            }
+        ],
+        "scenarios": [
+            {
+                "id": "images",
+                "inputs": ["cellstate"],
+                "default_input": "cellstate",
+            }
+        ],
+    }
 
 
 def image_document():
@@ -130,11 +150,33 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(run["blosc_level"], 3)
         self.assertEqual(codec_label(run), "blosc-zstd (bit, level 3)")
         self.assertEqual(run["id"], run_id(run))
+        self.assertEqual(run["input_id"], "cellstate")
+        self.assertEqual(run["input_label"], "Cellstate (provisional)")
+        self.assertEqual(run["scenario"], "images")
+        self.assertNotIn("settings-", run["id"])
         self.assertTrue(run["id"].endswith("__blosc-block-16384"))
-        self.assertIn("provisional", run["input_label"])
         self.assertEqual(result["machine"]["cpu_count"], 4)
         self.assertEqual(result["machine"]["gpu"], "NVIDIA L40")
         self.assertEqual(result["machine"]["commit"], "c" * 7)
+
+    def test_recorded_scenario_controls_grouping_and_identity(self):
+        archived = image_sweep(image_document())["runs"][0]
+
+        document = image_document()
+        for record in document["runs"]:
+            record["scenario"] = "images"
+        current = image_sweep(document)["runs"][0]
+        self.assertEqual(current["id"], archived["id"])
+
+        for record in document["runs"]:
+            record["scenario"] = "images_v2"
+        changed = image_sweep(document)["runs"][0]
+        self.assertEqual(changed["scenario"], "images_v2")
+        self.assertNotEqual(changed["id"], current["id"])
+
+        document["runs"][-1]["scenario"] = "images"
+        with self.assertRaisesRegex(ValueError, "Incomplete repetitions"):
+            image_sweep(document)
 
     def test_archived_codec_settings_remain_distinct(self):
         document = image_document()
@@ -169,7 +211,7 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(first["input_id"], other["input_id"])
         self.assertNotEqual(first["id"], other["id"])
 
-    def test_changed_corpus_pack_order_or_protocol_are_separate_inputs(self):
+    def test_exact_corpus_pack_and_protocol_details_do_not_split_inputs(self):
         before = image_sweep(image_document())["runs"][0]
         for change in ("corpus", "pack", "order", "protocol", "layout", "smoke"):
             with self.subTest(change=change):
@@ -189,8 +231,30 @@ class ImageResultTests(unittest.TestCase):
                         else:
                             record["layout"]["append_elements"] //= 2
                 after = image_sweep(document)["runs"][0]
-                self.assertNotEqual(before["input_id"], after["input_id"])
-                self.assertNotEqual(before["id"], after["id"])
+                self.assertEqual(before["input_id"], after["input_id"])
+
+    def test_source_group_names_provenance_and_content(self):
+        document = image_document()
+        document["corpus"]["kind"] = "raw"
+        for record in document["runs"]:
+            record["source_group"] = "opencell-dna"
+        core = image_sweep(document)["runs"][0]
+        self.assertEqual(core["input_id"], "opencell-dna")
+        self.assertEqual(core["input_label"], "OpenCell DNA")
+
+        for record in document["runs"]:
+            record["split"] = "heldout"
+        heldout = image_sweep(document)["runs"][0]
+        self.assertEqual(heldout["input_id"], core["input_id"])
+        self.assertEqual(heldout["input_label"], core["input_label"])
+        self.assertNotEqual(heldout["id"], core["id"])
+
+        for record in document["runs"]:
+            record["source_group"] = "opencell-protein"
+        protein = image_sweep(document)["runs"][0]
+        self.assertEqual(protein["input_id"], "opencell-protein")
+        self.assertEqual(protein["input_label"], "OpenCell Protein")
+        self.assertNotEqual(protein["input_id"], heldout["input_id"])
 
     def test_incomplete_or_inconsistent_measurements_are_rejected(self):
         for change in ("status", "repeats", "duplicate", "layout", "rate"):
@@ -212,7 +276,8 @@ class ImageResultTests(unittest.TestCase):
                     image_sweep(document)
 
     def test_overview_keeps_input_identity_and_repeat_spread(self):
-        row = trim_run(image_sweep(image_document())["runs"][0])
+        sweep = image_sweep(image_document())
+        row = trim_run(sweep["runs"][0])
         strings, blocks = pack([[row]])
         restored = decode_runs(blocks[0], strings)[0]
         self.assertEqual(restored["input_id"], row["input_id"])
@@ -223,6 +288,13 @@ class ImageResultTests(unittest.TestCase):
             row["repetitions"]["throughput_spread_percent"],
             places=2,
         )
+
+        summary = build_summary([(Path("reef.json"), sweep)])
+        self.assertFalse(summary["sweeps"][0]["smoke"])
+        smoke = image_document()
+        smoke["protocol"]["smoke"] = True
+        summary = build_summary([(Path("reef-smoke.json"), image_sweep(smoke))])
+        self.assertTrue(summary["sweeps"][0]["smoke"])
 
     def test_report_finds_canonical_results_and_keeps_distinct_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -240,8 +312,14 @@ class ImageResultTests(unittest.TestCase):
             loaded = load_files([*paths, paths[0]])
             self.assertEqual(len(loaded), 2)
             self.assertEqual(len({path.name for path, _ in loaded}), 2)
-            write_data(loaded, [], root / "site")
+            workloads = image_workloads()
+            write_data(loaded, [], root / "site", workloads=workloads)
             overview = json.loads((root / "site/overview.json").read_text())
+            explorer = json.loads((root / "site/sweeps.json").read_text())
+            self.assertEqual(overview["version"], 5)
+            self.assertEqual(explorer["version"], 8)
+            self.assertEqual(overview["workloads"], workloads)
+            self.assertEqual(explorer["workloads"], workloads)
             self.assertEqual(
                 {s["machine"] for s in overview["sweeps"]}, {"auk", "oreb"}
             )

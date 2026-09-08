@@ -8,18 +8,23 @@ int
 bench_input_load(struct bench_input* input,
                  const char* path,
                  size_t width,
-                 size_t height)
+                 size_t height,
+                 size_t chunk_width,
+                 size_t chunk_height)
 {
   const uint16_t endian = 1;
-  if (!input || !path || !width || !height || width > SIZE_MAX - 255 ||
-      height > SIZE_MAX - 255 || width > SIZE_MAX / sizeof(uint16_t) / height ||
+  if (!input || !path || !width || !height || !chunk_width || !chunk_height ||
+      width > SIZE_MAX - (chunk_width - 1) ||
+      height > SIZE_MAX - (chunk_height - 1) ||
+      width > SIZE_MAX / sizeof(uint16_t) / height ||
       *(const unsigned char*)&endian != 1) {
     fprintf(stderr, "Image replay requires little-endian u16 frames\n");
     return 1;
   }
   *input = (struct bench_input){ 0 };
-  size_t padded_width = (width + 255) / 256 * 256;
-  size_t padded_height = (height + 255) / 256 * 256;
+  size_t padded_width = (width + chunk_width - 1) / chunk_width * chunk_width;
+  size_t padded_height =
+    (height + chunk_height - 1) / chunk_height * chunk_height;
   if (padded_width > SIZE_MAX / sizeof(uint16_t) / padded_height)
     return 1;
   size_t frame_elements = width * height;

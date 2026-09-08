@@ -7,6 +7,7 @@ on:
       - 'bench/results/*.json'
       - 'bench/results/images/**/results.json'
       - 'bench/machines.toml'
+      - 'bench/workloads.toml'
       - 'scripts/sweep/**'
       - 'docs/benchmarks/**'
       - '.github/workflows/pages.yml'

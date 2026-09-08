@@ -45,6 +45,8 @@ struct bench_config
   uint64_t target_batch_bytes; // 0 = 512 MiB default; controls auto-K
   size_t memory_budget;        // 0 = auto-detect
   size_t min_shard_bytes;      // minimum uncompressed bytes per shard
+  size_t max_shard_bytes;      // 0 = default planner chunk-count limit;
+                               // otherwise cap full decoded shard geometry
   uint32_t
     target_concurrent_shards;  // cap on inner shard product (active files)
   uint32_t min_append_shards;  // require at least N shards along the outer
@@ -75,6 +77,8 @@ struct bench_spec
   size_t min_chunk_bytes; // auto-fit floor; bench fails if budget
                           // can't meet it (0 = no floor)
   size_t min_shard_bytes; // minimum uncompressed bytes per shard
+  size_t max_shard_bytes; // 0 = default planner chunk-count limit;
+                          // otherwise cap full decoded shard geometry
   uint32_t
     target_concurrent_shards; // cap on inner shard product (active files)
   uint32_t min_append_shards; // 0 = no minimum (see bench_config)

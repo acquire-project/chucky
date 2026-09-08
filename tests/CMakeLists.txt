@@ -183,7 +183,7 @@ endif()
 
 add_test_exe(test_json_writer test_json_writer.c zarr_metadata ngff_metadata strbuf chucky_log)
 add_test_exe(test_bench_memory test_bench_memory.c bench_memory)
-add_test_exe(test_bench_input test_bench_input.c bench_input)
+add_test_exe(test_bench_input test_bench_input.c bench_input test_platform)
 find_package(Python3 3.10 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(

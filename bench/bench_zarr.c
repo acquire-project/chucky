@@ -113,6 +113,9 @@ bench_zarr_open_s3(struct bench_zarr_handle* z,
     .throughput_gbps = throughput_gbps,
   };
   store_s3_config_set_defaults(&scfg);
+  CHECK(Fail,
+        store_s3_validate_part_count(rank, dims, data_type, scfg.part_size) ==
+          0);
 
   z->store = store_s3_create(&scfg);
   CHECK(Fail, z->store);

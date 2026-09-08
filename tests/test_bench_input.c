@@ -1,4 +1,5 @@
 #include "bench_input.h"
+#include "test_platform.h"
 
 #include <stdio.h>
 
@@ -32,9 +33,55 @@ check_append(struct writer* writer, struct slice data)
   return (struct writer_result){ 0, { p + count, end } };
 }
 
+static int
+test_load_padding(void)
+{
+  char directory[1024];
+  char path[1200];
+  struct bench_input input = { 0 };
+  uint16_t source[65 * 66];
+  int error = 1;
+
+  if (test_tmpdir_create(directory, sizeof(directory)) ||
+      snprintf(path, sizeof(path), "%s/input.raw", directory) < 0)
+    return 1;
+  for (size_t i = 0; i < sizeof(source) / sizeof(*source); ++i)
+    source[i] = (uint16_t)(i + 1);
+  FILE* file = fopen(path, "wb");
+  if (!file)
+    goto Cleanup;
+  if (fwrite(source, sizeof(*source), sizeof(source) / sizeof(*source), file) !=
+        sizeof(source) / sizeof(*source) ||
+      fclose(file))
+    goto Cleanup;
+
+  if (bench_input_load(&input, path, 65, 66, 64, 64) ||
+      input.elements != 128 * 128 || input.frame_elements != 128 * 128 ||
+      input.source_bytes != sizeof(source))
+    goto Cleanup;
+  for (size_t y = 0; y < 128; ++y)
+    for (size_t x = 0; x < 128; ++x) {
+      uint16_t expected_value = y < 66 && x < 65 ? source[y * 65 + x] : 0;
+      if (input.data[y * 128 + x] != expected_value)
+        goto Cleanup;
+    }
+  if (!bench_input_load(&input, path, SIZE_MAX, 1, 64, 64) ||
+      !bench_input_load(&input, path, 1, 1, 0, 64))
+    goto Cleanup;
+  error = 0;
+
+Cleanup:
+  bench_input_free(&input);
+  if (test_tmpdir_remove(directory))
+    error = 1;
+  return error;
+}
+
 int
 main(void)
 {
+  if (test_load_padding())
+    return 1;
   uint16_t data[7];
   for (size_t i = 0; i < 7; ++i)
     data[i] = expected[i];

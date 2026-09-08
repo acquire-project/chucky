@@ -237,7 +237,7 @@ input { accent-color: var(--series-1); }
 
 <script type="module">
 import {decodeRuns, fetchJson} from "./decode.js";
-import {filterRuns as selectRuns, inputLabel, inputLabels} from "./selection.mjs";
+import {filterRuns as selectRuns, inputLabel, inputLabels, scopeWorkloads, reconcileScenarioSet, reconcileScenarioToggle, selectScenarioGroup} from "./selection.mjs";
 import {bloscBlockKey, bloscBlockLabel, bloscBlockChoices} from "./blosc.js";
 
 /** One sweep is only downloaded when it is first opened, then kept. */
@@ -332,6 +332,7 @@ const fileByName = new Map(files.map(f => [f.filename, f]));
 let runs = [];
 let failedRuns = [];
 let allCodecs = [], allFills = [], allBackends = [], allDtypes = [], allSinks = [], allScenarios = [];
+let activeWorkloads = {version: DATA.workloads.version, inputs: [], scenarios: []};
 let allChunkLabels = [];
 let allStageNames = [];
 let allS3Throughputs = [];
@@ -351,11 +352,12 @@ function rebuildData() {
 
   function uniq(key) { return [...new Set(runs.map(r => r[key]))].sort(); }
   allCodecs = uniq("codec_label");
-  allFills = [...inputLabels(runs).keys()].sort();
+  activeWorkloads = scopeWorkloads(DATA.workloads, runs);
+  allFills = activeWorkloads.inputs.map(input => input.id);
   allBackends = uniq("backend");
   allDtypes = uniq("dtype");
   allSinks = [...new Set(runs.map(r => r.sink))].sort();
-  allScenarios = uniq("scenario");
+  allScenarios = activeWorkloads.scenarios.map(scenario => scenario.id).sort(scenarioSort);
 
   allChunkLabels = [...new Set(runs.map(r => r.chunk_bytes_label))].sort((a, b) =>
     chunkLabelToBytes(a) - chunkLabelToBytes(b));
@@ -467,7 +469,7 @@ function clearRadio(containerId) {
   document.getElementById(containerId).innerHTML = "";
 }
 
-function makeRadio(containerId, values, defaultVal, label = v => v) {
+function makeRadio(containerId, values, defaultVal, label = v => v, onChange = render) {
   const g = document.getElementById(containerId);
   const name = containerId;
   values.forEach((v,i) => {
@@ -480,13 +482,19 @@ function makeRadio(containerId, values, defaultVal, label = v => v) {
     lbl.appendChild(inp);
     lbl.appendChild(sp);
     g.appendChild(lbl);
-    inp.addEventListener("change", render);
+    inp.addEventListener("change", onChange);
   });
 }
 
 function getRadio(containerId) {
   const el = document.querySelector(`#${containerId} input:checked`);
   return el ? el.value : null;
+}
+
+function setRadio(containerId, value) {
+  document.querySelectorAll(`#${containerId} input`).forEach(input => {
+    input.checked = input.value === value;
+  });
 }
 
 function autoHide(wrapId, values) {
@@ -503,7 +511,28 @@ function hideEmptyGroup(groupId) {
 // --- Scenario checkboxes (grouped) ---
 const scenarioGroup = document.getElementById("scenario-group");
 
-function rebuildScenarios() {
+function setScenarioChecks(scenarios) {
+  scenarioGroup.querySelectorAll("input[type=checkbox]").forEach(input => {
+    input.checked = scenarios.has(input.value);
+  });
+}
+
+function applyScenarioToggle(input) {
+  const selection = reconcileScenarioToggle(
+    activeWorkloads,
+    {
+      input: getRadio("fill-group"),
+      scenarios: new Set(getCheckedScenarios()),
+    },
+    input.value,
+    input.checked,
+  );
+  setRadio("fill-group", selection.input);
+  setScenarioChecks(selection.scenarios);
+  render();
+}
+
+function rebuildScenarios(checkedScenarios) {
   scenarioGroup.innerHTML = "";
 
   // Group scenarios
@@ -522,8 +551,8 @@ function rebuildScenarios() {
     allScenarios.forEach(sc => {
       const lbl = document.createElement("label");
       const inp = document.createElement("input");
-      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
-      inp.addEventListener("change", render);
+      inp.type = "checkbox"; inp.checked = checkedScenarios.has(sc); inp.value = sc;
+      inp.addEventListener("change", () => applyScenarioToggle(inp));
       lbl.appendChild(inp);
       const sp = document.createElement("span"); sp.textContent = sc;
       lbl.appendChild(sp);
@@ -545,7 +574,13 @@ function rebuildScenarios() {
     const allBtn = document.createElement("button");
     allBtn.textContent = "all";
     allBtn.addEventListener("click", () => {
-      box.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; });
+      const checked = selectScenarioGroup(
+        activeWorkloads,
+        new Set(getCheckedScenarios()),
+        scenarios,
+        getRadio("fill-group"),
+      );
+      setScenarioChecks(checked);
       render();
     });
     const noneBtn = document.createElement("button");
@@ -563,8 +598,8 @@ function rebuildScenarios() {
     scenarios.forEach(sc => {
       const lbl = document.createElement("label");
       const inp = document.createElement("input");
-      inp.type = "checkbox"; inp.checked = true; inp.value = sc;
-      inp.addEventListener("change", render);
+      inp.type = "checkbox"; inp.checked = checkedScenarios.has(sc); inp.value = sc;
+      inp.addEventListener("change", () => applyScenarioToggle(inp));
       lbl.appendChild(inp);
       const short = sc.replace(/_single$/, "").replace(/_multiscale_dim0$/, "").replace(/_multiscale$/, "");
       const sp = document.createElement("span"); sp.textContent = short;
@@ -606,6 +641,10 @@ let prevCodec = "zstd", prevFill = "xor", prevBackend = "gpu", prevDtype = "u16"
 
 function rebuildControls() {
   const file = getActiveFile();
+  const previousScenarioControls = scenarioGroup.querySelectorAll(
+    "input[type=checkbox]"
+  );
+  const previousScenarios = new Set(getCheckedScenarios());
   document.getElementById("machine-info").textContent =
     [file.machine, file.host, file.gpu, file.commit, file.date || file.day]
       .filter(Boolean).join(" | ");
@@ -665,7 +704,21 @@ function rebuildControls() {
 
   makeRadio("codec-group", allCodecs, allCodecs.includes(prevCodec) ? prevCodec : undefined);
   const labels = inputLabels(runs);
-  makeRadio("fill-group", allFills, allFills.includes(prevFill) ? prevFill : undefined, v => labels.get(v));
+  makeRadio(
+    "fill-group",
+    allFills,
+    allFills.includes(prevFill) ? prevFill : undefined,
+    v => labels.get(v),
+    () => {
+      const checked = reconcileScenarioSet(
+        activeWorkloads,
+        new Set(getCheckedScenarios()),
+        getRadio("fill-group"),
+      );
+      setScenarioChecks(checked);
+      render();
+    },
+  );
   makeRadio("backend-group", allBackends, allBackends.includes(prevBackend) ? prevBackend : undefined);
   makeRadio("dtype-group", allDtypes, allDtypes.includes(prevDtype) ? prevDtype : undefined);
   makeRadio("sink-group", allSinks, allSinks.includes(prevSink) ? prevSink : undefined);
@@ -685,7 +738,13 @@ function rebuildControls() {
     document.getElementById("overlay-wrap").style.display = "none";
   }
 
-  rebuildScenarios();
+  const startingScenarios = previousScenarioControls.length
+    ? previousScenarios : new Set(allScenarios);
+  rebuildScenarios(reconcileScenarioSet(
+    activeWorkloads,
+    startingScenarios,
+    getRadio("fill-group"),
+  ));
   rebuildStageFilters();
   rebuildFailures();
   autoHide("scenario-controls", allScenarios);

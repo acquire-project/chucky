@@ -18,7 +18,9 @@ int
 bench_input_load(struct bench_input* input,
                  const char* path,
                  size_t width,
-                 size_t height);
+                 size_t height,
+                 size_t chunk_width,
+                 size_t chunk_height);
 
 int
 bench_input_pump(const struct bench_input* input,

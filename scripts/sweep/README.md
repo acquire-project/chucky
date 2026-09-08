@@ -75,6 +75,7 @@ Run the focused checks with:
 ```sh
 uv run scripts/sweep/test_sweep.py
 uv run scripts/sweep/test_image_results.py
+uv run scripts/sweep/test_workloads.py
 node --test scripts/sweep/test_reports.mjs
 ctest --test-dir build -R test-bench-cli --output-on-failure
 ```
@@ -179,6 +180,48 @@ use columnar rounding.
 
 `report.py` looks for `bench/machines.toml` next to the results directory, then
 one level up. Use `--machines` to point somewhere else.
+
+## Workload registry
+
+[`bench/workloads.toml`](../../bench/workloads.toml) is the authoritative list
+of scenario/input compatibility. Inputs use stable semantic IDs such as `xor`
+and `opencell-dna`; exact corpus and pack hashes remain result provenance, not
+compatibility keys. Each pair is declared in both directions, with no wildcards:
+
+```toml
+[[input]]
+id = "opencell-dna"
+scenarios = ["images"]
+default_scenario = "images"
+
+[[scenario]]
+id = "images"
+inputs = ["opencell-dna", "opencell-protein"]
+default_input = "opencell-dna"
+```
+
+`report.py --workloads` defaults to that file. Missing or malformed registries,
+duplicate IDs or references, unknown references, one-sided pairs, invalid
+defaults, and result pairs absent from the registry stop generation. The
+validated registry is embedded in `overview.json` and `sweeps.json`.
+
+Both report pages show only registry entries observed in their loaded scope.
+Changing Input keeps a compatible Scenario and otherwise uses the input default;
+changing Scenario does the reverse. When a default was not run in the active
+sweep, registry order chooses the first observed compatible value. The Explorer
+also prunes incompatible checked scenarios. Checking an incompatible scenario
+switches Input to that scenario's default, and a scenario-group **all** selects
+only values compatible with the current Input.
+
+To add a dataset-backed scenario:
+
+1. Give it a stable scenario ID and record that ID in every new execution. Give
+   each semantic dataset class a stable `source_group`; retain hashes and replay
+   details separately in result metadata.
+2. Add both the `[[input]]` and `[[scenario]]` sides to `bench/workloads.toml`,
+   including valid defaults and every explicit pair.
+3. Add conversion and selection tests, then regenerate the complete report. An
+   undeclared pair is intentionally rejected.
 
 ## Machine names
 
@@ -445,15 +488,15 @@ sets JavaScript module MIME types correctly even with Windows registry overrides
 ## Microscopy image inputs
 
 The image collection tools live in [scripts/datasets](../datasets/README.md).
-To replay a saved `cellstate-poc-v1` corpus, run from the chucky checkout:
+To replay the pinned OpenCell corpus, run from the chucky checkout:
 
 ```sh
 python scripts/datasets/run.py run \
-  --corpus /path/to/cellstate-poc-v1 \
-  --lock bench/datasets/cellstate-poc.lock.json --allow-provisional \
+  --corpus ~/data/chucky-benchmarks \
+  --lock bench/datasets/opencell.lock.json \
   --executable build-gpu/bench/bench_stream_images \
   --machine reef-l40 --backends cpu gpu \
-  --output bench/results/images/reef-l40-cellstate-poc
+  --output bench/results/images/reef-l40-opencell-v1
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
@@ -469,12 +512,17 @@ measured execution closest to the median throughput. The explorer tooltip gives
 the repeat count, throughput range, and selected execution. The original result
 file retains every measurement.
 
-The Input control identifies a corpus release and pack, including provisional
-status. Its comparison identity includes the full manifest hash, pack hash,
-plane order, replay protocol, and actual layout. Different data or replay settings
-remain separate inputs even if their display names match. The report can compare
-code revisions while retaining input identity; the stricter dataset `compare`
-command also requires identical chucky source hashes for machine comparisons.
+The Input control uses each pack's `source_group` as a short, stable
+provenance/content identity: for example, `opencell-dna` is shown as
+`OpenCell DNA`. Manifest and pack hashes, plane order, replay protocol, and
+layout remain in the result metadata but do not fragment explorer comparisons.
+Core and heldout data share the input selection but retain distinct run IDs.
+The stricter dataset `compare` command still requires identical input and chucky
+source hashes for machine comparisons.
 
-Image result schema 1 uses sweep metric version 10. Incomplete image collections
-are skipped with a warning. A smoke check is labeled and has its own input identity.
+New image result records explicitly store `scenario = "images"`; conversion of
+archived schema-1 records without it falls back to `images`. Scenario is part of
+repetition grouping and run identity. Image result schema 1 uses sweep metric
+version 10. Incomplete image collections are skipped with a warning. A smoke
+check is labeled, remains available in the explorer, and is omitted from
+Performance over time.

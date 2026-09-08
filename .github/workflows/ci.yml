@@ -25,6 +25,7 @@ jobs:
         run: |
           uv run scripts/sweep/test_sweep.py
           uv run scripts/sweep/test_image_results.py
+          uv run scripts/sweep/test_workloads.py
           node --test scripts/sweep/test_reports.mjs
 
   cpu-tests:

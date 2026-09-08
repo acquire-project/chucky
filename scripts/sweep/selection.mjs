@@ -1,5 +1,9 @@
 import {bloscBlockKey, bloscBlockLabel, matchesBloscBlock} from "./blosc.js";
 
+export function performanceSweeps(sweeps) {
+  return sweeps.filter(sweep => !sweep.smoke);
+}
+
 export function inputKey(run) {
   return run.input_id || run.fill;
 }
@@ -16,6 +20,97 @@ export function inputLabels(runs) {
     if (counts.get(label) > 1) labels.set(key, label + " [" + key.slice(-8) + "]");
   }
   return labels;
+}
+
+/** Keep registry order, but expose only IDs observed in this report scope. */
+export function scopeWorkloads(workloads, runs) {
+  const observedInputs = new Set(runs.map(inputKey));
+  const observedScenarios = new Set(runs.map(run => run.scenario));
+  return {
+    version: workloads.version,
+    inputs: workloads.inputs
+      .filter(input => observedInputs.has(input.id))
+      .map(input => ({...input,
+        scenarios: input.scenarios.filter(id => observedScenarios.has(id))})),
+    scenarios: workloads.scenarios
+      .filter(scenario => observedScenarios.has(scenario.id))
+      .map(scenario => ({...scenario,
+        inputs: scenario.inputs.filter(id => observedInputs.has(id))})),
+  };
+}
+
+function entry(entries, id) {
+  return entries.find(candidate => candidate.id === id) || null;
+}
+
+export function workloadsCompatible(workloads, scenario, input) {
+  return entry(workloads.scenarios, scenario)?.inputs.includes(input) || false;
+}
+
+export function preferredScenario(workloads, input) {
+  const selected = entry(workloads.inputs, input);
+  if (!selected) return null;
+  return selected.scenarios.includes(selected.default_scenario)
+    ? selected.default_scenario : selected.scenarios[0] || null;
+}
+
+export function preferredInput(workloads, scenario) {
+  const selected = entry(workloads.scenarios, scenario);
+  if (!selected) return null;
+  return selected.inputs.includes(selected.default_input)
+    ? selected.default_input : selected.inputs[0] || null;
+}
+
+/** Reconcile the overview's single Scenario control after Input changes. */
+export function reconcileInput(workloads, selection, input) {
+  const scenario = workloadsCompatible(workloads, selection.scenario, input)
+    ? selection.scenario : preferredScenario(workloads, input);
+  return {scenario, input};
+}
+
+/** Reconcile the overview's single Input control after Scenario changes. */
+export function reconcileScenario(workloads, selection, scenario) {
+  const input = workloadsCompatible(workloads, scenario, selection.input)
+    ? selection.input : preferredInput(workloads, scenario);
+  return {scenario, input};
+}
+
+/** Retain only compatible checks after an Explorer Input change. */
+export function reconcileScenarioSet(workloads, scenarios, input) {
+  const kept = new Set(
+    [...scenarios].filter(scenario =>
+      workloadsCompatible(workloads, scenario, input))
+  );
+  if (!kept.size) {
+    const fallback = preferredScenario(workloads, input);
+    if (fallback) kept.add(fallback);
+  }
+  return kept;
+}
+
+/** Check one Explorer group, excluding its scenarios incompatible with Input. */
+export function selectScenarioGroup(workloads, scenarios, group, input) {
+  const selected = new Set(scenarios);
+  for (const scenario of group) {
+    if (workloadsCompatible(workloads, scenario, input)) selected.add(scenario);
+    else selected.delete(scenario);
+  }
+  return selected;
+}
+
+/** Apply one explicit Explorer scenario check or uncheck. */
+export function reconcileScenarioToggle(workloads, selection, scenario, checked) {
+  const scenarios = new Set(selection.scenarios);
+  if (!checked) {
+    scenarios.delete(scenario);
+    return {input: selection.input, scenarios};
+  }
+  scenarios.add(scenario);
+  if (workloadsCompatible(workloads, scenario, selection.input)) {
+    return {input: selection.input, scenarios};
+  }
+  const input = preferredInput(workloads, scenario);
+  return {input, scenarios: reconcileScenarioSet(workloads, scenarios, input)};
 }
 
 export function metricValue(run, key) {

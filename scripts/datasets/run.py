@@ -17,6 +17,14 @@ from environment import collect_environment, digest_source, source_tree_digest
 from manifest import digest_file, git_output, read_json, verify_corpus
 
 BLOSC_BLOCK_BYTES = 16 * 1024
+CHUNK_SHAPE = [4, 64, 64]
+MIN_FULL_SHARD_BYTES = 512 * 1024**2
+MAX_FULL_SHARD_BYTES = 1024**3
+DEFAULT_LOCK = Path(__file__).resolve().parents[2] / "bench/datasets/opencell.lock.json"
+DEFAULT_MIN_GIB = 32
+DEFAULT_REPEATS = 5
+DEFAULT_SPLIT = "core"
+SCENARIO = "images"
 
 PROFILES = {
     "none": ["--codec", "none", "--codec-level", "0"],
@@ -166,7 +174,12 @@ def build_record(executable: Path, toolchain: Path | None) -> dict:
 
 
 def check_result(
-    result: dict, pack: dict, frames: int, backend: str, profile: str
+    result: dict,
+    pack: dict,
+    frames: int,
+    backend: str,
+    profile: str,
+    process_wall_s: float | None = None,
 ) -> dict:
     if result.get("status") != "pass":
         raise ValueError("Benchmark did not report success")
@@ -176,7 +189,7 @@ def check_result(
         "codec": profile,
         "dtype": "u16le",
         "shape": [frames, pack["height"], pack["width"]],
-        "chunk_shape": [1, 256, 256],
+        "chunk_shape": CHUNK_SHAPE,
         "target_batch_bytes": 64 * 1024**2,
         "source_bytes": pack["bytes"],
         "order": "cyclic",
@@ -205,14 +218,43 @@ def check_result(
             or value <= 0
         ):
             raise ValueError(f"Invalid measurement: {key}")
+    if (
+        process_wall_s is not None
+        and result["wall_s"] > process_wall_s * 1.05 + 0.1
+    ):
+        raise ValueError(
+            "Benchmark clock disagrees with process clock; the machine may have "
+            "slept during the measurement"
+        )
+    padded_height = (pack["height"] + CHUNK_SHAPE[1] - 1) // CHUNK_SHAPE[1]
+    padded_width = (pack["width"] + CHUNK_SHAPE[2] - 1) // CHUNK_SHAPE[2]
     padded_frame_bytes = (
-        ((pack["height"] + 255) // 256) * ((pack["width"] + 255) // 256) * 256**2 * 2
+        padded_height
+        * padded_width
+        * CHUNK_SHAPE[1]
+        * CHUNK_SHAPE[2]
+        * 2
     )
-    if result["padded_input_bytes"] != frames * padded_frame_bytes:
+    padded_frames = (
+        (frames + CHUNK_SHAPE[0] - 1) // CHUNK_SHAPE[0] * CHUNK_SHAPE[0]
+    )
+    if result["padded_input_bytes"] != padded_frames * padded_frame_bytes:
         raise ValueError("Padded input byte count is wrong")
     source_frames = pack["bytes"] // (pack["height"] * pack["width"] * 2)
     if replay["source_padded_bytes"] != source_frames * padded_frame_bytes:
         raise ValueError("Preloaded padded source byte count is wrong")
+    full_shard_bytes = (
+        math.prod(replay["chunk_shape"])
+        * math.prod(replay["chunks_per_shard"])
+        * 2
+    )
+    if full_shard_bytes > MAX_FULL_SHARD_BYTES:
+        raise ValueError("Full decoded shard geometry exceeds 1 GiB")
+    if (
+        frames * padded_frame_bytes >= 4 * MIN_FULL_SHARD_BYTES
+        and full_shard_bytes < MIN_FULL_SHARD_BYTES
+    ):
+        raise ValueError("Full decoded shard geometry is smaller than 0.5 GiB")
     return {key: replay[key] for key in LAYOUT_KEYS}
 
 
@@ -366,9 +408,9 @@ def run(args, corpus) -> None:
         raise ValueError("Backends and profiles must not repeat")
     if args.repeats < 1 or (not args.smoke and args.repeats < 3):
         raise ValueError("A pilot needs at least three measured runs")
-    if not args.smoke and args.min_gib < 8:
+    if not args.smoke and args.min_gib < 32:
         raise ValueError(
-            "A pilot needs at least 8 GiB per run; use --smoke for a quick check"
+            "A throughput run needs at least 32 GiB; use --smoke for a quick check"
         )
     if not math.isfinite(args.min_gib) or args.min_gib <= 0:
         raise ValueError("--min-gib must be positive")
@@ -400,7 +442,9 @@ def run(args, corpus) -> None:
             "batch_bytes": 64 * 1024**2,
             "workers": 4,
             "sink": "discard",
-            "chunk_shape": [1, 256, 256],
+            "chunk_shape": CHUNK_SHAPE,
+            "min_full_shard_bytes": MIN_FULL_SHARD_BYTES,
+            "max_full_shard_bytes": MAX_FULL_SHARD_BYTES,
             "order": "cyclic",
             "scales": 1,
             "codec_profiles": {name: PROFILES[name] for name in args.profiles},
@@ -455,6 +499,7 @@ def run(args, corpus) -> None:
                         (output / f"{label}.log").write_text(result.stderr)
                         (output / f"{label}.stdout").write_text(result.stdout)
                         record = {
+                            "scenario": SCENARIO,
                             "pack_id": pack["id"],
                             "pack_sha256": pack["sha256"],
                             "pack_path": pack["path"],
@@ -482,7 +527,12 @@ def run(args, corpus) -> None:
                             )
                         measurement = json.loads(result.stdout)
                         layout = check_result(
-                            measurement, pack, frames, backend, profile
+                            measurement,
+                            pack,
+                            frames,
+                            backend,
+                            profile,
+                            process_s,
                         )
                         if pack["id"] in layouts and layouts[pack["id"]] != layout:
                             raise ValueError(
@@ -558,13 +608,10 @@ def main() -> int:
         description="Verify and replay the pinned raw microscopy corpus"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    default_lock = (
-        Path(__file__).resolve().parents[2] / "bench/datasets/corpus.lock.json"
-    )
     for name in ("verify", "run"):
         p = sub.add_parser(name)
         p.add_argument("--corpus", type=Path, required=True)
-        p.add_argument("--lock", type=Path, default=default_lock)
+        p.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
         p.add_argument("--allow-unpinned", action="store_true")
         p.add_argument("--allow-test-data", action="store_true")
         p.add_argument("--allow-provisional", action="store_true")
@@ -579,11 +626,13 @@ def main() -> int:
                 "--profiles", nargs="+", choices=tuple(PROFILES), default=list(PROFILES)
             )
             p.add_argument(
-                "--split", choices=("core", "heldout", "all"), default="core"
+                "--split",
+                choices=("core", "heldout", "all"),
+                default=DEFAULT_SPLIT,
             )
             p.add_argument("--pack", action="append")
-            p.add_argument("--min-gib", type=float, default=8)
-            p.add_argument("--repeats", type=int, default=3)
+            p.add_argument("--min-gib", type=float, default=DEFAULT_MIN_GIB)
+            p.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
             p.add_argument("--smoke", action="store_true")
             p.add_argument("--toolchain", type=Path)
     p = sub.add_parser("compare")

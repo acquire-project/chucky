@@ -21,9 +21,9 @@ from models import codec_label, retired_metrics, run_id
 FILENAME_RE = re.compile(r"^(?P<machine>.+)-(?P<commit>[0-9a-f]{7,40})-(?P<date>\d{8})$")
 
 # Bumped to 2 when report.py started packing the runs into columns, to 3 when
-# canonical diagnostics were added, and to 4 when they changed from raw time
-# to percent of wall time in the trimmed overview payload.
-OVERVIEW_VERSION = 4
+# canonical diagnostics were added, to 4 when they changed from raw time to
+# percent of wall time, and to 5 for the workload compatibility registry.
+OVERVIEW_VERSION = 5
 
 CONFIG_KEYS = (
     "scenario", "codec", "fill", "backend", "dtype",
@@ -212,13 +212,18 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "version": data.get("version"),
         "migrated_from": data.get("migrated_from"),
         "retired": list(retired_metrics(data)),
+        "smoke": bool(data.get("protocol", {}).get("smoke", False)),
         "counts": status_counts(runs),
         "runs": [trim_run(r) for r in runs],
         **({"input_release": data["corpus"]["release"]} if "corpus" in data else {}),
     }
 
 
-def build_summary(files: list[tuple[Path, dict]], registry: list[dict] | None = None) -> dict:
+def build_summary(
+    files: list[tuple[Path, dict]],
+    registry: list[dict] | None = None,
+    workloads: dict | None = None,
+) -> dict:
     """Every sweep, ordered oldest first so the overview can read it as history."""
     sweeps = [summarize_sweep(path, data, registry or []) for path, data in files]
     sweeps.sort(key=lambda s: (s["day"], s["date"], s["machine"]))
@@ -244,8 +249,11 @@ def build_summary(files: list[tuple[Path, dict]], registry: list[dict] | None = 
             if value and value not in entry[key]:
                 entry[key].append(value)
 
-    return {
+    summary = {
         "version": OVERVIEW_VERSION,
         "machines": sorted(machines.values(), key=lambda m: m["name"].lower()),
         "sweeps": sweeps,
     }
+    if workloads is not None:
+        summary["workloads"] = workloads
+    return summary

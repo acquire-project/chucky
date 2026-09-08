@@ -30,7 +30,7 @@ python scripts/datasets/run.py verify --corpus ~/data/chucky-benchmarks \
 python scripts/datasets/run.py run --corpus ~/data/chucky-benchmarks \
   --lock bench/datasets/opencell.lock.json \
   --executable build-gpu/bench/bench_stream_images --backends cpu gpu \
-  --split all --machine reef-l40 --output bench/results/images/reef-l40-opencell-v1
+  --split core --machine reef-l40 --output bench/results/images/reef-l40-opencell-v1
 ```
 
 Use `--backends cpu` for a CPU-only build. The same explicit lock works with
@@ -118,25 +118,35 @@ After the corpus has been qualified and pinned:
 ```sh
 python scripts/datasets/run.py run \
   --corpus ~/data/chucky-benchmarks \
+  --lock bench/datasets/opencell.lock.json \
   --executable build-gpu/bench/bench_stream_images \
-  --machine reef-l40 --backends cpu gpu --split all \
+  --machine reef-l40 --backends cpu gpu --split core \
   --output bench/results/images/reef-l40-v1
 ```
 
-Defaults are one warmup and three measured process executions per pack, backend,
-and codec. Each execution streams at least 8 GiB, rounded up to whole frames.
+Defaults are one warmup and five measured process executions per pack, backend,
+and codec. Each execution streams at least 32 GiB, rounded up to whole frames.
+The runner rejects a measurement when its internal clock materially exceeds the
+supervising process clock, which catches system sleep during a timed run.
 The profiles are none, Zstd level 3, Blosc-LZ4 level 3, and Blosc-Zstd level 3.
 Both Blosc profiles use bitshuffle and 16 KiB blocks. The GPU path uses nvCOMP's
 default compression modes; its nonzero requested levels are recorded as hints,
 including Zstd. CPU levels and GPU modes are not equivalent algorithm settings.
 
-The fixed geometry is T/Y/X chunks `1/256/256`, a 64 MiB batch target, four
-workers, one scale, and the discard sink. The runner checks the reported actual
-batch and shard geometry across codecs and backends. It fails on a mismatch.
-Images retain native dimensions. The replay buffer is zero-padded to whole
-chunks before timing; source bytes and padded bytes are reported separately.
-Throughput uses native image bytes, while compressed traffic includes padding.
-A memory constraint causes failure instead of an automatic geometry change.
+The fixed geometry is T/Y/X chunks `4/64/64` (32 KiB decoded), a 0.5 GiB
+uncompressed full-shard floor, a 1 GiB ceiling, a 64 MiB batch target, four
+workers, one scale, and the discard sink. There is no minimum append-shard
+count. For the 600x600 OpenCell packs, four spatial shard streams divide the
+chunk grid evenly and produce full geometry of `1310/5/5`: 32,750 chunks and
+1,073,152,000 decoded bytes (about 0.9995 GiB) per full shard. The default
+8 MiB S3 transport size would use about 128 multipart parts for that shard;
+multipart parts are not chunks. The runner
+checks the reported actual batch and shard geometry across codecs and backends.
+It fails on a mismatch. Images retain native dimensions. The replay buffer is
+zero-padded to whole chunks before timing; source bytes and padded bytes are
+reported separately. Throughput uses native image bytes, while compressed
+traffic includes padding. A memory constraint causes failure instead of an
+automatic geometry change.
 
 Results are `results.json`, `summary.csv`, and per-execution logs.
 They live below `bench/results/images/`. The existing sweep report discovers
@@ -147,7 +157,8 @@ uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
 The [reporting workflow](../sweep/README.md#microscopy-image-inputs) shows medians,
-repeat spread, and stage details, with separate inputs for each corpus and pack.
+repeat spread, and stage details, with inputs keyed by each pack's semantic
+`source_group`.
 JSON includes input and output bytes, actual layouts,
 initialization/loading/drain times, memory measurements, image order, corpus
 identity, executable hash, source hashes, and machine information.
@@ -164,11 +175,12 @@ For a short functional check, add
 `--smoke --min-gib 0.016 --repeats 1 --profiles none`.
 Smoke runs are always marked inconclusive for representativeness.
 
-The core/heldout assessment compares matched modality, source group, shape,
+Regular throughput runs use the two core packs. An optional `--split all` run
+adds the heldout packs and compares matched modality, source group, shape,
 backend, codec, and actual geometry. The target is at most 10% difference in
-logical compression ratio and median throughput. Larger differences request
-a revised selection. Missing pairs, incomplete repetitions, and smoke runs
-remain inconclusive. Small heldout sets do not establish broad modality coverage.
+logical compression ratio and median throughput. Larger differences request a
+revised selection. Missing pairs, incomplete repetitions, and smoke runs remain
+inconclusive. Small heldout sets do not establish broad modality coverage.
 
 ## Reuse on auk and oreb
 
