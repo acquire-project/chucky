@@ -96,6 +96,7 @@ main(int argc, char** argv)
   struct codec_config codec = { .id = CODEC_NONE };
   const char* codec_name = "none";
   size_t frames = 2048, fps = 0, slots = 0, side = 1024, threads = 4;
+  size_t drain_slots = 0;
   for (int i = 1; i < argc; ++i) {
     if (i + 1 >= argc)
       goto usage;
@@ -111,18 +112,20 @@ main(int argc, char** argv)
       codec_name = value;
       codec.id = !strcmp(value, "none") ? CODEC_NONE : CODEC_ZSTD;
     } else {
-      size_t* out = !strcmp(key, "--frames")    ? &frames
-                    : !strcmp(key, "--fps")     ? &fps
-                    : !strcmp(key, "--slots")   ? &slots
-                    : !strcmp(key, "--side")    ? &side
-                    : !strcmp(key, "--threads") ? &threads
-                                                : NULL;
+      size_t* out = !strcmp(key, "--frames")        ? &frames
+                    : !strcmp(key, "--fps")         ? &fps
+                    : !strcmp(key, "--slots")       ? &slots
+                    : !strcmp(key, "--drain-slots") ? &drain_slots
+                    : !strcmp(key, "--side")        ? &side
+                    : !strcmp(key, "--threads")     ? &threads
+                                                    : NULL;
       if (!out || number(value, out))
         goto usage;
     }
   }
   if (!frames || frames > 10000000 || !threads || threads > 1024 ||
-      side < 256 || side > 4096 || side % 256 || fps > 1000000)
+      side < 256 || side > 4096 || side % 256 || fps > 1000000 ||
+      drain_slots > slots)
     goto usage;
 
   const size_t frame_bytes = side * side * sizeof(uint16_t);
@@ -185,7 +188,8 @@ main(int argc, char** argv)
   struct writer* writer = &observed.writer;
   if (slots) {
     buffered = buffered_writer_create(
-      writer, &(struct buffered_writer_config){ frame_bytes, slots });
+      writer,
+      &(struct buffered_writer_config){ frame_bytes, slots, drain_slots });
     if (!buffered)
       goto cleanup;
     writer = buffered_writer_as_writer(buffered);
@@ -224,22 +228,24 @@ main(int argc, char** argv)
   buffered = NULL;
   if (destroy_error || observed.frame != frames)
     goto cleanup;
-  printf("{\"backend\":\"%s\",\"codec\":\"%s\",\"frames\":%zu,\"fps\":%zu,"
-         "\"frame_bytes\":%zu,\"slots\":%zu,\"threads\":%zu,"
-         "\"wall_s\":%.6f,\"gib_s\":%.6f,\"second_half_gib_s\":%.6f,"
-         "\"flush_ms\":%.6f,",
-         gpu ? "gpu" : "cpu",
-         codec_name,
-         frames,
-         fps,
-         frame_bytes,
-         slots,
-         threads,
-         (done - start) * 1e-9,
-         (double)frames * frame_bytes / (done - start) * (1e9 / 1073741824.0),
-         (double)(frames - frames / 2) * frame_bytes / (done - halfway) *
-           (1e9 / 1073741824.0),
-         (done - appended) * 1e-6);
+  printf(
+    "{\"backend\":\"%s\",\"codec\":\"%s\",\"frames\":%zu,\"fps\":%zu,"
+    "\"frame_bytes\":%zu,\"slots\":%zu,\"drain_slots\":%zu,\"threads\":%zu,"
+    "\"wall_s\":%.6f,\"gib_s\":%.6f,\"second_half_gib_s\":%.6f,"
+    "\"flush_ms\":%.6f,",
+    gpu ? "gpu" : "cpu",
+    codec_name,
+    frames,
+    fps,
+    frame_bytes,
+    slots,
+    drain_slots ? drain_slots : slots,
+    threads,
+    (done - start) * 1e-9,
+    (double)frames * frame_bytes / (done - start) * (1e9 / 1073741824.0),
+    (double)(frames - frames / 2) * frame_bytes / (done - halfway) *
+      (1e9 / 1073741824.0),
+    (done - appended) * 1e-6);
   distribution("caller", caller, frames);
   printf(",");
   distribution("downstream", downstream, observed.calls);
@@ -279,11 +285,12 @@ cleanup:
   free(pattern);
   return error;
 usage:
-  fprintf(
-    stderr,
-    "Usage: %s [--backend cpu|gpu] [--codec none|zstd] "
-    "[--frames N] [--fps N] [--slots N] [--side N] [--threads N]\n"
-    "fps=0: unpaced; slots=0: direct; side: multiple of 256, 256..4096.\n",
-    argv[0]);
+  fprintf(stderr,
+          "Usage: %s [--backend cpu|gpu] [--codec none|zstd] "
+          "[--frames N] [--fps N] [--slots N] [--drain-slots N] "
+          "[--side N] [--threads N]\n"
+          "fps=0: unpaced; slots=0: direct; drain-slots=0: up to all slots.\n"
+          "side: multiple of 256, 256..4096.\n",
+          argv[0]);
   return 2;
 }

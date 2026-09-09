@@ -13,25 +13,31 @@ occupies one slot until its batch returns. Choose a slot size matching normal
 producer appends, and a count covering the temporary backlog your workload can
 tolerate. Both slot size and input sizes must respect downstream granularity.
 
-The **`slot_bytes * slot_count`** payload allocation is split between two
-contiguous buffers, plus fixed bookkeeping and one worker thread and stack. The
-first buffer gets the extra slot for odd counts. The producer packs input
-directly into one buffer while the worker drains the other. When the producer
-buffer fills, it waits for the worker to swap buffers. Thus each queued backlog
-holds at most half the slots, rounded up. A one-slot allocation waits for each
-drain before refilling. There are no append-path allocations or extra copies to
-assemble a batch.
+The **`slot_bytes * slot_count`** payload allocation is a shared ring, plus one
+bookkeeping entry per slot and one worker thread and stack. The producer packs
+input directly into the ring while the worker drains an older prefix. Active
+drains pin only their own slots: with one slot active in a 64-slot ring, the
+producer can fill the other 63. Each completed drain frees its slots immediately.
+There are no append-path allocations or extra copies to assemble a batch.
 
-Each drain snapshots the **entire queued backlog** and submits it in one
-downstream append. Short appends are packed without gaps; original append
-boundaries are not preserved. Input accepted while that call runs goes into
-the next buffer. Once the call returns, the worker immediately drains the new
-backlog. Partial downstream acceptance or stalls can require retries of the
-remaining suffix.
+Set **`max_drain_slots`** independently of total capacity. A drain submits the
+contiguous backlog prefix up to that many slots in one downstream append. Zero
+uses `slot_count`, and values greater than `slot_count` are invalid. A drain also
+stops at the physical end of the ring. Short appends are packed without gaps;
+original append boundaries are not preserved. Partial downstream acceptance or
+stalls can require retries of the remaining suffix.
 
-An append waits until one slot is free, copies up to `slot_bytes`, and returns
-the unaccepted suffix in `writer_result.rest`. The accepted prefix is owned by
-the adapter, so the caller can immediately overwrite or free that prefix.
+The worker starts immediately when input is available, without waiting to fill
+a batch. After each drain it immediately starts another if a backlog remains.
+For example, 64 slots with an eight-slot cap lets each drain catch up by up to
+eight producer appends while retaining the other 56 slots for waiting input.
+The cap bounds bytes held by one drain (`max_drain_slots * slot_bytes`), not its
+duration: a single frame can still trigger downstream startup or flush work.
+
+An append waits until one slot is free, copies up to `slot_bytes` or the end of
+the ring, and returns the unaccepted suffix in `writer_result.rest`. The accepted
+prefix is owned by the adapter, so the caller can immediately overwrite or free
+that prefix.
 `writer_append_wait` handles inputs larger than one slot. An empty input consumes
 no slot. When full, the queue blocks; it does not overwrite old data or drop new
 input. A bounded queue cannot compensate for sustained overload, and cannot
@@ -86,7 +92,11 @@ Downstream callbacks must not call back into the adapter.
 int write_buffered(struct writer* downstream, struct slice input,
                    size_t slot_bytes, size_t slot_count)
 {
-  struct buffered_writer_config config = { slot_bytes, slot_count };
+  struct buffered_writer_config config = {
+    .slot_bytes = slot_bytes,
+    .slot_count = slot_count,
+    .max_drain_slots = slot_count < 8 ? slot_count : 8,
+  };
   struct buffered_writer* buffered = buffered_writer_create(downstream, &config);
   if (!buffered)
     return 1;
@@ -126,15 +136,19 @@ GPU readback tests, including metadata and immediate input reuse.
 ```sh
 # Repeat in alternating order for both cpu/gpu and none/zstd.
 build/bench/bench_buffered_writer --backend cpu --codec none --frames 16384 --slots 0
-build/bench/bench_buffered_writer --backend cpu --codec none --frames 16384 --slots 16
+build/bench/bench_buffered_writer --backend cpu --codec none --frames 16384 --slots 64 --drain-slots 8
 
 # Paced arrival: fps=0 disables pacing; slots=0 selects direct appends.
 build/bench/bench_buffered_writer --backend gpu --codec zstd --frames 2048 --fps 500 --slots 0
-build/bench/bench_buffered_writer --backend gpu --codec zstd --frames 2048 --fps 500 --slots 16
+build/bench/bench_buffered_writer --backend gpu --codec zstd --frames 2048 --fps 500 --slots 64 --drain-slots 8
 ```
 
 JSON reports caller latency per frame and downstream latency per batch, together
 with downstream call count, maximum frames per batch and reserved payload bytes.
+`drain_slots` reports the effective cap; `--drain-slots 0` uses all configured
+slots. Compare different caps at the same total capacity to distinguish batching
+from the queue's ability to absorb stalls. The eight-slot example is a tunable
+starting point, not a measured universal optimum.
 Submission-to-downstream completion delay is per frame: all frames in a combined
 call use that call's return time, since intermediate consumption is not observed.
 It also reports lateness against scheduled frame arrival, peak queue occupancy,

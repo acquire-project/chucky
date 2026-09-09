@@ -56,9 +56,9 @@ write_zarr(const char* store_path, struct codec_config codec, int buffered)
   if (buffered) {
     // Mode 2 accepts a whole extra frame before the bounded stream can
     // report finished, making the unconsumed accepted suffix deterministic.
-    struct buffered_writer_config buffering = { 2 * 1023, 3 };
+    struct buffered_writer_config buffering = { 2 * 1023, 3, 2 };
     if (buffered == 2)
-      buffering = (struct buffered_writer_config){ (size_t)total * 2, 1 };
+      buffering = (struct buffered_writer_config){ (size_t)total * 2, 1, 0 };
     adapter = buffered_writer_create(writer, &buffering);
     CHECK(FailStream, adapter);
     writer = buffered_writer_as_writer(adapter);
