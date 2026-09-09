@@ -111,6 +111,9 @@ for mode in ("spatial", "append"):
         r, w = check(p)
         assert w["input_bytes"] == 33 * 32 * 32 * 2
         assert w["warmup_input_bytes"] > 0
+        assert r["stages"]["sink"]["in_bytes"] == w["output_bytes"]
+        assert r["stages"]["sink"]["owner"] == "delivery"
+        assert "Sink" in p.stderr
         levels = sorted(Path(directory).glob("multiscale/*/zarr.json"))
         assert len(levels) > 1
         frames = (w["warmup_input_bytes"] + w["input_bytes"]) // (32 * 32 * 2)

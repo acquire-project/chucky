@@ -186,7 +186,7 @@ metering_sink_init(struct metering_sink* ms, struct shard_sink* inner)
         ? metering_required_shard_alignment : NULL,
     },
     .inner = inner,
-    .metric = { .name = "Sink", .best_ms = 1e30f },
+    .metric = { .name = "Sink", .owner = METRIC_OWNER_DELIVERY, .best_ms = 1e30f },
   };
   for (int i = 0; i < METER_MAX_WRITERS; ++i) {
     ms->writers[i] = (struct metering_writer){

@@ -1055,8 +1055,7 @@ print_bench_json_pass(const struct stream_metrics* m,
   json_stage_metric(&jw, "compress", &m->compress);
   json_stage_metric(&jw, "aggregate", &m->aggregate);
   json_stage_metric(&jw, "d2h", &m->d2h);
-  if (sink_metric)
-    json_stage_metric(&jw, "sink", sink_metric);
+  json_stage_metric(&jw, "sink", sink_metric ? sink_metric : &m->sink);
   jw_object_end(&jw);
 
   jw_key(&jw, "stalls");

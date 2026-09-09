@@ -364,7 +364,7 @@ pump_measurement(struct bench_handle* h,
                  const unsigned char* source,
                  const struct bench_config* cfg,
                  struct bench_measurement* run,
-                 const struct metering_sink* meter,
+                 struct metering_sink* meter,
                  const struct throttled_shard_sink* throttled,
                  const struct discard_shard_sink* discard,
                  size_t* total_bytes)
@@ -451,6 +451,10 @@ pump_measurement(struct bench_handle* h,
         run->warmup_s = (drained - start) * 1e-9;
         run->warmup_bytes = accepted;
         run->warmup_output_bytes = sink_bytes(meter, throttled, discard);
+        // The delivery worker has joined, so sink write observations can be
+        // reset at the same boundary as the pipeline's stage observations.
+        if (meter->inner)
+          meter->metric = mk_stream_metric("Sink", METRIC_OWNER_DELIVERY);
         measure_start = drained;
         now = drained;
         measuring = 1;
@@ -778,6 +782,8 @@ run_bench(const struct bench_config* cfg)
 
   {
     struct stream_metrics m = bench_get_metrics(&h);
+    if (meter.inner)
+      m.sink = meter.metric;
     const struct sink_stats ss = { .total_bytes = measurement.output_bytes,
                                    .total_chunks = est_total_chunks };
     print_measurement_report(&measurement);
@@ -794,11 +800,8 @@ run_bench(const struct bench_config* cfg)
     print_memory_report(&mem_used);
 
     if (cfg->json_output) {
-      // Pipeline sink metrics share the reset boundary; the wrapper's
-      // lifetime metric includes warmup and must not replace them.
-      const struct stream_metric* sink_metric = NULL;
       print_bench_json_pass(&m,
-                            sink_metric,
+                            NULL,
                             layout,
                             config.dtype,
                             config.codec,
