@@ -6,6 +6,7 @@
 #include "test_platform.h"
 #include "test_zarr_helpers.h"
 #include "util/prelude.h"
+#include "writer.buffered.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,19 +19,19 @@
 // --- write_zarr ---
 
 static int
-write_zarr(const char* store_path, struct codec_config codec)
+write_zarr(const char* store_path, struct codec_config codec, int buffered)
 {
   if (codec_is_blosc(codec.id) && compress_blosc_validate(codec))
     return 2;
 
-  const int total = NT * NY * NX;
+  const int total = (NT + (buffered == 2)) * NY * NX;
   uint16_t* src = (uint16_t*)malloc((size_t)total * sizeof(uint16_t));
   CHECK(Fail, src);
   for (int i = 0; i < total; ++i)
     src[i] = (uint16_t)(i & 0xFFFF);
 
   struct dimension dims[3];
-  dims_create(dims, "tyx", (uint64_t[]){ 0, NY, NX });
+  dims_create(dims, "tyx", (uint64_t[]){ buffered == 2 ? NT : 0, NY, NX });
   dims_set_chunk_sizes(dims, 3, (uint64_t[]){ 1, 4, 6 });
   dims[0].chunks_per_shard = NT; // unbounded dim needs explicit cps
   dims_set_shard_counts(dims, 3, (uint64_t[]){ 0, 1, 1 });
@@ -52,18 +53,40 @@ write_zarr(const char* store_path, struct codec_config codec)
     tile_stream_cpu_create(&config, test_zarr_sink_as_shard_sink(&zs));
   CHECK(Fail_sink, s);
 
+  struct buffered_writer* adapter = NULL;
+  struct writer* writer = tile_stream_cpu_writer(s);
+  if (buffered) {
+    // Mode 2 accepts a whole extra frame before the bounded stream can
+    // report finished, making the unconsumed accepted suffix deterministic.
+    struct buffered_writer_config buffering = { 2 * 17 * 3, 2 * 23 };
+    if (buffered == 2)
+      buffering = (struct buffered_writer_config){ (size_t)total * 2, 0 };
+    adapter = buffered_writer_create(writer, &buffering);
+    CHECK(Fail_stream, adapter);
+    writer = buffered_writer_as_writer(adapter);
+  }
   struct slice input = { .beg = src, .end = src + total };
-  struct writer_result r = writer_append(tile_stream_cpu_writer(s), input);
-  CHECK(Fail_stream, r.error == 0);
-  r = writer_flush(tile_stream_cpu_writer(s));
-  CHECK(Fail_stream, r.error == 0);
-
-  CHECK(Fail_stream, test_zarr_sink_flush(&zs) == 0);
+  CHECK(Fail_adapter, writer_append_wait(writer, input).error == 0);
+  memset(src, 0xFF, (size_t)total * sizeof(uint16_t));
+  CHECK(Fail_adapter, writer_flush(writer).error == (buffered == 2));
+  CHECK(Fail_adapter, writer_flush(writer).error == (buffered == 2));
+  CHECK(Fail_adapter, writer_close(writer).error == (buffered == 2));
+  CHECK(Fail_adapter, writer_close(writer).error == (buffered == 2));
+  CHECK(Fail_adapter, test_zarr_sink_flush(&zs) == 0);
+  if (buffered == 2) {
+    struct buffered_writer_stats stats = buffered_writer_get_stats(adapter);
+    CHECK(Fail_adapter, stats.downstream_finished && stats.failed);
+    CHECK(Fail_adapter, stats.forwarded_bytes == NT * NY * NX * 2);
+    CHECK(Fail_adapter, stats.abandoned_bytes == NY * NX * 2);
+  }
+  buffered_writer_destroy(adapter);
   tile_stream_cpu_destroy(s);
   test_zarr_sink_close(&zs);
   free(src);
   return 0;
 
+Fail_adapter:
+  buffered_writer_destroy(adapter);
 Fail_stream:
   tile_stream_cpu_destroy(s);
 Fail_sink:
@@ -107,21 +130,30 @@ main(void)
   int n_codecs = (int)(sizeof(codecs) / sizeof(codecs[0]));
 
   int err = 0;
-  for (int i = 0; i < n_codecs; ++i) {
-    char store[512];
-    snprintf(store, sizeof(store), "%s/%s", tmpdir, codecs[i].name);
-    CHECK(Cleanup, test_mkdir(store) == 0);
-    log_info("Writing %s ...", codecs[i].name);
-    int wrc = write_zarr(store, codecs[i].codec);
-    if (wrc == 2) { // blosc not available
-      log_info("  skipped: %s (codec not available)", codecs[i].name);
-      test_tmpdir_remove(store);
-      continue;
-    }
-    if (wrc) {
-      log_error("  write failed: %s", codecs[i].name);
-      err = 1;
-      goto Cleanup;
+  for (int buffered = 0; buffered <= 2; ++buffered) {
+    for (int i = 0; i < n_codecs; ++i) {
+      char store[512];
+      snprintf(store,
+               sizeof(store),
+               "%s/%s%s",
+               tmpdir,
+               codecs[i].name,
+               buffered == 2 ? "_buffered_limit"
+               : buffered    ? "_buffered"
+                             : "");
+      CHECK(Cleanup, test_mkdir(store) == 0);
+      log_info("Writing %s ...", codecs[i].name);
+      int wrc = write_zarr(store, codecs[i].codec, buffered);
+      if (wrc == 2) { // blosc not available
+        log_info("  skipped: %s (codec not available)", codecs[i].name);
+        test_tmpdir_remove(store);
+        continue;
+      }
+      if (wrc) {
+        log_error("  write failed: %s", codecs[i].name);
+        err = 1;
+        goto Cleanup;
+      }
     }
   }
 

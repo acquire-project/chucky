@@ -3,6 +3,8 @@
 This document describes how chunks are tracked and their memory managed during
 streaming transpose of a D-dimensional tensor.
 
+For producer-side input buffering, see [Buffered input writer](buffered-writer.md).
+
 ## Setup
 
 Given input tensor shape $(s_{D-1}, \ldots, s_0)$ and chunk shape
