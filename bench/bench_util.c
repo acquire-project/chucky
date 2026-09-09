@@ -745,6 +745,10 @@ run_bench(const struct bench_config* cfg)
   float flush_s = platform_toc(&flush_clock);
   measurement.drain_s = (platform_monotonic_ns() - drain_start) * 1e-9;
   measurement.elapsed_s = measurement.append_s + measurement.drain_s;
+  // A screening budget, not a steady-state precision guarantee: a large
+  // endpoint drain means too much of this sample was still in flight.
+  measurement.coverage_sufficient &=
+    measurement.drain_s <= 0.1 * measurement.elapsed_s;
   const float wall_s = (float)measurement.elapsed_s;
   measurement.output_bytes =
     sink_bytes(&meter, &tss, &dss) - measurement.warmup_output_bytes;

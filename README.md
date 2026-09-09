@@ -230,7 +230,9 @@ retains its explicit fixed-frame, whole-run policy and rejects timing options.
 
 The 0.25 s warmup / 1 s measurement defaults keep routine sweeps practical.
 Coverage requires at least 0.25 s and two batches of warmup, then 0.25 s, four
-complete batches, and two generation transitions during measurement. The batch
+complete batches, and two generation transitions during measurement. Final drain
+must take no more than 10% of the measured window. This is a conservative
+screening budget, not a measured precision crossover. The batch
 reuse count is a conservative lower bound after allowing two batch buffers.
 These counts use input positions, independently of the geometry reference and
 `min_append_shards`; that fitter constraint is no longer a coverage guarantee.

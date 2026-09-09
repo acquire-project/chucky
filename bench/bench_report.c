@@ -715,7 +715,8 @@ print_measurement_report(const struct bench_measurement* run)
   print_report("  Generation transitions: %llu",
                (unsigned long long)run->generation_transitions);
   print_report("  Minimum: 0.25 s warmup + 2 batches; 0.25 s measured;");
-  print_report("           4 measured batches and 2 generation transitions.");
+  print_report("           4 measured batches, 2 generation transitions;");
+  print_report("           final drain <= 10%% of the measured window.");
   print_report(
     "  Coverage counts input positions; it does not establish accuracy.");
   if (!run->boundary_timing) {
@@ -837,6 +838,8 @@ json_measurement(struct json_writer* jw, const struct bench_measurement* run)
   jw_float(jw, run->elapsed_s);
   jw_key(jw, "drain_s");
   jw_float(jw, run->drain_s);
+  jw_key(jw, "drain_fraction");
+  jw_float(jw, run->elapsed_s > 0 ? run->drain_s / run->elapsed_s : 0);
   jw_key(jw, "input_bytes");
   jw_uint(jw, run->input_bytes);
   jw_key(jw, "output_bytes");

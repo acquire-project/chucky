@@ -28,6 +28,7 @@ def check(p):
     assert w["drain_s"] >= 0
     assert math.isclose(w["elapsed_s"], w["append_s"] + w["drain_s"], rel_tol=1e-5)
     assert math.isclose(report["wall_s"], w["elapsed_s"], rel_tol=1e-5)
+    assert math.isclose(w["drain_fraction"], w["drain_s"] / w["elapsed_s"], rel_tol=1e-5)
     assert math.isclose(report["input_gib"], w["input_bytes"] / 2**30, rel_tol=1e-5)
     for direction, key in (("in", "input"), ("out", "output")):
         expected = w[f"{key}_bytes"] / 2**30 / w["elapsed_s"]
@@ -88,6 +89,7 @@ assert all(group["crossing"]["calls"] == group["following"]["calls"] == 0
 # Synthetic asynchronous IO's final drain belongs to the same denominator.
 r, w = check(run("--frames", "16384", "--warmup", "0.01", "--io-bw-mbps", "100"))
 assert w["drain_s"] > 0.01
+assert w["drain_fraction"] > 0.1 and w["coverage_status"] == "insufficient"
 
 for args in (("--duration", "0"), ("--duration", "nan"), ("--duration", "inf"),
              ("--duration", "-1"), ("--duration", "1x"),
