@@ -24,7 +24,8 @@ def check(p):
     w = report["measurement"]
     assert w["policy"] == "drained-warmup-through-final-close-v1"
     assert w["warmup_s"] >= w["requested_warmup_s"]
-    assert w["drain_s"] > 0
+    # A synchronous empty drain can finish within one platform clock tick.
+    assert w["drain_s"] >= 0
     assert math.isclose(w["elapsed_s"], w["append_s"] + w["drain_s"], rel_tol=1e-5)
     assert math.isclose(report["wall_s"], w["elapsed_s"], rel_tol=1e-5)
     assert math.isclose(report["input_gib"], w["input_bytes"] / 2**30, rel_tol=1e-5)
