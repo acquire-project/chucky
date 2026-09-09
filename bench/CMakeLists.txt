@@ -29,6 +29,8 @@ add_library(
     bench_parse.h
     bench_report.c
     bench_report.h
+    bench_measurement.c
+    bench_measurement.h
 )
 target_include_directories(bench_util PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
@@ -85,6 +87,9 @@ foreach(src IN LISTS BENCH_STREAM_SOURCES)
     string(REPLACE ".c" "" target ${src})
     add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()
+
+add_bench(test_bench_coverage test_bench_coverage.c bench_util Zstd::Zstd)
+add_test(NAME test-bench_coverage COMMAND test_bench_coverage)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)

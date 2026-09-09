@@ -22,8 +22,16 @@ def check(p):
     report = json.loads(p.stdout)
     assert report["status"] == "pass"
     w = report["measurement"]
-    assert w["policy"] == "drained-warmup-through-final-close-v1"
-    assert w["warmup_s"] >= w["requested_warmup_s"]
+    assert w["policy"] == "coverage-qualified-through-final-close-v2"
+    assert w["coverage_status"] == "sufficient"
+    assert w["warmup_s"] >= max(0.25, w["requested_warmup_s"])
+    assert w["warmup_complete_batches"] >= 2
+    assert w["append_s"] >= max(0.25, w["target_duration_s"])
+    assert w["target_duration_s"] >= w["requested_duration_s"]
+    assert w["complete_batches"] >= 4 and w["generation_transitions"] >= 2
+    assert w["drain_fraction"] <= 0.1
+    assert 1 <= w["attempt"] <= w["max_attempts"]
+    assert (w["discarded_attempts_s"] > 0) == (w["attempt"] > 1)
     # A synchronous empty drain can finish within one platform clock tick.
     assert w["drain_s"] >= 0
     assert math.isclose(w["elapsed_s"], w["append_s"] + w["drain_s"], rel_tol=1e-5)
@@ -54,18 +62,17 @@ for append, warmup, frames in ((256, 0, 16384), (4096, 0.03, 65536),
     r, w = check(run("--frames", str(frames), "--warmup", str(warmup),
                      "--append-elements", str(append)))
     assert w["reference_frames"] == 65536
-    assert w["input_bytes"] == frames * 512
+    assert w["input_bytes"] >= frames * 512
     assert w["source_bytes"] == 64 << 20
     assert w["append_bytes"] == append * 2
     assert geometry is None or geometry == w["geometry"]
     geometry = w["geometry"]
-    # Whole-run metrics would overcount here when warmup is nonzero.
-    assert r["stages"]["scatter"]["in_bytes"] == frames * 512
+    # Rates and counters include only the accepted attempt's measured input.
+    assert r["stages"]["scatter"]["in_bytes"] == w["input_bytes"]
     if backend == "gpu":
-        assert r["memcpy_work"]["bytes"] == frames * 512
-        assert r["stages"]["h2d"]["in_bytes"] == frames * 512
-    assert bool(w["warmup_input_bytes"]) == bool(warmup)
-    assert w["coverage_status"] == "insufficient"
+        assert r["memcpy_work"]["bytes"] == w["input_bytes"]
+        assert r["stages"]["h2d"]["in_bytes"] == w["input_bytes"]
+    assert w["warmup_input_bytes"] > 0
 
 for duration in (0.02, 0.06):
     r, w = check(run("--frames", "0", "--duration", str(duration), "--warmup", "0.03"))
@@ -80,16 +87,40 @@ assert w["input_bytes"] > 32 << 20
 assert w["coverage_status"] == "sufficient"
 
 r, w = check(run("--frames", "1", "--warmup", "0", "--no-boundary-timing"))
-assert w["input_bytes"] == 512
-assert w["coverage_status"] == "insufficient"
+assert w["input_bytes"] >= 512
 assert w["boundary_timing"] is False
 assert all(group["crossing"]["calls"] == group["following"]["calls"] == 0
            for group in w["boundaries"].values())
 
 # Synthetic asynchronous IO's final drain belongs to the same denominator.
-r, w = check(run("--frames", "16384", "--warmup", "0.01", "--io-bw-mbps", "100"))
-assert w["drain_s"] > 0.01
-assert w["drain_fraction"] > 0.1 and w["coverage_status"] == "insufficient"
+r, w = check(run("--frames", "131072", "--warmup", "0.01", "--io-bw-mbps", "100"))
+assert w["drain_s"] > 0
+assert w["input_bytes"] >= 131072 * 512
+
+# A larger batch retains enough IO to exercise rejection and a longer retry
+# on fast hosts. On slower hosts, the first attempt may already be sufficient.
+# In either case, the driver must never publish an unqualified success.
+throttled = ("--duration", "0.02", "--warmup", "0", "--batch-bytes", "8M",
+             "--io-bw-mbps", "128")
+p = run(*throttled, "--max-attempts", "1")
+limited = json.loads(p.stdout)
+if p.returncode:
+    assert limited["status"] == "error" and limited["error"] == "insufficient_coverage"
+    failed = limited["measurement"]
+    assert failed["attempt"] == failed["max_attempts"] == 1
+    assert failed["coverage_status"] == "insufficient" and failed["drain_fraction"] > 0.1
+    assert "PASS" not in p.stderr
+else:
+    check(p)
+retried = run(*throttled)
+r, w = check(retried)
+assert w["geometry"] == limited["measurement"]["geometry"]
+assert r["stages"]["scatter"]["in_bytes"] == w["input_bytes"]
+if backend == "gpu":
+    assert r["memcpy_work"]["bytes"] == w["input_bytes"]
+if w["attempt"] > 1:
+    assert w["target_duration_s"] > 0.25
+    assert "retry with" in retried.stderr
 
 for args in (("--duration", "0"), ("--duration", "nan"), ("--duration", "inf"),
              ("--duration", "-1"), ("--duration", "1x"),
@@ -98,6 +129,9 @@ for args in (("--duration", "0"), ("--duration", "nan"), ("--duration", "inf"),
              ("--append-elements", "67108864"), ("--frames", "bad"),
              ("--frames", "-1"), ("--frames", "18446744073709551616"),
              ("--geometry-frames", "0"), ("--geometry-frames", "bad"),
+             ("--max-attempts", "0"), ("--max-attempts", "-1"),
+             ("--max-attempts", "bad"), ("--max-attempts", "1.5"),
+             ("--max-attempts", "4294967296"),
              ("--frames", "10", "--duration", "1")):
     p = run(*args)
     assert p.returncode != 0, args
@@ -109,7 +143,7 @@ for mode in ("spatial", "append"):
                             "--frames", "33", "--warmup", "0.02", "--max-threads", "4",
                             "--json", "-o", directory], capture_output=True, text=True, timeout=60)
         r, w = check(p)
-        assert w["input_bytes"] == 33 * 32 * 32 * 2
+        assert w["input_bytes"] >= 33 * 32 * 32 * 2
         assert w["warmup_input_bytes"] > 0
         assert r["stages"]["sink"]["in_bytes"] == w["output_bytes"]
         assert r["stages"]["sink"]["owner"] == "delivery"
@@ -122,7 +156,7 @@ for mode in ("spatial", "append"):
             expected_frames = math.ceil(frames / 2**lv) if mode == "append" else frames
             assert m["shape"] == [expected_frames, 32 >> lv, 32 >> lv], m
             # For zeros/none every indexed chunk must be readable and zero,
-            # across the warmup checkpoint as well as the final partial batch.
+            # across the warmup checkpoint through final close.
             shard_shape = m["chunk_grid"]["configuration"]["chunk_shape"]
             chunk_shape = m["codecs"][0]["configuration"]["chunk_shape"]
             chunks_per_shard = math.prod(s // c for s, c in zip(shard_shape, chunk_shape))

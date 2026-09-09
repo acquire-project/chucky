@@ -51,7 +51,7 @@ console = Console(stderr=True)
 # Scenarios
 # ---------------------------------------------------------------------------
 
-MEASUREMENT_POLICY = "drained-warmup-through-final-close-v1"
+MEASUREMENT_POLICY = "coverage-qualified-through-final-close-v2"
 DEFAULT_WARMUP_S = 0.25
 DEFAULT_DURATION_S = 1.0
 
@@ -439,12 +439,20 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             except json.JSONDecodeError:
                 pass
 
-        if not parsed:
-            if proc.returncode != 0:
+        if not isinstance(parsed, dict):
+            parsed = {}
+        if proc.returncode != 0:
+            parsed["status"] = "error"
+            parsed["returncode"] = proc.returncode
+        elif parsed.get("status") == "pass":
+            window = parsed.get("measurement")
+            if (not isinstance(window, dict) or
+                    window.get("policy") != MEASUREMENT_POLICY or
+                    window.get("coverage_status") != "sufficient"):
                 parsed["status"] = "error"
-                parsed["returncode"] = proc.returncode
-            else:
-                parsed["status"] = "unknown"
+                parsed["error"] = "benchmark did not satisfy required measurement policy"
+        elif not parsed:
+            parsed["status"] = "unknown"
 
         result = {**spec.base_result(), "elapsed_s": round(elapsed, 2), **parsed}
         if spec.sink == "s3":
@@ -498,10 +506,10 @@ def status_style(status: str) -> str:
 @click.option("--rerun", multiple=True, help="Re-run benchmarks whose id contains this substring.")
 @click.option("--dry-run", is_flag=True, help="Preview run matrix without executing.")
 @click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
-              show_default=True, help="Warmup seconds before draining and resetting metrics.")
+              show_default=True, help="Minimum warmup seconds; coverage may extend the run.")
 @click.option("--duration", type=click.FloatRange(min=0, min_open=True),
               default=DEFAULT_DURATION_S, show_default=True,
-              help="Measured append seconds; final drain is included in reported rates.")
+              help="Minimum measured append seconds; coverage may extend the run.")
 @click.option("--s3-bucket", default=None, help="S3 bucket (required for s3 tier).")
 @click.option("--s3-region", default="us-east-1", show_default=True, help="S3 region.")
 @click.option("--s3-endpoint", default="http://localhost:9000", show_default=True,
@@ -586,7 +594,7 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
             )
         console.print(table)
         console.print(f"\nTotal: [bold]{len(runs)}[/bold] runs across tiers: {', '.join(selected_tiers)}")
-        console.print(f"Warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
+        console.print(f"Minimum warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
         console.print(f"Output: {output}")
         return
 
@@ -680,7 +688,8 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
             st = result.get("status", "?")
             tp = result.get("throughput_in_gibs")
             suffix = f" {tp:.2f} GiB/s" if tp else ""
-            if result.get("measurement", {}).get("coverage_status") == "insufficient":
+            window = result.get("measurement")
+            if isinstance(window, dict) and window.get("coverage_status") == "insufficient":
                 suffix += " (insufficient coverage)"
             style = status_style(st)
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")

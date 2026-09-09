@@ -1,4 +1,5 @@
 #include "bench_report.h"
+#include "bench_measurement.h"
 
 #include "util/format_bytes.h"
 #include "util/metric.h"
@@ -694,7 +695,13 @@ print_measurement_report(const struct bench_measurement* run)
   format_bytes(source, sizeof(source), run->source_bytes);
   format_bytes(append, sizeof(append), run->append_bytes);
   print_report("\n--- Measurement window ---");
-  print_report("  Policy: drained warmup; measurement includes final close");
+  print_report("  Policy: required coverage; measurement includes final close");
+  print_report("  Attempt: %u/%u    Minimum append: %.3f s",
+               run->attempt,
+               run->max_attempts,
+               run->target_duration_s);
+  print_report("  Discarded attempts: %.3f s (excluded from rates)",
+               run->discarded_attempts_s);
   print_report("  Source: %s    Append: %s", source, append);
   print_report(
     "  Source prep: %8.3f s    Warmup: %8.3f s", run->prep_s, run->warmup_s);
@@ -762,13 +769,25 @@ json_measurement(struct json_writer* jw, const struct bench_measurement* run)
   jw_key(jw, "measurement");
   jw_object_begin(jw);
   jw_key(jw, "policy");
-  jw_string(jw, "drained-warmup-through-final-close-v1");
+  jw_string(jw, bench_measurement_policy);
   jw_key(jw, "input_mode");
   jw_string(jw, "direct");
   jw_key(jw, "output_scope");
   jw_string(jw, "physical_sink_writes");
   jw_key(jw, "coverage_status");
   jw_string(jw, run->coverage_sufficient ? "sufficient" : "insufficient");
+  jw_key(jw, "attempt");
+  jw_uint(jw, run->attempt);
+  jw_key(jw, "max_attempts");
+  jw_uint(jw, run->max_attempts);
+  jw_key(jw, "target_duration_s");
+  jw_float(jw, run->target_duration_s);
+  jw_key(jw, "discarded_attempts_s");
+  jw_float(jw, run->discarded_attempts_s);
+  jw_key(jw, "warmup_complete_batches");
+  jw_uint(jw,
+          run->boundary_bytes[0] ? run->warmup_bytes / run->boundary_bytes[0]
+                                 : 0);
   jw_key(jw, "complete_batches");
   jw_uint(jw, run->complete_batches);
   jw_key(jw, "batch_reuses_lower_bound");
@@ -1167,6 +1186,23 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_end(&jw);
   printf("%s\n", strbuf_cstr(&json_buf));
   strbuf_free(&json_buf);
+}
+
+void
+print_bench_json_coverage_error(const struct bench_measurement* run)
+{
+  struct strbuf buf = { 0 };
+  struct json_writer jw;
+  jw_init(&jw, &buf);
+  jw_object_begin(&jw);
+  jw_key(&jw, "status");
+  jw_string(&jw, "error");
+  jw_key(&jw, "error");
+  jw_string(&jw, "insufficient_coverage");
+  json_measurement(&jw, run);
+  jw_object_end(&jw);
+  printf("%s\n", strbuf_cstr(&buf));
+  strbuf_free(&buf);
 }
 
 void

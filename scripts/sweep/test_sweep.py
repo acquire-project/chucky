@@ -44,6 +44,36 @@ class MemcpyTimingTests(unittest.TestCase):
 
 
 class MeasurementPolicyTests(unittest.TestCase):
+    def test_only_qualified_success_is_accepted(self):
+        qualified = {"policy": measurement_policy()["policy"],
+                     "coverage_status": "sufficient"}
+        for window, returncode, expected in (
+            (qualified, 0, "pass"),
+            (qualified, 1, "error"),
+            ({**qualified, "coverage_status": "insufficient"}, 0, "error"),
+            ({**qualified, "policy": "drained-warmup-through-final-close-v1"}, 0, "error"),
+            (None, 0, "error"),
+            ([], 0, "error"),
+        ):
+            with self.subTest(window=window, returncode=returncode), \
+                 patch("sweep.Path.exists", return_value=True), patch(
+                     "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
+                         [], returncode, json.dumps({"status": "pass", "measurement": window}), "")):
+                result = run_one(spec(), Path("build"))
+            self.assertEqual(result["status"], expected)
+            self.assertEqual(result["measurement"], window)
+
+    def test_coverage_failure_retains_diagnostics(self):
+        failed = {"status": "error", "error": "insufficient_coverage",
+                  "measurement": {"coverage_status": "insufficient", "attempt": 5}}
+        with patch("sweep.Path.exists", return_value=True), patch(
+            "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
+                [], 1, json.dumps(failed), "")):
+            result = run_one(spec(), Path("build"))
+        self.assertEqual(result["measurement"], failed["measurement"])
+        self.assertEqual(result["error"], failed["error"])
+        self.assertEqual(result["returncode"], 1)
+
     def test_duration_changes_preserve_geometry_reference(self):
         run = spec(codec="none", blosc_block_bytes=None)
         for duration in (1, 5):
@@ -59,7 +89,8 @@ class MeasurementPolicyTests(unittest.TestCase):
             self.assertEqual(result["geometry_frames"], 200)
 
     def test_resume_refuses_unknown_or_different_policy(self):
-        for previous in (None, measurement_policy(duration=5)):
+        for previous in (None, measurement_policy(duration=5),
+                         {**measurement_policy(), "policy": "drained-warmup-through-final-close-v1"}):
             with tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "results.json"
                 data = {"version": CURRENT_VERSION, "runs": []}
