@@ -27,10 +27,19 @@ struct bench_append_sample
   double max_ms;
 };
 
-struct bench_sustained
+struct bench_measurement
 {
   int boundary_timing;
-  double prep_s, warmup_s, elapsed_s, drain_s;
+  int64_t start_ns; // private clock origin, omitted from reports
+  double prep_s, warmup_s, warmup_drain_s, append_s, elapsed_s, drain_s;
+  double requested_warmup_s, requested_duration_s;
+  uint64_t requested_frames, warmup_bytes, warmup_output_bytes;
+  uint64_t epoch_bytes, epochs_per_batch, staging_bytes;
+  uint64_t memory_budget, target_batch_bytes;
+  uint64_t complete_batches, batch_reuses, generation_transitions;
+  int coverage_sufficient;
+  uint8_t rank;
+  struct dimension geometry[HALF_MAX_RANK];
   uint64_t reference_frames, source_bytes, append_bytes;
   uint64_t input_bytes, output_bytes;
   uint64_t boundary_bytes[3];
@@ -38,7 +47,7 @@ struct bench_sustained
 };
 
 void
-print_sustained_report(const struct bench_sustained* run);
+print_measurement_report(const struct bench_measurement* run);
 
 void
 print_memory_report(const struct bench_memory* mem);
@@ -92,7 +101,7 @@ print_bench_json_pass(const struct stream_metrics* metrics,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
-                      const struct bench_sustained* sustained);
+                      const struct bench_measurement* measurement);
 
 // Emit a minimal error JSON (`{"status":"error"}`) to stdout.
 void

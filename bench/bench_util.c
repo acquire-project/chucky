@@ -17,6 +17,7 @@
 #include "zarr/json_writer.h"
 #include "zarr/shard_pool_fs.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -345,15 +346,36 @@ append_sample_add(struct bench_append_sample* sample, double ms)
     sample->max_ms = ms;
 }
 
-static int
-pump_sustained(struct writer* writer,
-               const unsigned char* source,
-               const _Atomic uint64_t* completed,
-               const struct bench_config* cfg,
-               struct bench_sustained* run,
-               size_t* total_bytes)
+// Called only after a reset/drain, when no delivery worker can update the sink.
+static uint64_t
+sink_bytes(const struct metering_sink* meter,
+           const struct throttled_shard_sink* throttled,
+           const struct discard_shard_sink* discard)
 {
-  uint64_t accepted = 0, checked = 0, warm_input = 0, warm_output = 0;
+  if (meter->inner)
+    return meter->total_bytes;
+  if (throttled->scheduler)
+    return atomic_load(&throttled->total_bytes);
+  return atomic_load(&discard->total_bytes);
+}
+
+static int
+pump_measurement(struct bench_handle* h,
+                 const unsigned char* source,
+                 const struct bench_config* cfg,
+                 struct bench_measurement* run,
+                 const struct metering_sink* meter,
+                 const struct throttled_shard_sink* throttled,
+                 const struct discard_shard_sink* discard,
+                 size_t* total_bytes)
+{
+  uint64_t accepted = 0, checked = 0;
+  uint64_t frame_bytes = dtype_bpe(cfg->dtype ? cfg->dtype : dtype_u16);
+  for (uint8_t d = 1; d < cfg->rank; ++d)
+    frame_bytes *= cfg->dims[d].size;
+  if (cfg->frames > SIZE_MAX / frame_bytes)
+    return 1;
+  const uint64_t limit = cfg->frames * frame_bytes;
   uint64_t next[3];
   int following[3] = { 0 };
   memcpy(next, run->boundary_bytes, sizeof(next));
@@ -361,8 +383,23 @@ pump_sustained(struct writer* writer,
   int64_t measure_start = start;
   int measuring = cfg->warmup_s == 0;
   while (1) {
-    const size_t offset = accepted & (run->source_bytes - 1);
-    const uint64_t end = accepted + run->append_bytes;
+    const size_t offset = accepted % run->source_bytes;
+    size_t offer = run->append_bytes;
+    if (offer > run->source_bytes - offset)
+      offer = run->source_bytes - offset;
+    // A warmup checkpoint never finalizes a partial batch. Clip just this
+    // offer to a batch boundary; append-downsample folds may need more batches.
+    if (!measuring) {
+      const uint64_t remaining =
+        run->boundary_bytes[0] - accepted % run->boundary_bytes[0];
+      if (offer > remaining)
+        offer = remaining;
+    } else if (limit && offer > limit - (accepted - run->warmup_bytes)) {
+      offer = limit - (accepted - run->warmup_bytes);
+    }
+    if (accepted > SIZE_MAX - offer)
+      return 1;
+    const uint64_t end = accepted + offer;
     int crossing[3], active = 0;
     if (run->boundary_timing) {
       for (int i = 0; i < 3; ++i) {
@@ -372,11 +409,10 @@ pump_sustained(struct writer* writer,
     }
     const int timed = active && measuring;
     const int64_t before = timed ? platform_monotonic_ns() : 0;
-    struct writer_result result = writer_append_wait(
-      writer,
-      (struct slice){ source + offset, source + offset + run->append_bytes });
+    const struct slice input = { source + offset, source + offset + offer };
+    struct writer_result result = writer_append_wait(bench_writer(h), input);
     const double ms = timed ? (platform_monotonic_ns() - before) * 1e-6 : 0;
-    if (result.error)
+    if (result.error || result.rest.beg != result.rest.end)
       return 1;
     if (active) {
       for (int i = 0; i < 3; ++i) {
@@ -393,24 +429,50 @@ pump_sustained(struct writer* writer,
       }
     }
     accepted = end;
-    // Per-append clock reads would dominate the smallest offers.
-    if (accepted - checked < (4u << 20))
+    const int at_limit =
+      measuring && limit && accepted - run->warmup_bytes == limit;
+    // Avoid clock reads per tiny append, but always check a frame limit and
+    // warmup batch boundary. Long blocking appends can overshoot a duration.
+    if (!at_limit && accepted - checked < (4u << 20) &&
+        (measuring || accepted % run->boundary_bytes[0]))
       continue;
     checked = accepted;
-    const int64_t now = platform_monotonic_ns();
-    const uint64_t output =
-      atomic_load_explicit(completed, memory_order_relaxed);
-    if (!measuring && (now - start) * 1e-9 >= cfg->warmup_s) {
-      measure_start = now;
-      warm_input = accepted;
-      warm_output = output;
-      measuring = 1;
+    int64_t now = platform_monotonic_ns();
+    if (!measuring && (now - start) * 1e-9 >= cfg->warmup_s &&
+        accepted % run->boundary_bytes[0] == 0) {
+      const int rc = h->backend == BENCH_CPU
+                       ? tile_stream_cpu_reset_metrics(h->cpu)
+                       : bench_gpu_reset_metrics(h->gpu);
+      if (rc < 0)
+        return 1;
+      if (rc == 0) {
+        const int64_t drained = platform_monotonic_ns();
+        run->warmup_drain_s = (drained - now) * 1e-9;
+        run->warmup_s = (drained - start) * 1e-9;
+        run->warmup_bytes = accepted;
+        run->warmup_output_bytes = sink_bytes(meter, throttled, discard);
+        measure_start = drained;
+        now = drained;
+        measuring = 1;
+        memset(following, 0, sizeof(following));
+      }
     }
-    if (measuring && (now - measure_start) * 1e-9 >= cfg->duration_s) {
-      run->warmup_s = (measure_start - start) * 1e-9;
-      run->elapsed_s = (now - measure_start) * 1e-9;
-      run->input_bytes = accepted - warm_input;
-      run->output_bytes = output - warm_output;
+    if (measuring && (at_limit || (!limit && (now - measure_start) * 1e-9 >=
+                                               cfg->duration_s))) {
+      run->start_ns = measure_start;
+      run->append_s = (now - measure_start) * 1e-9;
+      run->input_bytes = accepted - run->warmup_bytes;
+      run->complete_batches = run->input_bytes / run->boundary_bytes[0];
+      // Two batch buffers on GPU; this conservative lower bound also applies
+      // to CPU. Counts describe input positions, not internal event timestamps.
+      run->batch_reuses =
+        run->complete_batches > 2 ? run->complete_batches - 2 : 0;
+      run->generation_transitions = (accepted - 1) / run->boundary_bytes[1] -
+                                    run->warmup_bytes / run->boundary_bytes[1];
+      run->coverage_sufficient =
+        run->append_s >= 0.25 && run->warmup_s >= 0.25 &&
+        run->warmup_bytes / run->boundary_bytes[0] >= 2 &&
+        run->complete_batches >= 4 && run->generation_transitions >= 2;
       *total_bytes = accepted;
       return 0;
     }
@@ -438,21 +500,17 @@ run_bench(const struct bench_config* cfg)
 
   const enum dtype dtype = cfg->dtype ? cfg->dtype : dtype_u16;
   const size_t bpe = dtype_bpe(dtype);
-  struct bench_sustained sustained = {
+  struct bench_measurement measurement = {
     .boundary_timing = !cfg->no_boundary_timing,
     .reference_frames = dims[0].size,
     .source_bytes = 64u << 20,
     .append_bytes =
       cfg->append_elements ? cfg->append_elements * bpe : 64u << 20,
   };
-  if (cfg->duration_s > 0 &&
-      (is_multiscale || output_path || cfg->s3_bucket || cfg->io_bw_mbps ||
-       cfg->io_latency_us || !sustained.append_bytes ||
-       cfg->append_elements > sustained.source_bytes / bpe ||
-       sustained.source_bytes % sustained.append_bytes)) {
-    log_error(
-      "Sustained runs require single-scale discard output and an append "
-      "size that divides 64 MiB");
+  if (!measurement.append_bytes ||
+      cfg->append_elements > measurement.source_bytes / bpe ||
+      measurement.source_bytes % measurement.append_bytes) {
+    log_error("Append size must divide the 64 MiB source ring");
     return bench_failed(cfg->json_output);
   }
   uint32_t chosen_epochs_per_batch = 0; // 0 = auto; set by advise_layout on fit
@@ -481,19 +539,25 @@ run_bench(const struct bench_config* cfg)
   struct shard_sink* sink = &dss.base;
   struct bench_handle h = { .backend = cfg->backend };
 
-  if (cfg->duration_s > 0) {
-    CHECK(Fail, chosen_epochs_per_batch > 0);
-    const size_t elements = sustained.source_bytes / bpe;
+  {
+    const size_t elements = measurement.source_bytes / bpe;
     source = calloc(elements, bpe > 2 ? bpe : 2);
     CHECK(Fail, source);
     fill((uint16_t*)source, elements, 0, elements);
     free_fill_pattern(fill);
-    sustained.prep_s = (platform_monotonic_ns() - prep_start) * 1e-9;
-    sustained.boundary_bytes[1] =
+    measurement.prep_s = (platform_monotonic_ns() - prep_start) * 1e-9;
+    measurement.boundary_bytes[1] =
       dims[0].chunk_size * dims[0].chunks_per_shard * bpe;
     for (uint8_t d = 1; d < rank; ++d)
-      sustained.boundary_bytes[1] *= dims[d].size;
-    // Duration and append size must not change the fitted geometry.
+      measurement.boundary_bytes[1] *= dims[d].size;
+    measurement.rank = rank;
+    memcpy(measurement.geometry, dims, rank * sizeof(*dims));
+    measurement.requested_frames = cfg->frames;
+    measurement.requested_warmup_s = cfg->warmup_s;
+    measurement.requested_duration_s = cfg->duration_s;
+    measurement.memory_budget = cfg->memory_budget;
+    measurement.target_batch_bytes = resolved_batch_bytes(cfg);
+    // Run length and append size must not change the fitted geometry.
     dims[0].size = 0;
   }
 
@@ -563,6 +627,7 @@ run_bench(const struct bench_config* cfg)
     if (tile_stream_cpu_memory_estimate(&config, 0, &mem) == 0) {
       est_total_chunks = mem.total_chunks;
       est_total_bytes = mem.heap_bytes;
+      chosen_epochs_per_batch = mem.epochs_per_batch;
       char a[32], b[32];
       format_bytes(a, sizeof(a), mem.heap_bytes);
       print_report("  %-17s %s heap", "CPU memory:", a);
@@ -610,16 +675,22 @@ run_bench(const struct bench_config* cfg)
   float init_s = platform_toc(&init_clock);
 
   const struct tile_stream_layout* layout = bench_layout(&h);
-  if (cfg->duration_s > 0) {
-    sustained.boundary_bytes[0] =
+  if (cfg->backend == BENCH_GPU)
+    chosen_epochs_per_batch = bench_gpu_status(h.gpu).epochs_per_batch;
+  {
+    measurement.epoch_bytes = layout->epoch_elements * bpe;
+    measurement.epochs_per_batch = chosen_epochs_per_batch;
+    measurement.staging_bytes = config.buffer_capacity_bytes;
+    measurement.boundary_bytes[0] =
       layout->epoch_elements * bpe * chosen_epochs_per_batch;
-    uint64_t a = sustained.boundary_bytes[0], b = config.buffer_capacity_bytes;
+    uint64_t a = measurement.boundary_bytes[0],
+             b = config.buffer_capacity_bytes;
     while (b) {
       const uint64_t remainder = a % b;
       a = b;
       b = remainder;
     }
-    sustained.boundary_bytes[2] = a;
+    measurement.boundary_bytes[2] = a;
   }
   size_t max_compressed_size = 0;
   size_t codec_batch_size = 0;
@@ -631,8 +702,7 @@ run_bench(const struct bench_config* cfg)
     nlod = st.nlod;
   }
 
-  if (cfg->duration_s > 0)
-    print_report("  Reference extent below fits geometry, not run length:");
+  print_report("  Reference extent below fits geometry, not run length:");
   log_bench_header(layout,
                    config.dtype,
                    config.codec,
@@ -651,28 +721,15 @@ run_bench(const struct bench_config* cfg)
       "  %-17s %zu elements = %s", "Append size:", cfg->append_elements, abuf);
   }
 
-  struct platform_clock clock = { 0 };
-  platform_toc(&clock);
-  if (cfg->duration_s > 0) {
-    CHECK(Fail,
-          pump_sustained(bench_writer(&h),
-                         source,
-                         &dss.total_bytes,
-                         cfg,
-                         &sustained,
-                         &total_bytes) == 0);
-    total_elements = total_bytes / bpe;
-  } else {
-    CHECK(
-      Fail,
-      pump_data_prefill_blocked(
-        bench_writer(&h), total_elements, fill, bpe, cfg->append_elements) ==
-        0);
-  }
+  CHECK(Fail,
+        pump_measurement(
+          &h, source, cfg, &measurement, &meter, &tss, &dss, &total_bytes) ==
+          0);
+  total_elements = total_bytes / bpe;
 
   const int64_t drain_start = platform_monotonic_ns();
-  if (cfg->duration_s > 0)
-    CHECK(Fail, writer_flush(bench_writer(&h)).error == 0);
+  measurement.append_s = (drain_start - measurement.start_ns) * 1e-9;
+  CHECK(Fail, writer_flush(bench_writer(&h)).error == 0);
 
   // Final metadata publication belongs to the measured operation too.
   CHECK(Fail, writer_close(bench_writer(&h)).error == 0);
@@ -686,8 +743,11 @@ run_bench(const struct bench_config* cfg)
     goto Fail;
   }
   float flush_s = platform_toc(&flush_clock);
-  float wall_s = platform_toc(&clock);
-  sustained.drain_s = (platform_monotonic_ns() - drain_start) * 1e-9;
+  measurement.drain_s = (platform_monotonic_ns() - drain_start) * 1e-9;
+  measurement.elapsed_s = measurement.append_s + measurement.drain_s;
+  const float wall_s = (float)measurement.elapsed_s;
+  measurement.output_bytes =
+    sink_bytes(&meter, &tss, &dss) - measurement.warmup_output_bytes;
 
   if (platform_peak_resident_memory(&mem_used.host_peak_bytes) != 0) {
     log_warn("  host peak memory reading unavailable");
@@ -714,26 +774,15 @@ run_bench(const struct bench_config* cfg)
 
   {
     struct stream_metrics m = bench_get_metrics(&h);
-    int has_output = output_path || cfg->s3_bucket;
-    size_t sink_total_bytes;
-    if (has_output)
-      sink_total_bytes = meter.total_bytes;
-    else if (use_throttled)
-      sink_total_bytes = (size_t)atomic_load(&tss.total_bytes);
-    else
-      sink_total_bytes = dss.total_bytes;
-    struct sink_stats ss = { .total_bytes = sink_total_bytes,
-                             .total_chunks = est_total_chunks };
-    if (cfg->duration_s > 0) {
-      print_sustained_report(&sustained);
-      print_report("\n--- Whole run (warmup, measurement, drain) ---");
-    }
+    const struct sink_stats ss = { .total_bytes = measurement.output_bytes,
+                                   .total_chunks = est_total_chunks };
+    print_measurement_report(&measurement);
     print_bench_report(&m,
                        layout,
                        config.dtype,
                        &ss,
-                       total_bytes,
-                       total_elements,
+                       measurement.input_bytes,
+                       measurement.input_bytes / bpe,
                        wall_s,
                        init_s,
                        flush_s,
@@ -741,22 +790,23 @@ run_bench(const struct bench_config* cfg)
     print_memory_report(&mem_used);
 
     if (cfg->json_output) {
-      const struct stream_metric* sink_metric =
-        meter.metric.count > 0 ? &meter.metric : NULL;
+      // Pipeline sink metrics share the reset boundary; the wrapper's
+      // lifetime metric includes warmup and must not replace them.
+      const struct stream_metric* sink_metric = NULL;
       print_bench_json_pass(&m,
                             sink_metric,
                             layout,
                             config.dtype,
                             config.codec,
                             &ss,
-                            total_bytes,
-                            total_elements,
+                            measurement.input_bytes,
+                            measurement.input_bytes / bpe,
                             wall_s,
                             init_s,
                             flush_s,
                             &mem_used,
                             bench_worker_threads(&h),
-                            cfg->duration_s > 0 ? &sustained : NULL);
+                            &measurement);
     }
   }
 
@@ -777,7 +827,7 @@ Cleanup:
     throttled_shard_sink_teardown(&tss);
   free_fill_pattern(fill);
   free(source);
-  dims[0].size = sustained.reference_frames;
+  dims[0].size = measurement.reference_frames;
   return rc;
 }
 
@@ -794,6 +844,8 @@ struct bench_cli_args
   uint64_t target_batch_bytes;
   uint64_t memory_budget;
   uint64_t frames;
+  uint64_t geometry_frames;
+  int frames_set, duration_set, warmup_set;
   size_t append_elements; // 0 = default block
   int json_output;
   const char* output_path;
@@ -886,13 +938,31 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
     } else if (strcmp(av[i], "--dtype") == 0 && i + 1 < ac) {
       if (!parse_dtype(av[++i], &out->dtype))
         return 1;
-    } else if (strcmp(av[i], "--frames") == 0 && i + 1 < ac) {
-      out->frames = (uint64_t)strtoull(av[++i], NULL, 10);
+    } else if ((strcmp(av[i], "--frames") == 0 ||
+                strcmp(av[i], "--geometry-frames") == 0) &&
+               i + 1 < ac) {
+      const int geometry = strcmp(av[i], "--geometry-frames") == 0;
+      const char* value = av[++i];
+      char* end;
+      errno = 0;
+      const uint64_t frames = strtoull(value, &end, 10);
+      if (end == value || *end || *value == '-' || errno ||
+          (geometry && frames == 0)) {
+        fprintf(stderr, "Invalid frame count: %s\n", value);
+        return 1;
+      }
+      if (geometry)
+        out->geometry_frames = frames;
+      else {
+        out->frames = frames;
+        out->frames_set = 1;
+      }
     } else if (strcmp(av[i], "--append-elements") == 0 && i + 1 < ac) {
       char* end;
       const char* value = av[++i];
+      errno = 0;
       out->append_elements = (size_t)strtoull(value, &end, 10);
-      if (end == value || *end || *value == '-') {
+      if (end == value || *end || *value == '-' || errno) {
         fprintf(stderr, "Invalid --append-elements: %s\n", value);
         return 1;
       }
@@ -908,6 +978,7 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
         return 1;
       }
       *(duration ? &out->duration_s : &out->warmup_s) = seconds;
+      *(duration ? &out->duration_set : &out->warmup_set) = 1;
       ++i;
     } else if (strcmp(av[i], "--json") == 0) {
       out->json_output = 1;
@@ -957,8 +1028,9 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
               "[--blosc-block-bytes N (required for Blosc, e.g. 16K)] "
               "[--blosc-shuffle none|byte|bit] "
               "[--reduce mean|min|max|median|max_sup|min_sup] "
-              "[--backend gpu|cpu] [--dtype u8|u16|...] [--frames N] "
-              "[--json] [--append-elements N] [--duration S [--warmup S]] "
+              "[--backend gpu|cpu] [--dtype u8|u16|...] "
+              "[--geometry-frames N] [--frames N | --duration S] "
+              "[--json] [--append-elements N] [--warmup S] "
               "[--no-boundary-timing] "
               "[--chunk-bytes N] [--batch-bytes N] "
               "[--memory-budget N] [-o path] "
@@ -972,8 +1044,8 @@ parse_bench_cli_args(int ac, char* av[], struct bench_cli_args* out)
       return 1;
     }
   }
-  if (out->warmup_s > 0 && out->duration_s == 0) {
-    fprintf(stderr, "--warmup requires --duration\n");
+  if (out->frames > 0 && out->duration_set) {
+    fprintf(stderr, "Use --frames or --duration; fit with --geometry-frames\n");
     return 1;
   }
   return codec_config_validate_blosc(out->codec);
@@ -987,8 +1059,12 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     return 1;
 
   struct dimension* dims = spec.dims;
-  if (a.frames > 0)
-    dims[0].size = a.frames;
+  if (a.geometry_frames)
+    dims[0].size = a.geometry_frames;
+  if (!a.duration_set && !a.frames)
+    a.duration_s = 1.0;
+  if (!a.warmup_set)
+    a.warmup_s = 0.25;
 
   if (a.backend == BENCH_GPU && bench_gpu_context_create())
     return bench_failed(a.json_output);
@@ -1027,6 +1103,7 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     .backpressure_bytes = a.backpressure_bytes,
     .max_threads = a.max_threads,
     .full_memcpy_timing = a.full_memcpy_timing,
+    .frames = a.frames,
     .warmup_s = a.warmup_s,
     .duration_s = a.duration_s,
     .no_boundary_timing = a.no_boundary_timing,
@@ -1330,7 +1407,7 @@ bench_two_streams_main(int ac, char* av[], struct bench_spec spec)
   struct bench_cli_args a = { 0 };
   if (parse_bench_cli_args(ac, av, &a))
     return 1;
-  if (a.duration_s > 0) {
+  if (a.duration_set || a.warmup_set || (a.frames_set && !a.frames)) {
     print_report("--duration requires a single-stream benchmark");
     return bench_failed(a.json_output);
   }

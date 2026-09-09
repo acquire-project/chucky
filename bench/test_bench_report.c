@@ -118,7 +118,7 @@ main(int argc, char** argv)
                      empty ? 0 : 0.2f,
                      empty ? 0 : 65536);
   print_memory_report(&mem);
-  struct bench_sustained window = {
+  struct bench_measurement window = {
     .boundary_timing = 1,
     .elapsed_s = 1,
     .source_bytes = 64u << 20,
@@ -133,7 +133,7 @@ main(int argc, char** argv)
     };
   }
   if (large || empty)
-    print_sustained_report(&window);
+    print_measurement_report(&window);
   print_bench_json_pass(&m,
                         &m.sink,
                         &layout,

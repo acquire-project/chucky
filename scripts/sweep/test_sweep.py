@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from columnar import decode_runs, pack
 from models import CURRENT_VERSION, migrate_results, run_id
 from summary import trim_run
-from sweep import RunSpec, TIERS, deduplicate, main, run_one
+from sweep import RunSpec, TIERS, deduplicate, main, run_one, measurement_policy
 
 
 def spec(**overrides):
@@ -41,6 +41,46 @@ class MemcpyTimingTests(unittest.TestCase):
                                  "timing_scope": "sampled"}}]
         strings, blocks = pack([runs])
         self.assertEqual(decode_runs(blocks[0], strings), runs)
+
+
+class MeasurementPolicyTests(unittest.TestCase):
+    def test_duration_changes_preserve_geometry_reference(self):
+        run = spec(codec="none", blosc_block_bytes=None)
+        for duration in (1, 5):
+            with patch("sweep.Path.exists", return_value=True), patch(
+                "sweep.subprocess.run", return_value=subprocess.CompletedProcess(
+                    [], 0, '{"status":"pass"}', "")) as execute:
+                result = run_one(run, Path("build"), warmup=0.5, duration=duration)
+            cmd = execute.call_args.args[0]
+            self.assertNotIn("--frames", cmd)
+            self.assertEqual(cmd[cmd.index("--geometry-frames") + 1], "200")
+            self.assertEqual(cmd[cmd.index("--warmup") + 1], "0.5")
+            self.assertEqual(cmd[cmd.index("--duration") + 1], str(duration))
+            self.assertEqual(result["geometry_frames"], 200)
+
+    def test_resume_refuses_unknown_or_different_policy(self):
+        for previous in (None, measurement_policy(duration=5)):
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results.json"
+                data = {"version": CURRENT_VERSION, "runs": []}
+                if previous is not None:
+                    data["measurement_policy"] = previous
+                output.write_text(json.dumps(data))
+                before = output.read_bytes()
+                result = CliRunner().invoke(main, ["--tier", "backend", "-o", str(output)])
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("different or unknown timing policy", result.output)
+                self.assertEqual(output.read_bytes(), before)
+
+    def test_summary_retains_policy_and_coverage(self):
+        window = {"policy": measurement_policy()["policy"],
+                  "coverage_status": "insufficient", "geometry": {
+                      "dimensions": [{"reference_size": 200, "chunk_size": 1}]}}
+        row = {**spec().base_result(), "status": "pass", "measurement": window}
+        trimmed = trim_run(row)
+        self.assertEqual(trimmed["measurement"], window)
+        strings, blocks = pack([[trimmed]])
+        self.assertEqual(decode_runs(blocks[0], strings), [trimmed])
 
 
 class BloscSweepTests(unittest.TestCase):
@@ -142,6 +182,7 @@ class BloscSweepTests(unittest.TestCase):
                     previous["blosc_block_bytes"] = previous_block
                 output = Path(directory) / "results.json"
                 output.write_text(json.dumps({"version": CURRENT_VERSION, "machine": {},
+                                             "measurement_policy": measurement_policy(),
                                              "runs": [previous]}))
                 with patch.dict(TIERS, {"backend": lambda: [run]}), \
                      patch("sweep.git_commit", return_value="abcdef0"), \

@@ -453,6 +453,49 @@ stream_close_body(struct compress_agg_array* ar, struct stream_context* ctx)
   return r;
 }
 
+int
+tile_stream_gpu_reset_metrics(struct tile_stream_gpu* s)
+{
+  if (!s || s->flushed || s->ctx.append_failed)
+    return -1;
+  struct stream_engine* e = &s->engine;
+  struct stream_context* ctx = &s->ctx;
+  const uint64_t batch = ctx->layout.epoch_elements * e->sched.epochs_per_batch;
+  if (ctx->cursor_elements % batch)
+    return 1;
+  const int pushed = cu_ctx_push(e->cuda);
+  if (pushed < 0)
+    return -1;
+  int rc = -1;
+  if (stream_dispatch_staged(e).error)
+    goto Done;
+  if (lod_partial_append_mask(&e->lod)) {
+    rc = 1;
+    goto Done;
+  }
+  if (schedule_deliver_kicked(e, ctx).error) {
+    ctx->append_failed = 1;
+    goto Done;
+  }
+  if (shard_sink_drain(ctx->sink) ||
+      (ctx->sink->flush && ctx->sink->flush(ctx->sink)))
+    goto Done;
+  if (cuStreamSynchronize(e->streams.compute) != CUDA_SUCCESS ||
+      cuStreamSynchronize(e->streams.d2h) != CUDA_SUCCESS ||
+      cuStreamSynchronize(e->streams.payload_copy) != CUDA_SUCCESS) {
+    ctx->append_failed = 1;
+    goto Done;
+  }
+  collect_ingest_timing(e);
+  reset_stream_metrics(&e->metrics);
+  e->stage.scatter_samples_lost = 0;
+  e->lod_shared.timing_samples_lost = 0;
+  rc = 0;
+Done:
+  cu_ctx_pop(pushed);
+  return rc;
+}
+
 // --- Accessor ---
 
 struct stream_metrics

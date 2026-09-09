@@ -89,6 +89,7 @@ endforeach()
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_bench(test_bench_report test_bench_report.c bench_util Zstd::Zstd)
+    add_bench(test_bench_multiscale test_bench_multiscale.c bench_util Zstd::Zstd)
     add_test(
         NAME test-bench_report
         COMMAND
@@ -96,17 +97,25 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_report.py
             $<TARGET_FILE:test_bench_report>
     )
-    set(SUSTAINED_BACKENDS cpu)
+    add_bench(test_bench_reset test_bench_reset.c
+        bench_util test_shard_sink test_shard_verify Zstd::Zstd
+    )
+    set(MEASUREMENT_BACKENDS cpu)
     if(CHUCKY_ENABLE_GPU)
-        list(APPEND SUSTAINED_BACKENDS gpu)
+        list(APPEND MEASUREMENT_BACKENDS gpu)
     endif()
-    foreach(backend IN LISTS SUSTAINED_BACKENDS)
+    foreach(backend IN LISTS MEASUREMENT_BACKENDS)
         add_test(
-            NAME test-bench_sustained_${backend}
+            NAME test-bench_reset_${backend}
+            COMMAND test_bench_reset ${backend}
+        )
+        add_test(
+            NAME test-bench_measurement_${backend}
             COMMAND
                 ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_sustained.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_bench_measurement.py
                 $<TARGET_FILE:bench_stream_smallepoch_single> ${backend}
+                $<TARGET_FILE:test_bench_multiscale>
         )
     endforeach()
 endif()

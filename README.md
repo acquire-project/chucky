@@ -184,48 +184,81 @@ multiscale, and multiscale-with-dim0-downsampling modes.
 | `--blosc-block-bytes` | e.g. `16K`, `64K`, `4097` | Required for Blosc | Internal Blosc block size in bytes |
 | `--blosc-shuffle` | `none`, `byte`, `bit` | `none` | Blosc filter; recorded with the level in benchmark JSON |
 | `--reduce` | `mean`, `min`, `max`, `median`, `max_sup`, `min_sup` | `mean` | LOD reduction method |
-| `--duration` | seconds, > 0 | off | Sustained measurement window; single-stream, single-scale discard only |
-| `--warmup` | seconds, >= 0 | 0 | Unmeasured streaming before `--duration` |
+| `--duration` | seconds, > 0 | 1 | Measured append duration; final drain is added to the reported window |
+| `--frames` | frame count | 0 (unbounded) | Measured input limit, mutually exclusive with a positive duration |
+| `--geometry-frames` | positive frame count | scenario reference | Reference extent used only to fit chunk, shard, epoch, and batch geometry |
+| `--warmup` | seconds, >= 0 | 0.25 | Stream, drain at a complete batch/LOD boundary, then reset metrics |
 | `--no-boundary-timing` | flag | off | Disable full-API samples to check their observer overhead |
-| `--append-elements` | element count | bulk | In sustained mode, append bytes must divide the fixed 64 MiB source ring |
+| `--append-elements` | element count | bulk | Append bytes must divide the fixed 64 MiB source ring |
 | `--full-memcpy-timing` | flag | off | GPU profiling: time every host copy instead of sampling small copies |
 | `-o path` | output directory | omit to discard | Write Zarr output to disk |
 
 Benchmarks report per-stage throughput and latency, compression ratio, memory
 breakdown, and overall pipeline GiB/s.
 
-For sustained append comparisons, hold the reference frame count, chunk size,
-memory budget, and source pattern fixed. For example:
+Single-stream benchmarks use the same timing policy for CPU/GPU, single-scale
+and multiscale, and discard/filesystem/S3/throttled sinks. For example:
 
 ```sh
 ./build/bench/bench_stream_smallepoch_single --backend gpu --codec none \
-  --fill xor --dtype u16 --frames 65536 --chunk-bytes 1M --memory-budget 5G \
-  --append-elements 256 --warmup 5 --duration 20 --json
+  --fill xor --dtype u16 --geometry-frames 65536 --chunk-bytes 1M \
+  --batch-bytes 64M --memory-budget 5G --append-elements 256 --json
 ```
 
-Here `--frames` fits the layout; streaming then continues without a frame limit.
-Preparation and stream creation precede warmup. The measurement window does not
-flush at either endpoint. Its completed-output rate counts physical discard
-bytes (including padding and footers), not accepted input or queued writes.
-Final flush and close are timed separately as drain. Top-level JSON throughput
-and pipeline metrics cover the whole run; the optional `sustained` object holds
-window-only throughput and full-API latency samples.
+`--geometry-frames` fixes the layout reference. `--frames N` limits measured
+input, and `--duration S` limits measured append time; neither changes that
+layout. The underlying frame dimension is unbounded in both cases. Source
+preparation and stream creation precede warmup. The fixed 64 MiB source ring
+and source generators are unchanged.
 
-Latency samples cover calls crossing input batch/generation boundaries, a
-possible staging-boundary grid, and the next 16 calls after each. The grid is
-the greatest common divisor of input batch bytes and staging capacity. These
-are overlapping input-position groups, not internal flush event timestamps;
-they do not establish a maximum for unsampled calls. The GPU's existing
-whole-run append histogram is also retained.
-Use a paired `--no-boundary-timing` run to check sampling's throughput cost;
-this does not disable the library's existing timers.
+Warmup continues to a full batch boundary with no partial append-downsample
+accumulator, drains earlier work and sink metadata, and resets stage timings,
+append histograms, maxima, and work counters. It keeps the same pipeline and
+allocations. No warmup input is in flight when measurement begins. Measurement
+includes all its accepted input through final flush, close, and metadata
+publication. `append_s` and `drain_s` partition this window; primary throughput
+uses their sum. Output bytes count physical sink writes, including padding and
+footers, and are read after drain. Output files include **both warmup and measured
+input**; their extent is not just `--frames N`.
 
-Compare 256, 1024, 4096, and 33554432 elements for 512 B, 2 KiB, 8 KiB, and
-64 MiB offers at `u16`; use 30 seconds for bulk. Repeat in reverse order and
-include `orca2_single --frames 200` and `--backend cpu` controls. Check actual
-elapsed time and delivered batch counts: short windows can have substantial
-endpoint/backlog error. The fixed-frame sweep runner is unchanged; do not mix
-these window rates into historical fixed-frame throughput comparisons.
+TTY and top-level JSON rates/stage metrics describe this same window. The
+`measurement` object records the policy, requested and actual durations, warmup
+and measured work, effective per-dimension geometry, epoch/batch/staging sizes,
+and boundary samples. Version 11 sweep results are not directly comparable to
+older whole-run or no-drain sustained rates. The specialized two-stream driver
+retains its explicit fixed-frame, whole-run policy and rejects timing options.
+
+The 0.25 s warmup / 1 s measurement defaults keep routine sweeps practical.
+Coverage requires at least 0.25 s and two batches of warmup, then 0.25 s, four
+complete batches, and two generation transitions during measurement. The batch
+reuse count is a conservative lower bound after allowing two batch buffers.
+These counts use input positions, independently of the geometry reference and
+`min_append_shards`; that fitter constraint is no longer a coverage guarantee.
+Cases below these minima report **insufficient coverage**, even if execution
+passes. Meeting the minima does not establish steady-state accuracy.
+
+Validate representative short runs against longer references (`--warmup 2
+--duration 5`, or longer for slow cases) with the same geometry, source, append
+size, codec, sink, and worker allocation. Repeat paired runs in reverse order,
+include `orca2_single --geometry-frames 200` and CPU controls, and compare rates,
+variation, coverage, and drain fraction. Extend the cases needing more coverage
+or precision instead of making every sweep case long. A blocking append or
+warmup alignment can overshoot requested durations; use actual times.
+
+Full-API latency samples cover calls crossing input batch/generation boundaries,
+a possible staging grid (GCD of batch bytes and staging capacity), and the next
+16 calls. Groups overlap and do not establish maxima for unsampled calls. The
+backend append histogram uses the same warmup exclusion; its sampling scope
+still depends on the backend. `--no-boundary-timing` checks observer overhead
+without disabling the library timers.
+
+Input buffering ([#272](https://github.com/acquire-project/chucky/issues/272))
+remains a separate producer-latency feature. A queue can absorb caller stalls
+while downstream initialization continues; it cannot warm the downstream
+pipeline by itself. Compare direct and buffered runs with the same downstream
+work and drained endpoints, reporting occupancy, backpressure, and downstream
+delay separately from caller latency. Extra copying can reduce throughput,
+especially with codec `none`; buffering is not enabled as a benchmark default.
 
 ## Architecture
 

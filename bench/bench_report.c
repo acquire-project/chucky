@@ -688,21 +688,36 @@ static const char* const boundary_keys[] = { "batch",
                                              "staging_grid" };
 
 void
-print_sustained_report(const struct bench_sustained* run)
+print_measurement_report(const struct bench_measurement* run)
 {
   char source[32], append[32];
   format_bytes(source, sizeof(source), run->source_bytes);
   format_bytes(append, sizeof(append), run->append_bytes);
-  print_report("\n--- Sustained window ---");
+  print_report("\n--- Measurement window ---");
+  print_report("  Policy: drained warmup; measurement includes final close");
   print_report("  Source: %s    Append: %s", source, append);
   print_report(
     "  Source prep: %8.3f s    Warmup: %8.3f s", run->prep_s, run->warmup_s);
   print_report(
     "  Measurement: %8.3f s    Drain:  %8.3f s", run->elapsed_s, run->drain_s);
-  print_report("  Accepted:    %8.3f GiB/s",
+  print_report("  Append: %8.3f s    Warmup drain: %8.3f s",
+               run->append_s,
+               run->warmup_drain_s);
+  print_report("  Input:       %8.3f GiB/s (includes final drain)",
                gb_per_s(run->input_bytes, run->elapsed_s * 1000));
-  print_report("  Completed:   %8.3f GiB/s (physical discard bytes)",
+  print_report("  Output:      %8.3f GiB/s (physical sink writes, drained)",
                gb_per_s(run->output_bytes, run->elapsed_s * 1000));
+  print_report("  Coverage: %s",
+               run->coverage_sufficient ? "sufficient" : "insufficient");
+  print_report("  Full batches: %llu    Batch reuses (lower bound): %llu",
+               (unsigned long long)run->complete_batches,
+               (unsigned long long)run->batch_reuses);
+  print_report("  Generation transitions: %llu",
+               (unsigned long long)run->generation_transitions);
+  print_report("  Minimum: 0.25 s warmup + 2 batches; 0.25 s measured;");
+  print_report("           4 measured batches and 2 generation transitions.");
+  print_report(
+    "  Coverage counts input positions; it does not establish accuracy.");
   if (!run->boundary_timing) {
     print_report("  Full API boundary sampling: disabled");
     return;
@@ -741,10 +756,71 @@ print_sustained_report(const struct bench_sustained* run)
 }
 
 static void
-json_sustained(struct json_writer* jw, const struct bench_sustained* run)
+json_measurement(struct json_writer* jw, const struct bench_measurement* run)
 {
-  jw_key(jw, "sustained");
+  jw_key(jw, "measurement");
   jw_object_begin(jw);
+  jw_key(jw, "policy");
+  jw_string(jw, "drained-warmup-through-final-close-v1");
+  jw_key(jw, "input_mode");
+  jw_string(jw, "direct");
+  jw_key(jw, "output_scope");
+  jw_string(jw, "physical_sink_writes");
+  jw_key(jw, "coverage_status");
+  jw_string(jw, run->coverage_sufficient ? "sufficient" : "insufficient");
+  jw_key(jw, "complete_batches");
+  jw_uint(jw, run->complete_batches);
+  jw_key(jw, "batch_reuses_lower_bound");
+  jw_uint(jw, run->batch_reuses);
+  jw_key(jw, "generation_transitions");
+  jw_uint(jw, run->generation_transitions);
+  jw_key(jw, "requested_frames");
+  jw_uint(jw, run->requested_frames);
+  jw_key(jw, "requested_warmup_s");
+  jw_float(jw, run->requested_warmup_s);
+  jw_key(jw, "requested_duration_s");
+  jw_float(jw, run->requested_duration_s);
+  jw_key(jw, "warmup_input_bytes");
+  jw_uint(jw, run->warmup_bytes);
+  jw_key(jw, "warmup_output_bytes");
+  jw_uint(jw, run->warmup_output_bytes);
+  jw_key(jw, "warmup_drain_s");
+  jw_float(jw, run->warmup_drain_s);
+  jw_key(jw, "append_s");
+  jw_float(jw, run->append_s);
+  jw_key(jw, "geometry");
+  jw_object_begin(jw);
+  jw_key(jw, "epoch_bytes");
+  jw_uint(jw, run->epoch_bytes);
+  jw_key(jw, "epochs_per_batch");
+  jw_uint(jw, run->epochs_per_batch);
+  jw_key(jw, "staging_bytes");
+  jw_uint(jw, run->staging_bytes);
+  jw_key(jw, "memory_budget_bytes");
+  jw_uint(jw, run->memory_budget);
+  jw_key(jw, "target_batch_bytes");
+  jw_uint(jw, run->target_batch_bytes);
+  jw_key(jw, "dimensions");
+  jw_array_begin(jw);
+  for (uint8_t d = 0; d < run->rank; ++d) {
+    const struct dimension* dim = &run->geometry[d];
+    jw_object_begin(jw);
+    jw_key(jw, "name");
+    jw_string(jw, dim->name);
+    jw_key(jw, "reference_size");
+    jw_uint(jw, dim->size);
+    jw_key(jw, "chunk_size");
+    jw_uint(jw, dim->chunk_size);
+    jw_key(jw, "chunks_per_shard");
+    jw_uint(jw, dim->chunks_per_shard);
+    jw_key(jw, "downsample");
+    jw_bool(jw, dim->downsample);
+    jw_key(jw, "storage_position");
+    jw_uint(jw, dim->storage_position);
+    jw_object_end(jw);
+  }
+  jw_array_end(jw);
+  jw_object_end(jw);
   jw_key(jw, "boundary_timing");
   jw_bool(jw, run->boundary_timing);
   jw_key(jw, "reference_frames");
@@ -838,7 +914,7 @@ print_bench_json_pass(const struct stream_metrics* m,
                       float flush_s,
                       const struct bench_memory* mem,
                       int worker_threads,
-                      const struct bench_sustained* sustained)
+                      const struct bench_measurement* measurement)
 {
   const size_t chunk_bytes = layout->chunk_stride * dtype_bpe(dtype);
   const size_t num_epochs =
@@ -863,8 +939,8 @@ print_bench_json_pass(const struct stream_metrics* m,
   jw_object_begin(&jw);
   jw_key(&jw, "status");
   jw_string(&jw, "pass");
-  if (sustained)
-    json_sustained(&jw, sustained);
+  if (measurement)
+    json_measurement(&jw, measurement);
   if (codec_is_blosc(codec.id)) {
     jw_key(&jw, "blosc_block_bytes");
     jw_uint(&jw, codec.blosc_block_bytes);

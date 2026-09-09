@@ -370,6 +370,23 @@ tile_stream_cpu_destroy(struct tile_stream_cpu* s)
   free(s);
 }
 
+int
+tile_stream_cpu_reset_metrics(struct tile_stream_cpu* s)
+{
+  if (!s || s->flushed)
+    return -1;
+  if (s->cursor_elements % s->layout.epoch_elements || s->batch_accumulated)
+    return 1;
+  for (int lv = 1; lv < s->levels.nlod; ++lv)
+    if (s->append_counts[lv])
+      return 1;
+  if (shard_sink_drain(s->shard_sink) ||
+      (s->shard_sink->flush && s->shard_sink->flush(s->shard_sink)))
+    return -1;
+  reset_stream_metrics(&s->metrics);
+  return 0;
+}
+
 // ---- Accessors ----
 
 struct stream_metrics

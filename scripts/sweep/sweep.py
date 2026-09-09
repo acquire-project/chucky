@@ -51,6 +51,16 @@ console = Console(stderr=True)
 # Scenarios
 # ---------------------------------------------------------------------------
 
+MEASUREMENT_POLICY = "drained-warmup-through-final-close-v1"
+DEFAULT_WARMUP_S = 0.25
+DEFAULT_DURATION_S = 1.0
+
+
+def measurement_policy(warmup=DEFAULT_WARMUP_S, duration=DEFAULT_DURATION_S):
+    return {"policy": MEASUREMENT_POLICY, "warmup_s": warmup, "duration_s": duration}
+
+
+# Reference extents fit geometry; they do not limit the amount measured.
 SCENARIOS = {
     "orca2_single": 200,
     "256cube_single": 40,
@@ -150,7 +160,7 @@ class RunSpec(BaseModel):
             "chunk_bytes": self.chunk_bytes,
             "chunk_bytes_label": self.chunk_label,
             "sink": self.sink,
-            "frames": self.frames,
+            "geometry_frames": self.frames,
         }
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
@@ -374,7 +384,9 @@ def build_info(build_dir: Path) -> dict:
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
-            tmpdir_root: Path | None = None) -> dict | None:
+            tmpdir_root: Path | None = None,
+            warmup: float = DEFAULT_WARMUP_S,
+            duration: float = DEFAULT_DURATION_S) -> dict | None:
     """Execute a single benchmark run, return result dict or None if exe missing."""
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if sys.platform == "win32":
@@ -389,7 +401,9 @@ def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
         "--backend", spec.backend,
         "--dtype", spec.dtype,
         "--chunk-bytes", spec.chunk_label,
-        "--frames", str(spec.frames),
+        "--geometry-frames", str(spec.frames),
+        "--warmup", str(warmup),
+        "--duration", str(duration),
         "--json",
     ]
     if spec.codec.startswith("blosc-"):
@@ -483,6 +497,11 @@ def status_style(status: str) -> str:
 @click.option("--retry", is_flag=True, help="Re-run previously failed or timed-out benchmarks.")
 @click.option("--rerun", multiple=True, help="Re-run benchmarks whose id contains this substring.")
 @click.option("--dry-run", is_flag=True, help="Preview run matrix without executing.")
+@click.option("--warmup", type=click.FloatRange(min=0), default=DEFAULT_WARMUP_S,
+              show_default=True, help="Warmup seconds before draining and resetting metrics.")
+@click.option("--duration", type=click.FloatRange(min=0, min_open=True),
+              default=DEFAULT_DURATION_S, show_default=True,
+              help="Measured append seconds; final drain is included in reported rates.")
 @click.option("--s3-bucket", default=None, help="S3 bucket (required for s3 tier).")
 @click.option("--s3-region", default="us-east-1", show_default=True, help="S3 region.")
 @click.option("--s3-endpoint", default="http://localhost:9000", show_default=True,
@@ -494,8 +513,12 @@ def status_style(status: str) -> str:
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
 def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, dry_run,
-         s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name):
+         s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name, warmup, duration):
     """Benchmark sweep runner for chucky."""
+    import math
+    if not math.isfinite(warmup) or not math.isfinite(duration):
+        raise click.BadParameter("Timing values must be finite")
+    policy = measurement_policy(warmup, duration)
     commit = git_commit()
     hostname = platform.node()
     machine_name = machine_name or hostname
@@ -563,6 +586,7 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
             )
         console.print(table)
         console.print(f"\nTotal: [bold]{len(runs)}[/bold] runs across tiers: {', '.join(selected_tiers)}")
+        console.print(f"Warmup: {warmup:g} s; measurement: {duration:g} s plus drain")
         console.print(f"Output: {output}")
         return
 
@@ -572,6 +596,11 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
     if output.exists():
         with open(output) as f:
             raw_data = json.load(f)
+        if (raw_data.get("version") != CURRENT_VERSION or
+                raw_data.get("measurement_policy") != policy):
+            raise click.ClickException(
+                "Existing results use a different or unknown timing policy; "
+                "choose a new --output file.")
         try:
             validate_results(raw_data)
         except Exception as e:
@@ -589,6 +618,7 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
         gpu, driver = gpu_and_driver()
         data = {
             "version": CURRENT_VERSION,
+            "measurement_policy": policy,
             "machine": {
                 "name": machine_name,
                 "hostname": platform.node(),
@@ -635,7 +665,8 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
                                  s3_bucket=s3_bucket,
                                  s3_region=s3_region,
                                  s3_endpoint=s3_endpoint,
-                                 tmpdir_root=tmpdir_root)
+                                 tmpdir_root=tmpdir_root,
+                                 warmup=warmup, duration=duration)
             except subprocess.TimeoutExpired:
                 result = {**spec.base_result(), "status": "timeout"}
             except Exception as e:
@@ -649,6 +680,8 @@ def main(tier, run_all, backend_filter, build_dir, output, skip, retry, rerun, d
             st = result.get("status", "?")
             tp = result.get("throughput_in_gibs")
             suffix = f" {tp:.2f} GiB/s" if tp else ""
+            if result.get("measurement", {}).get("coverage_status") == "insufficient":
+                suffix += " (insufficient coverage)"
             style = status_style(st)
             progress.console.print(f"  {tag} [{style}]{st.upper()}[/{style}]{suffix}")
 
