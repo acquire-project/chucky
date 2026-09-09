@@ -335,16 +335,22 @@ def assess(rows: list[dict], smoke: bool) -> list[dict]:
                 key,
             )
         )
-        if (
-            smoke
-            or set(splits) != {"core", "heldout"}
-            or any(row["repeats"] < 3 for values in splits.values() for row in values)
-        ):
+        incomplete = any(
+            row["repeats"] < 3 for values in splits.values() for row in values
+        )
+        split_names = set(splits)
+        if smoke or incomplete or split_names != {"core", "heldout"}:
+            if smoke or incomplete:
+                reason = "At least three measured repetitions are required"
+            elif split_names == {"core"}:
+                reason = "Corpus has no heldout sample"
+            else:
+                reason = "A matched core and heldout pilot is required"
             results.append(
                 item
                 | {
                     "status": "inconclusive",
-                    "reason": "A full core and heldout pilot is required",
+                    "reason": reason,
                 }
             )
             continue
@@ -605,7 +611,7 @@ def compare(args) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify and replay the pinned raw microscopy corpus"
+        description="Verify and replay a pinned microscopy image corpus"
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("verify", "run"):

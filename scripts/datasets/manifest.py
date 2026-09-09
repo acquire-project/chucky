@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 MAX_BYTES = 256 * 1024**2
 SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_.-]{0,95}")
+CORPUS_FORMAT = "chucky-image-corpus"
+CORPUS_FORMAT_VERSION = 1
 
 
 def digest_file(path: Path) -> str:
@@ -74,7 +76,7 @@ class Corpus:
     pack_files: dict[str, Path]
 
     def record(self) -> dict:
-        return {
+        result = {
             "manifest_sha256": self.sha256,
             "revision": self.revision,
             "release": self.manifest.get("release"),
@@ -85,6 +87,176 @@ class Corpus:
             },
             "decoded_bytes": sum(p["bytes"] for p in self.manifest["packs"]),
         }
+        for key in ("name", "version", "format"):
+            if key in self.manifest:
+                result[key] = self.manifest[key]
+        return result
+
+
+def nonempty_string(value, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a nonempty string")
+    return value
+
+
+def verify_lock(
+    root: Path,
+    lock: Path | None,
+    manifest_sha: str,
+    revision: str | None,
+) -> None:
+    if lock is None:
+        return
+    pin = read_json(lock)
+    if manifest_sha != pin["manifest_sha256"]:
+        raise ValueError("Manifest differs from the pinned corpus")
+    pinned_revision = pin.get("revision")
+    if pinned_revision is None or revision is None or revision == pinned_revision:
+        return
+    branch = git_output(root, "symbolic-ref", "--quiet", "--short", "HEAD") or ""
+    if not branch.startswith("adjusted/"):
+        raise ValueError("Check out the pinned corpus revision before running")
+
+
+def verify_compact_corpus(
+    root: Path,
+    document: dict,
+    manifest_sha: str,
+    revision: str | None,
+    started: float,
+) -> Corpus:
+    format_spec = document.get("format")
+    expected_format = {
+        "name": CORPUS_FORMAT,
+        "version": CORPUS_FORMAT_VERSION,
+        "encoding": "raw",
+        "dtype": "uint16",
+        "byte_order": "little",
+        "axes": ["plane", "y", "x"],
+        "order": "C",
+    }
+    if (
+        not isinstance(format_spec, dict)
+        or type(format_spec.get("version")) is not int
+        or any(
+            format_spec.get(key) != value for key, value in expected_format.items()
+        )
+    ):
+        raise ValueError(
+            f"Expected {CORPUS_FORMAT} format version {CORPUS_FORMAT_VERSION}"
+        )
+
+    dataset_id = nonempty_string(document.get("id"), "Dataset id")
+    if not IDENTIFIER.fullmatch(dataset_id):
+        raise ValueError(f"Invalid dataset id: {dataset_id}")
+    dataset_version = positive_int(document.get("version"), "Dataset version")
+    dataset_name = nonempty_string(document.get("name"), "Dataset name")
+    modality = document.get("modality")
+    if modality not in {"fluorescence", "brightfield"}:
+        raise ValueError("Dataset modality must be fluorescence or brightfield")
+
+    source = document.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("Dataset source must be an object")
+    for key in (
+        "collection",
+        "url",
+        "attribution",
+        "license",
+        "license_url",
+        "changes",
+    ):
+        nonempty_string(source.get(key), f"Source {key}")
+
+    assets = document.get("assets")
+    if not isinstance(assets, list) or not assets:
+        raise ValueError("Manifest has no image assets")
+    identifiers, paths = set(), set()
+    packs, pack_files = [], {}
+    total_bytes = 0
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise ValueError("Each image asset must be an object")
+        asset_id = asset.get("id", "")
+        if (
+            not isinstance(asset_id, str)
+            or not IDENTIFIER.fullmatch(asset_id)
+            or asset_id in identifiers
+        ):
+            raise ValueError(f"Invalid or duplicate asset id: {asset_id}")
+        identifiers.add(asset_id)
+        nonempty_string(asset.get("name"), f"{asset_id} name")
+        path = relative_file(root, asset.get("path"))
+        if asset["path"] in paths:
+            raise ValueError(f"Duplicate asset path: {asset['path']}")
+        paths.add(asset["path"])
+        shape = asset.get("shape")
+        if (
+            not isinstance(shape, list)
+            or len(shape) != 3
+            or any(type(value) is not int or value <= 0 for value in shape)
+        ):
+            raise ValueError(f"{asset_id} shape must be [plane, y, x]")
+        plane_count, height, width = shape
+        size = plane_count * height * width * 2
+        total_bytes += size
+        if total_bytes > MAX_BYTES:
+            raise ValueError("Corpus exceeds the 256 MiB decoded limit")
+        checksum = asset.get("sha256", "")
+        if not isinstance(checksum, str) or not SHA256.fullmatch(checksum):
+            raise ValueError(f"Invalid asset checksum: {asset_id}")
+        try:
+            resolved = path.resolve(strict=True)
+            if resolved.stat().st_size != size:
+                raise ValueError(
+                    f"Wrong asset length: {path}; run git annex get data/"
+                )
+            if digest_file(resolved) != checksum:
+                raise ValueError(f"Asset checksum mismatch: {path}")
+        except FileNotFoundError as error:
+            raise ValueError(
+                f"Missing image asset: {path}; run git annex get data/"
+            ) from error
+        pack_files[asset_id] = resolved
+        packs.append(
+            {
+                "id": asset_id,
+                "name": asset["name"],
+                "path": asset["path"],
+                "modality": modality,
+                "split": "core",
+                "source_group": asset_id,
+                "dtype": "u16le",
+                "height": height,
+                "width": width,
+                "bytes": size,
+                "sha256": checksum,
+                "planes": [
+                    {"id": f"{asset_id}-{index}"} for index in range(plane_count)
+                ],
+            }
+        )
+
+    normalized = {
+        "schema_version": 2,
+        "kind": "raw",
+        "release": dataset_id,
+        "version": dataset_version,
+        "name": dataset_name,
+        "format": format_spec,
+        "modalities": [modality],
+        "source": source,
+        "sources": {},
+        "packs": packs,
+    }
+    return Corpus(
+        root,
+        normalized,
+        manifest_sha,
+        revision,
+        time.perf_counter() - started,
+        pack_files,
+    )
 
 
 def check_kind(kind: str, allow_test_data=False, allow_provisional=False) -> None:
@@ -185,6 +357,13 @@ def verify_corpus(
         raise ValueError("Corpus extraction is incomplete")
     path = root / "manifest.json"
     document = read_json(path)
+    manifest_sha = digest_file(path)
+    revision = (
+        git_output(root, "rev-parse", "HEAD") if (root / ".git").exists() else None
+    )
+    verify_lock(root, lock, manifest_sha, revision)
+    if "format" in document:
+        return verify_compact_corpus(root, document, manifest_sha, revision, start)
     selection = document.get("selection")
     if selection is not None:
         survey = relative_file(root, selection["survey_path"])
@@ -192,20 +371,6 @@ def verify_corpus(
             raise ValueError("Selection survey checksum mismatch")
     expected_modalities = set(corpus_modalities(document))
     corpus_notices(root, document)
-    manifest_sha = digest_file(path)
-    revision = (
-        git_output(root, "rev-parse", "HEAD") if (root / ".git").exists() else None
-    )
-    if lock is not None:
-        pin = read_json(lock)
-        if manifest_sha != pin["manifest_sha256"]:
-            raise ValueError("Manifest differs from the pinned corpus")
-        if revision is not None and revision != pin["revision"]:
-            branch = (
-                git_output(root, "symbolic-ref", "--quiet", "--short", "HEAD") or ""
-            )
-            if not branch.startswith("adjusted/"):
-                raise ValueError("Check out the pinned corpus revision before running")
     if document.get("schema_version") != 1:
         raise ValueError("Unsupported corpus schema")
     kind = document.get("kind")

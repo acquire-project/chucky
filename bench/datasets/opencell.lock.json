@@ -1,8 +1,6 @@
 {
-  "schema_version": 1,
-  "release": "opencell-v1",
-  "kind": "raw",
-  "revision": "4f1cb6d30874f0e0d6bb34e7814421fded3eeea7",
-  "manifest_sha256": "56c7910efdd35304064cdd925e078f04b33a9676be3140dd935c5c52ae3e3d8c",
-  "decoded_bytes": 11520000
+  "id": "opencell-fluorescence-core",
+  "version": 1,
+  "manifest_sha256": "35b10513842506b41d98d80a4d93b7168b7859ee4e56e34c1a17b434e21912e2",
+  "decoded_bytes": 8640000
 }

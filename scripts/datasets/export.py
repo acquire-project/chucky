@@ -33,7 +33,7 @@ def main():
     if selection is not None:
         files.add(selection["survey_path"])
     files.update(p["path"] for p in corpus.manifest["packs"])
-    files.update(s["evidence"] for s in corpus.manifest["sources"].values())
+    files.update(s["evidence"] for s in corpus.manifest.get("sources", {}).values())
     with zipfile.ZipFile(
         args.output, "x", compression=zipfile.ZIP_STORED, strict_timestamps=False
     ) as archive:

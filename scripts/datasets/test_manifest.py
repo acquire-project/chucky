@@ -61,6 +61,108 @@ def fixture(root):
     return document
 
 
+def compact_fixture(root):
+    data = bytes(range(12))
+    (root / "images.raw").write_bytes(data)
+    document = {
+        "format": {
+            "name": "chucky-image-corpus",
+            "version": 1,
+            "encoding": "raw",
+            "dtype": "uint16",
+            "byte_order": "little",
+            "axes": ["plane", "y", "x"],
+            "order": "C",
+        },
+        "id": "test-images",
+        "version": 1,
+        "name": "Test images",
+        "modality": "fluorescence",
+        "source": {
+            "collection": "Test collection",
+            "url": "https://example.invalid/images",
+            "attribution": "Test creator",
+            "license": "CC0-1.0",
+            "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+            "changes": "Selected and repacked test planes.",
+        },
+        "assets": [
+            {
+                "id": "test-input",
+                "name": "Test input",
+                "path": "images.raw",
+                "shape": [1, 2, 3],
+                "sha256": sha(data),
+            }
+        ],
+    }
+    (root / "manifest.json").write_text(json.dumps(document))
+    return document
+
+
+class CompactManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="chucky-compact-manifest-")
+        self.root = Path(self.directory.name)
+        self.document = compact_fixture(self.root)
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def save(self):
+        (self.root / "manifest.json").write_text(json.dumps(self.document))
+
+    def test_minimal_manifest_verifies_and_normalizes_for_replay(self):
+        corpus = verify_corpus(self.root)
+        self.assertEqual(corpus.record()["release"], "test-images")
+        self.assertEqual(corpus.record()["version"], 1)
+        self.assertEqual(corpus.record()["decoded_bytes"], 12)
+        self.assertEqual(corpus.manifest["kind"], "raw")
+        self.assertEqual(corpus.manifest["packs"][0]["source_group"], "test-input")
+        self.assertEqual(
+            corpus.manifest["packs"][0]["planes"], [{"id": "test-input-0"}]
+        )
+
+    def test_format_and_attribution_are_required(self):
+        self.document["format"]["version"] = 2
+        self.save()
+        with self.assertRaisesRegex(ValueError, "format version 1"):
+            verify_corpus(self.root)
+        self.document["format"]["version"] = 1
+        self.document["source"]["attribution"] = ""
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Source attribution"):
+            verify_corpus(self.root)
+
+    def test_asset_shape_path_and_checksum_are_checked(self):
+        asset = self.document["assets"][0]
+        for key, value, message in (
+            ("shape", [1, 2, 4], "Wrong asset length"),
+            ("path", "../images.raw", "Invalid corpus path"),
+            ("sha256", "0" * 64, "Asset checksum mismatch"),
+        ):
+            with self.subTest(key=key):
+                original = asset[key]
+                asset[key] = value
+                self.save()
+                with self.assertRaisesRegex(ValueError, message):
+                    verify_corpus(self.root)
+                asset[key] = original
+
+    def test_content_lock_does_not_require_a_git_revision(self):
+        lock = self.root / "lock.json"
+        lock.write_text(
+            json.dumps(
+                {
+                    "manifest_sha256": sha(
+                        (self.root / "manifest.json").read_bytes()
+                    )
+                }
+            )
+        )
+        self.assertEqual(verify_corpus(self.root, lock).record()["decoded_bytes"], 12)
+
+
 class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="chucky-manifest-")
@@ -309,7 +411,9 @@ class ResultTests(unittest.TestCase):
             "split": "core",
             "repeats": 3,
         }
-        self.assertEqual(assess([row], False)[0]["status"], "inconclusive")
+        result = assess([row], False)[0]
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["reason"], "Corpus has no heldout sample")
 
     def test_changed_geometry_is_rejected(self):
         pack = {"width": 256, "height": 256, "bytes": 131072}

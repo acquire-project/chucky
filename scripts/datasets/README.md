@@ -6,10 +6,8 @@ before the throughput timer starts. The measured interval includes the final
 pipeline drain and sink flush. The buffer stays alive until the stream is destroyed.
 
 Image packs live separately, conventionally at `~/data/chucky-benchmarks/`.
-The corpus is limited to 256 MiB decoded, including heldout fields. Git contains
-provenance and manifests; git-annex holds binary packs with SHA256 keys.
-`opencell-v1` is the first verified raw fluorescence release. It has its own lock;
-a combined fluorescence/brightfield `v1` has not been released.
+That repository has one metadata file, `manifest.json`; git-annex holds binary
+assets with SHA256 keys. The corpus is limited to 256 MiB decoded.
 
 The Cellstate proof of concept uses a separate frozen corpus. Its lock is
 included here; replay requires a saved copy of `cellstate-poc-v1`. Its images
@@ -18,11 +16,9 @@ are not part of the public corpus repository.
 
 ## OpenCell fluorescence
 
-`opencell-v1` contains 16 full 600×600 uint16 planes (10.99 MiB): 12 core and
-4 heldout, split evenly between DNA and tagged-protein fluorescence. The survey
-covers 32 distinct proteins, both channels, and four relative Z depths in original
-OpenCell stacks. Whole fields and proteins are separated before selection.
-This is one live-cell confocal source; broader fluorescence coverage remains open.
+`opencell-fluorescence-core` version 1 contains twelve full 600×600 uint16
+planes (8.24 MiB), split evenly between DNA and tagged-protein fluorescence.
+Its two assets are headerless C-contiguous plane/Y/X arrays.
 
 ```sh
 python scripts/datasets/run.py verify --corpus ~/data/chucky-benchmarks \
@@ -30,25 +26,14 @@ python scripts/datasets/run.py verify --corpus ~/data/chucky-benchmarks \
 python scripts/datasets/run.py run --corpus ~/data/chucky-benchmarks \
   --lock bench/datasets/opencell.lock.json \
   --executable build-gpu/bench/bench_stream_images --backends cpu gpu \
-  --split core --machine reef-l40 --output bench/results/images/reef-l40-opencell-v1
+  --machine reef-l40 --output bench/results/images/reef-l40-opencell
 ```
 
 Use `--backends cpu` for a CPU-only build. The same explicit lock works with
-`export.py`; exports include the OpenCell attribution and CC BY-SA 4.0 notice.
+`export.py`; the manifest carries the OpenCell attribution, CC BY-SA 4.0 license
+link, and change notice with every export.
 Image loading, padding, timing, profiles, and sweep reporting use the normal
 image replay workflow below.
-
-`opencell.py catalog` creates a deterministic source download plan; `fetch`
-downloads only original stacks and records independent full-file SHA256 values.
-`plan` checks the TIFF axes and writes explicit channel/Z/page coordinates for
-both channels. The corpus repository contains the frozen source and download
-plans, provenance, and reproduction commands. Source TIFFs stay in a separate
-cache; only selected image packs enter git-annex.
-
-Raw source plans can name their release and declare one or both `modalities`.
-Plans without a declaration keep the original requirement for both modalities.
-The verifier rejects missing or unexpected modalities. Optional `notices` entries
-carry a relative path and SHA256; extraction, verification, and ZIP export preserve them.
 
 ## Cellstate proof of concept
 
@@ -106,8 +91,9 @@ On Reef, builds, tests, image extraction, checksum scans, and benchmarks run on
 approved Slurm compute allocations. The prepared build job is
 `~/tmp/2026-09-06-chucky-bench/cpu-build.sh`.
 
-The verifier checks the pinned manifest, evidence files, exact pack lengths,
-pack SHA256, every plane SHA256, dtype, shape, size cap, and field separation.
+For compact manifests, the verifier checks the format declaration, dataset
+identity, collection attribution, exact asset lengths and SHA256 values, and the
+decoded-size cap. Evidence-rich schema-1 manifests remain supported.
 Missing annex content produces a `git annex get data/` instruction. Git and annex
 are unnecessary at runtime when materialized files with the same hashes are available.
 
@@ -175,25 +161,22 @@ For a short functional check, add
 `--smoke --min-gib 0.016 --repeats 1 --profiles none`.
 Smoke runs are always marked inconclusive for representativeness.
 
-Regular throughput runs use the two core packs. An optional `--split all` run
-adds the heldout packs and compares matched modality, source group, shape,
-backend, codec, and actual geometry. The target is at most 10% difference in
-logical compression ratio and median throughput. Larger differences request a
-revised selection. Missing pairs, incomplete repetitions, and smoke runs remain
-inconclusive. Small heldout sets do not establish broad modality coverage.
+Regular throughput runs use the two compact-corpus assets. Because this corpus
+has no heldout sample, representativeness remains explicitly inconclusive;
+throughput and compression measurements are still reported normally.
 
 ## Reuse on auk and oreb
 
-Clone the corpus over SSH from Reef and retrieve `data/v1/` as described in the
+Clone the corpus over SSH from Reef and retrieve `data/opencell-v1/` as described in the
 data repository README. Run the same chucky source revision and the same corpus
 pin on both machines. The runner uses Python 3.10 or newer and no image libraries.
 
 For native Windows with git-annex, use an unlocked adjusted branch:
 
 ```powershell
-git checkout -b benchmark-v1 v1
+git checkout -b benchmark-opencell data-opencell
 git annex adjust --unlock
-git annex get data/v1/
+git annex get data/opencell-v1/
 python C:/src/chucky/scripts/datasets/run.py verify --corpus .
 ```
 
@@ -279,8 +262,9 @@ no external manifest against which to check a whole-frame truncation.
 
 `test_bench_input` verifies the exact repeated sequence across append sizes,
 wraps, partial consumption, and a partial final cycle.
-`test_manifest.py` covers corruption, missing content, invalid manifests,
-field leakage, and file-copy equivalence. `test_extract.py` checks exact plane
+`test_manifest.py` covers compact and legacy formats, corruption, missing
+content, invalid manifests, field leakage, and file-copy equivalence.
+`test_extract.py` checks exact plane
 selection, missing chunks, malformed chunks, float rejection, and full synthetic
 extraction. `test_storage.py` checks real annex clone/get/fsck and materialized
 export. `test_runner.py` checks JSON/CSV output and comparison identity; set
@@ -297,10 +281,10 @@ The independent reader follows the
 
 ## Corpus locks and local paths
 
-Lock files stay in `bench/datasets/`. The lock pins a corpus revision and the
-SHA256 of `manifest.json`. The manifest records relative pack paths, independent
-SHA256 hashes of complete packs and individual planes, and hashes of provenance
-and survey files. Verification reads and hashes the content directly.
+Lock files stay in `bench/datasets/`. Compact-corpus locks pin the SHA256 of
+`manifest.json`; a Git revision remains optional for legacy corpora. Compact
+manifests record relative asset paths and independent SHA256 hashes. Verification
+reads and hashes the content directly.
 
 Git-annex currently uses SHA256 keys, so a pack's manifest digest equals the
 digest in its annex key. Verification does not parse annex keys or depend on how
