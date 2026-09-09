@@ -86,6 +86,8 @@ foreach(src IN LISTS BENCH_STREAM_SOURCES)
     add_bench(${target} ${src} bench_util Zstd::Zstd)
 endforeach()
 
+add_bench(bench_buffered_writer bench_buffered_writer.c bench_util)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
     add_test(

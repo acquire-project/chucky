@@ -90,6 +90,8 @@ target_link_libraries(
 
 # Threadpool unit tests
 add_test_exe(test_threadpool test_threadpool.c threadpool platform)
+add_test_exe(test_buffered_writer test_buffered_writer.c writer platform chucky_log)
+set_tests_properties(test-test_buffered_writer PROPERTIES TIMEOUT 30)
 
 # Index operations unit tests (pure CPU)
 add_test_exe(test_index_ops test_index_ops.c index_ops chucky_log)
