@@ -5,10 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct buffered_slot
+struct buffered_batch
 {
+  unsigned char* data;
+  size_t capacity_slots;
   size_t bytes;
-  int64_t accepted_ns;
+  size_t slots;
+  int64_t first_accepted_ns;
+  uint64_t acceptance_offsets_ns;
 };
 
 struct buffered_writer
@@ -18,12 +22,10 @@ struct buffered_writer
   struct platform_mutex* mutex;
   struct platform_cond* changed;
   struct platform_thread* worker;
-  unsigned char* data;
-  struct buffered_slot* slots;
+  struct buffered_batch buffers[2];
   size_t slot_bytes;
-  size_t slot_count;
-  size_t head;
-  size_t tail;
+  unsigned writing;
+  int copying; // the producer has an unpublished copy in the writing buffer
   struct buffered_writer_stats stats;
   int flush_requested;
   int flushed;
@@ -40,7 +42,7 @@ record_time(uint64_t* sum, uint64_t* peak, uint64_t ns)
     *peak = ns;
 }
 
-// Only accept a suffix of the submitted slot, or an empty rest. Treat a broken
+// Only accept a suffix of the submitted batch, or an empty rest. Treat a broken
 // downstream contract as failure without dereferencing its pointers.
 static size_t
 remaining_bytes(struct writer_result* r, const void* beg, const void* end)
@@ -60,34 +62,55 @@ worker_main(void* arg)
   struct buffered_writer* b = arg;
   platform_mutex_lock(b->mutex);
   for (;;) {
-    if (b->stats.occupied_slots) {
-      const struct buffered_slot slot = b->slots[b->head];
-      const unsigned char* beg = b->data + b->head * b->slot_bytes;
+    if (b->buffers[b->writing].slots && !b->copying) {
+      // Freeze the complete backlog, including short appends packed without
+      // gaps. The producer switches to the other buffer while this one drains.
+      const struct buffered_batch batch = b->buffers[b->writing];
+      b->writing ^= 1;
+      b->buffers[b->writing].bytes = 0;
+      b->buffers[b->writing].slots = 0;
+      platform_cond_broadcast(b->changed); // the producer can refill now
+      const unsigned char* beg = batch.data;
       platform_mutex_unlock(b->mutex);
       const int64_t start = platform_monotonic_ns();
       struct writer_result r = writer_append_wait(
-        b->downstream, (struct slice){ beg, beg + slot.bytes });
+        b->downstream, (struct slice){ beg, beg + batch.bytes });
       const int64_t end = platform_monotonic_ns();
-      size_t rest = remaining_bytes(&r, beg, beg + slot.bytes);
+      size_t rest = remaining_bytes(&r, beg, beg + batch.bytes);
       platform_mutex_lock(b->mutex);
 
       struct buffered_writer_stats* s = &b->stats;
-      record_time(&s->queue_ns, &s->max_queue_ns, start - slot.accepted_ns);
+      const uint64_t oldest_queue_ns = start - batch.first_accepted_ns;
+      s->queue_ns +=
+        batch.slots * oldest_queue_ns - batch.acceptance_offsets_ns;
+      if (oldest_queue_ns > s->max_queue_ns)
+        s->max_queue_ns = oldest_queue_ns;
       record_time(&s->downstream_ns, &s->max_downstream_ns, end - start);
-      if ((uint64_t)(end - slot.accepted_ns) > s->max_completion_ns)
-        s->max_completion_ns = end - slot.accepted_ns;
-      ++s->completed_slots;
-      s->forwarded_bytes += slot.bytes - rest;
-      s->pending_bytes -= slot.bytes - rest;
+      if ((uint64_t)(end - batch.first_accepted_ns) > s->max_completion_ns)
+        s->max_completion_ns = end - batch.first_accepted_ns;
+      s->completed_slots += batch.slots;
+      ++s->completed_batches;
+      if (batch.bytes > s->max_batch_bytes)
+        s->max_batch_bytes = batch.bytes;
+      s->forwarded_bytes += batch.bytes - rest;
+      s->pending_bytes -= batch.bytes - rest;
       if (r.error || rest) {
         s->downstream_finished = r.error == writer_error_finished;
         s->failed = r.error != writer_error_finished || s->pending_bytes != 0;
         s->abandoned_bytes += s->pending_bytes;
         s->pending_bytes = 0;
         s->occupied_slots = 0;
+        b->buffers[b->writing].bytes = 0;
+        b->buffers[b->writing].slots = 0;
       } else {
-        --s->occupied_slots;
-        b->head = (b->head + 1) % b->slot_count;
+        s->occupied_slots -= batch.slots;
+      }
+      // With a one-slot allocation, the second buffer has no capacity. Reuse
+      // the first only after downstream releases it.
+      if (!b->buffers[b->writing].capacity_slots) {
+        b->writing ^= 1;
+        b->buffers[b->writing].bytes = 0;
+        b->buffers[b->writing].slots = 0;
       }
     } else if (b->flush_requested && !b->flushed) {
       platform_mutex_unlock(b->mutex);
@@ -129,32 +152,43 @@ buffered_append(struct writer* self, struct slice input)
   platform_mutex_lock(b->mutex);
   int status = append_status(b);
   if (!status && input.beg != input.end &&
-      b->stats.occupied_slots == b->slot_count) {
+      b->buffers[b->writing].slots == b->buffers[b->writing].capacity_slots) {
     const int64_t start = platform_monotonic_ns();
     do {
       platform_cond_wait(b->changed, b->mutex);
       status = append_status(b);
-    } while (!status && b->stats.occupied_slots == b->slot_count);
+    } while (!status && b->buffers[b->writing].slots ==
+                          b->buffers[b->writing].capacity_slots);
     b->stats.backpressure_ns += platform_monotonic_ns() - start;
   }
-  platform_mutex_unlock(b->mutex);
-  if (status || input.beg == input.end)
+  if (status || input.beg == input.end) {
+    platform_mutex_unlock(b->mutex);
     return (struct writer_result){ status, input };
+  }
+  struct buffered_batch* batch = &b->buffers[b->writing];
+  const size_t offset = batch->bytes;
+  b->copying = 1;
+  platform_mutex_unlock(b->mutex);
 
   size_t bytes =
     (const unsigned char*)input.end - (const unsigned char*)input.beg;
   if (bytes > b->slot_bytes)
     bytes = b->slot_bytes;
-  // The single producer owns tail until publication. The worker still counts
-  // its active slot as occupied, so it cannot read or recycle this free slot.
-  memcpy(b->data + b->tail * b->slot_bytes, input.beg, bytes);
+  // Do not swap buffers until this copy is published. The downstream call on
+  // the other buffer can proceed concurrently, without holding the mutex.
+  memcpy(batch->data + offset, input.beg, bytes);
 
   platform_mutex_lock(b->mutex);
   status = append_status(b); // downstream may have terminated during the copy
   if (!status) {
-    b->slots[b->tail] =
-      (struct buffered_slot){ bytes, platform_monotonic_ns() };
-    b->tail = (b->tail + 1) % b->slot_count;
+    const int64_t accepted_ns = platform_monotonic_ns();
+    if (!batch->slots) {
+      batch->first_accepted_ns = accepted_ns;
+      batch->acceptance_offsets_ns = 0;
+    }
+    batch->acceptance_offsets_ns += accepted_ns - batch->first_accepted_ns;
+    batch->bytes += bytes;
+    ++batch->slots;
     b->stats.accepted_bytes += bytes;
     b->stats.pending_bytes += bytes;
     ++b->stats.occupied_slots;
@@ -163,8 +197,9 @@ buffered_append(struct writer* self, struct slice input)
     if (b->stats.occupied_slots > b->stats.peak_occupied_slots)
       b->stats.peak_occupied_slots = b->stats.occupied_slots;
     input.beg = (const unsigned char*)input.beg + bytes;
-    platform_cond_broadcast(b->changed);
   }
+  b->copying = 0;
+  platform_cond_broadcast(b->changed);
   platform_mutex_unlock(b->mutex);
   return (struct writer_result){ status, input };
 }
@@ -204,8 +239,7 @@ release(struct buffered_writer* b)
 {
   platform_cond_free(b->changed);
   platform_mutex_free(b->mutex);
-  free(b->slots);
-  free(b->data);
+  free(b->buffers[0].data);
   free(b);
 }
 
@@ -215,8 +249,7 @@ buffered_writer_create(struct writer* downstream,
 {
   if (!downstream || !downstream->append || !downstream->flush || !config ||
       !config->slot_bytes || !config->slot_count ||
-      config->slot_count > SIZE_MAX / config->slot_bytes ||
-      config->slot_count > SIZE_MAX / sizeof(struct buffered_slot))
+      config->slot_count > SIZE_MAX / config->slot_bytes)
     return NULL;
   struct buffered_writer* b = calloc(1, sizeof(*b));
   if (!b)
@@ -225,13 +258,16 @@ buffered_writer_create(struct writer* downstream,
     (struct writer){ buffered_append, buffered_flush, buffered_close };
   b->downstream = downstream;
   b->slot_bytes = config->slot_bytes;
-  b->slot_count = config->slot_count;
-  b->data = malloc(b->slot_count * b->slot_bytes);
-  b->slots = calloc(b->slot_count, sizeof(*b->slots));
+  b->buffers[0].capacity_slots =
+    config->slot_count / 2 + config->slot_count % 2;
+  b->buffers[1].capacity_slots = config->slot_count / 2;
+  b->buffers[0].data = malloc(config->slot_count * b->slot_bytes);
   b->mutex = platform_mutex_new();
   b->changed = platform_cond_new();
-  if (!b->data || !b->slots || !b->mutex || !b->changed)
+  if (!b->buffers[0].data || !b->mutex || !b->changed)
     goto fail;
+  b->buffers[1].data =
+    b->buffers[0].data + b->buffers[0].capacity_slots * b->slot_bytes;
   b->worker = platform_thread_start(worker_main, b);
   if (!b->worker)
     goto fail;

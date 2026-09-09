@@ -7,13 +7,27 @@ adapter does not change the underlying pipeline or its output format.
 
 ## Capacity and acceptance
 
-Choose `slot_bytes` and `slot_count` explicitly. The payload allocation is their
-product; bookkeeping is fixed per slot, with one worker thread and its stack.
-The slot being forwarded counts toward capacity. There are no allocations in
-the adapter's append path. Slots are not combined: a short append occupies one
-slot until downstream consumes it. Choose a slot size matching normal producer
-appends, and a count covering the temporary backlog your workload can tolerate.
-Both slot size and input sizes must respect downstream element granularity.
+Choose `slot_bytes` and `slot_count` explicitly. At most `slot_count` appends are
+accepted across the queued and active downstream batches. A short append still
+occupies one slot until its batch returns. Choose a slot size matching normal
+producer appends, and a count covering the temporary backlog your workload can
+tolerate. Both slot size and input sizes must respect downstream granularity.
+
+The **`slot_bytes * slot_count`** payload allocation is split between two
+contiguous buffers, plus fixed bookkeeping and one worker thread and stack. The
+first buffer gets the extra slot for odd counts. The producer packs input
+directly into one buffer while the worker drains the other. When the producer
+buffer fills, it waits for the worker to swap buffers. Thus each queued backlog
+holds at most half the slots, rounded up. A one-slot allocation waits for each
+drain before refilling. There are no append-path allocations or extra copies to
+assemble a batch.
+
+Each drain snapshots the **entire queued backlog** and submits it in one
+downstream append. Short appends are packed without gaps; original append
+boundaries are not preserved. Input accepted while that call runs goes into
+the next buffer. Once the call returns, the worker immediately drains the new
+backlog. Partial downstream acceptance or stalls can require retries of the
+remaining suffix.
 
 An append waits until one slot is free, copies up to `slot_bytes`, and returns
 the unaccepted suffix in `writer_result.rest`. The accepted prefix is owned by
@@ -96,8 +110,10 @@ occupancy spikes even if the observer samples infrequently.
 `backpressure_ns` measures caller time waiting for capacity. Queue time runs from
 acceptance (after the copy) until the worker starts forwarding. Downstream time
 includes partial-append retries. Completion time ends when downstream append
-returns, not when the data reaches storage. Timing aggregates are per slot, not
-weighted by bytes. These clocks exclude caller copy time from queue time.
+returns, not when the data reaches storage. Queue time is summed per accepted
+slot; downstream time is summed once per drained batch. `completed_batches` and
+`max_batch_bytes` report batching separately from `completed_slots`. These clocks
+exclude caller copy time from queue time.
 
 `bench_buffered_writer` compares direct and buffered appends using identical
 1024 x 1024 uint16 frames, 256 x 256 chunks, 32 epochs per batch, four processing
@@ -117,9 +133,12 @@ build/bench/bench_buffered_writer --backend gpu --codec zstd --frames 2048 --fps
 build/bench/bench_buffered_writer --backend gpu --codec zstd --frames 2048 --fps 500 --slots 16
 ```
 
-JSON reports caller and downstream append latency, submission-to-downstream
-completion delay, lateness against scheduled frame arrival, peak queue
-occupancy, queue delay and backpressure. The unpaced second-half byte rate
+JSON reports caller latency per frame and downstream latency per batch, together
+with downstream call count, maximum frames per batch and reserved payload bytes.
+Submission-to-downstream completion delay is per frame: all frames in a combined
+call use that call's return time, since intermediate consumption is not observed.
+It also reports lateness against scheduled frame arrival, peak queue occupancy,
+queue delay and backpressure. The unpaced second-half byte rate
 includes the final drain, so accepted backlog is never counted as completed
 work. Compare several capacities and include an overloaded paced run. Smaller
 queues may reduce copying/cache overhead but absorb shorter stalls.

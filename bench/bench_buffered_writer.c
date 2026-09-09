@@ -18,19 +18,31 @@ struct observed_writer
   int64_t* submitted;
   double* downstream_ms;
   double* completion_ms;
+  size_t frame_bytes;
+  size_t frames;
   size_t frame;
+  size_t calls;
+  size_t max_batch_frames;
 };
 
 static struct writer_result
 observed_append(struct writer* self, struct slice input)
 {
   struct observed_writer* o = (struct observed_writer*)self;
+  const size_t bytes =
+    (const unsigned char*)input.end - (const unsigned char*)input.beg;
+  const size_t frames = bytes / o->frame_bytes;
+  if (!frames || bytes % o->frame_bytes || frames > o->frames - o->frame)
+    return writer_error_at(input.beg, input.end);
   const int64_t start = platform_monotonic_ns();
   struct writer_result r = writer_append_wait(o->downstream, input);
   const int64_t end = platform_monotonic_ns();
-  o->downstream_ms[o->frame] = (end - start) * 1e-6;
-  o->completion_ms[o->frame] = (end - o->submitted[o->frame]) * 1e-6;
-  ++o->frame;
+  o->downstream_ms[o->calls++] = (end - start) * 1e-6;
+  if (frames > o->max_batch_frames)
+    o->max_batch_frames = frames;
+  // A combined call gives one completion observation for all its frames.
+  for (size_t i = 0; i < frames; ++i, ++o->frame)
+    o->completion_ms[o->frame] = (end - o->submitted[o->frame]) * 1e-6;
   return r;
 }
 
@@ -167,6 +179,8 @@ main(int argc, char** argv)
     .submitted = submitted,
     .downstream_ms = downstream,
     .completion_ms = completion,
+    .frame_bytes = frame_bytes,
+    .frames = frames,
   };
   struct writer* writer = &observed.writer;
   if (slots) {
@@ -228,14 +242,19 @@ main(int argc, char** argv)
          (done - appended) * 1e-6);
   distribution("caller", caller, frames);
   printf(",");
-  distribution("downstream", downstream, frames);
+  distribution("downstream", downstream, observed.calls);
   printf(",");
   distribution("completion", completion, frames);
   printf(",");
   distribution("lateness", lateness, frames);
-  printf(",\"peak_occupied_slots\":%zu,\"peak_pending_bytes\":%zu,"
+  printf(",\"downstream_calls\":%zu,\"max_batch_frames\":%zu,"
+         "\"buffer_payload_bytes\":%zu,"
+         "\"peak_occupied_slots\":%zu,\"peak_pending_bytes\":%zu,"
          "\"backpressure_ms\":%.6f,\"queue_mean_ms\":%.6f,"
          "\"queue_max_ms\":%.6f,\"abandoned_bytes\":%llu}\n",
+         observed.calls,
+         observed.max_batch_frames,
+         slots * frame_bytes,
          stats.peak_occupied_slots,
          stats.peak_pending_bytes,
          stats.backpressure_ns * 1e-6,

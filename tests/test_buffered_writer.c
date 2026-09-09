@@ -12,7 +12,9 @@ struct fake_writer
   struct platform_mutex* mutex;
   struct platform_cond* changed;
   int held;
+  int hold_each;
   int entered;
+  size_t append_bytes[128];
   size_t step;
   size_t limit;
   int terminal;
@@ -31,7 +33,12 @@ fake_append(struct writer* self, struct slice input)
 {
   struct fake_writer* f = (struct fake_writer*)self;
   platform_mutex_lock(f->mutex);
-  f->entered = 1;
+  if (f->hold_each)
+    f->held = 1;
+  if (f->entered < 128)
+    f->append_bytes[f->entered] =
+      (const unsigned char*)input.end - (const unsigned char*)input.beg;
+  ++f->entered;
   platform_cond_broadcast(f->changed);
   while (f->held)
     platform_cond_wait(f->changed, f->mutex);
@@ -69,6 +76,25 @@ fake_close(struct writer* self)
 
 static void
 unhold(struct fake_writer* f)
+{
+  platform_mutex_lock(f->mutex);
+  f->hold_each = 0;
+  f->held = 0;
+  platform_cond_broadcast(f->changed);
+  platform_mutex_unlock(f->mutex);
+}
+
+static void
+wait_call(struct fake_writer* f, int count)
+{
+  platform_mutex_lock(f->mutex);
+  while (f->entered < count)
+    platform_cond_wait(f->changed, f->mutex);
+  platform_mutex_unlock(f->mutex);
+}
+
+static void
+release_call(struct fake_writer* f)
 {
   platform_mutex_lock(f->mutex);
   f->held = 0;
@@ -255,6 +281,84 @@ Fail:
   return 1;
 }
 
+// Hold each drain while the producer builds the next backlog. Vary append
+// sizes and alternate buffers repeatedly: every backlog must arrive as one
+// packed append, including when a drain terminates inside the combined input.
+static int
+test_backlog(int terminal)
+{
+  struct fake_writer f;
+  if (fake_init(&f))
+    return 1;
+  f.hold_each = 1;
+  if (terminal) {
+    f.limit = 10; // one byte, then a prefix of the first combined drain
+    f.terminal = terminal;
+  }
+  struct buffered_writer* b =
+    buffered_writer_create(&f.writer, &(struct buffered_writer_config){ 8, 6 });
+  CHECK(Fail, b);
+  struct writer* w = buffered_writer_as_writer(b);
+  unsigned char input[64];
+  for (size_t i = 0; i < sizeof(input); ++i)
+    input[i] = (unsigned char)i;
+  CHECK(Fail, !writer_append(w, (struct slice){ input, input + 1 }).error);
+  wait_call(&f, 1);
+  const size_t sizes[][3] = { { 3, 8, 2 }, { 7, 1, 5 }, { 2, 4, 8 } };
+  size_t offset = 1;
+  for (int batch = 0; batch < (terminal ? 1 : 3); ++batch) {
+    size_t bytes = 0;
+    for (int slot = 0; slot < 3; ++slot) {
+      size_t n = sizes[batch][slot];
+      CHECK(
+        Fail,
+        !writer_append(w, (struct slice){ input + offset, input + offset + n })
+           .error);
+      memset(input + offset, 0xFF, n);
+      offset += n;
+      bytes += n;
+    }
+    release_call(&f);
+    wait_call(&f, batch + 2);
+    CHECK(Fail, f.append_bytes[batch + 1] == bytes);
+    struct buffered_writer_stats stats = buffered_writer_get_stats(b);
+    CHECK(Fail, stats.occupied_slots == 3 && stats.pending_bytes == bytes);
+  }
+  if (terminal) {
+    // Accepted during the combined downstream call: these must also be
+    // abandoned when it returns a terminal result, without another append.
+    CHECK(
+      Fail,
+      !writer_append(w, (struct slice){ input + offset, input + offset + 4 })
+         .error);
+    offset += 4;
+  }
+  memset(input, 0xFF, sizeof(input));
+  unhold(&f);
+  CHECK(Fail, writer_flush(w).error == (terminal != 0));
+  CHECK(Fail, f.appends == (terminal ? 2 : 4));
+  struct buffered_writer_stats stats = buffered_writer_get_stats(b);
+  CHECK(Fail, stats.completed_batches == (terminal ? 2u : 4u));
+  CHECK(Fail, stats.completed_slots == (terminal ? 4u : 10u));
+  CHECK(Fail, stats.max_batch_bytes == (terminal ? 13u : 14u));
+  CHECK(Fail, stats.forwarded_bytes == (terminal ? 10u : offset));
+  CHECK(Fail, stats.abandoned_bytes == (terminal ? offset - 10 : 0));
+  CHECK(Fail, !stats.occupied_slots && !stats.pending_bytes);
+  CHECK(Fail, stats.downstream_finished == (terminal == writer_error_finished));
+  for (size_t i = 0; i < f.bytes; ++i)
+    CHECK(Fail, f.output[i] == i);
+  int error = buffered_writer_destroy(b);
+  b = NULL;
+  CHECK(Fail, error == (terminal != 0));
+  fake_free(&f);
+  return 0;
+Fail:
+  unhold(&f);
+  buffered_writer_destroy(b);
+  fake_free(&f);
+  return 1;
+}
+
 static int
 test_destroy_and_config(void)
 {
@@ -303,6 +407,9 @@ main(void)
   failed += test_queue(writer_error_fail, 3);
   failed += test_queue(writer_error_finished, 3);
   failed += test_queue(writer_error_finished, 8);
+  failed += test_backlog(0);
+  failed += test_backlog(writer_error_fail);
+  failed += test_backlog(writer_error_finished);
   failed += test_finalize(0, 0, 0, 0);
   failed += test_finalize(1, 0, 0, 0);
   failed += test_finalize(0, 1, 0, 0);
