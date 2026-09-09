@@ -4,10 +4,12 @@
 
 struct buffered_writer;
 
+// Byte limits and append sizes must respect downstream input granularity.
+// Requires max_drain_bytes <= capacity_bytes.
 struct buffered_writer_config
 {
-  size_t capacity_bytes;  // maximum queued + active bytes; nonzero
-  size_t max_drain_bytes; // bytes per drain; 0 = capacity_bytes
+  size_t capacity_bytes;  // maximum pending bytes; nonzero
+  size_t max_drain_bytes; // maximum batch bytes; 0 = capacity_bytes
 };
 
 struct buffered_writer_stats
@@ -26,57 +28,35 @@ struct buffered_writer_stats
   int failed; // sticky, including abandoned input and flush/close failures
 };
 
-// A bounded, copying adapter. Borrows downstream, which (along with its sink,
-// configuration and GPU context) must outlive the adapter. Only the worker
-// calls downstream; do not access it separately until destroying the adapter.
-// The downstream writer must permit serialized calls from a different thread
-// and release its reference to consumed input before append returns. CPU/GPU
-// tile-stream writers satisfy this contract.
-//
-// Externally serialize append/flush/close/destroy calls. get_stats may run
-// concurrently. Downstream callbacks must not reenter the adapter.
-//
-// Payload allocation is capacity_bytes in a shared ring, plus fixed bookkeeping
-// and one worker thread. Active drains pin only their bytes; all remaining
-// capacity is shared with the producer. No per-append allocation or packing
-// copy. max_drain_bytes must be <= capacity_bytes. Capacity, drain cap and
-// input sizes must respect downstream granularity (e.g. whole elements).
-// Returns NULL on invalid config, allocation failure or thread-start failure.
+// Borrows downstream and its dependencies until destroy; do not call downstream
+// separately. It must provide append/flush, allow serialized calls from another
+// thread, and retain no pointers to consumed input after append returns.
+// Callbacks must not reenter the adapter. Serialize append, flush, close and
+// destroy. Returns NULL on invalid arguments or resource failure.
 struct buffered_writer*
 buffered_writer_create(struct writer* downstream,
                        const struct buffered_writer_config* config);
 
-// append waits for free capacity, copies as much input as fits up to the ring
-// boundary, and returns the unaccepted suffix in rest. The accepted prefix can
-// immediately be reused. An empty rest can be {NULL,NULL}. Use
-// writer_append_wait to retry unaccepted input. Acceptance is not downstream
-// completion; inspect flush's result even when every append succeeded.
-// Backpressure blocks without a timeout or drops. The worker submits a
-// contiguous backlog prefix of at most max_drain_bytes in one downstream
-// append, retrying for partial acceptance or stalls. A drain also stops at the
-// ring boundary. On return its bytes are reusable and the next drain starts
-// immediately if input remains; it never waits to fill a batch. Short appends
-// are packed without gaps; caller append boundaries are not preserved
-// downstream. A size cap does not bound downstream call time.
+// Returns an interface valid until destroy.
+// append copies an input prefix and returns the unaccepted suffix in rest.
+// Accepted input is immediately reusable. Append blocks when full, without
+// a timeout. Input order is preserved; append boundaries may change.
 //
-// A downstream failure stops forwarding and abandons the unconsumed accepted
-// suffix, counted in stats. Early downstream `finished` does the same: if any
-// accepted bytes remain, the adapter reports fail, otherwise finished. Future
-// appends accept nothing. No borrowed/copy-buffer pointer is returned in rest.
-// A downstream writer that makes no progress fails after writer_append_wait's
-// bounded retries.
+// Downstream failure or completion stops acceptance. Remaining accepted bytes
+// are abandoned and cause failure. Always check flush or destroy for errors.
 //
-// flush stops acceptance, drains the queue (unless downstream terminates), then
-// flushes downstream even after failure. close publishes downstream metadata
-// after flush; before flush it is a no-op, as with the tile-stream writers.
-// Both wait for completion, are idempotent, and report sticky failures.
+// flush stops acceptance, drains unless downstream has terminated, and flushes
+// downstream even after failure. close calls downstream close after flush and
+// is a no-op before flush. Both wait for completion, are idempotent, and report
+// sticky failures.
 struct writer*
 buffered_writer_as_writer(struct buffered_writer* buffered);
 
+// Thread-safe snapshot; stop concurrent readers before destroy.
 struct buffered_writer_stats
 buffered_writer_get_stats(struct buffered_writer* buffered);
 
-// Flush, close, join and release the adapter, never downstream. Returns nonzero
-// on any failure, including abandoned input. NULL is allowed and succeeds.
+// Flushes, closes and frees the adapter, leaving downstream alive.
+// Returns nonzero on failure. NULL succeeds.
 int
 buffered_writer_destroy(struct buffered_writer* buffered);
