@@ -150,7 +150,7 @@ produce(void* arg)
   atomic_store(&p->done, 1);
 }
 
-// Hold the consumer before it reads: memory reuse, FIFO, slot ownership during
+// Hold the consumer before it reads: memory reuse, FIFO, byte ownership during
 // forwarding, partial acceptance, blocking at capacity, and failure wakeups.
 static int
 test_queue(int terminal, size_t limit)
@@ -165,7 +165,7 @@ test_queue(int terminal, size_t limit)
     f.terminal = terminal;
   }
   struct buffered_writer* b = buffered_writer_create(
-    &f.writer, &(struct buffered_writer_config){ 8, 2, 0 });
+    &f.writer, &(struct buffered_writer_config){ 16, 8 });
   struct platform_thread* thread = NULL;
   CHECK(Fail, b);
   struct writer* w = buffered_writer_as_writer(b);
@@ -173,16 +173,16 @@ test_queue(int terminal, size_t limit)
   for (size_t i = 0; i < sizeof(input); ++i)
     input[i] = (unsigned char)i;
   struct slice slice = { input, input + sizeof(input) };
-  struct writer_result r = writer_append(w, slice);
-  CHECK(Fail, !r.error && r.rest.beg == input + 8 && r.rest.end == slice.end);
+  struct writer_result r = writer_append(w, (struct slice){ input, input + 8 });
+  CHECK(Fail, !r.error && r.rest.beg == input + 8 && r.rest.end == input + 8);
   memset(input, 0xFF, 8);
   wait_entered(&f);
-  r = writer_append(w, r.rest);
+  r = writer_append(w, (struct slice){ input + 8, input + 24 });
   CHECK(Fail, !r.error && r.rest.beg == input + 16);
   memset(input + 8, 0xFF, 8);
   struct buffered_writer_stats stats = buffered_writer_get_stats(b);
   CHECK(Fail, stats.accepted_bytes == 16 && stats.forwarded_bytes == 0);
-  CHECK(Fail, stats.pending_bytes == 16 && stats.occupied_slots == 2);
+  CHECK(Fail, stats.pending_bytes == 16);
 
   struct producer p = { .writer = w, .input = r.rest };
   atomic_init(&p.started, 0);
@@ -191,7 +191,7 @@ test_queue(int terminal, size_t limit)
   CHECK(Fail, thread);
   while (!atomic_load(&p.started))
     platform_sleep_ns(100000);
-  CHECK(Fail, !atomic_load(&p.done)); // no slot can be reclaimed while held
+  CHECK(Fail, !atomic_load(&p.done)); // no bytes can be reclaimed while held
   unhold(&f);
   platform_thread_join(thread);
   thread = NULL;
@@ -209,8 +209,8 @@ test_queue(int terminal, size_t limit)
   CHECK(Fail, writer_close(w).error == (terminal ? writer_error_fail : 0));
   CHECK(Fail, f.flushes == 1 && f.closes == 1);
   stats = buffered_writer_get_stats(b);
-  CHECK(Fail, !stats.pending_bytes && !stats.occupied_slots);
-  CHECK(Fail, stats.peak_pending_bytes == 16 && stats.peak_occupied_slots == 2);
+  CHECK(Fail, !stats.pending_bytes);
+  CHECK(Fail, stats.peak_pending_bytes == 16);
   CHECK(Fail, stats.forwarded_bytes == (terminal ? limit : 24u));
   CHECK(Fail, stats.abandoned_bytes == (terminal ? 16u - limit : 0u));
   CHECK(Fail,
@@ -248,8 +248,8 @@ test_finalize(int flush_error, int close_error, int finish, int stall)
   f.stall = stall;
   if (finish)
     f.limit = 8;
-  struct buffered_writer* b = buffered_writer_create(
-    &f.writer, &(struct buffered_writer_config){ 8, 1, 0 });
+  struct buffered_writer* b =
+    buffered_writer_create(&f.writer, &(struct buffered_writer_config){ 8, 0 });
   CHECK(Fail, b);
   struct writer* w = buffered_writer_as_writer(b);
   CHECK(Fail, writer_close(w).error == 0 && f.closes == 0);
@@ -282,7 +282,7 @@ Fail:
 }
 
 // Hold each drain while the producer builds the next backlog. Vary append
-// sizes and reuse descriptor slots: every contiguous backlog must arrive as one
+// sizes: every contiguous backlog must arrive as one
 // packed append, including when a drain terminates inside the combined input.
 static int
 test_backlog(int terminal)
@@ -296,7 +296,7 @@ test_backlog(int terminal)
     f.terminal = terminal;
   }
   struct buffered_writer* b = buffered_writer_create(
-    &f.writer, &(struct buffered_writer_config){ 8, 6, 0 });
+    &f.writer, &(struct buffered_writer_config){ 48, 0 });
   CHECK(Fail, b);
   struct writer* w = buffered_writer_as_writer(b);
   unsigned char input[64];
@@ -308,8 +308,8 @@ test_backlog(int terminal)
   size_t offset = 1;
   for (int batch = 0; batch < (terminal ? 1 : 3); ++batch) {
     size_t bytes = 0;
-    for (int slot = 0; slot < 3; ++slot) {
-      size_t n = sizes[batch][slot];
+    for (int append = 0; append < 3; ++append) {
+      size_t n = sizes[batch][append];
       CHECK(
         Fail,
         !writer_append(w, (struct slice){ input + offset, input + offset + n })
@@ -322,7 +322,7 @@ test_backlog(int terminal)
     wait_call(&f, batch + 2);
     CHECK(Fail, f.append_bytes[batch + 1] == bytes);
     struct buffered_writer_stats stats = buffered_writer_get_stats(b);
-    CHECK(Fail, stats.occupied_slots == 3 && stats.pending_bytes == bytes);
+    CHECK(Fail, stats.pending_bytes == bytes);
   }
   if (terminal) {
     // Accepted during the combined downstream call: these must also be
@@ -339,11 +339,10 @@ test_backlog(int terminal)
   CHECK(Fail, f.appends == (terminal ? 2 : 4));
   struct buffered_writer_stats stats = buffered_writer_get_stats(b);
   CHECK(Fail, stats.completed_batches == (terminal ? 2u : 4u));
-  CHECK(Fail, stats.completed_slots == (terminal ? 4u : 10u));
   CHECK(Fail, stats.max_batch_bytes == (terminal ? 13u : 14u));
   CHECK(Fail, stats.forwarded_bytes == (terminal ? 10u : offset));
   CHECK(Fail, stats.abandoned_bytes == (terminal ? offset - 10 : 0));
-  CHECK(Fail, !stats.occupied_slots && !stats.pending_bytes);
+  CHECK(Fail, !stats.pending_bytes);
   CHECK(Fail, stats.downstream_finished == (terminal == writer_error_finished));
   for (size_t i = 0; i < f.bytes; ++i)
     CHECK(Fail, f.output[i] == i);
@@ -367,7 +366,7 @@ test_capped_drain(void)
     return 1;
   f.hold_each = 1;
   struct buffered_writer* b = buffered_writer_create(
-    &f.writer, &(struct buffered_writer_config){ 8, 7, 2 });
+    &f.writer, &(struct buffered_writer_config){ 56, 16 });
   struct platform_thread* thread = NULL;
   CHECK(Fail, b);
   struct writer* w = buffered_writer_as_writer(b);
@@ -376,12 +375,12 @@ test_capped_drain(void)
     input[i] = (unsigned char)i;
   CHECK(Fail, !writer_append_wait(w, (struct slice){ input, input + 8 }).error);
   wait_call(&f, 1);
-  // One active slot leaves all six other slots available, not half the ring.
+  // Eight active bytes leave the other 48 bytes available to the producer.
   CHECK(Fail,
         !writer_append_wait(w, (struct slice){ input + 8, input + 56 }).error);
   memset(input, 0xFF, 56);
   struct buffered_writer_stats stats = buffered_writer_get_stats(b);
-  CHECK(Fail, stats.occupied_slots == 7 && stats.pending_bytes == 56);
+  CHECK(Fail, stats.pending_bytes == 56);
 
   struct producer p = { .writer = w, .input = { input + 56, input + 64 } };
   atomic_init(&p.started, 0);
@@ -396,7 +395,7 @@ test_capped_drain(void)
   platform_thread_join(thread);
   thread = NULL;
   CHECK(Fail, !p.result.error && p.result.rest.beg == input + 64);
-  CHECK(Fail, f.append_bytes[1] == 16); // catch up by two slots in one call
+  CHECK(Fail, f.append_bytes[1] == 16); // catch up by 16 bytes in one call
   memset(input + 56, 0xFF, 8);
 
   p.input = (struct slice){ input + 64, input + 72 };
@@ -412,19 +411,19 @@ test_capped_drain(void)
   platform_thread_join(thread);
   thread = NULL;
   CHECK(Fail, !p.result.error && p.result.rest.beg == input + 72);
-  // A capped drain freed both slots while an older backlog still remains.
+  // A capped drain freed 16 bytes while an older backlog still remains.
   CHECK(Fail,
         !writer_append_wait(w, (struct slice){ input + 72, input + 80 }).error);
   memset(input, 0xFF, sizeof(input));
   stats = buffered_writer_get_stats(b);
-  CHECK(Fail, stats.occupied_slots == 7 && stats.pending_bytes == 56);
+  CHECK(Fail, stats.pending_bytes == 56);
   CHECK(Fail, stats.forwarded_bytes == 24);
   unhold(&f);
   CHECK(Fail, !writer_flush(w).error);
   stats = buffered_writer_get_stats(b);
-  CHECK(Fail, stats.max_batch_bytes == 16 && stats.completed_slots == 10);
+  CHECK(Fail, stats.max_batch_bytes == 16);
   CHECK(Fail, stats.completed_batches == 6 && f.appends == 6);
-  CHECK(Fail, stats.peak_occupied_slots == 7 && !stats.pending_bytes);
+  CHECK(Fail, stats.peak_pending_bytes == 56 && !stats.pending_bytes);
   CHECK(Fail, stats.forwarded_bytes == 80 && !stats.abandoned_bytes);
   for (int i = 0; i < f.entered; ++i)
     CHECK(Fail, f.append_bytes[i] <= 16);
@@ -454,7 +453,7 @@ test_ring_wrap(void)
     return 1;
   f.hold_each = 1;
   struct buffered_writer* b = buffered_writer_create(
-    &f.writer, &(struct buffered_writer_config){ 8, 3, 2 });
+    &f.writer, &(struct buffered_writer_config){ 24, 16 });
   CHECK(Fail, b);
   struct writer* w = buffered_writer_as_writer(b);
   unsigned char input[32];
@@ -495,30 +494,86 @@ Fail:
 }
 
 static int
+test_byte_cap(int terminal)
+{
+  struct fake_writer f;
+  if (fake_init(&f))
+    return 1;
+  f.hold_each = 1;
+  if (terminal) {
+    f.limit = 9; // terminate inside the third drain and the original append
+    f.terminal = terminal;
+  }
+  struct buffered_writer* b = buffered_writer_create(
+    &f.writer, &(struct buffered_writer_config){ 17, 5 });
+  CHECK(Fail, b);
+  struct writer* w = buffered_writer_as_writer(b);
+  unsigned char input[25];
+  for (size_t i = 0; i < sizeof(input); ++i)
+    input[i] = (unsigned char)i;
+  CHECK(Fail, !writer_append_wait(w, (struct slice){ input, input + 3 }).error);
+  wait_call(&f, 1);
+  // One append can exceed the drain cap. Short appends consume only their
+  // bytes.
+  struct writer_result r =
+    writer_append(w, (struct slice){ input + 3, input + 17 });
+  CHECK(Fail, !r.error && r.rest.beg == input + 17);
+  memset(input, 0xFF, 17);
+  CHECK(Fail, buffered_writer_get_stats(b).pending_bytes == 17);
+  release_call(&f);
+  wait_call(&f, 2);
+  CHECK(Fail, f.append_bytes[1] == 5); // split the 14-byte producer append
+  r = writer_append(w, (struct slice){ input + 17, input + 25 });
+  CHECK(Fail, !r.error && r.rest.beg == input + 20 && r.rest.end == input + 25);
+  memset(input + 17, 0xFF, 3);
+  release_call(&f);
+  wait_call(&f, 3);
+  CHECK(Fail, f.append_bytes[2] == 5);
+  r = writer_append(w, r.rest);
+  CHECK(Fail, !r.error && r.rest.beg == input + 25);
+  memset(input, 0xFF, sizeof(input));
+  CHECK(Fail, buffered_writer_get_stats(b).pending_bytes == 17);
+  unhold(&f);
+  CHECK(Fail, writer_flush(w).error == (terminal != 0));
+  CHECK(Fail, f.bytes == (terminal ? 9u : 25u));
+  const size_t expected[] = { 3, 5, 5, 4, 5, 3 };
+  CHECK(Fail, f.appends == (terminal ? 3 : 6));
+  for (int i = 0; i < f.appends; ++i)
+    CHECK(Fail, f.append_bytes[i] == expected[i]);
+  for (size_t i = 0; i < f.bytes; ++i)
+    CHECK(Fail, f.output[i] == i);
+  struct buffered_writer_stats stats = buffered_writer_get_stats(b);
+  CHECK(Fail, stats.max_batch_bytes == 5 && stats.peak_pending_bytes == 17);
+  CHECK(Fail,
+        !stats.pending_bytes && stats.abandoned_bytes == (terminal ? 16u : 0u));
+  int error = buffered_writer_destroy(b);
+  b = NULL;
+  CHECK(Fail, error == (terminal != 0));
+  fake_free(&f);
+  return 0;
+Fail:
+  unhold(&f);
+  buffered_writer_destroy(b);
+  fake_free(&f);
+  return 1;
+}
+
+static int
 test_destroy_and_config(void)
 {
   struct fake_writer f;
   if (fake_init(&f))
     return 1;
-  struct buffered_writer_config cfg = { 4, 2, 0 };
+  struct buffered_writer_config cfg = { 1, 0 };
   struct buffered_writer* b = NULL;
   CHECK(Fail, !buffered_writer_create(NULL, &cfg));
   CHECK(Fail, !buffered_writer_create(&f.writer, NULL));
   CHECK(Fail,
         !buffered_writer_create(&f.writer,
-                                &(struct buffered_writer_config){ 0, 2, 0 }));
+                                &(struct buffered_writer_config){ 0, 0 }));
   CHECK(Fail,
         !buffered_writer_create(&f.writer,
-                                &(struct buffered_writer_config){ 4, 0, 0 }));
-  CHECK(Fail,
-        !buffered_writer_create(
-          &f.writer, &(struct buffered_writer_config){ 2, SIZE_MAX, 0 }));
-  CHECK(Fail,
-        !buffered_writer_create(
-          &f.writer, &(struct buffered_writer_config){ 1, SIZE_MAX, 0 }));
-  CHECK(Fail,
-        !buffered_writer_create(&f.writer,
-                                &(struct buffered_writer_config){ 8, 2, 3 }));
+                                &(struct buffered_writer_config){ 8, 9 }));
   CHECK(Fail, buffered_writer_destroy(NULL) == 0);
   b = buffered_writer_create(&f.writer, &cfg);
   CHECK(Fail, b);
@@ -553,6 +608,9 @@ main(void)
   failed += test_backlog(writer_error_finished);
   failed += test_capped_drain();
   failed += test_ring_wrap();
+  failed += test_byte_cap(0);
+  failed += test_byte_cap(writer_error_fail);
+  failed += test_byte_cap(writer_error_finished);
   failed += test_finalize(0, 0, 0, 0);
   failed += test_finalize(1, 0, 0, 0);
   failed += test_finalize(0, 1, 0, 0);

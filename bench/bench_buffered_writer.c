@@ -18,11 +18,14 @@ struct observed_writer
   int64_t* submitted;
   double* downstream_ms;
   double* completion_ms;
+  double* submission_to_forward_ms;
   size_t frame_bytes;
   size_t frames;
   size_t frame;
   size_t calls;
-  size_t max_batch_frames;
+  size_t call_capacity;
+  size_t bytes;
+  size_t max_batch_bytes;
 };
 
 static struct writer_result
@@ -31,17 +34,35 @@ observed_append(struct writer* self, struct slice input)
   struct observed_writer* o = (struct observed_writer*)self;
   const size_t bytes =
     (const unsigned char*)input.end - (const unsigned char*)input.beg;
-  const size_t frames = bytes / o->frame_bytes;
-  if (!frames || bytes % o->frame_bytes || frames > o->frames - o->frame)
+  if (!bytes || bytes > o->frames * o->frame_bytes - o->bytes)
     return writer_error_at(input.beg, input.end);
+  if (o->calls == o->call_capacity) {
+    if (o->call_capacity > SIZE_MAX / 2 / sizeof(*o->downstream_ms))
+      return writer_error_at(input.beg, input.end);
+    size_t capacity = o->call_capacity * 2;
+    double* values = realloc(o->downstream_ms, capacity * sizeof(*values));
+    if (!values)
+      return writer_error_at(input.beg, input.end);
+    o->downstream_ms = values;
+    o->call_capacity = capacity;
+  }
   const int64_t start = platform_monotonic_ns();
   struct writer_result r = writer_append_wait(o->downstream, input);
   const int64_t end = platform_monotonic_ns();
   o->downstream_ms[o->calls++] = (end - start) * 1e-6;
-  if (frames > o->max_batch_frames)
-    o->max_batch_frames = frames;
-  // A combined call gives one completion observation for all its frames.
-  for (size_t i = 0; i < frames; ++i, ++o->frame)
+  if (r.error)
+    return r;
+  // A byte-limited call may start or end inside a benchmark frame. Record its
+  // first byte's start once, and completion only when its last byte returns.
+  const size_t first =
+    o->bytes / o->frame_bytes + (o->bytes % o->frame_bytes != 0);
+  const size_t last = (o->bytes + bytes - 1) / o->frame_bytes;
+  for (size_t frame = first; frame <= last; ++frame)
+    o->submission_to_forward_ms[frame] = (start - o->submitted[frame]) * 1e-6;
+  if (bytes > o->max_batch_bytes)
+    o->max_batch_bytes = bytes;
+  o->bytes += bytes;
+  for (; o->frame < o->bytes / o->frame_bytes; ++o->frame)
     o->completion_ms[o->frame] = (end - o->submitted[o->frame]) * 1e-6;
   return r;
 }
@@ -95,8 +116,8 @@ main(int argc, char** argv)
   int gpu = 0;
   struct codec_config codec = { .id = CODEC_NONE };
   const char* codec_name = "none";
-  size_t frames = 2048, fps = 0, slots = 0, side = 1024, threads = 4;
-  size_t drain_slots = 0;
+  size_t frames = 2048, fps = 0, side = 1024, threads = 4;
+  size_t buffer_bytes = 0, drain_bytes = 0;
   for (int i = 1; i < argc; ++i) {
     if (i + 1 >= argc)
       goto usage;
@@ -112,36 +133,50 @@ main(int argc, char** argv)
       codec_name = value;
       codec.id = !strcmp(value, "none") ? CODEC_NONE : CODEC_ZSTD;
     } else {
-      size_t* out = !strcmp(key, "--frames")        ? &frames
-                    : !strcmp(key, "--fps")         ? &fps
-                    : !strcmp(key, "--slots")       ? &slots
-                    : !strcmp(key, "--drain-slots") ? &drain_slots
-                    : !strcmp(key, "--side")        ? &side
-                    : !strcmp(key, "--threads")     ? &threads
-                                                    : NULL;
+      size_t* out = !strcmp(key, "--frames")         ? &frames
+                    : !strcmp(key, "--fps")          ? &fps
+                    : !strcmp(key, "--buffer-bytes") ? &buffer_bytes
+                    : !strcmp(key, "--drain-bytes")  ? &drain_bytes
+                    : !strcmp(key, "--side")         ? &side
+                    : !strcmp(key, "--threads")      ? &threads
+                                                     : NULL;
       if (!out || number(value, out))
         goto usage;
     }
   }
   if (!frames || frames > 10000000 || !threads || threads > 1024 ||
       side < 256 || side > 4096 || side % 256 || fps > 1000000 ||
-      drain_slots > slots)
+      drain_bytes > buffer_bytes || buffer_bytes % sizeof(uint16_t) ||
+      drain_bytes % sizeof(uint16_t))
     goto usage;
 
   const size_t frame_bytes = side * side * sizeof(uint16_t);
+  if (frames > SIZE_MAX / frame_bytes)
+    goto usage;
   const size_t pattern_frames = 64;
   uint16_t* pattern = malloc(pattern_frames * frame_bytes);
   int64_t* submitted = calloc(frames, sizeof(*submitted));
   double* caller = calloc(frames, sizeof(*caller));
-  double* downstream = calloc(frames, sizeof(*downstream));
   double* completion = calloc(frames, sizeof(*completion));
+  double* submission_to_forward =
+    calloc(frames, sizeof(*submission_to_forward));
   double* lateness = calloc(frames, sizeof(*lateness));
   struct tile_stream_cpu* cpu = NULL;
   struct tile_stream_gpu* device = NULL;
   struct buffered_writer* buffered = NULL;
   int error = 1;
-  if (!pattern || !submitted || !caller || !downstream || !completion ||
-      !lateness)
+  struct observed_writer observed = {
+    .writer = { observed_append, observed_flush, observed_close },
+    .submitted = submitted,
+    .downstream_ms = calloc(frames, sizeof(double)),
+    .completion_ms = completion,
+    .submission_to_forward_ms = submission_to_forward,
+    .frame_bytes = frame_bytes,
+    .frames = frames,
+    .call_capacity = frames,
+  };
+  if (!pattern || !submitted || !caller || !observed.downstream_ms ||
+      !completion || !submission_to_forward || !lateness)
     goto cleanup;
   // A deterministic spatial/temporal pattern; generation stays outside timing.
   for (size_t t = 0; t < pattern_frames; ++t)
@@ -176,20 +211,12 @@ main(int argc, char** argv)
     if (!cpu)
       goto cleanup;
   }
-  struct observed_writer observed = {
-    .writer = { observed_append, observed_flush, observed_close },
-    .downstream = gpu ? bench_gpu_writer(device) : tile_stream_cpu_writer(cpu),
-    .submitted = submitted,
-    .downstream_ms = downstream,
-    .completion_ms = completion,
-    .frame_bytes = frame_bytes,
-    .frames = frames,
-  };
+  observed.downstream =
+    gpu ? bench_gpu_writer(device) : tile_stream_cpu_writer(cpu);
   struct writer* writer = &observed.writer;
-  if (slots) {
+  if (buffer_bytes) {
     buffered = buffered_writer_create(
-      writer,
-      &(struct buffered_writer_config){ frame_bytes, slots, drain_slots });
+      writer, &(struct buffered_writer_config){ buffer_bytes, drain_bytes });
     if (!buffered)
       goto cleanup;
     writer = buffered_writer_as_writer(buffered);
@@ -228,45 +255,40 @@ main(int argc, char** argv)
   buffered = NULL;
   if (destroy_error || observed.frame != frames)
     goto cleanup;
-  printf(
-    "{\"backend\":\"%s\",\"codec\":\"%s\",\"frames\":%zu,\"fps\":%zu,"
-    "\"frame_bytes\":%zu,\"slots\":%zu,\"drain_slots\":%zu,\"threads\":%zu,"
-    "\"wall_s\":%.6f,\"gib_s\":%.6f,\"second_half_gib_s\":%.6f,"
-    "\"flush_ms\":%.6f,",
-    gpu ? "gpu" : "cpu",
-    codec_name,
-    frames,
-    fps,
-    frame_bytes,
-    slots,
-    drain_slots ? drain_slots : slots,
-    threads,
-    (done - start) * 1e-9,
-    (double)frames * frame_bytes / (done - start) * (1e9 / 1073741824.0),
-    (double)(frames - frames / 2) * frame_bytes / (done - halfway) *
-      (1e9 / 1073741824.0),
-    (done - appended) * 1e-6);
+  printf("{\"backend\":\"%s\",\"codec\":\"%s\",\"frames\":%zu,\"fps\":%zu,"
+         "\"frame_bytes\":%zu,\"capacity_bytes\":%zu,\"max_drain_bytes\":%zu,"
+         "\"threads\":%zu,"
+         "\"wall_s\":%.6f,\"gib_s\":%.6f,\"second_half_gib_s\":%.6f,"
+         "\"flush_ms\":%.6f,",
+         gpu ? "gpu" : "cpu",
+         codec_name,
+         frames,
+         fps,
+         frame_bytes,
+         buffer_bytes,
+         drain_bytes ? drain_bytes : buffer_bytes,
+         threads,
+         (done - start) * 1e-9,
+         (double)frames * frame_bytes / (done - start) * (1e9 / 1073741824.0),
+         (double)(frames - frames / 2) * frame_bytes / (done - halfway) *
+           (1e9 / 1073741824.0),
+         (done - appended) * 1e-6);
   distribution("caller", caller, frames);
   printf(",");
-  distribution("downstream", downstream, observed.calls);
+  distribution("downstream", observed.downstream_ms, observed.calls);
   printf(",");
   distribution("completion", completion, frames);
   printf(",");
+  distribution("submission_to_forward", submission_to_forward, frames);
+  printf(",");
   distribution("lateness", lateness, frames);
-  printf(",\"downstream_calls\":%zu,\"max_batch_frames\":%zu,"
-         "\"buffer_payload_bytes\":%zu,"
-         "\"peak_occupied_slots\":%zu,\"peak_pending_bytes\":%zu,"
-         "\"backpressure_ms\":%.6f,\"queue_mean_ms\":%.6f,"
-         "\"queue_max_ms\":%.6f,\"abandoned_bytes\":%llu}\n",
+  printf(",\"downstream_calls\":%zu,\"max_batch_bytes\":%zu,"
+         "\"peak_pending_bytes\":%zu,"
+         "\"backpressure_ms\":%.6f,\"abandoned_bytes\":%llu}\n",
          observed.calls,
-         observed.max_batch_frames,
-         slots * frame_bytes,
-         stats.peak_occupied_slots,
+         observed.max_batch_bytes,
          stats.peak_pending_bytes,
          stats.backpressure_ns * 1e-6,
-         stats.completed_slots ? stats.queue_ns * 1e-6 / stats.completed_slots
-                               : 0,
-         stats.max_queue_ns * 1e-6,
          (unsigned long long)stats.abandoned_bytes);
   error = 0;
 cleanup:
@@ -279,18 +301,21 @@ cleanup:
     bench_gpu_context_destroy();
   free(lateness);
   free(completion);
-  free(downstream);
+  free(submission_to_forward);
+  free(observed.downstream_ms);
   free(caller);
   free(submitted);
   free(pattern);
   return error;
 usage:
-  fprintf(stderr,
-          "Usage: %s [--backend cpu|gpu] [--codec none|zstd] "
-          "[--frames N] [--fps N] [--slots N] [--drain-slots N] "
-          "[--side N] [--threads N]\n"
-          "fps=0: unpaced; slots=0: direct; drain-slots=0: up to all slots.\n"
-          "side: multiple of 256, 256..4096.\n",
-          argv[0]);
+  fprintf(
+    stderr,
+    "Usage: %s [--backend cpu|gpu] [--codec none|zstd] "
+    "[--frames N] [--fps N] [--buffer-bytes N] [--drain-bytes N] "
+    "[--side N] [--threads N]\n"
+    "fps=0: unpaced; buffer-bytes=0: direct; drain-bytes=0: up to capacity.\n"
+    "Buffer and drain sizes must be multiples of sizeof(uint16_t).\n"
+    "side: multiple of 256, 256..4096.\n",
+    argv[0]);
   return 2;
 }

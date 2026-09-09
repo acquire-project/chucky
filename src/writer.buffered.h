@@ -6,9 +6,8 @@ struct buffered_writer;
 
 struct buffered_writer_config
 {
-  size_t slot_bytes;      // maximum bytes accepted by one append; nonzero
-  size_t slot_count;      // maximum queued + active appends; nonzero
-  size_t max_drain_slots; // maximum slots per downstream batch; 0 = slot_count
+  size_t capacity_bytes;  // maximum queued + active bytes; nonzero
+  size_t max_drain_bytes; // bytes per drain; 0 = capacity_bytes
 };
 
 struct buffered_writer_stats
@@ -18,17 +17,11 @@ struct buffered_writer_stats
   uint64_t abandoned_bytes; // accepted but not consumed after a terminal result
   size_t pending_bytes;     // queued + currently forwarding
   size_t peak_pending_bytes;
-  size_t occupied_slots; // includes appends in the active downstream batch
-  size_t peak_occupied_slots;
-  uint64_t completed_slots;
   uint64_t completed_batches;
   size_t max_batch_bytes;
-  uint64_t backpressure_ns; // caller time waiting for a free slot
-  uint64_t queue_ns;        // sum per slot: acceptance to downstream start
-  uint64_t max_queue_ns;
-  uint64_t downstream_ns; // sum per batch, including partial retries
+  uint64_t backpressure_ns; // caller time waiting for free capacity
+  uint64_t downstream_ns;   // sum per batch, including partial retries
   uint64_t max_downstream_ns;
-  uint64_t max_completion_ns; // acceptance to downstream append return
   int downstream_finished;
   int failed; // sticky, including abandoned input and flush/close failures
 };
@@ -43,28 +36,28 @@ struct buffered_writer_stats
 // Externally serialize append/flush/close/destroy calls. get_stats may run
 // concurrently. Downstream callbacks must not reenter the adapter.
 //
-// Payload allocation is slot_count * slot_bytes in a shared ring, plus one
-// bookkeeping entry per slot and one worker thread. Active drains pin only
-// their slots; all other slots remain available to the producer. No per-append
-// allocation or packing copy. max_drain_slots must be <= slot_count. slot_bytes
-// and input sizes must respect downstream input granularity (e.g. elements).
+// Payload allocation is capacity_bytes in a shared ring, plus fixed bookkeeping
+// and one worker thread. Active drains pin only their bytes; all remaining
+// capacity is shared with the producer. No per-append allocation or packing
+// copy. max_drain_bytes must be <= capacity_bytes. Capacity, drain cap and
+// input sizes must respect downstream granularity (e.g. whole elements).
 // Returns NULL on invalid config, allocation failure or thread-start failure.
 struct buffered_writer*
 buffered_writer_create(struct writer* downstream,
                        const struct buffered_writer_config* config);
 
-// append waits for one free slot, copies at most slot_bytes (stopping at the
-// ring boundary), and returns the unaccepted suffix in rest. The accepted
-// prefix can immediately be reused.
-// An empty rest can be {NULL,NULL}. Use writer_append_wait for larger inputs.
-// Acceptance is not downstream completion; inspect flush's result even when
-// every append succeeded. Backpressure blocks without a timeout or drops.
-// The worker submits a contiguous backlog prefix of at most max_drain_slots
-// in one downstream append, retrying for partial acceptance or stalls. A drain
-// also stops at the ring boundary. On return its slots are reusable and the
-// next drain starts immediately if input remains; it never waits to fill a
-// batch. Short appends are packed without gaps; caller append boundaries are
-// not preserved downstream. A size cap does not bound downstream call time.
+// append waits for free capacity, copies as much input as fits up to the ring
+// boundary, and returns the unaccepted suffix in rest. The accepted prefix can
+// immediately be reused. An empty rest can be {NULL,NULL}. Use
+// writer_append_wait to retry unaccepted input. Acceptance is not downstream
+// completion; inspect flush's result even when every append succeeded.
+// Backpressure blocks without a timeout or drops. The worker submits a
+// contiguous backlog prefix of at most max_drain_bytes in one downstream
+// append, retrying for partial acceptance or stalls. A drain also stops at the
+// ring boundary. On return its bytes are reusable and the next drain starts
+// immediately if input remains; it never waits to fill a batch. Short appends
+// are packed without gaps; caller append boundaries are not preserved
+// downstream. A size cap does not bound downstream call time.
 //
 // A downstream failure stops forwarding and abandons the unconsumed accepted
 // suffix, counted in stats. Early downstream `finished` does the same: if any

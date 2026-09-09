@@ -5,12 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct buffered_slot
-{
-  size_t bytes;
-  int64_t accepted_ns;
-};
-
 struct buffered_writer
 {
   struct writer writer;
@@ -19,13 +13,8 @@ struct buffered_writer
   struct platform_cond* changed;
   struct platform_thread* worker;
   unsigned char* data;
-  struct buffered_slot* slots;
-  size_t slot_bytes;
-  size_t slot_count;
-  size_t max_drain_slots;
   size_t capacity_bytes;
-  size_t head;
-  size_t tail;
+  size_t max_drain_bytes;
   size_t read_offset;
   size_t write_offset;
   struct buffered_writer_stats stats;
@@ -64,20 +53,14 @@ worker_main(void* arg)
   struct buffered_writer* b = arg;
   platform_mutex_lock(b->mutex);
   for (;;) {
-    if (b->stats.occupied_slots) {
-      // Snapshot a contiguous prefix of the backlog. Keep its slots occupied
-      // until downstream releases the input; the producer uses all other slots.
-      const int64_t first_accepted_ns = b->slots[b->head].accepted_ns;
-      uint64_t acceptance_offsets_ns = 0;
-      size_t bytes = 0, count = 0, next = b->head;
-      while (count < b->stats.occupied_slots && count < b->max_drain_slots &&
-             bytes < b->capacity_bytes - b->read_offset) {
-        bytes += b->slots[next].bytes;
-        acceptance_offsets_ns += b->slots[next].accepted_ns - first_accepted_ns;
-        ++count;
-        if (++next == b->slot_count)
-          next = 0;
-      }
+    if (b->stats.pending_bytes) {
+      // Snapshot a contiguous byte prefix, independent of producer appends.
+      // It remains pending until downstream releases the input.
+      size_t bytes = b->stats.pending_bytes;
+      if (bytes > b->max_drain_bytes)
+        bytes = b->max_drain_bytes;
+      if (bytes > b->capacity_bytes - b->read_offset)
+        bytes = b->capacity_bytes - b->read_offset;
       const unsigned char* beg = b->data + b->read_offset;
       platform_mutex_unlock(b->mutex);
       const int64_t start = platform_monotonic_ns();
@@ -88,14 +71,7 @@ worker_main(void* arg)
       platform_mutex_lock(b->mutex);
 
       struct buffered_writer_stats* s = &b->stats;
-      const uint64_t oldest_queue_ns = start - first_accepted_ns;
-      s->queue_ns += count * oldest_queue_ns - acceptance_offsets_ns;
-      if (oldest_queue_ns > s->max_queue_ns)
-        s->max_queue_ns = oldest_queue_ns;
       record_time(&s->downstream_ns, &s->max_downstream_ns, end - start);
-      if ((uint64_t)(end - first_accepted_ns) > s->max_completion_ns)
-        s->max_completion_ns = end - first_accepted_ns;
-      s->completed_slots += count;
       ++s->completed_batches;
       if (bytes > s->max_batch_bytes)
         s->max_batch_bytes = bytes;
@@ -106,10 +82,7 @@ worker_main(void* arg)
         s->failed = r.error != writer_error_finished || s->pending_bytes != 0;
         s->abandoned_bytes += s->pending_bytes;
         s->pending_bytes = 0;
-        s->occupied_slots = 0;
       } else {
-        s->occupied_slots -= count;
-        b->head = next;
         b->read_offset += bytes;
         if (b->read_offset == b->capacity_bytes)
           b->read_offset = 0;
@@ -154,12 +127,12 @@ buffered_append(struct writer* self, struct slice input)
   platform_mutex_lock(b->mutex);
   int status = append_status(b);
   if (!status && input.beg != input.end &&
-      b->stats.occupied_slots == b->slot_count) {
+      b->stats.pending_bytes == b->capacity_bytes) {
     const int64_t start = platform_monotonic_ns();
     do {
       platform_cond_wait(b->changed, b->mutex);
       status = append_status(b);
-    } while (!status && b->stats.occupied_slots == b->slot_count);
+    } while (!status && b->stats.pending_bytes == b->capacity_bytes);
     b->stats.backpressure_ns += platform_monotonic_ns() - start;
   }
   if (status || input.beg == input.end) {
@@ -168,35 +141,27 @@ buffered_append(struct writer* self, struct slice input)
   }
   size_t bytes =
     (const unsigned char*)input.end - (const unsigned char*)input.beg;
-  if (bytes > b->slot_bytes)
-    bytes = b->slot_bytes;
+  if (bytes > b->capacity_bytes - b->stats.pending_bytes)
+    bytes = b->capacity_bytes - b->stats.pending_bytes;
   if (bytes > b->capacity_bytes - b->write_offset)
     bytes = b->capacity_bytes - b->write_offset;
   const size_t offset = b->write_offset;
   platform_mutex_unlock(b->mutex);
 
-  // Every occupied slot holds at most slot_bytes, so a free slot guarantees
-  // room for this copy. Stop at the ring boundary to keep each slot contiguous.
-  // The worker cannot see this slot until publication, and never moves data.
+  // The single producer owns the free suffix. The worker cannot see this copy
+  // until publication and never moves data; active drains can run concurrently.
   memcpy(b->data + offset, input.beg, bytes);
 
   platform_mutex_lock(b->mutex);
   status = append_status(b); // downstream may have terminated during the copy
   if (!status) {
-    b->slots[b->tail] =
-      (struct buffered_slot){ bytes, platform_monotonic_ns() };
-    if (++b->tail == b->slot_count)
-      b->tail = 0;
     b->write_offset += bytes;
     if (b->write_offset == b->capacity_bytes)
       b->write_offset = 0;
     b->stats.accepted_bytes += bytes;
     b->stats.pending_bytes += bytes;
-    ++b->stats.occupied_slots;
     if (b->stats.pending_bytes > b->stats.peak_pending_bytes)
       b->stats.peak_pending_bytes = b->stats.pending_bytes;
-    if (b->stats.occupied_slots > b->stats.peak_occupied_slots)
-      b->stats.peak_occupied_slots = b->stats.occupied_slots;
     input.beg = (const unsigned char*)input.beg + bytes;
   }
   platform_cond_broadcast(b->changed);
@@ -239,7 +204,6 @@ release(struct buffered_writer* b)
 {
   platform_cond_free(b->changed);
   platform_mutex_free(b->mutex);
-  free(b->slots);
   free(b->data);
   free(b);
 }
@@ -249,10 +213,8 @@ buffered_writer_create(struct writer* downstream,
                        const struct buffered_writer_config* config)
 {
   if (!downstream || !downstream->append || !downstream->flush || !config ||
-      !config->slot_bytes || !config->slot_count ||
-      config->slot_count > SIZE_MAX / config->slot_bytes ||
-      config->slot_count > SIZE_MAX / sizeof(struct buffered_slot) ||
-      config->max_drain_slots > config->slot_count)
+      !config->capacity_bytes ||
+      config->max_drain_bytes > config->capacity_bytes)
     return NULL;
   struct buffered_writer* b = calloc(1, sizeof(*b));
   if (!b)
@@ -260,16 +222,13 @@ buffered_writer_create(struct writer* downstream,
   b->writer =
     (struct writer){ buffered_append, buffered_flush, buffered_close };
   b->downstream = downstream;
-  b->slot_bytes = config->slot_bytes;
-  b->slot_count = config->slot_count;
-  b->max_drain_slots =
-    config->max_drain_slots ? config->max_drain_slots : config->slot_count;
-  b->capacity_bytes = config->slot_count * b->slot_bytes;
+  b->capacity_bytes = config->capacity_bytes;
+  b->max_drain_bytes =
+    config->max_drain_bytes ? config->max_drain_bytes : config->capacity_bytes;
   b->data = malloc(b->capacity_bytes);
-  b->slots = calloc(config->slot_count, sizeof(*b->slots));
   b->mutex = platform_mutex_new();
   b->changed = platform_cond_new();
-  if (!b->data || !b->slots || !b->mutex || !b->changed)
+  if (!b->data || !b->mutex || !b->changed)
     goto fail;
   b->worker = platform_thread_start(worker_main, b);
   if (!b->worker)
