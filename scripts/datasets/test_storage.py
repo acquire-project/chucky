@@ -62,16 +62,13 @@ class StorageTests(unittest.TestCase):
                 "NOTICE.md",
             )
             git(source, "commit", "-m", "bench: storage test")
-            lock = root / "lock.json"
-            lock.write_text(
-                json.dumps(
-                    {
-                        "revision": git(source, "rev-parse", "HEAD"),
-                        "manifest_sha256": sha((source / "manifest.json").read_bytes()),
-                    }
+            original = verify_corpus(source, allow_test_data=True)
+            self.assertTrue(
+                all(
+                    "/annex/objects/" in path.as_posix()
+                    for path in original.pack_files.values()
                 )
             )
-            original = verify_corpus(source, lock, True)
             for pack in packs:
                 self.assertTrue(
                     git(source, "annex", "lookupkey", pack).startswith("SHA256-")
@@ -80,19 +77,52 @@ class StorageTests(unittest.TestCase):
             git(root, "clone", "--no-hardlinks", str(source), str(clone))
             git(clone, "annex", "init", "clone-test")
             with self.assertRaisesRegex(ValueError, "git annex get"):
-                verify_corpus(clone, lock, True)
+                verify_corpus(clone, allow_test_data=True)
             git(clone, "annex", "get", "--", *packs)
             git(clone, "annex", "fsck", "--", *packs)
-            copied = verify_corpus(clone, lock, True)
+            copied = verify_corpus(clone, allow_test_data=True)
+            self.assertTrue(
+                all(
+                    "/annex/objects/" in path.as_posix()
+                    for path in copied.pack_files.values()
+                )
+            )
+            superproject = root / "superproject"
+            superproject.mkdir()
+            git(superproject, "init", "--initial-branch=main")
+            git(superproject, "config", "user.name", "Storage test")
+            git(superproject, "config", "user.email", "storage@example.invalid")
+            git(
+                superproject,
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                str(source),
+                "data",
+            )
+            submodule = superproject / "data"
+            git(submodule, "annex", "init", "submodule-test")
+            with self.assertRaisesRegex(ValueError, "git annex get"):
+                verify_corpus(submodule, allow_test_data=True)
+            git(submodule, "annex", "get", "--", *packs)
+            submodule_corpus = verify_corpus(submodule, allow_test_data=True)
+            annex_objects = (
+                superproject / ".git" / "modules" / "data" / "annex" / "objects"
+            ).resolve()
+            self.assertTrue(
+                all(
+                    path.is_relative_to(annex_objects)
+                    for path in submodule_corpus.pack_files.values()
+                )
+            )
             archive = root / "corpus.zip"
             result = subprocess.run(
                 [
                     sys.executable,
                     str(Path(__file__).with_name("export.py")),
-                    "--corpus",
+                    "--direct-corpus",
                     str(source),
-                    "--lock",
-                    str(lock),
                     "--output",
                     str(archive),
                     "--allow-test-data",
@@ -106,7 +136,7 @@ class StorageTests(unittest.TestCase):
             plain = root / "plain"
             with zipfile.ZipFile(archive) as exported:
                 exported.extractall(plain)
-            materialized = verify_corpus(plain, lock, True)
+            materialized = verify_corpus(plain, allow_test_data=True)
             self.assertEqual(original.sha256, copied.sha256)
             self.assertEqual(original.sha256, materialized.sha256)
             self.assertEqual((clone / "NOTICE.md").read_bytes(), notice)

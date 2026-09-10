@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from manifest import verify_corpus
+from manifest import resolved_content_file, verify_corpus
 from run import assess, check_result
 
 
@@ -123,15 +123,15 @@ class CompactManifestTests(unittest.TestCase):
             corpus.manifest["packs"][0]["planes"], [{"id": "test-input-0"}]
         )
 
-    def test_format_and_attribution_are_required(self):
+    def test_format_and_source_metadata_shape_are_required(self):
         self.document["format"]["version"] = 2
         self.save()
         with self.assertRaisesRegex(ValueError, "format version 1"):
             verify_corpus(self.root)
         self.document["format"]["version"] = 1
-        self.document["source"]["attribution"] = ""
+        self.document["source"] = []
         self.save()
-        with self.assertRaisesRegex(ValueError, "Source attribution"):
+        with self.assertRaisesRegex(ValueError, "source must be an object"):
             verify_corpus(self.root)
 
     def test_asset_shape_path_and_checksum_are_checked(self):
@@ -148,20 +148,6 @@ class CompactManifestTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     verify_corpus(self.root)
                 asset[key] = original
-
-    def test_content_lock_does_not_require_a_git_revision(self):
-        lock = self.root / "lock.json"
-        lock.write_text(
-            json.dumps(
-                {
-                    "manifest_sha256": sha(
-                        (self.root / "manifest.json").read_bytes()
-                    )
-                }
-            )
-        )
-        self.assertEqual(verify_corpus(self.root, lock).record()["decoded_bytes"], 12)
-
 
 class ManifestTests(unittest.TestCase):
     def setUp(self):
@@ -281,16 +267,7 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "git annex get"):
             self.verify()
 
-    def test_resolved_paths_can_differ_under_the_same_lock(self):
-        lock = self.root / "corpus.lock.json"
-        lock.write_text(
-            json.dumps(
-                {
-                    "revision": "a" * 40,
-                    "manifest_sha256": sha((self.root / "manifest.json").read_bytes()),
-                }
-            )
-        )
+    def test_resolved_paths_are_recorded_without_affecting_identity(self):
         file = self.root / "pack-0.raw"
         pixels = file.read_bytes()
         objects = self.root / "objects"
@@ -302,25 +279,43 @@ class ManifestTests(unittest.TestCase):
             file.symlink_to(first.relative_to(self.root))
         except OSError as error:
             self.skipTest(f"Symlinks are unavailable: {error}")
-        corpus = verify_corpus(self.root, lock, allow_test_data=True)
+        corpus = verify_corpus(self.root, allow_test_data=True)
         self.assertEqual(corpus.pack_files["pack-0"], first.resolve())
         before = corpus.sha256
         file.unlink()
         second = objects / "different-name"
         second.write_bytes(pixels)
         file.symlink_to(second)
-        changed = verify_corpus(self.root, lock, allow_test_data=True)
+        changed = verify_corpus(self.root, allow_test_data=True)
         self.assertEqual(changed.sha256, before)
         self.assertEqual(changed.pack_files["pack-0"], second.resolve())
         self.assertEqual(corpus.pack_files["pack-0"], first.resolve())
         file.unlink()
         file.write_bytes(pixels)
-        plain = verify_corpus(self.root, lock, allow_test_data=True)
+        plain = verify_corpus(self.root, allow_test_data=True)
         self.assertEqual(plain.sha256, before)
         self.assertEqual(plain.pack_files["pack-0"], file.resolve())
         file.write_bytes(b"\xff" + pixels[1:])
         with self.assertRaisesRegex(ValueError, "Plane checksum mismatch"):
-            verify_corpus(self.root, lock, allow_test_data=True)
+            verify_corpus(self.root, allow_test_data=True)
+
+    def test_submodule_annex_location_uses_the_real_git_directory(self):
+        file = self.root / "pack-0.raw"
+        git_dir = self.root / "superproject-git" / "modules" / "microscopy"
+        content = git_dir / "annex" / "objects" / "key" / "content"
+        content.parent.mkdir(parents=True)
+        content.write_bytes(file.read_bytes())
+        with patch(
+            "manifest.git_output",
+            side_effect=[
+                "SHA256-key",
+                ".git/annex/objects/key/content",
+                str(git_dir),
+            ],
+        ):
+            self.assertEqual(
+                resolved_content_file(self.root, file), content.resolve()
+            )
 
     def test_missing_or_changed_provenance_is_rejected(self):
         (self.root / "evidence.txt").write_text("Changed evidence")
@@ -366,28 +361,6 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "core and heldout"):
             self.verify()
 
-    def test_changed_manifest_does_not_match_pin(self):
-        lock = self.root / "lock.json"
-        lock.write_text(json.dumps({"revision": "f" * 40, "manifest_sha256": "0" * 64}))
-        with self.assertRaisesRegex(ValueError, "pinned corpus"):
-            verify_corpus(self.root, lock, True)
-
-    def test_adjusted_annex_branch_keeps_the_same_content_pin(self):
-        (self.root / ".git").mkdir()
-        lock = self.root / "lock.json"
-        lock.write_text(
-            json.dumps(
-                {
-                    "revision": "a" * 40,
-                    "manifest_sha256": sha((self.root / "manifest.json").read_bytes()),
-                }
-            )
-        )
-        with patch(
-            "manifest.git_output", side_effect=["b" * 40, "adjusted/main(unlocked)"]
-        ):
-            self.assertEqual(verify_corpus(self.root, lock, True).revision, "b" * 40)
-
     def test_copied_files_verify_without_git_or_annex(self):
         with tempfile.TemporaryDirectory(prefix="chucky-copy-") as directory:
             copy = Path(directory) / "copy"
@@ -428,7 +401,7 @@ class ResultTests(unittest.TestCase):
             },
         }
         with self.assertRaisesRegex(ValueError, "chunk_shape"):
-            check_result(result, pack, 8, "cpu", "none")
+            check_result(result, pack, 8, "cpu", "none", 32 << 10)
 
     def test_clock_disagreement_is_rejected(self):
         pack = {"width": 64, "height": 64, "bytes": 32768}
@@ -453,7 +426,15 @@ class ResultTests(unittest.TestCase):
             "logical_compression_fold": 1.0,
         }
         with self.assertRaisesRegex(ValueError, "clock disagrees"):
-            check_result(result, pack, 4, "cpu", "none", process_wall_s=19.0)
+            check_result(
+                result,
+                pack,
+                4,
+                "cpu",
+                "none",
+                32 << 10,
+                process_wall_s=19.0,
+            )
 
 
 if __name__ == "__main__":

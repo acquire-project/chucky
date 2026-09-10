@@ -1,5 +1,6 @@
-# Microscopy corpus locks
+# Microscopy dataset tools
 
 The Python tools and documentation are in [scripts/datasets](../../scripts/datasets/README.md).
-This directory holds corpus lock files. The remaining Python entry points forward
-to the scripts directory so instructions in frozen corpus releases still work.
+The data-source and selection registry is [`bench/data.json`](../data.json).
+The Python entry points here forward to the scripts directory so instructions in
+older corpus releases still work.

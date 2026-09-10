@@ -159,6 +159,40 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(result["machine"]["gpu"], "NVIDIA L40")
         self.assertEqual(result["machine"]["commit"], "c" * 7)
 
+    def test_schema_two_keeps_chunk_targets_as_separate_rows(self):
+        document = image_document()
+        document["schema_version"] = 2
+        for record in document["runs"]:
+            record.update(
+                scenario="images",
+                chunk_bytes=128 << 10,
+                chunk_bytes_label="128K",
+            )
+        smaller = copy.deepcopy(document["runs"])
+        for record in smaller:
+            record.update(chunk_bytes=32 << 10, chunk_bytes_label="32K")
+            record["layout"]["chunk_shape"] = [1, 128, 128]
+            record["measurement"]["image_replay"]["chunk_shape"] = [1, 128, 128]
+        document["runs"].extend(smaller)
+
+        runs = image_sweep(document)["runs"]
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(
+            {(run["chunk_bytes_label"], run["chunk_bytes"]) for run in runs},
+            {("32K", 32 << 10), ("128K", 128 << 10)},
+        )
+        self.assertEqual(len({run["id"] for run in runs}), 2)
+
+    def test_schema_two_rejects_a_mislabeled_chunk(self):
+        document = image_document()
+        document["schema_version"] = 2
+        for record in document["runs"]:
+            record.update(
+                scenario="images", chunk_bytes=128 << 10, chunk_bytes_label="32K"
+            )
+        with self.assertRaisesRegex(ValueError, "chunk label"):
+            image_sweep(document)
+
     def test_recorded_scenario_controls_grouping_and_identity(self):
         archived = image_sweep(image_document())["runs"][0]
 
@@ -255,6 +289,17 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(protein["input_id"], "opencell-protein")
         self.assertEqual(protein["input_label"], "OpenCell Protein")
         self.assertNotEqual(protein["input_id"], heldout["input_id"])
+
+    def test_chucky_input_id_overrides_external_source_group(self):
+        document = image_document()
+        document["corpus"]["kind"] = "raw"
+        for record in document["runs"]:
+            record["source_group"] = "external-description"
+            record["input_id"] = "opencell-dna"
+        run = image_sweep(document)["runs"][0]
+        self.assertEqual(run["input_id"], "opencell-dna")
+        self.assertEqual(run["input_label"], "OpenCell DNA")
+        self.assertEqual(run["image_input"]["source_group"], "external-description")
 
     def test_incomplete_or_inconsistent_measurements_are_rejected(self):
         for change in ("status", "repeats", "duplicate", "layout", "rate"):

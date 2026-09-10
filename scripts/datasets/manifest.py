@@ -74,10 +74,13 @@ class Corpus:
     revision: str | None
     verify_s: float
     pack_files: dict[str, Path]
+    source_manifest: str = "manifest.json"
+    dataset: dict | None = None
 
     def record(self) -> dict:
         result = {
             "manifest_sha256": self.sha256,
+            "manifest": self.source_manifest,
             "revision": self.revision,
             "release": self.manifest.get("release"),
             "kind": self.manifest["kind"],
@@ -90,6 +93,8 @@ class Corpus:
         for key in ("name", "version", "format"):
             if key in self.manifest:
                 result[key] = self.manifest[key]
+        if self.dataset is not None:
+            result["dataset"] = self.dataset
         return result
 
 
@@ -99,23 +104,35 @@ def nonempty_string(value, label: str) -> str:
     return value
 
 
-def verify_lock(
-    root: Path,
-    lock: Path | None,
-    manifest_sha: str,
-    revision: str | None,
-) -> None:
-    if lock is None:
-        return
-    pin = read_json(lock)
-    if manifest_sha != pin["manifest_sha256"]:
-        raise ValueError("Manifest differs from the pinned corpus")
-    pinned_revision = pin.get("revision")
-    if pinned_revision is None or revision is None or revision == pinned_revision:
-        return
-    branch = git_output(root, "symbolic-ref", "--quiet", "--short", "HEAD") or ""
-    if not branch.startswith("adjusted/"):
-        raise ValueError("Check out the pinned corpus revision before running")
+def resolved_content_file(root: Path, file: Path) -> Path:
+    """Return the concrete bytes used for replay, including annex object paths."""
+    try:
+        relative = file.relative_to(root).as_posix()
+    except ValueError:
+        return file.resolve(strict=True)
+    key = git_output(root, "annex", "lookupkey", "--", relative)
+    if key:
+        location = git_output(root, "annex", "contentlocation", key)
+        if location:
+            path = Path(location)
+            if path.is_absolute():
+                candidate = path
+            elif path.parts and path.parts[0] == ".git":
+                git_dir = git_output(
+                    root, "rev-parse", "--path-format=absolute", "--git-dir"
+                )
+                candidate = (
+                    Path(git_dir).joinpath(*path.parts[1:])
+                    if git_dir
+                    else file
+                )
+            else:
+                candidate = root.joinpath(*path.parts)
+            try:
+                return candidate.resolve(strict=True)
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+    return file.resolve(strict=True)
 
 
 def verify_compact_corpus(
@@ -124,6 +141,8 @@ def verify_compact_corpus(
     manifest_sha: str,
     revision: str | None,
     started: float,
+    selected_ids: set[str] | None,
+    source_manifest: str,
 ) -> Corpus:
     format_spec = document.get("format")
     expected_format = {
@@ -158,15 +177,6 @@ def verify_compact_corpus(
     source = document.get("source")
     if not isinstance(source, dict):
         raise ValueError("Dataset source must be an object")
-    for key in (
-        "collection",
-        "url",
-        "attribution",
-        "license",
-        "license_url",
-        "changes",
-    ):
-        nonempty_string(source.get(key), f"Source {key}")
 
     assets = document.get("assets")
     if not isinstance(assets, list) or not assets:
@@ -185,6 +195,8 @@ def verify_compact_corpus(
         ):
             raise ValueError(f"Invalid or duplicate asset id: {asset_id}")
         identifiers.add(asset_id)
+        if selected_ids is not None and asset_id not in selected_ids:
+            continue
         nonempty_string(asset.get("name"), f"{asset_id} name")
         path = relative_file(root, asset.get("path"))
         if asset["path"] in paths:
@@ -199,21 +211,21 @@ def verify_compact_corpus(
             raise ValueError(f"{asset_id} shape must be [plane, y, x]")
         plane_count, height, width = shape
         size = plane_count * height * width * 2
-        total_bytes += size
-        if total_bytes > MAX_BYTES:
-            raise ValueError("Corpus exceeds the 256 MiB decoded limit")
         checksum = asset.get("sha256", "")
         if not isinstance(checksum, str) or not SHA256.fullmatch(checksum):
             raise ValueError(f"Invalid asset checksum: {asset_id}")
+        total_bytes += size
+        if total_bytes > MAX_BYTES:
+            raise ValueError("Selected data exceed the 256 MiB decoded limit")
         try:
-            resolved = path.resolve(strict=True)
+            resolved = resolved_content_file(root, path)
             if resolved.stat().st_size != size:
                 raise ValueError(
                     f"Wrong asset length: {path}; run git annex get data/"
                 )
             if digest_file(resolved) != checksum:
                 raise ValueError(f"Asset checksum mismatch: {path}")
-        except FileNotFoundError as error:
+        except (FileNotFoundError, NotADirectoryError) as error:
             raise ValueError(
                 f"Missing image asset: {path}; run git annex get data/"
             ) from error
@@ -237,6 +249,13 @@ def verify_compact_corpus(
             }
         )
 
+    if selected_ids is not None:
+        missing = sorted(selected_ids - identifiers)
+        if missing:
+            raise ValueError(f"Selected image asset(s) are absent: {', '.join(missing)}")
+    if not packs:
+        raise ValueError("No image assets were selected")
+
     normalized = {
         "schema_version": 2,
         "kind": "raw",
@@ -256,6 +275,7 @@ def verify_compact_corpus(
         revision,
         time.perf_counter() - started,
         pack_files,
+        source_manifest,
     )
 
 
@@ -347,23 +367,32 @@ def verify_source(root: Path, name: str, source: dict, kind: str) -> dict:
 
 def verify_corpus(
     root: Path,
-    lock: Path | None = None,
+    *,
+    manifest: str = "manifest.json",
     allow_test_data: bool = False,
     allow_provisional: bool = False,
+    selected_ids: set[str] | None = None,
 ) -> Corpus:
     start = time.perf_counter()
     root = root.expanduser().resolve()
     if (root / "INCOMPLETE").exists():
         raise ValueError("Corpus extraction is incomplete")
-    path = root / "manifest.json"
+    path = relative_file(root, manifest)
     document = read_json(path)
     manifest_sha = digest_file(path)
     revision = (
         git_output(root, "rev-parse", "HEAD") if (root / ".git").exists() else None
     )
-    verify_lock(root, lock, manifest_sha, revision)
     if "format" in document:
-        return verify_compact_corpus(root, document, manifest_sha, revision, start)
+        return verify_compact_corpus(
+            root,
+            document,
+            manifest_sha,
+            revision,
+            start,
+            selected_ids,
+            manifest,
+        )
     selection = document.get("selection")
     if selection is not None:
         survey = relative_file(root, selection["survey_path"])
@@ -390,6 +419,7 @@ def verify_corpus(
     fields, modalities = {}, set()
     total_bytes = 0
     pack_files = {}
+    selected_packs = []
     for pack in packs:
         name = pack.get("id", "")
         if not IDENTIFIER.fullmatch(name) or name in identifiers:
@@ -410,9 +440,6 @@ def verify_corpus(
         size = positive_int(pack.get("bytes"), f"{name} bytes")
         if size != width * height * 2 * len(planes):
             raise ValueError(f"Pack size does not match its frames: {name}")
-        total_bytes += size
-        if total_bytes > MAX_BYTES:
-            raise ValueError("Corpus exceeds the 256 MiB decoded limit")
         if not SHA256.fullmatch(pack.get("sha256", "")):
             raise ValueError(f"Invalid pack checksum: {name}")
         file = relative_file(root, pack["path"])
@@ -448,8 +475,13 @@ def verify_corpus(
                 or any(type(v) is not int or v < 0 for v in coordinates.values())
             ):
                 raise ValueError(f"Invalid source coordinates: {plane_id}")
+        if selected_ids is not None and name not in selected_ids:
+            continue
+        total_bytes += size
+        if total_bytes > MAX_BYTES:
+            raise ValueError("Selected data exceed the 256 MiB decoded limit")
         try:
-            resolved = file.resolve(strict=True)
+            resolved = resolved_content_file(root, file)
             if resolved.stat().st_size != size:
                 raise ValueError(f"Wrong pack length: {file}; run git annex get data/")
             checksum = hashlib.sha256()
@@ -466,12 +498,27 @@ def verify_corpus(
             if checksum.hexdigest() != pack["sha256"]:
                 raise ValueError(f"Pack checksum mismatch: {file}")
             pack_files[name] = resolved
-        except FileNotFoundError as error:
+        except (FileNotFoundError, NotADirectoryError) as error:
             raise ValueError(
                 f"Missing image pack: {file}; run git annex get data/"
             ) from error
+        selected_packs.append(pack)
+    if selected_ids is not None:
+        missing = sorted(selected_ids - identifiers)
+        if missing:
+            raise ValueError(f"Selected image pack(s) are absent: {', '.join(missing)}")
+    if not selected_packs:
+        raise ValueError("No image packs were selected")
     if modalities != expected_modalities:
         raise ValueError("Image packs differ from the declared modalities")
+    document = dict(document)
+    document["packs"] = selected_packs
     return Corpus(
-        root, document, manifest_sha, revision, time.perf_counter() - start, pack_files
+        root,
+        document,
+        manifest_sha,
+        revision,
+        time.perf_counter() - start,
+        pack_files,
+        manifest,
     )

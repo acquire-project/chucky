@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "default_dataset": "opencell-core",
+  "source": [
+    {
+      "id": "microscopy",
+      "path": "data/microscopy",
+      "manifest": "manifest.json",
+      "format": "chucky-image-corpus",
+      "format_version": 1
+    }
+  ],
+  "dataset": [
+    {
+      "id": "opencell-core",
+      "source": "microscopy",
+      "manifest_id": "opencell-fluorescence-core",
+      "manifest_version": 1,
+      "member": [
+        {
+          "asset": "opencell-dna",
+          "input": "opencell-dna"
+        },
+        {
+          "asset": "opencell-protein",
+          "input": "opencell-protein"
+        }
+      ]
+    }
+  ]
+}

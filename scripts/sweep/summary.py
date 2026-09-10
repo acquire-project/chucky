@@ -212,7 +212,11 @@ def summarize_sweep(path: Path, data: dict, registry: list[dict]) -> dict:
         "version": data.get("version"),
         "migrated_from": data.get("migrated_from"),
         "retired": list(retired_metrics(data)),
-        "smoke": bool(data.get("protocol", {}).get("smoke", False)),
+        "smoke": bool(
+            data.get("protocol", {}).get(
+                "smoke", data.get("image_protocol", {}).get("smoke", False)
+            )
+        ),
         "counts": status_counts(runs),
         "runs": [trim_run(r) for r in runs],
         **({"input_release": data["corpus"]["release"]} if "corpus" in data else {}),

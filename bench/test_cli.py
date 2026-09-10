@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
 BENCH = Path(sys.argv.pop(1)).resolve()
+IMAGE_BENCH = Path(sys.argv.pop(1)).resolve()
 
 
 class CodecOptionsTest(unittest.TestCase):
@@ -98,6 +100,54 @@ class CodecOptionsTest(unittest.TestCase):
                                                 "--level", "0", *block)
                         self.assertNotEqual(result.returncode, 0)
                         self.assertTrue(result.stderr)
+
+    def test_image_chunk_targets_change_the_actual_layout(self):
+        with tempfile.TemporaryDirectory(prefix="chucky-image-cli-") as directory:
+            source = Path(directory) / "input.raw"
+            source.write_bytes(bytes(64 * 64 * 2))
+            for label, shape in (
+                ("16K", [4, 32, 64]),
+                ("32K", [4, 64, 64]),
+            ):
+                with self.subTest(label=label):
+                    result = subprocess.run(
+                        [
+                            str(IMAGE_BENCH),
+                            "--input",
+                            str(source),
+                            "--width",
+                            "64",
+                            "--height",
+                            "64",
+                            "--dtype",
+                            "u16",
+                            "--frames",
+                            "8",
+                            "--backend",
+                            "cpu",
+                            "--chunk-bytes",
+                            label,
+                            "--batch-bytes",
+                            "1M",
+                            "--max-threads",
+                            "2",
+                            "--append-elements",
+                            str(64 * 64),
+                            "--codec",
+                            "none",
+                            "--level",
+                            "0",
+                            "--json",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    data = json.loads(result.stdout)
+                    self.assertEqual(data["status"], "pass")
+                    self.assertEqual(data["image_replay"]["chunk_shape"], shape)
+                    self.assertEqual(data["image_replay"]["source_bytes"], 64 * 64 * 2)
 
 
 if __name__ == "__main__":

@@ -937,29 +937,51 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
   struct dimension* dims = spec.dims;
   struct bench_input input = { 0 };
   if (spec.image_input) {
-    uint64_t chunk_elements = 1;
     if (spec.rank != 3)
       return bench_failed(a.json_output);
+    if (!a.input_path || !a.width || !a.height || a.dtype != dtype_u16 ||
+        a.fill_set || a.width > INT_MAX || a.height > INT_MAX ||
+        a.width > SIZE_MAX / sizeof(uint16_t) / a.height) {
+      fprintf(stderr, "Images require --input, --width, --height, and u16\n");
+      return bench_failed(a.json_output);
+    }
+    size_t frame_elements = (size_t)(a.width * a.height);
+    size_t frame_bytes = frame_elements * sizeof(uint16_t);
+    if (!a.frames) {
+      const uint64_t minimum_bytes = (uint64_t)32 << 30;
+      a.frames =
+        minimum_bytes / frame_bytes + (minimum_bytes % frame_bytes != 0);
+    }
+    dims[0].size = a.frames;
+    dims[1].size = a.height;
+    dims[2].size = a.width;
+
+    const size_t target_chunk_bytes =
+      a.target_chunk_bytes ? a.target_chunk_bytes : spec.target_chunk_bytes;
+    if (spec.chunk_ratios && dims_budget_chunk_bytes(dims,
+                                                     spec.rank,
+                                                     target_chunk_bytes,
+                                                     sizeof(uint16_t),
+                                                     spec.chunk_ratios))
+      return bench_failed(a.json_output);
+
+    uint64_t chunk_elements = 1;
     for (uint8_t d = 0; d < spec.rank; ++d) {
       if (!dims[d].chunk_size ||
           chunk_elements > UINT64_MAX / dims[d].chunk_size)
         return bench_failed(a.json_output);
       chunk_elements *= dims[d].chunk_size;
     }
-    const uint64_t chunk_bytes = chunk_elements * sizeof(uint16_t);
-    if (!a.input_path || !a.width || !a.height || a.dtype != dtype_u16 ||
-        a.fill_set || a.width > INT_MAX || a.height > INT_MAX ||
-        a.width > SIZE_MAX / sizeof(uint16_t) / a.height ||
-        (a.target_chunk_bytes && a.target_chunk_bytes != chunk_bytes)) {
+    if (target_chunk_bytes &&
+        (chunk_elements > SIZE_MAX / sizeof(uint16_t) ||
+         chunk_elements * sizeof(uint16_t) != target_chunk_bytes)) {
       fprintf(stderr,
-              "Images require --input, --width, --height, u16, "
-              "and fixed 4x64x64 chunks\n");
+              "Requested image chunk size does not fit the image dimensions\n");
       return bench_failed(a.json_output);
     }
+
     const size_t chunk_height = (size_t)dims[1].chunk_size;
     const size_t chunk_width = (size_t)dims[2].chunk_size;
-    size_t frame_elements = (size_t)(a.width * a.height);
-    size_t frame_bytes = frame_elements * sizeof(uint16_t);
     size_t padded_width =
       (size_t)((a.width + chunk_width - 1) / chunk_width * chunk_width);
     size_t padded_height =
@@ -967,18 +989,11 @@ bench_stream_main(int ac, char* av[], struct bench_spec spec)
     if (padded_width > SIZE_MAX / sizeof(uint16_t) / padded_height)
       return bench_failed(a.json_output);
     size_t padded_frame = padded_width * padded_height;
-    if (!a.frames) {
-      const uint64_t minimum_bytes = (uint64_t)32 << 30;
-      a.frames =
-        minimum_bytes / frame_bytes + (minimum_bytes % frame_bytes != 0);
-    }
     if (a.frames > SIZE_MAX / sizeof(uint16_t) / padded_frame ||
         a.append_elements > SIZE_MAX / sizeof(uint16_t)) {
       fprintf(stderr, "Image stream size overflows addressable memory\n");
       return bench_failed(a.json_output);
     }
-    dims[1].size = a.height;
-    dims[2].size = a.width;
     a.fill = NULL;
     if (!a.target_batch_bytes)
       a.target_batch_bytes = (uint64_t)64 << 20;

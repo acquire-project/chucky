@@ -16,6 +16,11 @@ Use the Blosc Pareto page to filter and compare block sizes.
 files and the retained Blosc dataset manifest to write a site with three pages.
 CI publishes it when report inputs change on `main` (`.github/workflows/pages.yml`).
 
+Repeat `--scenario` to put selected scenarios in one sweep. The registered
+`images` scenario is explicit because it verifies external corpus content and
+runs repeated processes for each configuration; see
+[Microscopy image inputs](#microscopy-image-inputs).
+
 - `index.html` shows how each machine's numbers change from one sweep to the next.
 - `explore.html` shows a single sweep in detail, down to per-stage timing.
 - `pareto.html` compares retained Blosc experiments across systems and workload groups.
@@ -216,9 +221,9 @@ only values compatible with the current Input.
 
 To add a dataset-backed scenario:
 
-1. Give it a stable scenario ID and record that ID in every new execution. Give
-   each semantic dataset class a stable `source_group`; retain hashes and replay
-   details separately in result metadata.
+1. Give it a stable scenario ID and record that ID in every new execution. Map
+   each physical asset to a stable Chucky `input_id` in `bench/data.json`; retain
+   source grouping, hashes, and replay details separately as provenance.
 2. Add both the `[[input]]` and `[[scenario]]` sides to `bench/workloads.toml`,
    including valid defaults and every explicit pair.
 3. Add conversion and selection tests, then regenerate the complete report. An
@@ -489,41 +494,59 @@ sets JavaScript module MIME types correctly even with Windows registry overrides
 ## Microscopy image inputs
 
 The image collection tools live in [scripts/datasets](../datasets/README.md).
-To replay the pinned OpenCell corpus, run from the chucky checkout:
+After initializing the data submodule and retrieving the selected annex assets,
+run the image matrix through the same sweep command and result file as the
+synthetic scenarios:
 
 ```sh
-python scripts/datasets/run.py run \
-  --corpus ~/data/chucky-benchmarks \
-  --lock bench/datasets/opencell.lock.json \
-  --executable build-gpu/bench/bench_stream_images \
-  --machine reef-l40 --backends cpu gpu \
-  --output bench/results/images/reef-l40-opencell-v1
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario images \
+  --build-dir build-gpu --machine reef-l40
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
-The report discovers both top-level sweep JSON and `images/**/results.json`.
-It also accepts an image result file as an explicit argument. Backend views such
-as `results-cpu.json` are not discovered automatically, so the original executions
-appear once. Saved image results can be reported without rerunning a benchmark.
+`images` is opt-in rather than part of an unfiltered `--all`, because its
+registered data may not be present and its measurement protocol is much longer.
+Repeat the option to run it alongside an ordinary scenario:
 
-Each image case becomes one report row. Throughput is the median of measured
-repetitions; compression uses their combined native input and output byte counts.
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier backend --backend cpu \
+  --scenario orca2_single --scenario images \
+  --build-dir build-cpu --machine local
+```
+
+The image matrix is the full product of two inputs, eight chunk targets, five
+codecs, and both backends: 160 configurations and 960 process executions.
+`--backend cpu` or `--backend gpu` filters it to 80 configurations and 480
+executions. The `compress` and `backend` tiers select the same image axes; their
+distinction still applies to ordinary scenarios. `--dry-run` prints both counts
+without verifying or opening the image assets.
+
+Each image configuration becomes one normal sweep row. By default it runs one
+warmup and five measured processes of at least 32 GiB each. Throughput is the
+median of measured repetitions; compression uses their combined native input and
+output byte counts.
 Warmups are excluded. Stage timings and other detailed counters come from the
 measured execution closest to the median throughput. The explorer tooltip gives
-the repeat count, throughput range, and selected execution. The original result
-file retains every measurement.
+the repeat count, throughput range, and selected execution. The row retains the
+individual throughput and supervising process-time values. Add
+`--smoke --min-gib 0.016 --repeats 1` for a short functional check; smoke sweeps
+do not enter the performance trend.
 
-The Input control uses each pack's `source_group` as a short, stable
-provenance/content identity: for example, `opencell-dna` is shown as
-`OpenCell DNA`. Manifest and pack hashes, plane order, replay protocol, and
-layout remain in the result metadata but do not fragment explorer comparisons.
-Core and heldout data share the input selection but retain distinct run IDs.
-The stricter dataset `compare` command still requires identical input and chucky
-source hashes for machine comparisons.
+`bench/data.json` maps selected physical assets to stable Chucky input IDs; for
+example, `opencell-dna` is shown as `OpenCell DNA`. The data repository's names
+and grouping metadata are provenance only. Data version, repository revision,
+manifest and asset hashes, resolved input path, plane order, replay protocol, and
+layout remain in result metadata. The stricter dataset `compare` command requires
+identical selected asset hashes, logical inputs, layouts, and Chucky source hashes,
+but tolerates unrelated data-repository and manifest changes.
 
-New image result records explicitly store `scenario = "images"`; conversion of
-archived schema-1 records without it falls back to `images`. Scenario is part of
-repetition grouping and run identity. Image result schema 1 uses sweep metric
-version 10. Incomplete image collections are skipped with a warning. A smoke
-check is labeled, remains available in the explorer, and is omitted from
-Performance over time.
+The result records `scenario = "images"`, its semantic `input_id`, physical asset,
+chunk target, selected-asset hashes, corpus identity, and replay protocol. Resume
+refuses to mix different asset content or image protocols in one file.
+
+`report.py` still discovers archived standalone `images/**/results.json` files
+and converts schema-1 and schema-2 image collections to the same sweep rows.
+The lower-level `scripts/datasets/run.py` remains available for direct legacy
+corpora, full per-execution logs, and its strict two-result comparison command.

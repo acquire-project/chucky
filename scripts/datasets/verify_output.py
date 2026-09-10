@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from manifest import verify_corpus
+from data_sources import DEFAULT_REGISTRY, load_corpus
 from run import BLOSC_BLOCK_BYTES, PROFILES, check_result, write_json
 
 
@@ -126,20 +126,28 @@ def main():
         "--backends", nargs="+", choices=("cpu", "gpu"), default=["cpu"]
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--corpus", type=Path)
-    parser.add_argument(
-        "--lock",
-        type=Path,
-        default=Path(__file__).resolve().parents[2] / "bench/datasets/corpus.lock.json",
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--corpus", type=Path, help="Override the registered dataset's source path"
     )
+    source.add_argument(
+        "--direct-corpus", type=Path, help="Load an unregistered legacy corpus"
+    )
+    parser.add_argument("--dataset")
+    parser.add_argument("--data-registry", type=Path, default=DEFAULT_REGISTRY)
     parser.add_argument("--allow-test-data", action="store_true")
     parser.add_argument("--allow-provisional", action="store_true")
     args = parser.parse_args()
     corpus = (
-        verify_corpus(
-            args.corpus, args.lock, args.allow_test_data, args.allow_provisional
+        load_corpus(
+            args.data_registry,
+            args.dataset,
+            args.corpus,
+            args.direct_corpus,
+            allow_test_data=args.allow_test_data,
+            allow_provisional=args.allow_provisional,
         )
-        if args.corpus
+        if args.corpus or args.direct_corpus or args.dataset
         else None
     )
     output = args.output.resolve()

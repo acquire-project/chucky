@@ -5,33 +5,52 @@ then repeats its planes in manifest order. Loading and GPU context setup finish
 before the throughput timer starts. The measured interval includes the final
 pipeline drain and sink flush. The buffer stays alive until the stream is destroyed.
 
-Image packs live separately, conventionally at `~/data/chucky-benchmarks/`.
-That repository has one metadata file, `manifest.json`; git-annex holds binary
-assets with SHA256 keys. The corpus is limited to 256 MiB decoded.
+The default metadata checkout is the `bench/data/microscopy` Git submodule;
+git-annex holds its binary assets with SHA256 keys. [`bench/data.json`](../../bench/data.json)
+declares the accepted manifest version, selects the assets used by Chucky, and
+maps them to report inputs. Extra assets and unavailable unselected annex content
+do not affect a sweep.
 
-The Cellstate proof of concept uses a separate frozen corpus. Its lock is
-included here; replay requires a saved copy of `cellstate-poc-v1`. Its images
-are not part of the public corpus repository.
+The Cellstate proof of concept uses a separate saved corpus and is not registered
+as a default data source.
 
 
 ## OpenCell fluorescence
 
 `opencell-fluorescence-core` version 1 contains twelve full 600×600 uint16
 planes (8.24 MiB), split evenly between DNA and tagged-protein fluorescence.
-Its two assets are headerless C-contiguous plane/Y/X arrays.
+Its two assets are headerless C-contiguous plane/Y/X arrays. The manifest is the
+only corpus metadata file.
+
+On a fresh clone, initialize the submodule, add the annex-bearing Reef checkout
+as a read-only Git remote, then retrieve the two selected assets. Update the URL
+if the checkout moves. Reef's noninteractive PATH requires the explicit
+`git-annex-shell` path.
 
 ```sh
-python scripts/datasets/run.py verify --corpus ~/data/chucky-benchmarks \
-  --lock bench/datasets/opencell.lock.json
-python scripts/datasets/run.py run --corpus ~/data/chucky-benchmarks \
-  --lock bench/datasets/opencell.lock.json \
-  --executable build-gpu/bench/bench_stream_images --backends cpu gpu \
-  --machine reef-l40 --output bench/results/images/reef-l40-opencell
+git submodule update --init bench/data/microscopy
+git -C bench/data/microscopy remote add reef \
+  ssh://login-reef-nclack/mnt/main0/home/nclack/data/chucky-benchmarks
+git -C bench/data/microscopy config remote.reef.annex-shell \
+  /mnt/main0/home/nclack/.local/share/mamba/envs/git-annex/bin/git-annex-shell
+git -C bench/data/microscopy config remote.reef.annex-readonly true
+git -C bench/data/microscopy annex get --from=reef \
+  data/opencell-v1/fluorescence-core-00-600x600.raw \
+  data/opencell-v1/fluorescence-core-01-600x600.raw
+python scripts/datasets/run.py verify
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario images \
+  --build-dir build-gpu --machine reef-l40
 ```
 
-Use `--backends cpu` for a CPU-only build. The same explicit lock works with
-`export.py`; the manifest carries the OpenCell attribution, CC BY-SA 4.0 license
-link, and change notice with every export.
+The GitHub submodule supplies metadata and annex pointers, not the annexed
+bytes. Setup and retrieval remain manual; Chucky never fetches content
+automatically.
+
+Use `--backend cpu` for a CPU-only build. `export.py` materializes
+the selected manifest and image assets.
+The OpenCell attribution, CC BY-SA 4.0 license link, and change notice live in
+the manifest and therefore travel with every export.
 Image loading, padding, timing, profiles, and sweep reporting use the normal
 image replay workflow below.
 
@@ -47,10 +66,10 @@ In a saved corpus clone, check out the tag and retrieve
 `data/cellstate-poc-v1/` with git-annex, then:
 
 ```sh
-python scripts/datasets/run.py verify --corpus /path/to/cellstate-poc-v1 \
-  --lock bench/datasets/cellstate-poc.lock.json --allow-provisional
-python scripts/datasets/run.py run --corpus /path/to/cellstate-poc-v1 \
-  --lock bench/datasets/cellstate-poc.lock.json --allow-provisional \
+python scripts/datasets/run.py verify --direct-corpus /path/to/cellstate-poc-v1 \
+  --allow-provisional
+python scripts/datasets/run.py run --direct-corpus /path/to/cellstate-poc-v1 \
+  --allow-provisional \
   --executable build-gpu/bench/bench_stream_images --machine reef-l40 \
   --backends cpu gpu --output bench/results/images/reef-l40-cellstate-poc
 ```
@@ -58,7 +77,7 @@ python scripts/datasets/run.py run --corpus /path/to/cellstate-poc-v1 \
 `--allow-provisional` permits only an explicitly provisional manifest with hashed
 provenance documenting the missing evidence. Pack and plane checksums remain
 mandatory, and this option cannot qualify a source in a raw release. Use this flag
-and the same lock with `export.py` for materialized copies on auk or oreb.
+with `export.py` for materialized copies on auk or oreb.
 
 The summary reports the minimum, median, maximum, and range divided by median for
 throughput across measured repetitions. A range within 5% is the repeatability
@@ -92,84 +111,106 @@ approved Slurm compute allocations. The prepared build job is
 `~/tmp/2026-09-06-chucky-bench/cpu-build.sh`.
 
 For compact manifests, the verifier checks the format declaration, dataset
-identity, collection attribution, exact asset lengths and SHA256 values, and the
-decoded-size cap. Evidence-rich schema-1 manifests remain supported.
-Missing annex content produces a `git annex get data/` instruction. Git and annex
-are unnecessary at runtime when materialized files with the same hashes are available.
+identity, source-metadata shape, selected asset lengths and SHA256 values, and
+the decoded-size cap. Missing annex content produces a `git annex get data/`
+instruction. Git and annex are unnecessary at runtime when materialized files
+with the same hashes are available. Evidence-rich schema-1 manifests remain
+supported for older corpora.
 
 ## Run a pilot
 
-After the corpus has been qualified and pinned:
+After retrieving the selected annex assets:
 
 ```sh
-python scripts/datasets/run.py run \
-  --corpus ~/data/chucky-benchmarks \
-  --lock bench/datasets/opencell.lock.json \
-  --executable build-gpu/bench/bench_stream_images \
-  --machine reef-l40 --backends cpu gpu --split core \
-  --output bench/results/images/reef-l40-v1
+uv run scripts/sweep/sweep.py \
+  --tier backend --scenario images \
+  --build-dir build-gpu --machine reef-l40
 ```
 
 Defaults are one warmup and five measured process executions per pack, backend,
-and codec. Each execution streams at least 32 GiB, rounded up to whole frames.
+codec, and chunk target. Each execution streams at least 32 GiB, rounded up to
+whole frames.
 The runner rejects a measurement when its internal clock materially exceeds the
 supervising process clock, which catches system sleep during a timed run.
-The profiles are none, Zstd level 3, Blosc-LZ4 level 3, and Blosc-Zstd level 3.
+The profiles are none, raw LZ4 level 1, Zstd level 3, Blosc-LZ4 level 3, and
+Blosc-Zstd level 3.
 Both Blosc profiles use bitshuffle and 16 KiB blocks. The GPU path uses nvCOMP's
 default compression modes; its nonzero requested levels are recorded as hints,
 including Zstd. CPU levels and GPU modes are not equivalent algorithm settings.
 
-The fixed geometry is T/Y/X chunks `4/64/64` (32 KiB decoded), a 0.5 GiB
-uncompressed full-shard floor, a 1 GiB ceiling, a 64 MiB batch target, four
-workers, one scale, and the discard sink. There is no minimum append-shard
-count. For the 600x600 OpenCell packs, four spatial shard streams divide the
-chunk grid evenly and produce full geometry of `1310/5/5`: 32,750 chunks and
-1,073,152,000 decoded bytes (about 0.9995 GiB) per full shard. The default
-8 MiB S3 transport size would use about 128 multipart parts for that shard;
-multipart parts are not chunks. The runner
-checks the reported actual batch and shard geometry across codecs and backends.
-It fails on a mismatch. Images retain native dimensions. The replay buffer is
-zero-padded to whole chunks before timing; source bytes and padded bytes are
-reported separately. Throughput uses native image bytes, while compressed
-traffic includes padding. A memory constraint causes failure instead of an
-automatic geometry change.
+The image scenario uses the regular 16 KiB through 2 MiB chunk matrix, all five
+codecs, and both CPU and GPU backends. The two selected inputs therefore produce
+160 configurations and 960 process executions. `--backend cpu` or `--backend gpu`
+filters that to 80 configurations and 480 executions. The `compress` and
+`backend` tiers select the same image axes; their distinction still applies to
+ordinary scenarios. Add `--dry-run` to print the matrix without opening the image
+assets. For example, a CPU-only image sweep is:
 
-Results are `results.json`, `summary.csv`, and per-execution logs.
-They live below `bench/results/images/`. The existing sweep report discovers
-these image results alongside ordinary sweeps:
+```sh
+uv run scripts/sweep/sweep.py \
+  --tier compress --backend cpu --scenario images \
+  --build-dir build --machine local
+```
+
+Repeat `--scenario` to put images and ordinary scenarios in the same sweep JSON.
+The lower-level `scripts/datasets/run.py run` command retains a 32 KiB `codec`
+preset, explicit axis overrides, per-execution logs, and comparison support for
+direct legacy corpora.
+
+Image chunks preserve the default T:Y:X bit ratio `1:4:4`; every requested
+decoded size is checked against the actual layout. All tiers retain the 0.5 GiB
+uncompressed full-shard floor, 1 GiB ceiling, 64 MiB batch target, four workers,
+one scale, and discard sink. Images retain native dimensions. The replay buffer
+is zero-padded to whole chunks before timing; source and padded bytes are
+reported separately. Throughput uses native image bytes, while compressed
+traffic includes padding. A memory constraint or unattainable chunk target
+causes failure instead of silently changing geometry.
+
+The unified runner writes the normal
+`bench/results/<machine>-<commit>-<date>.json`. Each image configuration is one
+row containing median throughput, repeat spread, the detailed execution closest
+to the median, registered corpus provenance, and the requested chunk identity.
+The existing sweep report reads it alongside ordinary scenarios:
 
 ```sh
 uv run scripts/sweep/report.py --results-dir bench/results/ -o _site --serve
 ```
 
 The [reporting workflow](../sweep/README.md#microscopy-image-inputs) shows medians,
-repeat spread, and stage details, with inputs keyed by each pack's semantic
-`source_group`.
-JSON includes input and output bytes, actual layouts,
+repeat spread, and stage details. Report input IDs come from `bench/data.json`,
+not names or grouping metadata in the data repository.
+The JSON includes input and output bytes, actual layouts,
 initialization/loading/drain times, memory measurements, image order, corpus
 identity, executable hash, source hashes, and machine information.
 Compiler, CUDA, and codec-header versions are collected from the executable's
-CMake build when available. Use `--toolchain toolchain.json` to attach a saved
-build record; `environment.py` creates one and records the source content hash.
+CMake build when available. The lower-level runner accepts
+`--toolchain toolchain.json` to attach a saved build record; `environment.py`
+creates one and records the source content hash.
+Archived standalone schema-1 and schema-2 result directories remain reportable.
 
-`logical_compression_fold` is logical image bytes divided by bytes sent to
-the sink. The denominator includes sink traffic and its alignment/index overhead.
-The existing `compression_fold` also counts padded input chunks; prefer the
-logical ratio for these images. The discard sink's alignment is 4096 bytes.
+`logical_compression_fold` is logical image bytes divided by bytes sent to the
+sink. The denominator includes sink traffic and its alignment/index overhead.
+Unified sweep rows use that logical ratio for both compression fields. Raw
+per-execution output from the lower-level runner retains the binary's padded-input
+`compression_fold`; its summaries use the logical ratio. The discard sink's
+alignment is 4096 bytes.
 
 For a short functional check, add
-`--smoke --min-gib 0.016 --repeats 1 --profiles none`.
-Smoke runs are always marked inconclusive for representativeness.
+`--smoke --min-gib 0.016 --repeats 1`.
+Smoke sweeps are labeled and excluded from the performance trend.
 
-Regular throughput runs use the two compact-corpus assets. Because this corpus
-has no heldout sample, representativeness remains explicitly inconclusive;
-throughput and compression measurements are still reported normally.
+Regular throughput runs use the two compact-corpus assets. This corpus has no
+heldout sample, so its throughput and compression measurements are not evidence
+of broader representativeness.
 
 ## Reuse on auk and oreb
 
-Clone the corpus over SSH from Reef and retrieve `data/opencell-v1/` as described in the
-data repository README. Run the same chucky source revision and the same corpus
-pin on both machines. The runner uses Python 3.10 or newer and no image libraries.
+Initialize the submodule and retrieve its selected assets on each machine. The
+submodule commit is a reproducible default, but another checkout is accepted when
+its manifest contract and selected content verify. The runner records the actual
+data commit, manifest hash, and selected asset hashes. The standalone data tools
+use Python 3.10 or newer; `sweep.py` declares Python 3.11 or newer. Neither path
+needs an image library.
 
 For native Windows with git-annex, use an unlocked adjusted branch:
 
@@ -180,8 +221,7 @@ git annex get data/opencell-v1/
 python C:/src/chucky/scripts/datasets/run.py verify --corpus .
 ```
 
-The adjusted Git HEAD is recorded separately from the pinned release; matching
-manifest and pixel checksums establish the input identity.
+The adjusted Git HEAD is recorded alongside the manifest and pixel checksums.
 [Git-annex documents this branch mode](https://git-annex.branchable.com/git-annex-adjust/).
 
 To transfer normal files instead, export on a compute node after retrieving
@@ -192,7 +232,9 @@ python scripts/datasets/export.py --corpus ~/data/chucky-benchmarks \
   --output ~/tmp/chucky-benchmarks-v1.zip
 ```
 
-Unpack the ZIP on either machine and pass that directory as `--corpus`.
+Unpack the ZIP on either machine and pass that directory as `--corpus`; this
+keeps the registered Chucky selection even if the source manifest lists more
+assets than the ZIP contains.
 On oreb, point `--executable` at the native Windows `bench_stream_images.exe`.
 Set `--machine auk` or `--machine oreb` and write each run to a new output directory.
 
@@ -205,12 +247,18 @@ python scripts/datasets/run.py compare \
   --output bench/results/images/auk-oreb-v1.json
 ```
 
-The comparison refuses different input hashes, protocols, source revisions,
-benchmark source hashes, or actual layouts. Toolchain versions are retained:
+The comparison refuses different selected input hashes, dataset contracts,
+protocols, Chucky source revisions, benchmark source hashes, or actual layouts.
+It tolerates data-repository and manifest changes that leave selected inputs
+unchanged. Toolchain versions are retained:
 different CUDA/nvCOMP versions can affect both compression ratio and throughput,
 so such a comparison includes software differences as well as hardware.
 
-## Extract and check the corpus
+## Legacy extraction tools
+
+The extraction pipeline below produces the older evidence-rich manifest format.
+It remains available for existing corpora and synthetic tests, but it is not
+needed to consume the compact OpenCell corpus.
 
 Install the optional packages in a separate environment:
 
@@ -262,6 +310,8 @@ no external manifest against which to check a whole-frame truncation.
 
 `test_bench_input` verifies the exact repeated sequence across append sizes,
 wraps, partial consumption, and a partial final cycle.
+`test_data_sources.py` covers registry validation, version contracts, explicit
+logical input mapping, and selection of a subset from a larger repository.
 `test_manifest.py` covers compact and legacy formats, corruption, missing
 content, invalid manifests, field leakage, and file-copy equivalence.
 `test_extract.py` checks exact plane
@@ -271,27 +321,48 @@ export. `test_runner.py` checks JSON/CSV output and comparison identity; set
 `CHUCKY_IMAGE_BENCH` to the built executable to run it.
 `verify_output.py` independently opens saved outputs with Zarr Python and
 compares every pixel for all four profiles and two append sizes on each backend.
-With `--corpus`, `--lock`, and the applicable provenance flag, it also replays each
-real pack for two complete cycles plus one plane (nine frames for this corpus),
-compares every saved pixel, and checks the stored Blosc block and shuffle settings.
+With `--corpus`, it also replays the registered assets. Use `--direct-corpus`
+and any applicable provenance flag for an older unregistered corpus. In either
+case it compares every saved pixel and checks the stored Blosc settings.
 
 The independent reader follows the
 [Zarr Python API](https://zarr.readthedocs.io/en/stable/api/zarr/) and
 [Tifffile's page-reading interface](https://github.com/cgohlke/tifffile).
 
-## Corpus locks and local paths
+## Data versions and local paths
 
-Lock files stay in `bench/datasets/`. Compact-corpus locks pin the SHA256 of
-`manifest.json`; a Git revision remains optional for legacy corpora. Compact
-manifests record relative asset paths and independent SHA256 hashes. Verification
-reads and hashes the content directly.
+`bench/data.json` is the only Chucky file that describes logical data sources.
+Each `source` gives a stable ID, submodule-relative path, manifest path, and
+accepted manifest format version. Each `dataset` gives a stable selection ID,
+the data repository's dataset ID and version, and an ordered map from physical
+asset IDs to Chucky report input IDs. Multiple datasets can select different
+subsets of one source. The default dataset is used unless `--dataset` names
+another; `--corpus` changes only the selected source's checkout path.
 
-Git-annex currently uses SHA256 keys, so a pack's manifest digest equals the
-digest in its annex key. Verification does not parse annex keys or depend on how
-annex names or locates its objects. It works with locked annex links, unlocked
-files, and materialized exports.
+The submodule supplies a reproducible default revision without making that
+revision a runtime requirement. Verification reads only selected content and
+checks it against the data repository's manifest. The recorded dataset contract,
+actual data commit, whole-manifest hash, selected asset hashes, and direct input
+paths preserve provenance while allowing unrelated repository metadata and
+unselected assets to change. A future repository rename changes only the URL in
+`.gitmodules`; the stable submodule path and IDs in `bench/data.json` stay the same.
 
-The verifier resolves each pack path locally and retains the resolved path for
-replay and export. `resolved_pack_paths` in the corpus record and `input_path` in each
-execution show what was opened. Machine-specific resolved paths do not enter the
-lock or comparison identity.
+The registry's top-level `version` versions its own syntax. A source's
+`format_version` is the external manifest/encoding contract, while a dataset's
+`manifest_version` is the version published by the data repository. When that
+repository intentionally changes either contract, update `bench/data.json` in
+the Chucky change that adopts it. Repository commits and metadata-only edits are
+recorded as provenance, not treated as version pins.
+
+Selected assets carry SHA256 digests in the source manifest. When git-annex is
+available, verification asks it for each asset's content location; otherwise it
+uses the resolved file. This works with locked annex links, unlocked files, and
+materialized exports without treating an annex key as the data contract.
+
+The verifier fully resolves each selected path before replay. For a locked annex
+file this is the object under the real Git directory: `.git/annex/objects/...`
+in a normal clone or `.git/modules/.../annex/objects/...` in a submodule.
+`pack_path` retains the portable repository-relative name; `resolved_pack_paths`
+and each execution's `input_path` show the absolute file actually opened.
+Machine-specific paths and data-repository revisions do not enter comparison
+identity; selected asset hashes, logical inputs, and replay order do.

@@ -99,5 +99,6 @@ if(Python3_Interpreter_FOUND AND HAVE_BLOSC)
         COMMAND
             ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cli.py
             $<TARGET_FILE:bench_stream_smallepoch_single>
+            $<TARGET_FILE:bench_stream_images>
     )
 endif()

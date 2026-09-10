@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import run as runner
 from test_manifest import fixture, sha
@@ -23,11 +24,42 @@ def command(*args):
 
 class RunnerDefaultsTests(unittest.TestCase):
     def test_opencell_throughput_defaults(self):
-        self.assertEqual(runner.DEFAULT_LOCK.name, "opencell.lock.json")
-        self.assertTrue(runner.DEFAULT_LOCK.is_file())
-        self.assertEqual(runner.DEFAULT_SPLIT, "core")
+        self.assertEqual(runner.DEFAULT_REGISTRY.name, "data.json")
+        self.assertTrue(runner.DEFAULT_REGISTRY.is_file())
         self.assertEqual(runner.DEFAULT_MIN_GIB, 32)
         self.assertEqual(runner.DEFAULT_REPEATS, 5)
+        self.assertEqual(runner.DEFAULT_TIER, "codec")
+        self.assertEqual(runner.DEFAULT_CHUNK_BYTES, ("32K",))
+        self.assertEqual(
+            runner.IMAGE_TIERS["compress"]["chunk_bytes"],
+            tuple(runner.CHUNK_BYTES),
+        )
+        self.assertEqual(
+            runner.IMAGE_TIERS["compress"]["backends"], ("gpu", "cpu")
+        )
+        self.assertEqual(
+            runner.IMAGE_TIERS["backend"]["backends"], ("gpu", "cpu")
+        )
+
+    def test_explicit_axes_replace_tier_defaults(self):
+        args = SimpleNamespace(
+            tier="compress",
+            backends=["cpu"],
+            profiles=["none"],
+            chunk_bytes=["16K", "1M"],
+        )
+        runner.resolve_axes(args)
+        self.assertEqual(args.backends, ["cpu"])
+        self.assertEqual(args.profiles, ["none"])
+        self.assertEqual(args.chunk_bytes, ["16K", "1M"])
+
+        defaults = SimpleNamespace(
+            tier="backend", backends=None, profiles=None, chunk_bytes=None
+        )
+        runner.resolve_axes(defaults)
+        self.assertEqual(defaults.backends, ["gpu", "cpu"])
+        self.assertEqual(defaults.profiles, list(runner.PROFILES))
+        self.assertEqual(defaults.chunk_bytes, list(runner.CHUNK_BYTES))
 
 
 @unittest.skipUnless(
@@ -71,11 +103,10 @@ class RunnerTests(unittest.TestCase):
                 output = root / f"run-{index}"
                 result = command(
                     "run",
-                    "--corpus",
+                    "--direct-corpus",
                     corpus,
                     "--executable",
                     os.environ["CHUCKY_IMAGE_BENCH"],
-                    "--allow-unpinned",
                     "--allow-test-data",
                     "--smoke",
                     "--min-gib",
@@ -84,8 +115,11 @@ class RunnerTests(unittest.TestCase):
                     "1",
                     "--backends",
                     *os.environ.get("CHUCKY_TEST_BACKENDS", "cpu").split(),
-                    "--split",
-                    "all",
+                    "--profiles",
+                    "none",
+                    "--chunk-bytes",
+                    "16K",
+                    "32K",
                     "--machine",
                     f"fixture-{index}",
                     "--output",
@@ -94,12 +128,17 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 report = json.loads((output / "results.json").read_text())
                 self.assertEqual(report["status"], "complete")
+                self.assertEqual(report["schema_version"], 2)
                 self.assertEqual(report["corpus"]["kind"], "synthetic-test")
                 self.assertTrue(
                     all(row["scenario"] == "images" for row in report["runs"])
                 )
                 self.assertTrue((output / "summary.csv").is_file())
                 self.assertTrue(all(row["status"] == "pass" for row in report["runs"]))
+                self.assertEqual(
+                    {row["chunk_bytes_label"] for row in report["runs"]},
+                    {"16K", "32K"},
+                )
                 self.assertTrue(
                     all(
                         row["status"] == "inconclusive"
@@ -113,8 +152,20 @@ class RunnerTests(unittest.TestCase):
             changed["corpus"]["manifest_sha256"] = "f" * 64
             results[1].write_text(json.dumps(changed))
             result = command("compare", *results)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            changed["summary"][0]["pack_sha256"] = "f" * 64
+            results[1].write_text(json.dumps(changed))
+            result = command("compare", *results)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("corpus", result.stderr.lower())
+            self.assertIn("input", result.stderr.lower())
+            changed["summary"][0]["pack_sha256"] = json.loads(
+                results[0].read_text()
+            )["summary"][0]["pack_sha256"]
+            changed["corpus"]["dataset"] = {"id": "different-selection"}
+            results[1].write_text(json.dumps(changed))
+            result = command("compare", *results)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("dataset contracts", result.stderr.lower())
 
 
 if __name__ == "__main__":

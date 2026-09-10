@@ -15,14 +15,19 @@ Usage:
     uv run scripts/sweep/sweep.py --all
     uv run scripts/sweep/sweep.py --tier io
     uv run scripts/sweep/sweep.py --tier s3 --backend cpu --s3-bucket my-bucket
+    uv run scripts/sweep/sweep.py --tier backend --scenario images
+    uv run scripts/sweep/sweep.py --tier backend --scenario orca2_single --scenario images
 """
 
 from __future__ import annotations
 
+import copy
 import json
+import math
 import os
 import platform
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -32,6 +37,10 @@ from pathlib import Path
 import click
 from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.table import Table
+
+from image_results import input_label
 from models import (
     CURRENT_VERSION,
     VALID_BACKENDS,
@@ -44,8 +53,6 @@ from models import (
     run_id,
     validate_results,
 )
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
-from rich.table import Table
 
 console = Console(stderr=True)
 
@@ -53,7 +60,8 @@ console = Console(stderr=True)
 # Scenarios
 # ---------------------------------------------------------------------------
 
-SCENARIOS = {
+IMAGE_SCENARIO = "images"
+SCENARIOS: dict[str, int | None] = {
     "orca2_single": 200,
     "256cube_single": 40,
     "medfmt_single": 10,
@@ -65,7 +73,31 @@ SCENARIOS = {
     "orca2_multiscale_dim0": 200,
     "256cube_multiscale_dim0": 40,
     "medfmt_multiscale_dim0": 10,
+    # Image frame counts depend on each registered asset and --min-gib.
+    IMAGE_SCENARIO: None,
 }
+
+DEFAULT_DATA_REGISTRY = Path(__file__).resolve().parents[2] / "bench/data.json"
+DEFAULT_IMAGE_MIN_GIB = 32.0
+DEFAULT_IMAGE_REPEATS = 5
+IMAGE_SUPPORTED_TIERS = {"compress", "backend"}
+IMAGE_CODEC_SETTINGS = {
+    "none": {"level": 0, "blosc_shuffle": "none"},
+    "lz4": {"level": 1, "blosc_shuffle": "none"},
+    "zstd": {"level": 3, "blosc_shuffle": "none"},
+    "blosc-lz4": {"level": 3, "blosc_shuffle": "bit"},
+    "blosc-zstd": {"level": 3, "blosc_shuffle": "bit"},
+}
+IMAGE_LAYOUT_KEYS = (
+    "shape",
+    "chunk_shape",
+    "chunks_per_shard",
+    "epochs_per_batch",
+    "target_batch_bytes",
+    "actual_batch_bytes",
+    "append_elements",
+    "dtype",
+)
 
 # Chunk-byte labels -> values (ordered small to large)
 CHUNK_BYTES = {
@@ -106,6 +138,9 @@ class RunSpec(BaseModel):
     blosc_block_bytes: int | None = Field(default=None, ge=128, le=715827542, strict=True)
     blosc_shuffle: str = "none"
     level: int | None = Field(default=None, ge=0, le=255)
+    input_id: str | None = None
+    image_asset_id: str | None = None
+    image_split: str | None = None
 
     @model_validator(mode="after")
     def _validate_enums(self) -> RunSpec:
@@ -113,8 +148,25 @@ class RunSpec(BaseModel):
             raise ValueError(f"Unknown scenario: {self.scenario}")
         if self.codec not in VALID_CODECS:
             raise ValueError(f"Unknown codec: {self.codec} (expected one of {VALID_CODECS})")
-        if self.fill not in VALID_FILLS:
+        if self.scenario == IMAGE_SCENARIO:
+            if self.fill != IMAGE_SCENARIO:
+                raise ValueError(f"{IMAGE_SCENARIO} scenario requires fill={IMAGE_SCENARIO}")
+            if not self.input_id or not self.image_asset_id or not self.image_split:
+                raise ValueError(
+                    f"{IMAGE_SCENARIO} scenario requires input_id, image_asset_id, "
+                    "and image_split"
+                )
+            if self.dtype != "u16" or self.sink != "discard":
+                raise ValueError(
+                    f"{IMAGE_SCENARIO} scenario requires u16 and the discard sink"
+                )
+        elif self.fill not in VALID_FILLS:
             raise ValueError(f"Unknown fill: {self.fill} (expected one of {VALID_FILLS})")
+        elif any(
+            value is not None
+            for value in (self.input_id, self.image_asset_id, self.image_split)
+        ):
+            raise ValueError("Image input fields are only valid for the images scenario")
         if self.backend not in VALID_BACKENDS:
             raise ValueError(f"Unknown backend: {self.backend} (expected one of {VALID_BACKENDS})")
         if self.dtype not in VALID_DTYPES:
@@ -146,7 +198,10 @@ class RunSpec(BaseModel):
 
     @property
     def frames(self) -> int:
-        return SCENARIOS[self.scenario]
+        frames = SCENARIOS[self.scenario]
+        if frames is None:
+            raise ValueError("Image frame count depends on the selected corpus")
+        return frames
 
     @property
     def id(self) -> str:
@@ -154,7 +209,7 @@ class RunSpec(BaseModel):
 
     def base_result(self) -> dict:
         """Common fields shared by success, error, and timeout results."""
-        d = {
+        d: dict = {
             "scenario": self.scenario,
             "codec": self.codec,
             "fill": self.fill,
@@ -163,8 +218,13 @@ class RunSpec(BaseModel):
             "chunk_bytes": self.chunk_bytes,
             "chunk_bytes_label": self.chunk_label,
             "sink": self.sink,
-            "frames": self.frames,
         }
+        if self.scenario == IMAGE_SCENARIO:
+            d["input_id"] = self.input_id
+            d["image_asset_id"] = self.image_asset_id
+            d["image_split"] = self.image_split
+        else:
+            d["frames"] = self.frames
         if self.s3_throughput_gbps > 0:
             d["s3_throughput_gbps"] = self.s3_throughput_gbps
         if self.codec.startswith("blosc-"):
@@ -173,7 +233,21 @@ class RunSpec(BaseModel):
             d["blosc_level"] = self.level
         else:
             d["level"] = self.level
-        d["id"] = run_id(d)
+        identity = None
+        if self.scenario == IMAGE_SCENARIO:
+            identity = "__".join(
+                (
+                    self.scenario,
+                    self.codec,
+                    str(self.input_id),
+                    str(self.image_asset_id),
+                    str(self.image_split),
+                    self.backend,
+                    self.dtype,
+                    self.chunk_label,
+                )
+            )
+        d["id"] = run_id({**d, **({"id": identity} if identity else {})})
         return d
 
 
@@ -208,6 +282,37 @@ def backend_runs() -> list[RunSpec]:
                         backend=backend, dtype="u16", chunk_label=cl,
                         blosc_block_bytes=16 * 1024 if codec.startswith("blosc-") else None,
                     ))
+    return runs
+
+
+def image_runs(tier: str, members: list[tuple[str, str]]) -> list[RunSpec]:
+    """Full chunk x codec x backend image matrix for a sweep tier."""
+    if tier not in IMAGE_SUPPORTED_TIERS:
+        return []
+    backends = ("gpu", "cpu")
+    runs = []
+    for asset_id, input_id in members:
+        for codec, settings in IMAGE_CODEC_SETTINGS.items():
+            for cl in CHUNK_BYTES:
+                for backend in backends:
+                    runs.append(
+                        RunSpec(
+                            scenario=IMAGE_SCENARIO,
+                            codec=codec,
+                            fill=IMAGE_SCENARIO,
+                            input_id=input_id,
+                            image_asset_id=asset_id,
+                            image_split="core",
+                            backend=backend,
+                            dtype="u16",
+                            chunk_label=cl,
+                            level=settings["level"],
+                            blosc_shuffle=settings["blosc_shuffle"],
+                            blosc_block_bytes=(
+                                16 * 1024 if codec.startswith("blosc-") else None
+                            ),
+                        )
+                    )
     return runs
 
 
@@ -407,13 +512,328 @@ def build_info(build_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Registered image inputs
+# ---------------------------------------------------------------------------
+
+def _image_modules():
+    """Load the dataset tooling only when the images scenario is selected."""
+    datasets_dir = Path(__file__).resolve().parents[1] / "datasets"
+    path = str(datasets_dir)
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    import data_sources
+    import run as image_runner
+
+    return data_sources, image_runner
+
+
+def load_image_members(
+    registry_path: Path, dataset_id: str | None
+) -> list[tuple[str, str]]:
+    data_sources, _ = _image_modules()
+    registry = data_sources.load_registry(registry_path)
+    selected_id = dataset_id or registry["default_dataset"]
+    try:
+        dataset = registry["datasets"][selected_id]
+    except KeyError as error:
+        raise ValueError(f"Unknown dataset: {selected_id}") from error
+    return list(dataset.members.items())
+
+
+def load_image_corpus(
+    registry_path: Path, dataset_id: str | None, corpus_path: Path | None
+):
+    data_sources, _ = _image_modules()
+    return data_sources.load_corpus(
+        registry_path, dataset_id, corpus_path, None
+    )
+
+
+def check_image_result(
+    result: dict,
+    pack: dict,
+    frames: int,
+    spec: RunSpec,
+    process_wall_s: float,
+) -> dict:
+    _, image_runner = _image_modules()
+    return image_runner.check_result(
+        result,
+        pack,
+        frames,
+        spec.backend,
+        spec.codec,
+        spec.chunk_bytes,
+        process_wall_s,
+        expected_level=spec.level,
+        expected_shuffle=spec.blosc_shuffle,
+        expected_blosc_block_bytes=spec.blosc_block_bytes,
+    )
+
+
+def image_build_record(executable: Path) -> dict:
+    _, image_runner = _image_modules()
+    return image_runner.build_record(executable, None)
+
+
+def image_executable(build_dir: Path) -> Path:
+    executable = build_dir / "bench" / f"bench_stream_{IMAGE_SCENARIO}"
+    return executable.with_suffix(".exe") if sys.platform == "win32" else executable
+
+
+def image_protocol(min_gib: float, repeats: int, smoke: bool) -> dict:
+    return {
+        "minimum_bytes": math.ceil(min_gib * 1024**3),
+        "warmups": 0 if smoke else 1,
+        "repeats": repeats,
+        "smoke": smoke,
+        "batch_bytes": 64 * 1024**2,
+        "workers": 4,
+        "sink": "discard",
+        "chunk_ratios": [1, 4, 4],
+        "min_full_shard_bytes": 512 * 1024**2,
+        "max_full_shard_bytes": 1024**3,
+        "order": "cyclic",
+        "scales": 1,
+        "repeatability_range_percent": 5,
+    }
+
+
+def image_corpus_record(corpus) -> dict:
+    record = corpus.record()
+    record["selected_assets"] = [
+        {
+            "asset": pack["id"],
+            "input": pack.get("input_id", pack["source_group"]),
+            "sha256": pack["sha256"],
+            "width": pack["width"],
+            "height": pack["height"],
+            "split": pack["split"],
+        }
+        for pack in corpus.manifest["packs"]
+    ]
+    return record
+
+
+def image_execution_count(runs: list[RunSpec], repeats: int, smoke: bool) -> int:
+    repetitions = repeats + (0 if smoke else 1)
+    return sum(
+        repetitions if run.scenario == IMAGE_SCENARIO else 1 for run in runs
+    )
+
+
+def existing_image_layouts(runs: list[dict]) -> dict:
+    layouts = {}
+    for run in runs:
+        if run.get("scenario") != IMAGE_SCENARIO or run.get("status") != "pass":
+            continue
+        replay = run.get("image_replay")
+        asset_id = run.get("image_asset_id")
+        chunk_label = run.get("chunk_bytes_label")
+        if not isinstance(replay, dict) or not asset_id or not chunk_label:
+            continue
+        try:
+            layout = {key: replay[key] for key in IMAGE_LAYOUT_KEYS}
+        except KeyError:
+            continue
+        identity = (asset_id, chunk_label)
+        if identity in layouts and layouts[identity] != layout:
+            raise ValueError(
+                f"Existing image layouts disagree for {asset_id} at {chunk_label}"
+            )
+        layouts[identity] = layout
+    return layouts
+
+
+def run_image_one(
+    spec: RunSpec,
+    build_dir: Path,
+    corpus,
+    min_gib: float,
+    repeats: int,
+    smoke: bool,
+    layouts: dict | None = None,
+) -> dict | None:
+    """Run and aggregate one image asset/codec/backend/chunk configuration."""
+    executable = image_executable(build_dir)
+    if not executable.exists():
+        return None
+
+    packs = {pack["id"]: pack for pack in corpus.manifest["packs"]}
+    try:
+        pack = packs[spec.image_asset_id]
+        input_path = corpus.pack_files[spec.image_asset_id]
+    except KeyError as error:
+        raise ValueError(
+            f"Image asset {spec.image_asset_id!r} is absent from the selected dataset"
+        ) from error
+    input_id = pack.get("input_id", pack["source_group"])
+    if input_id != spec.input_id:
+        raise ValueError(
+            f"Image asset {spec.image_asset_id!r} maps to {input_id!r}, not {spec.input_id!r}"
+        )
+    if pack["split"] != spec.image_split:
+        raise ValueError(
+            f"Image asset {spec.image_asset_id!r} is in split {pack['split']!r}, "
+            f"not {spec.image_split!r}"
+        )
+
+    minimum_bytes = math.ceil(min_gib * 1024**3)
+    frame_bytes = pack["width"] * pack["height"] * 2
+    frames = (minimum_bytes + frame_bytes - 1) // frame_bytes
+    executions = repeats + (0 if smoke else 1)
+    measured = []
+    case_layout = None
+
+    for iteration in range(executions):
+        warmup = not smoke and iteration == 0
+        command = [
+            str(executable),
+            "--input", str(input_path),
+            "--width", str(pack["width"]),
+            "--height", str(pack["height"]),
+            "--dtype", "u16",
+            "--frames", str(frames),
+            "--backend", spec.backend,
+            "--chunk-bytes", spec.chunk_label,
+            "--batch-bytes", "64M",
+            "--max-threads", "4",
+            "--append-elements", str(pack["width"] * pack["height"]),
+            "--json",
+            "--codec", spec.codec,
+            "--codec-level", str(spec.level),
+        ]
+        if spec.codec.startswith("blosc-"):
+            command.extend(
+                [
+                    "--shuffle", spec.blosc_shuffle,
+                    "--blosc-block-bytes", str(spec.blosc_block_bytes),
+                ]
+            )
+
+        started = time.perf_counter()
+        process = subprocess.run(command, capture_output=True, text=True, check=False)
+        process_wall_s = time.perf_counter() - started
+        if process.returncode != 0:
+            detail = process.stderr.strip() or process.stdout.strip()
+            raise ValueError(
+                f"Image benchmark failed with exit code {process.returncode}"
+                + (f": {detail[-2000:]}" if detail else "")
+            )
+        try:
+            measurement = json.loads(process.stdout)
+        except json.JSONDecodeError as error:
+            raise ValueError("Image benchmark did not emit valid JSON") from error
+        layout = check_image_result(
+            measurement, pack, frames, spec, process_wall_s
+        )
+        if case_layout is not None and layout != case_layout:
+            raise ValueError("Image layout changed between repetitions")
+        case_layout = layout
+        if not warmup:
+            measured.append(
+                {
+                    "iteration": iteration,
+                    "measurement": measurement,
+                    "process_wall_s": process_wall_s,
+                }
+            )
+
+    if len(measured) != repeats:
+        raise ValueError("Image benchmark produced an incomplete repetition set")
+    if layouts is not None:
+        key = (spec.image_asset_id, spec.chunk_label)
+        if key in layouts and layouts[key] != case_layout:
+            raise ValueError(
+                f"Image layout changed across codecs/backends for {spec.image_asset_id} "
+                f"at {spec.chunk_label}"
+            )
+        layouts[key] = case_layout
+
+    rates = [item["measurement"]["throughput_in_gibs"] for item in measured]
+    median_rate = statistics.median(rates)
+    selected = min(
+        measured,
+        key=lambda item: abs(
+            item["measurement"]["throughput_in_gibs"] - median_rate
+        ),
+    )
+    measurements = [item["measurement"] for item in measured]
+    total_input = sum(item["input_bytes"] for item in measurements)
+    total_output = sum(item["output_bytes"] for item in measurements)
+    if total_input <= 0 or total_output <= 0:
+        raise ValueError("Image byte counts must be positive")
+
+    result = copy.deepcopy(selected["measurement"])
+    result.update(spec.base_result())
+    result.update(
+        {
+            "status": "pass",
+            "frames": frames,
+            "input_label": input_label(str(spec.input_id))
+            + (f" ({corpus.manifest['kind']})" if corpus.manifest["kind"] != "raw" else "")
+            + (" (smoke)" if smoke else ""),
+            "throughput_in_gibs": median_rate,
+            "throughput_out_gibs": statistics.median(
+                item["throughput_out_gibs"] for item in measurements
+            ),
+            "compression_fold": total_input / total_output,
+            "logical_compression_fold": total_input / total_output,
+            "image_input": {
+                "release": corpus.manifest.get("release"),
+                "kind": corpus.manifest["kind"],
+                "manifest_sha256": corpus.sha256,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["sha256"],
+                "modality": pack["modality"],
+                "split": pack["split"],
+                "input_id": spec.input_id,
+                "source_group": pack["source_group"],
+                "plane_order": [plane["id"] for plane in pack["planes"]],
+            },
+            "repetitions": {
+                "count": len(measured),
+                "warmups": 0 if smoke else 1,
+                "throughput_min_gibs": min(rates),
+                "throughput_max_gibs": max(rates),
+                "throughput_spread_percent": 100
+                * (max(rates) - min(rates))
+                / median_rate,
+                "throughput_gibs": rates,
+                "process_wall_s": [item["process_wall_s"] for item in measured],
+                "detail_iteration": selected["iteration"],
+                "detail_repeat": measured.index(selected) + 1,
+            },
+        }
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
 def run_one(spec: RunSpec, build_dir: Path, s3_bucket: str | None = None,
             s3_region: str | None = None, s3_endpoint: str | None = None,
-            tmpdir_root: Path | None = None) -> dict | None:
+            tmpdir_root: Path | None = None, *, image_corpus=None,
+            image_min_gib: float = DEFAULT_IMAGE_MIN_GIB,
+            image_repeats: int = DEFAULT_IMAGE_REPEATS,
+            image_smoke: bool = False,
+            image_layouts: dict | None = None) -> dict | None:
     """Execute a single benchmark run, return result dict or None if exe missing."""
+    if spec.scenario == IMAGE_SCENARIO:
+        if image_corpus is None:
+            raise ValueError("The images scenario requires a verified corpus")
+        return run_image_one(
+            spec,
+            build_dir,
+            image_corpus,
+            image_min_gib,
+            image_repeats,
+            image_smoke,
+            image_layouts,
+        )
+
     exe = build_dir / "bench" / f"bench_stream_{spec.scenario}"
     if sys.platform == "win32":
         exe = exe.with_suffix(".exe")
@@ -512,6 +932,9 @@ def status_style(status: str) -> str:
 @click.option("--tier", "-t", multiple=True, type=click.Choice(ALL_TIER_NAMES),
               help="Tier(s) to run. Repeat for multiple.")
 @click.option("--all", "run_all", is_flag=True, help="Run all tiers.")
+@click.option("--scenario", "scenario_filter", multiple=True,
+              type=click.Choice(sorted(SCENARIOS)),
+              help="Only run this scenario. Repeat to combine scenarios; images is opt-in.")
 @click.option("--backend", "backend_filter", type=click.Choice(sorted(VALID_BACKENDS)),
               help="Only run benchmarks for this backend.")
 @click.option("--blosc-shuffle", type=click.Choice(sorted(VALID_SHUFFLES)), default=None,
@@ -533,12 +956,30 @@ def status_style(status: str) -> str:
               help="S3 endpoint URL.")
 @click.option("--tmpdir", "tmpdir_root", type=click.Path(path_type=Path), default=None,
               help="Parent directory for fs-sink scratch dirs (default: system temp).")
+@click.option("--data-registry", type=click.Path(path_type=Path),
+              default=DEFAULT_DATA_REGISTRY, show_default=True,
+              help="Registered data sources used by the images scenario.")
+@click.option("--dataset", "image_dataset", default=None,
+              help="Registered image dataset id (default: registry default).")
+@click.option("--corpus", "image_corpus_path", type=click.Path(path_type=Path),
+              default=None, help="Override the registered image corpus checkout.")
+@click.option("--min-gib", "image_min_gib", type=float,
+              default=DEFAULT_IMAGE_MIN_GIB, show_default=True,
+              help="Minimum native image GiB per image process execution.")
+@click.option("--repeats", "image_repeats", type=int,
+              default=DEFAULT_IMAGE_REPEATS, show_default=True,
+              help="Measured process executions per image configuration.")
+@click.option("--smoke", "image_smoke", is_flag=True,
+              help="Skip image warmups and permit short/inconclusive image runs.")
 @click.option("--machine", "machine_name", default=None, envvar="CHUCKY_MACHINE",
               help="Name this machine goes by in the report (default: hostname). "
                    "Give a stable name where the hostname changes between runs, as "
                    "it does on a cluster; group names live in bench/machines.toml.")
-def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output, skip, retry, rerun, dry_run,
-         s3_bucket, s3_region, s3_endpoint, tmpdir_root, machine_name):
+def main(tier, run_all, scenario_filter, backend_filter, blosc_shuffle, level,
+         build_dir, output, skip, retry, rerun, dry_run, s3_bucket, s3_region,
+         s3_endpoint, tmpdir_root, data_registry, image_dataset,
+         image_corpus_path, image_min_gib, image_repeats, image_smoke,
+         machine_name):
     """Benchmark sweep runner for chucky."""
     commit = git_commit()
     hostname = platform.node()
@@ -573,6 +1014,21 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
     runs: list[RunSpec] = []
     for t in selected_tiers:
         runs.extend(TIERS[t]())
+    selected_scenarios = set(scenario_filter)
+    if selected_scenarios:
+        runs = [run for run in runs if run.scenario in selected_scenarios]
+    if IMAGE_SCENARIO in selected_scenarios:
+        supported = [tier for tier in selected_tiers if tier in IMAGE_SUPPORTED_TIERS]
+        if not supported:
+            raise click.UsageError(
+                "The images scenario is available in the compress and backend tiers"
+            )
+        try:
+            members = load_image_members(data_registry, image_dataset)
+        except (OSError, ValueError) as error:
+            raise click.ClickException(str(error)) from error
+        for name in supported:
+            runs.extend(image_runs(name, members))
     if blosc_shuffle is not None or level is not None:
         overrides = {}
         if blosc_shuffle is not None:
@@ -587,6 +1043,30 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
     if skip:
         runs = [r for r in runs if not any(pat in r.scenario for pat in skip)]
 
+    image_specs = [run for run in runs if run.scenario == IMAGE_SCENARIO]
+    image_was_skipped = any(pattern in IMAGE_SCENARIO for pattern in skip)
+    if (
+        IMAGE_SCENARIO in selected_scenarios
+        and not image_specs
+        and not image_was_skipped
+    ):
+        raise click.UsageError(
+            "No image configurations remain after filtering."
+        )
+    if image_specs:
+        if image_repeats < 1 or (not image_smoke and image_repeats < 3):
+            raise click.BadParameter(
+                "a non-smoke image sweep needs at least three measured runs",
+                param_hint="--repeats",
+            )
+        if not math.isfinite(image_min_gib) or image_min_gib <= 0:
+            raise click.BadParameter("must be positive", param_hint="--min-gib")
+        if not image_smoke and image_min_gib < DEFAULT_IMAGE_MIN_GIB:
+            raise click.BadParameter(
+                "a throughput image sweep needs at least 32 GiB; use --smoke for a quick check",
+                param_hint="--min-gib",
+            )
+
     # Skip S3 runs if --s3-bucket not provided
     if not s3_bucket:
         s3_count = sum(1 for r in runs if r.sink == "s3")
@@ -599,6 +1079,7 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
         table = Table(title="Sweep Matrix", show_lines=False)
         table.add_column("#", justify="right", style="dim")
         table.add_column("Scenario")
+        table.add_column("Input")
         table.add_column("Codec")
         table.add_column("Shuffle")
         table.add_column("Level", justify="right")
@@ -610,15 +1091,36 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
         table.add_column("Sink", justify="center")
         for i, r in enumerate(runs, 1):
             table.add_row(
-                str(i), r.scenario, r.codec, r.blosc_shuffle, str(r.level), r.fill,
+                str(i), r.scenario, r.input_id or r.fill, r.codec,
+                r.blosc_shuffle, str(r.level), r.fill,
                 r.backend, r.dtype, r.chunk_label,
                 str(r.blosc_block_bytes) if r.blosc_block_bytes is not None else "",
                 r.sink if r.sink != "discard" else "",
             )
         console.print(table)
-        console.print(f"\nTotal: [bold]{len(runs)}[/bold] runs across tiers: {', '.join(selected_tiers)}")
+        executions = image_execution_count(runs, image_repeats, image_smoke)
+        console.print(
+            f"\nTotal: [bold]{len(runs)}[/bold] configurations, "
+            f"[bold]{executions}[/bold] process executions across tiers: "
+            f"{', '.join(selected_tiers)}"
+        )
         console.print(f"Output: {output}")
         return
+
+    verified_image_corpus = None
+    current_image_corpus = None
+    current_image_protocol = None
+    if image_specs:
+        try:
+            verified_image_corpus = load_image_corpus(
+                data_registry, image_dataset, image_corpus_path
+            )
+        except (OSError, ValueError) as error:
+            raise click.ClickException(str(error)) from error
+        current_image_corpus = image_corpus_record(verified_image_corpus)
+        current_image_protocol = image_protocol(
+            image_min_gib, image_repeats, image_smoke
+        )
 
     # -- load existing results for resumability --
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -656,6 +1158,34 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
             "runs": [],
         }
 
+    previous_image_runs = any(
+        run.get("scenario") == IMAGE_SCENARIO for run in data.get("runs", [])
+    )
+    if image_specs:
+        if previous_image_runs:
+            previous_corpus = data.get("corpus", {})
+            previous_identity = {
+                key: previous_corpus.get(key)
+                for key in ("dataset", "selected_assets")
+            }
+            current_identity = {
+                key: current_image_corpus.get(key)
+                for key in ("dataset", "selected_assets")
+            }
+            if previous_identity != current_identity:
+                raise click.ClickException(
+                    "Existing image runs use a different registered dataset or asset content"
+                )
+            if data.get("image_protocol") != current_image_protocol:
+                raise click.ClickException(
+                    "Existing image runs use a different repetition or replay protocol"
+                )
+        data["corpus"] = current_image_corpus
+        data["image_protocol"] = current_image_protocol
+        executable = image_executable(build_dir)
+        if not previous_image_runs and executable.exists():
+            data["image_benchmark"] = image_build_record(executable)
+
     # -- count how many actually need to run --
     to_run = [spec for spec in runs if spec.id not in existing]
     skip_count = len(runs) - len(to_run)
@@ -667,6 +1197,11 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
         console.print(f"[green]All {len(runs)} runs already complete.[/green]")
         console.print(f"Results: {output}")
         return
+
+    try:
+        image_layouts = existing_image_layouts(data.get("runs", []))
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
 
     # -- run with progress bar --
     with Progress(
@@ -680,6 +1215,11 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
 
         for spec in to_run:
             tag = f"{spec.scenario} {spec.codec} {spec.backend} {spec.chunk_label}"
+            if spec.input_id:
+                tag = (
+                    f"{spec.scenario}/{spec.input_id} {spec.codec} "
+                    f"{spec.backend} {spec.chunk_label}"
+                )
             if spec.codec.startswith("blosc-"):
                 tag += f" {spec.blosc_shuffle} level={spec.level}"
             if spec.sink != "discard":
@@ -691,7 +1231,12 @@ def main(tier, run_all, backend_filter, blosc_shuffle, level, build_dir, output,
                                  s3_bucket=s3_bucket,
                                  s3_region=s3_region,
                                  s3_endpoint=s3_endpoint,
-                                 tmpdir_root=tmpdir_root)
+                                 tmpdir_root=tmpdir_root,
+                                 image_corpus=verified_image_corpus,
+                                 image_min_gib=image_min_gib,
+                                 image_repeats=image_repeats,
+                                 image_smoke=image_smoke,
+                                 image_layouts=image_layouts)
             except subprocess.TimeoutExpired:
                 result = {**spec.base_result(), "status": "timeout"}
             except Exception as e:
